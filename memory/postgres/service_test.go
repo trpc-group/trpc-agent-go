@@ -2128,6 +2128,21 @@ func TestParseTableName(t *testing.T) {
 	}
 }
 
+// Test buildCreateTableSQL and buildCreateIndexSQL
+func TestBuildSQLFunctions(t *testing.T) {
+	t.Run("buildCreateTableSQL", func(t *testing.T) {
+		result := buildCreateTableSQL("test_schema", "memories", "CREATE TABLE {{TABLE_NAME}}")
+		expected := "CREATE TABLE test_schema.memories"
+		assert.Equal(t, expected, result)
+	})
+
+	t.Run("buildCreateIndexSQL", func(t *testing.T) {
+		result := buildCreateIndexSQL("test_schema", "memories", "app_user", "CREATE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}}")
+		expected := "CREATE INDEX idx_memories_app_user ON test_schema.memories"
+		assert.Equal(t, expected, result)
+	})
+}
+
 // Test schema verification error scenarios for better coverage
 func TestSchemaVerificationErrors(t *testing.T) {
 	// Test tableExists query failure
@@ -2148,10 +2163,9 @@ func TestSchemaVerificationErrors(t *testing.T) {
 		// Mock table exists query to fail
 		mock.ExpectQuery(`SELECT EXISTS \(`).WillReturnError(fmt.Errorf("table query failed"))
 
-		err = service.verifySchema(context.Background())
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "check table")
-		assert.Contains(t, err.Error(), "existence failed")
+		assert.Panics(t, func() {
+			service.verifySchema(context.Background())
+		})
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -2176,9 +2190,9 @@ func TestSchemaVerificationErrors(t *testing.T) {
 		// Mock columns query to fail
 		mock.ExpectQuery(`SELECT column_name, data_type, is_nullable`).WillReturnError(fmt.Errorf("columns query failed"))
 
-		err = service.verifySchema(context.Background())
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "verify columns")
+		assert.Panics(t, func() {
+			service.verifySchema(context.Background())
+		})
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -2209,10 +2223,9 @@ func TestSchemaVerificationErrors(t *testing.T) {
 			AddRow("updated_at", "timestamp without time zone", "NO").
 			AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-		err = service.verifySchema(context.Background())
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "memory_id")
-		assert.Contains(t, err.Error(), "is missing")
+		assert.Panics(t, func() {
+			service.verifySchema(context.Background())
+		})
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -2244,10 +2257,9 @@ func TestSchemaVerificationErrors(t *testing.T) {
 			AddRow("updated_at", "timestamp without time zone", "NO").
 			AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-		err = service.verifySchema(context.Background())
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "has type")
-		assert.Contains(t, err.Error(), "expected")
+		assert.Panics(t, func() {
+			service.verifySchema(context.Background())
+		})
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -2279,9 +2291,9 @@ func TestSchemaVerificationErrors(t *testing.T) {
 			AddRow("updated_at", "timestamp without time zone", "NO").
 			AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-		err = service.verifySchema(context.Background())
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "nullable mismatch")
+		assert.Panics(t, func() {
+			service.verifySchema(context.Background())
+		})
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -2308,9 +2320,9 @@ func TestSchemaVerificationErrors(t *testing.T) {
 										AddRow("memory_id", "text")
 		mock.ExpectQuery(`SELECT column_name, data_type, is_nullable`).WillReturnRows(rows)
 
-		err = service.verifySchema(context.Background())
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "verify columns")
+		assert.Panics(t, func() {
+			service.verifySchema(context.Background())
+		})
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -2334,9 +2346,34 @@ func TestSchemaVerificationErrors(t *testing.T) {
 		rows := sqlmock.NewRows([]string{"wrong_column"}).AddRow("some_value")
 		mock.ExpectQuery(`SELECT EXISTS \(`).WillReturnRows(rows)
 
-		err = service.verifySchema(context.Background())
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "check table")
+		assert.Panics(t, func() {
+			service.verifySchema(context.Background())
+		})
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	// Test tableExists with no rows returned
+	t.Run("tableExists no rows", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true))
+		require.NoError(t, err)
+
+		// Mock table exists query with no rows returned (table doesn't exist)
+		mock.ExpectQuery(`SELECT EXISTS \(`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}))
+
+		assert.Panics(t, func() {
+			service.verifySchema(context.Background())
+		})
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -2371,8 +2408,7 @@ func TestSchemaVerificationErrors(t *testing.T) {
 		rows := sqlmock.NewRows([]string{"wrong_column"}).AddRow("some_value")
 		mock.ExpectQuery(`SELECT indexname`).WillReturnRows(rows)
 
-		err = service.verifySchema(context.Background())
-		require.NoError(t, err) // verifyIndexes failure is logged but not fatal
+		service.verifySchema(context.Background()) // verifyIndexes failure is logged but not fatal
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})

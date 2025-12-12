@@ -19,7 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
-// SQL template for table creation (PostgreSQL syntax)
+// SQL template for table creation (PostgreSQL syntax).
 const (
 	sqlCreateMemoriesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
@@ -32,7 +32,7 @@ const (
 			deleted_at TIMESTAMP NULL DEFAULT NULL
 		)`
 
-	// Index creation SQL
+	// Index creation SQL.
 	sqlCreateMemoriesAppUserIndex = `
 		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name, user_id)`
@@ -55,8 +55,8 @@ type tableColumn struct {
 
 // tableIndex represents a table index definition.
 type tableIndex struct {
-	table   string // Base table name (without prefix/schema) like "memories"
-	suffix  string // Index suffix like "app_user", "updated_at", "deleted_at"
+	table   string // Base table name (without prefix/schema) like "memories".
+	suffix  string // Index suffix like "app_user", "updated_at", "deleted_at".
 	columns []string
 }
 
@@ -104,7 +104,7 @@ func buildCreateIndexSQL(schema, tableName, indexSuffix, template string) string
 func (s *Service) initDB(ctx context.Context) error {
 	log.Info("initializing postgres memory database schema...")
 
-	// Use base table name from opts (before schema prefix is applied)
+	// Use base table name from opts (before schema prefix is applied).
 	baseTableName := s.opts.tableName
 
 	// Create table
@@ -122,7 +122,7 @@ func (s *Service) initDB(ctx context.Context) error {
 		indexSuffixDeletedAt = "deleted_at"
 	)
 
-	// Create indexes
+	// Create indexes.
 	indexes := []struct {
 		suffix   string
 		template string
@@ -140,41 +140,37 @@ func (s *Service) initDB(ctx context.Context) error {
 		log.Infof("created index: %s on table %s", idx.suffix, fullTableName)
 	}
 
-	// Verify schema
-	if err := s.verifySchema(ctx); err != nil {
-		return fmt.Errorf("schema verification failed: %w", err)
-	}
+	// Verify schema.
+	s.verifySchema(ctx)
 
 	log.Info("postgres memory database schema initialized successfully")
 	return nil
 }
 
 // verifySchema verifies that the database schema matches expectations.
-func (s *Service) verifySchema(ctx context.Context) error {
+func (s *Service) verifySchema(ctx context.Context) {
 	for tableName, schema := range expectedSchema {
 		fullTableName := sqldb.BuildTableNameWithSchema(s.opts.schema, "", tableName)
 
-		// Check if table exists
+		// Check if table exists.
 		exists, err := s.tableExists(ctx, fullTableName)
 		if err != nil {
-			return fmt.Errorf("check table %s existence failed: %w", fullTableName, err)
+			panic(fmt.Sprintf("check table %s existence failed: %v", fullTableName, err))
 		}
 		if !exists {
-			return fmt.Errorf("table %s does not exist", fullTableName)
+			panic(fmt.Sprintf("table %s does not exist", fullTableName))
 		}
 
-		// Verify columns
+		// Verify columns.
 		if err := s.verifyColumns(ctx, fullTableName, schema.columns); err != nil {
-			return fmt.Errorf("verify columns for table %s failed: %w", fullTableName, err)
+			panic(fmt.Sprintf("verify columns for table %s failed: %v", fullTableName, err))
 		}
 
-		// Verify indexes
+		// Verify indexes.
 		if err := s.verifyIndexes(ctx, fullTableName, schema.indexes); err != nil {
 			log.Warnf("verify indexes for table %s failed (non-fatal): %v", fullTableName, err)
 		}
 	}
-
-	return nil
 }
 
 // tableExists checks if a table exists.
@@ -198,7 +194,7 @@ func (s *Service) tableExists(ctx context.Context, fullTableName string) (bool, 
 // verifyColumns verifies that table columns match expectations.
 func (s *Service) verifyColumns(ctx context.Context, fullTableName string, expectedColumns []tableColumn) error {
 	schema, tableName := parseTableName(fullTableName)
-	// Get actual columns from database
+	// Get actual columns from database.
 	actualColumns := make(map[string]tableColumn)
 	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
@@ -224,20 +220,20 @@ func (s *Service) verifyColumns(ctx context.Context, fullTableName string, expec
 		return fmt.Errorf("query columns failed: %w", err)
 	}
 
-	// Check each expected column
+	// Check each expected column.
 	for _, expected := range expectedColumns {
 		actual, exists := actualColumns[expected.name]
 		if !exists {
 			return fmt.Errorf("column %s.%s is missing", tableName, expected.name)
 		}
 
-		// Check data type
+		// Check data type.
 		if actual.dataType != expected.dataType {
 			return fmt.Errorf("column %s.%s has type %s, expected %s",
 				tableName, expected.name, actual.dataType, expected.dataType)
 		}
 
-		// Check nullable
+		// Check nullable.
 		if actual.nullable != expected.nullable {
 			return fmt.Errorf("column %s.%s nullable mismatch: got %v, expected %v",
 				tableName, expected.name, actual.nullable, expected.nullable)
@@ -250,7 +246,7 @@ func (s *Service) verifyColumns(ctx context.Context, fullTableName string, expec
 // verifyIndexes verifies that table indexes exist.
 func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expectedIndexes []tableIndex) error {
 	schema, tableName := parseTableName(fullTableName)
-	// Get actual indexes from database
+	// Get actual indexes from database.
 	actualIndexes := make(map[string]bool)
 	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
@@ -270,9 +266,9 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 		return fmt.Errorf("query indexes failed: %w", err)
 	}
 
-	// Check each expected index
+	// Check each expected index.
 	for _, expected := range expectedIndexes {
-		// Use sqldb.BuildIndexName to construct the expected index name
+		// Use sqldb.BuildIndexName to construct the expected index name.
 		expectedIndexName := sqldb.BuildIndexName("", expected.table, expected.suffix)
 
 		if !actualIndexes[expectedIndexName] {
