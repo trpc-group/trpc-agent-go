@@ -558,3 +558,12 @@ func (f *Flow) postprocess(
 		processor.ProcessResponse(ctx, invocation, llmRequest, llmResponse, eventChan)
 	}
 }
+
+// WaitEventTimeout returns the remaining time until the context deadline.
+// If the context has no deadline, it returns the default event completion timeout.
+func WaitEventTimeout(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		return time.Until(deadline)
+	}
+	return eventCompletionTimeout
+}
