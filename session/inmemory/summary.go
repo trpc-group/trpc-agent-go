@@ -115,8 +115,10 @@ func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Se
 	// Do not check storage existence before enqueueing. The worker and
 	// write path perform authoritative validation under lock.
 
-	// Create summary job.
+	// Create summary job with detached context to preserve values (e.g., trace ID)
+	// but not inherit cancel/timeout from the original context.
 	job := &summaryJob{
+		ctx:       context.WithoutCancel(ctx),
 		filterKey: filterKey,
 		force:     force,
 		session:   sess,
@@ -208,8 +210,9 @@ func (s *SessionService) processSummaryJob(job *summaryJob) {
 	// Do not pre-validate against storage here. We summarize based on the
 	// provided job.session and rely on the write path to validate under lock.
 
-	// Create a fresh context with timeout for this job.
-	ctx := context.Background()
+	// Use the detached context from job which preserves values (e.g., trace ID).
+	// Apply timeout if configured.
+	ctx := job.ctx
 	if s.opts.summaryJobTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, s.opts.summaryJobTimeout)

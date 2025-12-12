@@ -66,6 +66,7 @@ type sessionEventPair struct {
 
 // summaryJob represents a summary job to be processed asynchronously.
 type summaryJob struct {
+	ctx       context.Context // Detached context preserving values but not cancel.
 	filterKey string
 	force     bool
 	session   *session.Session
