@@ -11,7 +11,7 @@
             "role": "user",
             "parts": [
               {
-                "text": "hackerli是谁？"
+                "text": "What is trpc-agent-go?"
               }
             ]
           }

@@ -14,16 +14,15 @@ import (
 	"log"
 	"math"
 	"strings"
-	"time"
 
-	"git.woa.com/trag/trag-sdk/go-trag"
-	knowledge "git.woa.com/trpc-go/trpc-agent-go/trpc/knowledge/trag"
-	"git.woa.com/trpc-go/trpc-agent-go/trpc/knowledge/trag/sdk"
-	tragsource "git.woa.com/trpc-go/trpc-agent-go/trpc/knowledge/trag/source"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge"
+	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -55,41 +54,29 @@ func newQAAgent(modelName string, stream bool) agent.Agent {
 func newSearchTool() tool.Tool {
 	ctx := context.Background()
 
-	// 1. 创建 tRAG 客户端
-	tragClient := trag.NewTRag(trag.WithToken("c4f4abf6-e3b7-4fbd-98fc-800ff99e77d5"))
-
-	// 2. 创建 tRAG 选项配置
-	tragOption := sdk.NewTRagOption(
-		sdk.WithClient(tragClient),
-		sdk.WithInstanceCode("is-8a8c8dbf"),          // RAG 实例代码
-		sdk.WithNamespaceCode("ns-8b87ae30"),         // 命名空间代码
-		sdk.WithCollectionCode("col-21e13ceb"),       // 集合代码
-		sdk.WithEmbeddingModel("bge-large-en"),       // embedding 模型名称（可选）
-		sdk.WithPolicyCode("homerpan-import-policy"), // 策略代码（可选）
+	// 1. 创建 embedder
+	embedder := openaiembedder.New(
+		openaiembedder.WithModel("text-embedding-3-small"),
 	)
 
-	// 3. 创建数据源（推荐使用 tRAG Source）
+	// 2. 创建向量存储
+	vectorStore := vectorinmemory.New()
+
+	// 3. 创建知识源
 	sources := []source.Source{
-		// tRAG 文件源 - 读取本地文件，由 tRAG 服务端分块（推荐）
-		tragsource.NewFileSource(
-			[]string{"./knowledge/llm.md"},
-			tragsource.WithFileMetadata(map[string]any{"type": "documentation"}),
-		),
+		filesource.New([]string{"./knowledge/llm.md"}),
 	}
 
-	// 4. 创建 tRAG 知识库
-	kb, err := knowledge.New(
-		knowledge.WithTRagOption(*tragOption),
+	// 4. 创建 Knowledge
+	kb := knowledge.New(
+		knowledge.WithEmbedder(embedder),
+		knowledge.WithVectorStore(vectorStore),
 		knowledge.WithSources(sources),
+		knowledge.WithEnableSourceSync(true),
 	)
-	if err != nil {
-		log.Fatalf("Failed to create tRAG knowledge: %v", err)
-	}
 
-	// 5. 加载文档（支持限流）
-	if err := kb.Load(ctx,
-		knowledge.WithTRagRateLimit(300*time.Millisecond, 5), // 3 QPS，burst=5
-	); err != nil {
+	// 5. 加载文档
+	if err := kb.Load(ctx); err != nil {
 		log.Fatalf("Failed to load knowledge base: %v", err)
 	}
 
