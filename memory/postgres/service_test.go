@@ -2127,3 +2127,253 @@ func TestParseTableName(t *testing.T) {
 		})
 	}
 }
+
+// Test schema verification error scenarios for better coverage
+func TestSchemaVerificationErrors(t *testing.T) {
+	// Test tableExists query failure
+	t.Run("tableExists query failure", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true))
+		require.NoError(t, err)
+
+		// Mock table exists query to fail
+		mock.ExpectQuery(`SELECT EXISTS \(`).WillReturnError(fmt.Errorf("table query failed"))
+
+		err = service.verifySchema(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "check table")
+		assert.Contains(t, err.Error(), "existence failed")
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	// Test verifyColumns query failure
+	t.Run("verifyColumns query failure", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true))
+		require.NoError(t, err)
+
+		// Mock table exists
+		mock.ExpectQuery(`SELECT EXISTS \(`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		// Mock columns query to fail
+		mock.ExpectQuery(`SELECT column_name, data_type, is_nullable`).WillReturnError(fmt.Errorf("columns query failed"))
+
+		err = service.verifySchema(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "verify columns")
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	// Test column missing
+	t.Run("column missing", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true))
+		require.NoError(t, err)
+
+		// Mock table exists
+		mock.ExpectQuery(`SELECT EXISTS \(`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		// Mock columns query - missing memory_id column
+		mock.ExpectQuery(`SELECT column_name, data_type, is_nullable`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
+			AddRow("app_name", "text", "NO").
+			AddRow("user_id", "text", "NO").
+			AddRow("memory_data", "jsonb", "NO").
+			AddRow("created_at", "timestamp without time zone", "NO").
+			AddRow("updated_at", "timestamp without time zone", "NO").
+			AddRow("deleted_at", "timestamp without time zone", "YES"))
+
+		err = service.verifySchema(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "memory_id")
+		assert.Contains(t, err.Error(), "is missing")
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	// Test column type mismatch
+	t.Run("column type mismatch", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true))
+		require.NoError(t, err)
+
+		// Mock table exists
+		mock.ExpectQuery(`SELECT EXISTS \(`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		// Mock columns query - wrong type for memory_id
+		mock.ExpectQuery(`SELECT column_name, data_type, is_nullable`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
+			AddRow("memory_id", "varchar", "NO"). // Wrong type: should be "text"
+			AddRow("app_name", "text", "NO").
+			AddRow("user_id", "text", "NO").
+			AddRow("memory_data", "jsonb", "NO").
+			AddRow("created_at", "timestamp without time zone", "NO").
+			AddRow("updated_at", "timestamp without time zone", "NO").
+			AddRow("deleted_at", "timestamp without time zone", "YES"))
+
+		err = service.verifySchema(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "has type")
+		assert.Contains(t, err.Error(), "expected")
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	// Test nullable mismatch
+	t.Run("nullable mismatch", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true))
+		require.NoError(t, err)
+
+		// Mock table exists
+		mock.ExpectQuery(`SELECT EXISTS \(`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		// Mock columns query - wrong nullable for app_name
+		mock.ExpectQuery(`SELECT column_name, data_type, is_nullable`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
+			AddRow("memory_id", "text", "NO").
+			AddRow("app_name", "text", "YES"). // Wrong: should be "NO"
+			AddRow("user_id", "text", "NO").
+			AddRow("memory_data", "jsonb", "NO").
+			AddRow("created_at", "timestamp without time zone", "NO").
+			AddRow("updated_at", "timestamp without time zone", "NO").
+			AddRow("deleted_at", "timestamp without time zone", "YES"))
+
+		err = service.verifySchema(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "nullable mismatch")
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	// Test verifyColumns rows.Scan failure
+	t.Run("verifyColumns rows.Scan failure", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true))
+		require.NoError(t, err)
+
+		// Mock table exists
+		mock.ExpectQuery(`SELECT EXISTS \(`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		// Mock columns query with wrong number of columns to cause Scan failure
+		rows := sqlmock.NewRows([]string{"column_name", "data_type"}). // Missing is_nullable column
+										AddRow("memory_id", "text")
+		mock.ExpectQuery(`SELECT column_name, data_type, is_nullable`).WillReturnRows(rows)
+
+		err = service.verifySchema(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "verify columns")
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	// Test tableExists rows.Scan failure
+	t.Run("tableExists rows.Scan failure", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true))
+		require.NoError(t, err)
+
+		// Mock table exists query with wrong column type to cause Scan failure
+		rows := sqlmock.NewRows([]string{"wrong_column"}).AddRow("some_value")
+		mock.ExpectQuery(`SELECT EXISTS \(`).WillReturnRows(rows)
+
+		err = service.verifySchema(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "check table")
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	// Test verifyIndexes rows.Scan failure
+	t.Run("verifyIndexes rows.Scan failure", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true))
+		require.NoError(t, err)
+
+		// Mock table exists
+		mock.ExpectQuery(`SELECT EXISTS \(`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		// Mock columns query - all correct
+		mock.ExpectQuery(`SELECT column_name, data_type, is_nullable`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
+			AddRow("memory_id", "text", "NO").
+			AddRow("app_name", "text", "NO").
+			AddRow("user_id", "text", "NO").
+			AddRow("memory_data", "jsonb", "NO").
+			AddRow("created_at", "timestamp without time zone", "NO").
+			AddRow("updated_at", "timestamp without time zone", "NO").
+			AddRow("deleted_at", "timestamp without time zone", "YES"))
+		// Mock indexes query with wrong column type to cause Scan failure
+		rows := sqlmock.NewRows([]string{"wrong_column"}).AddRow("some_value")
+		mock.ExpectQuery(`SELECT indexname`).WillReturnRows(rows)
+
+		err = service.verifySchema(context.Background())
+		require.NoError(t, err) // verifyIndexes failure is logged but not fatal
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
