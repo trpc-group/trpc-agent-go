@@ -25,12 +25,10 @@ func (m *Model) convertRequest(req *model.Request) (*ChatCompletionRequest, erro
 		MaxTokens:        req.MaxTokens,
 		Temperature:      req.Temperature,
 		TopP:             req.TopP,
-		N:                req.N,
 		Stream:           req.Stream,
 		Stop:             req.Stop,
 		PresencePenalty:  req.PresencePenalty,
 		FrequencyPenalty: req.FrequencyPenalty,
-		Seed:             req.Seed,
 		ExtraFields:      make(map[string]interface{}),
 	}
 
@@ -55,15 +53,10 @@ func (m *Model) convertRequest(req *model.Request) (*ChatCompletionRequest, erro
 		}
 	}
 
-	// Convert tool choice
-	if req.ToolChoice != nil {
-		hfReq.ToolChoice = req.ToolChoice
-	}
-
-	// Convert response format
-	if req.ResponseFormat != nil {
+	// Convert structured output to response format
+	if req.StructuredOutput != nil && req.StructuredOutput.Type == model.StructuredOutputJSONSchema {
 		hfReq.ResponseFormat = &ResponseFormat{
-			Type: string(*req.ResponseFormat),
+			Type: "json_object",
 		}
 	}
 
@@ -73,30 +66,35 @@ func (m *Model) convertRequest(req *model.Request) (*ChatCompletionRequest, erro
 // convertMessage converts a model.Message to a HuggingFace ChatMessage.
 func convertMessage(msg model.Message) (ChatMessage, error) {
 	hfMsg := ChatMessage{
-		Role:       string(msg.Role),
-		Name:       msg.Name,
-		ToolCallID: msg.ToolCallID,
-		Refusal:    msg.Refusal,
+		Role: string(msg.Role),
 	}
 
-	// Convert content
-	if len(msg.Content) > 0 {
+	// Handle tool message fields
+	if msg.Role == model.RoleTool {
+		hfMsg.ToolCallID = msg.ToolID
+		hfMsg.Name = msg.ToolName
+	}
+
+	// Convert content - prioritize Content string field
+	if msg.Content != "" {
+		hfMsg.Content = msg.Content
+	} else if len(msg.ContentParts) > 0 {
 		// Check if all content parts are text
 		allText := true
-		for _, part := range msg.Content {
+		for _, part := range msg.ContentParts {
 			if part.Type != model.ContentTypeText {
 				allText = false
 				break
 			}
 		}
 
-		if allText && len(msg.Content) == 1 {
+		if allText && len(msg.ContentParts) == 1 && msg.ContentParts[0].Text != nil {
 			// Single text content - use string format
-			hfMsg.Content = msg.Content[0].Text
+			hfMsg.Content = *msg.ContentParts[0].Text
 		} else {
 			// Multiple parts or non-text content - use array format
-			contentParts := make([]ContentPart, 0, len(msg.Content))
-			for _, part := range msg.Content {
+			contentParts := make([]ContentPart, 0, len(msg.ContentParts))
+			for _, part := range msg.ContentParts {
 				hfPart, err := convertContentPart(part)
 				if err != nil {
 					return ChatMessage{}, fmt.Errorf("failed to convert content part: %w", err)
@@ -126,19 +124,29 @@ func convertMessage(msg model.Message) (ChatMessage, error) {
 func convertContentPart(part model.ContentPart) (ContentPart, error) {
 	switch part.Type {
 	case model.ContentTypeText:
+		text := ""
+		if part.Text != nil {
+			text = *part.Text
+		}
 		return ContentPart{
 			Type: "text",
-			Text: part.Text,
+			Text: text,
 		}, nil
-	case model.ContentTypeImageURL:
-		if part.ImageURL == nil {
-			return ContentPart{}, fmt.Errorf("image_url is nil for image_url content type")
+	case model.ContentTypeImage:
+		if part.Image == nil {
+			return ContentPart{}, fmt.Errorf("image is nil for image content type")
+		}
+		// Convert image to image_url format
+		url := part.Image.URL
+		if url == "" && len(part.Image.Data) > 0 {
+			// If data is provided, create a data URL
+			url = fmt.Sprintf("data:image/%s;base64,%s", part.Image.Format, part.Image.Data)
 		}
 		return ContentPart{
 			Type: "image_url",
 			ImageURL: &ImageURL{
-				URL:    part.ImageURL.URL,
-				Detail: part.ImageURL.Detail,
+				URL:    url,
+				Detail: part.Image.Detail,
 			},
 		}, nil
 	default:
@@ -148,13 +156,13 @@ func convertContentPart(part model.ContentPart) (ContentPart, error) {
 
 // convertTool converts a tool.Tool to a HuggingFace Tool.
 func convertTool(t tool.Tool) (Tool, error) {
-	// Get tool definition
-	def := t.Definition()
+	// Get tool declaration
+	decl := t.Declaration()
 
 	// Convert parameters to map
 	var params map[string]any
-	if def.InputSchema != nil {
-		paramsJSON, err := json.Marshal(def.InputSchema)
+	if decl.InputSchema != nil {
+		paramsJSON, err := json.Marshal(decl.InputSchema)
 		if err != nil {
 			return Tool{}, fmt.Errorf("failed to marshal tool parameters: %w", err)
 		}
@@ -166,8 +174,8 @@ func convertTool(t tool.Tool) (Tool, error) {
 	return Tool{
 		Type: "function",
 		Function: FunctionTool{
-			Name:        def.Name,
-			Description: def.Description,
+			Name:        decl.Name,
+			Description: decl.Description,
 			Parameters:  params,
 		},
 	}, nil
@@ -180,7 +188,7 @@ func convertToolCall(tc model.ToolCall) (ToolCall, error) {
 		Type: tc.Type,
 		Function: FunctionCall{
 			Name:      tc.Function.Name,
-			Arguments: tc.Function.Arguments,
+			Arguments: string(tc.Function.Arguments),
 		},
 	}, nil
 }
@@ -214,10 +222,14 @@ func (m *Model) convertResponse(hfResp *ChatCompletionResponse) *model.Response 
 
 // convertChoice converts a HuggingFace ChatCompletionChoice to a model.Choice.
 func convertChoice(choice ChatCompletionChoice) model.Choice {
+	var finishReason *string
+	if choice.FinishReason != "" {
+		finishReason = &choice.FinishReason
+	}
 	return model.Choice{
 		Index:        choice.Index,
 		Message:      convertMessageToModel(choice.Message),
-		FinishReason: choice.FinishReason,
+		FinishReason: finishReason,
 	}
 }
 
@@ -233,10 +245,14 @@ func (m *Model) convertChunk(chunk *ChatCompletionChunk) *model.Response {
 
 	// Convert choices
 	for _, choice := range chunk.Choices {
+		var finishReason *string
+		if choice.FinishReason != "" {
+			finishReason = &choice.FinishReason
+		}
 		resp.Choices = append(resp.Choices, model.Choice{
 			Index:        choice.Index,
 			Delta:        convertMessageToModel(choice.Delta),
-			FinishReason: choice.FinishReason,
+			FinishReason: finishReason,
 		})
 	}
 
@@ -255,10 +271,13 @@ func (m *Model) convertChunk(chunk *ChatCompletionChunk) *model.Response {
 // convertMessageToModel converts a HuggingFace ChatMessage to a model.Message.
 func convertMessageToModel(hfMsg ChatMessage) model.Message {
 	msg := model.Message{
-		Role:       model.Role(hfMsg.Role),
-		Name:       hfMsg.Name,
-		ToolCallID: hfMsg.ToolCallID,
-		Refusal:    hfMsg.Refusal,
+		Role: model.Role(hfMsg.Role),
+	}
+
+	// Handle tool message fields
+	if hfMsg.ToolCallID != "" {
+		msg.ToolID = hfMsg.ToolCallID
+		msg.ToolName = hfMsg.Name
 	}
 
 	// Convert content
@@ -266,27 +285,22 @@ func convertMessageToModel(hfMsg ChatMessage) model.Message {
 	case string:
 		// String content
 		if content != "" {
-			msg.Content = []model.ContentPart{
-				{
-					Type: model.ContentTypeText,
-					Text: content,
-				},
-			}
+			msg.Content = content
 		}
 	case []interface{}:
 		// Array content
-		msg.Content = make([]model.ContentPart, 0, len(content))
+		msg.ContentParts = make([]model.ContentPart, 0, len(content))
 		for _, part := range content {
 			if partMap, ok := part.(map[string]interface{}); ok {
 				contentPart := convertContentPartToModel(partMap)
-				msg.Content = append(msg.Content, contentPart)
+				msg.ContentParts = append(msg.ContentParts, contentPart)
 			}
 		}
 	case []ContentPart:
 		// Typed array content
-		msg.Content = make([]model.ContentPart, 0, len(content))
+		msg.ContentParts = make([]model.ContentPart, 0, len(content))
 		for _, part := range content {
-			msg.Content = append(msg.Content, convertContentPartStructToModel(part))
+			msg.ContentParts = append(msg.ContentParts, convertContentPartStructToModel(part))
 		}
 	}
 
@@ -297,9 +311,9 @@ func convertMessageToModel(hfMsg ChatMessage) model.Message {
 			msg.ToolCalls = append(msg.ToolCalls, model.ToolCall{
 				ID:   tc.ID,
 				Type: tc.Type,
-				Function: model.FunctionCall{
+				Function: model.FunctionDefinitionParam{
 					Name:      tc.Function.Name,
-					Arguments: tc.Function.Arguments,
+					Arguments: []byte(tc.Function.Arguments),
 				},
 			})
 		}
@@ -315,25 +329,28 @@ func convertContentPartToModel(partMap map[string]interface{}) model.ContentPart
 	switch partType {
 	case "text":
 		text, _ := partMap["text"].(string)
+		textPtr := &text
 		return model.ContentPart{
 			Type: model.ContentTypeText,
-			Text: text,
+			Text: textPtr,
 		}
 	case "image_url":
 		imageURL, _ := partMap["image_url"].(map[string]interface{})
 		url, _ := imageURL["url"].(string)
 		detail, _ := imageURL["detail"].(string)
 		return model.ContentPart{
-			Type: model.ContentTypeImageURL,
-			ImageURL: &model.ImageURL{
+			Type: model.ContentTypeImage,
+			Image: &model.Image{
 				URL:    url,
 				Detail: detail,
 			},
 		}
 	default:
+		text := fmt.Sprintf("unsupported content type: %s", partType)
+		textPtr := &text
 		return model.ContentPart{
 			Type: model.ContentTypeText,
-			Text: fmt.Sprintf("unsupported content type: %s", partType),
+			Text: textPtr,
 		}
 	}
 }
@@ -342,28 +359,33 @@ func convertContentPartToModel(partMap map[string]interface{}) model.ContentPart
 func convertContentPartStructToModel(part ContentPart) model.ContentPart {
 	switch part.Type {
 	case "text":
+		textPtr := &part.Text
 		return model.ContentPart{
 			Type: model.ContentTypeText,
-			Text: part.Text,
+			Text: textPtr,
 		}
 	case "image_url":
 		if part.ImageURL != nil {
 			return model.ContentPart{
-				Type: model.ContentTypeImageURL,
-				ImageURL: &model.ImageURL{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
 					URL:    part.ImageURL.URL,
 					Detail: part.ImageURL.Detail,
 				},
 			}
 		}
+		text := "image_url is nil"
+		textPtr := &text
 		return model.ContentPart{
 			Type: model.ContentTypeText,
-			Text: "image_url is nil",
+			Text: textPtr,
 		}
 	default:
+		text := fmt.Sprintf("unsupported content type: %s", part.Type)
+		textPtr := &text
 		return model.ContentPart{
 			Type: model.ContentTypeText,
-			Text: fmt.Sprintf("unsupported content type: %s", part.Type),
+			Text: textPtr,
 		}
 	}
 }

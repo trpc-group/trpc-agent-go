@@ -86,7 +86,7 @@ func New(modelName string, opts ...Option) (*Model, error) {
 		if options.TailoringStrategy != nil {
 			tailoringStrategy = options.TailoringStrategy
 		} else {
-			tailoringStrategy = model.NewMiddleOutStrategy()
+			tailoringStrategy = model.NewMiddleOutStrategy(options.TokenCounter)
 		}
 	}
 
@@ -128,11 +128,6 @@ func (m *Model) GenerateContent(ctx context.Context, request *model.Request) (<-
 	}
 
 	// Apply token tailoring if enabled
-	if m.enableTokenTailoring && m.maxInputTokens > 0 {
-		if err := m.applyTokenTailoring(request, hfRequest); err != nil {
-			log.Warnf(ctx, "failed to apply token tailoring: %v", err)
-		}
-	}
 
 	// Create response channel
 	responseChan := make(chan *model.Response, m.channelBufferSize)
@@ -172,7 +167,7 @@ func (m *Model) handleNonStreamingRequest(
 	hfResponse, err := m.makeRequest(ctx, hfRequest)
 	if err != nil {
 		responseChan <- &model.Response{
-			Error: &model.Error{
+			Error: &model.ResponseError{
 				Message: fmt.Sprintf("failed to make request: %v", err),
 			},
 		}
@@ -216,7 +211,7 @@ func (m *Model) handleStreamingRequest(
 	if err != nil {
 		streamErr = err
 		responseChan <- &model.Response{
-			Error: &model.Error{
+			Error: &model.ResponseError{
 				Message: fmt.Sprintf("failed to make streaming request: %v", err),
 			},
 		}
@@ -246,7 +241,7 @@ func (m *Model) handleStreamingRequest(
 		// Parse chunk
 		var chunk ChatCompletionChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			log.Warnf(ctx, "failed to parse chunk: %v, data: %s", err, data)
+			log.Warnf("failed to parse chunk: %v, data: %s", err, data)
 			continue
 		}
 
@@ -263,7 +258,7 @@ func (m *Model) handleStreamingRequest(
 	if err := scanner.Err(); err != nil {
 		streamErr = err
 		responseChan <- &model.Response{
-			Error: &model.Error{
+			Error: &model.ResponseError{
 				Message: fmt.Sprintf("error reading stream: %v", err),
 			},
 		}
@@ -413,33 +408,3 @@ func (m *Model) marshalRequest(hfRequest *ChatCompletionRequest) ([]byte, error)
 }
 
 // applyTokenTailoring applies token tailoring to the request.
-func (m *Model) applyTokenTailoring(originalRequest *model.Request, hfRequest *ChatCompletionRequest) error {
-	if m.tokenCounter == nil || m.tailoringStrategy == nil {
-		return errors.New("token counter or tailoring strategy not initialized")
-	}
-
-	// Calculate current token count
-	currentTokens := m.tokenCounter.CountTokens(originalRequest)
-
-	// Check if tailoring is needed
-	if currentTokens <= m.maxInputTokens {
-		return nil
-	}
-
-	// Apply tailoring strategy
-	tailoredRequest, err := m.tailoringStrategy.Tailor(originalRequest, m.maxInputTokens, m.tokenCounter)
-	if err != nil {
-		return fmt.Errorf("failed to tailor request: %w", err)
-	}
-
-	// Convert tailored request back to HuggingFace format
-	tailoredHFRequest, err := m.convertRequest(tailoredRequest)
-	if err != nil {
-		return fmt.Errorf("failed to convert tailored request: %w", err)
-	}
-
-	// Update the request
-	*hfRequest = *tailoredHFRequest
-
-	return nil
-}
