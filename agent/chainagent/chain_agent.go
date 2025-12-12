@@ -198,6 +198,9 @@ func (a *ChainAgent) executeSubAgents(
 			if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
 				return nil, tokenUsage
 			}
+			if subEvent != nil && subEvent.Error != nil {
+				return subEvent, tokenUsage
+			}
 		}
 
 		if err := agent.CheckContextCancelled(ctx); err != nil {
