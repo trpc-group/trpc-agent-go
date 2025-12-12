@@ -100,6 +100,19 @@ func TestWithInvocationRunOptions(t *testing.T) {
 	assert.Equal(t, "value1", inv.RunOptions.RuntimeState["key1"])
 }
 
+func TestRunOptionsAgentSelectors(t *testing.T) {
+	override := &mockAgent{name: "override"}
+	opts := &RunOptions{}
+
+	WithAgent(override)(opts)
+	assert.Equal(t, override, opts.Agent)
+	assert.Empty(t, opts.AgentName)
+
+	WithAgentName("named")(opts)
+	assert.Equal(t, "named", opts.AgentName)
+	assert.Equal(t, override, opts.Agent)
+}
+
 func TestGetRuntimeStateValue(t *testing.T) {
 	t.Run("key not found", func(t *testing.T) {
 		opts := &RunOptions{
