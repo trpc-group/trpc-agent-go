@@ -230,7 +230,7 @@ func (e *eventEmitter) Context() context.Context {
 func (e *eventEmitter) emitWithRecover(evt *event.Event) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Warnf("EventEmitter: recovered from panic while emitting event: %v", r)
+			log.Errorf("EventEmitter: recovered from panic while emitting event: %v", r)
 			err = nil // Don't propagate panic as error
 		}
 	}()

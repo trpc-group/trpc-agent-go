@@ -1172,7 +1172,7 @@ func TestGraphNodeCustomEvents_CustomCategory(t *testing.T) {
 	value, ok := customEvt.Value.(map[string]any)
 	assert.True(t, ok)
 	assert.Equal(t, "test-node", value["nodeId"])
-	assert.Equal(t, float64(1), value["stepNumber"])
+	assert.Equal(t, 1, value["stepNumber"])
 	assert.NotNil(t, value["payload"])
 }
 
