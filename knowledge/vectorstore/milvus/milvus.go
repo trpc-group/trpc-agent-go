@@ -23,6 +23,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/index"
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
 
+	internalknowledge "trpc.group/trpc-go/trpc-agent-go/internal/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
@@ -81,7 +82,7 @@ func New(ctx context.Context, opts ...Option) (*VectorStore, error) {
 	vs := &VectorStore{
 		client:          milvusClient,
 		option:          option,
-		filterConverter: &milvusFilterConverter{},
+		filterConverter: newMilvusFilterConverter(option.metadataField),
 	}
 
 	if err := vs.initCollection(ctx); err != nil {
@@ -171,7 +172,7 @@ func (vs *VectorStore) createCollection(ctx context.Context) error {
 	indexOpts := make([]client.CreateIndexOption, 0)
 	indexOpts = append(indexOpts, indexOption)
 	if vs.option.enableHNSW {
-		hnswIndexOption := client.NewCreateIndexOption(vs.option.collectionName, vs.option.vectorField, index.NewHNSWIndex(entity.L2, vs.option.hnswM, vs.option.hnswEfConstruction))
+		hnswIndexOption := client.NewCreateIndexOption(vs.option.collectionName, vs.option.vectorField, index.NewHNSWIndex(vs.option.metricType, vs.option.hnswM, vs.option.hnswEfConstruction))
 		indexOpts = append(indexOpts, hnswIndexOption)
 	}
 	if err := vs.client.CreateCollection(ctx, client.NewCreateCollectionOption(vs.option.collectionName, schema).WithIndexOptions(indexOpts...)); err != nil {
@@ -450,16 +451,23 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 
 	annReqs := make([]*client.AnnRequest, 0)
 	if len(vector) > 0 {
-		annReqs = append(annReqs, client.NewAnnRequest(vs.option.vectorField, query.Limit, entity.FloatVector(vector)))
+		annReq := client.NewAnnRequest(vs.option.vectorField, query.Limit, entity.FloatVector(vector))
+		if filterExpr != "" {
+			annReq.WithFilter(filterExpr)
+			for k, v := range filterParams {
+				annReq.WithTemplateParam(k, v)
+			}
+		}
+		annReqs = append(annReqs, annReq)
 	}
+
 	if query.Query != "" {
-		annReqs = append(annReqs, client.NewAnnRequest(vs.option.contentSparseField, query.Limit, entity.Text(query.Query)).WithANNSField(vs.option.contentSparseField))
-	}
-	if len(filterExpr) > 0 {
-		annReq := client.NewAnnRequest(vs.option.metadataField, query.Limit)
-		annReq.WithFilter(filterExpr)
-		for k, v := range filterParams {
-			annReq.WithTemplateParam(k, v)
+		annReq := client.NewAnnRequest(vs.option.contentSparseField, query.Limit, entity.Text(query.Query)).WithANNSField(vs.option.contentSparseField)
+		if filterExpr != "" {
+			annReq.WithFilter(filterExpr)
+			for k, v := range filterParams {
+				annReq.WithTemplateParam(k, v)
+			}
 		}
 		annReqs = append(annReqs, annReq)
 	}
@@ -490,6 +498,11 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 		}
 		filterExpr = expr
 		filterParams = params
+	}
+
+	// Filter-only search requires a non-empty filter expression
+	if filterExpr == "" {
+		return nil, fmt.Errorf("empty filter condition")
 	}
 
 	queryOption := client.NewQueryOption(vs.option.collectionName)
@@ -732,12 +745,20 @@ func (vs *VectorStore) buildFilterExpression(filter *vectorstore.SearchFilter) (
 		}
 	}
 
-	// for json path, query like 'metadata["trpc_agent_go_source_name"] == {metadata["trpc_agent_go_source_name"]}' is invalid
-	// and JSON_CONTAINS/JSON_CONTAINS_ALL/JSON_CONTAINS_ANY does not suit our needs
 	if len(filter.Metadata) > 0 {
 		for key, value := range filter.Metadata {
-			jsonPath := fmt.Sprintf("%s[\"%s\"]", vs.option.metadataField, key)
-			conditions = append(conditions, fmt.Sprintf("%s == %s", jsonPath, formatValue(value)))
+			metaCR, err := vs.filterConverter.Convert(&searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorEqual,
+				Field:    key,
+				Value:    value,
+			})
+			if err != nil {
+				return "", nil, err
+			}
+			conditions = append(conditions, metaCR.exprStr)
+			for k, v := range metaCR.params {
+				allParams[k] = v
+			}
 		}
 	}
 
@@ -755,8 +776,9 @@ func (vs *VectorStore) buildFilterExpression(filter *vectorstore.SearchFilter) (
 		}
 	}
 
+	// Return empty expression if no conditions (allow search without filter)
 	if len(conditions) == 0 {
-		return "", nil, fmt.Errorf("empty filter condition")
+		return "", nil, nil
 	}
 
 	var finalExpr string
@@ -956,10 +978,14 @@ func (vs *VectorStore) convertSearchResult(result []client.ResultSet, query *vec
 	if err != nil {
 		return nil, fmt.Errorf("convert result to document failed: %w", err)
 	}
+
+	// Normalize scores based on metric type
+	normalizedScores := vs.normalizeScores(scores, query.SearchMode)
+
 	for i, doc := range docs {
 		searchResult.Results = append(searchResult.Results, &vectorstore.ScoredDocument{
 			Document: doc,
-			Score:    scores[i],
+			Score:    normalizedScores[i],
 		})
 	}
 
@@ -979,10 +1005,26 @@ func (vs *VectorStore) convertQueryResult(result client.ResultSet, query *vector
 	if err != nil {
 		return nil, fmt.Errorf("convert result to document failed: %w", err)
 	}
+
+	// For filter-only queries, Query API doesn't return scores
+	// Assign default score of 1.0 to all documents
+	if len(scores) == 0 {
+		for _, doc := range docs {
+			searchResult.Results = append(searchResult.Results, &vectorstore.ScoredDocument{
+				Document: doc,
+				Score:    1.0,
+			})
+		}
+		return searchResult, nil
+	}
+
+	// Normalize scores based on metric type
+	normalizedScores := vs.normalizeScores(scores, query.SearchMode)
+
 	for i, doc := range docs {
 		searchResult.Results = append(searchResult.Results, &vectorstore.ScoredDocument{
 			Document: doc,
-			Score:    scores[i],
+			Score:    normalizedScores[i],
 		})
 	}
 	return searchResult, nil
@@ -1013,4 +1055,48 @@ func convertToFloat32Vector(embedding []float64) []float32 {
 		vector32[i] = float32(v)
 	}
 	return vector32
+}
+
+// normalizeScores normalizes raw scores based on the metric type and search mode.
+// After normalization, higher scores always indicate better similarity (range [0, 1]).
+func (vs *VectorStore) normalizeScores(scores []float64, searchMode int) []float64 {
+	if len(scores) == 0 {
+		return scores
+	}
+
+	result := make([]float64, len(scores))
+
+	// Determine metric type based on search mode
+	var metricType internalknowledge.MetricType
+	switch searchMode {
+	case vectorstore.SearchModeKeyword:
+		// BM25 sparse vector search
+		metricType = internalknowledge.MetricTypeBM25
+	case vectorstore.SearchModeHybrid:
+		// Hybrid search scores are already fused by reranker
+		// Use min-max normalization for hybrid results
+		return internalknowledge.MinMaxNormalize(scores)
+	default:
+		// Vector search - use configured metric type
+		metricType = vs.metricTypeToInternal()
+	}
+
+	for i, score := range scores {
+		result[i] = internalknowledge.NormalizeScore(score, metricType)
+	}
+	return result
+}
+
+// metricTypeToInternal converts Milvus entity.MetricType to internal MetricType.
+func (vs *VectorStore) metricTypeToInternal() internalknowledge.MetricType {
+	switch vs.option.metricType {
+	case entity.L2:
+		return internalknowledge.MetricTypeL2
+	case entity.IP:
+		return internalknowledge.MetricTypeIP
+	case entity.COSINE:
+		return internalknowledge.MetricTypeCosine
+	default:
+		return internalknowledge.MetricTypeIP
+	}
 }
