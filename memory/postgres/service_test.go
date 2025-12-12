@@ -1996,3 +1996,43 @@ func TestGenerateMemoryID_DifferentTopics(t *testing.T) {
 
 	assert.NotEqual(t, id1, id2, "Different topics should generate different IDs")
 }
+
+// TestNewService_FallbackToDefaultConnString tests the fallback branch when
+// no DSN, host, or instanceName is provided.
+func TestNewService_FallbackToDefaultConnString(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	receivedConnString := ""
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		opts := &storage.ClientBuilderOpts{}
+		for _, opt := range builderOpts {
+			opt(opts)
+		}
+		receivedConnString = opts.ConnString
+		return client, nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	// Mock table and index creation
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Create service without DSN, host, or instanceName - should use default connection string
+	service, err := NewService()
+	require.NoError(t, err)
+	assert.NotNil(t, service)
+
+	// Verify that the default connection string was used
+	assert.Contains(t, receivedConnString, "host=localhost", "Should use default host")
+	assert.Contains(t, receivedConnString, "port=5432", "Should use default port")
+	assert.Contains(t, receivedConnString, defaultDatabase, "Should use default database")
+	assert.Contains(t, receivedConnString, "sslmode=disable", "Should use default sslmode")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+	service.Close()
+}
