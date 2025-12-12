@@ -403,6 +403,13 @@ type Invocation struct {
     // 调用级别的状态（延迟初始化，通过 stateMu 保护并发）
     state   map[string]any
     stateMu sync.RWMutex
+
+    // 内部计数器（高级用法）：用于可选的每次调用限制。
+    // 这些限制通过 RunOptions 进行配置，并在「每个 Invocation」维度生效。
+    // 当通过 Clone 创建子 Invocation（例如 transfer_to_agent 或 AgentTool）
+    // 时，会复制 RunOptions，但每个子 Invocation 的计数器都会从 0 重新开始。
+    llmCallCount       int
+    toolIterationCount int
 }
 ```
 

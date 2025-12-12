@@ -107,6 +107,18 @@ type Invocation struct {
 
 	// timingInfo stores timing information for the first LLM call in this invocation.
 	timingInfo *model.TimingInfo
+
+	// llmCallCount tracks how many LLM calls have been made in this invocation.
+	// This is used together with RunOptions.MaxLLMCalls to enforce a per-run limit.
+	// Note: counters are invocation-scoped. When child invocations are created
+	// via Clone (for example, in transfer_to_agent or AgentTool), the RunOptions
+	// are copied but the counters start from zero for each invocation.
+	llmCallCount int
+
+	// toolIterationCount tracks how many tool call iterations have been processed
+	// in this invocation. This is used together with RunOptions.MaxToolIterations
+	// to guard against unbounded tool_call -> LLM -> tool_call loops.
+	toolIterationCount int
 }
 
 // DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
@@ -424,6 +436,20 @@ type RunOptions struct {
 	//       return t.Declaration().Name == "calculator"
 	//   })
 	ToolFilter tool.FilterFunc
+
+	// MaxLLMCalls is an optional upper bound on the number of LLM calls
+	// allowed for this run. When the value is:
+	//   - > 0: the limit is enforced per invocation.
+	//   - <= 0: no limit is applied (default, preserves existing behavior).
+	MaxLLMCalls int
+
+	// MaxToolIterations is an optional upper bound on how many tool-call
+	// iterations are allowed in this run. A "tool iteration" is defined as
+	// an assistant response that contains tool calls and triggers the
+	// FunctionCallResponseProcessor. When the value is:
+	//   - > 0: the limit is enforced per invocation.
+	//   - <= 0: no limit is applied (default, preserves existing behavior).
+	MaxToolIterations int
 }
 
 // NewInvocation create a new invocation
@@ -652,6 +678,46 @@ func (inv *Invocation) GetOrCreateTimingInfo() *model.TimingInfo {
 		inv.timingInfo = &model.TimingInfo{}
 	}
 	return inv.timingInfo
+}
+
+// IncLLMCallCount increments the LLM call counter for this invocation and
+// enforces the optional MaxLLMCalls limit from RunOptions. When the limit is
+// not set or non-positive, no restriction is applied. When the limit is
+// exceeded, a StopError is returned so callers can terminate the flow early.
+func (inv *Invocation) IncLLMCallCount() error {
+	if inv == nil {
+		return nil
+	}
+	limit := inv.RunOptions.MaxLLMCalls
+	if limit <= 0 {
+		// No limit configured, preserve existing behavior.
+		return nil
+	}
+	inv.llmCallCount++
+	if inv.llmCallCount > limit {
+		return NewStopError(
+			fmt.Sprintf("max LLM calls (%d) exceeded", limit),
+		)
+	}
+	return nil
+}
+
+// IncToolIteration increments the tool iteration counter and reports whether
+// the MaxToolIterations limit has been exceeded. A "tool iteration" is defined
+// as an assistant response that contains tool calls and triggers the
+// FunctionCallResponseProcessor. When the limit is not set or non-positive,
+// this method always returns false, preserving existing behavior.
+func (inv *Invocation) IncToolIteration() bool {
+	if inv == nil {
+		return false
+	}
+	limit := inv.RunOptions.MaxToolIterations
+	if limit <= 0 {
+		// No limit configured, preserve existing behavior.
+		return false
+	}
+	inv.toolIterationCount++
+	return inv.toolIterationCount > limit
 }
 
 // DeleteState removes a value from the invocation state.
