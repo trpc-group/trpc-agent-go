@@ -46,6 +46,107 @@ func TestExecutor_WithSaver_CreatesInitialCheckpoint(t *testing.T) {
 	}
 }
 
+type failingPutFullSaver struct {
+	*mockSaver
+}
+
+func (f *failingPutFullSaver) PutFull(
+	ctx context.Context,
+	req PutFullRequest,
+) (map[string]any, error) {
+	const errPutFull = "putfull failed"
+	return nil, errors.New(errPutFull)
+}
+
+type panicGetTupleSaver struct {
+	*mockSaver
+}
+
+func (p *panicGetTupleSaver) GetTuple(
+	ctx context.Context,
+	config map[string]any,
+) (*CheckpointTuple, error) {
+	panic("gettuple panic")
+}
+
+func TestExecutor_CheckpointSaveError_DoesNotStopRun(
+	t *testing.T,
+) {
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+
+	baseSaver := newMockSaver()
+	saver := &failingPutFullSaver{mockSaver: baseSaver}
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(
+		context.Background(),
+		State{},
+		&agent.Invocation{InvocationID: "inv-save-fail"},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+}
+
+func TestExecutor_PanicInSaver_IsRecovered(
+	t *testing.T,
+) {
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+
+	baseSaver := newMockSaver()
+	saver := &panicGetTupleSaver{mockSaver: baseSaver}
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	// Empty invocation id triggers lineage generation before panic.
+	ch, err := exec.Execute(
+		context.Background(),
+		State{},
+		&agent.Invocation{},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+}
+
+func TestExecutor_CreateTask_LogsStepCountAndFinalNode(
+	t *testing.T,
+) {
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("final", func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("final").
+		SetFinishPoint("final").
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	state := State{
+		StateFieldCounter:   1,
+		StateFieldStepCount: 2,
+	}
+	task := exec.createTask("final", state, 0)
+	require.NotNil(t, task)
+}
+
 // Test resuming from a checkpoint converts values by schema (restoreCheckpointValueWithSchema)
 func TestExecutor_Resume_RestoreSchemaValues(t *testing.T) {
 	// schema with tags []string

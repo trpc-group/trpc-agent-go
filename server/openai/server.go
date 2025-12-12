@@ -282,17 +282,9 @@ func (s *Server) handleNonStreaming(w http.ResponseWriter, r *http.Request, req 
 	var response *openAIResponse
 	response, err = s.converter.aggregateStreamingEvents(events)
 	if err != nil {
-		log.ErrorfContext(
-			ctx,
-			"openai: failed to aggregate events: %v",
-			err,
-		)
-		s.writeError(
-			w,
-			err,
-			errorTypeInternal,
-			http.StatusInternalServerError,
-		)
+		log.Errorf("openai: failed to aggregate events: %v", err)
+		s.writeError(w, err, errorTypeInternal,
+			http.StatusInternalServerError)
 		return
 	}
 	if response == nil {
@@ -416,7 +408,7 @@ func (s *Server) handleStreaming(w http.ResponseWriter, r *http.Request, req *op
 
 // processStreamingChunk processes a single streaming chunk and returns true if it's the final event.
 func (s *Server) processStreamingChunk(
-	ctx context.Context,
+	_ context.Context,
 	w http.ResponseWriter,
 	flusher http.Flusher,
 	evt *event.Event,
@@ -425,11 +417,7 @@ func (s *Server) processStreamingChunk(
 ) bool {
 	chunkData, err := s.converter.convertToChunk(evt)
 	if err != nil {
-		log.ErrorfContext(
-			ctx,
-			"openai: failed to convert event: %v",
-			err,
-		)
+		log.Errorf("openai: failed to convert event: %v", err)
 		return false
 	}
 	if chunkData == nil {

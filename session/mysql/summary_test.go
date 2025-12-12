@@ -1374,9 +1374,10 @@ func TestTryEnqueueJob_QueueFull(t *testing.T) {
 		WithSummaryQueueSize(1),
 	)
 
-	// Start async workers to initialize channels
-	s.startAsyncSummaryWorker()
-	defer s.Close() // This will close the channels
+	// Initialize channels without starting workers to keep queue full.
+	s.summaryJobChans = []chan *summaryJob{
+		make(chan *summaryJob, 1),
+	}
 
 	ctx := context.Background()
 	sess := session.NewSession("test-app", "user-456", "session-123")
@@ -1437,6 +1438,87 @@ func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
 	// Try to enqueue with cancelled context when queue is full - should return false
 	result := s.tryEnqueueJob(ctx, job)
 	assert.False(t, result, "tryEnqueueJob should return false when context is cancelled and queue is full")
+}
+
+type doneNoErrContext struct {
+	context.Context
+	done <-chan struct{}
+}
+
+func (c doneNoErrContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (doneNoErrContext) Err() error {
+	return nil
+}
+
+func TestTryEnqueueJob_ContextDoneBranch(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db,
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(1),
+	)
+	// Initialize channels without starting workers to keep queue full.
+	s.summaryJobChans = []chan *summaryJob{
+		make(chan *summaryJob, 1),
+	}
+
+	sess := session.NewSession("test-app", "user-456", "session-123")
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   sess,
+	}
+
+	index := sess.Hash % len(s.summaryJobChans)
+	s.summaryJobChans[index] <- job
+
+	doneCh := make(chan struct{})
+	close(doneCh)
+	ctx := doneNoErrContext{
+		Context: context.Background(),
+		done:    doneCh,
+	}
+
+	result := s.tryEnqueueJob(ctx, job)
+	assert.False(t, result)
+}
+
+func TestProcessSummaryJob_NilJob_Recovers(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &fakeSummarizer{allow: true, out: "test"}
+	s := createTestService(t, db, WithSummarizer(summarizer))
+	defer s.Close()
+
+	require.NotPanics(t, func() {
+		s.processSummaryJob(nil)
+	})
+}
+
+func TestProcessSummaryJob_NilSession_LogsWarning(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &fakeSummarizer{allow: true, out: "test"}
+	s := createTestService(t, db, WithSummarizer(summarizer))
+	defer s.Close()
+
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   nil,
+	}
+	require.NotPanics(t, func() {
+		s.processSummaryJob(job)
+	})
 }
 
 func TestProcessSummaryJob_Timeout(t *testing.T) {
