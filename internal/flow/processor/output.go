@@ -92,7 +92,11 @@ func (p *OutputResponseProcessor) emitTypedStructuredOutput(
 		instance = reflect.New(invocation.StructuredOutputType).Interface()
 	}
 	if err := json.Unmarshal([]byte(jsonObject), instance); err != nil {
-		log.Errorf("Structured output unmarshal failed: %v", err)
+		log.ErrorfContext(
+			ctx,
+			"Structured output unmarshal failed: %v",
+			err,
+		)
 		return
 	}
 	typedEvt := event.New(
@@ -102,7 +106,7 @@ func (p *OutputResponseProcessor) emitTypedStructuredOutput(
 		event.WithStructuredOutputPayload(instance),
 	)
 
-	log.Debugf("Emitted typed structured output payload event.")
+	log.DebugContext(ctx, "Emitted typed structured output payload event.")
 	agent.EmitEvent(ctx, invocation, ch, typedEvt)
 }
 
@@ -120,7 +124,12 @@ func (p *OutputResponseProcessor) handleOutputKey(ctx context.Context, invocatio
 		}
 		var parsedJSON any
 		if err := json.Unmarshal([]byte(jsonObject), &parsedJSON); err != nil {
-			log.Warnf("Failed to parse output as JSON for output_schema validation: %v", err)
+			log.WarnfContext(
+				ctx,
+				"Failed to parse output as JSON for output_schema "+
+					"validation: %v",
+				err,
+			)
 			return
 		}
 		// Store the original JSON string.
@@ -137,7 +146,11 @@ func (p *OutputResponseProcessor) handleOutputKey(ctx context.Context, invocatio
 	)
 	stateEvent.RequiresCompletion = true
 
-	log.Debugf("Emitted state delta event with key '%s'.", p.outputKey)
+	log.DebugfContext(
+		ctx,
+		"Emitted state delta event with key '%s'.",
+		p.outputKey,
+	)
 	if err := agent.EmitEvent(ctx, invocation, ch, stateEvent); err != nil {
 		return
 	}
@@ -147,7 +160,12 @@ func (p *OutputResponseProcessor) handleOutputKey(ctx context.Context, invocatio
 	completionID := agent.GetAppendEventNoticeKey(stateEvent.ID)
 	if err := invocation.AddNoticeChannelAndWait(ctx, completionID,
 		agent.WaitNoticeWithoutTimeout); err != nil {
-		log.Warnf("Failed to add notice channel for completion ID %s: %v", completionID, err)
+		log.WarnfContext(
+			ctx,
+			"Failed to add notice channel for completion ID %s: %v",
+			completionID,
+			err,
+		)
 	}
 }
 
