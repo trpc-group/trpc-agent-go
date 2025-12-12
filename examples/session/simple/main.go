@@ -146,18 +146,10 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 		}
 
 	case "pgsql":
-		port := 5432
-		if pgPort != "" {
-			if p, parseErr := fmt.Sscanf(pgPort, "%d", &port); parseErr != nil || p != 1 {
-				return fmt.Errorf("invalid PG_PORT value: %s", pgPort)
-			}
-		}
+		pgDSN := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
+			pgUser, pgPassword, pgHost, pgPort, pgDatabase)
 		sessionService, err = postgres.NewService(
-			postgres.WithHost(pgHost),
-			postgres.WithPort(port),
-			postgres.WithUser(pgUser),
-			postgres.WithPassword(pgPassword),
-			postgres.WithDatabase(pgDatabase),
+			postgres.WithPostgresClientDSN(pgDSN),
 			postgres.WithTablePrefix("trpc_"),
 			postgres.WithSessionEventLimit(*eventLimit),
 			postgres.WithSessionTTL(*sessionTTL),

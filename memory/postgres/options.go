@@ -44,6 +44,7 @@ var (
 // ServiceOpts is the options for the postgres memory service.
 type ServiceOpts struct {
 	// PostgreSQL connection settings.
+	dsn      string
 	host     string
 	port     int
 	user     string
@@ -89,6 +90,17 @@ func (o ServiceOpts) clone() ServiceOpts {
 
 // ServiceOpt is the option for the postgres memory service.
 type ServiceOpt func(*ServiceOpts)
+
+// WithPostgresClientDSN sets the PostgreSQL DSN connection string directly (recommended).
+// Example: "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+//
+// Note: WithPostgresClientDSN has the highest priority.
+// If DSN is specified, other connection settings (WithHost, WithPort, etc.) will be ignored.
+func WithPostgresClientDSN(dsn string) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.dsn = dsn
+	}
+}
 
 // WithHost sets the PostgreSQL host.
 func WithHost(host string) ServiceOpt {
