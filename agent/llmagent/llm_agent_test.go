@@ -173,14 +173,14 @@ func TestBuildRequestProcessors_AddSessionSummaryWiring(t *testing.T) {
 	require.False(t, crp.AddSessionSummary)
 }
 
-// Test that buildRequestProcessors wires SummaryAsSeparateSystemMessage
+// Test that buildRequestProcessors wires StandaloneSessionSummary
 // into ContentRequestProcessor correctly.
-func TestBuildRequestProcessors_SummaryAsSeparateSystemMessageWiring(
+func TestBuildRequestProcessors_StandaloneSessionSummaryWiring(
 	t *testing.T,
 ) {
-	optsSeparate := &Options{}
-	WithSummaryAsSeparateSystemMessage(true)(optsSeparate)
-	procs := buildRequestProcessors("test-agent", optsSeparate)
+	optsStandalone := &Options{}
+	WithStandaloneSessionSummary(true)(optsStandalone)
+	procs := buildRequestProcessors("test-agent", optsStandalone)
 	var crp *processor.ContentRequestProcessor
 	for _, p := range procs {
 		if v, ok := p.(*processor.ContentRequestProcessor); ok {
@@ -188,11 +188,12 @@ func TestBuildRequestProcessors_SummaryAsSeparateSystemMessageWiring(
 		}
 	}
 	require.NotNil(t, crp)
-	require.True(t, crp.SummaryAsSeparateSystemMessage)
+	require.True(t, crp.StandaloneSessionSummary)
+	require.True(t, crp.AddSessionSummary) // Should be automatically enabled
 
-	optsMerged := &Options{}
-	WithSummaryAsSeparateSystemMessage(false)(optsMerged)
-	procs = buildRequestProcessors("test-agent", optsMerged)
+	optsNormal := &Options{}
+	WithAddSessionSummary(true)(optsNormal)
+	procs = buildRequestProcessors("test-agent", optsNormal)
 	crp = nil
 	for _, p := range procs {
 		if v, ok := p.(*processor.ContentRequestProcessor); ok {
@@ -200,7 +201,8 @@ func TestBuildRequestProcessors_SummaryAsSeparateSystemMessageWiring(
 		}
 	}
 	require.NotNil(t, crp)
-	require.False(t, crp.SummaryAsSeparateSystemMessage)
+	require.True(t, crp.AddSessionSummary)
+	require.False(t, crp.StandaloneSessionSummary)
 }
 
 // Test that buildRequestProcessors wires MaxHistoryRuns into

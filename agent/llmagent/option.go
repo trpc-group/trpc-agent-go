@@ -154,9 +154,9 @@ type Options struct {
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message when available (default: false).
 	AddSessionSummary bool
-	// SummaryAsSeparateSystemMessage keeps the session summary as a standalone
-	// system message instead of merging it into the first system prompt.
-	SummaryAsSeparateSystemMessage bool
+	// StandaloneSessionSummary adds the session summary as a standalone
+	// system message instead of merging it into the first system message.
+	StandaloneSessionSummary bool
 
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
@@ -464,11 +464,15 @@ func WithAddSessionSummary(addSummary bool) Option {
 	}
 }
 
-// WithSummaryAsSeparateSystemMessage keeps the session summary as its own
-// system message instead of merging it into the first system prompt.
-func WithSummaryAsSeparateSystemMessage(separate bool) Option {
+// WithStandaloneSessionSummary adds the session summary as a standalone
+// system message instead of merging it into the first system message.
+// This automatically enables AddSessionSummary.
+func WithStandaloneSessionSummary(standalone bool) Option {
 	return func(opts *Options) {
-		opts.SummaryAsSeparateSystemMessage = separate
+		opts.StandaloneSessionSummary = standalone
+		if standalone {
+			opts.AddSessionSummary = true // Automatically enable summary
+		}
 	}
 }
 

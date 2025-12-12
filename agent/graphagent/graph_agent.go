@@ -142,8 +142,8 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		p := processor.NewContentRequestProcessor(
 			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
 			processor.WithAddSessionSummary(ga.options.AddSessionSummary),
-			processor.WithSummaryAsSeparateSystemMessage(
-				ga.options.SummaryAsSeparateSystemMessage),
+			processor.WithStandaloneSessionSummary(
+				ga.options.StandaloneSessionSummary),
 			processor.WithMaxHistoryRuns(ga.options.MaxHistoryRuns),
 			processor.WithPreserveSameBranch(true),
 			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),

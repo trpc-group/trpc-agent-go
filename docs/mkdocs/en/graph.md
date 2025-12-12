@@ -557,10 +557,9 @@ graphAgent, err := graphagent.New(
     graphagent.WithChannelBufferSize(1024),            // Tune event buffer size
     graphagent.WithCheckpointSaver(memorySaver),       // Persist checkpoints if needed
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // Register sub-agents by name
-    graphagent.WithAddSessionSummary(true),            // Inject session summary as system message
-    // Keep summary as a separate system message (default merges into the first
-    // system prompt when present). It only takes effect when WithAddSessionSummary(true) is enabled.
-    graphagent.WithSummaryAsSeparateSystemMessage(true),
+    graphagent.WithAddSessionSummary(true),            // Inject session summary as system message (merged)
+    // OR: add summary as standalone system message
+    // graphagent.WithStandaloneSessionSummary(true),
     graphagent.WithMaxHistoryRuns(5),                  // Truncate history when summaries are off
     // Set the filter mode for messages passed to the model. The final messages passed to the model must satisfy both WithMessageTimelineFilterMode and WithMessageBranchFilterMode conditions.
     // Timeline dimension filter conditions
@@ -589,12 +588,9 @@ graphAgent, err := graphagent.New(
 
 Session summary notes:
 
-- `WithAddSessionSummary(true)` takes effect only when `Session.Summaries` contains a summary for the invocation’s filter key. Summaries are typically produced by SessionService + SessionSummarizer, and Runner will auto‑enqueue summarization after persisting events.
-- By default the summary is merged into the first system message. Set
-  `graphagent.WithSummaryAsSeparateSystemMessage(true)` to keep it as a
-  dedicated system message (inserted after the first system prompt when
-  present). This option is effective only when `WithAddSessionSummary(true)`
-  is enabled.
+- `WithAddSessionSummary(true)`: Merges summary into the first system message
+- `WithStandaloneSessionSummary(true)`: Adds summary as a standalone system message after the first system message
+- Both options take effect only when `Session.Summaries` contains a summary for the invocation's filter key. Summaries are typically produced by SessionService + SessionSummarizer, and Runner will auto‑enqueue summarization after persisting events.
 - GraphAgent reads summaries only; it does not generate them. If you bypass Runner, call `sessionService.CreateSessionSummary` or `EnqueueSummaryJob` after appending events.
 - Summary injection works only when `TimelineFilterMode` is `TimelineFilterAll`.
 

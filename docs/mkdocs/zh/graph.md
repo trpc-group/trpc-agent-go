@@ -635,9 +635,9 @@ graphAgent, err := graphagent.New(
 	graphagent.WithChannelBufferSize(1024),            // 调整事件通道缓冲区
 	graphagent.WithCheckpointSaver(memorySaver),       // 使用持久化检查点
 	graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
-	graphagent.WithAddSessionSummary(true),            // 将会话摘要注入 system 消息
-	// 默认会把摘要合并到第一条 system 消息，如需让摘要单独作为 system 消息，仅当 WithAddSessionSummary(true) 时生效
-	graphagent.WithSummaryAsSeparateSystemMessage(true),
+	graphagent.WithAddSessionSummary(true),            // 将会话摘要注入 system 消息 (合并)
+	// 或：将摘要作为独立的 system 消息
+	// graphagent.WithStandaloneSessionSummary(true),
 	graphagent.WithMaxHistoryRuns(5),                  // 未开启摘要时截断历史轮次
 	// 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
 	// 时间维度过滤条件
@@ -665,11 +665,9 @@ graphAgent, err := graphagent.New(
 
 使用会话摘要的注意事项：
 
-- `WithAddSessionSummary(true)` 仅在 `Session.Summaries` 中已有对应 `FilterKey` 的摘要时生效。摘要通常由 SessionService + SessionSummarizer 生成，Runner 在落库事件后会自动触发 `EnqueueSummaryJob`。
-- 默认会把摘要合并到第一条 system 消息；如果希望摘要单独作为
-  system 消息（插在第一条 system 消息之后），使用
-  `graphagent.WithSummaryAsSeparateSystemMessage(true)`（仅在
-  `WithAddSessionSummary(true)` 时生效）。
+- `WithAddSessionSummary(true)`：将摘要合并到第一条 system 消息
+- `WithStandaloneSessionSummary(true)`：将摘要作为独立的 system 消息插入到第一条 system 消息之后
+- 以上选项仅在 `Session.Summaries` 中已有对应 `FilterKey` 的摘要时生效。摘要通常由 SessionService + SessionSummarizer 生成，Runner 在落库事件后会自动触发 `EnqueueSummaryJob`。
 - GraphAgent 只读取摘要，不生成摘要。如果绕过 Runner，需在写入事件后自行调用 `sessionService.CreateSessionSummary` 或 `EnqueueSummaryJob`。
 - 摘要仅在 `TimelineFilterAll` 下生效。
 

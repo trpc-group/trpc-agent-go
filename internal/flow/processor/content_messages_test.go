@@ -359,8 +359,7 @@ func TestProcessRequest_SessionSummary_AsSeparateSystemMessage(t *testing.T) {
 	inv.AgentName = "test-agent"
 
 	p := NewContentRequestProcessor(
-		WithAddSessionSummary(true),
-		WithSummaryAsSeparateSystemMessage(true),
+		WithStandaloneSessionSummary(true),
 	)
 	p.ProcessRequest(context.Background(), inv, req, nil)
 

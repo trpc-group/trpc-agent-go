@@ -275,13 +275,14 @@ func TestContentRequestProcessor_WithAddSessionSummary_Option(t *testing.T) {
 	assert.True(t, p.AddSessionSummary)
 }
 
-func TestContentRequestProcessor_WithSummaryAsSeparateSystemMessage_Option(
+func TestContentRequestProcessor_WithStandaloneSessionSummary_Option(
 	t *testing.T,
 ) {
 	p := NewContentRequestProcessor(
-		WithSummaryAsSeparateSystemMessage(true),
+		WithStandaloneSessionSummary(true),
 	)
-	assert.True(t, p.SummaryAsSeparateSystemMessage)
+	assert.True(t, p.StandaloneSessionSummary)
+	assert.True(t, p.AddSessionSummary) // Should be automatically enabled
 }
 
 func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) {
@@ -1134,13 +1135,13 @@ func Test_toMap(t *testing.T) {
 func TestNewContentRequestProcessor(t *testing.T) {
 
 	defaultWant := &ContentRequestProcessor{
-		BranchFilterMode:               "prefix",
-		AddContextPrefix:               true,
-		PreserveSameBranch:             false,
-		TimelineFilterMode:             "all",
-		AddSessionSummary:              false,
-		SummaryAsSeparateSystemMessage: false,
-		MaxHistoryRuns:                 0,
+		BranchFilterMode:         "prefix",
+		AddContextPrefix:         true,
+		PreserveSameBranch:       false,
+		TimelineFilterMode:       "all",
+		AddSessionSummary:        false,
+		StandaloneSessionSummary: false,
+		MaxHistoryRuns:           0,
 	}
 
 	tests := []struct {
@@ -1174,13 +1175,13 @@ func TestNewContentRequestProcessor(t *testing.T) {
 				WithBranchFilterMode("all"),
 			},
 			want: &ContentRequestProcessor{
-				BranchFilterMode:               "all",
-				AddContextPrefix:               false,
-				PreserveSameBranch:             false,
-				TimelineFilterMode:             TimelineFilterCurrentRequest,
-				AddSessionSummary:              false,
-				SummaryAsSeparateSystemMessage: false,
-				MaxHistoryRuns:                 0,
+				BranchFilterMode:         "all",
+				AddContextPrefix:         false,
+				PreserveSameBranch:       false,
+				TimelineFilterMode:       TimelineFilterCurrentRequest,
+				AddSessionSummary:        false,
+				StandaloneSessionSummary: false,
+				MaxHistoryRuns:           0,
 			},
 		},
 
@@ -1237,9 +1238,9 @@ func TestNewContentRequestProcessor(t *testing.T) {
 				got.TimelineFilterMode, "TimelineFilterMode mismatch")
 			assert.Equal(t, tt.want.AddSessionSummary,
 				got.AddSessionSummary, "AddSessionSummary mismatch")
-			assert.Equal(t, tt.want.SummaryAsSeparateSystemMessage,
-				got.SummaryAsSeparateSystemMessage,
-				"SummaryAsSeparateSystemMessage mismatch")
+			assert.Equal(t, tt.want.StandaloneSessionSummary,
+				got.StandaloneSessionSummary,
+				"StandaloneSessionSummary mismatch")
 			assert.Equal(t, tt.want.MaxHistoryRuns, got.MaxHistoryRuns,
 				"MaxHistoryRuns mismatch")
 		})
