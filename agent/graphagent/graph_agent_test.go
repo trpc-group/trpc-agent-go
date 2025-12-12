@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -1004,9 +1005,18 @@ func TestGraphAgent_BeforeCallbackReturnsError(t *testing.T) {
 		AgentName:    "test-before-err",
 	}
 
-	_, err = ga.Run(context.Background(), inv)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "before callback failed")
+	events, err := ga.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	// Collect events and expect a final error event.
+	var collected []*event.Event
+	for e := range events {
+		collected = append(collected, e)
+	}
+	require.Len(t, collected, 1)
+	require.NotNil(t, collected[0].Error)
+	require.Equal(t, model.ErrorTypeFlowError, collected[0].Error.Type)
+	require.Contains(t, collected[0].Error.Message, "before callback failed")
 }
 
 func TestGraphAgent_AfterCallbackReturnsResponse(t *testing.T) {
@@ -1185,4 +1195,120 @@ func TestGraphAgent_AfterCallbackReceivesExecutionError(t *testing.T) {
 
 	require.Error(t, callbackErr)
 	require.Contains(t, callbackErr.Error(), "flow_error:")
+}
+
+func TestGraphAgent_BarrierWaitsForCompletion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	schema := graph.NewStateSchema().
+		AddField(graph.StateKeyMessages, graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		})
+	g, err := graph.NewStateGraph(schema).
+		AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"ok": true}, nil
+		}).
+		SetEntryPoint("done").
+		SetFinishPoint("done").
+		Compile()
+	require.NoError(t, err)
+
+	ga, err := New("barrier-test", g)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "u", "s")),
+	)
+	barrier.Enable(inv)
+
+	ch, err := ga.Run(ctx, inv)
+	require.NoError(t, err)
+
+	var barrierEvt *event.Event
+	select {
+	case barrierEvt = <-ch:
+	case <-ctx.Done():
+		t.Fatalf("did not receive barrier event: %v", ctx.Err())
+	}
+	require.NotNil(t, barrierEvt)
+	require.Equal(t, graph.ObjectTypeGraphBarrier, barrierEvt.Object)
+	require.True(t, barrierEvt.RequiresCompletion)
+
+	select {
+	case evt, ok := <-ch:
+		if ok {
+			t.Fatalf("unexpected event before completion: %+v", evt)
+		}
+	default:
+	}
+
+	completionID := agent.GetAppendEventNoticeKey(barrierEvt.ID)
+	require.NoError(t, inv.NotifyCompletion(ctx, completionID))
+
+	var received []*event.Event
+	for {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				goto done
+			}
+			received = append(received, evt)
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for graph events: %v", ctx.Err())
+		}
+	}
+done:
+	require.NotEmpty(t, received)
+	var hasGraphExec bool
+	for _, evt := range received {
+		if evt.Object == graph.ObjectTypeGraphExecution {
+			hasGraphExec = true
+		}
+	}
+	require.True(t, hasGraphExec)
+}
+
+func TestGraphAgent_RunWithBarrierEmitError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	schema := graph.NewStateSchema().
+		AddField("done", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+	g, err := graph.NewStateGraph(schema).
+		AddNode("finish", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"done": "ok"}, nil
+		}).
+		SetEntryPoint("finish").
+		SetFinishPoint("finish").
+		Compile()
+	require.NoError(t, err)
+
+	ga, err := New("barrier-error", g)
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		AgentName:    "barrier-error",
+		InvocationID: "inv-barrier-error",
+		// noticeMu left nil to force AddNoticeChannel to fail.
+	}
+	barrier.Enable(inv)
+
+	out := make(chan *event.Event, 1)
+	go ga.runWithBarrier(ctx, inv, out)
+
+	var events []*event.Event
+	for evt := range out {
+		events = append(events, evt)
+	}
+
+	require.Len(t, events, 1)
+	require.NotNil(t, events[0].Response)
+	require.NotNil(t, events[0].Response.Error)
+	require.Equal(t, model.ErrorTypeFlowError, events[0].Response.Error.Type)
+	require.Contains(t, events[0].Response.Error.Message, "add notice channel")
 }

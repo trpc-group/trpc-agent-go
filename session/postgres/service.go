@@ -562,29 +562,26 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		return fmt.Errorf("postgres session service update session state failed: get session state: %w", err)
 	}
 
-	// Unmarshal current state
-	var currentState session.StateMap
+	var sessState SessionState
 	if len(currentStateBytes) > 0 {
-		if err := json.Unmarshal(currentStateBytes, &currentState); err != nil {
+		if err := json.Unmarshal(currentStateBytes, &sessState); err != nil {
 			return fmt.Errorf("postgres session service update session state failed: unmarshal state: %w", err)
 		}
-	} else {
-		currentState = make(session.StateMap)
 	}
-
-	// Merge new state into current state
+	now := time.Now()
+	if sessState.State == nil {
+		sessState.State = make(session.StateMap)
+	}
 	for k, v := range state {
-		currentState[k] = v
+		sessState.State[k] = v
 	}
+	sessState.UpdatedAt = now
 
-	// Marshal updated state
-	updatedStateBytes, err := json.Marshal(currentState)
+	updatedStateBytes, err := json.Marshal(sessState)
 	if err != nil {
 		return fmt.Errorf("postgres session service update session state failed: marshal state: %w", err)
 	}
 
-	// Update session state in database
-	now := time.Now()
 	var expiresAt *time.Time
 	if s.opts.sessionTTL > 0 {
 		t := now.Add(s.opts.sessionTTL)

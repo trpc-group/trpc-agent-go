@@ -725,3 +725,17 @@ func TestRun_WithResumeExecutesPendingToolCalls(t *testing.T) {
 	require.Len(t, toolCalls, 1)
 	require.Equal(t, "resume", toolCalls[0])
 }
+
+func TestWaitEventTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	timeout := WaitEventTimeout(ctx)
+	require.InDelta(t, time.Second.Seconds(), timeout.Seconds(), 0.1)
+}
+
+func TestWaitEventTimeout_NoDeadline(t *testing.T) {
+	ctx := context.Background()
+	timeout := WaitEventTimeout(ctx)
+	require.Equal(t, 5*time.Second, timeout)
+}

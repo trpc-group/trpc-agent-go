@@ -41,6 +41,11 @@ const (
 
 	// EventFilterKeyDelimiter is the delimiter for event filter key
 	EventFilterKeyDelimiter = "/"
+
+	// flusherStateKey is the invocation state key used by flush.Attach.
+	flusherStateKey = "__flush_session__"
+	// barrierStateKey is the invocation state key used by internal barrier flag.
+	barrierStateKey = "__graph_barrier__"
 )
 
 // TransferInfo contains information about a pending agent transfer.
@@ -85,9 +90,9 @@ type Invocation struct {
 	// ArtifactService is the service for managing artifacts.
 	ArtifactService artifact.Service
 
-	// noticeChanMap is used to signal when events are written to the session.
-	noticeChanMap map[string]chan any
-	noticeMu      *sync.Mutex
+	// noticeChannels is used to signal when events are written to the session.
+	noticeChannels map[string]chan any
+	noticeMu       *sync.Mutex
 
 	// eventFilterKey is used to filter events for flow or agent
 	eventFilterKey string
@@ -424,9 +429,9 @@ type RunOptions struct {
 // NewInvocation create a new invocation
 func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
 	inv := &Invocation{
-		InvocationID:  uuid.NewString(),
-		noticeMu:      &sync.Mutex{},
-		noticeChanMap: make(map[string]chan any),
+		InvocationID:   uuid.NewString(),
+		noticeMu:       &sync.Mutex{},
+		noticeChannels: make(map[string]chan any),
 	}
 
 	for _, opt := range invocationOpts {
@@ -457,9 +462,10 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		MemoryService:   inv.MemoryService,
 		ArtifactService: inv.ArtifactService,
 		noticeMu:        inv.noticeMu,
-		noticeChanMap:   inv.noticeChanMap,
+		noticeChannels:  inv.noticeChannels,
 		eventFilterKey:  inv.eventFilterKey,
 		parent:          inv,
+		state:           inv.cloneState(),
 	}
 
 	for _, opt := range invocationOpts {
@@ -481,6 +487,22 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	}
 
 	return newInv
+}
+
+func (inv *Invocation) cloneState() map[string]any {
+	if inv == nil || inv.state == nil {
+		return nil
+	}
+	inv.stateMu.RLock()
+	defer inv.stateMu.RUnlock()
+	copied := make(map[string]any)
+	if holder, ok := inv.state[flusherStateKey]; ok {
+		copied[flusherStateKey] = holder
+	}
+	if barrier, ok := inv.state[barrierStateKey]; ok {
+		copied[barrierStateKey] = barrier
+	}
+	return copied
 }
 
 // GetEventFilterKey get event filter key.
@@ -696,15 +718,15 @@ func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan an
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
-	if ch, ok := inv.noticeChanMap[key]; ok {
+	if ch, ok := inv.noticeChannels[key]; ok {
 		return ch
 	}
 
 	ch := make(chan any)
-	if inv.noticeChanMap == nil {
-		inv.noticeChanMap = make(map[string]chan any)
+	if inv.noticeChannels == nil {
+		inv.noticeChannels = make(map[string]chan any)
 	}
-	inv.noticeChanMap[key] = ch
+	inv.noticeChannels[key] = ch
 
 	return ch
 }
@@ -726,14 +748,28 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
-	ch, ok := inv.noticeChanMap[key]
+	ch, ok := inv.noticeChannels[key]
+	// channel not found, create a new one and close it.
+	// May involve notification followed by waiting.
 	if !ok {
-		log.WarnfContext(ctx, "notice channel not found for %s", key)
-		return fmt.Errorf("notice channel not found for %s", key)
+		ch = make(chan any)
+		if inv.noticeChannels == nil {
+			inv.noticeChannels = make(map[string]chan any)
+		}
+		inv.noticeChannels[key] = ch
+		close(ch)
+		return nil
 	}
 
-	close(ch)
-	delete(inv.noticeChanMap, key)
+	// channel found, close it if it's not closed
+	select {
+	case _, isOpen := <-ch:
+		if isOpen {
+			close(ch)
+		}
+	default:
+		close(ch)
+	}
 
 	return nil
 }
@@ -753,10 +789,17 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
-	for _, ch := range inv.noticeChanMap {
-		close(ch)
+	for _, ch := range inv.noticeChannels {
+		select {
+		case _, isOpen := <-ch:
+			if isOpen {
+				close(ch)
+			}
+		default:
+			close(ch)
+		}
 	}
-	inv.noticeChanMap = nil
+	inv.noticeChannels = nil
 }
 
 // GetCustomAgentConfig retrieves configuration for a specific custom agent type.
