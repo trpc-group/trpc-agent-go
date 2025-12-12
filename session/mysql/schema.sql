@@ -18,9 +18,8 @@ CREATE TABLE IF NOT EXISTS session_states (
     deleted_at TIMESTAMP(6) NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Session states table';
 
--- Unique index on (app_name, user_id, session_id, deleted_at)
--- Note: deleted_at is included because MySQL doesn't support partial indexes like PostgreSQL
-CREATE UNIQUE INDEX idx_session_states_unique_active
+-- Lookup index on (app_name, user_id, session_id, deleted_at)
+CREATE INDEX idx_session_states_lookup
 ON session_states(app_name, user_id, session_id, deleted_at);
 
 -- TTL cleanup index
@@ -95,8 +94,8 @@ CREATE TABLE IF NOT EXISTS session_summaries (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Session summaries table';
 
--- Unique index on (app_name, user_id, session_id, deleted_at)
-CREATE UNIQUE INDEX idx_session_summaries_unique_active
+-- Lookup index on (app_name, user_id, session_id, deleted_at)
+CREATE INDEX idx_session_summaries_lookup
 ON session_summaries(app_name, user_id, session_id, deleted_at);
 
 -- TTL cleanup index
@@ -119,8 +118,8 @@ CREATE TABLE IF NOT EXISTS app_states (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Application states table';
 
--- Unique index on (app_name, key, deleted_at)
-CREATE UNIQUE INDEX idx_app_states_unique_active
+-- Lookup index on (app_name, key, deleted_at)
+CREATE INDEX idx_app_states_lookup
 ON app_states(app_name, `key`, deleted_at);
 
 -- TTL cleanup index
@@ -144,8 +143,8 @@ CREATE TABLE IF NOT EXISTS user_states (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='User states table';
 
--- Unique index on (app_name, user_id, key, deleted_at)
-CREATE UNIQUE INDEX idx_user_states_unique_active
+-- Lookup index on (app_name, user_id, key, deleted_at)
+CREATE INDEX idx_user_states_lookup
 ON user_states(app_name, user_id, `key`, deleted_at);
 
 -- TTL cleanup index
@@ -177,6 +176,7 @@ ON user_states(expires_at);
 --    - 'key' is a MySQL reserved word, so it's enclosed in backticks
 --
 -- 6. Index Strategy:
---    - Unique indexes include deleted_at to allow same key with different deleted_at values
+--    - Using regular indexes instead of unique indexes
+--    - Uniqueness is enforced at application level
 --    - TTL indexes on expires_at for efficient cleanup
 --    - Lookup indexes for common query patterns

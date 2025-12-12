@@ -735,90 +735,117 @@ PostgreSQL 使用关系型表结构，JSON 数据使用 JSONB 类型存储：
 
 ```sql
 -- 会话状态表
-CREATE TABLE session_states (
+CREATE TABLE IF NOT EXISTS session_states (
     id BIGSERIAL PRIMARY KEY,
     app_name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
     session_id VARCHAR(255) NOT NULL,
-    state JSONB,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP
+    state JSONB DEFAULT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP DEFAULT NULL,
+    deleted_at TIMESTAMP DEFAULT NULL
 );
 
 -- 部分唯一索引（只对未删除记录生效）
-CREATE UNIQUE INDEX idx_session_states_unique_active
+CREATE UNIQUE INDEX IF NOT EXISTS idx_session_states_unique_active
 ON session_states(app_name, user_id, session_id)
 WHERE deleted_at IS NULL;
 
+-- TTL 索引（部分索引，仅对非空值生效）
+CREATE INDEX IF NOT EXISTS idx_session_states_expires
+ON session_states(expires_at)
+WHERE expires_at IS NOT NULL;
+
 -- 会话事件表
-CREATE TABLE session_events (
+CREATE TABLE IF NOT EXISTS session_events (
     id BIGSERIAL PRIMARY KEY,
     app_name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
     session_id VARCHAR(255) NOT NULL,
     event JSONB NOT NULL,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP DEFAULT NULL,
+    deleted_at TIMESTAMP DEFAULT NULL
 );
 
--- 轨迹事件表
-CREATE TABLE session_track_events (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    track VARCHAR(255) NOT NULL,
-    event JSONB NOT NULL,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP
-);
+-- 查询索引
+CREATE INDEX IF NOT EXISTS idx_session_events_lookup
+ON session_events(app_name, user_id, session_id, created_at);
+
+-- TTL 索引
+CREATE INDEX IF NOT EXISTS idx_session_events_expires
+ON session_events(expires_at)
+WHERE expires_at IS NOT NULL;
 
 -- 会话摘要表
-CREATE TABLE session_summaries (
+CREATE TABLE IF NOT EXISTS session_summaries (
     id BIGSERIAL PRIMARY KEY,
     app_name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
     session_id VARCHAR(255) NOT NULL,
-    filter_key VARCHAR(255) NOT NULL,
-    summary JSONB NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP,
-    UNIQUE(app_name, user_id, session_id, filter_key)
+    filter_key VARCHAR(255) NOT NULL DEFAULT '',
+    summary JSONB DEFAULT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP DEFAULT NULL,
+    deleted_at TIMESTAMP DEFAULT NULL
 );
 
+-- 部分唯一索引（只对未删除记录生效）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_session_summaries_unique_active
+ON session_summaries(app_name, user_id, session_id, filter_key)
+WHERE deleted_at IS NULL;
+
+-- TTL 索引
+CREATE INDEX IF NOT EXISTS idx_session_summaries_expires
+ON session_summaries(expires_at)
+WHERE expires_at IS NOT NULL;
+
 -- 应用状态表
-CREATE TABLE app_states (
+CREATE TABLE IF NOT EXISTS app_states (
     id BIGSERIAL PRIMARY KEY,
     app_name VARCHAR(255) NOT NULL,
     key VARCHAR(255) NOT NULL,
     value TEXT DEFAULT NULL,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP,
-    UNIQUE(app_name, key)
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP DEFAULT NULL,
+    deleted_at TIMESTAMP DEFAULT NULL
 );
 
+-- 部分唯一索引（只对未删除记录生效）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_states_unique_active
+ON app_states(app_name, key)
+WHERE deleted_at IS NULL;
+
+-- TTL 索引
+CREATE INDEX IF NOT EXISTS idx_app_states_expires
+ON app_states(expires_at)
+WHERE expires_at IS NOT NULL;
+
 -- 用户状态表
-CREATE TABLE user_states (
+CREATE TABLE IF NOT EXISTS user_states (
     id BIGSERIAL PRIMARY KEY,
     app_name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
     key VARCHAR(255) NOT NULL,
     value TEXT DEFAULT NULL,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP,
-    UNIQUE(app_name, user_id, key)
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP DEFAULT NULL,
+    deleted_at TIMESTAMP DEFAULT NULL
 );
+
+-- 部分唯一索引（只对未删除记录生效）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_states_unique_active
+ON user_states(app_name, user_id, key)
+WHERE deleted_at IS NULL;
+
+-- TTL 索引
+CREATE INDEX IF NOT EXISTS idx_user_states_expires
+ON user_states(expires_at)
+WHERE expires_at IS NOT NULL;
 ```
 
 ## MySQL 存储
@@ -992,25 +1019,42 @@ MySQL 使用关系型表结构，JSON 数据使用 JSON 类型存储：
 
 ```sql
 -- 会话状态表
-CREATE TABLE session_states (
+CREATE TABLE IF NOT EXISTS session_states (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     app_name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
     session_id VARCHAR(255) NOT NULL,
+<<<<<<< HEAD
     state JSON,
     created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     expires_at TIMESTAMP(6) NULL,
     deleted_at TIMESTAMP(6) NULL,
     UNIQUE KEY idx_session_states_unique (app_name, user_id, session_id, deleted_at)
+=======
+    state JSON DEFAULT NULL COMMENT 'Session state in JSON format',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
+    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
+>>>>>>> d101a94e (improve mysql index)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Lookup index on (app_name, user_id, session_id, deleted_at)
+CREATE INDEX idx_session_states_lookup
+ON session_states(app_name, user_id, session_id, deleted_at);
+
+-- TTL cleanup index
+CREATE INDEX idx_session_states_expires
+ON session_states(expires_at);
+
 -- 会话事件表
-CREATE TABLE session_events (
+CREATE TABLE IF NOT EXISTS session_events (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     app_name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
     session_id VARCHAR(255) NOT NULL,
+<<<<<<< HEAD
     event JSON NOT NULL,
     created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
@@ -1033,25 +1077,58 @@ CREATE TABLE session_track_events (
     deleted_at TIMESTAMP(6) NULL,
     KEY idx_session_track_events (app_name, user_id, session_id, track, deleted_at, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+=======
+    event JSON NOT NULL COMMENT 'Event data in JSON format',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
+    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Lookup index for querying events by session
+CREATE INDEX idx_session_events_lookup
+ON session_events(app_name, user_id, session_id, created_at);
+
+-- TTL cleanup index
+CREATE INDEX idx_session_events_expires
+ON session_events(expires_at);
+>>>>>>> d101a94e (improve mysql index)
 
 -- 会话摘要表
-CREATE TABLE session_summaries (
+CREATE TABLE IF NOT EXISTS session_summaries (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     app_name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
     session_id VARCHAR(255) NOT NULL,
+<<<<<<< HEAD
     filter_key VARCHAR(255) NOT NULL,
     summary JSON NOT NULL,
     updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     expires_at TIMESTAMP(6) NULL,
     deleted_at TIMESTAMP(6) NULL,
     UNIQUE KEY idx_session_summaries_unique (app_name, user_id, session_id, filter_key, deleted_at)
+=======
+    filter_key VARCHAR(255) NOT NULL DEFAULT '' COMMENT 'Filter key for multiple summaries per session',
+    summary JSON DEFAULT NULL COMMENT 'Summary data in JSON format',
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
+    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
+>>>>>>> d101a94e (improve mysql index)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Lookup index on (app_name, user_id, session_id, deleted_at)
+CREATE INDEX idx_session_summaries_lookup
+ON session_summaries(app_name, user_id, session_id, deleted_at);
+
+-- TTL cleanup index
+CREATE INDEX idx_session_summaries_expires
+ON session_summaries(expires_at);
+
 -- 应用状态表
-CREATE TABLE app_states (
+CREATE TABLE IF NOT EXISTS app_states (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     app_name VARCHAR(255) NOT NULL,
+<<<<<<< HEAD
     `key` VARCHAR(255) NOT NULL,
     value TEXT DEFAULT NULL,
     created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
@@ -1059,13 +1136,30 @@ CREATE TABLE app_states (
     expires_at TIMESTAMP(6) NULL,
     deleted_at TIMESTAMP(6) NULL,
     UNIQUE KEY idx_app_states_unique (app_name, `key`, deleted_at)
+=======
+    `key` VARCHAR(255) NOT NULL COMMENT 'State key',
+    value TEXT DEFAULT NULL COMMENT 'State value',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
+    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
+>>>>>>> d101a94e (improve mysql index)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Lookup index on (app_name, key, deleted_at)
+CREATE INDEX idx_app_states_lookup
+ON app_states(app_name, `key`, deleted_at);
+
+-- TTL cleanup index
+CREATE INDEX idx_app_states_expires
+ON app_states(expires_at);
+
 -- 用户状态表
-CREATE TABLE user_states (
+CREATE TABLE IF NOT EXISTS user_states (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     app_name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
+<<<<<<< HEAD
     `key` VARCHAR(255) NOT NULL,
     value TEXT DEFAULT NULL,
     created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
@@ -1073,12 +1167,28 @@ CREATE TABLE user_states (
     expires_at TIMESTAMP(6) NULL,
     deleted_at TIMESTAMP(6) NULL,
     UNIQUE KEY idx_user_states_unique (app_name, user_id, `key`, deleted_at)
+=======
+    `key` VARCHAR(255) NOT NULL COMMENT 'State key',
+    value TEXT DEFAULT NULL COMMENT 'State value',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
+    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
+>>>>>>> d101a94e (improve mysql index)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Lookup index on (app_name, user_id, key, deleted_at)
+CREATE INDEX idx_user_states_lookup
+ON user_states(app_name, user_id, `key`, deleted_at);
+
+-- TTL cleanup index
+CREATE INDEX idx_user_states_expires
+ON user_states(expires_at);
 ```
 
 **MySQL 与 PostgreSQL 的关键差异：**
 
-- MySQL 不支持 `WHERE deleted_at IS NULL` 的 partial index，需要将 `deleted_at` 包含在唯一索引中
+- MySQL 使用普通索引而非唯一索引，唯一性由应用层保证
 - MySQL 使用 `JSON` 类型而非 `JSONB`（功能类似，但存储格式不同）
 - MySQL 使用 `ON DUPLICATE KEY UPDATE` 语法实现 UPSERT
 

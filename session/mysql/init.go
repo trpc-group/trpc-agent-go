@@ -104,10 +104,9 @@ const (
 	// Note: MySQL doesn't support IF NOT EXISTS for indexes until MySQL 8.0.13+
 	// We'll handle duplicate index errors in the creation logic
 
-	// session_states: unique index on (app_name, user_id, session_id, deleted_at)
-	// MySQL doesn't support partial indexes like PostgreSQL, so we include deleted_at in the index
-	sqlCreateSessionStatesUniqueIndex = `
-		CREATE UNIQUE INDEX {{INDEX_NAME}}
+	// session_states: lookup index on (app_name, user_id, session_id, deleted_at)
+	sqlCreateSessionStatesLookupIndex = `
+		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name, user_id, session_id, deleted_at)`
 
 	// session_states: TTL index on (expires_at)
@@ -116,7 +115,7 @@ const (
 		ON {{TABLE_NAME}}(expires_at)`
 
 	// session_events: lookup index on (app_name, user_id, session_id, created_at)
-	sqlCreateSessionEventsIndex = `
+	sqlCreateSessionEventsLookupIndex = `
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name, user_id, session_id, created_at)`
 
@@ -135,9 +134,9 @@ const (
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
-	// session_summaries: unique index on (app_name, user_id, session_id, filter_key, deleted_at)
-	sqlCreateSessionSummariesUniqueIndex = `
-		CREATE UNIQUE INDEX {{INDEX_NAME}}
+	// session_summaries: lookup index on (app_name, user_id, session_id, deleted_at)
+	sqlCreateSessionSummariesLookupIndex = `
+		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name, user_id, session_id, deleted_at)`
 
 	// session_summaries: TTL index on (expires_at)
@@ -145,9 +144,9 @@ const (
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
-	// app_states: unique index on (app_name, key, deleted_at)
-	sqlCreateAppStatesUniqueIndex = `
-		CREATE UNIQUE INDEX {{INDEX_NAME}}
+	// app_states: lookup index on (app_name, key, deleted_at)
+	sqlCreateAppStatesLookupIndex = `
+		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name, ` + "`key`" + `, deleted_at)`
 
 	// app_states: TTL index on (expires_at)
@@ -155,9 +154,9 @@ const (
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
-	// user_states: unique index on (app_name, user_id, key, deleted_at)
-	sqlCreateUserStatesUniqueIndex = `
-		CREATE UNIQUE INDEX {{INDEX_NAME}}
+	// user_states: lookup index on (app_name, user_id, key, deleted_at)
+	sqlCreateUserStatesLookupIndex = `
+		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name, user_id, ` + "`key`" + `, deleted_at)`
 
 	// user_states: TTL index on (expires_at)
@@ -191,14 +190,13 @@ var tableDefs = []tableDefinition{
 
 // Global index definitions
 var indexDefs = []indexDefinition{
-	// Unique indexes (include deleted_at for MySQL compatibility)
-	{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, sqlCreateSessionStatesUniqueIndex},
-	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive, sqlCreateSessionSummariesUniqueIndex},
-	{sqldb.TableNameAppStates, sqldb.IndexSuffixUniqueActive, sqlCreateAppStatesUniqueIndex},
-	{sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive, sqlCreateUserStatesUniqueIndex},
 	// Lookup indexes
-	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookup, sqlCreateSessionEventsIndex},
 	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixLookup, sqlCreateSessionTracksIndex},
+	{sqldb.TableNameSessionStates, sqldb.IndexSuffixLookup, sqlCreateSessionStatesLookupIndex},
+	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookup, sqlCreateSessionEventsLookupIndex},
+	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixLookup, sqlCreateSessionSummariesLookupIndex},
+	{sqldb.TableNameAppStates, sqldb.IndexSuffixLookup, sqlCreateAppStatesLookupIndex},
+	{sqldb.TableNameUserStates, sqldb.IndexSuffixLookup, sqlCreateUserStatesLookupIndex},
 	// TTL indexes
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, sqlCreateSessionStatesExpiresIndex},
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, sqlCreateSessionEventsExpiresIndex},
