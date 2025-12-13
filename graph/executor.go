@@ -214,7 +214,8 @@ func (e *Executor) Execute(
 	// Create event channel.
 	eventChan := make(chan *event.Event, e.channelBufferSize)
 	// Start execution in a goroutine.
-	go func() {
+	runCtx := agent.CloneContextForGoroutine(ctx)
+	go func(ctx context.Context) {
 		defer func() {
 			if r := recover(); r != nil {
 				stack := debug.Stack()
@@ -246,7 +247,7 @@ func (e *Executor) Execute(
 				WithPregelEventError(err.Error()),
 			))
 		}
-	}()
+	}(runCtx)
 	return eventChan, nil
 }
 
@@ -1084,8 +1085,9 @@ func (e *Executor) executeStep(
 	results := make(chan error, len(tasks))
 
 	for _, t := range tasks {
+		runCtx := agent.CloneContextForGoroutine(ctx)
 		wg.Add(1)
-		go func(t *Task) {
+		go func(ctx context.Context, t *Task) {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
@@ -1117,7 +1119,7 @@ func (e *Executor) executeStep(
 			if err := e.executeSingleTask(taskCtx, taskInvocation, execCtx, t, step); err != nil {
 				results <- err
 			}
-		}(t)
+		}(runCtx, t)
 	}
 
 	// Wait for all tasks to complete.
