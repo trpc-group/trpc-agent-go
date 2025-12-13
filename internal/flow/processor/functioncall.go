@@ -295,8 +295,9 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 
 	for i, tc := range toolCalls {
 		wg.Add(1)
+		runCtx := agent.CloneContextForGoroutine(ctx)
 		go p.runParallelToolCall(
-			ctx, &wg, invocation, llmResponse, tools, eventChan, resultChan, i, tc,
+			runCtx, &wg, invocation, llmResponse, tools, eventChan, resultChan, i, tc,
 		)
 	}
 
