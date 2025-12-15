@@ -527,6 +527,12 @@ func (p *panicSummarizer) Metadata() map[string]any {
 	return map[string]any{}
 }
 
+func (p *panicSummarizer) SetPrompt(prompt string) {
+}
+
+func (p *panicSummarizer) SetModel(m model.Model) {
+}
+
 func TestMemoryService_ProcessSummaryJob_RecoversFromPanic(t *testing.T) {
 	s := NewSessionService(
 		WithSummarizer(&panicSummarizer{}),
