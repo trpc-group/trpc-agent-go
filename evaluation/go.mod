@@ -12,7 +12,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/genai v1.36.0
-	trpc.group/trpc-go/trpc-agent-go v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go v0.7.0
 	trpc.group/trpc-go/trpc-agent-go/model/provider v0.0.0-20251126064502-c8c2594d2519
 )
 
@@ -32,6 +32,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
+	github.com/ollama/ollama v0.13.1 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
@@ -65,4 +66,5 @@ require (
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-20251126064502-c8c2594d2519 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.0.0-20251203120347-0b4d62cb115d // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/ollama v0.7.1-0.20251215094804-902d5dace126 // indirect
 )

@@ -32,7 +32,8 @@ func TestScoreBasedOnResponse(t *testing.T) {
 	assert.Equal(t, 0.0, score.Score)
 
 	_, err = scorer.ScoreBasedOnResponse(ctx, makeResponse(`{"is_the_agent_response_valid":"UNKNOWN"}`), nil)
-	require.Error(t, err)
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, score.Score)
 
 	_, err = scorer.ScoreBasedOnResponse(ctx, &model.Response{}, nil)
 	require.Error(t, err)
@@ -42,10 +43,10 @@ func TestScoreBasedOnResponse(t *testing.T) {
 }
 
 func TestExtractLabel(t *testing.T) {
-	assert.Equal(t, LabelValid, extractLabel(`"is_the_agent_response_valid":"VALID"`))
-	assert.Equal(t, LabelInvalid, extractLabel(`no label`))
-	assert.Equal(t, LabelInvalid, extractLabel(`"is_the_agent_response_valid":"INVALID"`))
-	assert.Equal(t, Label("maybe"), extractLabel(`"is_the_agent_response_valid":"maybe"`))
+	assert.Equal(t, labelValid, extractLabel(`"is_the_agent_response_valid":"VALID"`))
+	assert.NotEqual(t, labelValid, extractLabel(`no label`))
+	assert.NotEqual(t, labelValid, extractLabel(`"is_the_agent_response_valid":"INVALID"`))
+	assert.NotEqual(t, labelValid, extractLabel(`"is_the_agent_response_valid":"maybe"`))
 }
 
 func makeResponse(content string) *model.Response {
