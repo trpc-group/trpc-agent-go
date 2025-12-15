@@ -81,7 +81,7 @@ func New(ctx context.Context, opts ...Option) (*VectorStore, error) {
 	vs := &VectorStore{
 		client:          milvusClient,
 		option:          option,
-		filterConverter: &milvusFilterConverter{},
+		filterConverter: &milvusFilterConverter{metadataFieldName: option.metadataField},
 	}
 
 	if err := vs.initCollection(ctx); err != nil {
@@ -388,7 +388,7 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 		return nil, fmt.Errorf("milvus vector search failed: %w", err)
 	}
 
-	return vs.convertSearchResult(result, query)
+	return vs.convertSearchResult(result)
 }
 
 // searchByKeyword performs keyword-based search using BM25.
@@ -430,7 +430,7 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 		return nil, fmt.Errorf("milvus keyword search failed: %w", err)
 	}
 
-	return vs.convertSearchResult(result, query)
+	return vs.convertSearchResult(result)
 }
 
 // searchByHybrid performs hybrid search combining vector and keyword search.
@@ -476,7 +476,7 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		return nil, fmt.Errorf("milvus hybrid search failed: %w", err)
 	}
 
-	return vs.convertSearchResult(result, query)
+	return vs.convertSearchResult(result)
 }
 
 // searchByFilter performs filter-based search.
@@ -506,7 +506,7 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 		return nil, fmt.Errorf("milvus filter search failed: %w", err)
 	}
 
-	return vs.convertQueryResult(result, query)
+	return vs.convertQueryResult(result)
 }
 
 // DeleteByFilter deletes documents from the vector store based on filter conditions.
@@ -710,63 +710,47 @@ func (vs *VectorStore) getMaxResults(maxResults int) int {
 // Returns the filter expression string and parameter map for templated queries.
 func (vs *VectorStore) buildFilterExpression(filter *vectorstore.SearchFilter) (string, map[string]any, error) {
 	if filter == nil {
-		return "", nil, fmt.Errorf("filter cannot be nil")
+		return "", nil, nil
 	}
 
-	var conditions []string
-	allParams := make(map[string]any)
-
+	var filters []*searchfilter.UniversalFilterCondition
+	// Filter by document IDs.
 	if len(filter.IDs) > 0 {
-		idCR, err := vs.filterConverter.Convert(&searchfilter.UniversalFilterCondition{
+		filters = append(filters, &searchfilter.UniversalFilterCondition{
 			Operator: searchfilter.OperatorIn,
 			Field:    vs.option.idField,
 			Value:    filter.IDs,
 		})
-		if err != nil {
-			return "", nil, err
-		}
-		conditions = append(conditions, idCR.exprStr)
-		// Merge params
-		for k, v := range idCR.params {
-			allParams[k] = v
-		}
 	}
 
-	// for json path, query like 'metadata["trpc_agent_go_source_name"] == {metadata["trpc_agent_go_source_name"]}' is invalid
-	// and JSON_CONTAINS/JSON_CONTAINS_ALL/JSON_CONTAINS_ANY does not suit our needs
-	if len(filter.Metadata) > 0 {
-		for key, value := range filter.Metadata {
-			jsonPath := fmt.Sprintf("%s[\"%s\"]", vs.option.metadataField, key)
-			conditions = append(conditions, fmt.Sprintf("%s == %s", jsonPath, formatValue(value)))
-		}
+	// Filter by metadata.
+	for key, value := range filter.Metadata {
+		filters = append(filters, &searchfilter.UniversalFilterCondition{
+			Operator: searchfilter.OperatorEqual,
+			Field:    fmt.Sprintf("%s[\"%s\"]", vs.option.metadataField, key),
+			Value:    value,
+		})
 	}
 
 	if filter.FilterCondition != nil {
-		cr, err := vs.filterConverter.Convert(filter.FilterCondition)
-		if err != nil {
-			return "", nil, fmt.Errorf("convert filter condition failed: %w", err)
-		}
-		if cr.exprStr != "" {
-			conditions = append(conditions, cr.exprStr)
-			// Merge params
-			for k, v := range cr.params {
-				allParams[k] = v
-			}
-		}
+		filters = append(filters, filter.FilterCondition)
 	}
 
-	if len(conditions) == 0 {
-		return "", nil, fmt.Errorf("empty filter condition")
+	if len(filters) == 0 {
+		return "", nil, nil
 	}
 
-	var finalExpr string
-	if len(conditions) == 1 {
-		finalExpr = conditions[0]
-	} else {
-		finalExpr = "(" + strings.Join(conditions, " and ") + ")"
+	condFilter, err := vs.filterConverter.Convert(&searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorAnd,
+		Value:    filters,
+	})
+	if err != nil {
+		return "", nil, err
 	}
-
-	return finalExpr, allParams, nil
+	if condFilter == nil || condFilter.exprStr == "" {
+		return "", nil, errors.New("empty filter expression")
+	}
+	return condFilter.exprStr, condFilter.params, nil
 }
 
 // buildDeleteFilterExpression milvus delete does not support template parameters
@@ -939,7 +923,7 @@ func (vs *VectorStore) convertResultToDocument(result client.ResultSet) ([]*docu
 	return docs, embeddings, scores, nil
 }
 
-func (vs *VectorStore) convertSearchResult(result []client.ResultSet, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+func (vs *VectorStore) convertSearchResult(result []client.ResultSet) (*vectorstore.SearchResult, error) {
 	searchResult := &vectorstore.SearchResult{
 		Results: make([]*vectorstore.ScoredDocument, 0),
 	}
@@ -966,7 +950,7 @@ func (vs *VectorStore) convertSearchResult(result []client.ResultSet, query *vec
 	return searchResult, nil
 }
 
-func (vs *VectorStore) convertQueryResult(result client.ResultSet, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+func (vs *VectorStore) convertQueryResult(result client.ResultSet) (*vectorstore.SearchResult, error) {
 	searchResult := &vectorstore.SearchResult{
 		Results: make([]*vectorstore.ScoredDocument, 0, result.Len()),
 	}

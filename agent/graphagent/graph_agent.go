@@ -17,7 +17,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -76,7 +79,71 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	// Setup invocation.
 	ga.setupInvocation(invocation)
+	out := make(chan *event.Event, ga.channelBufferSize)
+	go ga.runWithBarrier(ctx, invocation, out)
+	return out, nil
+}
 
+// runWithBarrier emits a start barrier, waits for completion, then runs the graph with callbacks
+// pipeline and forwards all events to the provided output channel.
+func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invocation, out chan<- *event.Event) {
+	defer close(out)
+	// Emit a barrier event and wait for completion in a dedicated goroutine so that the runner can append all prior
+	// events before GraphAgent reads history.
+	if err := ga.emitStartBarrierAndWait(ctx, invocation, out); err != nil {
+		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
+			model.ErrorTypeFlowError, err.Error())
+		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
+			log.Errorf("graphagent: emit error event failed: %v", emitErr)
+		}
+		return
+	}
+	innerChan, err := ga.runWithCallbacks(ctx, invocation)
+	if err != nil {
+		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
+			model.ErrorTypeFlowError, err.Error())
+		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
+			log.Errorf("graphagent: emit error event failed: %v.", emitErr)
+		}
+		return
+	}
+	for evt := range innerChan {
+		if err := event.EmitEvent(ctx, out, evt); err != nil {
+			log.Errorf("graphagent: emit event failed: %v.", err)
+			return
+		}
+	}
+}
+
+// emitStartBarrierAndWait emits a barrier event and waits until the runner has processed it,
+// ensuring that all prior events have been appended to the session before GraphAgent reads history.
+func (ga *GraphAgent) emitStartBarrierAndWait(ctx context.Context, invocation *agent.Invocation,
+	ch chan<- *event.Event) error {
+	// If graph barrier is not enabled, skip.
+	if !barrier.Enabled(invocation) {
+		return nil
+	}
+	barrier := event.New(invocation.InvocationID, invocation.AgentName,
+		event.WithObject(graph.ObjectTypeGraphBarrier))
+	barrier.RequiresCompletion = true
+	completionID := agent.GetAppendEventNoticeKey(barrier.ID)
+	if noticeCh := invocation.AddNoticeChannel(ctx, completionID); noticeCh == nil {
+		return fmt.Errorf("add notice channel for %s", completionID)
+	}
+	if err := agent.EmitEvent(ctx, invocation, ch, barrier); err != nil {
+		return fmt.Errorf("emit barrier event: %w", err)
+	}
+	timeout := llmflow.WaitEventTimeout(ctx)
+	if err := invocation.AddNoticeChannelAndWait(ctx, completionID, timeout); err != nil {
+		return fmt.Errorf("wait for barrier completion: %w", err)
+	}
+	return nil
+}
+
+// runWithCallbacks executes the GraphAgent flow: prepare initial state, run before-agent callbacks, execute the graph,
+// and wrap with after-agent callbacks when present.
+func (ga *GraphAgent) runWithCallbacks(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	// Execute the graph.
 	if ga.agentCallbacks != nil {
 		result, err := ga.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
 			Invocation: invocation,
@@ -141,6 +208,8 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		// Default processor: include (possibly overridden) + preserve same branch.
 		p := processor.NewContentRequestProcessor(
 			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
+			processor.WithAddSessionSummary(ga.options.AddSessionSummary),
+			processor.WithMaxHistoryRuns(ga.options.MaxHistoryRuns),
 			processor.WithPreserveSameBranch(true),
 			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
 		)

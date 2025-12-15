@@ -13,11 +13,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -210,6 +215,60 @@ func (m *streamingMockAgent) Info() agent.Info {
 func (m *streamingMockAgent) SubAgents() []agent.Agent        { return nil }
 func (m *streamingMockAgent) FindSubAgent(string) agent.Agent { return nil }
 
+type completionWaitAgent struct {
+	name string
+}
+
+func (m *completionWaitAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+
+		barrier := event.New(inv.InvocationID, m.name)
+		barrier.RequiresCompletion = true
+		completionID := agent.GetAppendEventNoticeKey(barrier.ID)
+		_ = inv.AddNoticeChannel(ctx, completionID)
+		_ = agent.EmitEvent(ctx, inv, ch, barrier)
+
+		if err := inv.AddNoticeChannelAndWait(ctx, completionID, 500*time.Millisecond); err != nil {
+			errEvt := event.NewErrorEvent(inv.InvocationID, m.name, model.ErrorTypeFlowError, err.Error())
+			_ = agent.EmitEvent(ctx, inv, ch, errEvt)
+			return
+		}
+
+		done := event.NewResponseEvent(inv.InvocationID, m.name, &model.Response{
+			Done:    true,
+			Choices: []model.Choice{{Message: model.NewAssistantMessage("done")}},
+		})
+		_ = agent.EmitEvent(ctx, inv, ch, done)
+	}()
+	return ch, nil
+}
+
+func (m *completionWaitAgent) Tools() []tool.Tool { return nil }
+func (m *completionWaitAgent) Info() agent.Info {
+	return agent.Info{Name: m.name, Description: "wait completion"}
+}
+func (m *completionWaitAgent) SubAgents() []agent.Agent        { return nil }
+func (m *completionWaitAgent) FindSubAgent(string) agent.Agent { return nil }
+
+type filterKeyAgent struct {
+	name string
+	seen string
+}
+
+func (m *filterKeyAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	m.seen = inv.GetEventFilterKey()
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{Response: &model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage(m.seen)}}}}
+	close(ch)
+	return ch, nil
+}
+func (m *filterKeyAgent) Tools() []tool.Tool              { return nil }
+func (m *filterKeyAgent) Info() agent.Info                { return agent.Info{Name: m.name, Description: "fk"} }
+func (m *filterKeyAgent) SubAgents() []agent.Agent        { return nil }
+func (m *filterKeyAgent) FindSubAgent(string) agent.Agent { return nil }
+
 func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 	sa := &streamingMockAgent{name: "stream-agent"}
 	at := NewTool(sa, WithStreamInner(true))
@@ -236,7 +295,7 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 
 	// Expect to receive forwarded event chunks
 	var got []string
-	for i := 0; i < 4; i++ { // Now expecting 4 events: tool input + original 3 events
+	for i := 0; i < 3; i++ { // Now expecting 4 events: tool input + original 3 events
 		chunk, err := reader.Recv()
 		if err != nil {
 			t.Fatalf("unexpected stream error: %v", err)
@@ -254,7 +313,7 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 		}
 	}
 	// We now get 4 events: tool input event + original 3 events (delta1, delta2, final full)
-	if got[0] != `{"request":"hi"}` || got[1] != "hello" || got[2] != " world" || got[3] != "ignored full" {
+	if got[0] != "hello" || got[1] != " world" || got[2] != "ignored full" {
 		t.Fatalf("unexpected forwarded contents: %#v", got)
 	}
 
@@ -270,7 +329,7 @@ func TestTool_HistoryScope_ParentBranch_Streamable_FilterKeyPrefix(t *testing.T)
 	at := NewTool(sa, WithStreamInner(true), WithHistoryScope(HistoryScopeParentBranch))
 
 	// Parent invocation with base filter key.
-	sess := &session.Session{}
+	sess := session.NewSession("app", "user", "session")
 	parent := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationEventFilterKey("parent-agent"),
@@ -283,7 +342,7 @@ func TestTool_HistoryScope_ParentBranch_Streamable_FilterKeyPrefix(t *testing.T)
 	}
 	defer r.Close()
 	// Drain stream
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 3; i++ {
 		if _, err := r.Recv(); err != nil {
 			t.Fatalf("unexpected stream error: %v", err)
 		}
@@ -293,6 +352,107 @@ func TestTool_HistoryScope_ParentBranch_Streamable_FilterKeyPrefix(t *testing.T)
 	if !strings.HasPrefix(sa.seenFilterKey, "parent-agent/"+sa.name+"-") {
 		t.Fatalf("expected child filter key to start with %q, got %q", "parent-agent/"+sa.name+"-", sa.seenFilterKey)
 	}
+}
+
+func TestTool_StreamableCall_FlushesParentSession(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	flushCh := make(chan *flush.FlushRequest, 1)
+	flush.Attach(ctx, parent, flushCh)
+
+	at := NewTool(&streamingMockAgent{name: "stream-agent"}, WithStreamInner(true))
+	toolCtx := agent.NewInvocationContext(ctx, parent)
+
+	acked := make(chan struct{}, 1)
+	go func() {
+		select {
+		case req := <-flushCh:
+			require.NotNil(t, req)
+			require.NotNil(t, req.ACK)
+			close(req.ACK)
+			acked <- struct{}{}
+		case <-ctx.Done():
+		}
+	}()
+
+	reader, err := at.StreamableCall(toolCtx, []byte(`{"request":"hi"}`))
+	require.NoError(t, err)
+	defer reader.Close()
+
+	recvCount := 0
+	for {
+		_, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		recvCount++
+	}
+	require.Equal(t, 3, recvCount)
+
+	select {
+	case <-acked:
+	default:
+		t.Fatalf("expected flush request to be handled")
+	}
+}
+
+func TestTool_StreamableCall_NotifiesCompletion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	at := NewTool(&completionWaitAgent{name: "waiter"}, WithStreamInner(true))
+	toolCtx := agent.NewInvocationContext(ctx, parent)
+
+	reader, err := at.StreamableCall(toolCtx, []byte(`{"request":"payload"}`))
+	require.NoError(t, err)
+	defer reader.Close()
+
+	var contents []string
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		ev, ok := chunk.Content.(*event.Event)
+		require.True(t, ok)
+		require.Nil(t, ev.Error)
+		if ev.Response != nil && len(ev.Response.Choices) > 0 {
+			msg := ev.Response.Choices[0].Message
+			if msg.Content != "" {
+				contents = append(contents, msg.Content)
+			}
+		}
+	}
+
+	require.Contains(t, contents, "done")
+}
+
+func TestTool_wrapWithCompletion_NilInvocation(t *testing.T) {
+	at := NewTool(&mockAgent{name: "wrap", description: "wrap"})
+	src := make(chan *event.Event, 1)
+	src <- &event.Event{Response: &model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("ok")}}}}
+	close(src)
+
+	out := at.wrapWithCompletion(context.Background(), nil, src)
+	require.Equal(t, reflect.ValueOf(src).Pointer(), reflect.ValueOf(out).Pointer())
+
+	evt, ok := <-out
+	require.True(t, ok)
+	require.NotNil(t, evt)
+
+	_, ok = <-out
+	require.False(t, ok)
 }
 
 // inspectAgent collects matched contents from session using the invocation's filter key
@@ -328,16 +488,20 @@ func TestTool_HistoryScope_ParentBranch_Call_InheritsParentHistory(t *testing.T)
 	ia := &inspectAgent{name: "child"}
 	at := NewTool(ia, WithHistoryScope(HistoryScopeParentBranch))
 
-	// Build parent session with a prior assistant event under parent branch.
-	sess := &session.Session{}
+	// Build parent session with a prior user event under parent branch so that
+	// session filtering preserves it when seeding the snapshot.
+	sess := session.NewSession("parent-app", "parent-user", "parent-session")
 	parent := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationEventFilterKey("parent-branch"),
 	)
 	ctx := agent.NewInvocationContext(context.Background(), parent)
 
-	// Append a parent assistant event (author parent, content "PARENT").
-	parentEvt := event.NewResponseEvent(parent.InvocationID, "parent", &model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("PARENT")}}})
+	// Append a parent user event (content "PARENT") so that snapshot/session
+	// filtering retains it as part of history.
+	parentEvt := event.NewResponseEvent(parent.InvocationID, "parent", &model.Response{
+		Choices: []model.Choice{{Message: model.NewUserMessage("PARENT")}},
+	})
 	agent.InjectIntoEvent(parent, parentEvt)
 	sess.Events = append(sess.Events, *parentEvt)
 
@@ -348,8 +512,8 @@ func TestTool_HistoryScope_ParentBranch_Call_InheritsParentHistory(t *testing.T)
 	}
 	s, _ := out.(string)
 	// Expect both parent content and tool input to be visible via filter inheritance.
-	if !strings.Contains(s, "PARENT") || !strings.Contains(s, `{"request":"CHILD"}`) {
-		t.Fatalf("expected output to contain both parent and child contents, got: %q", s)
+	if !strings.Contains(s, "PARENT") || strings.Contains(s, `{"request":"CHILD"}`) {
+		t.Fatalf("expected output to contain parent content (not raw child request), got: %q", s)
 	}
 }
 
@@ -369,7 +533,7 @@ func TestTool_HistoryScope_Isolated_Streamable_NoParentPrefix(t *testing.T) {
 		t.Fatalf("StreamableCall error: %v", err)
 	}
 	defer r.Close()
-	for i := 0; i < 4; i++ { // drain
+	for i := 0; i < 3; i++ { // drain
 		if _, err := r.Recv(); err != nil {
 			t.Fatalf("stream read error: %v", err)
 		}
@@ -515,7 +679,10 @@ func TestTool_Call_EventError(t *testing.T) {
 func TestTool_Call_WithParentInvocation_EventError(t *testing.T) {
 	at := NewTool(&eventErrorMockAgent{name: "err-event-agent"})
 
-	sess := &session.Session{}
+	sess := &session.Session{
+		ID:     "s",
+		UserID: "u",
+	}
 	parent := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationEventFilterKey("parent"),
@@ -660,6 +827,108 @@ func TestTool_Call_WithParentInvocation_NoSession(t *testing.T) {
 	}
 	if result == nil {
 		t.Fatalf("Expected non-nil result")
+	}
+}
+
+func TestTool_callWithParentInvocation_NoSessionFallback(t *testing.T) {
+	at := NewTool(&mockAgent{name: "test", description: "test"})
+	parent := agent.NewInvocation()
+
+	res, err := at.callWithParentInvocation(context.Background(), parent, model.NewUserMessage("hi"))
+	require.NoError(t, err)
+	require.Equal(t, "Hello from mock agent!", res)
+}
+
+func TestTool_Call_WithParentInvocation_FlushError(t *testing.T) {
+	at := NewTool(&mockAgent{name: "test-agent", description: "desc"})
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationEventFilterKey("parent"),
+	)
+	flush.Attach(context.Background(), parent, make(chan *flush.FlushRequest))
+
+	baseCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctx := agent.NewInvocationContext(baseCtx, parent)
+
+	result, err := at.Call(ctx, []byte(`{"request":"hello"}`))
+	require.Error(t, err)
+	require.Empty(t, result)
+	require.Contains(t, err.Error(), "flush parent invocation session")
+}
+
+func TestTool_Call_WithParentInvocation_RunError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationEventFilterKey("parent"),
+	)
+	flushCh := make(chan *flush.FlushRequest, 1)
+	flush.Attach(ctx, parent, flushCh)
+
+	flushed := make(chan struct{}, 1)
+	go func() {
+		select {
+		case req := <-flushCh:
+			if req != nil && req.ACK != nil {
+				close(req.ACK)
+			}
+			flushed <- struct{}{}
+		case <-ctx.Done():
+		}
+	}()
+
+	at := NewTool(&errorMockAgent{name: "err-agent"})
+	_, err := at.Call(agent.NewInvocationContext(ctx, parent), []byte(`{"request":"x"}`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to run agent")
+
+	select {
+	case <-flushed:
+	default:
+		t.Fatalf("expected flush to be triggered")
+	}
+}
+
+func TestTool_Call_WithParentInvocation_FlushesAndCompletes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	flushCh := make(chan *flush.FlushRequest, 1)
+	flush.Attach(ctx, parent, flushCh)
+
+	flushed := make(chan struct{}, 1)
+	go func() {
+		select {
+		case req := <-flushCh:
+			if req != nil && req.ACK != nil {
+				close(req.ACK)
+			}
+			flushed <- struct{}{}
+		case <-ctx.Done():
+		}
+	}()
+
+	a := &filterKeyAgent{name: "child-agent"}
+	at := NewTool(a, WithHistoryScope(HistoryScopeParentBranch))
+	res, err := at.Call(agent.NewInvocationContext(ctx, parent), []byte(`{"request":"hi"}`))
+	require.NoError(t, err)
+	resStr, ok := res.(string)
+	require.True(t, ok)
+	require.True(t, strings.HasPrefix(resStr, "parent-agent/"+a.name+"-"))
+	require.Equal(t, a.seen, resStr)
+
+	select {
+	case <-flushed:
+	default:
+		t.Fatalf("expected flush to be triggered")
 	}
 }
 

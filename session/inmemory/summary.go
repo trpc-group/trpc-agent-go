@@ -115,8 +115,10 @@ func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Se
 	// Do not check storage existence before enqueueing. The worker and
 	// write path perform authoritative validation under lock.
 
-	// Create summary job.
+	// Create summary job with detached context to preserve values (e.g., trace ID)
+	// but not inherit cancel/timeout from the original context.
 	job := &summaryJob{
+		ctx:       context.WithoutCancel(ctx),
 		filterKey: filterKey,
 		force:     force,
 		session:   sess,
@@ -141,8 +143,10 @@ func (s *SessionService) tryEnqueueJob(ctx context.Context, job *summaryJob) boo
 
 	// If context already cancelled, do not enqueue.
 	if err := ctx.Err(); err != nil {
-		log.Debugf(
-			"summary job context cancelled before enqueue: %v", err,
+		log.DebugfContext(
+			ctx,
+			"summary job context cancelled before enqueue: %v",
+			err,
 		)
 		return false
 	}
@@ -151,7 +155,8 @@ func (s *SessionService) tryEnqueueJob(ctx context.Context, job *summaryJob) boo
 	// sending to a closed channel.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Warnf(
+			log.WarnfContext(
+				ctx,
 				"summary job channel may be closed, falling back to "+
 					"synchronous processing: %v",
 				r,
@@ -165,8 +170,9 @@ func (s *SessionService) tryEnqueueJob(ctx context.Context, job *summaryJob) boo
 		return true // Successfully enqueued.
 	default:
 		// Queue is full, fall back to synchronous processing.
-		log.Warnf(
-			"summary job queue is full, falling back to synchronous " +
+		log.WarnfContext(
+			ctx,
+			"summary job queue is full, falling back to synchronous "+
 				"processing",
 		)
 		return false
@@ -201,15 +207,24 @@ func (s *SessionService) startAsyncSummaryWorker() {
 func (s *SessionService) processSummaryJob(job *summaryJob) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Errorf("panic in summary worker: %v", r)
+			log.ErrorfContext(
+				context.Background(),
+				"panic in summary worker: %v",
+				r,
+			)
 		}
 	}()
 
 	// Do not pre-validate against storage here. We summarize based on the
 	// provided job.session and rely on the write path to validate under lock.
 
-	// Create a fresh context with timeout for this job.
-	ctx := context.Background()
+	// Use the detached context from job which preserves values (e.g., trace ID).
+	// Fallback to background context if job.ctx is nil for defensive programming.
+	ctx := job.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Apply timeout if configured.
 	if s.opts.summaryJobTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, s.opts.summaryJobTimeout)
@@ -217,7 +232,11 @@ func (s *SessionService) processSummaryJob(job *summaryJob) {
 	}
 
 	if err := s.CreateSessionSummary(ctx, job.session, job.filterKey, job.force); err != nil {
-		log.Warnf("summary worker failed to create session summary: %v", err)
+		log.WarnfContext(
+			ctx,
+			"summary worker failed to create session summary: %v",
+			err,
+		)
 	}
 }
 

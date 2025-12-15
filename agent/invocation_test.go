@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -68,25 +69,26 @@ func TestInvocation_Clone(t *testing.T) {
 	require.NotEqual(t, "test-invocation", subInv.InvocationID)
 	require.Equal(t, "test-agent", subInv.AgentName)
 	require.Equal(t, "Hello", subInv.Message.Content)
-	require.Equal(t, inv.noticeChanMap, subInv.noticeChanMap)
+	require.Equal(t, inv.noticeChannels, subInv.noticeChannels)
 	require.Equal(t, inv.noticeMu, subInv.noticeMu)
 }
 
 func TestInvocation_AddNoticeChannel(t *testing.T) {
 	inv := NewInvocation()
+	defer inv.CleanupNotice(context.Background())
 	ctx := context.Background()
 	ch := inv.AddNoticeChannel(ctx, "test-channel")
 
 	require.NotNil(t, ch)
-	require.Equal(t, 1, len(inv.noticeChanMap))
+	require.Equal(t, 1, len(inv.noticeChannels))
 	// Adding the same channel again should return the existing channel
 	ch2 := inv.AddNoticeChannel(ctx, "test-channel")
 	require.Equal(t, ch, ch2)
-	require.Equal(t, 1, len(inv.noticeChanMap))
+	require.Equal(t, 1, len(inv.noticeChannels))
 
 	err := inv.NotifyCompletion(ctx, "test-channel")
 	require.NoError(t, err)
-	require.Equal(t, 0, len(inv.noticeChanMap))
+	require.Equal(t, 1, len(inv.noticeChannels))
 }
 
 func TestInvocation_AddNoticeChannelAndWait(t *testing.T) {
@@ -157,6 +159,7 @@ func TestInvocation_AddNoticeChannelAndWait(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			inv := NewInvocation()
 			ctx := context.Background()
+			defer inv.CleanupNotice(ctx)
 			if tt.ctxDelay > 0 {
 				innerCtx, cancel := context.WithTimeout(ctx, tt.ctxDelay)
 				defer cancel()
@@ -214,7 +217,7 @@ func TestInvocation_AddNoticeChannelAndWait(t *testing.T) {
 
 			// Verify channel cleanup
 			if tt.errType == 0 {
-				require.Equal(t, 0, len(inv.noticeChanMap), "notice channel should be cleaned up")
+				require.Equal(t, 1, len(inv.noticeChannels), "notice channel should be cleaned up")
 			}
 
 			// Verify main execution time
@@ -227,23 +230,84 @@ func TestInvocation_AddNoticeChannelAndWait(t *testing.T) {
 	}
 }
 
+func TestInvocation_AddNoticeChannelAndWait_after_notify(t *testing.T) {
+	inv := NewInvocation()
+	key := "test-channel-1"
+
+	err := inv.NotifyCompletion(context.Background(), key)
+	require.NoError(t, err)
+
+	startTime := time.Now()
+	err = inv.AddNoticeChannelAndWait(context.Background(), key, 2*time.Second)
+	require.NoError(t, err)
+	require.Less(t, time.Since(startTime), 2*time.Second)
+}
+
+func TestInvocation_AddNoticeChannelAndWait_before_notify(t *testing.T) {
+	inv := NewInvocation()
+	defer inv.CleanupNotice(context.Background())
+	key := "test-channel-1"
+
+	startTime := time.Now()
+	err := inv.AddNoticeChannelAndWait(context.Background(), key, 2*time.Second)
+	// timeout after 2s
+	require.Error(t, err)
+	require.Greater(t, time.Since(startTime), 2*time.Second)
+
+	err = inv.NotifyCompletion(context.Background(), key)
+	require.NoError(t, err)
+	err = inv.NotifyCompletion(context.Background(), key)
+	require.NoError(t, err)
+
+	startTime = time.Now()
+	err = inv.AddNoticeChannelAndWait(context.Background(), key, 2*time.Second)
+	require.NoError(t, err)
+	require.Less(t, time.Since(startTime), 2*time.Second)
+}
+
 func TestInvocation_NotifyCompletion(t *testing.T) {
 	inv := NewInvocation()
+	inv.noticeChannels = nil
+	defer inv.CleanupNotice(context.Background())
 	noticeKey := "test-channel-1"
 	err := inv.NotifyCompletion(context.Background(), noticeKey)
-	require.Error(t, err)
-	require.Equal(t, 0, len(inv.noticeChanMap))
+	require.NoError(t, err)
+	require.Equal(t, 1, len(inv.noticeChannels))
+
+	inv.AddNoticeChannel(context.Background(), "test-channel-1")
+	require.Equal(t, 1, len(inv.noticeChannels))
+	err = inv.NotifyCompletion(context.Background(), noticeKey)
+	require.NoError(t, err)
 }
 
 func TestInvocation_CleanupNotice(t *testing.T) {
 	inv := NewInvocation()
+	inv.noticeChannels = nil
 	ch := inv.AddNoticeChannel(context.Background(), "test-channel-1")
-	require.Equal(t, 1, len(inv.noticeChanMap))
+	require.Equal(t, 1, len(inv.noticeChannels))
 
+	ch2 := inv.AddNoticeChannel(context.Background(), "test-channel-2")
+	require.Equal(t, 2, len(inv.noticeChannels))
+	require.NotNil(t, ch2)
+	inv.NotifyCompletion(context.Background(), "test-channel-2")
+
+	ch3 := inv.AddNoticeChannel(context.Background(), "test-channel-3")
+	require.Equal(t, 3, len(inv.noticeChannels))
+	require.NotNil(t, ch3)
+
+	go func() {
+		ch <- 1
+	}()
+	go func() {
+		ch3 <- 1
+	}()
+
+	time.Sleep(500 * time.Microsecond)
+	inv.NotifyCompletion(context.Background(), "test-channel-3")
 	// Cleanup notice channel
 	inv.CleanupNotice(context.Background())
 	<-ch
-	require.Equal(t, 0, len(inv.noticeChanMap))
+	require.Equal(t, 0, len(inv.noticeChannels))
 }
 
 func TestInvocation_AddNoticeChannel_Panic(t *testing.T) {
@@ -253,10 +317,38 @@ func TestInvocation_AddNoticeChannel_Panic(t *testing.T) {
 	require.Nil(t, ch)
 }
 
+func TestInvocation_NotifyCompletion_Panic(t *testing.T) {
+	inv := &Invocation{}
+
+	err := inv.NotifyCompletion(context.Background(), "test-key")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "noticeMu is uninitialized")
+}
+
 func TestInvocation_AddNoticeChannelAndWait_Panic(t *testing.T) {
 	inv := &Invocation{}
 
 	err := inv.AddNoticeChannelAndWait(context.Background(), "test-key", 2*time.Second)
+	require.Error(t, err)
+}
+
+func TestInvocation_AddNoticeChannelAndWait_NoTimeoutUsesContext(t *testing.T) {
+	inv := NewInvocation()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- inv.AddNoticeChannelAndWait(
+			ctx,
+			"test-key",
+			WaitNoticeWithoutTimeout,
+		)
+	}()
+
+	cancel()
+
+	err := <-done
 	require.Error(t, err)
 }
 
@@ -272,6 +364,42 @@ func TestInvocation_AddNoticeChannelAndWait_nil(t *testing.T) {
 
 	err := inv.AddNoticeChannelAndWait(context.Background(), "test-key", 2*time.Second)
 	require.Error(t, err)
+}
+
+func TestInvocation_CleanupNotice_NilInvocation(t *testing.T) {
+	var inv *Invocation
+
+	require.NotPanics(t, func() {
+		inv.CleanupNotice(context.Background())
+	})
+}
+
+func TestInvocation_cloneState(t *testing.T) {
+	t.Run("nil invocation", func(t *testing.T) {
+		var inv *Invocation
+		require.Nil(t, inv.cloneState())
+	})
+
+	t.Run("nil state map", func(t *testing.T) {
+		inv := &Invocation{}
+		require.Nil(t, inv.cloneState())
+	})
+
+	t.Run("copies allowed keys only", func(t *testing.T) {
+		inv := &Invocation{
+			state: map[string]any{
+				flusherStateKey: "flush-holder",
+				barrierStateKey: "barrier-holder",
+				"other":         "skip",
+			},
+		}
+		cloned := inv.cloneState()
+		require.NotNil(t, cloned)
+		require.Len(t, cloned, 2)
+		require.Equal(t, "flush-holder", cloned[flusherStateKey])
+		require.Equal(t, "barrier-holder", cloned[barrierStateKey])
+		assert.NotContains(t, cloned, "other")
+	})
 }
 
 func TestInvocation_GetEventFilterKey(t *testing.T) {
@@ -526,4 +654,73 @@ func TestWithModelName_Integration(t *testing.T) {
 	)
 
 	require.Equal(t, "gpt-4-turbo", inv.RunOptions.ModelName)
+}
+
+func TestInvocation_IncLLMCallCount_NoLimitOrNil(t *testing.T) {
+	// nil invocation should be a no-op
+	var nilInv *Invocation
+	require.NoError(t, nilInv.IncLLMCallCount())
+
+	// MaxLLMCalls <= 0 should be treated as "no limit"
+	inv := &Invocation{}
+	err := inv.IncLLMCallCount()
+	require.NoError(t, err)
+	require.Equal(t, 0, inv.llmCallCount, "counter should not increment when no limit is configured")
+}
+
+func TestInvocation_IncLLMCallCount_WithLimitAndOverflow(t *testing.T) {
+	inv := &Invocation{
+		MaxLLMCalls: 2,
+	}
+
+	// First call within limit.
+	err := inv.IncLLMCallCount()
+	require.NoError(t, err)
+	require.Equal(t, 1, inv.llmCallCount)
+
+	// Second call still within limit.
+	err = inv.IncLLMCallCount()
+	require.NoError(t, err)
+	require.Equal(t, 2, inv.llmCallCount)
+
+	// Third call exceeds limit and should return a StopError.
+	err = inv.IncLLMCallCount()
+	require.Error(t, err)
+	stopErr, ok := AsStopError(err)
+	require.True(t, ok, "expected StopError when LLM call limit exceeded")
+	require.Contains(t, stopErr.Message, "max LLM calls (2) exceeded")
+	require.Equal(t, 3, inv.llmCallCount, "counter should still increment on overflow check")
+}
+
+func TestInvocation_IncToolIteration_NoLimitOrNil(t *testing.T) {
+	// nil invocation should be a no-op and report not exceeded.
+	var nilInv *Invocation
+	require.False(t, nilInv.IncToolIteration())
+
+	// MaxToolIterations <= 0 should be treated as "no limit".
+	inv := &Invocation{}
+	exceeded := inv.IncToolIteration()
+	require.False(t, exceeded)
+	require.Equal(t, 0, inv.toolIterationCount, "counter should not increment when no limit is configured")
+}
+
+func TestInvocation_IncToolIteration_WithLimitAndOverflow(t *testing.T) {
+	inv := &Invocation{
+		MaxToolIterations: 2,
+	}
+
+	// First iteration within limit.
+	exceeded := inv.IncToolIteration()
+	require.False(t, exceeded)
+	require.Equal(t, 1, inv.toolIterationCount)
+
+	// Second iteration still within limit.
+	exceeded = inv.IncToolIteration()
+	require.False(t, exceeded)
+	require.Equal(t, 2, inv.toolIterationCount)
+
+	// Third iteration exceeds limit and should report true.
+	exceeded = inv.IncToolIteration()
+	require.True(t, exceeded, "expected true when tool iteration limit is exceeded")
+	require.Equal(t, 3, inv.toolIterationCount)
 }

@@ -49,7 +49,12 @@ func newMCPTool(mcpToolData mcp.Tool, sessionManager *mcpSessionManager) *mcpToo
 
 // Call implements the Tool interface.
 func (t *mcpTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
-	log.Debug("Calling MCP tool", "name", t.mcpToolRef.Name)
+	log.DebugContext(
+		ctx,
+		"Calling MCP tool",
+		"name",
+		t.mcpToolRef.Name,
+	)
 
 	// Parse raw arguments.
 	var rawArguments map[string]any

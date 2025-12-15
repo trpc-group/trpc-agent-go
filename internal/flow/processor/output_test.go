@@ -286,7 +286,15 @@ func TestOutputResponseProcessor_TypedAndStateDelta(t *testing.T) {
 	inv.StructuredOutputType = reflect.TypeOf(typedStruct{})
 
 	// Prepare response content that contains JSON object.
-	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "text {\"a\":1} more"}}}}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Content: "text {\"a\":1} more",
+				},
+			},
+		},
+	}
 
 	ch := make(chan *event.Event, 4)
 
@@ -294,13 +302,72 @@ func TestOutputResponseProcessor_TypedAndStateDelta(t *testing.T) {
 	go func() {
 		for e := range ch {
 			if e.RequiresCompletion {
-				_ = inv.NotifyCompletion(ctx, agent.GetAppendEventNoticeKey(e.ID))
+				key := agent.GetAppendEventNoticeKey(e.ID)
+				_ = inv.NotifyCompletion(ctx, key)
 			}
 		}
 	}()
 
-	proc := NewOutputResponseProcessor("k", map[string]any{"type": "object"})
+	proc := NewOutputResponseProcessor(
+		"k",
+		map[string]any{"type": "object"},
+	)
 	proc.ProcessResponse(ctx, inv, nil, rsp, ch)
+}
+
+func TestOutputResponseProcessor_TypedInvalidJSON(t *testing.T) {
+	ctx := context.Background()
+	inv := agent.NewInvocation()
+	inv.AgentName = "test-agent"
+	inv.StructuredOutputType = reflect.TypeOf(typedStruct{})
+
+	// Content contains a balanced object that is not valid JSON
+	// (unquoted key), so unmarshal will fail.
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Content: "prefix {not-valid-json} suffix",
+				},
+			},
+		},
+	}
+
+	ch := make(chan *event.Event, 2)
+	proc := NewOutputResponseProcessor(
+		"",
+		map[string]any{"type": "object"},
+	)
+	proc.ProcessResponse(ctx, inv, nil, rsp, ch)
+
+	close(ch)
+	if len(ch) != 0 {
+		t.Fatalf("expected no events for invalid structured output")
+	}
+}
+
+func TestOutputResponseProcessor_HandleOutputKey_AddNoticeError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	inv := agent.NewInvocation()
+	inv.AgentName = "test-agent"
+
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Content: "{\"a\":1}",
+				},
+			},
+		},
+	}
+
+	ch := make(chan *event.Event, 2)
+	proc := NewOutputResponseProcessor("k", nil)
+	proc.ProcessResponse(ctx, inv, nil, rsp, ch)
+
+	close(ch)
 }
 
 func TestOutputResponseProcessor_ExtractFinalContent(t *testing.T) {

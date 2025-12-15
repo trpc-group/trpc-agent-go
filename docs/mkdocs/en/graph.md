@@ -508,6 +508,39 @@ stateGraph.
     SetFinishPoint("ask")
 ```
 
+#### Using RemoveAllMessages to Clear Message History
+
+When chaining multiple LLM nodes, `MessageReducer` accumulates messages. If each
+LLM node requires an isolated message context (without inheriting the previous
+node's conversation history), use `RemoveAllMessages` to clear previous messages:
+
+```go
+// In the prompt preparation node, clear messages before setting new UserInput.
+func preparePromptNode(ctx context.Context, state graph.State) (any, error) {
+    userMessage := buildUserMessage(...)
+    return graph.State{
+        // Key: Clear previous messages first to avoid accumulation.
+        graph.StateKeyMessages:  graph.RemoveAllMessages{},
+        graph.StateKeyUserInput: userMessage,
+    }, nil
+}
+```
+
+**Use cases**:
+
+- Multiple independent LLM nodes within the same Graph, where each node doesn't
+  need the previous node's conversation history
+- Loop structures where each iteration requires a fresh message context
+- Scenarios requiring complete message list reconstruction
+
+**Notes**:
+
+- `RemoveAllMessages{}` is a special `MessageOp` that `MessageReducer` recognizes
+  and uses to clear the message list
+- Must set `RemoveAllMessages{}` **before** setting `StateKeyUserInput`
+- `WithSubgraphIsolatedMessages(true)` only works for `AddSubgraphNode`, not for
+  `AddLLMNode`; use `RemoveAllMessages` to isolate messages between LLM nodes
+
 ### 3. GraphAgent Configuration Options
 
 GraphAgent supports various configuration options:
@@ -524,6 +557,8 @@ graphAgent, err := graphagent.New(
     graphagent.WithChannelBufferSize(1024),            // Tune event buffer size
     graphagent.WithCheckpointSaver(memorySaver),       // Persist checkpoints if needed
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // Register sub-agents by name
+    graphagent.WithAddSessionSummary(true),            // Inject session summary as system message
+    graphagent.WithMaxHistoryRuns(5),                  // Truncate history when summaries are off
     // Set the filter mode for messages passed to the model. The final messages passed to the model must satisfy both WithMessageTimelineFilterMode and WithMessageBranchFilterMode conditions.
     // Timeline dimension filter conditions
     // Default: graphagent.TimelineFilterAll
@@ -548,6 +583,12 @@ graphAgent, err := graphagent.New(
 
 > Model/tool callbacks are configured per node, e.g. `AddLLMNode(..., graph.WithModelCallbacks(...))`
 > or `AddToolsNode(..., graph.WithToolCallbacks(...))`.
+
+Session summary notes:
+
+- `WithAddSessionSummary(true)` takes effect only when `Session.Summaries` contains a summary for the invocation’s filter key. Summaries are typically produced by SessionService + SessionSummarizer, and Runner will auto‑enqueue summarization after persisting events.
+- GraphAgent reads summaries only; it does not generate them. If you bypass Runner, call `sessionService.CreateSessionSummary` or `EnqueueSummaryJob` after appending events.
+- Summary injection works only when `TimelineFilterMode` is `TimelineFilterAll`.
 
 #### Concurrency considerations
 
@@ -3059,6 +3100,24 @@ graphAgent, _ := graphagent.New("workflow", g,
   sg.AddToolsConditionalEdges("ask", "tools", "fallback")
   ```
 - **Execution timing**: When `AddToolsConditionalEdges` detects `tool_calls` in the LLM response, it routes to `AddToolsNode`, which executes the actual tool calls.
+
+**Q9: Messages are duplicated in req.Messages when chaining multiple LLM nodes**
+
+- **Symptom**: The same user input appears multiple times in `req.Messages`.
+- **Root cause**: When using `MessagesStateSchema()`, `MessageReducer` accumulates messages. Each LLM node execution appends a new user message if `StateKeyUserInput` is not empty. When there are loops (e.g., tool call loops) or multiple LLM nodes chained together, messages keep accumulating.
+- **Solution**: Use `RemoveAllMessages` to clear previous messages before setting a new `StateKeyUserInput`:
+  ```go
+  // In the prepare prompt node
+  func preparePromptNode(ctx context.Context, state graph.State) (any, error) {
+      userMessage := buildUserMessage(...)
+      return graph.State{
+          // Key: Clear previous messages to avoid accumulation
+          graph.StateKeyMessages:  graph.RemoveAllMessages{},
+          graph.StateKeyUserInput: userMessage,
+      }, nil
+  }
+  ```
+- **Note**: `WithSubgraphIsolatedMessages(true)` only works for `AddSubgraphNode`, not for `AddLLMNode`.
 
 ## Real‑World Example
 

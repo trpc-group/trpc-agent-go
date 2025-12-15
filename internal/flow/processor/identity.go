@@ -64,13 +64,20 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 	}
 
 	if req == nil {
-		log.Errorf("Identity request processor: request is nil")
+		log.ErrorfContext(
+			ctx,
+			"Identity request processor: request is nil",
+		)
 		return
 	}
 
 	// Get agent name.
 	agentName := invocation.AgentName
-	log.Debugf("Identity request processor: processing request for agent %s", agentName)
+	log.DebugfContext(
+		ctx,
+		"Identity request processor: processing request for agent %s",
+		agentName,
+	)
 
 	// Initialize messages slice if nil.
 	if req.Messages == nil {
@@ -94,24 +101,34 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 			if !containsIdentity(req.Messages[systemMsgIndex].Content, identityContent) {
 				// Prepend identity to existing system message
 				req.Messages[systemMsgIndex].Content = identityContent + "\n\n" + req.Messages[systemMsgIndex].Content
-				log.Debugf("Identity request processor: prepended identity to existing system message")
+				log.DebugContext(
+					ctx,
+					"Identity request processor: prepended identity to "+
+						"existing system message",
+				)
 			}
 		} else {
 			// No existing system message, create new one
 			identityMsg := model.NewSystemMessage(identityContent)
 			req.Messages = append([]model.Message{identityMsg}, req.Messages...)
-			log.Debugf("Identity request processor: added identity message")
+			log.DebugContext(
+				ctx,
+				"Identity request processor: added identity message",
+			)
 		}
 	}
 
-	log.Debugf("Identity request processor: sent preprocessing event")
+	log.DebugContext(ctx, "Identity request processor: sent preprocessing event")
 
 	if err := agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingIdentity),
 	)); err != nil {
-		log.Debugf("Identity request processor: context cancelled")
+		log.DebugContext(
+			ctx,
+			"Identity request processor: context cancelled",
+		)
 	}
 }
 

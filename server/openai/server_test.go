@@ -497,7 +497,7 @@ func TestServer_handleNonStreaming_EmptyMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	reqBody := openAIRequest{
-		Model:    "gpt-3.5-turbo",
+		Model:    defaultModelName,
 		Messages: []openAIMessage{},
 		Stream:   false,
 	}
@@ -508,6 +508,34 @@ func TestServer_handleNonStreaming_EmptyMessages(t *testing.T) {
 	s.handleChatCompletions(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestServer_handleStreaming_EmptyMessages(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model:    defaultModelName,
+		Messages: []openAIMessage{},
+		Stream:   true,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewReader(bodyBytes),
+	)
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, contentTypeJSON, w.Header().Get(headerContentType))
+
+	var errorResp openAIError
+	err = json.NewDecoder(w.Body).Decode(&errorResp)
+	require.NoError(t, err)
+	assert.Equal(t, errorTypeInvalidRequest, errorResp.Error.Type)
 }
 
 func TestServer_handleStreaming(t *testing.T) {
@@ -865,6 +893,33 @@ func TestServer_handleNonStreaming_RunnerError(t *testing.T) {
 	s.handleChatCompletions(w, req)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestServer_handleNonStreaming_InvalidRole(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "invalid",
+				Content: "Hello",
+			},
+		},
+		Stream: false,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewReader(bodyBytes),
+	)
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 func TestServer_handleNonStreaming_EmptyEvents(t *testing.T) {

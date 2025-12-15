@@ -135,7 +135,11 @@ func New(name string, opts ...Option) *Model {
 	}
 	m.contextWindow, err = m.getContextWindow()
 	if err != nil {
-		log.Warnf("failed to get context window for %s: %v", m.name, err)
+		log.Warnf(
+			"failed to get context window for %s: %v",
+			m.name,
+			err,
+		)
 		m.contextWindow = imodel.ResolveContextWindow(m.name)
 	}
 	return m
@@ -207,14 +211,24 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			// Use default parameters.
 			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
 		}
-		log.Debugf("auto-calculated max input tokens: model=%s, contextWindow=%d, maxInputTokens=%d",
-			m.name, contextWindow, maxInputTokens)
+		log.DebugfContext(
+			ctx,
+			"auto-calculated max input tokens: model=%s, "+
+				"contextWindow=%d, maxInputTokens=%d",
+			m.name,
+			contextWindow,
+			maxInputTokens,
+		)
 	}
 
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
-		log.Warn("token tailoring failed in ollama.Model", err)
+		log.WarnContext(
+			ctx,
+			"token tailoring failed in ollama.Model",
+			err,
+		)
 		return
 	}
 
@@ -223,7 +237,11 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Calculate remaining tokens for output based on context window.
 	usedTokens, err := m.tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
 	if err != nil {
-		log.Warn("failed to count tokens after tailoring", err)
+		log.WarnContext(
+			ctx,
+			"failed to count tokens after tailoring",
+			err,
+		)
 		return
 	}
 
@@ -245,8 +263,14 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		}
 		if maxOutputTokens > 0 {
 			request.GenerationConfig.MaxTokens = &maxOutputTokens
-			log.Debugf("token tailoring: contextWindow=%d, usedTokens=%d, maxOutputTokens=%d",
-				m.contextWindow, usedTokens, maxOutputTokens)
+			log.DebugfContext(
+				ctx,
+				"token tailoring: contextWindow=%d, usedTokens=%d, "+
+					"maxOutputTokens=%d",
+				m.contextWindow,
+				usedTokens,
+				maxOutputTokens,
+			)
 		}
 	}
 }

@@ -586,6 +586,39 @@ stateGraph.
     SetFinishPoint("ask")
 ```
 
+#### 使用 RemoveAllMessages 清除消息历史
+
+当多个 LLM 节点串联时，`MessageReducer` 会累积消息。如果每个 LLM 节点
+需要独立的消息上下文（不继承前序节点的对话历史），可以使用
+`RemoveAllMessages` 操作清除之前的消息：
+
+```go
+// 在准备 prompt 的节点中，先清除消息再设置新的 UserInput.
+func preparePromptNode(ctx context.Context, state graph.State) (any, error) {
+    userMessage := buildUserMessage(...)
+    return graph.State{
+        // 关键：先清除之前的消息，避免累积.
+        graph.StateKeyMessages:  graph.RemoveAllMessages{},
+        graph.StateKeyUserInput: userMessage,
+    }, nil
+}
+```
+
+**适用场景**：
+
+- 同一个 Graph 内有多个独立的 LLM 节点，每个节点不需要前序节点的对话历史
+- 循环结构中，每次迭代需要全新的消息上下文
+- 需要完全重建消息列表的场景
+
+**注意**：
+
+- `RemoveAllMessages{}` 是一个特殊的 `MessageOp`，`MessageReducer` 会
+  识别它并清空消息列表
+- 必须在设置 `StateKeyUserInput` **之前**先设置 `RemoveAllMessages{}`
+- `WithSubgraphIsolatedMessages(true)` 只对 `AddSubgraphNode` 有效，
+  对 `AddLLMNode` 无效；如需在 LLM 节点间隔离消息，请使用
+  `RemoveAllMessages`
+
 ### 3. GraphAgent 配置选项
 
 GraphAgent 支持多种配置选项：
@@ -593,38 +626,46 @@ GraphAgent 支持多种配置选项：
 ```go
 // 创建 GraphAgent 时可以使用多种选项
 graphAgent, err := graphagent.New(
-    "workflow-name",
-    compiledGraph,
-    graphagent.WithDescription("工作流描述"),
-    graphagent.WithInitialState(graph.State{
-        "initial_data": "初始数据",
-    }),
-    graphagent.WithChannelBufferSize(1024),           // 调整事件通道缓冲区
-    graphagent.WithCheckpointSaver(memorySaver),      // 使用持久化检查点
-    graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
-    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
-    // 时间维度过滤条件
-    // 默认值: graphagent.TimelineFilterAll
-    // 可选值:
-    //  - graphagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
-    //  - graphagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
-    //  - graphagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
-    graphagent.WithMessageTimelineFilterMode(graphagent.BranchFilterModeAll),
-    // 分支维度过滤条件
-    // 默认值: graphagent.BranchFilterModePrefix
-    // 可选值:
-    //  - graphagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
-    //  - graphagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
-    //  - graphagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
-    graphagent.WithMessageBranchFilterMode(graphagent.TimelineFilterAll),
-    graphagent.WithAgentCallbacks(&agent.Callbacks{
-        // Agent 级回调配置
-    }),
+	"workflow-name",
+	compiledGraph,
+	graphagent.WithDescription("工作流描述"),
+	graphagent.WithInitialState(graph.State{
+		"initial_data": "初始数据",
+	}),
+	graphagent.WithChannelBufferSize(1024),            // 调整事件通道缓冲区
+	graphagent.WithCheckpointSaver(memorySaver),       // 使用持久化检查点
+	graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
+	graphagent.WithAddSessionSummary(true),            // 将会话摘要注入 system 消息
+	graphagent.WithMaxHistoryRuns(5),                  // 未开启摘要时截断历史轮次
+	// 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+	// 时间维度过滤条件
+	// 默认值: graphagent.TimelineFilterAll
+	// 可选值:
+	//  - graphagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
+	//  - graphagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
+	//  - graphagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
+	graphagent.WithMessageTimelineFilterMode(graphagent.BranchFilterModeAll),
+	// 分支维度过滤条件
+	// 默认值: graphagent.BranchFilterModePrefix
+	// 可选值:
+	//  - graphagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
+	//  - graphagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
+	//  - graphagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
+	graphagent.WithMessageBranchFilterMode(graphagent.TimelineFilterAll),
+	graphagent.WithAgentCallbacks(&agent.Callbacks{
+		// Agent 级回调配置
+	}),
 )
 ```
 
 > 模型/工具回调需要在节点级配置，例如 `AddLLMNode(..., graph.WithModelCallbacks(...))`
 > 或 `AddToolsNode(..., graph.WithToolCallbacks(...))`。
+
+使用会话摘要的注意事项：
+
+- `WithAddSessionSummary(true)` 仅在 `Session.Summaries` 中已有对应 `FilterKey` 的摘要时生效。摘要通常由 SessionService + SessionSummarizer 生成，Runner 在落库事件后会自动触发 `EnqueueSummaryJob`。
+- GraphAgent 只读取摘要，不生成摘要。如果绕过 Runner，需在写入事件后自行调用 `sessionService.CreateSessionSummary` 或 `EnqueueSummaryJob`。
+- 摘要仅在 `TimelineFilterAll` 下生效。
 
 #### 并发使用注意事项
 
@@ -3078,6 +3119,24 @@ graphAgent, _ := graphagent.New("workflow", g,
   sg.AddToolsConditionalEdges("ask", "tools", "fallback")
   ```
 - **调用时机**：当 `AddToolsConditionalEdges` 检测到 LLM 响应中包含 `tool_calls` 时，会路由到 `AddToolsNode`，由工具节点执行实际调用。
+
+**Q9: 多个 LLM 节点串联时，req.Messages 中消息被重复追加**
+
+- **问题现象**：同一个用户输入在 `req.Messages` 中出现多次。
+- **根本原因**：使用 `MessagesStateSchema()` 时，`MessageReducer` 会累积消息。每个 LLM 节点执行时，如果 `StateKeyUserInput` 不为空，会追加新的 user message。当存在循环（如工具调用循环）或多个 LLM 节点串联时，消息会不断累积。
+- **解决方案**：在设置新的 `StateKeyUserInput` 之前，使用 `RemoveAllMessages` 清除之前的消息：
+  ```go
+  // 在准备 prompt 的节点中
+  func preparePromptNode(ctx context.Context, state graph.State) (any, error) {
+      userMessage := buildUserMessage(...)
+      return graph.State{
+          // 关键：先清除之前的消息，避免累积
+          graph.StateKeyMessages:  graph.RemoveAllMessages{},
+          graph.StateKeyUserInput: userMessage,
+      }, nil
+  }
+  ```
+- **注意**：`WithSubgraphIsolatedMessages(true)` 只对 `AddSubgraphNode` 有效，对 `AddLLMNode` 无效。
 
 ## 实际案例
 
