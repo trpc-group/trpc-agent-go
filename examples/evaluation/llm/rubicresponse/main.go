@@ -7,7 +7,7 @@
 //
 //
 
-// Package main implements functions for the final response evaluation.
+// Package main implements functions for the rubic response evaluation.
 package main
 
 import (

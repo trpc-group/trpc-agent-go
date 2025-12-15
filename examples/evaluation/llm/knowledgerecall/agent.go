@@ -53,34 +53,28 @@ func newQAAgent(modelName string, stream bool) agent.Agent {
 
 func newSearchTool() tool.Tool {
 	ctx := context.Background()
-
-	// 1. 创建 embedder
+	// 1. Create embedder.
 	embedder := openaiembedder.New(
 		openaiembedder.WithModel("text-embedding-3-small"),
 	)
-
-	// 2. 创建向量存储
+	// 2. Create vector store.
 	vectorStore := vectorinmemory.New()
-
-	// 3. 创建知识源
+	// 3. Create knowledge sources.
 	sources := []source.Source{
 		filesource.New([]string{"./knowledge/llm.md"}),
 	}
-
-	// 4. 创建 Knowledge
+	// 4. Create Knowledge.
 	kb := knowledge.New(
 		knowledge.WithEmbedder(embedder),
 		knowledge.WithVectorStore(vectorStore),
 		knowledge.WithSources(sources),
 		knowledge.WithEnableSourceSync(true),
 	)
-
-	// 5. 加载文档
+	// 5. Load documents.
 	if err := kb.Load(ctx); err != nil {
 		log.Fatalf("Failed to load knowledge base: %v", err)
 	}
-
-	// 6. 创建搜索工具
+	// 6. Create search tool.
 	searchTool := knowledgetool.NewKnowledgeSearchTool(
 		kb,
 		knowledgetool.WithToolName("knowledge_search"),

@@ -2,8 +2,6 @@ module trpc.group/trpc-go/trpc-agent-go/examples/evaluation
 
 go 1.24.10
 
-toolchain go1.24.11
-
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/evaluation => ../../evaluation

@@ -22,6 +22,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+const labelValid string = "valid" // labelValid marks a valid agent response.
+
 // labelMatchIsResponseValidRe extracts the validity label from judge output.
 var labelMatchIsResponseValidRe = regexp.MustCompile(`"is_the_agent_response_valid"\s*:\s*\[?\s*"?([A-Za-z_]+)"?\s*\]?`)
 
@@ -45,39 +47,22 @@ func (e *finalResponseResponseScorer) ScoreBasedOnResponse(ctx context.Context, 
 	}
 	label := extractLabel(responseText)
 	score := 0.0
-	switch label {
-	case LabelValid:
+	if label == labelValid {
 		score = 1.0
-	case LabelInvalid:
-		score = 0.0
-	default:
-		return nil, fmt.Errorf("unknown label: %v", label)
 	}
-	return &evalresult.ScoreResult{
-		Score: score,
-	}, nil
+	return &evalresult.ScoreResult{Score: score}, nil
 }
 
-// Label captures the validity category returned by the judge.
-type Label string
-
-const (
-	LabelValid   Label = "valid"   // LabelValid marks a valid agent response.
-	LabelInvalid Label = "invalid" // LabelInvalid marks an invalid agent response.
-)
-
 // extractLabel extracts the validity label from the judge response.
-func extractLabel(response string) Label {
+func extractLabel(response string) string {
 	match := labelMatchIsResponseValidRe.FindStringSubmatch(response)
 	if len(match) < 1 {
-		return LabelInvalid
+		return ""
 	}
 	label := strings.TrimSpace(match[1])
 	switch strings.ToLower(label) {
-	case string(LabelValid):
-		return LabelValid
-	case string(LabelInvalid):
-		return LabelInvalid
+	case labelValid:
+		return labelValid
 	}
-	return Label(label)
+	return ""
 }

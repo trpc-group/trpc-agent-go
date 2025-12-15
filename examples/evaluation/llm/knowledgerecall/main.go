@@ -7,7 +7,7 @@
 //
 //
 
-// Package main implements functions for the final response evaluation.
+// Package main implements functions for the knowledge recall evaluation.
 package main
 
 import (
