@@ -108,6 +108,8 @@ func (l *recordingLogger) Fatalf(format string, args ...any) {
 type mockSummarizer interface {
 	ShouldSummarize(sess *session.Session) bool
 	Summarize(ctx context.Context, sess *session.Session) (string, error)
+	SetPrompt(prompt string)
+	SetModel(m model.Model)
 	Metadata() map[string]any
 }
 

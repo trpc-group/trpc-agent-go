@@ -15,6 +15,7 @@ import (
 	"context"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -25,6 +26,19 @@ type SessionSummarizer interface {
 
 	// Summarize generates a summary without modifying the session events.
 	Summarize(ctx context.Context, sess *session.Session) (string, error)
+
+	// SetPrompt updates the summarizer's prompt dynamically.
+	// The prompt must include the placeholder {conversation_text}, which will
+	// be replaced with the extracted conversation when generating the summary.
+	// If an empty prompt is provided, it will be ignored and the current
+	// prompt will remain unchanged.
+	SetPrompt(prompt string)
+
+	// SetModel updates the summarizer's model dynamically.
+	// This allows switching to different models at runtime based on different
+	// scenarios or requirements. If nil is provided, it will be ignored and
+	// the current model will remain unchanged.
+	SetModel(m model.Model)
 
 	// Metadata returns metadata about the summarizer configuration.
 	Metadata() map[string]any
