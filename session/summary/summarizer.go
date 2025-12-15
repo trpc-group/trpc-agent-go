@@ -144,6 +144,10 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 			return "", fmt.Errorf("pre-summary hook failed: %w", hookErr)
 		}
 		if hookErr == nil {
+			// Propagate context modifications from pre-hook to subsequent operations.
+			if hookCtx.Ctx != nil {
+				ctx = hookCtx.Ctx
+			}
 			if hookCtx.Text != "" {
 				conversationText = hookCtx.Text
 			} else if len(hookCtx.Events) > 0 {
