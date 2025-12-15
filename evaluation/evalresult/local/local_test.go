@@ -16,8 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -111,10 +111,10 @@ func TestLocalManagerSaveUsesProvidedID(t *testing.T) {
 	ctx := context.Background()
 	mgr := New(evalresult.WithBaseDir(dir)).(*manager)
 	provided := &evalresult.EvalSetResult{
-		EvalSetID:          "set",
-		EvalSetResultID:    "custom-id",
-		EvalSetResultName:  "provided-name",
-		CreationTimestamp:  &epochtime.EpochTime{Time: time.Now()},
+		EvalSetID:         "set",
+		EvalSetResultID:   "custom-id",
+		EvalSetResultName: "provided-name",
+		CreationTimestamp: &epochtime.EpochTime{Time: time.Now()},
 	}
 	id, err := mgr.Save(ctx, "app", provided)
 	require.NoError(t, err)
