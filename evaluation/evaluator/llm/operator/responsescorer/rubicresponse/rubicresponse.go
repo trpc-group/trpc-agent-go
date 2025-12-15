@@ -21,6 +21,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+const passedVerdict = "yes"
+
 // rubricBlockRegex extracts rubric ID, property, evidence, reason, and verdict blocks.
 var rubricBlockRegex = regexp.MustCompile(
 	`(?ms)ID:\s*(\d+)\s*` + // 1: rubric id
@@ -33,10 +35,12 @@ var rubricBlockRegex = regexp.MustCompile(
 type rubicResponseScorer struct {
 }
 
+// New returns a response scorer for rubric responses.
 func New() responsescorer.ResponseScorer {
 	return &rubicResponseScorer{}
 }
 
+// ScoreBasedOnResponse scores rubric responses.
 func (e *rubicResponseScorer) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
 	_ *metric.EvalMetric) (*evalresult.ScoreResult, error) {
 	content := response.Choices[0].Message.Content
@@ -51,7 +55,7 @@ func (e *rubicResponseScorer) ScoreBasedOnResponse(ctx context.Context, response
 		reason := match[4]
 		verdict := match[5]
 		var score float64
-		if verdict == "yes" {
+		if verdict == passedVerdict {
 			score = 1.0
 		} else {
 			score = 0.0

@@ -77,10 +77,12 @@ Verdict: [yes|no]
 type rubicKnowledgeRecallMessagesConstructor struct {
 }
 
+// New returns a messages constructor for knowledge recall.
 func New() messagesconstructor.MessagesConstructor {
 	return &rubicKnowledgeRecallMessagesConstructor{}
 }
 
+// ConstructMessages builds judge prompts for knowledge recall evaluation.
 func (e *rubicKnowledgeRecallMessagesConstructor) ConstructMessages(ctx context.Context, actual, _ *evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
 	if actual == nil {

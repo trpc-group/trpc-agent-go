@@ -18,10 +18,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+// ResponseScorer defines the interface for scoring judge responses.
 type ResponseScorer interface {
-	// ResponseScorer converts judge feedback into a numeric score for a single metric.
 	// ScoreBasedOnResponse extracts a score from the judge response.
-	ScoreBasedOnResponse(ctx context.Context,
-		resp *model.Response,
+	ScoreBasedOnResponse(ctx context.Context, resp *model.Response,
 		evalMetric *metric.EvalMetric) (*evalresult.ScoreResult, error)
 }

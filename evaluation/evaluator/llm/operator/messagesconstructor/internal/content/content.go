@@ -31,6 +31,7 @@ func ExtractTextFromContent(content *genai.Content) string {
 	return text.String()
 }
 
+// ExtractIntermediateData extracts intermediate data from evalset.IntermediateData.
 func ExtractIntermediateData(intermediateData *evalset.IntermediateData) (string, error) {
 	data, err := json.Marshal(intermediateData)
 	if err != nil {
@@ -39,6 +40,7 @@ func ExtractIntermediateData(intermediateData *evalset.IntermediateData) (string
 	return string(data), nil
 }
 
+// ExtractRubrics extracts rubrics from llm.Rubric.
 func ExtractRubrics(rubrics []*llm.Rubric) string {
 	if rubrics == nil {
 		return ""

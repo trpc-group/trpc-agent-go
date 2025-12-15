@@ -29,8 +29,7 @@ func New() invocationsaggregator.InvocationsAggregator {
 
 // AggregateInvocations summarizes per-invocation results into an overall score while skipping not-evaluated entries.
 func (a *averageInvocationsAggregator) AggregateInvocations(ctx context.Context,
-	results []*evaluator.PerInvocationResult,
-	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
+	results []*evaluator.PerInvocationResult, evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
 	sumScore := 0.0
 	numEvaluated := 0.0
 	for _, result := range results {

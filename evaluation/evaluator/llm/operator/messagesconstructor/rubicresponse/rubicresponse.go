@@ -190,14 +190,16 @@ Verdict: yes
 	rubicResponsePromptTemplate = template.Must(template.New("rubicResponsePrompt").Parse(rubicResponsePrompt))
 )
 
-type rubicMessagesConstructor struct {
+type rubicResponseMessagesConstructor struct {
 }
 
+// New returns a messages constructor for rubric responses.
 func New() messagesconstructor.MessagesConstructor {
-	return &rubicMessagesConstructor{}
+	return &rubicResponseMessagesConstructor{}
 }
 
-func (e *rubicMessagesConstructor) ConstructMessages(ctx context.Context, actual, _ *evalset.Invocation,
+// ConstructMessages builds judge prompts for rubric responses.
+func (e *rubicResponseMessagesConstructor) ConstructMessages(ctx context.Context, actual, _ *evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
 	responseSteps, err := content.ExtractIntermediateData(actual.IntermediateData)
 	if err != nil {
@@ -221,6 +223,7 @@ func (e *rubicMessagesConstructor) ConstructMessages(ctx context.Context, actual
 	}, nil
 }
 
+// rubicResponsePromptData feeds values into the judge prompt template.
 type rubicResponsePromptData struct {
 	UserInput     string
 	ResponseSteps string

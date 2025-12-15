@@ -46,34 +46,41 @@ func New(opt ...Option) evaluator.Evaluator {
 	return e
 }
 
+// Name returns the name of the evaluator.
 func (e *rubicResponseEvaluator) Name() string {
 	return "llm_rubic_response"
 }
 
+// Description returns the description of the evaluator.
 func (e *rubicResponseEvaluator) Description() string {
 	return "LLM rubic response evaluator"
 }
 
+// Evaluate evaluates the response of the agent.
 func (e *rubicResponseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
 	return e.llmBaseEvaluator.Evaluate(ctx, actuals, expecteds, evalMetric)
 }
 
+// ConstructMessages constructs the messages for the evaluator.
 func (e *rubicResponseEvaluator) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
 	return e.messagesConstructor.ConstructMessages(ctx, actual, expected, evalMetric)
 }
 
+// ScoreBasedOnResponse scores the response of the evaluator.
 func (e *rubicResponseEvaluator) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
 	evalMetric *metric.EvalMetric) (*evalresult.ScoreResult, error) {
 	return e.responsescorer.ScoreBasedOnResponse(ctx, response, evalMetric)
 }
 
+// AggregateSamples aggregates the samples of the evaluator.
 func (e *rubicResponseEvaluator) AggregateSamples(ctx context.Context, samples []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.PerInvocationResult, error) {
 	return e.samplesAggregator.AggregateSamples(ctx, samples, evalMetric)
 }
 
+// AggregateInvocations aggregates the invocations of the evaluator.
 func (e *rubicResponseEvaluator) AggregateInvocations(ctx context.Context, results []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
 	return e.invocationsAggregator.AggregateInvocations(ctx, results, evalMetric)

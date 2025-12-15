@@ -72,6 +72,7 @@ var (
 type finalResponseMessagesConstructor struct {
 }
 
+// New returns a messages constructor for final responses.
 func New() messagesconstructor.MessagesConstructor {
 	return &finalResponseMessagesConstructor{}
 }

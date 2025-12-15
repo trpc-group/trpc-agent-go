@@ -28,6 +28,7 @@ var labelMatchIsResponseValidRe = regexp.MustCompile(`"is_the_agent_response_val
 type finalResponseResponseScorer struct {
 }
 
+// New returns a response scorer for final responses.
 func New() responsescorer.ResponseScorer {
 	return &finalResponseResponseScorer{}
 }

@@ -17,9 +17,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 )
 
+// SamplesAggregator defines the interface for aggregating multiple sample scores for one invocation.
 type SamplesAggregator interface {
 	// AggregateSamples summarizes multiple sample scores for one invocation.
-	AggregateSamples(ctx context.Context,
-		samples []*evaluator.PerInvocationResult,
+	AggregateSamples(ctx context.Context, samples []*evaluator.PerInvocationResult,
 		evalMetric *metric.EvalMetric) (*evaluator.PerInvocationResult, error)
 }
