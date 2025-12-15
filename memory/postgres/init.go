@@ -198,32 +198,46 @@ func (s *Service) initDB(ctx context.Context) error {
 
 // verifySchema verifies that the database schema matches expectations.
 func (s *Service) verifySchema(ctx context.Context) error {
-	for tableName, schema := range expectedSchema {
-		fullTableName := sqldb.BuildTableNameWithSchema(s.opts.schema, "", tableName)
+	// Use actual table name from opts instead of hardcoded "memories".
+	baseTableName := s.opts.tableName
+	fullTableName := sqldb.BuildTableNameWithSchema(s.opts.schema, "", baseTableName)
 
-		// Check if table exists
-		exists, err := s.tableExists(ctx, fullTableName)
-		if err != nil {
-			return fmt.Errorf("check table %s existence failed: %w", fullTableName, err)
-		}
-		if !exists {
-			return fmt.Errorf("table %s does not exist", fullTableName)
-		}
+	// Get schema definition for "memories" table type.
+	schema, ok := expectedSchema["memories"]
+	if !ok {
+		return fmt.Errorf("no schema definition found for memories table")
+	}
 
-		// Verify columns
-		if err := s.verifyColumns(ctx, fullTableName, schema.columns); err != nil {
-			return fmt.Errorf("verify columns for table %s failed: %w", fullTableName, err)
-		}
+	// Check if table exists.
+	exists, err := s.tableExists(ctx, fullTableName)
+	if err != nil {
+		return fmt.Errorf("check table %s existence failed: %w", fullTableName, err)
+	}
+	if !exists {
+		return fmt.Errorf("table %s does not exist", fullTableName)
+	}
 
-		// Verify indexes
-		if err := s.verifyIndexes(ctx, fullTableName, schema.indexes); err != nil {
-			log.WarnfContext(
-				ctx,
-				"verify indexes for table %s failed (non-fatal): %v",
-				fullTableName,
-				err,
-			)
+	// Verify columns.
+	if err := s.verifyColumns(ctx, fullTableName, schema.columns); err != nil {
+		return fmt.Errorf("verify columns for table %s failed: %w", fullTableName, err)
+	}
+
+	// Verify indexes (use actual table name for index definitions).
+	actualIndexes := make([]tableIndex, len(schema.indexes))
+	for i, idx := range schema.indexes {
+		actualIndexes[i] = tableIndex{
+			table:   baseTableName, // Use actual table name instead of "memories".
+			suffix:  idx.suffix,
+			columns: idx.columns,
 		}
+	}
+	if err := s.verifyIndexes(ctx, fullTableName, actualIndexes); err != nil {
+		log.WarnfContext(
+			ctx,
+			"verify indexes for table %s failed (non-fatal): %v",
+			fullTableName,
+			err,
+		)
 	}
 
 	return nil

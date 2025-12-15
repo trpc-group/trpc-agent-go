@@ -822,10 +822,10 @@ func (c *testClient) Close() error {
 func setupMockService(t *testing.T, db *sql.DB, mock sqlmock.Sqlmock, opts ...ServiceOpt) *Service {
 	originalBuilder := storage.GetClientBuilder()
 
-	// Create a test client that wraps sql.DB
+	// Create a test client that wraps sql.DB.
 	client := &testClient{db: db}
 
-	// Set up builder to return our test client
+	// Set up builder to return our test client.
 	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
 		return client, nil
 	})
@@ -833,21 +833,22 @@ func setupMockService(t *testing.T, db *sql.DB, mock sqlmock.Sqlmock, opts ...Se
 		storage.SetClientBuilder(originalBuilder)
 	})
 
-	// Check if skipDBInit is set in opts
-	skipDBInit := false
+	// Determine schema and table name from opts.
+	testOpts := defaultOptions.clone()
 	for _, opt := range opts {
-		testOpts := &ServiceOpts{}
-		opt(testOpts)
-		if testOpts.skipDBInit {
-			skipDBInit = true
-			break
-		}
+		opt(&testOpts)
 	}
+	skipDBInit := testOpts.skipDBInit
+	schema := testOpts.schema
+	if schema == "" {
+		schema = "public"
+	}
+	tableName := testOpts.tableName
 
 	if !skipDBInit {
 		// Mock DDL privilege check.
 		mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
-			WithArgs("public").
+			WithArgs(schema).
 			WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
 
 		// Mock table creation.
@@ -857,20 +858,20 @@ func setupMockService(t *testing.T, db *sql.DB, mock sqlmock.Sqlmock, opts ...Se
 		mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 
-		// Mock schema verification queries - default to public schema.
+		// Mock schema verification queries - use actual schema and table name.
 		// Mock table exists query.
 		mock.ExpectQuery(`SELECT EXISTS \(
 			SELECT FROM information_schema.tables
 			WHERE table_schema = \$1
 			AND table_name = \$2
-		\)`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		\)`).WithArgs(schema, tableName).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
-		// Mock columns query - match expected schema
+		// Mock columns query - match expected schema.
 		mock.ExpectQuery(`SELECT column_name, data_type, is_nullable
 			FROM information_schema.columns
 			WHERE table_schema = \$1
 			AND table_name = \$2
-			ORDER BY ordinal_position`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
+			ORDER BY ordinal_position`).WithArgs(schema, tableName).WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
 			AddRow("memory_id", "text", "NO").
 			AddRow("app_name", "text", "NO").
 			AddRow("user_id", "text", "NO").
@@ -879,26 +880,18 @@ func setupMockService(t *testing.T, db *sql.DB, mock sqlmock.Sqlmock, opts ...Se
 			AddRow("updated_at", "timestamp without time zone", "NO").
 			AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-		// Mock indexes query - match expected indexes
+		// Mock indexes query - match expected indexes with actual table name.
 		mock.ExpectQuery(`SELECT indexname
 			FROM pg_indexes
 			WHERE schemaname = \$1
-			AND tablename = \$2`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-			AddRow("memories_app_user").
-			AddRow("memories_updated_at").
-			AddRow("memories_deleted_at"))
+			AND tablename = \$2`).WithArgs(schema, tableName).WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
+			AddRow("idx_" + tableName + "_app_user").
+			AddRow("idx_" + tableName + "_updated_at").
+			AddRow("idx_" + tableName + "_deleted_at"))
 	}
 
-	// Ensure host is set if not already set
-	hasHost := false
-	for _, opt := range opts {
-		testOpts := &ServiceOpts{}
-		opt(testOpts)
-		if testOpts.host != "" {
-			hasHost = true
-			break
-		}
-	}
+	// Ensure host is set if not already set.
+	hasHost := testOpts.host != ""
 	if !hasHost {
 		opts = append(opts, WithHost("localhost"))
 	}
@@ -2743,7 +2736,8 @@ func TestNewService_FallbackToDefaultConnString(t *testing.T) {
 		AddRow("memories_updated_at").
 		AddRow("memories_deleted_at"))
 
-	// Create service without DSN, host, or instanceName - should use default connection string.
+	// Create service without DSN, host, or instanceName - should use default
+	// connection string.
 	service, err := NewService()
 	require.NoError(t, err)
 	assert.NotNil(t, service)
@@ -2757,3 +2751,75 @@ func TestNewService_FallbackToDefaultConnString(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 	service.Close()
 }
+
+// TestNewService_WithCustomTableName tests schema verification with custom
+// table name.
+func TestNewService_WithCustomTableName(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return client, nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	customTableName := "custom_memories"
+
+	// Mock DDL privilege check.
+	mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+
+	// Mock table creation with custom table name.
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS.*" + customTableName).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock schema verification queries - should use custom table name.
+	mock.ExpectQuery(`SELECT EXISTS \(
+		SELECT FROM information_schema.tables
+		WHERE table_schema = \$1
+		AND table_name = \$2
+	\)`).WithArgs("public", customTableName).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	// Mock columns query with custom table name.
+	mock.ExpectQuery(`SELECT column_name, data_type, is_nullable
+		FROM information_schema.columns
+		WHERE table_schema = \$1
+		AND table_name = \$2
+		ORDER BY ordinal_position`).WithArgs("public", customTableName).WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
+		AddRow("memory_id", "text", "NO").
+		AddRow("app_name", "text", "NO").
+		AddRow("user_id", "text", "NO").
+		AddRow("memory_data", "jsonb", "NO").
+		AddRow("created_at", "timestamp without time zone", "NO").
+		AddRow("updated_at", "timestamp without time zone", "NO").
+		AddRow("deleted_at", "timestamp without time zone", "YES"))
+
+	// Mock indexes query with custom table name - indexes should use custom
+	// table name as prefix with idx_ prefix.
+	mock.ExpectQuery(`SELECT indexname
+		FROM pg_indexes
+		WHERE schemaname = \$1
+		AND tablename = \$2`).WithArgs("public", customTableName).WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
+		AddRow("idx_" + customTableName + "_app_user").
+		AddRow("idx_" + customTableName + "_updated_at").
+		AddRow("idx_" + customTableName + "_deleted_at"))
+
+	service, err := NewService(
+		WithHost("localhost"),
+		WithPort(5432),
+		WithDatabase("testdb"),
+		WithTableName(customTableName),
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, service)
+	assert.Equal(t, customTableName, service.tableName)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+	service.Close()
+}
+
