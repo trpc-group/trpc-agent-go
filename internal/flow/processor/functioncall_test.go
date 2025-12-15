@@ -433,8 +433,8 @@ func TestFunctionCallResponseProcessor_ToolIterationLimitEmitsFlowError(t *testi
 	p := NewFunctionCallResponseProcessor(false, nil)
 
 	inv := &agent.Invocation{
-		InvocationID:     "inv-limit",
-		AgentName:        "test-agent",
+		InvocationID:      "inv-limit",
+		AgentName:         "test-agent",
 		MaxToolIterations: 1,
 	}
 
