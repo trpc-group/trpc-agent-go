@@ -23,9 +23,8 @@ import (
 )
 
 // resolveModelFromConfig constructs a concrete model instance from config.
-// Preferred path: model_spec (provider/model_name/base_url/api_key/headers/extra_fields).
-// Compatibility path: model_id resolved via ModelProvider.
-func resolveModelFromConfig(cfg map[string]any, models dsl.ModelProvider, allowEnvSecrets bool) (model.Model, string, error) {
+// Required: model_spec (provider/model_name/base_url/api_key/headers/extra_fields).
+func resolveModelFromConfig(cfg map[string]any, allowEnvSecrets bool) (model.Model, string, error) {
 	if cfg == nil {
 		return nil, "", fmt.Errorf("model config is nil")
 	}
@@ -154,19 +153,7 @@ func resolveModelFromConfig(cfg map[string]any, models dsl.ModelProvider, allowE
 		}
 	}
 
-	modelID, ok := cfg["model_id"].(string)
-	modelID = strings.TrimSpace(modelID)
-	if !ok || modelID == "" {
-		return nil, "", fmt.Errorf("either model_spec or model_id is required")
-	}
-	if models == nil {
-		return nil, "", fmt.Errorf("model provider is not set")
-	}
-	llmModel, err := models.Get(modelID)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to resolve model %q: %w", modelID, err)
-	}
-	return llmModel, modelID, nil
+	return nil, "", fmt.Errorf("model_spec is required")
 }
 
 // newLLMAgentNodeFuncFromConfig creates a NodeFunc for a builtin.llmagent node
@@ -177,7 +164,6 @@ func resolveModelFromConfig(cfg map[string]any, models dsl.ModelProvider, allowE
 func newLLMAgentNodeFuncFromConfig(
 	nodeID string,
 	cfg map[string]any,
-	models dsl.ModelProvider,
 	toolsProvider dsl.ToolProvider,
 	allowEnvSecrets bool,
 ) (graph.NodeFunc, error) {
@@ -185,7 +171,7 @@ func newLLMAgentNodeFuncFromConfig(
 		return nil, fmt.Errorf("nodeID is required for NewLLMAgentNodeFuncFromConfig")
 	}
 
-	llmModel, modelID, err := resolveModelFromConfig(cfg, models, allowEnvSecrets)
+	llmModel, modelName, err := resolveModelFromConfig(cfg, allowEnvSecrets)
 	if err != nil {
 		return nil, err
 	}
@@ -409,7 +395,7 @@ func newLLMAgentNodeFuncFromConfig(
 			opts = append(opts, llmagent.WithGenerationConfig(genConfig))
 		}
 
-		agentName := fmt.Sprintf("llmagent_%s_%s", nodeID, modelID)
+		agentName := fmt.Sprintf("llmagent_%s_%s", nodeID, modelName)
 		llmAgent := llmagent.New(agentName, opts...)
 
 		parentInvocation, ok := agent.InvocationFromContext(ctx)

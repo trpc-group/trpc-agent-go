@@ -1,10 +1,8 @@
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
-//
 package registry
 
 import (
@@ -21,7 +19,7 @@ import (
 // 1. Framework built-in reducers (registered at init time)
 // 2. Business custom reducers (registered before service starts)
 //
-// This follows the same pattern as ModelRegistry and ToolRegistry.
+// This follows the same pattern as ToolRegistry.
 type ReducerRegistry struct {
 	mu       sync.RWMutex
 	reducers map[string]graph.StateReducer

@@ -148,16 +148,6 @@ func (s *Server) handleGetComponent(w http.ResponseWriter, r *http.Request) {
 }
 
 // ============================================================================
-// Model Registry Handlers
-// ============================================================================
-
-// handleListModels lists all registered models.
-func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
-	models := s.modelRegistry.List()
-	respondJSON(w, http.StatusOK, models)
-}
-
-// ============================================================================
 // Tool Registry Handlers
 // ============================================================================
 

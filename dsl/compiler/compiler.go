@@ -26,7 +26,6 @@ type Option func(*Compiler)
 // into imperative Go code that can be executed by trpc-agent-go.
 type Compiler struct {
 	registry        *registry.Registry
-	modelProvider   dsl.ModelProvider
 	toolProvider    dsl.ToolProvider
 	toolSetProvider dsl.ToolSetProvider
 	reducerRegistry *registry.ReducerRegistry
@@ -76,11 +75,10 @@ type whileExpansion struct {
 
 // New creates a new DSL compiler with sensible defaults and applies the
 // provided options. Callers typically supply only the options that need to
-// differ from the defaults (e.g., custom ModelProvider or ToolProvider).
+// differ from the defaults (e.g., custom ToolProvider or ToolSetProvider).
 func New(opts ...Option) *Compiler {
 	c := &Compiler{
 		registry:        registry.DefaultRegistry,
-		modelProvider:   registry.NewModelRegistry(),
 		toolProvider:    registry.DefaultToolRegistry,
 		toolSetProvider: registry.DefaultToolSetRegistry,
 		reducerRegistry: registry.NewReducerRegistry(),
@@ -116,21 +114,12 @@ func WithComponentRegistry(reg *registry.Registry) Option {
 	}
 }
 
-// WithModelProvider sets a custom model provider for the compiler. This
-// allows integration with platform-level model services or other dynamic
-// resolution strategies.
-func WithModelProvider(provider dsl.ModelProvider) Option {
-	return func(c *Compiler) {
-		c.modelProvider = provider
-	}
-}
-
 // WithAllowEnvSecrets enables resolving "env:VAR" placeholders in model_spec
 // fields such as api_key/headers/base_url.
 //
 // This is intended for local development and debugging only; production
-// services should provide explicit secrets via model_spec (or via a
-// ModelProvider) to avoid ambiguity and accidental environment-based fallbacks.
+// services should provide explicit secrets via model_spec to avoid ambiguity and
+// accidental environment-based fallbacks.
 func WithAllowEnvSecrets(enabled bool) Option {
 	return func(c *Compiler) {
 		c.allowEnvSecrets = enabled
@@ -527,13 +516,13 @@ func (c *Compiler) createNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 	}, nil
 }
 
-// createLLMNodeFunc creates a NodeFunc for an LLM component.
-// This uses the AddLLMNode pattern from trpc-agent-go, where the model instance
-// is obtained from ModelRegistry and passed via closure, not through state.
+// createLLMNodeFunc creates a NodeFunc for a builtin.llm node.
+// The model instance is constructed from model_spec and captured via closure,
+// not passed through graph state.
 func (c *Compiler) createLLMNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 	engine := node.EngineNode
 
-	llmModel, _, err := resolveModelFromConfig(engine.Config, c.modelProvider, c.allowEnvSecrets)
+	llmModel, _, err := resolveModelFromConfig(engine.Config, c.allowEnvSecrets)
 	if err != nil {
 		return nil, err
 	}
@@ -1046,7 +1035,7 @@ func (c *llmPseudoComponent) Execute(ctx context.Context, config registry.Compon
 // createLLMAgentNodeFunc creates a NodeFunc for an LLMAgent component.
 // This dynamically creates an LLMAgent based on DSL configuration and executes it.
 func (c *Compiler) createLLMAgentNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
-	return newLLMAgentNodeFuncFromConfig(node.ID, node.EngineNode.Config, c.modelProvider, c.toolProvider, c.allowEnvSecrets)
+	return newLLMAgentNodeFuncFromConfig(node.ID, node.EngineNode.Config, c.toolProvider, c.allowEnvSecrets)
 }
 
 // createUserApprovalNodeFunc creates a NodeFunc for a user approval step.

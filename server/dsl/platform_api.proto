@@ -50,7 +50,7 @@ message ViewNodeData {
   engine_dsl.EngineNode engine = 3;          // Engine-level node definition.
 }
 
-// Simple model info placeholder. Actual fields depend on ModelRegistry usage.
+// Simple model info placeholder. Actual fields depend on platform model management.
 message ModelInfo {
   string name = 1;
   string provider = 2;

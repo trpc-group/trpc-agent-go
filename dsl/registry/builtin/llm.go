@@ -1,4 +1,3 @@
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
@@ -60,21 +59,12 @@ func (c *LLMComponent) Metadata() registry.ComponentMetadata {
 
 		ConfigSchema: []registry.ParameterSchema{
 			{
-				Name:        "model_id",
-				DisplayName: "Model ID",
-				Description: "Optional logical model identifier (kept for compatibility and observability).",
-				Type:        "string",
-				GoType:      reflect.TypeOf(""),
-				Required:    false,
-				Placeholder: "deepseek-chat",
-			},
-			{
 				Name:        "model_spec",
 				DisplayName: "Model Spec",
 				Description: "Resolved model specification used by the framework to construct a concrete model instance.",
 				Type:        "map[string]any",
 				GoType:      reflect.TypeOf(map[string]any{}),
-				Required:    false,
+				Required:    true,
 			},
 			{
 				Name:        "instruction",
@@ -112,8 +102,8 @@ func (c *LLMComponent) Metadata() registry.ComponentMetadata {
 
 // Execute executes the LLM component.
 // NOTE: This method is deprecated and not used when compiling DSL graphs.
-// The Compiler uses createLLMNodeFunc which directly calls graph.NewLLMNodeFunc
-// with the model instance from ModelRegistry. This method is kept for backward
+// The Compiler uses createLLMNodeFunc which constructs a model instance from
+// model_spec and calls graph.NewLLMNodeFunc. This method is kept for backward
 // compatibility with non-DSL usage.
 func (c *LLMComponent) Execute(ctx context.Context, config registry.ComponentConfig, state graph.State) (any, error) {
 	// Get messages from state

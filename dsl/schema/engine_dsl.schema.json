@@ -195,15 +195,8 @@
     },
     "AgentConfig": {
       "type": "object",
-      "anyOf": [
-        { "required": ["model_spec"] },
-        { "required": ["model_id"] }
-      ],
+      "required": ["model_spec"],
       "properties": {
-        "model_id": {
-          "type": "string",
-          "description": "Optional logical model identifier (kept for compatibility and observability)."
-        },
         "model_spec": {
           "$ref": "#/$defs/ModelSpec",
           "description": "Resolved model specification used by the framework to construct a concrete model instance."

@@ -22,7 +22,12 @@
           "label": "Classifier",
           "node_type": "builtin.llmagent",
           "config": {
-            "model_id": "deepseek-chat",
+            "model_spec": {
+              "provider": "openai",
+              "model_name": "deepseek-chat",
+              "base_url": "https://api.deepseek.com/v1",
+              "api_key": "env:OPENAI_API_KEY"
+            },
             "instruction": "Classify how complex the user's question is (short / detailed) and provide a short summary.",
             "output_format": {
               "type": "json",
@@ -55,7 +60,12 @@
           "label": "Plain agent",
           "node_type": "builtin.llmagent",
           "config": {
-            "model_id": "deepseek-chat",
+            "model_spec": {
+              "provider": "openai",
+              "model_name": "deepseek-chat",
+              "base_url": "https://api.deepseek.com/v1",
+              "api_key": "env:OPENAI_API_KEY"
+            },
             "instruction": "Answer the user's question briefly in one or two sentences."
           }
         }

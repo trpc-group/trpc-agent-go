@@ -24,10 +24,6 @@
       "description": "Component registry operations"
     },
     {
-      "name": "models",
-      "description": "Model registry operations"
-    },
-    {
       "name": "tools",
       "description": "Tool registry operations"
     },
@@ -116,28 +112,6 @@
           },
           "404": {
             "description": "Component not found"
-          }
-        }
-      }
-    },
-    "/api/v1/models": {
-      "get": {
-        "tags": ["models"],
-        "summary": "List all registered models",
-        "operationId": "listModels",
-        "responses": {
-          "200": {
-            "description": "List of model names",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
           }
         }
       }

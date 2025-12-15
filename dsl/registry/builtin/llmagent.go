@@ -30,7 +30,7 @@ func init() {
 // It allows front-end users to configure an LLMAgent directly in DSL without pre-registration.
 //
 // This component wraps the llmagent.New() constructor and supports common LLMAgent options:
-//   - model_id: Logical model ID resolved by ModelProvider/ModelRegistry
+//   - model_spec: Resolved model specification used by the framework to construct a model instance
 //   - instruction: System prompt/instruction
 //   - tools: List of tool names (from ToolRegistry)
 //   - output_format: Output configuration { type: text|json, schema } for structured output
@@ -45,7 +45,12 @@ func init() {
 //	    "ref": "builtin.llmagent"
 //	  },
 //	  "config": {
-//	    "model_id": "gpt-4-turbo",
+//	    "model_spec": {
+//	      "provider": "openai",
+//	      "model_name": "deepseek-chat",
+//	      "base_url": "https://api.deepseek.com/v1",
+//	      "api_key": "env:OPENAI_API_KEY"
+//	    },
 //	    "instruction": "You are a classification agent. Classify user intent into categories.",
 //	    "tools": ["search", "calculator"],
 //	    "temperature": 0.7,
@@ -87,17 +92,6 @@ func (c *LLMAgentComponent) Metadata() registry.ComponentMetadata {
 		},
 		ConfigSchema: []registry.ParameterSchema{
 			{
-				Name:        "model_id",
-				DisplayName: "Model ID",
-				Description: "Optional logical model identifier (kept for compatibility and observability).",
-				Type:        "string",
-				TypeID:      "string",
-				Kind:        "string",
-				GoType:      reflect.TypeOf(""),
-				Required:    false,
-				Placeholder: "deepseek-chat",
-			},
-			{
 				Name:        "model_spec",
 				DisplayName: "Model Spec",
 				Description: "Resolved model specification used by the framework to construct a concrete model instance.",
@@ -105,7 +99,7 @@ func (c *LLMAgentComponent) Metadata() registry.ComponentMetadata {
 				TypeID:      "object",
 				Kind:        "object",
 				GoType:      reflect.TypeOf(map[string]any{}),
-				Required:    false,
+				Required:    true,
 			},
 			{
 				Name:        "instruction",
@@ -282,34 +276,25 @@ func (c *LLMAgentComponent) Execute(ctx context.Context, config registry.Compone
 
 // Validate validates the component configuration.
 func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
-	// Validate model_spec (preferred) or model_id (compatibility).
-	if specRaw, hasSpec := config["model_spec"]; hasSpec && specRaw != nil {
-		spec, ok := specRaw.(map[string]any)
-		if !ok {
-			return fmt.Errorf("model_spec must be an object")
-		}
-		providerName, _ := spec["provider"].(string)
-		modelName, _ := spec["model_name"].(string)
-		apiKey, _ := spec["api_key"].(string)
-		if strings.TrimSpace(providerName) == "" {
-			return fmt.Errorf("model_spec.provider cannot be empty")
-		}
-		if strings.TrimSpace(modelName) == "" {
-			return fmt.Errorf("model_spec.model_name cannot be empty")
-		}
-		if strings.TrimSpace(apiKey) == "" {
-			return fmt.Errorf("model_spec.api_key cannot be empty")
-		}
-	} else if modelIDRaw, hasID := config["model_id"]; hasID {
-		modelID, ok := modelIDRaw.(string)
-		if !ok {
-			return fmt.Errorf("model_id must be a string")
-		}
-		if strings.TrimSpace(modelID) == "" {
-			return fmt.Errorf("model_id cannot be empty")
-		}
-	} else {
-		return fmt.Errorf("either model_spec or model_id is required")
+	specRaw, ok := config["model_spec"]
+	if !ok || specRaw == nil {
+		return fmt.Errorf("model_spec is required")
+	}
+	spec, ok := specRaw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("model_spec must be an object")
+	}
+	providerName, _ := spec["provider"].(string)
+	modelName, _ := spec["model_name"].(string)
+	apiKey, _ := spec["api_key"].(string)
+	if strings.TrimSpace(providerName) == "" {
+		return fmt.Errorf("model_spec.provider cannot be empty")
+	}
+	if strings.TrimSpace(modelName) == "" {
+		return fmt.Errorf("model_spec.model_name cannot be empty")
+	}
+	if strings.TrimSpace(apiKey) == "" {
+		return fmt.Errorf("model_spec.api_key cannot be empty")
 	}
 
 	// Validate instruction if present

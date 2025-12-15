@@ -1,7 +1,7 @@
 // Package main implements the DSL platform HTTP server.
 //
 // This server provides REST APIs for:
-// - Component/Model/Tool registry queries
+// - Component/Tool registry queries
 // - Graph CRUD operations
 // - DSL validation and compilation
 // - Graph execution (streaming and non-streaming)
@@ -79,7 +79,6 @@ func main() {
 // Server holds the DSL platform server state.
 type Server struct {
 	componentRegistry *registry.Registry
-	modelRegistry     *registry.ModelRegistry
 	toolRegistry      *registry.ToolRegistry
 	toolSetRegistry   *registry.ToolSetRegistry
 	compiler          *compiler.Compiler
@@ -95,21 +94,18 @@ type Server struct {
 func NewServer() *Server {
 	// Use default registries (with built-in components/tools/toolsets auto-registered)
 	componentRegistry := registry.DefaultRegistry
-	modelRegistry := registry.NewModelRegistry()
 	toolRegistry := registry.DefaultToolRegistry       // Use DefaultToolRegistry with built-in tools
 	toolSetRegistry := registry.DefaultToolSetRegistry // Use DefaultToolSetRegistry with built-in toolsets
 
 	// Create compiler
 	comp := compiler.New(
 		compiler.WithComponentRegistry(componentRegistry),
-		compiler.WithModelProvider(modelRegistry),
 		compiler.WithToolProvider(toolRegistry),
 		compiler.WithToolSetRegistry(toolSetRegistry),
 	)
 
 	return &Server{
 		componentRegistry: componentRegistry,
-		modelRegistry:     modelRegistry,
 		toolRegistry:      toolRegistry,
 		toolSetRegistry:   toolSetRegistry,
 		compiler:          comp,
@@ -128,9 +124,6 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// Single component metadata by name. We use a trailing slash pattern so this
 	// works consistently even on older Go versions without path variables.
 	mux.HandleFunc("/api/v1/components/", methodHandler("GET", s.handleGetComponent))
-
-	// Model registry
-	mux.HandleFunc("/api/v1/models", methodHandler("GET", s.handleListModels))
 
 	// Tool registry
 	mux.HandleFunc("/api/v1/tools", methodHandler("GET", s.handleListTools))

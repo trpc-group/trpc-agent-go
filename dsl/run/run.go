@@ -36,10 +36,6 @@ type Options struct {
 	// references. Defaults to registry.DefaultRegistry when nil.
 	ComponentRegistry *registry.Registry
 
-	// ModelRegistry resolves LLM model_id strings for builtin.llm and
-	// builtin.llmagent nodes. Defaults to a fresh registry when nil.
-	ModelRegistry *registry.ModelRegistry
-
 	// ToolRegistry resolves tool names used by LLM / tools / MCP nodes.
 	// Defaults to a fresh registry when nil.
 	ToolRegistry *registry.ToolRegistry
@@ -75,9 +71,6 @@ func NewRunner(opts Options) *Runner {
 
 	validator := dslvalidator.New(dslvalidator.WithComponentRegistry(reg))
 	var compilerOpts []compiler.Option
-	if opts.ModelRegistry != nil {
-		compilerOpts = append(compilerOpts, compiler.WithModelProvider(opts.ModelRegistry))
-	}
 	if opts.ToolRegistry != nil {
 		compilerOpts = append(compilerOpts, compiler.WithToolProvider(opts.ToolRegistry))
 	}

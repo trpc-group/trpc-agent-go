@@ -5,23 +5,13 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 // Package dsl defines high-level abstractions for working with engine DSL
-// graphs. Providers are runtime dependencies used by the compiler and
-// builtin components to resolve logical model and tool identifiers into
-// concrete implementations.
+// graphs. Providers are runtime dependencies used by the compiler and builtin
+// components to resolve logical tool identifiers into concrete implementations.
 package dsl
 
 import (
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
-
-// ModelProvider resolves a logical model identifier into a model.Model.
-// Implementations are responsible for any caching or configuration lookup.
-type ModelProvider interface {
-	// Get returns the model associated with the given ID or an error if
-	// the model is not found or cannot be constructed.
-	Get(modelID string) (model.Model, error)
-}
 
 // ToolProvider resolves logical tool names into tool.Tool instances.
 // Implementations can apply user/tenant specific access control, dynamic
