@@ -3498,15 +3498,18 @@
 <p>适用于生产环境和需要复杂查询的应用，提供关系型数据库的完整能力。</p>
 <h3 id="_16">配置选项</h3>
 <p><strong>连接配置：</strong></p>
-<ul>
-<li><strong><code>WithHost(host string)</code></strong>：PostgreSQL 服务器地址。默认值为 <code>localhost</code>。</li>
-<li><strong><code>WithPort(port int)</code></strong>：PostgreSQL 服务器端口。默认值为 <code>5432</code>。</li>
-<li><strong><code>WithUser(user string)</code></strong>：数据库用户名。默认值为 <code>postgres</code>。</li>
-<li><strong><code>WithPassword(password string)</code></strong>：数据库密码。默认值为空字符串。</li>
-<li><strong><code>WithDatabase(database string)</code></strong>：数据库名称。默认值为 <code>postgres</code>。</li>
-<li><strong><code>WithSSLMode(sslMode string)</code></strong>：SSL 模式。默认值为 <code>disable</code>。可选值：<code>disable</code>、<code>require</code>、<code>verify-ca</code>、<code>verify-full</code>。</li>
-<li><strong><code>WithInstanceName(name string)</code></strong>：使用预配置的 PostgreSQL 实例。</li>
-</ul>
+<p>方式一：
+- <strong><code>WithPostgresClientDSN(dsn string)</code></strong>：PostgreSQL DSN。 示例：<code>postgres://user:password@localhost:5432/dbname</code></p>
+<p>方式二：
+- <strong><code>WithHost(host string)</code></strong>：PostgreSQL 服务器地址。默认值为 <code>localhost</code>。
+- <strong><code>WithPort(port int)</code></strong>：PostgreSQL 服务器端口。默认值为 <code>5432</code>。
+- <strong><code>WithUser(user string)</code></strong>：数据库用户名。默认值为 <code>postgres</code>。
+- <strong><code>WithPassword(password string)</code></strong>：数据库密码。默认值为空字符串。
+- <strong><code>WithDatabase(database string)</code></strong>：数据库名称。默认值为 <code>postgres</code>。
+- <strong><code>WithSSLMode(sslMode string)</code></strong>：SSL 模式。默认值为 <code>disable</code>。可选值：<code>disable</code>、<code>require</code>、<code>verify-ca</code>、<code>verify-full</code>。</p>
+<p>方式三：
+- <strong><code>WithPostgresInstance(name string)</code></strong>：使用预配置的 PostgreSQL 实例。</p>
+<p>优先级：方式一 &gt; 方式二 &gt; 方式三</p>
 <p><strong>会话配置：</strong></p>
 <ul>
 <li><strong><code>WithSessionEventLimit(limit int)</code></strong>：每个会话最大事件数量。默认值为 1000。</li>
@@ -3564,58 +3567,36 @@
 <span class="normal"><a href="#__codelineno-12-27">27</a></span>
 <span class="normal"><a href="#__codelineno-12-28">28</a></span>
 <span class="normal"><a href="#__codelineno-12-29">29</a></span>
-<span class="normal"><a href="#__codelineno-12-30">30</a></span>
-<span class="normal"><a href="#__codelineno-12-31">31</a></span>
-<span class="normal"><a href="#__codelineno-12-32">32</a></span>
-<span class="normal"><a href="#__codelineno-12-33">33</a></span>
-<span class="normal"><a href="#__codelineno-12-34">34</a></span>
-<span class="normal"><a href="#__codelineno-12-35">35</a></span>
-<span class="normal"><a href="#__codelineno-12-36">36</a></span>
-<span class="normal"><a href="#__codelineno-12-37">37</a></span>
-<span class="normal"><a href="#__codelineno-12-38">38</a></span>
-<span class="normal"><a href="#__codelineno-12-39">39</a></span>
-<span class="normal"><a href="#__codelineno-12-40">40</a></span>
-<span class="normal"><a href="#__codelineno-12-41">41</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/postgres&quot;</span>
+<span class="normal"><a href="#__codelineno-12-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/postgres&quot;</span>
 </span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a>
 </span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="c1">// 默认配置（最简）</span>
 </span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;localhost&quot;</span><span class="p">),</span>
-</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithPassword</span><span class="p">(</span><span class="s">&quot;your-password&quot;</span><span class="p">),</span>
-</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7"></a><span class="p">)</span>
-</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8"></a><span class="c1">// 效果：</span>
-</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9"></a><span class="c1">// - 连接 localhost:5432，数据库 postgres</span>
-</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10"></a><span class="c1">// - 每个会话最多 1000 个事件</span>
-</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11"></a><span class="c1">// - 数据永不过期</span>
-</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12"></a><span class="c1">// - 2 个异步持久化 worker</span>
-</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13"></a>
-</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14"></a><span class="c1">// 生产环境完整配置</span>
-</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16"></a><span class="w">    </span><span class="c1">// 连接配置</span>
-</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;localhost&quot;</span><span class="p">),</span>
-</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithPort</span><span class="p">(</span><span class="mi">5432</span><span class="p">),</span>
-</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithUser</span><span class="p">(</span><span class="s">&quot;postgres&quot;</span><span class="p">),</span>
-</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithPassword</span><span class="p">(</span><span class="s">&quot;your-password&quot;</span><span class="p">),</span>
-</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithDatabase</span><span class="p">(</span><span class="s">&quot;trpc_sessions&quot;</span><span class="p">),</span>
-</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithSSLMode</span><span class="p">(</span><span class="s">&quot;require&quot;</span><span class="p">),</span>
-</span><span id="__span-12-23"><a id="__codelineno-12-23" name="__codelineno-12-23"></a>
-</span><span id="__span-12-24"><a id="__codelineno-12-24" name="__codelineno-12-24"></a><span class="w">    </span><span class="c1">// 会话配置</span>
-</span><span id="__span-12-25"><a id="__codelineno-12-25" name="__codelineno-12-25"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithSessionEventLimit</span><span class="p">(</span><span class="mi">1000</span><span class="p">),</span>
-</span><span id="__span-12-26"><a id="__codelineno-12-26" name="__codelineno-12-26"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithSessionTTL</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
-</span><span id="__span-12-27"><a id="__codelineno-12-27" name="__codelineno-12-27"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithAppStateTTL</span><span class="p">(</span><span class="mi">24</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Hour</span><span class="p">),</span>
-</span><span id="__span-12-28"><a id="__codelineno-12-28" name="__codelineno-12-28"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithUserStateTTL</span><span class="p">(</span><span class="mi">7</span><span class="o">*</span><span class="mi">24</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Hour</span><span class="p">),</span>
-</span><span id="__span-12-29"><a id="__codelineno-12-29" name="__codelineno-12-29"></a>
-</span><span id="__span-12-30"><a id="__codelineno-12-30" name="__codelineno-12-30"></a><span class="w">    </span><span class="c1">// TTL 清理配置</span>
-</span><span id="__span-12-31"><a id="__codelineno-12-31" name="__codelineno-12-31"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithCleanupInterval</span><span class="p">(</span><span class="mi">10</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
-</span><span id="__span-12-32"><a id="__codelineno-12-32" name="__codelineno-12-32"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithSoftDelete</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w">  </span><span class="c1">// 软删除模式</span>
-</span><span id="__span-12-33"><a id="__codelineno-12-33" name="__codelineno-12-33"></a>
-</span><span id="__span-12-34"><a id="__codelineno-12-34" name="__codelineno-12-34"></a><span class="w">    </span><span class="c1">// 异步持久化配置</span>
-</span><span id="__span-12-35"><a id="__codelineno-12-35" name="__codelineno-12-35"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithAsyncPersisterNum</span><span class="p">(</span><span class="mi">4</span><span class="p">),</span>
-</span><span id="__span-12-36"><a id="__codelineno-12-36" name="__codelineno-12-36"></a><span class="p">)</span>
-</span><span id="__span-12-37"><a id="__codelineno-12-37" name="__codelineno-12-37"></a><span class="c1">// 效果：</span>
-</span><span id="__span-12-38"><a id="__codelineno-12-38" name="__codelineno-12-38"></a><span class="c1">// - 使用 SSL 加密连接</span>
-</span><span id="__span-12-39"><a id="__codelineno-12-39" name="__codelineno-12-39"></a><span class="c1">// - 会话 30 分钟无活动后过期</span>
-</span><span id="__span-12-40"><a id="__codelineno-12-40" name="__codelineno-12-40"></a><span class="c1">// - 每 10 分钟清理过期数据（软删除）</span>
-</span><span id="__span-12-41"><a id="__codelineno-12-41" name="__codelineno-12-41"></a><span class="c1">// - 4 个异步 worker 处理写入</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithPostgresClientDSN</span><span class="p">(</span><span class="s">&quot;postgres://user:password@localhost:5432/mydb?sslmode=disable&quot;</span><span class="p">),</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a><span class="p">)</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7"></a>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8"></a>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9"></a><span class="c1">// 生产环境完整配置</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithPostgresClientDSN</span><span class="p">(</span><span class="s">&quot;postgres://user:password@localhost:5432/trpc_sessions?sslmode=require&quot;</span><span class="p">),</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12"></a>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13"></a><span class="w">    </span><span class="c1">// 会话配置</span>
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithSessionEventLimit</span><span class="p">(</span><span class="mi">1000</span><span class="p">),</span>
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithSessionTTL</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithAppStateTTL</span><span class="p">(</span><span class="mi">24</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Hour</span><span class="p">),</span>
+</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithUserStateTTL</span><span class="p">(</span><span class="mi">7</span><span class="o">*</span><span class="mi">24</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Hour</span><span class="p">),</span>
+</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18"></a>
+</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19"></a><span class="w">    </span><span class="c1">// TTL 清理配置</span>
+</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithCleanupInterval</span><span class="p">(</span><span class="mi">10</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
+</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithSoftDelete</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w">  </span><span class="c1">// 软删除模式</span>
+</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22"></a>
+</span><span id="__span-12-23"><a id="__codelineno-12-23" name="__codelineno-12-23"></a><span class="w">    </span><span class="c1">// 异步持久化配置</span>
+</span><span id="__span-12-24"><a id="__codelineno-12-24" name="__codelineno-12-24"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithAsyncPersisterNum</span><span class="p">(</span><span class="mi">4</span><span class="p">),</span>
+</span><span id="__span-12-25"><a id="__codelineno-12-25" name="__codelineno-12-25"></a><span class="p">)</span>
+</span><span id="__span-12-26"><a id="__codelineno-12-26" name="__codelineno-12-26"></a><span class="c1">// 效果：</span>
+</span><span id="__span-12-27"><a id="__codelineno-12-27" name="__codelineno-12-27"></a><span class="c1">// - 使用 SSL 加密连接</span>
+</span><span id="__span-12-28"><a id="__codelineno-12-28" name="__codelineno-12-28"></a><span class="c1">// - 会话 30 分钟无活动后过期</span>
+</span><span id="__span-12-29"><a id="__codelineno-12-29" name="__codelineno-12-29"></a><span class="c1">// - 每 10 分钟清理过期数据（软删除）</span>
+</span><span id="__span-12-30"><a id="__codelineno-12-30" name="__codelineno-12-30"></a><span class="c1">// - 4 个异步 worker 处理写入</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="_18">配置复用</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1"> 1</a></span>
@@ -3632,29 +3613,21 @@
 <span class="normal"><a href="#__codelineno-13-12">12</a></span>
 <span class="normal"><a href="#__codelineno-13-13">13</a></span>
 <span class="normal"><a href="#__codelineno-13-14">14</a></span>
-<span class="normal"><a href="#__codelineno-13-15">15</a></span>
-<span class="normal"><a href="#__codelineno-13-16">16</a></span>
-<span class="normal"><a href="#__codelineno-13-17">17</a></span>
-<span class="normal"><a href="#__codelineno-13-18">18</a></span>
-<span class="normal"><a href="#__codelineno-13-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/storage&quot;</span>
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/postgres&quot;</span>
+<span class="normal"><a href="#__codelineno-13-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/storage/postgres&quot;</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="w">    </span><span class="nx">sessionpg</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/postgres&quot;</span>
 </span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="p">)</span>
 </span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5"></a>
 </span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6"></a><span class="c1">// 注册 PostgreSQL 实例</span>
-</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7"></a><span class="nx">storage</span><span class="p">.</span><span class="nx">RegisterPostgresInstance</span><span class="p">(</span><span class="s">&quot;my-postgres-instance&quot;</span><span class="p">,</span>
-</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8"></a><span class="w">    </span><span class="nx">storage</span><span class="p">.</span><span class="nx">WithPostgresHost</span><span class="p">(</span><span class="s">&quot;localhost&quot;</span><span class="p">),</span>
-</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9"></a><span class="w">    </span><span class="nx">storage</span><span class="p">.</span><span class="nx">WithPostgresPort</span><span class="p">(</span><span class="mi">5432</span><span class="p">),</span>
-</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10"></a><span class="w">    </span><span class="nx">storage</span><span class="p">.</span><span class="nx">WithPostgresUser</span><span class="p">(</span><span class="s">&quot;postgres&quot;</span><span class="p">),</span>
-</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11"></a><span class="w">    </span><span class="nx">storage</span><span class="p">.</span><span class="nx">WithPostgresPassword</span><span class="p">(</span><span class="s">&quot;your-password&quot;</span><span class="p">),</span>
-</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12"></a><span class="w">    </span><span class="nx">storage</span><span class="p">.</span><span class="nx">WithPostgresDatabase</span><span class="p">(</span><span class="s">&quot;trpc_sessions&quot;</span><span class="p">),</span>
-</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13"></a><span class="p">)</span>
-</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14"></a>
-</span><span id="__span-13-15"><a id="__codelineno-13-15" name="__codelineno-13-15"></a><span class="c1">// 在会话服务中使用</span>
-</span><span id="__span-13-16"><a id="__codelineno-13-16" name="__codelineno-13-16"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-13-17"><a id="__codelineno-13-17" name="__codelineno-13-17"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithInstanceName</span><span class="p">(</span><span class="s">&quot;my-postgres-instance&quot;</span><span class="p">),</span>
-</span><span id="__span-13-18"><a id="__codelineno-13-18" name="__codelineno-13-18"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithSessionEventLimit</span><span class="p">(</span><span class="mi">500</span><span class="p">),</span>
-</span><span id="__span-13-19"><a id="__codelineno-13-19" name="__codelineno-13-19"></a><span class="p">)</span>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7"></a><span class="nx">postgres</span><span class="p">.</span><span class="nx">RegisterPostgresInstance</span><span class="p">(</span><span class="s">&quot;my-postgres-instance&quot;</span><span class="p">,</span>
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithClientConnString</span><span class="p">(</span><span class="s">&quot;postgres://user:password@localhost:5432/trpc_sessions?sslmode=disable&quot;</span><span class="p">),</span>
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9"></a><span class="p">)</span>
+</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10"></a>
+</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11"></a><span class="c1">// 在会话服务中使用</span>
+</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionpg</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13"></a><span class="w">    </span><span class="nx">sessionpg</span><span class="p">.</span><span class="nx">WithPostgresInstance</span><span class="p">(</span><span class="s">&quot;my-postgres-instance&quot;</span><span class="p">),</span>
+</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14"></a><span class="w">    </span><span class="nx">sessionpg</span><span class="p">.</span><span class="nx">WithSessionEventLimit</span><span class="p">(</span><span class="mi">500</span><span class="p">),</span>
+</span><span id="__span-13-15"><a id="__codelineno-13-15" name="__codelineno-13-15"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="schema">Schema 与表前缀</h3>
 <p>PostgreSQL 支持 schema 和表前缀配置，适用于多租户和多环境场景：</p>
@@ -4115,29 +4088,21 @@
 <span class="normal"><a href="#__codelineno-20-12">12</a></span>
 <span class="normal"><a href="#__codelineno-20-13">13</a></span>
 <span class="normal"><a href="#__codelineno-20-14">14</a></span>
-<span class="normal"><a href="#__codelineno-20-15">15</a></span>
-<span class="normal"><a href="#__codelineno-20-16">16</a></span>
-<span class="normal"><a href="#__codelineno-20-17">17</a></span>
-<span class="normal"><a href="#__codelineno-20-18">18</a></span>
-<span class="normal"><a href="#__codelineno-20-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/storage&quot;</span>
-</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/mysql&quot;</span>
+<span class="normal"><a href="#__codelineno-20-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/storage/mysql&quot;</span>
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a><span class="w">    </span><span class="nx">sessionmysql</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/mysql&quot;</span>
 </span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4"></a><span class="p">)</span>
 </span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5"></a>
 </span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6"></a><span class="c1">// 注册 MySQL 实例</span>
-</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7"></a><span class="nx">storage</span><span class="p">.</span><span class="nx">RegisterMySQLInstance</span><span class="p">(</span><span class="s">&quot;my-mysql-instance&quot;</span><span class="p">,</span>
-</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8"></a><span class="w">    </span><span class="nx">storage</span><span class="p">.</span><span class="nx">WithMySQLHost</span><span class="p">(</span><span class="s">&quot;localhost&quot;</span><span class="p">),</span>
-</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9"></a><span class="w">    </span><span class="nx">storage</span><span class="p">.</span><span class="nx">WithMySQLPort</span><span class="p">(</span><span class="mi">3306</span><span class="p">),</span>
-</span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10"></a><span class="w">    </span><span class="nx">storage</span><span class="p">.</span><span class="nx">WithMySQLUser</span><span class="p">(</span><span class="s">&quot;root&quot;</span><span class="p">),</span>
-</span><span id="__span-20-11"><a id="__codelineno-20-11" name="__codelineno-20-11"></a><span class="w">    </span><span class="nx">storage</span><span class="p">.</span><span class="nx">WithMySQLPassword</span><span class="p">(</span><span class="s">&quot;your-password&quot;</span><span class="p">),</span>
-</span><span id="__span-20-12"><a id="__codelineno-20-12" name="__codelineno-20-12"></a><span class="w">    </span><span class="nx">storage</span><span class="p">.</span><span class="nx">WithMySQLDatabase</span><span class="p">(</span><span class="s">&quot;trpc_sessions&quot;</span><span class="p">),</span>
-</span><span id="__span-20-13"><a id="__codelineno-20-13" name="__codelineno-20-13"></a><span class="p">)</span>
-</span><span id="__span-20-14"><a id="__codelineno-20-14" name="__codelineno-20-14"></a>
-</span><span id="__span-20-15"><a id="__codelineno-20-15" name="__codelineno-20-15"></a><span class="c1">// 在会话服务中使用</span>
-</span><span id="__span-20-16"><a id="__codelineno-20-16" name="__codelineno-20-16"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-20-17"><a id="__codelineno-20-17" name="__codelineno-20-17"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithInstanceName</span><span class="p">(</span><span class="s">&quot;my-mysql-instance&quot;</span><span class="p">),</span>
-</span><span id="__span-20-18"><a id="__codelineno-20-18" name="__codelineno-20-18"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSessionEventLimit</span><span class="p">(</span><span class="mi">500</span><span class="p">),</span>
-</span><span id="__span-20-19"><a id="__codelineno-20-19" name="__codelineno-20-19"></a><span class="p">)</span>
+</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7"></a><span class="nx">mysql</span><span class="p">.</span><span class="nx">RegisterMySQLInstance</span><span class="p">(</span><span class="s">&quot;my-mysql-instance&quot;</span><span class="p">,</span>
+</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithClientBuilderDSN</span><span class="p">(</span><span class="s">&quot;root:password@tcp(localhost:3306)/trpc_sessions?parseTime=true&amp;charset=utf8mb4&quot;</span><span class="p">),</span>
+</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9"></a><span class="p">)</span>
+</span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10"></a>
+</span><span id="__span-20-11"><a id="__codelineno-20-11" name="__codelineno-20-11"></a><span class="c1">// 在会话服务中使用</span>
+</span><span id="__span-20-12"><a id="__codelineno-20-12" name="__codelineno-20-12"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionmysql</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+</span><span id="__span-20-13"><a id="__codelineno-20-13" name="__codelineno-20-13"></a><span class="w">    </span><span class="nx">sessionmysql</span><span class="p">.</span><span class="nx">WithMySQLInstance</span><span class="p">(</span><span class="s">&quot;my-mysql-instance&quot;</span><span class="p">),</span>
+</span><span id="__span-20-14"><a id="__codelineno-20-14" name="__codelineno-20-14"></a><span class="w">    </span><span class="nx">sessionmysql</span><span class="p">.</span><span class="nx">WithSessionEventLimit</span><span class="p">(</span><span class="mi">500</span><span class="p">),</span>
+</span><span id="__span-20-15"><a id="__codelineno-20-15" name="__codelineno-20-15"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="_24">表前缀</h3>
 <p>MySQL 支持表前缀配置，适用于多应用共享数据库的场景：</p>
@@ -5410,7 +5375,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月10日 11:17:18 UTC">2025-12-10 11:17:18</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月15日 03:16:06 UTC">2025-12-15 03:16:06</span>
   </span>
 
     
