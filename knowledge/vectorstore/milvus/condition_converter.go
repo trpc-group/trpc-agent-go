@@ -11,12 +11,14 @@ package milvus
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"runtime/debug"
 	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -32,14 +34,16 @@ var comparisonOperators = map[string]string{
 }
 
 // milvusFilterConverter converts searchfilter conditions to Milvus expressions
-type milvusFilterConverter struct{}
+type milvusFilterConverter struct {
+	metadataFieldName string
+}
 
 type convertResult struct {
 	exprStr string
 	params  map[string]any
 }
 
-func (c *milvusFilterConverter) Convert(condition *searchfilter.UniversalFilterCondition) (*convertResult, error) {
+func (c *milvusFilterConverter) Convert(cond *searchfilter.UniversalFilterCondition) (*convertResult, error) {
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
@@ -47,137 +51,122 @@ func (c *milvusFilterConverter) Convert(condition *searchfilter.UniversalFilterC
 		}
 	}()
 
-	cr := &convertResult{
-		params: make(map[string]any),
-	}
-
-	err := c.convertCondition(condition, cr)
-	if err != nil {
-		return nil, err
-	}
-
-	// Return nil params if empty
-	if len(cr.exprStr) == 0 || len(cr.params) == 0 {
-		return nil, fmt.Errorf("empty condition")
-	}
-
-	return cr, nil
+	return c.convertCondition(cond)
 }
 
-func (c *milvusFilterConverter) convertCondition(condition *searchfilter.UniversalFilterCondition, cr *convertResult) error {
-	if condition == nil {
-		return fmt.Errorf("milvus filter condition is nil")
+func (c *milvusFilterConverter) convertCondition(cond *searchfilter.UniversalFilterCondition) (*convertResult, error) {
+	if cond == nil {
+		return nil, fmt.Errorf("milvus filter condition is nil")
 	}
-	switch condition.Operator {
+	switch cond.Operator {
 	case searchfilter.OperatorEqual, searchfilter.OperatorNotEqual, searchfilter.OperatorGreaterThan,
 		searchfilter.OperatorGreaterThanOrEqual, searchfilter.OperatorLessThan, searchfilter.OperatorLessThanOrEqual,
 		searchfilter.OperatorLike, searchfilter.OperatorNotLike:
-		return c.convertGeneralComparisonCondition(condition, cr)
+		return c.convertComparisonCondition(cond)
 	case searchfilter.OperatorAnd, searchfilter.OperatorOr:
-		return c.convertLogicalCondition(condition, cr)
+		return c.convertLogicalCondition(cond)
 	case searchfilter.OperatorIn, searchfilter.OperatorNotIn:
-		return c.convertInCondition(condition, cr)
+		return c.convertInCondition(cond)
 	case searchfilter.OperatorBetween:
-		return c.convertBetweenCondition(condition, cr)
+		return c.convertBetweenCondition(cond)
 	default:
-		return fmt.Errorf("unsupported operator: %v", condition.Operator)
+		return nil, fmt.Errorf("unsupported operator: %v", cond.Operator)
 	}
 }
 
-func (c *milvusFilterConverter) convertGeneralComparisonCondition(condition *searchfilter.UniversalFilterCondition, cr *convertResult) error {
-	if condition.Field == "" || condition.Value == nil {
-		return fmt.Errorf("milvus filter condition is nil")
+func (c *milvusFilterConverter) convertComparisonCondition(cond *searchfilter.UniversalFilterCondition) (*convertResult, error) {
+	condField := c.convertFieldName(cond.Field)
+	if condField == "" || cond.Value == nil {
+		return nil, fmt.Errorf("milvus filter condition is nil")
 	}
-
-	operator := comparisonOperators[condition.Operator]
-
-	cr.params[condition.Field] = condition.Value
-	cr.exprStr = fmt.Sprintf("%s %s {%s}", condition.Field, operator, condition.Field)
-	return nil
-}
-
-func (c *milvusFilterConverter) convertLogicalCondition(condition *searchfilter.UniversalFilterCondition, cr *convertResult) error {
-	if condition.Value == nil {
-		return fmt.Errorf("milvus filter condition is nil")
-	}
-
-	conditions, ok := condition.Value.([]*searchfilter.UniversalFilterCondition)
+	operator, ok := comparisonOperators[cond.Operator]
 	if !ok {
-		return fmt.Errorf("invalid logical condition value type")
+		return nil, fmt.Errorf("unsupported comparison operator: %s", cond.Operator)
 	}
 
-	parts := make([]string, 0, len(conditions))
-	params := make(map[string]any)
-	for _, cond := range conditions {
-		condCR := &convertResult{
-			params: make(map[string]any),
-		}
-		err := c.convertCondition(cond, condCR)
+	return &convertResult{
+		exprStr: fmt.Sprintf("%s %s {%s}", condField, operator, cond.Field),
+		params:  map[string]any{cond.Field: cond.Value},
+	}, nil
+}
+
+func (c *milvusFilterConverter) convertLogicalCondition(cond *searchfilter.UniversalFilterCondition) (*convertResult, error) {
+	if cond.Value == nil {
+		return nil, fmt.Errorf("milvus filter condition is nil")
+	}
+	conds, ok := cond.Value.([]*searchfilter.UniversalFilterCondition)
+	if !ok {
+		return nil, fmt.Errorf("invalid logical condition value type")
+	}
+
+	var condResult *convertResult
+	for _, childCond := range conds {
+		childRes, err := c.convertCondition(childCond)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if condCR.exprStr != "" {
-			parts = append(parts, condCR.exprStr)
+		if childRes == nil || childRes.exprStr == "" {
+			continue
 		}
-		for k, v := range condCR.params {
-			params[k] = v
+		if condResult == nil {
+			condResult = childRes
+			continue
 		}
+
+		condResult.exprStr = fmt.Sprintf("(%s) %s (%s)", condResult.exprStr, strings.ToLower(cond.Operator), childRes.exprStr)
+		maps.Copy(condResult.params, childRes.params)
 	}
 
-	if len(parts) == 0 {
-		return nil
+	if condResult == nil {
+		return nil, fmt.Errorf("empty logical condition")
 	}
-	if len(parts) == 1 {
-		cr.exprStr = parts[0]
-		cr.params = params
-		return nil
-	}
-	if condition.Operator == searchfilter.OperatorAnd {
-		cr.exprStr = "(" + strings.Join(parts, " and ") + ")"
-	} else {
-		cr.exprStr = "(" + strings.Join(parts, " or ") + ")"
-	}
-	cr.params = params
-	return nil
+	return condResult, nil
 }
 
-func (c *milvusFilterConverter) convertInCondition(condition *searchfilter.UniversalFilterCondition, cr *convertResult) error {
-	if condition.Field == "" || condition.Value == nil {
-		return fmt.Errorf("milvus filter condition is nil")
+func (c *milvusFilterConverter) convertInCondition(cond *searchfilter.UniversalFilterCondition) (*convertResult, error) {
+	condField := c.convertFieldName(cond.Field)
+	if condField == "" || cond.Value == nil {
+		return nil, fmt.Errorf("milvus filter condition is nil")
 	}
 
-	s := reflect.ValueOf(condition.Value)
+	s := reflect.ValueOf(cond.Value)
 	if s.Kind() != reflect.Slice || s.Len() <= 0 {
-		return fmt.Errorf("in operator value must be a slice with at least one value: %v", condition.Value)
+		return nil, fmt.Errorf("in operator value must be a slice with at least one value: %v", cond.Value)
 	}
-	cr.params[condition.Field] = condition.Value
-
-	if condition.Operator == searchfilter.OperatorNotIn {
-		cr.exprStr = fmt.Sprintf("%s not in {%s}", condition.Field, condition.Field)
-		return nil
-	}
-
-	cr.exprStr = fmt.Sprintf("%s in {%s}", condition.Field, condition.Field)
-	return nil
+	return &convertResult{
+		exprStr: fmt.Sprintf("%s %s {%s}", condField, strings.ToLower(cond.Operator), cond.Field),
+		params:  map[string]any{cond.Field: cond.Value},
+	}, nil
 }
 
-func (c *milvusFilterConverter) convertBetweenCondition(condition *searchfilter.UniversalFilterCondition, cr *convertResult) error {
-	if condition.Field == "" || condition.Value == nil {
-		return fmt.Errorf("milvus filter condition is nil")
+func (c *milvusFilterConverter) convertBetweenCondition(cond *searchfilter.UniversalFilterCondition) (*convertResult, error) {
+	condField := c.convertFieldName(cond.Field)
+	if condField == "" || cond.Value == nil {
+		return nil, fmt.Errorf("milvus filter condition is nil")
 	}
 
-	value := reflect.ValueOf(condition.Value)
+	value := reflect.ValueOf(cond.Value)
 	if value.Kind() != reflect.Slice || value.Len() != 2 {
-		return fmt.Errorf("between operator value must be a slice with two elements: %v", condition.Value)
+		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
 	}
 
-	paramName1 := fmt.Sprintf("%s_%d", condition.Field, 0)
-	paramName2 := fmt.Sprintf("%s_%d", condition.Field, 1)
-	cr.params[paramName1] = value.Index(0).Interface()
-	cr.params[paramName2] = value.Index(1).Interface()
-	cr.exprStr = fmt.Sprintf("%s >= {%s} and %s <= {%s}", condition.Field, paramName1, condition.Field, paramName2)
+	paramName1 := fmt.Sprintf("%s_%d", cond.Field, 0)
+	paramName2 := fmt.Sprintf("%s_%d", cond.Field, 1)
+	return &convertResult{
+		exprStr: fmt.Sprintf("%s >= {%s} and %s <= {%s}", condField, paramName1, condField, paramName2),
+		params: map[string]any{
+			paramName1: value.Index(0).Interface(),
+			paramName2: value.Index(1).Interface(),
+		},
+	}, nil
+}
 
-	return nil
+// convertFieldName converts metadata.xxx fields to ES field path.
+func (c *milvusFilterConverter) convertFieldName(field string) string {
+	if actualField, ok := strings.CutPrefix(field, source.MetadataFieldPrefix); ok {
+		return fmt.Sprintf("%s[\"%s\"]", c.metadataFieldName, actualField)
+	}
+	return field
 }
 
 // formatValue formats a value for use in Milvus filter expressions.
