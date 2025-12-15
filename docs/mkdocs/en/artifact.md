@@ -83,7 +83,7 @@ service := inmemory.NewService()
 
 ### Tencent Cloud Object Storage (COS)
 
-For production deployments:
+For production deployments with Tencent Cloud:
 
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/artifact/cos"
@@ -94,6 +94,52 @@ import "trpc.group/trpc-go/trpc-agent-go/artifact/cos"
 
 service := cos.NewService("https://bucket.cos.region.myqcloud.com")
 ```
+
+### S3-Compatible Storage
+
+The S3 backend supports AWS S3 and S3-compatible services (MinIO, DigitalOcean Spaces, Cloudflare R2, etc.).
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/artifact/s3"
+```
+
+#### Usage
+
+```go
+// Create the service
+service, err := s3.NewService(os.Getenv("S3_BUCKET"))
+if err != nil {
+    log.Fatal(err)
+}
+
+// With custom endpoint (for S3-compatible services)
+service, err := s3.NewService(os.Getenv("S3_BUCKET"),
+    s3.WithEndpoint(os.Getenv("S3_ENDPOINT")),
+    s3.WithCredentials(os.Getenv("S3_ACCESS_KEY"), os.Getenv("S3_SECRET_KEY")),
+    s3.WithPathStyle(),  // Required for MinIO and some S3-compatible services
+)
+```
+
+> **Note**: The bucket must already exist before using the service.
+
+#### Configuration Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `WithEndpoint(url)` | Custom endpoint for S3-compatible services (use `http://` for non-SSL) | AWS S3 |
+| `WithRegion(region)` | AWS region | `AWS_REGION` env or `us-east-1` |
+| `WithCredentials(key, secret)` | Static credentials | AWS credential chain |
+| `WithSessionToken(token)` | STS session token for temporary credentials | - |
+| `WithPathStyle()` | Use path-style URLs (required for MinIO, R2) | Virtual-hosted |
+| `WithRetries(n)` | Max retry attempts | 3 |
+
+#### Credential Resolution Order
+
+When no explicit credentials are provided via `WithCredentials()`, the AWS SDK resolves credentials in the following order of precedence:
+
+1. **Environment variables**: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+2. **Shared credentials file**: `~/.aws/credentials` (with optional `AWS_PROFILE`)
+3. **IAM role**: EC2 instance profile, ECS task role, Lambda execution role, etc.
 
 ## Usage in Agents
 
@@ -282,6 +328,20 @@ func processTextTool(ctx context.Context, input ProcessTextInput) (ProcessTextOu
 6. **Resource Management**: Be mindful of storage costs and data lifecycle when using cloud storage backends.
 
 ## Configuration
+
+### Environment Variables for S3
+
+When using AWS S3 or S3-compatible services:
+
+```bash
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export AWS_REGION="your-region"
+export S3_BUCKET="your-bucket-name"
+
+# Optional: for S3-compatible services (MinIO, R2, Spaces, etc.)
+export S3_ENDPOINT="https://your-endpoint.com"
+```
 
 ### Environment Variables for COS
 

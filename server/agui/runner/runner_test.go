@@ -22,6 +22,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 func TestNew(t *testing.T) {
@@ -168,6 +170,77 @@ func TestRunRunOptionResolverError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve run option")
 	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunFlushesTracker(t *testing.T) {
+	recorder := &flushRecorder{}
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		tracker:           recorder,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	collectEvents(t, ch)
+	assert.GreaterOrEqual(t, recorder.appendCount, 1)
+	assert.Equal(t, 1, recorder.flushCount)
+}
+
+func TestNewWithSessionServiceEnablesTracker(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(context.Context, string, string, model.Message, ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(underlying, WithSessionService(inmemory.NewSessionService()))
+	run, ok := r.(*runner)
+	assert.True(t, ok)
+	assert.NotNil(t, run.tracker)
+}
+
+func TestRunRejectsConcurrentSession(t *testing.T) {
+	ch := make(chan *agentevent.Event)
+	underlying := &fakeRunner{
+		run: func(context.Context, string, string, model.Message, ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return ch, nil
+		},
+	}
+	r := New(underlying).(*runner)
+
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	}
+
+	events1, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	go collectEvents(t, events1)
+
+	events2, err := r.Run(context.Background(), input)
+	assert.Nil(t, events2)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "session is already running")
+
+	close(ch)
+	collectEvents(t, events1)
 }
 
 func TestRunRunOptionResolverOptions(t *testing.T) {
@@ -703,6 +776,45 @@ func (f *fakeTranslator) Translate(ctx context.Context, evt *agentevent.Event) (
 	return out, nil
 }
 
+type flushRecorder struct {
+	appendCount int
+	flushCount  int
+}
+
+func (f *flushRecorder) AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
+	f.appendCount++
+	return nil
+}
+
+func (f *flushRecorder) GetEvents(ctx context.Context, key session.Key) (*session.TrackEvents, error) {
+	return nil, nil
+}
+
+func (f *flushRecorder) Flush(ctx context.Context, key session.Key) error {
+	f.flushCount++
+	return nil
+}
+
+type errorTracker struct {
+	appendErr error
+	flushErr  error
+}
+
+func (e *errorTracker) AppendEvent(ctx context.Context,
+	_ session.Key, _ aguievents.Event) error {
+	return e.appendErr
+}
+
+func (e *errorTracker) GetEvents(ctx context.Context,
+	_ session.Key) (*session.TrackEvents, error) {
+	return nil, nil
+}
+
+func (e *errorTracker) Flush(ctx context.Context,
+	_ session.Key) error {
+	return e.flushErr
+}
+
 type fakeRunner struct {
 	run func(ctx context.Context,
 		userID, sessionID string,
@@ -724,6 +836,47 @@ func (f *fakeRunner) Run(ctx context.Context,
 
 func (f *fakeRunner) Close() error {
 	return nil
+}
+
+func TestRunTrackingErrorsAreIgnored(t *testing.T) {
+	appendErr := errors.New("append failed")
+	flushErr := errors.New("flush failed")
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		tracker: &errorTracker{
+			appendErr: appendErr,
+			flushErr:  flushErr,
+		},
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []model.Message{
+			{
+				Role:    model.RoleUser,
+				Content: "hi",
+			},
+		},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	assert.Len(t, evts, 1)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
 }
 
 func collectEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Event {

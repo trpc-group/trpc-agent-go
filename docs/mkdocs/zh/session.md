@@ -4,6 +4,12 @@
 
 tRPC-Agent-Go 框架提供了强大的会话（Session）管理功能，用于维护 Agent 与用户交互过程中的对话历史和上下文信息。通过自动持久化对话记录、智能摘要压缩和灵活的存储后端，会话管理为构建有状态的智能 Agent 提供了完整的基础设施。
 
+### 定位
+
+Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID, SessionID>`，保存这一段对话里的用户消息、Agent 回复、工具调用结果以及基于这些内容生成的简要摘要，用于支撑多轮问答场景。
+
+在同一条对话中，它让多轮问答之间能够自然承接，避免用户在每一轮都重新描述同一个问题或提供相同参数。
+
 ### 🎯 核心特性
 
 - **上下文管理**：自动加载历史对话，实现真正的多轮对话
@@ -223,6 +229,30 @@ r := runner.NewRunner("my-agent", llmAgent,
     runner.WithSessionService(sessionService))
 ```
 
+#### 摘要前后置 Hook
+
+可以通过 Hook 调整摘要输入或输出：
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithPreSummaryHook(func(ctx *summary.PreSummaryHookContext) error {
+        // 可在摘要前修改 ctx.Text 或 ctx.Events
+        return nil
+    }),
+    summary.WithPostSummaryHook(func(ctx *summary.PostSummaryHookContext) error {
+        // 可在摘要返回前修改 ctx.Summary
+        return nil
+    }),
+    summary.WithSummaryHookAbortOnError(true), // Hook 报错时中断（可选）。
+)
+```
+
+说明：
+
+- Pre-hook 主要修改 `ctx.Text`，也可调整 `ctx.Events`；Post-hook 可修改 `ctx.Summary`。
+- 默认忽略 Hook 错误，需中断时使用 `WithSummaryHookAbortOnError(true)`。
+
 **上下文注入机制：**
 
 启用摘要后，框架会将摘要作为系统消息前置到 LLM 输入，同时包含摘要时间点之后的所有增量事件，保证完整上下文：
@@ -327,7 +357,6 @@ tRPC-Agent-Go 提供四种会话存储后端，满足不同场景需求：
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
 - **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
 
 ### 基础配置示例
@@ -495,13 +524,22 @@ summary:{appName}:{userID}:{sessionID}:{filterKey} -> String (JSON)
 
 **连接配置：**
 
+方式一：
+- **`WithPostgresClientDSN(dsn string)`**：PostgreSQL DSN。 示例：`postgres://user:password@localhost:5432/dbname`
+
+
+方式二：
 - **`WithHost(host string)`**：PostgreSQL 服务器地址。默认值为 `localhost`。
 - **`WithPort(port int)`**：PostgreSQL 服务器端口。默认值为 `5432`。
 - **`WithUser(user string)`**：数据库用户名。默认值为 `postgres`。
 - **`WithPassword(password string)`**：数据库密码。默认值为空字符串。
 - **`WithDatabase(database string)`**：数据库名称。默认值为 `postgres`。
 - **`WithSSLMode(sslMode string)`**：SSL 模式。默认值为 `disable`。可选值：`disable`、`require`、`verify-ca`、`verify-full`。
-- **`WithInstanceName(name string)`**：使用预配置的 PostgreSQL 实例。
+
+方式三：
+- **`WithPostgresInstance(name string)`**：使用预配置的 PostgreSQL 实例。
+
+优先级：方式一 > 方式二 > 方式三
 
 **会话配置：**
 
@@ -516,7 +554,6 @@ summary:{appName}:{userID}:{sessionID}:{filterKey} -> String (JSON)
 
 - **`WithEnableAsyncPersist(enable bool)`**：启用异步持久化。默认值为 `false`。
 - **`WithAsyncPersisterNum(num int)`**：异步持久化 worker 数量。默认值为 10。
-
 
 **摘要配置：**
 
@@ -538,24 +575,13 @@ import "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 
 // 默认配置（最简）
 sessionService, err := postgres.NewService(
-    postgres.WithHost("localhost"),
-    postgres.WithPassword("your-password"),
+    postgres.WithPostgresClientDSN("postgres://user:password@localhost:5432/mydb?sslmode=disable"),
 )
-// 效果：
-// - 连接 localhost:5432，数据库 postgres
-// - 每个会话最多 1000 个事件
-// - 数据永不过期
-// - 2 个异步持久化 worker
+
 
 // 生产环境完整配置
 sessionService, err := postgres.NewService(
-    // 连接配置
-    postgres.WithHost("localhost"),
-    postgres.WithPort(5432),
-    postgres.WithUser("postgres"),
-    postgres.WithPassword("your-password"),
-    postgres.WithDatabase("trpc_sessions"),
-    postgres.WithSSLMode("require"),
+    postgres.WithPostgresClientDSN("postgres://user:password@localhost:5432/trpc_sessions?sslmode=require"),
 
     // 会话配置
     postgres.WithSessionEventLimit(1000),
@@ -581,23 +607,19 @@ sessionService, err := postgres.NewService(
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/storage"
-    "trpc.group/trpc-go/trpc-agent-go/session/postgres"
+    "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
+    sessionpg "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 )
 
 // 注册 PostgreSQL 实例
-storage.RegisterPostgresInstance("my-postgres-instance",
-    storage.WithPostgresHost("localhost"),
-    storage.WithPostgresPort(5432),
-    storage.WithPostgresUser("postgres"),
-    storage.WithPostgresPassword("your-password"),
-    storage.WithPostgresDatabase("trpc_sessions"),
+postgres.RegisterPostgresInstance("my-postgres-instance",
+    postgres.WithClientConnString("postgres://user:password@localhost:5432/trpc_sessions?sslmode=disable"),
 )
 
 // 在会话服务中使用
-sessionService, err := postgres.NewService(
-    postgres.WithInstanceName("my-postgres-instance"),
-    postgres.WithSessionEventLimit(500),
+sessionService, err := sessionpg.NewService(
+    sessionpg.WithPostgresInstance("my-postgres-instance"),
+    sessionpg.WithSessionEventLimit(500),
 )
 ```
 
@@ -658,7 +680,7 @@ sessionService, err := postgres.NewService(
 
 | 配置               | 删除操作                        | 查询行为                  | 数据恢复 |
 | ------------------ | ------------------------------- | ------------------------- | -------- |
-| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 过滤 `deleted_at IS NULL` | 可恢复   |
+| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 查询附带 `WHERE deleted_at IS NULL`，仅返回未软删除数据 | 可恢复   |
 | `softDelete=false` | `DELETE FROM ...`               | 查询所有记录              | 不可恢复 |
 
 **TTL 自动清理：**
@@ -675,7 +697,7 @@ sessionService, err := postgres.NewService(
 // 清理行为：
 // - softDelete=true：过期数据标记为 deleted_at = NOW()
 // - softDelete=false：过期数据被物理删除
-// - 查询时始终过滤 deleted_at IS NULL
+// - 查询时始终附加 `WHERE deleted_at IS NULL`，仅返回未软删除数据
 ```
 
 ### 配合摘要使用
@@ -811,7 +833,6 @@ CREATE TABLE user_states (
 - **`WithEnableAsyncPersist(enable bool)`**：启用异步持久化。默认值为 `false`。
 - **`WithAsyncPersisterNum(num int)`**：异步持久化 worker 数量。默认值为 10。
 
-
 **摘要配置：**
 
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
@@ -867,23 +888,19 @@ sessionService, err := mysql.NewService(
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/storage"
-    "trpc.group/trpc-go/trpc-agent-go/session/mysql"
+    "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+    sessionmysql "trpc.group/trpc-go/trpc-agent-go/session/mysql"
 )
 
 // 注册 MySQL 实例
-storage.RegisterMySQLInstance("my-mysql-instance",
-    storage.WithMySQLHost("localhost"),
-    storage.WithMySQLPort(3306),
-    storage.WithMySQLUser("root"),
-    storage.WithMySQLPassword("your-password"),
-    storage.WithMySQLDatabase("trpc_sessions"),
+mysql.RegisterMySQLInstance("my-mysql-instance",
+    mysql.WithClientBuilderDSN("root:password@tcp(localhost:3306)/trpc_sessions?parseTime=true&charset=utf8mb4"),
 )
 
 // 在会话服务中使用
-sessionService, err := mysql.NewService(
-    mysql.WithInstanceName("my-mysql-instance"),
-    mysql.WithSessionEventLimit(500),
+sessionService, err := sessionmysql.NewService(
+    sessionmysql.WithMySQLInstance("my-mysql-instance"),
+    sessionmysql.WithSessionEventLimit(500),
 )
 ```
 
@@ -921,7 +938,7 @@ sessionService, err := mysql.NewService(
 
 | 配置               | 删除操作                        | 查询行为                  | 数据恢复 |
 | ------------------ | ------------------------------- | ------------------------- | -------- |
-| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 过滤 `deleted_at IS NULL` | 可恢复   |
+| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 查询附带 `WHERE deleted_at IS NULL`，仅返回未软删除数据 | 可恢复   |
 | `softDelete=false` | `DELETE FROM ...`               | 查询所有记录              | 不可恢复 |
 
 **TTL 自动清理：**
@@ -938,7 +955,7 @@ sessionService, err := mysql.NewService(
 // 清理行为：
 // - softDelete=true：过期数据标记为 deleted_at = NOW()
 // - softDelete=false：过期数据被物理删除
-// - 查询时始终过滤 deleted_at IS NULL
+// - 查询时始终附加 `WHERE deleted_at IS NULL`，仅返回未软删除数据
 ```
 
 ### 配合摘要使用
@@ -1039,6 +1056,14 @@ CREATE TABLE user_states (
 
 ## 高级用法
 
+### Hook 能力（Append/Get）
+
+- **AppendEventHook**：事件写入前的拦截/修改/终止。可用于内容安全、审计打标（如写入 `violation=<word>`），或直接阻断存储。关于 filterKey 的赋值请见下文“会话摘要 / FilterKey 与 AppendEventHook”。
+- **GetSessionHook**：会话读取后的拦截/修改/过滤。可用来剔除带特定标签的事件，或动态补充返回的 Session 状态。
+- **责任链执行**：Hook 通过 `next()` 形成链式调用，可提前返回以短路后续逻辑，错误会向上传递。
+- **跨后端一致**：内存、Redis、MySQL、PostgreSQL 实现已统一接入 Hook，构造服务时注入 Hook 切片即可。
+- **示例**：见 `examples/session/hook`（[代码](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook)）
+
 ### 直接使用 Session Service API
 
 在大多数情况下，您应该通过 Runner 使用会话管理，Runner 会自动处理所有细节。但在某些特殊场景下（如会话管理后台、数据迁移、统计分析等），您可能需要直接操作 Session Service。
@@ -1125,8 +1150,8 @@ summaryModel := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 summarizer := summary.NewSummarizer(
     summaryModel,
     summary.WithChecksAny(                     // 任一条件满足即触发
-        summary.CheckEventThreshold(20),       // 超过 20 个事件后触发
-        summary.CheckTokenThreshold(4000),     // 超过 4000 个 token 后触发
+        summary.CheckEventThreshold(20),       // 自上次摘要后新增 20 个事件后触发
+        summary.CheckTokenThreshold(4000),     // 自上次摘要后新增 4000 个 token 后触发
         summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
     ),
     summary.WithMaxSummaryWords(200),          // 限制摘要在 200 字以内
@@ -1370,8 +1395,8 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 
 **触发条件：**
 
-- **`WithEventThreshold(eventCount int)`**：当事件数量超过阈值时触发摘要。示例：`WithEventThreshold(20)` 在超过 20 个事件后触发。
-- **`WithTokenThreshold(tokenCount int)`**：当总 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在超过 4000 个 token 后触发。
+- **`WithEventThreshold(eventCount int)`**：当自上次摘要后的事件数量超过阈值时触发摘要。示例：`WithEventThreshold(20)` 在自上次摘要后新增 20 个事件后触发。
+- **`WithTokenThreshold(tokenCount int)`**：当自上次摘要后的 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在自上次摘要后新增 4000 个 token 后触发。
 - **`WithTimeThreshold(interval time.Duration)`**：当自上次事件后经过的时间超过间隔时触发摘要。示例：`WithTimeThreshold(5*time.Minute)` 在 5 分钟无活动后触发。
 
 **组合条件：**
@@ -1397,6 +1422,7 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 
 - **`WithMaxSummaryWords(maxWords int)`**：限制摘要的最大字数。该限制会包含在提示词中以指导模型生成。示例：`WithMaxSummaryWords(150)` 请求在 150 字以内的摘要。
 - **`WithPrompt(prompt string)`**：提供自定义摘要提示词。提示词必须包含占位符 `{conversation_text}`，它会被对话内容替换。可选包含 `{max_summary_words}` 用于字数限制指令。
+- **`WithSkipRecent(skipFunc SkipRecentFunc)`**：通过自定义函数在摘要时跳过**最近**事件。函数接收所有事件并返回应跳过的尾部事件数量，返回 0 表示不跳过。适合避免总结最近、可能不完整的对话，或实现基于时间/内容的跳过策略。
 
 **自定义提示词示例：**
 
@@ -1412,9 +1438,52 @@ customPrompt := `分析以下对话并提供简洁的摘要，重点关注关键
 
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithPrompt(customPrompt),
-    summary.WithMaxSummaryWords(100),
+    summary.WithPrompt(customPrompt), // 自定义 Prompt
+    summary.WithMaxSummaryWords(100), // 注入 Prompt 里面的 {max_summary_words}
     summary.WithEventThreshold(15),
+)
+
+// 跳过固定数量（兼容旧用法）
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithSkipRecent(func(_ []event.Event) int { return 2 }), // 跳过最后 2 条
+    summary.WithEventThreshold(10),
+)
+
+// 跳过最近 5 分钟内的消息（时间窗口）
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithSkipRecent(func(events []event.Event) int {
+        cutoff := time.Now().Add(-5 * time.Minute)
+        skip := 0
+        for i := len(events) - 1; i >= 0; i-- {
+            if events[i].Timestamp.After(cutoff) {
+                skip++
+            } else {
+                break
+            }
+        }
+        return skip
+    }),
+    summary.WithEventThreshold(10),
+)
+
+// 仅跳过末尾的工具调用消息
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithSkipRecent(func(events []event.Event) int {
+        skip := 0
+        for i := len(events) - 1; i >= 0; i-- {
+            if events[i].Response != nil && len(events[i].Response.Choices) > 0 &&
+                events[i].Response.Choices[0].Message.Role == model.RoleTool {
+                skip++
+            } else {
+                break
+            }
+        }
+        return skip
+    }),
+    summary.WithEventThreshold(10),
 )
 ```
 
@@ -1462,11 +1531,28 @@ err := sessionService.EnqueueSummaryJob(
 从会话中获取最新的摘要文本：
 
 ```go
+// 获取全量会话摘要（默认行为）
 summaryText, found := sessionService.GetSessionSummaryText(ctx, sess)
 if found {
     fmt.Printf("摘要：%s\n", summaryText)
 }
+
+// 获取特定 filter key 的摘要
+userSummary, found := sessionService.GetSessionSummaryText(
+    ctx, sess, session.WithSummaryFilterKey("user-messages"),
+)
+if found {
+    fmt.Printf("用户消息摘要：%s\n", userSummary)
+}
 ```
+
+**Filter Key 支持：**
+
+`GetSessionSummaryText` 方法支持可选的 `WithSummaryFilterKey` 选项，用于获取特定事件过滤器的摘要：
+
+- 不提供选项时，返回全量会话摘要（`SummaryFilterKeyAllContents`）
+- 提供特定 filter key 但未找到时，回退到全量会话摘要
+- 如果都不存在，兜底返回任意可用的摘要
 
 ### 工作原理
 
@@ -1474,7 +1560,7 @@ if found {
 
 2. **增量摘要**：新事件与先前的摘要（作为系统事件前置）组合，生成一个既包含旧上下文又包含新信息的更新摘要。
 
-3. **触发条件评估**：在生成摘要之前，摘要器会评估配置的触发条件（事件计数、token 计数、时间阈值）。如果条件未满足且 `force=false`，则跳过摘要。
+3. **触发条件评估**：在生成摘要之前，摘要器会评估配置的触发条件（基于自上次摘要后的增量事件计数、token 计数、时间阈值）。如果条件未满足且 `force=false`，则跳过摘要。
 
 4. **异步 Worker**：摘要任务使用基于哈希的分发策略分配到多个 worker goroutine。这确保同一会话的任务按顺序处理，而不同会话可以并行处理。
 
@@ -1493,6 +1579,80 @@ if found {
 5. **平衡字数限制**：设置 `WithMaxSummaryWords` 以在保留上下文和减少 token 使用之间取得平衡。典型值范围为 100-300 字。
 
 6. **测试触发条件**：尝试不同的 `WithChecksAny` 和 `WithChecksAll` 组合，找到摘要频率和成本之间的最佳平衡。
+
+### 按事件类型生成摘要
+
+在实际应用中，你可能希望为不同类型的事件生成独立的摘要。例如：
+
+- **用户消息摘要**：总结用户的需求和问题
+- **工具调用摘要**：记录使用了哪些工具和结果
+- **系统事件摘要**：跟踪系统状态变化
+
+要实现这个功能，需要为事件设置 `FilterKey` 字段来标识事件类型。
+
+#### 使用 AppendEventHook 设置 FilterKey
+
+推荐使用 `AppendEventHook` 在事件写入前自动设置 `FilterKey`：
+
+```go
+sessionService := inmemory.NewSessionService(
+    inmemory.WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+        // 根据事件作者自动分类
+        prefix := "my-app/"  // 必须添加 appName 前缀
+        switch ctx.Event.Author {
+        case "user":
+            ctx.Event.FilterKey = prefix + "user-messages"
+        case "tool":
+            ctx.Event.FilterKey = prefix + "tool-calls"
+        default:
+            ctx.Event.FilterKey = prefix + "misc"
+        }
+        return next()
+    }),
+)
+```
+
+设置好 FilterKey 后，就可以为不同类型的事件生成独立摘要：
+
+```go
+// 为用户消息生成摘要
+err := sessionService.CreateSessionSummary(ctx, sess, "my-app/user-messages", false)
+
+// 为工具调用生成摘要
+err := sessionService.CreateSessionSummary(ctx, sess, "my-app/tool-calls", false)
+
+// 获取特定类型的摘要
+userSummary, found := sessionService.GetSessionSummaryText(
+    ctx, sess, session.WithSummaryFilterKey("my-app/user-messages"))
+```
+
+#### FilterKey 前缀规范
+
+**⚠️ 重要：FilterKey 必须添加 `appName + "/"` 前缀。**
+
+**原因：** Runner 在过滤事件时使用 `appName + "/"` 作为过滤前缀，如果 FilterKey 没有这个前缀，事件会被过滤掉，导致：
+
+- LLM 看不到历史对话，可能重复触发工具调用
+- 摘要内容不完整，丢失重要上下文
+
+**示例：**
+
+```go
+// ✅ 正确：带 appName 前缀
+evt.FilterKey = "my-app/user-messages"
+
+// ❌ 错误：没有前缀，事件会被过滤
+evt.FilterKey = "user-messages"
+```
+
+**技术细节：** 框架使用前缀匹配机制（`strings.HasPrefix`）来判断事件是否应该被包含在上下文中。详见 `ContentRequestProcessor` 的过滤逻辑。
+
+#### 完整示例
+
+参考以下示例查看完整的 FilterKey 使用场景：
+
+- [examples/session/hook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook) - Hook 基础用法
+- [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - 按 FilterKey 生成摘要
 
 ### 性能考虑
 

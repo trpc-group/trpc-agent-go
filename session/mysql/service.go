@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -41,9 +42,6 @@ type SessionState struct {
 type Service struct {
 	opts            ServiceOpts
 	mysqlClient     storage.Client
-	sessionTTL      time.Duration            // TTL for session state and event list
-	appStateTTL     time.Duration            // TTL for app state
-	userStateTTL    time.Duration            // TTL for user state
 	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
 	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
 	cleanupTicker   *time.Ticker             // ticker for automatic cleanup
@@ -111,9 +109,6 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	s := &Service{
 		opts:                  opts,
 		mysqlClient:           mysqlClient,
-		sessionTTL:            opts.sessionTTL,
-		appStateTTL:           opts.appStateTTL,
-		userStateTTL:          opts.userStateTTL,
 		tableSessionStates:    tableSessionStates,
 		tableSessionEvents:    tableSessionEvents,
 		tableSessionSummaries: tableSessionSummaries,
@@ -218,7 +213,7 @@ func (s *Service) CreateSession(
 	}
 
 	// Calculate expires_at based on TTL
-	expiresAt := calculateExpiresAt(s.sessionTTL)
+	expiresAt := calculateExpiresAt(s.opts.sessionTTL)
 
 	// Check if session already exists (matching PostgreSQL behavior)
 	var sessionExists bool
@@ -239,23 +234,55 @@ func (s *Service) CreateSession(
 	if sessionExists {
 		// If session exists and has not expired, reject creation
 		if !existingExpiresAt.Valid {
-			log.Errorf("CreateSession: session already exists with no expiration (app=%s, user=%s, session=%s)",
-				key.AppName, key.UserID, key.SessionID)
+			log.ErrorfContext(
+				ctx,
+				"CreateSession: session already exists with no "+
+					"expiration (app=%s, user=%s, session=%s)",
+				key.AppName,
+				key.UserID,
+				key.SessionID,
+			)
 			return nil, fmt.Errorf("session already exists and has not expired")
 		}
 		if existingExpiresAt.Time.After(now) {
-			log.Errorf("CreateSession: session already exists and not expired yet (app=%s, user=%s, session=%s, expires=%v)",
-				key.AppName, key.UserID, key.SessionID, existingExpiresAt.Time)
+			log.ErrorfContext(
+				ctx,
+				"CreateSession: session already exists and not "+
+					"expired yet (app=%s, user=%s, session=%s, "+
+					"expires=%v)",
+				key.AppName,
+				key.UserID,
+				key.SessionID,
+				existingExpiresAt.Time,
+			)
 			return nil, fmt.Errorf("session already exists and has not expired")
 		}
 		// If session exists but has expired, trigger cleanup before creating new one
-		log.Debugf("found expired session (app=%s, user=%s, session=%s), triggering cleanup",
-			key.AppName, key.UserID, key.SessionID)
-		s.cleanupExpiredForUser(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
+		log.DebugfContext(
+			ctx,
+			"found expired session (app=%s, user=%s, session=%s), "+
+				"triggering cleanup",
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		)
+		s.cleanupExpiredForUser(
+			ctx,
+			session.UserKey{
+				AppName: key.AppName,
+				UserID:  key.UserID,
+			},
+		)
 	}
 
-	log.Debugf("CreateSession: inserting new session (app=%s, user=%s, session=%s)",
-		key.AppName, key.UserID, key.SessionID)
+	log.DebugfContext(
+		ctx,
+		"CreateSession: inserting new session (app=%s, user=%s, "+
+			"session=%s)",
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+	)
 
 	// Insert session state (MySQL syntax)
 	_, err = s.mysqlClient.Exec(ctx,
@@ -296,20 +323,42 @@ func (s *Service) GetSession(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
-	sess, err := s.getSession(ctx, key, opt.EventNum, opt.EventTime)
-	if err != nil {
-		return nil, fmt.Errorf("mysql session service get session state failed: %w", err)
+	hctx := &session.GetSessionContext{
+		Context: ctx,
+		Key:     key,
+		Options: opt,
 	}
-
-	// Refresh session TTL if configured and session exists
-	if sess != nil && s.sessionTTL > 0 {
-		if err := s.refreshSessionTTL(ctx, key); err != nil {
-			log.Warnf("failed to refresh session TTL: %v", err)
-			// Don't fail the GetSession call, just log the warning
+	final := func(
+		c *session.GetSessionContext,
+		next func() (*session.Session, error),
+	) (*session.Session, error) {
+		sess, err := s.getSession(
+			c.Context,
+			c.Key,
+			c.Options.EventNum,
+			c.Options.EventTime,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"mysql session service get session state failed: %w",
+				err,
+			)
 		}
-	}
 
-	return sess, nil
+		// Refresh session TTL if configured and session exists.
+		if sess != nil && s.opts.sessionTTL > 0 {
+			if err := s.refreshSessionTTL(c.Context, c.Key); err != nil {
+				log.WarnfContext(
+					c.Context,
+					"failed to refresh session TTL: %v",
+					err,
+				)
+				// Do not fail GetSession; just log a warning.
+			}
+		}
+		return sess, nil
+	}
+	return hook.RunGetSessionHooks(s.opts.getSessionHooks, hctx, final)
 }
 
 // ListSessions lists all sessions by user scope of session key.
@@ -351,7 +400,7 @@ func (s *Service) UpdateAppState(ctx context.Context, appName string, state sess
 	}
 
 	now := time.Now()
-	expiresAt := calculateExpiresAt(s.appStateTTL)
+	expiresAt := calculateExpiresAt(s.opts.appStateTTL)
 
 	for k, v := range state {
 		k = strings.TrimPrefix(k, session.StateAppPrefix)
@@ -426,7 +475,7 @@ func (s *Service) UpdateUserState(ctx context.Context, userKey session.UserKey, 
 	}
 
 	now := time.Now()
-	expiresAt := calculateExpiresAt(s.userStateTTL)
+	expiresAt := calculateExpiresAt(s.opts.userStateTTL)
 
 	for k, v := range state {
 		k = strings.TrimPrefix(k, session.StateUserPrefix)
@@ -500,30 +549,27 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		return fmt.Errorf("mysql session service update session state failed: %w", err)
 	}
 
-	// Unmarshal current state
-	var currentState session.StateMap
+	var sessState SessionState
 	if len(currentStateBytes) > 0 {
-		if err := json.Unmarshal(currentStateBytes, &currentState); err != nil {
+		if err := json.Unmarshal(currentStateBytes, &sessState); err != nil {
 			return fmt.Errorf("mysql session service update session state failed: unmarshal state: %w", err)
 		}
-	} else {
-		currentState = make(session.StateMap)
 	}
-
-	// Merge new state into current state
+	if sessState.State == nil {
+		sessState.State = make(session.StateMap)
+	}
 	for k, v := range state {
-		currentState[k] = v
+		sessState.State[k] = v
 	}
+	now := time.Now()
+	sessState.UpdatedAt = now
 
-	// Marshal updated state
-	updatedStateBytes, err := json.Marshal(currentState)
+	updatedStateBytes, err := json.Marshal(sessState)
 	if err != nil {
 		return fmt.Errorf("mysql session service update session state failed: marshal state: %w", err)
 	}
 
-	// Update session state in database
-	now := time.Now()
-	expiresAt := calculateExpiresAt(s.sessionTTL)
+	expiresAt := calculateExpiresAt(s.opts.sessionTTL)
 
 	_, err = s.mysqlClient.Exec(ctx,
 		fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
@@ -567,7 +613,7 @@ func (s *Service) DeleteUserState(ctx context.Context, userKey session.UserKey, 
 func (s *Service) AppendEvent(
 	ctx context.Context,
 	sess *session.Session,
-	event *event.Event,
+	e *event.Event,
 	opts ...session.Option,
 ) error {
 	key := session.Key{
@@ -578,15 +624,42 @@ func (s *Service) AppendEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+
+	hctx := &session.AppendEventContext{
+		Context: ctx,
+		Session: sess,
+		Event:   e,
+		Key:     key,
+	}
+	final := func(c *session.AppendEventContext, next func() error) error {
+		return s.appendEventInternal(c.Context, c.Session, c.Event, c.Key, opts...)
+	}
+	return hook.RunAppendEventHooks(s.opts.appendEventHooks, hctx, final)
+}
+
+// appendEventInternal is the internal implementation of AppendEvent.
+func (s *Service) appendEventInternal(
+	ctx context.Context,
+	sess *session.Session,
+	e *event.Event,
+	key session.Key,
+	opts ...session.Option,
+) error {
 	// update user session with the given event
-	sess.UpdateUserSession(event, opts...)
+	sess.UpdateUserSession(e, opts...)
 
 	// persist event to MySQL asynchronously
 	if s.opts.enableAsyncPersist {
 		defer func() {
 			if r := recover(); r != nil {
-				if err, ok := r.(error); ok && err.Error() == "send on closed channel" {
-					log.Errorf("mysql session service append event failed: %v", r)
+				if err, ok := r.(error); ok &&
+					err.Error() == "send on closed channel" {
+					log.ErrorfContext(
+						ctx,
+						"mysql session service append event "+
+							"failed: %v",
+						r,
+					)
 					return
 				}
 				panic(r)
@@ -596,14 +669,14 @@ func (s *Service) AppendEvent(
 		// Hash key to determine which worker channel to use
 		index := sess.Hash % len(s.eventPairChans)
 		select {
-		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		return nil
 	}
 
-	if err := s.addEvent(ctx, key, event); err != nil {
+	if err := s.addEvent(ctx, key, e); err != nil {
 		return fmt.Errorf("mysql session service append event failed: %w", err)
 	}
 
@@ -624,11 +697,28 @@ func (s *Service) startAsyncPersistWorker() {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
 			for eventPair := range eventPairChan {
-				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
-				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, (app=%s, user=%s, session=%s)",
-					cap(eventPairChan), len(eventPairChan), eventPair.key.AppName, eventPair.key.UserID, eventPair.key.SessionID)
+				ctx := context.Background()
+				ctx, cancel := context.WithTimeout(
+					ctx,
+					defaultAsyncPersistTimeout,
+				)
+				log.DebugfContext(
+					ctx,
+					"Session persistence queue monitoring: channel "+
+						"capacity: %d, current length: %d, "+
+						"(app=%s, user=%s, session=%s)",
+					cap(eventPairChan),
+					len(eventPairChan),
+					eventPair.key.AppName,
+					eventPair.key.UserID,
+					eventPair.key.SessionID,
+				)
 				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
-					log.Errorf("async persist event failed: %w", err)
+					log.ErrorfContext(
+						ctx,
+						"async persist event failed: %w",
+						err,
+					)
 				}
 				cancel()
 			}
@@ -636,7 +726,8 @@ func (s *Service) startAsyncPersistWorker() {
 	}
 }
 
-// startCleanupRoutine starts a background routine to periodically clean up expired data.
+// startCleanupRoutine starts a background routine to periodically clean up
+// expired data.
 func (s *Service) startCleanupRoutine() {
 	interval := s.opts.cleanupInterval
 	if interval <= 0 {
@@ -647,7 +738,12 @@ func (s *Service) startCleanupRoutine() {
 	s.cleanupDone = make(chan struct{})
 
 	go func() {
-		log.Infof("started cleanup routine for mysql session service (interval: %v)", interval)
+		log.InfofContext(
+			context.Background(),
+			"started cleanup routine for mysql session service "+
+				"(interval: %v)",
+			interval,
+		)
 		for {
 			select {
 			case <-s.cleanupTicker.C:
@@ -655,7 +751,10 @@ func (s *Service) startCleanupRoutine() {
 				s.cleanupExpiredData(ctx)
 				cancel()
 			case <-s.cleanupDone:
-				log.Info("cleanup routine stopped for mysql session service")
+				log.InfoContext(
+					context.Background(),
+					"cleanup routine stopped for mysql session service",
+				)
 				return
 			}
 		}
@@ -679,17 +778,17 @@ func (s *Service) cleanupExpiredData(ctx context.Context) {
 	now := time.Now()
 
 	// Clean up expired sessions
-	if s.sessionTTL > 0 {
+	if s.opts.sessionTTL > 0 {
 		s.cleanupExpiredSessions(ctx, now)
 	}
 
 	// Clean up expired app states
-	if s.appStateTTL > 0 {
+	if s.opts.appStateTTL > 0 {
 		s.cleanupExpiredAppStates(ctx, now)
 	}
 
 	// Clean up expired user states
-	if s.userStateTTL > 0 {
+	if s.opts.userStateTTL > 0 {
 		s.cleanupExpiredUserStates(ctx, now)
 	}
 }
@@ -708,7 +807,7 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 		if err := rows.Scan(&appName, &userID, &sessionID, &updatedAt); err != nil {
 			return err
 		}
-		if updatedAt.Before(now.Add(-s.sessionTTL)) {
+		if updatedAt.Before(now.Add(-s.opts.sessionTTL)) {
 			sessionKeys = append(sessionKeys, session.Key{
 				AppName:   appName,
 				UserID:    userID,
@@ -718,7 +817,11 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 		return nil
 	}, query)
 	if err != nil {
-		log.Warnf("fetch events failed: %w", err)
+		log.WarnfContext(
+			ctx,
+			"fetch events failed: %w",
+			err,
+		)
 		return
 	}
 	placeholders := make([]string, len(sessionKeys))
@@ -759,7 +862,11 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 			return nil
 		})
 		if err != nil {
-			log.Errorf("cleanup expired sessions failed: %v", err)
+			log.ErrorfContext(
+				ctx,
+				"cleanup expired sessions failed: %v",
+				err,
+			)
 			return
 		}
 	} else {
@@ -791,13 +898,21 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 			return nil
 		})
 		if err != nil {
-			log.Errorf("cleanup expired sessions failed: %v", err)
+			log.ErrorfContext(
+				ctx,
+				"cleanup expired sessions failed: %v",
+				err,
+			)
 			return
 		}
 	}
 
 	if deletedCount > 0 {
-		log.Infof("cleaned up %d expired sessions", deletedCount)
+		log.InfofContext(
+			ctx,
+			"cleaned up %d expired sessions",
+			deletedCount,
+		)
 	}
 }
 
@@ -810,7 +925,11 @@ func (s *Service) cleanupExpiredAppStates(ctx context.Context, now time.Time) {
 			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableAppStates),
 			now, now)
 		if err != nil {
-			log.Errorf("cleanup expired app states failed: %v", err)
+			log.ErrorfContext(
+				ctx,
+				"cleanup expired app states failed: %v",
+				err,
+			)
 			return
 		}
 		deletedCount, _ = result.RowsAffected()
@@ -819,14 +938,22 @@ func (s *Service) cleanupExpiredAppStates(ctx context.Context, now time.Time) {
 			fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableAppStates),
 			now)
 		if err != nil {
-			log.Errorf("cleanup expired app states failed: %v", err)
+			log.ErrorfContext(
+				ctx,
+				"cleanup expired app states failed: %v",
+				err,
+			)
 			return
 		}
 		deletedCount, _ = result.RowsAffected()
 	}
 
 	if deletedCount > 0 {
-		log.Infof("cleaned up %d expired app states", deletedCount)
+		log.InfofContext(
+			ctx,
+			"cleaned up %d expired app states",
+			deletedCount,
+		)
 	}
 }
 
@@ -839,7 +966,11 @@ func (s *Service) cleanupExpiredUserStates(ctx context.Context, now time.Time) {
 			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableUserStates),
 			now, now)
 		if err != nil {
-			log.Errorf("cleanup expired user states failed: %v", err)
+			log.ErrorfContext(
+				ctx,
+				"cleanup expired user states failed: %v",
+				err,
+			)
 			return
 		}
 		deletedCount, _ = result.RowsAffected()
@@ -848,14 +979,22 @@ func (s *Service) cleanupExpiredUserStates(ctx context.Context, now time.Time) {
 			fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableUserStates),
 			now)
 		if err != nil {
-			log.Errorf("cleanup expired user states failed: %v", err)
+			log.ErrorfContext(
+				ctx,
+				"cleanup expired user states failed: %v",
+				err,
+			)
 			return
 		}
 		deletedCount, _ = result.RowsAffected()
 	}
 
 	if deletedCount > 0 {
-		log.Infof("cleaned up %d expired user states", deletedCount)
+		log.InfofContext(
+			ctx,
+			"cleaned up %d expired user states",
+			deletedCount,
+		)
 	}
 }
 
@@ -869,14 +1008,22 @@ func (s *Service) cleanupExpiredForUser(ctx context.Context, userKey session.Use
 		if _, err := s.mysqlClient.Exec(ctx,
 			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionStates),
 			now, userKey.AppName, userKey.UserID, now); err != nil {
-			log.Errorf("cleanup expired sessions for user failed: %v", err)
+			log.ErrorfContext(
+				ctx,
+				"cleanup expired sessions for user failed: %v",
+				err,
+			)
 		}
 	} else {
 		// Hard delete expired sessions for this user
 		if _, err := s.mysqlClient.Exec(ctx,
 			fmt.Sprintf(`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionStates),
 			userKey.AppName, userKey.UserID, now); err != nil {
-			log.Errorf("cleanup expired sessions for user failed: %v", err)
+			log.ErrorfContext(
+				ctx,
+				"cleanup expired sessions for user failed: %v",
+				err,
+			)
 		}
 	}
 }

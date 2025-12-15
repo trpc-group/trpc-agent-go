@@ -30,14 +30,15 @@ import (
 )
 
 var (
-	modelName    = flag.String("model", "deepseek-chat", "Model name to use for LLM summarization and chat")
-	streaming    = flag.Bool("streaming", true, "Enable streaming mode for responses")
-	flagEvents   = flag.Int("events", 1, "Event count threshold to trigger summarization")
-	flagTokens   = flag.Int("tokens", 0, "Token-count threshold to trigger summarization (0=disabled)")
-	flagTimeSec  = flag.Int("time-sec", 0, "Time threshold in seconds to trigger summarization (0=disabled)")
-	flagMaxWords = flag.Int("max-words", 0, "Max summary words (0=unlimited)")
-	flagAddSum   = flag.Bool("add-summary", true, "Prepend latest branch summary as system message for LLM input")
-	flagMaxHist  = flag.Int("max-history", 0, "Max history messages when add-summary=false (0=unlimited)")
+	modelName      = flag.String("model", "deepseek-chat", "Model name to use for LLM summarization and chat")
+	streaming      = flag.Bool("streaming", true, "Enable streaming mode for responses")
+	flagEvents     = flag.Int("events", 1, "Event count threshold to trigger summarization")
+	flagTokens     = flag.Int("tokens", 0, "Token-count threshold to trigger summarization (0=disabled)")
+	flagTimeSec    = flag.Int("time-sec", 0, "Time threshold in seconds to trigger summarization (0=disabled)")
+	flagMaxWords   = flag.Int("max-words", 0, "Max summary words (0=unlimited)")
+	flagSkipRecent = flag.Int("skip-recent", 0, "Number of recent events to skip during summarization (0=skip none)")
+	flagAddSum     = flag.Bool("add-summary", true, "Prepend latest branch summary as system message for LLM input")
+	flagMaxHist    = flag.Int("max-history", 0, "Max history messages when add-summary=false (0=unlimited)")
 )
 
 func main() {
@@ -85,6 +86,12 @@ func (c *summaryChat) setup(_ context.Context) error {
 	//   - {conversation_text}: The conversation content to be summarized
 	//   - {max_summary_words}: The maximum word count for the summary (only included when max-words > 0)
 	sum := summary.NewSummarizer(llm, summary.WithMaxSummaryWords(*flagMaxWords),
+		summary.WithSkipRecent(func(_ []event.Event) int {
+			if *flagSkipRecent > 0 {
+				return *flagSkipRecent
+			}
+			return 0
+		}),
 		summary.WithChecksAny(
 			summary.CheckEventThreshold(*flagEvents),
 			summary.CheckTokenThreshold(*flagTokens),
@@ -132,6 +139,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 	fmt.Printf("TokenThreshold: %d\n", *flagTokens)
 	fmt.Printf("TimeThreshold: %ds\n", *flagTimeSec)
 	fmt.Printf("MaxWords: %d\n", *flagMaxWords)
+	fmt.Printf("SkipRecent: %d\n", *flagSkipRecent)
 	fmt.Printf("Streaming: %v\n", *streaming)
 	fmt.Printf("AddSummary: %v\n", *flagAddSum)
 	fmt.Printf("MaxHistory: %d\n", *flagMaxHist)

@@ -31,6 +31,8 @@ func (f *fakeSummarizer) ShouldSummarize(sess *session.Session) bool { return f.
 func (f *fakeSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
 	return f.out, nil
 }
+func (f *fakeSummarizer) SetPrompt(prompt string)  {}
+func (f *fakeSummarizer) SetModel(m model.Model)   {}
 func (f *fakeSummarizer) Metadata() map[string]any { return map[string]any{} }
 
 func TestMemoryService_GetSessionSummaryText_LocalPreferred(t *testing.T) {
@@ -275,6 +277,8 @@ func (f *fakeBlockingSummarizer) Summarize(ctx context.Context, sess *session.Se
 	<-ctx.Done()
 	return "", ctx.Err()
 }
+func (f *fakeBlockingSummarizer) SetPrompt(prompt string)  {}
+func (f *fakeBlockingSummarizer) SetModel(m model.Model)   {}
 func (f *fakeBlockingSummarizer) Metadata() map[string]any { return map[string]any{} }
 
 func TestMemoryService_SummaryJobTimeout_CancelsSummarizer(t *testing.T) {
@@ -504,6 +508,68 @@ func TestMemoryService_ProcessSummaryJob_Panic(t *testing.T) {
 	})
 }
 
+type panicSummarizer struct{}
+
+func (p *panicSummarizer) ShouldSummarize(
+	sess *session.Session,
+) bool {
+	return true
+}
+
+func (p *panicSummarizer) Summarize(
+	ctx context.Context,
+	sess *session.Session,
+) (string, error) {
+	panic("summarizer panic")
+}
+
+func (p *panicSummarizer) Metadata() map[string]any {
+	return map[string]any{}
+}
+
+func TestMemoryService_ProcessSummaryJob_RecoversFromPanic(t *testing.T) {
+	s := NewSessionService(
+		WithSummarizer(&panicSummarizer{}),
+	)
+	defer s.Close()
+
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sid",
+	}
+	sess, err := s.CreateSession(
+		context.Background(),
+		key,
+		session.StateMap{},
+	)
+	require.NoError(t, err)
+
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "hello",
+				},
+			},
+		},
+	}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   sess,
+	}
+
+	require.NotPanics(t, func() {
+		s.processSummaryJob(job)
+	})
+}
+
 func TestMemoryService_TryEnqueueJob_ContextCancelled(t *testing.T) {
 	// Use blocking summarizer to ensure queue stays full.
 	service := NewSessionService(
@@ -548,6 +614,36 @@ func TestMemoryService_TryEnqueueJob_ContextCancelled(t *testing.T) {
 
 	// Should return false when context is cancelled (even if queue is full).
 	assert.False(t, service.tryEnqueueJob(cancelledCtx, job2))
+}
+
+func TestMemoryService_TryEnqueueJob_ClosedChannel(t *testing.T) {
+	service := NewSessionService(
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(1),
+	)
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess",
+	}
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	idx := sess.Hash % len(service.summaryJobChans)
+	closedChan := service.summaryJobChans[idx]
+	close(closedChan)
+
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   sess,
+	}
+	assert.False(t, service.tryEnqueueJob(ctx, job))
+
+	service.summaryJobChans[idx] = make(chan *summaryJob)
+	service.Close()
 }
 
 func TestMemoryService_AppendEvent_Errors(t *testing.T) {
@@ -801,6 +897,8 @@ func (f *fakeErrorSummarizer) ShouldSummarize(sess *session.Session) bool { retu
 func (f *fakeErrorSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
 	return "", fmt.Errorf("summarizer error")
 }
+func (f *fakeErrorSummarizer) SetPrompt(prompt string)  {}
+func (f *fakeErrorSummarizer) SetModel(m model.Model)   {}
 func (f *fakeErrorSummarizer) Metadata() map[string]any { return map[string]any{} }
 
 func TestMemoryService_StopAsyncSummaryWorker_AlreadyStopped(t *testing.T) {
@@ -851,4 +949,88 @@ func TestMemoryService_TryEnqueueJob_ChannelsNotInitialized(t *testing.T) {
 	sum, ok := got.Summaries[""]
 	require.True(t, ok)
 	require.Equal(t, "test", sum.Summary)
+}
+
+func TestMemoryService_GetSessionSummaryText_WithFilterKey(t *testing.T) {
+	s := NewSessionService()
+	sess := &session.Session{
+		ID: "s1",
+		Summaries: map[string]*session.Summary{
+			"":              {Summary: "full-summary", UpdatedAt: time.Now()},
+			"user-messages": {Summary: "user-only-summary", UpdatedAt: time.Now()},
+			"tool-usage":    {Summary: "tool-summary", UpdatedAt: time.Now()},
+		},
+	}
+
+	// Test getting summary for specific filterKey.
+	text, ok := s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey("user-messages"))
+	require.True(t, ok)
+	require.Equal(t, "user-only-summary", text)
+
+	// Test getting summary for another filterKey.
+	text, ok = s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey("tool-usage"))
+	require.True(t, ok)
+	require.Equal(t, "tool-summary", text)
+
+	// Test returning full-session summary when no options provided.
+	text, ok = s.GetSessionSummaryText(context.Background(), sess)
+	require.True(t, ok)
+	require.Equal(t, "full-summary", text)
+
+	// Test explicitly passing empty string (full-session key).
+	text, ok = s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey(session.SummaryFilterKeyAllContents))
+	require.True(t, ok)
+	require.Equal(t, "full-summary", text)
+}
+
+func TestMemoryService_GetSessionSummaryText_FilterKeyFallback(t *testing.T) {
+	s := NewSessionService()
+
+	// Only full-session summary available, no specific filterKey.
+	sess := &session.Session{
+		ID: "s1",
+		Summaries: map[string]*session.Summary{
+			"": {Summary: "full-summary", UpdatedAt: time.Now()},
+		},
+	}
+
+	// Request non-existent filterKey, should fallback to full-session summary.
+	text, ok := s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey("non-existent"))
+	require.True(t, ok)
+	require.Equal(t, "full-summary", text)
+}
+
+func TestMemoryService_GetSessionSummaryText_FilterKeyNotFoundNoFallback(t *testing.T) {
+	s := NewSessionService()
+
+	// Only specific filterKey summary available, no full-session summary.
+	sess := &session.Session{
+		ID: "s1",
+		Summaries: map[string]*session.Summary{
+			"branch1": {Summary: "branch-summary", UpdatedAt: time.Now()},
+		},
+	}
+
+	// Request non-existent filterKey, full-session doesn't exist either, should fallback to any available summary.
+	text, ok := s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey("non-existent"))
+	require.True(t, ok)
+	require.Equal(t, "branch-summary", text)
+}
+
+func TestMemoryService_GetSessionSummaryText_FilterKeyEmptySummary(t *testing.T) {
+	s := NewSessionService()
+
+	// filterKey exists but summary is empty.
+	sess := &session.Session{
+		ID: "s1",
+		Summaries: map[string]*session.Summary{
+			"user-messages": {Summary: "", UpdatedAt: time.Now()},
+			"":              {Summary: "full-summary", UpdatedAt: time.Now()},
+		},
+	}
+
+	// Requested filterKey exists but is empty, should fallback to full-session summary.
+	text, ok := s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey("user-messages"))
+	require.True(t, ok)
+	require.Equal(t, "full-summary", text)
 }

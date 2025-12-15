@@ -528,6 +528,113 @@ func TestRunAfterModelCallbacks_ErrorPassing(t *testing.T) {
 	}
 }
 
+// blockingModel emits one response then waits for ctx cancellation.
+type blockingModel struct{}
+
+func (m *blockingModel) Info() model.Info {
+	return model.Info{Name: "blocking"}
+}
+
+func (m *blockingModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.NewAssistantMessage("hi"),
+			},
+		},
+	}
+	go func() {
+		defer close(ch)
+		<-ctx.Done()
+	}()
+	return ch, nil
+}
+
+func TestFlow_Run_ContextCanceledIsGraceful(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&minimalAgent{}),
+		agent.WithInvocationModel(&blockingModel{}),
+	)
+
+	ch, err := f.Run(ctx, inv)
+	require.NoError(t, err)
+
+	var sawLLMEvent bool
+	for evt := range ch {
+		if evt.RequiresCompletion {
+			key := agent.AppendEventNoticeKeyPrefix + evt.ID
+			_ = inv.NotifyCompletion(ctx, key)
+		}
+		if evt.Response != nil {
+			sawLLMEvent = true
+			cancel()
+		}
+	}
+	require.True(t, sawLLMEvent)
+}
+
+func TestFlow_callLLM_NoModel(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation()
+	req := &model.Request{}
+
+	ch, err := f.callLLM(context.Background(), inv, req)
+	require.Error(t, err)
+	require.Nil(t, ch)
+}
+
+func TestFlow_callLLM_ModelError(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(
+		agent.WithInvocationModel(&mockModel{ShouldError: true}),
+	)
+	req := &model.Request{}
+
+	ch, err := f.callLLM(context.Background(), inv, req)
+	require.Error(t, err)
+	require.Nil(t, ch)
+}
+
+func TestFlow_Postprocess_WithProcessor(t *testing.T) {
+	respProcessor := &mockResponseProcessor{}
+	f := New(nil, []flow.ResponseProcessor{respProcessor}, Options{})
+
+	ctx := context.Background()
+	inv := agent.NewInvocation()
+	req := &model.Request{}
+	resp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.NewAssistantMessage("ok"),
+			},
+		},
+	}
+	eventCh := make(chan *event.Event, 2)
+
+	f.postprocess(ctx, inv, req, resp, eventCh)
+
+	var count int
+	for {
+		select {
+		case <-eventCh:
+			count++
+		default:
+			goto done
+		}
+	}
+
+done:
+	require.Equal(t, 1, count)
+}
+
 // Test that when RunOptions.Resume is enabled and the latest session event
 // is an assistant tool_call response, the flow executes the pending tool
 // before issuing a new LLM request.
@@ -617,4 +724,18 @@ func TestRun_WithResumeExecutesPendingToolCalls(t *testing.T) {
 	require.True(t, sawToolResult, "expected tool result event when resuming")
 	require.Len(t, toolCalls, 1)
 	require.Equal(t, "resume", toolCalls[0])
+}
+
+func TestWaitEventTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	timeout := WaitEventTimeout(ctx)
+	require.InDelta(t, time.Second.Seconds(), timeout.Seconds(), 0.1)
+}
+
+func TestWaitEventTimeout_NoDeadline(t *testing.T) {
+	ctx := context.Background()
+	timeout := WaitEventTimeout(ctx)
+	require.Equal(t, 5*time.Second, timeout)
 }

@@ -362,7 +362,7 @@ func TestAgentCallbacks_ContextPropagation(t *testing.T) {
 	})
 
 	// Register after callback that reads the context value.
-	var capturedValue interface{}
+	var capturedValue any
 	callbacks.RegisterAfterAgent(func(ctx context.Context, args *AfterAgentArgs) (*AfterAgentResult, error) {
 		// Read the value from context.
 		capturedValue = ctx.Value(testKey)

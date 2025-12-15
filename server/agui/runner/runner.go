@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/google/uuid"
@@ -40,7 +41,11 @@ func New(r trunner.Runner, opt ...Option) Runner {
 	var tracker track.Tracker
 	if opts.SessionService != nil {
 		var err error
-		tracker, err = track.New(opts.SessionService)
+		tracker, err = track.New(opts.SessionService,
+			track.WithAggregatorFactory(opts.AggregatorFactory),
+			track.WithAggregationOption(opts.AggregationOption...),
+			track.WithFlushInterval(opts.FlushInterval),
+		)
 		if err != nil {
 			log.Warnf("agui: tracker disabled: %v", err)
 		}
@@ -54,6 +59,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		runAgentInputHook:  opts.RunAgentInputHook,
 		runOptionResolver:  opts.RunOptionResolver,
 		tracker:            tracker,
+		runningSessions:    sync.Map{},
 	}
 	return run
 }
@@ -68,6 +74,7 @@ type runner struct {
 	runAgentInputHook  RunAgentInputHook
 	runOptionResolver  RunOptionResolver
 	tracker            track.Tracker
+	runningSessions    sync.Map
 }
 
 type runInput struct {
@@ -123,19 +130,41 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		translator:  r.translatorFactory(ctx, runAgentInput),
 		enableTrack: r.tracker != nil,
 	}
+	if _, ok := r.runningSessions.LoadOrStore(input.key, struct{}{}); ok {
+		return nil, fmt.Errorf("session is already running: %v", input.key)
+	}
 	events := make(chan aguievents.Event)
 	go r.run(ctx, input, events)
 	return events, nil
 }
 
 func (r *runner) run(ctx context.Context, input *runInput, events chan<- aguievents.Event) {
+	defer r.runningSessions.Delete(input.key)
 	defer close(events)
 	threadID := input.threadID
 	runID := input.runID
 	if input.enableTrack {
+		defer func() {
+			if err := r.tracker.Flush(ctx, input.key); err != nil {
+				log.WarnfContext(
+					ctx,
+					"agui run: threadID: %s, runID: %s, "+
+						"flush track events: %v",
+					threadID,
+					runID,
+					err,
+				)
+			}
+		}()
 		if err := r.recordUserMessage(ctx, input.key, &input.userMessage); err != nil {
-			log.Warnf("agui run: threadID: %s, runID: %s, record user message failed, disable tracking: %v",
-				threadID, runID, err)
+			log.WarnfContext(
+				ctx,
+				"agui run: threadID: %s, runID: %s, record user "+
+					"message failed, disable tracking: %v",
+				threadID,
+				runID,
+				err,
+			)
 		}
 	}
 	if !r.emitEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input) {
@@ -143,7 +172,13 @@ func (r *runner) run(ctx context.Context, input *runInput, events chan<- aguieve
 	}
 	ch, err := r.runner.Run(ctx, input.userID, threadID, input.userMessage, input.runOption...)
 	if err != nil {
-		log.Errorf("agui run: threadID: %s, runID: %s, run agent: %v", threadID, runID, err)
+		log.ErrorfContext(
+			ctx,
+			"agui run: threadID: %s, runID: %s, run agent: %v",
+			threadID,
+			runID,
+			err,
+		)
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("run agent: %v", err),
 			aguievents.WithRunID(runID)), input)
 		return
@@ -151,14 +186,28 @@ func (r *runner) run(ctx context.Context, input *runInput, events chan<- aguieve
 	for event := range ch {
 		customEvent, err := r.handleBeforeTranslate(ctx, event)
 		if err != nil {
-			log.Errorf("agui run: threadID: %s, runID: %s, before translate callback: %v", threadID, runID, err)
+			log.ErrorfContext(
+				ctx,
+				"agui run: threadID: %s, runID: %s, before "+
+					"translate callback: %v",
+				threadID,
+				runID,
+				err,
+			)
 			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("before translate callback: %v", err),
 				aguievents.WithRunID(runID)), input)
 			return
 		}
 		aguiEvents, err := input.translator.Translate(ctx, customEvent)
 		if err != nil {
-			log.Errorf("agui run: threadID: %s, runID: %s, translate event: %v", threadID, runID, err)
+			log.ErrorfContext(
+				ctx,
+				"agui run: threadID: %s, runID: %s, translate "+
+					"event: %v",
+				threadID,
+				runID,
+				err,
+			)
 			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("translate event: %v", err),
 				aguievents.WithRunID(runID)), input)
 			return
@@ -218,17 +267,36 @@ func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, 
 	input *runInput) bool {
 	event, err := r.handleAfterTranslate(ctx, event)
 	if err != nil {
-		log.Errorf("agui emit event: original event: %v, threadID: %s, runID: %s, after translate callback: %v",
-			event, input.threadID, input.runID, err)
+		log.ErrorfContext(
+			ctx,
+			"agui emit event: original event: %v, threadID: %s, "+
+				"runID: %s, after translate callback: %v",
+			event,
+			input.threadID,
+			input.runID,
+			err,
+		)
 		events <- aguievents.NewRunErrorEvent(fmt.Sprintf("after translate callback: %v", err),
 			aguievents.WithRunID(input.runID))
 		return false
 	}
-	log.Debugf("agui emit event: emitted event: %v, threadID: %s, runID: %s", event, input.threadID, input.runID)
+	log.DebugfContext(
+		ctx,
+		"agui emit event: emitted event: %v, threadID: %s, runID: %s",
+		event,
+		input.threadID,
+		input.runID,
+	)
 	if input.enableTrack {
 		if err := r.recordTrackEvent(ctx, input.key, event); err != nil {
-			log.Warnf("agui emit event: record track event failed: threadID: %s, runID: %s, err: %v",
-				input.threadID, input.runID, err)
+			log.WarnfContext(
+				ctx,
+				"agui emit event: record track event failed: "+
+					"threadID: %s, runID: %s, err: %v",
+				input.threadID,
+				input.runID,
+				err,
+			)
 		}
 	}
 	events <- event

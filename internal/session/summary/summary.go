@@ -127,10 +127,7 @@ func SummarizeSession(
 	// summarization to avoid skipping events during future delta computations.
 	// When no new events were summarized (e.g., force==true and delta empty),
 	// keep the previous timestamp.
-	updatedAt := prevAt.UTC()
-	if len(delta) > 0 && !latestTs.IsZero() {
-		updatedAt = latestTs.UTC()
-	}
+	updatedAt := selectUpdatedAt(tmp, prevAt, latestTs, len(delta) > 0)
 
 	// Acquire write lock to protect Summaries access.
 	base.SummariesMu.Lock()
@@ -141,4 +138,95 @@ func SummarizeSession(
 	}
 	base.Summaries[filterKey] = &session.Summary{Summary: text, UpdatedAt: updatedAt}
 	return true, nil
+}
+
+func selectUpdatedAt(tmp *session.Session, prevAt, latestTs time.Time, hasDelta bool) time.Time {
+	updatedAt := prevAt.UTC()
+	if !hasDelta || latestTs.IsZero() {
+		return updatedAt
+	}
+
+	if ts := readLastIncludedTimestamp(tmp); !ts.IsZero() {
+		return ts.UTC()
+	}
+	return latestTs.UTC()
+}
+
+const lastIncludedTsKey = "summary:last_included_ts"
+
+func readLastIncludedTimestamp(tmp *session.Session) time.Time {
+	if tmp == nil || tmp.State == nil {
+		return time.Time{}
+	}
+	raw, ok := tmp.State[lastIncludedTsKey]
+	if !ok || len(raw) == 0 {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, string(raw))
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
+}
+
+// PickSummaryText picks a non-empty summary string with preference for the
+// specified filterKey. Falls back to all-contents key and then any available summary.
+// When filterKey is empty (SummaryFilterKeyAllContents), prefers the full-session summary.
+func PickSummaryText(summaries map[string]*session.Summary, filterKey string) (string, bool) {
+	if summaries == nil {
+		return "", false
+	}
+	// First, try to get the requested filter key summary.
+	if sum, ok := summaries[filterKey]; ok && sum != nil && sum.Summary != "" {
+		return sum.Summary, true
+	}
+	// Fallback: if requesting a specific filter key but not found, try full-session summary.
+	if filterKey != session.SummaryFilterKeyAllContents {
+		if sum, ok := summaries[session.SummaryFilterKeyAllContents]; ok && sum != nil && sum.Summary != "" {
+			return sum.Summary, true
+		}
+	}
+	// Last resort: return any available summary.
+	for _, s := range summaries {
+		if s != nil && s.Summary != "" {
+			return s.Summary, true
+		}
+	}
+	return "", false
+}
+
+// GetSummaryTextFromSession attempts to retrieve summary text from the session's
+// in-memory summaries using the specified filter key. It parses the provided options
+// and applies the summary selection logic.
+func GetSummaryTextFromSession(sess *session.Session, opts ...session.SummaryOption) (string, bool) {
+	if sess == nil {
+		return "", false
+	}
+
+	// Parse options.
+	options := &session.SummaryOptions{
+		FilterKey: session.SummaryFilterKeyAllContents, // Default to full session.
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	// Prefer local in-memory session summaries when available.
+	if len(sess.Summaries) > 0 {
+		return PickSummaryText(sess.Summaries, options.FilterKey)
+	}
+
+	return "", false
+}
+
+// GetFilterKeyFromOptions extracts the filter key from the provided summary options.
+// Returns SummaryFilterKeyAllContents if no options are provided.
+func GetFilterKeyFromOptions(opts ...session.SummaryOption) string {
+	options := &session.SummaryOptions{
+		FilterKey: session.SummaryFilterKeyAllContents, // Default to full session.
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
+	return options.FilterKey
 }

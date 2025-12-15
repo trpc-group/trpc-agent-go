@@ -405,11 +405,7 @@ func (r *reducer) handleActivity(e aguievents.Event) error {
 			"event":  e.Event,
 		}
 	default:
-		activity.ID = e.GetBaseEvent().ID()
-		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
-			"content": e,
-		}
+		return nil
 	}
 	r.messages = append(r.messages, activity)
 	return nil

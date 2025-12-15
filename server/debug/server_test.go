@@ -806,7 +806,7 @@ func (m *mockSessionService) EnqueueSummaryJob(ctx context.Context, sess *sessio
 	return nil
 }
 
-func (m *mockSessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
+func (m *mockSessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session, opts ...session.SummaryOption) (string, bool) {
 	return "", false
 }
 

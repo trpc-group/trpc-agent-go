@@ -1,9 +1,7 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights
-// reserved.
+// Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -68,7 +66,12 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 	for _, name := range loaded {
 		sk, err := p.repo.Get(name)
 		if err != nil || sk == nil {
-			log.Warnf("skills: get %s failed: %v", name, err)
+			log.WarnfContext(
+				ctx,
+				"skills: get %s failed: %v",
+				name,
+				err,
+			)
 			continue
 		}
 		if sk.Body != "" {

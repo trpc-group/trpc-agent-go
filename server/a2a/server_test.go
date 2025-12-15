@@ -174,7 +174,7 @@ func (m *mockSessionService) EnqueueSummaryJob(ctx context.Context, sess *sessio
 	return nil
 }
 
-func (m *mockSessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
+func (m *mockSessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session, opts ...session.SummaryOption) (string, bool) {
 	return "", false
 }
 
@@ -792,10 +792,15 @@ func TestMessageProcessor_HandleError_DebugLogging(t *testing.T) {
 }
 
 func TestIsFinalStreamingEventVariants(t *testing.T) {
+	// nil and empty events are not final
 	assert.False(t, isFinalStreamingEvent(nil))
 	assert.False(t, isFinalStreamingEvent(&event.Event{}))
+
+	// Regular done event is NOT final (we wait for runner.completion)
 	base := &event.Event{Response: &model.Response{Done: false}}
 	assert.False(t, isFinalStreamingEvent(base))
+
+	// Tool calls are not final
 	toolCall := &event.Event{Response: &model.Response{
 		Done: true,
 		Choices: []model.Choice{
@@ -803,6 +808,8 @@ func TestIsFinalStreamingEventVariants(t *testing.T) {
 		},
 	}}
 	assert.False(t, isFinalStreamingEvent(toolCall))
+
+	// Tool role is not final
 	toolRole := &event.Event{Response: &model.Response{
 		Done: true,
 		Choices: []model.Choice{
@@ -810,13 +817,22 @@ func TestIsFinalStreamingEventVariants(t *testing.T) {
 		},
 	}}
 	assert.False(t, isFinalStreamingEvent(toolRole))
-	final := &event.Event{Response: &model.Response{
+
+	// Regular assistant response is NOT final (we wait for runner.completion)
+	assistantResp := &event.Event{Response: &model.Response{
 		Done: true,
 		Choices: []model.Choice{
 			{Message: model.Message{Role: model.RoleAssistant}},
 		},
 	}}
-	assert.True(t, isFinalStreamingEvent(final))
+	assert.False(t, isFinalStreamingEvent(assistantResp))
+
+	// Only runner.completion is truly final
+	runnerCompletion := &event.Event{Response: &model.Response{
+		Done:   true,
+		Object: model.ObjectTypeRunnerCompletion,
+	}}
+	assert.True(t, isFinalStreamingEvent(runnerCompletion))
 }
 
 func TestMessageProcessor_ProcessMessage_EdgeCases(t *testing.T) {
@@ -1107,12 +1123,11 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 	t.Run("final_event_stops", func(t *testing.T) {
 		proc := createTestMessageProcessor()
 		sub := &mockTaskSubscriber{}
+		// Only runner.completion is treated as final event
 		final := &event.Event{
 			Response: &model.Response{
-				Done: true,
-				Choices: []model.Choice{
-					{Message: model.Message{Role: model.RoleAssistant}},
-				},
+				Object: model.ObjectTypeRunnerCompletion,
+				Done:   true,
 			},
 		}
 		cont, err := proc.processBatchStreamingEvents(ctx, taskID, msg, []*event.Event{final}, sub)
@@ -1217,6 +1232,185 @@ func TestProcessAgentStreamingEvents_SendFailure(t *testing.T) {
 	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, handler)
 	assert.True(t, handlerCalled)
 	assert.True(t, cleaned)
+}
+
+func TestProcessAgentStreamingEvents_FinalSendFailureAndCleanFailure(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	events := make(chan *event.Event)
+	close(events)
+
+	proc := createTestMessageProcessor()
+
+	sendCount := 0
+	sub := &mockTaskSubscriber{
+		sendFunc: func(protocol.StreamingMessageEvent) error {
+			sendCount++
+			if sendCount == 2 || sendCount == 3 {
+				return fmt.Errorf("send fail")
+			}
+			return nil
+		},
+	}
+
+	var cleaned bool
+	handler := &mockTaskHandler{
+		cleanTaskFunc: func(taskID *string) error {
+			cleaned = true
+			return fmt.Errorf("clean fail")
+		},
+	}
+
+	assert.NotPanics(t, func() {
+		proc.processAgentStreamingEvents(
+			ctx,
+			"task",
+			"user1",
+			"session1",
+			msg,
+			events,
+			sub,
+			handler,
+		)
+	})
+	assert.True(t, cleaned)
+}
+
+func TestMessageProcessor_ProcessMessage_Streaming_BuildTaskError(
+	t *testing.T,
+) {
+	ctxID := "ctx"
+	msg := protocol.Message{
+		Kind:      "message",
+		MessageID: "msg-build-task",
+		ContextID: &ctxID,
+		Role:      protocol.MessageRoleUser,
+		Parts: []protocol.Part{
+			protocol.NewTextPart("hi"),
+		},
+	}
+
+	ctx := context.WithValue(
+		context.Background(),
+		auth.AuthUserKey,
+		&auth.User{ID: ""},
+	)
+
+	proc := createTestMessageProcessor()
+	proc.debugLogging = true
+
+	handler := &mockTaskHandler{
+		buildTaskFunc: func(
+			specificTaskID *string,
+			contextID *string,
+		) (string, error) {
+			return "", fmt.Errorf("build task failed")
+		},
+	}
+
+	res, err := proc.ProcessMessage(
+		ctx,
+		msg,
+		taskmanager.ProcessOptions{Streaming: true},
+		handler,
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+}
+
+func TestMessageProcessor_ProcessMessage_ConversionError_WithAuthUser(
+	t *testing.T,
+) {
+	ctxID := "ctx"
+	msg := protocol.Message{
+		Kind:      "message",
+		MessageID: "conv-err-auth",
+		ContextID: &ctxID,
+		Role:      protocol.MessageRoleUser,
+		Parts: []protocol.Part{
+			protocol.NewTextPart("hi"),
+		},
+	}
+	ctx := context.WithValue(
+		context.Background(),
+		auth.AuthUserKey,
+		&auth.User{ID: "user"},
+	)
+
+	proc := createTestMessageProcessor()
+	proc.a2aToAgentConverter = &errorA2AMessageConverter{}
+	handler := &mockTaskHandler{
+		buildTaskFunc: func(
+			specificTaskID *string,
+			contextID *string,
+		) (string, error) {
+			return "task", nil
+		},
+	}
+
+	res, err := proc.ProcessMessage(
+		ctx,
+		msg,
+		taskmanager.ProcessOptions{Streaming: false},
+		handler,
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+	assert.NotNil(t, res.Result)
+}
+
+func TestMessageProcessor_ProcessMessage_RunnerError_WithAuthUser(
+	t *testing.T,
+) {
+	ctxID := "ctx"
+	msg := protocol.Message{
+		Kind:      "message",
+		MessageID: "runner-err-auth",
+		ContextID: &ctxID,
+		Role:      protocol.MessageRoleUser,
+		Parts: []protocol.Part{
+			protocol.NewTextPart("hi"),
+		},
+	}
+	ctx := context.WithValue(
+		context.Background(),
+		auth.AuthUserKey,
+		&auth.User{ID: "user"},
+	)
+
+	proc := createTestMessageProcessor()
+	proc.runner = &mockRunner{
+		runFunc: func(
+			ctx context.Context,
+			userID string,
+			sessionID string,
+			message model.Message,
+			opts ...agent.RunOption,
+		) (<-chan *event.Event, error) {
+			return nil, errors.New("runner failed")
+		},
+	}
+	handler := &mockTaskHandler{
+		buildTaskFunc: func(
+			specificTaskID *string,
+			contextID *string,
+		) (string, error) {
+			return "task", nil
+		},
+	}
+
+	res, err := proc.ProcessMessage(
+		ctx,
+		msg,
+		taskmanager.ProcessOptions{Streaming: false},
+		handler,
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+	assert.NotNil(t, res.Result)
 }
 
 func TestProcessAgentStreamingEvents_ConverterError(t *testing.T) {
@@ -2527,10 +2721,12 @@ func TestMessageProcessor_ProcessMessage_MultipleEvents(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.NotNil(t, result.Result)
-	// Verify that parts from all events were collected
-	resultMsg, ok := result.Result.(*protocol.Message)
-	assert.True(t, ok)
-	assert.Equal(t, 3, len(resultMsg.Parts))
+	// When multiple events are returned, the result is a Task with history and artifacts
+	resultTask, ok := result.Result.(*protocol.Task)
+	assert.True(t, ok, "Expected *protocol.Task for multiple events, got %T", result.Result)
+	// History should contain first 2 messages, artifacts should contain the last message
+	assert.Equal(t, 2, len(resultTask.History))
+	assert.Equal(t, 1, len(resultTask.Artifacts))
 }
 
 // TestMessageProcessor_ProcessMessage_NoPartsCollected tests handling when no parts are collected

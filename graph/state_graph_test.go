@@ -70,6 +70,83 @@ func TestBuilderAddFunctionNode(t *testing.T) {
 	}
 }
 
+func TestWithToolSets_EmptyClearsNodeToolSets(t *testing.T) {
+	stateGraph := NewStateGraph(NewStateSchema())
+
+	stateGraph.AddNode("n",
+		func(ctx context.Context,
+			state State) (any, error) {
+			return state, nil
+		},
+		WithToolSets(nil),
+	)
+
+	node := stateGraph.graph.nodes["n"]
+	if node == nil {
+		t.Fatalf("expected node n to exist")
+	}
+	if node.toolSets != nil {
+		t.Fatalf("expected toolSets to be nil for empty input")
+	}
+}
+
+func TestWithToolSets_CopiesSlice(t *testing.T) {
+	stateGraph := NewStateGraph(NewStateSchema())
+
+	originalToolSets := []tool.ToolSet{
+		&simpleToolSet{name: "simple"},
+	}
+
+	stateGraph.AddNode("n",
+		func(ctx context.Context,
+			state State) (any, error) {
+			return state, nil
+		},
+		WithToolSets(originalToolSets),
+	)
+
+	node := stateGraph.graph.nodes["n"]
+	if node == nil {
+		t.Fatalf("expected node n to exist")
+	}
+	if len(node.toolSets) != 1 {
+		t.Fatalf("expected 1 toolset on node, got %d",
+			len(node.toolSets))
+	}
+
+	snapshot := node.toolSets[0]
+	originalToolSets[0] = &simpleToolSet{name: "updated"}
+
+	if node.toolSets[0] != snapshot {
+		t.Fatalf("expected node toolset reference to be stable")
+	}
+	if node.toolSets[0] == originalToolSets[0] {
+		t.Fatalf("expected node toolsets slice to be copied")
+	}
+}
+
+func TestMergeToolsWithToolSets_EmitsConflictWarning(t *testing.T) {
+	base := map[string]tool.Tool{
+		"simple_echo": &echoTool{name: "simple_echo"},
+	}
+	toolSets := []tool.ToolSet{
+		&simpleToolSet{name: "simple"},
+	}
+
+	out := mergeToolsWithToolSets(
+		context.Background(),
+		base,
+		toolSets,
+	)
+
+	if len(out) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(out))
+	}
+	if _, ok := out["simple_echo"]; !ok {
+		t.Fatalf("expected key simple_echo in merged tools")
+	}
+}
+
 // blockingTool is a test tool that blocks until allowed, reporting start and
 // optionally respecting context cancellation.
 type blockingTool struct {
@@ -249,6 +326,37 @@ func TestProcessToolCalls_SerialVsParallel(t *testing.T) {
 			t.Fatalf("order not preserved: %s then %s", msgs[0].ToolName, msgs[1].ToolName)
 		}
 	})
+}
+
+func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
+	ctx := context.Background()
+	agentEvents := make(chan *event.Event, 1)
+	parentEventChan := make(chan *event.Event, 1)
+
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			Object: ObjectTypeGraphExecution,
+			Done:   true,
+		},
+		StateDelta: map[string][]byte{
+			"bad": []byte("not-json"),
+		},
+	}
+	close(agentEvents)
+
+	last, final, raw, err := processAgentEventStream(
+		ctx,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "", last)
+	require.NotNil(t, final)
+	require.Len(t, raw, 1)
 }
 
 func TestProcessToolCalls_ParallelCancelOnFirstError(t *testing.T) {
@@ -1381,4 +1489,204 @@ func TestMessagesStateSchemaIncludesLastResponseID(t *testing.T) {
 	require.True(t, ok, "StateKeyLastResponseID should be present")
 	require.Equal(t, reflect.TypeOf(""), field.Type)
 	require.NotNil(t, field.Reducer)
+}
+
+const (
+	testToolSetName       = "set"
+	testToolBaseName      = "echo"
+	testNamespacedToolKey = testToolSetName + "_" + testToolBaseName
+)
+
+type simpleTool struct {
+	name string
+}
+
+func (s *simpleTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: s.name}
+}
+
+func (s *simpleTool) Call(ctx context.Context, _ []byte) (any, error) {
+	return map[string]any{"ok": true}, nil
+}
+
+type countingToolSet struct {
+	name  string
+	calls int
+}
+
+func (s *countingToolSet) Tools(ctx context.Context) []tool.Tool {
+	s.calls++
+	return []tool.Tool{&simpleTool{name: testToolBaseName}}
+}
+
+func (s *countingToolSet) Close() error { return nil }
+
+func (s *countingToolSet) Name() string { return s.name }
+
+type recordingModel struct {
+	lastTools map[string]tool.Tool
+}
+
+func (m *recordingModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.lastTools = req.Tools
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("ok"),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *recordingModel) Info() model.Info {
+	return model.Info{Name: "recording"}
+}
+
+func TestAddLLMNode_StaticToolSets(t *testing.T) {
+	schema := MessagesStateSchema()
+	rm := &recordingModel{}
+	sg := NewStateGraph(schema)
+	ts := &countingToolSet{name: testToolSetName}
+
+	sg.AddLLMNode(
+		"llm",
+		rm,
+		"inst",
+		nil,
+		WithToolSets([]tool.ToolSet{ts}),
+	)
+
+	n := sg.graph.nodes["llm"]
+	require.NotNil(t, n)
+
+	state := State{StateKeyUserInput: "hi"}
+
+	_, err := n.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	_, err = n.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, ts.calls)
+}
+
+func TestAddLLMNode_RefreshToolSetsOnRun(t *testing.T) {
+	schema := MessagesStateSchema()
+	rm := &recordingModel{}
+	sg := NewStateGraph(schema)
+	ts := &countingToolSet{name: testToolSetName}
+
+	sg.AddLLMNode(
+		"llm",
+		rm,
+		"inst",
+		nil,
+		WithToolSets([]tool.ToolSet{ts}),
+		WithRefreshToolSetsOnRun(true),
+	)
+
+	n := sg.graph.nodes["llm"]
+	require.NotNil(t, n)
+
+	state := State{StateKeyUserInput: "hi"}
+
+	_, err := n.Function(context.Background(), state)
+	require.NoError(t, err)
+	firstTools := rm.lastTools
+	require.NotNil(t, firstTools)
+	require.NotEmpty(t, firstTools)
+
+	_, err = n.Function(context.Background(), state)
+	require.NoError(t, err)
+	secondTools := rm.lastTools
+	require.NotNil(t, secondTools)
+	require.NotEmpty(t, secondTools)
+
+	require.Equal(t, 2, ts.calls)
+}
+
+func TestNewToolsNodeFunc_StaticToolSets(t *testing.T) {
+	schema := MessagesStateSchema()
+	sg := NewStateGraph(schema)
+	ts := &countingToolSet{name: testToolSetName}
+
+	sg.AddToolsNode(
+		"tools",
+		nil,
+		WithToolSets([]tool.ToolSet{ts}),
+	)
+
+	n := sg.graph.nodes["tools"]
+	require.NotNil(t, n)
+
+	messages := []model.Message{
+		model.NewUserMessage("hi"),
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      testNamespacedToolKey,
+					Arguments: []byte(`{}`),
+				},
+			}},
+		},
+	}
+
+	state := State{StateKeyMessages: messages}
+
+	_, err := n.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	_, err = n.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, ts.calls)
+}
+
+func TestNewToolsNodeFunc_RefreshToolSetsOnRun(t *testing.T) {
+	schema := MessagesStateSchema()
+	sg := NewStateGraph(schema)
+	ts := &countingToolSet{name: testToolSetName}
+
+	sg.AddToolsNode(
+		"tools",
+		nil,
+		WithToolSets([]tool.ToolSet{ts}),
+		WithRefreshToolSetsOnRun(true),
+	)
+
+	n := sg.graph.nodes["tools"]
+	require.NotNil(t, n)
+
+	messages := []model.Message{
+		model.NewUserMessage("hi"),
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      testNamespacedToolKey,
+					Arguments: []byte(`{}`),
+				},
+			}},
+		},
+	}
+
+	state := State{StateKeyMessages: messages}
+
+	_, err := n.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	_, err = n.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	require.Equal(t, 2, ts.calls)
 }

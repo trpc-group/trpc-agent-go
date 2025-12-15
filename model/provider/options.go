@@ -15,6 +15,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/anthropic"
 	"trpc.group/trpc-go/trpc-agent-go/model/gemini"
+	"trpc.group/trpc-go/trpc-agent-go/model/hunyuan"
+	"trpc.group/trpc-go/trpc-agent-go/model/ollama"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
@@ -41,6 +43,8 @@ type Options struct {
 	OpenAIOption         []openai.Option             // OpenAIOption stores additional OpenAI options.
 	AnthropicOption      []anthropic.Option          // AnthropicOption stores additional Anthropic options.
 	GeminiOption         []gemini.Option             // GeminiOption stores additional Gemini options.
+	OllamaOption         []ollama.Option             // OllamaOption stores additional Ollama options.
+	HunyuanOption        []hunyuan.Option            // HunyuanOption stores additional Hunyuan options.
 }
 
 // Callbacks collects provider specific callback hooks.
@@ -69,6 +73,22 @@ type Callbacks struct {
 	GeminiChatChunk gemini.ChatChunkCallbackFunc
 	// GeminiStreamComplete runs after an Gemini streaming session completes.
 	GeminiStreamComplete gemini.ChatStreamCompleteCallbackFunc
+	// OllamaChatRequest runs before dispatching a chat request to Ollama providers.
+	OllamaChatRequest ollama.ChatRequestCallbackFunc
+	// OllamaChatResponse runs after receiving a full chat response from Ollama providers.
+	OllamaChatResponse ollama.ChatResponseCallbackFunc
+	// OllamaChatChunk runs for each streaming chunk from Ollama providers.
+	OllamaChatChunk ollama.ChatChunkCallbackFunc
+	// OllamaStreamComplete runs after an Ollama streaming session completes.
+	OllamaStreamComplete ollama.ChatStreamCompleteCallbackFunc
+	// HunyuanChatRequest runs before dispatching a chat request to Hunyuan providers.
+	HunyuanChatRequest hunyuan.ChatRequestCallbackFunc
+	// HunyuanChatResponse runs after receiving a full chat response from Hunyuan providers.
+	HunyuanChatResponse hunyuan.ChatResponseCallbackFunc
+	// HunyuanChatChunk runs for each streaming chunk from Hunyuan providers.
+	HunyuanChatChunk hunyuan.ChatChunkCallbackFunc
+	// HunyuanStreamComplete runs after a Hunyuan streaming session completes.
+	HunyuanStreamComplete hunyuan.ChatStreamCompleteCallbackFunc
 }
 
 // WithAPIKey records the API key for the provider.
@@ -140,6 +160,18 @@ func WithCallbacks(cb Callbacks) Option {
 		}
 		if cb.AnthropicStreamComplete != nil {
 			o.Callbacks.AnthropicStreamComplete = cb.AnthropicStreamComplete
+		}
+		if cb.OllamaChatRequest != nil {
+			o.Callbacks.OllamaChatRequest = cb.OllamaChatRequest
+		}
+		if cb.OllamaChatResponse != nil {
+			o.Callbacks.OllamaChatResponse = cb.OllamaChatResponse
+		}
+		if cb.OllamaStreamComplete != nil {
+			o.Callbacks.OllamaStreamComplete = cb.OllamaStreamComplete
+		}
+		if cb.OllamaChatChunk != nil {
+			o.Callbacks.OllamaChatChunk = cb.OllamaChatChunk
 		}
 	}
 }
@@ -228,5 +260,19 @@ func WithAnthropicOption(opt ...anthropic.Option) Option {
 func WithGeminiOption(opt ...gemini.Option) Option {
 	return func(o *Options) {
 		o.GeminiOption = append(o.GeminiOption, opt...)
+	}
+}
+
+// WithOllamaOption appends raw Ollama options.
+func WithOllamaOption(opt ...ollama.Option) Option {
+	return func(o *Options) {
+		o.OllamaOption = append(o.OllamaOption, opt...)
+	}
+}
+
+// WithHunyuanOption appends raw Hunyuan options.
+func WithHunyuanOption(opt ...hunyuan.Option) Option {
+	return func(o *Options) {
+		o.HunyuanOption = append(o.HunyuanOption, opt...)
 	}
 }

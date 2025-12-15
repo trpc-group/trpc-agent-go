@@ -317,6 +317,44 @@ func TestEmitEventWithTimeout_NoTimeout_ContextCancelled(t *testing.T) {
 	require.True(t, errors.Is(err, context.Canceled))
 }
 
+func TestEmitEventWithTimeout_NoTimeout_ContextCancelledDuringSend(
+	t *testing.T,
+) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan *Event) // Unbuffered so send blocks.
+	e := New("inv", "author")
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- EmitEventWithTimeout(ctx, ch, e, EmitWithoutTimeout)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	err := <-errCh
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestEmitEventWithTimeout_WithTimeout_ContextCancelledDuringSend(
+	t *testing.T,
+) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan *Event) // Unbuffered so send blocks.
+	e := New("inv", "author")
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- EmitEventWithTimeout(ctx, ch, e, time.Second)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	err := <-errCh
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestWithTag_SetAndAppend(t *testing.T) {
 	// First option should set, second should append with delimiter
 	e := New("inv", "author", WithTag("t1"), WithTag("t2"))
@@ -732,4 +770,16 @@ func TestEventJSON_RoundTrip(t *testing.T) {
 		require.Equal(t, "id1", dst.ID)
 		require.Nil(t, dst.Response)
 	})
+}
+
+func TestEvent_Filter_LegacyBranchCompatibility(t *testing.T) {
+	legacy := &Event{
+		Branch:  "legacy/branch",
+		Version: InitVersion,
+	}
+
+	require.True(t, legacy.Filter("legacy"))
+	require.True(t, legacy.Filter("legacy/branch"))
+	require.True(t, legacy.Filter("legacy/branch/sub"))
+	require.False(t, legacy.Filter("legacy-other"))
 }

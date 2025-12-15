@@ -41,6 +41,11 @@ const (
 
 	// EventFilterKeyDelimiter is the delimiter for event filter key
 	EventFilterKeyDelimiter = "/"
+
+	// flusherStateKey is the invocation state key used by flush.Attach.
+	flusherStateKey = "__flush_session__"
+	// barrierStateKey is the invocation state key used by internal barrier flag.
+	barrierStateKey = "__graph_barrier__"
 )
 
 // TransferInfo contains information about a pending agent transfer.
@@ -85,9 +90,9 @@ type Invocation struct {
 	// ArtifactService is the service for managing artifacts.
 	ArtifactService artifact.Service
 
-	// noticeChanMap is used to signal when events are written to the session.
-	noticeChanMap map[string]chan any
-	noticeMu      *sync.Mutex
+	// noticeChannels is used to signal when events are written to the session.
+	noticeChannels map[string]chan any
+	noticeMu       *sync.Mutex
 
 	// eventFilterKey is used to filter events for flow or agent
 	eventFilterKey string
@@ -100,8 +105,39 @@ type Invocation struct {
 	state   map[string]any
 	stateMu sync.RWMutex
 
+	// MaxLLMCalls is an optional upper bound on the number of LLM calls
+	// allowed for this invocation. When the value is:
+	//   - > 0: the limit is enforced for this invocation.
+	//   - <= 0: no limit is applied (default, preserves existing behavior).
+	//
+	// Typical usage:
+	//   - LLMAgent copies its per-agent limits into these fields in setupInvocation.
+	//   - Other agent implementations may set them explicitly when constructing
+	//     invocations. If left at zero, IncLLMCallCount/IncToolIteration are no-ops.
+	MaxLLMCalls int
+
+	// MaxToolIterations is an optional upper bound on how many tool-call
+	// iterations are allowed for this invocation. A "tool iteration" is defined
+	// as an assistant response that contains tool calls and triggers the
+	// FunctionCallResponseProcessor. When the value is:
+	//   - > 0: the limit is enforced for this invocation.
+	//   - <= 0: no limit is applied (default, preserves existing behavior).
+	MaxToolIterations int
+
 	// timingInfo stores timing information for the first LLM call in this invocation.
 	timingInfo *model.TimingInfo
+
+	// llmCallCount tracks how many LLM calls have been made in this invocation.
+	// This is used together with MaxLLMCalls to enforce a per-invocation limit.
+	// Note: counters are invocation-scoped. When child invocations are created
+	// via Clone (for example, in transfer_to_agent or AgentTool), the counters
+	// start from zero for each invocation.
+	llmCallCount int
+
+	// toolIterationCount tracks how many tool call iterations have been processed
+	// in this invocation. This is used together with MaxToolIterations
+	// to guard against unbounded tool_call -> LLM -> tool_call loops.
+	toolIterationCount int
 }
 
 // DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
@@ -424,9 +460,9 @@ type RunOptions struct {
 // NewInvocation create a new invocation
 func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
 	inv := &Invocation{
-		InvocationID:  uuid.NewString(),
-		noticeMu:      &sync.Mutex{},
-		noticeChanMap: make(map[string]chan any),
+		InvocationID:   uuid.NewString(),
+		noticeMu:       &sync.Mutex{},
+		noticeChannels: make(map[string]chan any),
 	}
 
 	for _, opt := range invocationOpts {
@@ -457,9 +493,10 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		MemoryService:   inv.MemoryService,
 		ArtifactService: inv.ArtifactService,
 		noticeMu:        inv.noticeMu,
-		noticeChanMap:   inv.noticeChanMap,
+		noticeChannels:  inv.noticeChannels,
 		eventFilterKey:  inv.eventFilterKey,
 		parent:          inv,
+		state:           inv.cloneState(),
 	}
 
 	for _, opt := range invocationOpts {
@@ -481,6 +518,22 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	}
 
 	return newInv
+}
+
+func (inv *Invocation) cloneState() map[string]any {
+	if inv == nil || inv.state == nil {
+		return nil
+	}
+	inv.stateMu.RLock()
+	defer inv.stateMu.RUnlock()
+	copied := make(map[string]any)
+	if holder, ok := inv.state[flusherStateKey]; ok {
+		copied[flusherStateKey] = holder
+	}
+	if barrier, ok := inv.state[barrierStateKey]; ok {
+		copied[barrierStateKey] = barrier
+	}
+	return copied
 }
 
 // GetEventFilterKey get event filter key.
@@ -518,8 +571,15 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 		agentName = inv.AgentName
 		requestID = inv.RunOptions.RequestID
 	}
-	log.Tracef("[agent.EmitEvent]queue monitoring:RequestID: %s channel capacity: %d, current length: %d, branch: %s, agent name:%s",
-		requestID, cap(ch), len(ch), e.Branch, agentName)
+	log.Tracef(
+		"[agent.EmitEvent]queue monitoring:RequestID: %s channel capacity: "+
+			"%d, current length: %d, branch: %s, agent name:%s",
+		requestID,
+		cap(ch),
+		len(ch),
+		e.Branch,
+		agentName,
+	)
 	return event.EmitEvent(ctx, ch, e)
 }
 
@@ -625,6 +685,46 @@ func (inv *Invocation) GetOrCreateTimingInfo() *model.TimingInfo {
 	return inv.timingInfo
 }
 
+// IncLLMCallCount increments the LLM call counter for this invocation and
+// enforces the optional MaxLLMCalls limit. When the limit is not set or
+// non-positive, no restriction is applied. When the limit is exceeded, a
+// StopError is returned so callers can terminate the flow early.
+func (inv *Invocation) IncLLMCallCount() error {
+	if inv == nil {
+		return nil
+	}
+	limit := inv.MaxLLMCalls
+	if limit <= 0 {
+		// No limit configured, preserve existing behavior.
+		return nil
+	}
+	inv.llmCallCount++
+	if inv.llmCallCount > limit {
+		return NewStopError(
+			fmt.Sprintf("max LLM calls (%d) exceeded", limit),
+		)
+	}
+	return nil
+}
+
+// IncToolIteration increments the tool iteration counter and reports whether
+// the MaxToolIterations limit has been exceeded. A "tool iteration" is
+// defined as an assistant response that contains tool calls and triggers the
+// FunctionCallResponseProcessor. When the limit is not set or non-positive,
+// this method always returns false, preserving existing behavior.
+func (inv *Invocation) IncToolIteration() bool {
+	if inv == nil {
+		return false
+	}
+	limit := inv.MaxToolIterations
+	if limit <= 0 {
+		// No limit configured, preserve existing behavior.
+		return false
+	}
+	inv.toolIterationCount++
+	return inv.toolIterationCount > limit
+}
+
 // DeleteState removes a value from the invocation state.
 //
 // Example:
@@ -662,8 +762,13 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 	select {
 	case <-ch:
 	case <-time.After(timeout):
-		log.Infof("[AddNoticeChannelAndWait]: Wait for notification message timeout. key: %s, timeout: %d(s)",
-			key, int64(timeout/time.Second))
+		log.InfofContext(
+			ctx,
+			"[AddNoticeChannelAndWait]: Wait for notification message "+
+				"timeout. key: %s, timeout: %d(s)",
+			key,
+			int64(timeout/time.Second),
+		)
 		return NewWaitNoticeTimeoutError(fmt.Sprintf("Timeout waiting for completion of event %s", key))
 	case <-ctx.Done():
 		return ctx.Err()
@@ -674,21 +779,25 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 // AddNoticeChannel add a new notice channel
 func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan any {
 	if inv == nil || inv.noticeMu == nil {
-		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
+		log.ErrorContext(
+			ctx,
+			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+				"Clone method to create Invocation",
+		)
 		return nil
 	}
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
-	if ch, ok := inv.noticeChanMap[key]; ok {
+	if ch, ok := inv.noticeChannels[key]; ok {
 		return ch
 	}
 
 	ch := make(chan any)
-	if inv.noticeChanMap == nil {
-		inv.noticeChanMap = make(map[string]chan any)
+	if inv.noticeChannels == nil {
+		inv.noticeChannels = make(map[string]chan any)
 	}
-	inv.noticeChanMap[key] = ch
+	inv.noticeChannels[key] = ch
 
 	return ch
 }
@@ -696,20 +805,42 @@ func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan an
 // NotifyCompletion notify completion signal to waiting task
 func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 	if inv == nil || inv.noticeMu == nil {
-		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
-		return fmt.Errorf("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation key:%s", key)
+		log.ErrorContext(
+			ctx,
+			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+				"Clone method to create Invocation",
+		)
+		return fmt.Errorf(
+			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+				"Clone method to create Invocation key:%s",
+			key,
+		)
 	}
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
-	ch, ok := inv.noticeChanMap[key]
+	ch, ok := inv.noticeChannels[key]
+	// channel not found, create a new one and close it.
+	// May involve notification followed by waiting.
 	if !ok {
-		log.Warnf("notice channel not found for %s", key)
-		return fmt.Errorf("notice channel not found for %s", key)
+		ch = make(chan any)
+		if inv.noticeChannels == nil {
+			inv.noticeChannels = make(map[string]chan any)
+		}
+		inv.noticeChannels[key] = ch
+		close(ch)
+		return nil
 	}
 
-	close(ch)
-	delete(inv.noticeChanMap, key)
+	// channel found, close it if it's not closed
+	select {
+	case _, isOpen := <-ch:
+		if isOpen {
+			close(ch)
+		}
+	default:
+		close(ch)
+	}
 
 	return nil
 }
@@ -719,16 +850,27 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 // upon completion to prevent resource leaks.
 func (inv *Invocation) CleanupNotice(ctx context.Context) {
 	if inv == nil || inv.noticeMu == nil {
-		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
+		log.ErrorContext(
+			ctx,
+			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+				"Clone method to create Invocation",
+		)
 		return
 	}
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
-	for _, ch := range inv.noticeChanMap {
-		close(ch)
+	for _, ch := range inv.noticeChannels {
+		select {
+		case _, isOpen := <-ch:
+			if isOpen {
+				close(ch)
+			}
+		default:
+			close(ch)
+		}
 	}
-	inv.noticeChanMap = nil
+	inv.noticeChannels = nil
 }
 
 // GetCustomAgentConfig retrieves configuration for a specific custom agent type.

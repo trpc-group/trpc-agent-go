@@ -41,6 +41,17 @@ const (
 	TagDelimiter = ";"
 )
 
+const (
+	// CodeExecutionTag is the tag value for code execution code event.
+	CodeExecutionTag = "code_execution_code"
+
+	// CodeExecutionResultTag is the tag value for code execution result event.
+	CodeExecutionResultTag = "code_execution_result"
+
+	// TransferTag is the tag for transfer event.
+	TransferTag = "transfer"
+)
+
 // Event represents an event in conversation between agents and users.
 type Event struct {
 	// Response is the base struct for all LLM response functionality.
@@ -95,6 +106,21 @@ type Event struct {
 
 	// version for handling version compatibility issues.
 	Version int `json:"version,omitempty"`
+}
+
+// ContainsTag checks if the event contains the specified tag.
+func (e *Event) ContainsTag(tag string) bool {
+	if e.Tag == "" {
+		return false
+	}
+
+	tags := strings.Split(e.Tag, TagDelimiter)
+	for _, t := range tags {
+		if strings.TrimSpace(t) == strings.TrimSpace(tag) {
+			return true
+		}
+	}
+	return false
 }
 
 // EventActions represents optional actions/hints attached to an event.
@@ -251,7 +277,11 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	// the send and the ctx.Done() cases are ready, which could otherwise
 	// result in emitting an event after cancellation.
 	if err := ctx.Err(); err != nil {
-		log.Warnf("EmitEventWithTimeout: context cancelled, event: %+v", *e)
+		log.WarnfContext(
+			ctx,
+			"EmitEventWithTimeout: context cancelled, event: %+v",
+			*e,
+		)
 		return err
 	}
 
@@ -263,7 +293,11 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		case ch <- e:
 			log.Tracef("EmitEventWithTimeout: event sent, event: %+v", *e)
 		case <-ctx.Done():
-			log.Warnf("EmitEventWithTimeout: context cancelled, event: %+v", *e)
+			log.WarnfContext(
+				ctx,
+				"EmitEventWithTimeout: context cancelled, event: %+v",
+				*e,
+			)
 			return ctx.Err()
 		}
 		return nil
@@ -273,10 +307,18 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	case ch <- e:
 		log.Tracef("EmitEventWithTimeout: event sent, event: %+v", *e)
 	case <-ctx.Done():
-		log.Warnf("EmitEventWithTimeout: context cancelled, event: %+v", *e)
+		log.WarnfContext(
+			ctx,
+			"EmitEventWithTimeout: context cancelled, event: %+v",
+			*e,
+		)
 		return ctx.Err()
 	case <-time.After(timeout):
-		log.Warnf("EmitEventWithTimeout: timeout, event: %+v", *e)
+		log.WarnfContext(
+			ctx,
+			"EmitEventWithTimeout: timeout, event: %+v",
+			*e,
+		)
 		return DefaultEmitTimeoutErr
 	}
 	return nil

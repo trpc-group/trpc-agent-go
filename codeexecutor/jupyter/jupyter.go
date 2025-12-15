@@ -7,6 +7,7 @@
 //
 //
 
+// Package jupyter provides a Jupyter code executor.
 package jupyter
 
 import (
@@ -134,26 +135,26 @@ func New(opts ...Option) (*CodeExecutor, error) {
 		return nil, err
 	}
 
-	loggingConfig := map[string]interface{}{
-		"loggers": map[string]interface{}{
-			"KernelGatewayApp": map[string]interface{}{
+	loggingConfig := map[string]any{
+		"loggers": map[string]any{
+			"KernelGatewayApp": map[string]any{
 				"level":    c.logLevel,
 				"handlers": []string{"console"},
 			},
 		},
 	}
-	logHandlers := map[string]interface{}{}
+	logHandlers := map[string]any{}
 
 	if len(c.logFile) > 0 {
-		logHandlers["file"] = map[string]interface{}{
+		logHandlers["file"] = map[string]any{
 			"class":    "logging.handlers.RotatingFileHandler",
 			"level":    c.logLevel,
 			"maxBytes": c.logMaxBytes,
 			"filename": c.logFile,
 		}
 		loggingConfig["handlers"] = logHandlers
-		loggingConfig["loggers"] = map[string]interface{}{
-			"KernelGatewayApp": map[string]interface{}{
+		loggingConfig["loggers"] = map[string]any{
+			"KernelGatewayApp": map[string]any{
 				"level":    c.logLevel,
 				"handlers": []string{"file", "console"},
 			},

@@ -350,6 +350,48 @@ sseToolSet := mcp.NewMCPToolSet(
 - 🎯 **独立重试**：每次工具调用独立计数，不会因早期失败影响后续调用
 - 🛡️ **保守策略**：仅针对明确的连接/会话错误触发重连，避免配置错误导致的无限循环
 
+### MCP 工具的动态发现与更新（LLMAgent 配置项）
+
+对于 MCP 工具集，服务器端的工具列表是可以变化的（例如在运行
+过程中新增了一个 MCP 工具）。如果希望 LLMAgent 在**每次调用**
+时自动看到最新的工具列表，可以在使用 `WithToolSets` 的同时，
+开启 `llmagent.WithRefreshToolSetsOnRun(true)`。
+
+#### LLMAgent 配置示例
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
+
+// 1. 创建 MCP 工具集（可以是 STDIO、SSE 或 Streamable HTTP）
+mcpToolSet := mcp.NewMCPToolSet(connectionConfig)
+
+// 2. 创建 LLMAgent，并开启 ToolSets 的自动刷新
+agent := llmagent.New(
+    "mcp-assistant",
+    llmagent.WithModel(openai.New("gpt-4o-mini")),
+    llmagent.WithToolSets([]tool.ToolSet{mcpToolSet}),
+    llmagent.WithRefreshToolSetsOnRun(true),
+)
+```
+
+当启用 `WithRefreshToolSetsOnRun(true)` 时：
+
+- LLMAgent 在构造工具列表时，会再次调用
+  `ToolSet.Tools(context.Background())`；
+- 如果 MCP 服务器新增或删除了工具，该 Agent **下一次执行** 时，
+  会自动使用更新后的工具列表。
+
+这个配置项的侧重点是**动态发现工具**。如果你还需要基于
+`context.Context` 的**每次请求动态 HTTP 请求头**（例如从上下文
+中提取认证信息），仍然可以参考 `examples/mcptool/http_headers`
+示例，手动调用 `toolSet.Tools(ctx)`，然后配合
+`WithTools` 使用。
+
 ## Agent 工具 (AgentTool)
 
 AgentTool 允许把一个现有的 Agent 以工具的形式暴露给上层 Agent 使用。相比普通函数工具，AgentTool 的优势在于：
@@ -509,7 +551,9 @@ agent := llmagent.New("ai-assistant",
         calculatorTool, timeTool, searchTool,
     }),
     // 添加工具集（ToolSet 接口）
-    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        stdioToolSet, sseToolSet, streamableToolSet,
+    }),
 )
 ```
 
@@ -583,7 +627,9 @@ agent := llmagent.New("ai-assistant",
         calculatorTool, timeTool, searchTool,
     }),
     // 添加工具集（ToolSet 接口）
-    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        stdioToolSet, sseToolSet, streamableToolSet,
+    }),
     llmagent.WithToolFilter(filter),
 )
 ```
@@ -616,7 +662,9 @@ agent := llmagent.New("ai-assistant",
         calculatorTool, timeTool, searchTool,
     }),
     // 添加工具集（ToolSet 接口）
-    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        stdioToolSet, sseToolSet, streamableToolSet,
+    }),
     llmagent.WithToolFilter(filter),
 )
 ```
@@ -754,6 +802,53 @@ Tool 2: get_population       [====] 50ms
 Tool 3: get_time                  [====] 50ms
 总时间: ~150ms（依次执行）
 ```
+
+### 运行时 ToolSet 动态管理
+
+`WithToolSets` 是一种**静态配置方式**：在创建 Agent 时一次性注入 ToolSet。很多实际场景下，你希望在**运行时动态增删 ToolSet**，而不必重建 Agent。
+
+LLMAgent 提供了三个与 ToolSet 相关的运行时方法：
+
+- `AddToolSet(toolSet tool.ToolSet)` —— 按 `ToolSet.Name()` 添加或替换同名 ToolSet
+- `RemoveToolSet(name string) bool` —— 按名称移除所有同名 ToolSet，返回是否确实删除
+- `SetToolSets(toolSets []tool.ToolSet)` —— 以给定切片整体替换当前所有 ToolSet
+
+这些方法是并发安全的，并会自动重新计算：
+
+- 聚合后的工具列表（显式 `WithTools` 工具 + ToolSet 工具 + 知识检索工具 + Skills 工具）
+- “用户工具”跟踪信息（用于前文介绍的智能过滤机制）
+
+**典型使用方式：**
+
+```go
+// 1. 初始只挂基础工具
+agent := llmagent.New("dynamic-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithTools([]tool.Tool{calculatorTool}),
+)
+
+// 2. 运行时挂载一个 MCP ToolSet
+mcpToolSet := mcp.NewMCPToolSet(connectionConfig)
+if err := mcpToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("初始化 MCP ToolSet 失败: %w", err)
+}
+agent.AddToolSet(mcpToolSet)
+
+// 3. 从配置中心下发一整套 ToolSet（声明式控制）
+toolSetsFromConfig := []tool.ToolSet{mcpToolSet, fileToolSet}
+agent.SetToolSets(toolSetsFromConfig)
+
+// 4. 按名称下线某个 ToolSet（例如回滚某个集成）
+removed := agent.RemoveToolSet(mcpToolSet.Name())
+if !removed {
+    log.Printf("未找到 ToolSet %q", mcpToolSet.Name())
+}
+```
+
+运行时 ToolSet 更新会自动与前文的**工具过滤机制**协同工作：
+
+- 通过 `WithTools` 和所有 ToolSet（包括动态添加的 ToolSet）注册的工具都视为**用户工具**，会受到 `WithToolFilter` 以及每次调用的运行时过滤控制。
+- 框架工具（`transfer_to_agent`、`knowledge_search`、`agentic_knowledge_search`）仍然**永远不被过滤**，始终对 Agent 可用。
 
 ## 快速开始
 

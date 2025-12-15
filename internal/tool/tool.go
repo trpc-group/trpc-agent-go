@@ -21,6 +21,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const defsRefPrefix = "#/$defs/"
+
 // GenerateJSONSchema generates a basic JSON schema from a reflect.Type.
 func GenerateJSONSchema(t reflect.Type) *tool.Schema {
 	// Use a context to track visited types and handle recursion
@@ -45,12 +47,36 @@ type schemaContext struct {
 	defs    map[string]*tool.Schema // Stores reusable schema definitions
 }
 
+func schemaRef(defName string) *tool.Schema {
+	return &tool.Schema{Ref: defsRefPrefix + defName}
+}
+
+func cloneProperties(props map[string]*tool.Schema) map[string]*tool.Schema {
+	if len(props) == 0 {
+		return nil
+	}
+	out := make(map[string]*tool.Schema, len(props))
+	for k, v := range props {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneRequired(required []string) []string {
+	if len(required) == 0 {
+		return nil
+	}
+	out := make([]string, len(required))
+	copy(out, required)
+	return out
+}
+
 // generateJSONSchema generates a JSON schema with recursion handling
 func generateJSONSchema(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Schema {
 	// Handle different kinds of types.
 	switch t.Kind() {
 	case reflect.Struct:
-		return handleGenerateJSONSchemaStruct(t, ctx, isRoot)
+		return handleStructType(t, ctx, isRoot)
 
 	case reflect.Ptr:
 		// For function tool parameters, we typically use value types
@@ -65,108 +91,6 @@ func generateJSONSchema(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.S
 // hasRecursiveFields checks if a struct type has fields that reference itself
 func hasRecursiveFields(t reflect.Type) bool {
 	return checkRecursion(t, t, make(map[reflect.Type]bool))
-}
-
-// handleGenerateJSONSchemaStruct contains the previously large struct-handling
-// logic extracted from generateJSONSchema to reduce cyclomatic complexity.
-func handleGenerateJSONSchemaStruct(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Schema {
-	// Check if we've already seen this struct type
-	if defName, exists := ctx.visited[t]; exists {
-		// Return a reference to the existing definition
-		return &tool.Schema{Ref: "#/$defs/" + defName}
-	}
-
-	// Generate a unique name for this type and mark it visited
-	defName := generateDefName(t)
-	ctx.visited[t] = defName
-
-	// Create the schema for this struct
-	schema := &tool.Schema{Type: "object"}
-	properties := map[string]*tool.Schema{}
-	required := make([]string, 0)
-
-	// Check if this struct has recursive fields
-	hasRecursion := hasRecursiveFields(t)
-
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		if !field.IsExported() {
-			continue
-		}
-
-		// Get JSON tag or use field name.
-		jsonTag := field.Tag.Get("json")
-		if jsonTag == "-" {
-			continue // Skip fields marked with json:"-"
-		}
-
-		fieldName := field.Name
-		isOmitEmpty := false
-
-		if jsonTag != "" {
-			// Parse json tag (handle omitempty, etc.)
-			if commaIdx := strings.Index(jsonTag, ","); commaIdx != -1 {
-				fieldName = jsonTag[:commaIdx]
-				isOmitEmpty = strings.Contains(jsonTag[commaIdx:], "omitempty")
-			} else {
-				fieldName = jsonTag
-			}
-		}
-
-		// Generate schema for field type.
-		fieldSchema := generateFieldSchema(field.Type, ctx, false)
-		properties[fieldName] = fieldSchema
-
-		// Parse jsonschema tag to customize the schema
-		// Only apply jsonschema tags if the field schema is not a reference
-		if fieldSchema.Ref == "" {
-			isRequiredByTag, err := parseJSONSchemaTag(field.Type, field.Tag, fieldSchema)
-			if err != nil {
-				log.Errorf("parseJSONSchemaTag error for field %s: %v", fieldName, err)
-				// Continue execution with the field schema as is
-			}
-
-			// Check if field is required (not a pointer and no omitempty, or explicitly marked as required by jsonschema tag).
-			if (field.Type.Kind() != reflect.Ptr && !isOmitEmpty) || isRequiredByTag {
-				required = append(required, fieldName)
-			}
-		} else {
-			// For reference fields, check if they should be required based on type and omitempty
-			if field.Type.Kind() != reflect.Ptr && !isOmitEmpty {
-				required = append(required, fieldName)
-			}
-		}
-	}
-
-	schema.Properties = properties
-	if len(required) > 0 {
-		schema.Required = required
-	}
-
-	// Store the definition if we have recursion or if it's not the root
-	if hasRecursion || !isRoot {
-		// Create a copy of the schema for the definition to avoid circular references
-		defSchema := &tool.Schema{
-			Type:       schema.Type,
-			Properties: make(map[string]*tool.Schema),
-			Required:   schema.Required,
-		}
-
-		// Copy properties but ensure we use references for recursive types
-		for propName, propSchema := range schema.Properties {
-			defSchema.Properties[propName] = propSchema
-		}
-
-		ctx.defs[defName] = defSchema
-	}
-
-	// For the root type with recursion, return the actual schema
-	// For nested recursive types, return a reference
-	if isRoot {
-		return schema
-	}
-
-	return &tool.Schema{Ref: "#/$defs/" + defName}
 }
 
 // checkRecursion recursively checks if targetType appears in the fields of currentType
@@ -345,9 +269,6 @@ func handleArrayOrSlice(t reflect.Type, ctx *schemaContext) *tool.Schema {
 // handleMapType builds schema for map types using additionalProperties.
 func handleMapType(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Schema {
 	valueSchema := generateFieldSchema(t.Elem(), ctx, false)
-	if valueSchema == nil {
-		valueSchema = &tool.Schema{Type: "object"}
-	}
 
 	schema := &tool.Schema{
 		Type:                 "object",
@@ -366,75 +287,110 @@ func handlePointerType(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Sc
 	return generateFieldSchema(t.Elem(), ctx, isRoot)
 }
 
-// handleStructType handles inline and named struct schemas with recursion tracking.
-func handleStructType(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Schema {
-	// If we've already created a definition for this type, return a reference.
-	if defName, exists := ctx.visited[t]; exists {
-		return &tool.Schema{Ref: "#/$defs/" + defName}
+func jsonFieldMeta(
+	field reflect.StructField,
+) (fieldName string, omitEmpty bool, ok bool) {
+	if !field.IsExported() {
+		return "", false, false
 	}
 
-	hasRecursion := hasRecursiveFields(t)
-
-	// Inline schema when there is no recursion (backwards compat).
-	if !hasRecursion {
-		nestedSchema := &tool.Schema{
-			Type:       "object",
-			Properties: make(map[string]*tool.Schema),
-		}
-
-		for i := 0; i < t.NumField(); i++ {
-			field := t.Field(i)
-			if !field.IsExported() {
-				continue
-			}
-			jsonTag := field.Tag.Get("json")
-			if jsonTag == "-" {
-				continue
-			}
-			fieldName := field.Name
-			if jsonTag != "" {
-				if commaIdx := strings.Index(jsonTag, ","); commaIdx != -1 {
-					fieldName = jsonTag[:commaIdx]
-				} else {
-					fieldName = jsonTag
-				}
-			}
-			nestedSchema.Properties[fieldName] = generateFieldSchema(field.Type, ctx, false)
-		}
-		return nestedSchema
+	tag := field.Tag.Get("json")
+	if tag == "-" {
+		return "", false, false
 	}
 
-	// Named struct with recursion: create definition and return a reference.
-	defName := generateDefName(t)
-	ctx.visited[t] = defName
+	if tag == "" {
+		return field.Name, false, true
+	}
 
-	nestedSchema := &tool.Schema{
+	commaIdx := strings.Index(tag, ",")
+	if commaIdx == -1 {
+		return tag, false, true
+	}
+	return tag[:commaIdx], strings.Contains(tag[commaIdx:], "omitempty"), true
+}
+
+func appendRequiredField(
+	required []string,
+	field reflect.StructField,
+	fieldSchema *tool.Schema,
+	fieldName string,
+	isOmitEmpty bool,
+) []string {
+	if fieldSchema.Ref == "" {
+		isRequiredByTag, err := parseJSONSchemaTag(
+			field.Type, field.Tag, fieldSchema,
+		)
+		if err != nil {
+			log.Errorf("parseJSONSchemaTag error for field %s: %v", fieldName, err)
+		}
+
+		if (field.Type.Kind() != reflect.Ptr && !isOmitEmpty) ||
+			isRequiredByTag {
+			return append(required, fieldName)
+		}
+	} else if field.Type.Kind() != reflect.Ptr && !isOmitEmpty {
+		return append(required, fieldName)
+	}
+	return required
+}
+
+func buildStructSchema(t reflect.Type, ctx *schemaContext) *tool.Schema {
+	schema := &tool.Schema{
 		Type:       "object",
 		Properties: make(map[string]*tool.Schema),
 	}
 
+	required := make([]string, 0)
+
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
-		if !field.IsExported() {
+		fieldName, isOmitEmpty, ok := jsonFieldMeta(field)
+		if !ok {
 			continue
 		}
-		jsonTag := field.Tag.Get("json")
-		if jsonTag == "-" {
-			continue
-		}
-		fieldName := field.Name
-		if jsonTag != "" {
-			if commaIdx := strings.Index(jsonTag, ","); commaIdx != -1 {
-				fieldName = jsonTag[:commaIdx]
-			} else {
-				fieldName = jsonTag
-			}
-		}
-		nestedSchema.Properties[fieldName] = generateFieldSchema(field.Type, ctx, false)
+
+		fieldSchema := generateFieldSchema(field.Type, ctx, false)
+		schema.Properties[fieldName] = fieldSchema
+
+		required = appendRequiredField(
+			required, field, fieldSchema, fieldName, isOmitEmpty,
+		)
 	}
 
-	// Store the definition
-	ctx.defs[defName] = nestedSchema
+	if len(required) > 0 {
+		schema.Required = required
+	}
+	return schema
+}
 
-	return &tool.Schema{Ref: "#/$defs/" + defName}
+// handleStructType handles inline and named struct schemas with recursion tracking.
+func handleStructType(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Schema {
+	if defName, exists := ctx.visited[t]; exists {
+		return schemaRef(defName)
+	}
+
+	hasRecursion := hasRecursiveFields(t)
+	if !hasRecursion {
+		return buildStructSchema(t, ctx)
+	}
+
+	defName := generateDefName(t)
+	ctx.visited[t] = defName
+	nestedSchema := buildStructSchema(t, ctx)
+	defSchema := &tool.Schema{
+		Type:       nestedSchema.Type,
+		Properties: cloneProperties(nestedSchema.Properties),
+		Required:   cloneRequired(nestedSchema.Required),
+	}
+	ctx.defs[defName] = defSchema
+	if isRoot {
+		return &tool.Schema{
+			Type:       nestedSchema.Type,
+			Properties: cloneProperties(nestedSchema.Properties),
+			Required:   cloneRequired(nestedSchema.Required),
+		}
+	}
+
+	return schemaRef(defName)
 }

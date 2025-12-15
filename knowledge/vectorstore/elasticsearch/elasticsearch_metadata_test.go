@@ -11,12 +11,14 @@ package elasticsearch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
@@ -101,6 +103,27 @@ func TestVectorStore_GetMetadata(t *testing.T) {
 			wantErr: true,
 			errMsg:  "search failed",
 		},
+		{
+			name: "doc_builder_error_is_tolerated",
+			setupDocs: func(mc *mockClient) {
+				mc.SetSearchHits([]map[string]any{
+					{
+						"_source": map[string]any{
+							"id":      "doc1",
+							"name":    "Doc 1",
+							"content": "Content 1",
+						},
+					},
+				})
+			},
+			wantErr: false,
+			validate: func(
+				t *testing.T,
+				metadata map[string]vectorstore.DocumentMetadata,
+			) {
+				assert.NotNil(t, metadata)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -108,7 +131,14 @@ func TestVectorStore_GetMetadata(t *testing.T) {
 			mc := newMockClient()
 			mc.indexExists = true
 			tt.setupDocs(mc)
-			vs := newTestVectorStore(t, mc)
+			builder := func(json.RawMessage) (*document.Document, []float64, error) {
+				return nil, nil, errors.New("doc builder failed")
+			}
+			opts := []Option{}
+			if tt.name == "doc_builder_error_is_tolerated" {
+				opts = append(opts, WithDocBuilder(builder))
+			}
+			vs := newTestVectorStore(t, mc, opts...)
 
 			metadata, err := vs.GetMetadata(context.Background())
 

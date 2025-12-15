@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -29,9 +30,15 @@ const (
 	metadataKeyModelAvailable = "model_available"
 	// metadataKeyCheckFunctions is the key for check functions count in metadata.
 	metadataKeyCheckFunctions = "check_functions"
+	// metadataKeySkipRecentEnabled indicates whether skip recent logic is configured.
+	metadataKeySkipRecentEnabled = "skip_recent_enabled"
 )
 
 const (
+	// lastIncludedTsKey is the key for last included timestamp in summary.
+	// This key is used to store the last included timestamp in the session state.
+	lastIncludedTsKey = "summary:last_included_ts"
+
 	// conversationTextPlaceholder is the placeholder for conversation text.
 	conversationTextPlaceholder = "{conversation_text}"
 	// maxSummaryWordsPlaceholder is the placeholder for max summary words.
@@ -68,6 +75,11 @@ type sessionSummarizer struct {
 	prompt          string
 	checks          []Checker
 	maxSummaryWords int
+	skipRecentFunc  SkipRecentFunc
+
+	preHook          PreSummaryHook
+	postHook         PostSummaryHook
+	hookAbortOnError bool
 }
 
 // NewSummarizer creates a new session summarizer.
@@ -76,6 +88,7 @@ func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 		prompt:          "",          // Will be set after processing options.
 		checks:          []Checker{}, // No default checks - summarization only when explicitly configured.
 		maxSummaryWords: 0,           // 0 means no word limit.
+		skipRecentFunc:  nil,         // nil means no events are skipped.
 	}
 	s.model = m
 
@@ -114,11 +127,30 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		return "", fmt.Errorf("no events to summarize for session %s (events=0)", sess.ID)
 	}
 
-	// Extract conversation text from events. Use all events for summarization
-	// as the session service already handles incremental processing.
-	eventsToSummarize := sess.Events
+	// Extract conversation text from events. Use filtered events for summarization
+	// to skip recent events while ensuring proper context.
+	eventsToSummarize := s.filterEventsForSummary(sess.Events)
 
 	conversationText := s.extractConversationText(eventsToSummarize)
+	if s.preHook != nil {
+		hookCtx := &PreSummaryHookContext{
+			Ctx:     ctx,
+			Session: sess,
+			Events:  eventsToSummarize,
+			Text:    conversationText,
+		}
+		hookErr := s.preHook(hookCtx)
+		if hookErr != nil && s.hookAbortOnError {
+			return "", fmt.Errorf("pre-summary hook failed: %w", hookErr)
+		}
+		if hookErr == nil {
+			if hookCtx.Text != "" {
+				conversationText = hookCtx.Text
+			} else if len(hookCtx.Events) > 0 {
+				conversationText = s.extractConversationText(hookCtx.Events)
+			}
+		}
+	}
 	if conversationText == "" {
 		return "", fmt.Errorf("no conversation text extracted for session %s (events=%d)", sess.ID, len(eventsToSummarize))
 	}
@@ -131,7 +163,89 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		return "", fmt.Errorf("failed to generate summary for session %s (input_chars=%d)", sess.ID, len(conversationText))
 	}
 
+	s.recordLastIncludedTimestamp(sess, eventsToSummarize)
+
+	if s.postHook != nil {
+		hookCtx := &PostSummaryHookContext{
+			Ctx:     ctx,
+			Session: sess,
+			Summary: summaryText,
+		}
+		hookErr := s.postHook(hookCtx)
+		if hookErr != nil && s.hookAbortOnError {
+			return "", fmt.Errorf("post-summary hook failed: %w", hookErr)
+		}
+		if hookErr == nil && hookCtx.Summary != "" {
+			summaryText = hookCtx.Summary
+		}
+	}
+
 	return summaryText, nil
+}
+
+// recordLastIncludedTimestamp records the last included timestamp in the session state.
+func (s *sessionSummarizer) recordLastIncludedTimestamp(sess *session.Session, events []event.Event) {
+	if sess == nil || len(events) == 0 {
+		return
+	}
+	if sess.State == nil {
+		sess.State = make(session.StateMap)
+	}
+	last := events[len(events)-1].Timestamp.UTC()
+	sess.State[lastIncludedTsKey] = []byte(last.Format(time.RFC3339Nano))
+}
+
+// filterEventsForSummary filters events for summarization, excluding recent events
+// and ensuring at least one user message is included for context.
+func (s *sessionSummarizer) filterEventsForSummary(events []event.Event) []event.Event {
+	if s.skipRecentFunc == nil {
+		return events
+	}
+
+	skipCount := s.skipRecentFunc(events)
+	if skipCount <= 0 {
+		return events
+	}
+	if len(events) <= skipCount {
+		return []event.Event{}
+	}
+
+	filteredEvents := events[:len(events)-skipCount]
+
+	// Ensure the filtered events contain at least one user message for context.
+	for _, e := range filteredEvents {
+		if e.Author == authorUser && e.Response != nil &&
+			len(e.Response.Choices) > 0 &&
+			e.Response.Choices[0].Message.Content != "" {
+			// Found at least one user message, return all filtered events
+			return filteredEvents
+		}
+	}
+
+	// If no user message found in filtered events, return empty slice.
+	// This prevents generating summaries without proper context.
+	return []event.Event{}
+}
+
+// SetPrompt updates the summarizer's prompt dynamically.
+// The prompt must include the placeholder {conversation_text}, which will be
+// replaced with the extracted conversation when generating the summary.
+// If an empty prompt is provided, it will be ignored and the current prompt
+// will remain unchanged.
+func (s *sessionSummarizer) SetPrompt(prompt string) {
+	if prompt != "" {
+		s.prompt = prompt
+	}
+}
+
+// SetModel updates the summarizer's model dynamically.
+// This allows switching to different models at runtime based on different
+// scenarios or requirements. If nil is provided, it will be ignored and the
+// current model will remain unchanged.
+func (s *sessionSummarizer) SetModel(m model.Model) {
+	if m != nil {
+		s.model = m
+	}
 }
 
 // Metadata returns metadata about the summarizer configuration.
@@ -143,10 +257,11 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 		modelAvailable = true
 	}
 	return map[string]any{
-		metadataKeyModelName:       modelName,
-		metadataKeyMaxSummaryWords: s.maxSummaryWords,
-		metadataKeyModelAvailable:  modelAvailable,
-		metadataKeyCheckFunctions:  len(s.checks),
+		metadataKeyModelName:         modelName,
+		metadataKeyMaxSummaryWords:   s.maxSummaryWords,
+		metadataKeyModelAvailable:    modelAvailable,
+		metadataKeyCheckFunctions:    len(s.checks),
+		metadataKeySkipRecentEnabled: s.skipRecentFunc != nil,
 	}
 }
 

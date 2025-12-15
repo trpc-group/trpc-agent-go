@@ -1,20 +1,26 @@
 module trpc.group/trpc-go/trpc-agent-go/model/provider
 
-go 1.24.10
+go 1.24.1
+
+toolchain go1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic => ../../model/anthropic
 	trpc.group/trpc-go/trpc-agent-go/model/gemini => ../../model/gemini
+	trpc.group/trpc-go/trpc-agent-go/model/hunyuan => ../../model/hunyuan
+	trpc.group/trpc-go/trpc-agent-go/model/ollama => ../../model/ollama
 )
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.16.0
+	github.com/ollama/ollama v0.13.1
 	github.com/openai/openai-go v1.12.0
 	github.com/stretchr/testify v1.11.1
-	trpc.group/trpc-go/trpc-agent-go v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go v0.6.0
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-20251126064502-c8c2594d2519
-	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.0.0-20251203120347-0b4d62cb115d
+	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/model/ollama v0.0.0-20251201063627-880416fa9808
 )
 
 require (
@@ -27,6 +33,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.7 // indirect
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect

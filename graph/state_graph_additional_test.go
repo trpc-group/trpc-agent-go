@@ -13,10 +13,12 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -56,12 +58,40 @@ func (s *simpleToolSet) Tools(ctx context.Context) []tool.Tool {
 func (s *simpleToolSet) Close() error { return nil }
 func (s *simpleToolSet) Name() string { return s.name }
 
+// stubAgent is a minimal agent implementation used for subgraph tests.
+type stubAgent struct {
+	name string
+}
+
+func (a *stubAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	return nil, nil
+}
+
+func (a *stubAgent) Tools() []tool.Tool { return nil }
+
+func (a *stubAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *stubAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *stubAgent) FindSubAgent(name string) agent.Agent { return nil }
+
 func TestAddLLMNode_ToolSetInjection_And_ModelEventInput(t *testing.T) {
 	schema := MessagesStateSchema()
 	cm := &captureModel{}
 	sg := NewStateGraph(schema)
 	// Inject toolset via node options
-	sg.AddLLMNode("llm", cm, "inst", nil, WithToolSets([]tool.ToolSet{&simpleToolSet{"simple"}}))
+	sg.AddLLMNode(
+		"llm",
+		cm,
+		"inst",
+		nil,
+		WithToolSets([]tool.ToolSet{&simpleToolSet{"simple"}}),
+	)
 	// Ensure node type is LLM
 	n, ok := sg.graph.nodes["llm"]
 	require.True(t, ok)
@@ -345,4 +375,71 @@ func TestStateSchema_ApplyUpdate_SkipsInternalUnknownKeys(t *testing.T) {
 	require.Equal(t, 2, result["y"])
 	// Existing schema field remains unless overridden.
 	require.Equal(t, 1, result["x"])
+}
+
+func TestBuildAgentInvocationWithStateAndScope_ParentAndScope(t *testing.T) {
+	parent := agent.NewInvocation(
+		agent.WithInvocationEventFilterKey("root"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	target := &stubAgent{name: "child"}
+	inv := buildAgentInvocationWithStateAndScope(
+		ctx,
+		State{},
+		State{},
+		target,
+		"scope",
+	)
+
+	key := inv.GetEventFilterKey()
+	parts := strings.Split(key, event.FilterKeyDelimiter)
+	require.Len(t, parts, 3)
+	require.Equal(t, "root", parts[0])
+	require.Equal(t, "scope", parts[1])
+	require.NotEmpty(t, parts[2])
+}
+
+func TestBuildAgentInvocationWithStateAndScope_ParentNoScope(t *testing.T) {
+	parent := agent.NewInvocation(
+		agent.WithInvocationEventFilterKey("root"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	target := &stubAgent{name: "child"}
+	inv := buildAgentInvocationWithStateAndScope(
+		ctx,
+		State{},
+		State{},
+		target,
+		"",
+	)
+
+	key := inv.GetEventFilterKey()
+	parts := strings.Split(key, event.FilterKeyDelimiter)
+	require.Len(t, parts, 3)
+	require.Equal(t, "root", parts[0])
+	require.Equal(t, "child", parts[1])
+	require.NotEmpty(t, parts[2])
+}
+
+func TestBuildAgentInvocationWithStateAndScope_NoParentKey(t *testing.T) {
+	// Parent invocation without an explicit filter key.
+	parent := &agent.Invocation{}
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	target := &stubAgent{name: "child"}
+	inv := buildAgentInvocationWithStateAndScope(
+		ctx,
+		State{},
+		State{},
+		target,
+		"scope",
+	)
+
+	key := inv.GetEventFilterKey()
+	parts := strings.Split(key, event.FilterKeyDelimiter)
+	require.Len(t, parts, 2)
+	require.Equal(t, "scope", parts[0])
+	require.NotEmpty(t, parts[1])
 }
