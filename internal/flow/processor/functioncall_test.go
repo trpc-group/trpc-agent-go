@@ -424,6 +424,64 @@ func TestExecuteToolCallsInParallel(t *testing.T) {
 	assert.Equal(t, 2, len(evt.Choices))
 }
 
+// TestFunctionCallResponseProcessor_ToolIterationLimitEmitsFlowError verifies
+// that when the per-invocation MaxToolIterations limit is exceeded, the
+// processor emits a flow_error response event and marks the invocation as
+// ended without executing any tools.
+func TestFunctionCallResponseProcessor_ToolIterationLimitEmitsFlowError(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := &agent.Invocation{
+		InvocationID:      "inv-limit",
+		AgentName:         "test-agent",
+		MaxToolIterations: 1,
+	}
+
+	// Simulate one prior iteration within the limit so that the next
+	// tool-call response processed by the processor will overflow.
+	firstExceeded := inv.IncToolIteration()
+	require.False(t, firstExceeded, "first iteration should not exceed limit")
+
+	// Build a minimal tool-call response so IsToolCallResponse() returns true.
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   "call-1",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "dummy-tool",
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	eventChan := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, &model.Request{}, rsp, eventChan)
+
+	select {
+	case evt := <-eventChan:
+		require.NotNil(t, evt.Response, "expected response event")
+		require.NotNil(t, evt.Response.Error, "expected error in response")
+		require.Equal(t, model.ObjectTypeError, evt.Response.Object)
+		require.Equal(t, model.ErrorTypeFlowError, evt.Response.Error.Type)
+		require.Contains(t, evt.Response.Error.Message, "max tool iterations (1) exceeded")
+	default:
+		t.Fatalf("expected an event to be emitted when tool iteration limit is exceeded")
+	}
+
+	require.True(t, inv.EndInvocation, "invocation should be marked as ended")
+}
+
 func TestFlow_EnableParallelTools_ForcesSerialExecution(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

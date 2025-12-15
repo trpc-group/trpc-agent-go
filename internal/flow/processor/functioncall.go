@@ -108,6 +108,33 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		return
 	}
 
+	// Enforce optional per-invocation tool iteration limit. A "tool iteration"
+	// is defined as an assistant response that contains tool calls and reaches
+	// this processor. When the limit is not configured (<= 0), this check is a
+	// no-op and preserves existing behavior.
+	if invocation.IncToolIteration() {
+		// Mark the invocation as ended so the flow will not issue another LLM call.
+		invocation.EndInvocation = true
+
+		// Emit an error response event describing the limit breach instead of
+		// executing any tools. This makes the termination visible to callers
+		// while avoiding additional model or tool invocations.
+		resp := &model.Response{
+			Object: model.ObjectTypeError,
+			Error: &model.ResponseError{
+				Type:    model.ErrorTypeFlowError,
+				Message: fmt.Sprintf("max tool iterations (%d) exceeded", invocation.MaxToolIterations),
+			},
+			Done: true,
+		}
+		agent.EmitEvent(ctx, invocation, ch, event.NewResponseEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			resp,
+		))
+		return
+	}
+
 	functioncallResponseEvent, err := p.handleFunctionCallsAndSendEvent(ctx, invocation, rsp, req.Tools, ch)
 
 	// Option one: set invocation.EndInvocation is true, and stop next step.

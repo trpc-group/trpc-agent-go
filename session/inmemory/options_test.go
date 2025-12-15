@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -60,6 +61,8 @@ func (f *fakeOptionsSummarizer) ShouldSummarize(sess *session.Session) bool { re
 func (f *fakeOptionsSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
 	return "test summary", nil
 }
+func (f *fakeOptionsSummarizer) SetPrompt(prompt string)  {}
+func (f *fakeOptionsSummarizer) SetModel(m model.Model)   {}
 func (f *fakeOptionsSummarizer) Metadata() map[string]any { return map[string]any{"test": "data"} }
 
 func TestWithSummarizer(t *testing.T) {
