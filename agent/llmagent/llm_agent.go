@@ -498,6 +498,13 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	// Propagate structured output configuration into invocation and request path.
 	invocation.StructuredOutputType = a.structuredOutputType
 	invocation.StructuredOutput = a.structuredOutput
+
+	// Propagate per-agent safety limits into the invocation. These limits are
+	// evaluated by the Invocation helpers (IncLLMCallCount / IncToolIteration)
+	// and enforced at the flow layer. When the values are <= 0, the helpers
+	// treat them as "no limit", preserving existing behavior.
+	invocation.MaxLLMCalls = a.option.MaxLLMCalls
+	invocation.MaxToolIterations = a.option.MaxToolIterations
 }
 
 // wrapEventChannel wraps the event channel to apply after agent callbacks.

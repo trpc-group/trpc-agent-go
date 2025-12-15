@@ -108,6 +108,8 @@ func (l *recordingLogger) Fatalf(format string, args ...any) {
 type mockSummarizer interface {
 	ShouldSummarize(sess *session.Session) bool
 	Summarize(ctx context.Context, sess *session.Session) (string, error)
+	SetPrompt(prompt string)
+	SetModel(m model.Model)
 	Metadata() map[string]any
 }
 
@@ -2804,6 +2806,72 @@ func TestNewService_WithInstance_Success(t *testing.T) {
 	err = svc.Close()
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNewService_WithDSN_Success(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	var capturedConnString string
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		opts := &storage.ClientBuilderOpts{}
+		for _, opt := range builderOpts {
+			opt(opts)
+		}
+		capturedConnString = opts.ConnString
+		return &mockPostgresClient{db: db}, nil
+	})
+
+	dsn := "postgres://user:password@localhost:5432/mydb?sslmode=disable"
+	svc, err := NewService(
+		WithPostgresClientDSN(dsn),
+		WithSkipDBInit(true),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	assert.Equal(t, dsn, capturedConnString)
+
+	err = svc.Close()
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNewService_DSNPriority(t *testing.T) {
+	db, _, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	var capturedConnString string
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		opts := &storage.ClientBuilderOpts{}
+		for _, opt := range builderOpts {
+			opt(opts)
+		}
+		capturedConnString = opts.ConnString
+		return &mockPostgresClient{db: db}, nil
+	})
+
+	// DSN should take priority over host settings
+	dsn := "postgres://dsn-user:password@dsn-host:5432/dsndb"
+	svc, err := NewService(
+		WithPostgresClientDSN(dsn),
+		WithHost("other-host"),
+		WithPort(5433),
+		WithUser("other-user"),
+		WithSkipDBInit(true),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	assert.Equal(t, dsn, capturedConnString, "DSN should take priority over host settings")
+
+	_ = svc.Close()
 }
 
 func TestAppendEventHook(t *testing.T) {
