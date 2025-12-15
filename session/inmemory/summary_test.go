@@ -1060,6 +1060,8 @@ func (c *ctxCaptureSummarizer) Summarize(ctx context.Context, sess *session.Sess
 	return "captured-summary", nil
 }
 func (c *ctxCaptureSummarizer) Metadata() map[string]any { return map[string]any{} }
+func (c *ctxCaptureSummarizer) SetPrompt(prompt string)  {}
+func (c *ctxCaptureSummarizer) SetModel(m model.Model)   {}
 
 func TestMemoryService_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
 	captureSummarizer := &ctxCaptureSummarizer{done: make(chan struct{})}
