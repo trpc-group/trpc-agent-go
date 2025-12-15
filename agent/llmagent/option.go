@@ -47,6 +47,18 @@ const (
 	// TimelineFilterCurrentInvocation only includes messages within the current invocation session
 	// Suitable for scenarios requiring isolation between different invocation cycles in long-running sessions
 	TimelineFilterCurrentInvocation = processor.TimelineFilterCurrentInvocation
+
+	// ReasoningContentModeKeepAll keeps all reasoning_content in history.
+	// This is the default behavior for backward compatibility.
+	ReasoningContentModeKeepAll = processor.ReasoningContentModeKeepAll
+	// ReasoningContentModeDiscardPreviousTurns discards reasoning_content from
+	// messages that belong to previous request turns. Messages within the current
+	// request retain their reasoning_content (for tool call scenarios).
+	// This is the recommended mode for DeepSeek models.
+	ReasoningContentModeDiscardPreviousTurns = processor.ReasoningContentModeDiscardPreviousTurns
+	// ReasoningContentModeDiscardAll discards all reasoning_content from history.
+	// Use this for maximum bandwidth savings when reasoning history is not needed.
+	ReasoningContentModeDiscardAll = processor.ReasoningContentModeDiscardAll
 )
 
 // MessageFilterMode is the mode for filtering messages.
@@ -195,6 +207,11 @@ type Options struct {
 	SkillsRepository          skill.Repository
 	messageTimelineFilterMode string
 	messageBranchFilterMode   string
+
+	// ReasoningContentMode controls how reasoning_content is handled in
+	// multi-turn conversations. This is particularly important for DeepSeek
+	// models where reasoning_content should be discarded from previous turns.
+	ReasoningContentMode string
 
 	toolFilter tool.FilterFunc
 }
@@ -525,6 +542,21 @@ func WithMessageTimelineFilterMode(mode string) Option {
 func WithMessageBranchFilterMode(mode string) Option {
 	return func(opts *Options) {
 		opts.messageBranchFilterMode = mode
+	}
+}
+
+// WithReasoningContentMode controls how reasoning_content is handled in
+// multi-turn conversations. This is particularly important for DeepSeek models
+// where reasoning_content should be discarded from previous request turns.
+//
+// Available modes:
+//   - ReasoningContentModeKeepAll: Keep all reasoning_content (default).
+//   - ReasoningContentModeDiscardPreviousTurns: Discard reasoning_content from
+//     previous requests, keep for current request (recommended for DeepSeek).
+//   - ReasoningContentModeDiscardAll: Discard all reasoning_content from history.
+func WithReasoningContentMode(mode string) Option {
+	return func(opts *Options) {
+		opts.ReasoningContentMode = mode
 	}
 }
 

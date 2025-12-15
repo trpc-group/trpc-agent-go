@@ -49,9 +49,7 @@ func TestWithChannelBufferSize(t *testing.T) {
 			option := WithChannelBufferSize(tt.inputSize)
 			option(options)
 
-			if options.ChannelBufferSize != tt.wantBufSize {
-				t.Errorf("got buf size %d, want %d", options.ChannelBufferSize, tt.wantBufSize)
-			}
+			require.Equal(t, tt.wantBufSize, options.ChannelBufferSize)
 		})
 	}
 }
@@ -102,27 +100,20 @@ func TestWithMessageFilterMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.wantPanic {
-				defer func() {
-					if r := recover(); r == nil {
-						t.Error("Expected panic but did not get one")
-					}
-				}()
+				require.Panics(t, func() {
+					opt := WithMessageFilterMode(tt.inputMode)
+					opts := &Options{}
+					opt(opts)
+				})
+				return
 			}
 
 			opt := WithMessageFilterMode(tt.inputMode)
 			opts := &Options{}
 			opt(opts)
 
-			if !tt.wantPanic {
-				if opts.messageBranchFilterMode != tt.wantBranchFilterMode {
-					t.Errorf("BranchFilterMode got = %v, want %v",
-						opts.messageBranchFilterMode, tt.wantBranchFilterMode)
-				}
-				if opts.messageTimelineFilterMode != tt.wantTimelineFilterMode {
-					t.Errorf("TimelineFilterMode got = %v, want %v",
-						opts.messageTimelineFilterMode, tt.wantTimelineFilterMode)
-				}
-			}
+			require.Equal(t, tt.wantBranchFilterMode, opts.messageBranchFilterMode)
+			require.Equal(t, tt.wantTimelineFilterMode, opts.messageTimelineFilterMode)
 		})
 	}
 }
@@ -143,4 +134,38 @@ func TestWithMaxHistoryRuns(t *testing.T) {
 
 	WithMaxHistoryRuns(0)(opts)
 	require.Equal(t, 0, opts.MaxHistoryRuns)
+}
+
+func TestWithReasoningContentMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     string
+		wantMode string
+	}{
+		{
+			name:     "keep_all mode",
+			mode:     ReasoningContentModeKeepAll,
+			wantMode: ReasoningContentModeKeepAll,
+		},
+		{
+			name:     "discard_previous_turns mode",
+			mode:     ReasoningContentModeDiscardPreviousTurns,
+			wantMode: ReasoningContentModeDiscardPreviousTurns,
+		},
+		{
+			name:     "discard_all mode",
+			mode:     ReasoningContentModeDiscardAll,
+			wantMode: ReasoningContentModeDiscardAll,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &Options{}
+			opt := WithReasoningContentMode(tt.mode)
+			opt(opts)
+
+			require.Equal(t, tt.wantMode, opts.ReasoningContentMode)
+		})
+	}
 }
