@@ -2127,7 +2127,15 @@
 <span class="normal"><a href="#__codelineno-12-41">41</a></span>
 <span class="normal"><a href="#__codelineno-12-42">42</a></span>
 <span class="normal"><a href="#__codelineno-12-43">43</a></span>
-<span class="normal"><a href="#__codelineno-12-44">44</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="c1">// Invocation 是 Agent 执行流程的上下文对象，包含单次调用所需的全部信息</span>
+<span class="normal"><a href="#__codelineno-12-44">44</a></span>
+<span class="normal"><a href="#__codelineno-12-45">45</a></span>
+<span class="normal"><a href="#__codelineno-12-46">46</a></span>
+<span class="normal"><a href="#__codelineno-12-47">47</a></span>
+<span class="normal"><a href="#__codelineno-12-48">48</a></span>
+<span class="normal"><a href="#__codelineno-12-49">49</a></span>
+<span class="normal"><a href="#__codelineno-12-50">50</a></span>
+<span class="normal"><a href="#__codelineno-12-51">51</a></span>
+<span class="normal"><a href="#__codelineno-12-52">52</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="c1">// Invocation 是 Agent 执行流程的上下文对象，包含单次调用所需的全部信息</span>
 </span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Invocation</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">    </span><span class="c1">// Agent 指定要调用的 Agent 实例</span>
 </span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="w">    </span><span class="nx">Agent</span><span class="w"> </span><span class="nx">Agent</span>
@@ -2167,10 +2175,18 @@
 </span><span id="__span-12-38"><a id="__codelineno-12-38" name="__codelineno-12-38"></a><span class="w">    </span><span class="nx">eventFilterKey</span><span class="w"> </span><span class="kt">string</span>
 </span><span id="__span-12-39"><a id="__codelineno-12-39" name="__codelineno-12-39"></a><span class="w">    </span><span class="nx">parent</span><span class="w">         </span><span class="o">*</span><span class="nx">Invocation</span>
 </span><span id="__span-12-40"><a id="__codelineno-12-40" name="__codelineno-12-40"></a>
-</span><span id="__span-12-41"><a id="__codelineno-12-41" name="__codelineno-12-41"></a><span class="w">    </span><span class="c1">// 调用级别的状态（延迟初始化，通过 stateMu 保护并发）</span>
+</span><span id="__span-12-41"><a id="__codelineno-12-41" name="__codelineno-12-41"></a><span class="w">    </span><span class="c1">// 调用级状态（延迟初始化，通过 stateMu 保护并发）</span>
 </span><span id="__span-12-42"><a id="__codelineno-12-42" name="__codelineno-12-42"></a><span class="w">    </span><span class="nx">state</span><span class="w">   </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span>
 </span><span id="__span-12-43"><a id="__codelineno-12-43" name="__codelineno-12-43"></a><span class="w">    </span><span class="nx">stateMu</span><span class="w"> </span><span class="nx">sync</span><span class="p">.</span><span class="nx">RWMutex</span>
-</span><span id="__span-12-44"><a id="__codelineno-12-44" name="__codelineno-12-44"></a><span class="p">}</span>
+</span><span id="__span-12-44"><a id="__codelineno-12-44" name="__codelineno-12-44"></a>
+</span><span id="__span-12-45"><a id="__codelineno-12-45" name="__codelineno-12-45"></a><span class="w">    </span><span class="c1">// 可选的调用级安全限制（通常由 LLMAgent 在 setupInvocation 中设置）。</span>
+</span><span id="__span-12-46"><a id="__codelineno-12-46" name="__codelineno-12-46"></a><span class="w">    </span><span class="nx">MaxLLMCalls</span><span class="w">      </span><span class="kt">int</span>
+</span><span id="__span-12-47"><a id="__codelineno-12-47" name="__codelineno-12-47"></a><span class="w">    </span><span class="nx">MaxToolIterations</span><span class="w"> </span><span class="kt">int</span>
+</span><span id="__span-12-48"><a id="__codelineno-12-48" name="__codelineno-12-48"></a>
+</span><span id="__span-12-49"><a id="__codelineno-12-49" name="__codelineno-12-49"></a><span class="w">    </span><span class="c1">// 与 MaxLLMCalls / MaxToolIterations 配套使用的内部计数器。</span>
+</span><span id="__span-12-50"><a id="__codelineno-12-50" name="__codelineno-12-50"></a><span class="w">    </span><span class="nx">llmCallCount</span><span class="w">       </span><span class="kt">int</span>
+</span><span id="__span-12-51"><a id="__codelineno-12-51" name="__codelineno-12-51"></a><span class="w">    </span><span class="nx">toolIterationCount</span><span class="w"> </span><span class="kt">int</span>
+</span><span id="__span-12-52"><a id="__codelineno-12-52" name="__codelineno-12-52"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="invocation-state">Invocation State</h4>
 <p><code>Invocation</code> 提供了通用的状态存储机制，用于在单次调用的生命周期内共享数据。这对于 callbacks、middleware 或任何需要在 invocation 级别存储临时数据的场景都很有用。</p>
@@ -2592,7 +2608,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月8日 08:25:13 UTC">2025-12-08 08:25:13</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月15日 09:42:45 UTC">2025-12-15 09:42:45</span>
   </span>
 
     
