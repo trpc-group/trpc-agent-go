@@ -271,8 +271,8 @@ func (r *runner) selectAgent(
 		return ro.Agent, nil
 	}
 	agentName := r.defaultAgentName
-	if ro.AgentName != "" {
-		agentName = ro.AgentName
+	if ro.AgentByName != "" {
+		agentName = ro.AgentByName
 	}
 	if ag, ok := r.agents[agentName]; ok && ag != nil {
 		return ag, nil

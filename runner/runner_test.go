@@ -365,7 +365,7 @@ func TestRunner_Run_WithAgentNameRegistry(t *testing.T) {
 
 	ctx := context.Background()
 	msg := model.NewUserMessage("hello")
-	ch, err := r.Run(ctx, "user", "session", msg, agent.WithAgentName("alt"))
+	ch, err := r.Run(ctx, "user", "session", msg, agent.WithAgentByName("alt"))
 	require.NoError(t, err)
 
 	var events []*event.Event
@@ -398,7 +398,7 @@ func TestRunner_Run_WithAgentInstanceOverride(t *testing.T) {
 
 func TestRunner_Run_WithAgentNameNotFound(t *testing.T) {
 	r := NewRunner("test-app", &mockAgent{name: "default"}, WithSessionService(sessioninmemory.NewSessionService()))
-	ch, err := r.Run(context.Background(), "user", "session", model.NewUserMessage("hi"), agent.WithAgentName("missing"))
+	ch, err := r.Run(context.Background(), "user", "session", model.NewUserMessage("hi"), agent.WithAgentByName("missing"))
 	require.Error(t, err)
 	require.Nil(t, ch)
 }
