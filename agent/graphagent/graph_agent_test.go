@@ -412,6 +412,8 @@ func (s *stubSummarizer) ShouldSummarize(_ *session.Session) bool { return true 
 func (s *stubSummarizer) Summarize(_ context.Context, _ *session.Session) (string, error) {
 	return s.summary, nil
 }
+func (s *stubSummarizer) SetPrompt(prompt string)  {}
+func (s *stubSummarizer) SetModel(m model.Model)   {}
 func (s *stubSummarizer) Metadata() map[string]any { return nil }
 
 var _ summary.SessionSummarizer = (*stubSummarizer)(nil)

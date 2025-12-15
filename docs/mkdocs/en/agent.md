@@ -453,6 +453,14 @@ type Invocation struct {
     // Invocation-scoped state (lazy-init, thread-safe via stateMu).
     state   map[string]any
     stateMu sync.RWMutex
+
+    // Optional per-invocation safety limits (usually set by LLMAgent).
+    MaxLLMCalls      int
+    MaxToolIterations int
+
+    // Internal counters used to enforce MaxLLMCalls / MaxToolIterations.
+    llmCallCount       int
+    toolIterationCount int
 }
 ```
 

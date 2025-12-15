@@ -4600,3 +4600,95 @@ func TestWithTokenTailoringConfig(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildThinkingOption tests the buildThinkingOption method for different variants.
+func TestBuildThinkingOption(t *testing.T) {
+	trueVal := true
+	falseVal := false
+	thinkingTokens := 1024
+
+	tests := []struct {
+		name            string
+		variant         Variant
+		thinkingEnabled *bool
+		thinkingTokens  *int
+		wantKeys        []string
+		wantValues      []any
+	}{
+		{
+			name:            "DeepSeek variant with thinking enabled",
+			variant:         VariantDeepSeek,
+			thinkingEnabled: &trueVal,
+			wantKeys:        []string{"thinking"},
+			wantValues:      []any{map[string]string{"type": "enabled"}},
+		},
+		{
+			name:            "DeepSeek variant with thinking disabled",
+			variant:         VariantDeepSeek,
+			thinkingEnabled: &falseVal,
+			wantKeys:        []string{"thinking"},
+			wantValues:      []any{map[string]string{"type": "disabled"}},
+		},
+		{
+			name:            "DeepSeek variant with thinking tokens",
+			variant:         VariantDeepSeek,
+			thinkingEnabled: &trueVal,
+			thinkingTokens:  &thinkingTokens,
+			wantKeys:        []string{model.ThinkingTokensKey, "thinking"},
+			wantValues:      []any{1024, map[string]string{"type": "enabled"}},
+		},
+		{
+			name:            "OpenAI variant with thinking enabled",
+			variant:         VariantOpenAI,
+			thinkingEnabled: &trueVal,
+			wantKeys:        []string{model.ThinkingEnabledKey},
+			wantValues:      []any{true},
+		},
+		{
+			name:            "OpenAI variant with thinking disabled",
+			variant:         VariantOpenAI,
+			thinkingEnabled: &falseVal,
+			wantKeys:        []string{model.ThinkingEnabledKey},
+			wantValues:      []any{false},
+		},
+		{
+			name:            "Qwen variant with thinking enabled",
+			variant:         VariantQwen,
+			thinkingEnabled: &trueVal,
+			wantKeys:        []string{model.EnabledThinkingKey},
+			wantValues:      []any{true},
+		},
+		{
+			name:            "nil thinking enabled returns empty opts",
+			variant:         VariantDeepSeek,
+			thinkingEnabled: nil,
+			wantKeys:        nil,
+			wantValues:      nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Model{
+				variant:       tt.variant,
+				variantConfig: variantConfigs[tt.variant],
+			}
+
+			request := &model.Request{
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: tt.thinkingEnabled,
+					ThinkingTokens:  tt.thinkingTokens,
+				},
+			}
+
+			opts := m.buildThinkingOption(request)
+
+			if tt.wantKeys == nil {
+				assert.Empty(t, opts, "expected empty opts")
+				return
+			}
+
+			assert.Len(t, opts, len(tt.wantKeys), "expected %d opts", len(tt.wantKeys))
+		})
+	}
+}

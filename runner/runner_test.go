@@ -805,6 +805,49 @@ func TestEmitRunnerCompletion_AppendErrorStillEmits(t *testing.T) {
 	// Even though append failed internally, the completion event is still emitted.
 }
 
+func TestGraphCompletionNotPersistedAsMessage(t *testing.T) {
+	const (
+		appName   = "app"
+		userID    = "u"
+		sessionID = "s"
+		userMsg   = "hi"
+		stateKey  = "k"
+		stateVal  = "v"
+	)
+
+	svc := sessioninmemory.NewSessionService()
+	ag := &graphDoneAgent{
+		name:        "g",
+		delta:       map[string][]byte{stateKey: []byte(stateVal)},
+		withChoices: true,
+	}
+	r := NewRunner(appName, ag, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage(userMsg),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 2)
+	require.True(t, sess.Events[0].IsUserMessage())
+	require.Equal(t, model.ObjectTypeRunnerCompletion,
+		sess.Events[1].Object)
+}
+
 func TestPropagateGraphCompletion_NilStateValue(t *testing.T) {
 	// Call propagateGraphCompletion directly to cover the nil-value copy branch.
 	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
