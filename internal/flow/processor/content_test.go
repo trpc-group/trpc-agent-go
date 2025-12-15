@@ -1135,13 +1135,13 @@ func Test_toMap(t *testing.T) {
 func TestNewContentRequestProcessor(t *testing.T) {
 
 	defaultWant := &ContentRequestProcessor{
-		BranchFilterMode:              "prefix",
-		AddContextPrefix:              true,
-		PreserveSameBranch:            false,
-		TimelineFilterMode:            "all",
-		AddSessionSummary:             false,
-		SummarySeparateSystemMessage:  false,
-		MaxHistoryRuns:                0,
+		BranchFilterMode:             "prefix",
+		AddContextPrefix:             true,
+		PreserveSameBranch:           false,
+		TimelineFilterMode:           "all",
+		AddSessionSummary:            false,
+		SummarySeparateSystemMessage: false,
+		MaxHistoryRuns:               0,
 	}
 
 	tests := []struct {
@@ -1175,13 +1175,13 @@ func TestNewContentRequestProcessor(t *testing.T) {
 				WithBranchFilterMode("all"),
 			},
 			want: &ContentRequestProcessor{
-				BranchFilterMode:              "all",
-				AddContextPrefix:              false,
-				PreserveSameBranch:            false,
-				TimelineFilterMode:            TimelineFilterCurrentRequest,
-				AddSessionSummary:             false,
-				SummarySeparateSystemMessage:  false,
-				MaxHistoryRuns:                0,
+				BranchFilterMode:             "all",
+				AddContextPrefix:             false,
+				PreserveSameBranch:           false,
+				TimelineFilterMode:           TimelineFilterCurrentRequest,
+				AddSessionSummary:            false,
+				SummarySeparateSystemMessage: false,
+				MaxHistoryRuns:               0,
 			},
 		},
 
