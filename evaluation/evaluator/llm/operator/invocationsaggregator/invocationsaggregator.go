@@ -7,6 +7,7 @@
 //
 //
 
+// Package invocationsaggregator defines strategies to roll up per-invocation scores.
 package invocationsaggregator
 
 import (

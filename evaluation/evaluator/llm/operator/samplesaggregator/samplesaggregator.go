@@ -7,6 +7,7 @@
 //
 //
 
+// Package samplesaggregator merges multiple judge samples for a single invocation.
 package samplesaggregator
 
 import (

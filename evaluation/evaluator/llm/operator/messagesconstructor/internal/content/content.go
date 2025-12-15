@@ -7,6 +7,7 @@
 //
 //
 
+// Package content extracts and formats conversation artifacts for judge prompts.
 package content
 
 import (

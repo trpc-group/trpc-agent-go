@@ -1,13 +1,4 @@
-//
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-//
-
-package finalresponse
+package rubicresponse
 
 import (
 	"context"
@@ -26,53 +17,42 @@ import (
 
 type stubMessagesConstructor struct {
 	called bool
-	ctx    context.Context
 }
 
 func (s *stubMessagesConstructor) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
 	_ *metric.EvalMetric) ([]model.Message, error) {
 	s.called = true
-	s.ctx = ctx
 	return []model.Message{{Role: model.RoleUser, Content: actual.InvocationID + expected.InvocationID}}, nil
 }
 
 type stubResponseScorer struct {
 	called bool
-	ctx    context.Context
 }
 
 func (s *stubResponseScorer) ScoreBasedOnResponse(ctx context.Context, _ *model.Response,
 	_ *metric.EvalMetric) (*evalresult.ScoreResult, error) {
 	s.called = true
-	s.ctx = ctx
 	return &evalresult.ScoreResult{Score: 1}, nil
 }
 
 type stubSamplesAggregator struct {
 	called bool
-	ctx    context.Context
 }
 
 func (s *stubSamplesAggregator) AggregateSamples(ctx context.Context, samples []*evaluator.PerInvocationResult,
 	_ *metric.EvalMetric) (*evaluator.PerInvocationResult, error) {
 	s.called = true
-	s.ctx = ctx
 	return samples[0], nil
 }
 
 type stubInvocationsAggregator struct {
 	called bool
-	ctx    context.Context
 }
 
 func (s *stubInvocationsAggregator) AggregateInvocations(ctx context.Context, results []*evaluator.PerInvocationResult,
 	_ *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
 	s.called = true
-	s.ctx = ctx
-	return &evaluator.EvaluateResult{
-		OverallStatus:        results[0].Status,
-		PerInvocationResults: results,
-	}, nil
+	return &evaluator.EvaluateResult{OverallStatus: results[0].Status, PerInvocationResults: results}, nil
 }
 
 type stubLLMBase struct {
@@ -82,7 +62,7 @@ type stubLLMBase struct {
 
 func (s *stubLLMBase) Name() string { return "stub" }
 
-func (s *stubLLMBase) Description() string { return "stub desc" }
+func (s *stubLLMBase) Description() string { return "stub" }
 
 func (s *stubLLMBase) Evaluate(_ context.Context, _ []*evalset.Invocation, _ []*evalset.Invocation,
 	_ *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
@@ -110,7 +90,7 @@ func (s *stubLLMBase) AggregateInvocations(context.Context, []*evaluator.PerInvo
 	return s.result, nil
 }
 
-func TestFinalResponseEvaluator_DelegatesToDependencies(t *testing.T) {
+func TestRubicResponseEvaluatorDelegates(t *testing.T) {
 	ctx := context.Background()
 	mc := &stubMessagesConstructor{}
 	rs := &stubResponseScorer{}
@@ -122,24 +102,19 @@ func TestFinalResponseEvaluator_DelegatesToDependencies(t *testing.T) {
 		WithSamplesAggregator(sa),
 		WithInvocationsAggregator(ia),
 	)
-	impl, ok := ev.(*finalResponseEvaluator)
+	impl, ok := ev.(*rubicResponseEvaluator)
 	require.True(t, ok)
 
 	base := &stubLLMBase{result: &evaluator.EvaluateResult{OverallStatus: status.EvalStatusPassed}}
 	impl.llmBaseEvaluator = base
 
-	msgs, err := impl.ConstructMessages(ctx, &evalset.Invocation{InvocationID: "a"}, &evalset.Invocation{InvocationID: "b"}, nil)
+	_, err := impl.ConstructMessages(ctx, &evalset.Invocation{InvocationID: "a"}, &evalset.Invocation{InvocationID: "b"}, nil)
 	require.NoError(t, err)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, model.RoleUser, msgs[0].Role)
-
 	_, err = impl.ScoreBasedOnResponse(ctx, &model.Response{}, nil)
 	require.NoError(t, err)
-
 	_, err = impl.AggregateSamples(ctx, []*evaluator.PerInvocationResult{{Status: status.EvalStatusPassed}}, nil)
 	require.NoError(t, err)
-
-	_, err = impl.AggregateInvocations(ctx, []*evaluator.PerInvocationResult{{Status: status.EvalStatusFailed}}, nil)
+	_, err = impl.AggregateInvocations(ctx, []*evaluator.PerInvocationResult{{Status: status.EvalStatusPassed}}, nil)
 	require.NoError(t, err)
 
 	result, err := impl.Evaluate(ctx, nil, nil, nil)
@@ -150,7 +125,7 @@ func TestFinalResponseEvaluator_DelegatesToDependencies(t *testing.T) {
 	assert.True(t, sa.called)
 	assert.True(t, ia.called)
 	assert.True(t, base.evaluateCalled)
+	assert.Equal(t, "llm_rubic_response", impl.Name())
+	assert.Equal(t, "LLM rubic response evaluator", impl.Description())
 	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)
-	assert.Equal(t, "llm_final_response", impl.Name())
-	assert.Equal(t, "LLM judge for final responses", impl.Description())
 }

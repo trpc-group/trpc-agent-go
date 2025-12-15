@@ -16,6 +16,11 @@ import (
 	"fmt"
 )
 
+func init() {
+	gob.Register([]any{})
+	gob.Register(map[string]any{})
+}
+
 // Clone perform deepcopy on src.
 func Clone[T any](src *T) (*T, error) {
 	if src == nil {

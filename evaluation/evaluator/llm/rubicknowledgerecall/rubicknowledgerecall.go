@@ -6,6 +6,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
+// Package rubicknowledgerecall evaluates knowledge recall using LLM judges.
 package rubicknowledgerecall
 
 import (

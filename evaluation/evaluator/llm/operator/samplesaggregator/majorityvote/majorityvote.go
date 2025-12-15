@@ -7,6 +7,7 @@
 //
 //
 
+// Package majorityvote picks a representative sample based on vote counts.
 package majorityvote
 
 import (
@@ -22,11 +23,12 @@ import (
 type majorityVoteSamplesAggregator struct {
 }
 
+// majorityVoteSamplesAggregator picks the dominant sample based on pass or fail counts.
 func New() samplesaggregator.SamplesAggregator {
 	return &majorityVoteSamplesAggregator{}
 }
 
-// AggregateSamples resolves multiple judge samples to one invocation result.
+// AggregateSamples resolves multiple judge samples to one invocation result, preferring the majority status.
 func (s *majorityVoteSamplesAggregator) AggregateSamples(ctx context.Context, samples []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.PerInvocationResult, error) {
 	if len(samples) == 0 {
@@ -50,6 +52,7 @@ func (s *majorityVoteSamplesAggregator) AggregateSamples(ctx context.Context, sa
 	if len(positiveResults) > len(negativeResults) {
 		return positiveResults[0], nil
 	} else {
+		// On tie or majority fail, return a representative failing sample to preserve conservative scoring.
 		return negativeResults[0], nil
 	}
 }

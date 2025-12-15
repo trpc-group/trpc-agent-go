@@ -7,13 +7,14 @@
 //
 //
 
+// Package rubicresponse builds judge prompts for rubric-based evaluations.
 package rubicresponse
 
 import (
 	"bytes"
 	"context"
 	"fmt"
-	"html/template"
+	"text/template"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"

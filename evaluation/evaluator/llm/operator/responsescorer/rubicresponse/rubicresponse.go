@@ -7,6 +7,7 @@
 //
 //
 
+// Package rubicresponse scores rubric-graded judge outputs.
 package rubicresponse
 
 import (

@@ -7,6 +7,7 @@
 //
 //
 
+// Package average aggregates invocation results using arithmetic mean.
 package average
 
 import (
@@ -21,11 +22,12 @@ import (
 type averageInvocationsAggregator struct {
 }
 
+// averageInvocationsAggregator computes the mean score across evaluated invocations.
 func New() invocationsaggregator.InvocationsAggregator {
 	return &averageInvocationsAggregator{}
 }
 
-// AggregateInvocations summarizes per-invocation results into an overall score.
+// AggregateInvocations summarizes per-invocation results into an overall score while skipping not-evaluated entries.
 func (a *averageInvocationsAggregator) AggregateInvocations(ctx context.Context,
 	results []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {

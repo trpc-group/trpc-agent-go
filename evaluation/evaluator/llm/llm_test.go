@@ -45,7 +45,7 @@ func (f *fakeLLMEvaluator) Evaluate(_ context.Context, _ []*evalset.Invocation, 
 	return nil, nil
 }
 
-func (f *fakeLLMEvaluator) ConstructMessages(actual, expected *evalset.Invocation,
+func (f *fakeLLMEvaluator) ConstructMessages(_ context.Context, actual, expected *evalset.Invocation,
 	_ *metric.EvalMetric) ([]model.Message, error) {
 	f.constructMessagesCalled++
 	return []model.Message{{
@@ -54,14 +54,14 @@ func (f *fakeLLMEvaluator) ConstructMessages(actual, expected *evalset.Invocatio
 	}}, nil
 }
 
-func (f *fakeLLMEvaluator) ScoreBasedOnResponse(_ *model.Response,
+func (f *fakeLLMEvaluator) ScoreBasedOnResponse(_ context.Context, _ *model.Response,
 	_ *metric.EvalMetric) (*evalresult.ScoreResult, error) {
 	f.scoreBasedOnResponseCalls++
 	score := 0.9
 	return &evalresult.ScoreResult{Score: score}, nil
 }
 
-func (f *fakeLLMEvaluator) AggregateSamples(samples []*evaluator.PerInvocationResult,
+func (f *fakeLLMEvaluator) AggregateSamples(_ context.Context, samples []*evaluator.PerInvocationResult,
 	_ *metric.EvalMetric) (*evaluator.PerInvocationResult, error) {
 	f.aggregateSamplesCalls++
 	f.receivedSamples = samples
@@ -71,7 +71,7 @@ func (f *fakeLLMEvaluator) AggregateSamples(samples []*evaluator.PerInvocationRe
 	}, nil
 }
 
-func (f *fakeLLMEvaluator) AggregateInvocations(results []*evaluator.PerInvocationResult,
+func (f *fakeLLMEvaluator) AggregateInvocations(_ context.Context, results []*evaluator.PerInvocationResult,
 	_ *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
 	f.aggregateInvocationsCalls++
 	f.receivedInvocations = results
@@ -188,7 +188,7 @@ func (s *scriptedLLMEvaluator) Evaluate(context.Context, []*evalset.Invocation, 
 	return nil, nil
 }
 
-func (s *scriptedLLMEvaluator) ConstructMessages(*evalset.Invocation, *evalset.Invocation,
+func (s *scriptedLLMEvaluator) ConstructMessages(context.Context, *evalset.Invocation, *evalset.Invocation,
 	*metric.EvalMetric) ([]model.Message, error) {
 	if s.constructErr != nil {
 		return nil, s.constructErr
@@ -196,7 +196,7 @@ func (s *scriptedLLMEvaluator) ConstructMessages(*evalset.Invocation, *evalset.I
 	return []model.Message{{Role: "user", Content: "prompt"}}, nil
 }
 
-func (s *scriptedLLMEvaluator) ScoreBasedOnResponse(*model.Response,
+func (s *scriptedLLMEvaluator) ScoreBasedOnResponse(context.Context, *model.Response,
 	*metric.EvalMetric) (*evalresult.ScoreResult, error) {
 	if s.scoreErr != nil {
 		return nil, s.scoreErr
@@ -205,7 +205,7 @@ func (s *scriptedLLMEvaluator) ScoreBasedOnResponse(*model.Response,
 	return &evalresult.ScoreResult{Score: score}, nil
 }
 
-func (s *scriptedLLMEvaluator) AggregateSamples(samples []*evaluator.PerInvocationResult,
+func (s *scriptedLLMEvaluator) AggregateSamples(_ context.Context, samples []*evaluator.PerInvocationResult,
 	_ *metric.EvalMetric) (*evaluator.PerInvocationResult, error) {
 	if s.aggregateSamplesErr != nil {
 		return nil, s.aggregateSamplesErr
@@ -218,7 +218,7 @@ func (s *scriptedLLMEvaluator) AggregateSamples(samples []*evaluator.PerInvocati
 	}, nil
 }
 
-func (s *scriptedLLMEvaluator) AggregateInvocations(results []*evaluator.PerInvocationResult,
+func (s *scriptedLLMEvaluator) AggregateInvocations(_ context.Context, results []*evaluator.PerInvocationResult,
 	_ *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
 	return &evaluator.EvaluateResult{
 		OverallScore:         results[0].Score,

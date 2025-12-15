@@ -198,6 +198,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		result, err := s.evaluateMetric(ctx, evalMetric, inferenceResult.Inferences, evalCase.Conversation)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
+				// Skip metrics whose evaluator or artifacts are intentionally absent.
 				continue
 			}
 			return nil, fmt.Errorf("run evaluation for metric %s: %w", evalMetric.MetricName, err)

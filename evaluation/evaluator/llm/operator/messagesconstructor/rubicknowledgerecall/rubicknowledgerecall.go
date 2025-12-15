@@ -6,14 +6,15 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
+// Package rubicknowledgerecall builds judge prompts for knowledge recall evaluation.
 package rubicknowledgerecall
 
 import (
 	"bytes"
 	"context"
 	"fmt"
-	"html/template"
 	"log"
+	"text/template"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"

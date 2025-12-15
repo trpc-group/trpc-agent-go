@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -43,6 +45,7 @@ func ExtractKnowledgeRecall(intermediateData *evalset.IntermediateData) (string,
 		if kResp == nil {
 			continue
 		}
+		kResp = sanitizeKnowledgeSearchResponse(kResp)
 		payload, err := json.Marshal(kResp)
 		if err != nil {
 			return "", fmt.Errorf("marshal tool %s response: %w", resp.Name, err)
@@ -53,6 +56,7 @@ func ExtractKnowledgeRecall(intermediateData *evalset.IntermediateData) (string,
 	return builder.String(), nil
 }
 
+// parseKnowledgeSearchResponse converts a function response payload into a typed knowledge search response.
 func parseKnowledgeSearchResponse(resp *genai.FunctionResponse) (*tool.KnowledgeSearchResponse, error) {
 	if resp == nil || resp.Response == nil {
 		return nil, nil
@@ -66,4 +70,53 @@ func parseKnowledgeSearchResponse(resp *genai.FunctionResponse) (*tool.Knowledge
 		return nil, err
 	}
 	return &res, nil
+}
+
+// sanitizeKnowledgeSearchResponse cleans text fields while preserving original structure.
+func sanitizeKnowledgeSearchResponse(resp *tool.KnowledgeSearchResponse) *tool.KnowledgeSearchResponse {
+	if resp == nil {
+		return nil
+	}
+	clean := *resp
+	if len(resp.Documents) == 0 {
+		return &clean
+	}
+	clean.Documents = make([]*tool.DocumentResult, len(resp.Documents))
+	for i, doc := range resp.Documents {
+		if doc == nil {
+			continue
+		}
+		cp := *doc
+		cp.Text = sanitizeKnowledgeText(cp.Text)
+		clean.Documents[i] = &cp
+	}
+	return &clean
+}
+
+// sanitizeKnowledgeText guards against non-text payloads by pruning invalid or mostly non-printable content.
+func sanitizeKnowledgeText(text string) string {
+	if text == "" {
+		return text
+	}
+	if !utf8.ValidString(text) {
+		return "[non-text content omitted]"
+	}
+	var (
+		printable int
+		total     int
+	)
+	for _, r := range text {
+		total++
+		if unicode.IsPrint(r) || r == '\n' || r == '\t' || r == '\r' {
+			printable++
+		}
+	}
+	if total == 0 {
+		return text
+	}
+	ratio := float64(printable) / float64(total)
+	if ratio < 0.6 {
+		return "[non-text content omitted]"
+	}
+	return text
 }

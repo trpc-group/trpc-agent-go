@@ -44,3 +44,26 @@ func TestCloneNilInput(t *testing.T) {
 	assert.Nil(t, clone)
 	assert.Error(t, err)
 }
+
+type dynamic struct {
+	Payload map[string]any
+}
+
+func TestCloneWithInterfaces(t *testing.T) {
+
+	src := &dynamic{
+		Payload: map[string]any{
+			"docs": []any{
+				map[string]any{"text": "t1", "score": 1},
+			},
+			"flag": true,
+		},
+	}
+	dst, err := Clone(src)
+	assert.NoError(t, err)
+	assert.NotSame(t, src, dst)
+	assert.Equal(t, src.Payload["flag"], dst.Payload["flag"])
+	// mutate clone and ensure original unchanged
+	dst.Payload["flag"] = false
+	assert.Equal(t, true, src.Payload["flag"])
+}

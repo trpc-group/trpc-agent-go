@@ -7,6 +7,7 @@
 //
 //
 
+// Package rubicresponse evaluates agent outputs using rubric-based LLM judges.
 package rubicresponse
 
 import (

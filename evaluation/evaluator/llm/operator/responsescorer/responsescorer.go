@@ -7,6 +7,7 @@
 //
 //
 
+// Package responsescorer extracts numeric scores from judge model outputs.
 package responsescorer
 
 import (
@@ -18,6 +19,7 @@ import (
 )
 
 type ResponseScorer interface {
+	// ResponseScorer converts judge feedback into a numeric score for a single metric.
 	// ScoreBasedOnResponse extracts a score from the judge response.
 	ScoreBasedOnResponse(ctx context.Context,
 		resp *model.Response,

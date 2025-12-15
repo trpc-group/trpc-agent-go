@@ -7,6 +7,7 @@
 //
 //
 
+// Package finalresponse converts judge feedback into validity scores for final responses.
 package finalresponse
 
 import (

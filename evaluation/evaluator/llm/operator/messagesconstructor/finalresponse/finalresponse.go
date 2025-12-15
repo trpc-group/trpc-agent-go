@@ -7,6 +7,7 @@
 //
 //
 
+// Package finalresponse assembles judge prompts for evaluating final agent outputs.
 package finalresponse
 
 import (
