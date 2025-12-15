@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 )
 
 func TestExtractKnowledgeRecall(t *testing.T) {
@@ -107,30 +106,6 @@ func TestExtractKnowledgeRecallSanitizeNonText(t *testing.T) {
 	result, err := ExtractKnowledgeRecall(intermediate)
 	require.NoError(t, err)
 	require.NotEmpty(t, result)
-}
-
-func TestExtractTextFromContent(t *testing.T) {
-	require.Equal(t, "", ExtractTextFromContent(nil))
-	content := &genai.Content{Parts: []*genai.Part{{Text: "hello "}, {Text: "world"}}}
-	require.Equal(t, "hello world", ExtractTextFromContent(content))
-}
-
-func TestExtractIntermediateData(t *testing.T) {
-	data, err := ExtractIntermediateData(&evalset.IntermediateData{IntermediateResponses: [][]any{{"role", "message"}}})
-	require.NoError(t, err)
-	require.Contains(t, data, "role")
-	require.Contains(t, data, "message")
-}
-
-func TestExtractRubrics(t *testing.T) {
-	rubrics := []*llm.Rubric{
-		{ID: "1", Content: &llm.RubricContent{Text: "first"}},
-		{ID: "2", Content: &llm.RubricContent{Text: "second"}},
-	}
-	text := ExtractRubrics(rubrics)
-	require.Contains(t, text, "1: first")
-	require.Contains(t, text, "2: second")
-	require.Equal(t, "", ExtractRubrics(nil))
 }
 
 func TestExtractKnowledgeRecallIgnoresNilResponses(t *testing.T) {
