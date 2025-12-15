@@ -2876,12 +2876,12 @@ func TestContentRequestProcessor_GetIncrementMessagesWithReasoningContent(t *tes
 	}
 
 	tests := []struct {
-		name                  string
-		mode                  string
-		events                []event.Event
-		currentRequestID      string
-		expectedReasonings    []string
-		expectedMessageCount  int
+		name                 string
+		mode                 string
+		events               []event.Event
+		currentRequestID     string
+		expectedReasonings   []string
+		expectedMessageCount int
 	}{
 		{
 			name: "keep_all preserves all reasoning",
