@@ -249,8 +249,8 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	contentProcessor := processor.NewContentRequestProcessor(
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
-		processor.WithStandaloneSessionSummary(
-			options.StandaloneSessionSummary),
+		processor.WithSummarySeparateSystemMessage(
+			options.SummarySeparateSystemMessage),
 		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),
 		processor.WithPreserveSameBranch(options.PreserveSameBranch),
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),

@@ -57,10 +57,10 @@ type ContentRequestProcessor struct {
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message to the request if available.
 	AddSessionSummary bool
-	// StandaloneSessionSummary adds the session summary as a standalone
+	// SummarySeparateSystemMessage adds the session summary as a standalone
 	// system message instead of merging it into the first system message.
 	// When enabled, this automatically enables AddSessionSummary.
-	StandaloneSessionSummary bool
+	SummarySeparateSystemMessage bool
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
@@ -111,12 +111,12 @@ func WithAddSessionSummary(add bool) ContentOption {
 	}
 }
 
-// WithStandaloneSessionSummary adds the session summary as a standalone
+// WithSummarySeparateSystemMessage adds the session summary as a standalone
 // system message instead of merging it into the first system message.
 // This automatically enables AddSessionSummary.
-func WithStandaloneSessionSummary(standalone bool) ContentOption {
+func WithSummarySeparateSystemMessage(standalone bool) ContentOption {
 	return func(p *ContentRequestProcessor) {
-		p.StandaloneSessionSummary = standalone
+		p.SummarySeparateSystemMessage = standalone
 		if standalone {
 			p.AddSessionSummary = true // Automatically enable summary.
 		}
@@ -208,8 +208,9 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			// Add session summary as a system message if enabled and available.
 			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
 			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
-				// Check if we should add summary (either merged or as separate message)
-				if p.AddSessionSummary || p.StandaloneSessionSummary {
+				// Check if we should add summary (either merged or as separate message).
+				// Note: SummarySeparateSystemMessage automatically enables AddSessionSummary.
+				if p.AddSessionSummary || p.SummarySeparateSystemMessage {
 					p.insertSummaryMessage(req, msg)
 				}
 				summaryUpdatedAt = updatedAt
@@ -270,7 +271,7 @@ func (p *ContentRequestProcessor) insertSummaryMessage(
 		return
 	}
 	// Add summary as standalone message after system message, or merge into system message.
-	if p.StandaloneSessionSummary {
+	if p.SummarySeparateSystemMessage {
 		insertIdx := systemMsgIndex + 1
 		req.Messages = append(req.Messages, model.Message{})
 		copy(req.Messages[insertIdx+1:], req.Messages[insertIdx:])

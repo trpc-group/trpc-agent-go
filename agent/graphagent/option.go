@@ -76,9 +76,9 @@ type Options struct {
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message when available.
 	AddSessionSummary bool
-	// StandaloneSessionSummary adds the session summary as a standalone
+	// SummarySeparateSystemMessage adds the session summary as a standalone
 	// system message instead of merging it into the first system message.
-	StandaloneSessionSummary bool
+	SummarySeparateSystemMessage bool
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
@@ -146,12 +146,12 @@ func WithAddSessionSummary(addSummary bool) Option {
 	}
 }
 
-// WithStandaloneSessionSummary adds the session summary as a standalone
+// WithSummarySeparateSystemMessage adds the session summary as a standalone
 // system message instead of merging it into the first system message.
 // This automatically enables AddSessionSummary.
-func WithStandaloneSessionSummary(standalone bool) Option {
+func WithSummarySeparateSystemMessage(standalone bool) Option {
 	return func(opts *Options) {
-		opts.StandaloneSessionSummary = standalone
+		opts.SummarySeparateSystemMessage = standalone
 		if standalone {
 			opts.AddSessionSummary = true // Automatically enable summary
 		}

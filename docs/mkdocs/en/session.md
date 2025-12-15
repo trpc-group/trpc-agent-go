@@ -77,8 +77,8 @@ func main() {
         llmagent.WithModel(llm),
         llmagent.WithInstruction("You are a helpful assistant"),
         llmagent.WithAddSessionSummary(true), // Optional: enable summary injection to context (merges into first system message)
-        // OR: add summary as a standalone system message
-        // llmagent.WithStandaloneSessionSummary(true), // Automatically enables AddSessionSummary
+        // OR: add summary as a separate system message
+        // llmagent.WithSummarySeparateSystemMessage(true), // Automatically enables AddSessionSummary
         // Note: WithAddSessionSummary(true) ignores WithMaxHistoryRuns configuration
         // Summary includes all history, incremental events fully retained
     )
@@ -284,7 +284,7 @@ fully retained.
 **Summary Injection Options:**
 
 - `WithAddSessionSummary(true)`: Merges summary into the first system message (default behavior)
-- `WithStandaloneSessionSummary(true)`: Adds summary as a standalone system message after the first system message
+- `WithSummarySeparateSystemMessage(true)`: Adds summary as a standalone system message after the first system message
 
 For detailed configuration and advanced usage, see the
 [Session Summary](#session-summary) section.

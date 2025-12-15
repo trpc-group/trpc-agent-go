@@ -78,7 +78,7 @@ func main() {
         llmagent.WithInstruction("你是一个智能助手"),
         llmagent.WithAddSessionSummary(true), // 可选：启用摘要注入到上下文 (合并到第一条 system 消息)
         // 或：将摘要作为独立的 system 消息
-        // llmagent.WithStandaloneSessionSummary(true), // 自动启用 AddSessionSummary
+        // llmagent.WithSummarySeparateSystemMessage(true), // 自动启用 AddSessionSummary
         // 注意：WithAddSessionSummary(true) 时会忽略 WithMaxHistoryRuns 配置
         // 摘要会包含所有历史，增量事件会完整保留
     )
@@ -278,7 +278,7 @@ summarizer := summary.NewSummarizer(
 **摘要注入选项：**
 
 - `WithAddSessionSummary(true)`：将摘要合并到第一条 system 消息中（默认行为）
-- `WithStandaloneSessionSummary(true)`：将摘要作为独立的 system 消息插入到第一条 system 消息之后
+- `WithSummarySeparateSystemMessage(true)`：将摘要作为独立的 system 消息插入到第一条 system 消息之后
 
 详细配置和高级用法请参见 [会话摘要](#会话摘要) 章节。
 
