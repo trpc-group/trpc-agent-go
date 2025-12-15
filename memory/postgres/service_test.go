@@ -821,15 +821,20 @@ func setupMockService(t *testing.T, db *sql.DB, mock sqlmock.Sqlmock, opts ...Se
 	}
 
 	if !skipDBInit {
-		// Mock table creation
+		// Mock DDL privilege check.
+		mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
+			WithArgs("public").
+			WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+
+		// Mock table creation.
 		mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
-		// Mock index creation (3 indexes)
+		// Mock index creation (3 indexes).
 		mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 
-		// Mock schema verification queries - default to public schema
-		// Mock table exists query
+		// Mock schema verification queries - default to public schema.
+		// Mock table exists query.
 		mock.ExpectQuery(`SELECT EXISTS \(
 			SELECT FROM information_schema.tables
 			WHERE table_schema = \$1
@@ -923,21 +928,26 @@ func TestNewService_WithHost(t *testing.T) {
 	})
 	defer storage.SetClientBuilder(originalBuilder)
 
-	// Mock table and index creation
+	// Mock DDL privilege check.
+	mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+
+	// Mock table and index creation.
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 
-	// Mock schema verification queries for public schema
-	// Mock table exists query
+	// Mock schema verification queries for public schema.
+	// Mock table exists query.
 	mock.ExpectQuery(`SELECT EXISTS \(
 		SELECT FROM information_schema.tables
 		WHERE table_schema = \$1
 		AND table_name = \$2
 	\)`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
-	// Mock columns query - match expected schema
+	// Mock columns query - match expected schema.
 	mock.ExpectQuery(`SELECT column_name, data_type, is_nullable
 		FROM information_schema.columns
 		WHERE table_schema = \$1
@@ -951,7 +961,7 @@ func TestNewService_WithHost(t *testing.T) {
 		AddRow("updated_at", "timestamp without time zone", "NO").
 		AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-	// Mock indexes query - match expected indexes
+	// Mock indexes query - match expected indexes.
 	mock.ExpectQuery(`SELECT indexname
 		FROM pg_indexes
 		WHERE schemaname = \$1
@@ -978,6 +988,11 @@ func TestNewService_InitDBError(t *testing.T) {
 		return client, nil
 	})
 	defer storage.SetClientBuilder(originalBuilder)
+
+	// Mock DDL privilege check.
+	mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
 
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnError(fmt.Errorf("table creation failed"))
 
@@ -1473,13 +1488,18 @@ func TestNewService_ConnectionSettingsPriority(t *testing.T) {
 		storage.WithClientConnString("postgres://localhost:5432/testdb"),
 	)
 
+	// Mock DDL privilege check.
+	mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 
-	// Mock schema verification queries for public schema
-	// Mock table exists query
+	// Mock schema verification queries for public schema.
+	// Mock table exists query.
 	mock.ExpectQuery(`SELECT EXISTS \(
 		SELECT FROM information_schema.tables
 		WHERE table_schema = \$1
@@ -1920,21 +1940,26 @@ func TestNewService_WithSchema(t *testing.T) {
 	})
 	defer storage.SetClientBuilder(originalBuilder)
 
-	// Mock table and index creation with schema
+	// Mock DDL privilege check.
+	mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
+		WithArgs("test_schema").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+
+	// Mock table and index creation with schema.
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS.*test_schema.memories").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 
-	// Mock schema verification queries for test_schema
-	// Mock table exists query
+	// Mock schema verification queries for test_schema.
+	// Mock table exists query.
 	mock.ExpectQuery(`SELECT EXISTS \(
 		SELECT FROM information_schema.tables
 		WHERE table_schema = \$1
 		AND table_name = \$2
 	\)`).WithArgs("test_schema", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
-	// Mock columns query - match expected schema
+	// Mock columns query - match expected schema.
 	mock.ExpectQuery(`SELECT column_name, data_type, is_nullable
 		FROM information_schema.columns
 		WHERE table_schema = \$1
@@ -1948,7 +1973,7 @@ func TestNewService_WithSchema(t *testing.T) {
 		AddRow("updated_at", "timestamp without time zone", "NO").
 		AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-	// Mock indexes query - match expected indexes
+	// Mock indexes query - match expected indexes.
 	mock.ExpectQuery(`SELECT indexname
 		FROM pg_indexes
 		WHERE schemaname = \$1
@@ -1983,9 +2008,14 @@ func TestInitDB_IndexCreationError(t *testing.T) {
 	})
 	defer storage.SetClientBuilder(originalBuilder)
 
-	// Mock table creation success
+	// Mock DDL privilege check.
+	mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+
+	// Mock table creation success.
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
-	// Mock first index creation error
+	// Mock first index creation error.
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnError(fmt.Errorf("index creation failed"))
 
 	_, err := NewService(
@@ -2011,21 +2041,26 @@ func TestService_WithSchema(t *testing.T) {
 	})
 	defer storage.SetClientBuilder(originalBuilder)
 
-	// Mock table and index creation
+	// Mock DDL privilege check.
+	mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
+		WithArgs("test_schema").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+
+	// Mock table and index creation.
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS.*test_schema.memories").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 
-	// Mock schema verification queries for test_schema
-	// Mock table exists query
+	// Mock schema verification queries for test_schema.
+	// Mock table exists query.
 	mock.ExpectQuery(`SELECT EXISTS \(
 		SELECT FROM information_schema.tables
 		WHERE table_schema = \$1
 		AND table_name = \$2
 	\)`).WithArgs("test_schema", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
-	// Mock columns query - match expected schema
+	// Mock columns query - match expected schema.
 	mock.ExpectQuery(`SELECT column_name, data_type, is_nullable
 		FROM information_schema.columns
 		WHERE table_schema = \$1
@@ -2039,7 +2074,7 @@ func TestService_WithSchema(t *testing.T) {
 		AddRow("updated_at", "timestamp without time zone", "NO").
 		AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-	// Mock indexes query - match expected indexes
+	// Mock indexes query - match expected indexes.
 	mock.ExpectQuery(`SELECT indexname
 		FROM pg_indexes
 		WHERE schemaname = \$1
@@ -2053,7 +2088,7 @@ func TestService_WithSchema(t *testing.T) {
 		WithPort(5432),
 		WithDatabase("testdb"),
 		WithSchema("test_schema"),
-		WithMemoryLimit(0), // Disable memory limit to avoid COUNT query
+		WithMemoryLimit(0), // Disable memory limit to avoid COUNT query.
 	)
 	require.NoError(t, err)
 	defer service.Close()
@@ -2061,7 +2096,7 @@ func TestService_WithSchema(t *testing.T) {
 	ctx := context.Background()
 	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
 
-	// Test AddMemory with schema-qualified table name
+	// Test AddMemory with schema-qualified table name.
 	mock.ExpectExec("INSERT INTO.*test_schema.memories").WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err = service.AddMemory(ctx, userKey, "test memory", []string{"topic1"})
@@ -2376,4 +2411,182 @@ func TestSchemaVerificationErrors(t *testing.T) {
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
+}
+
+// Test checkDDLPrivilege function.
+func TestCheckDDLPrivilege(t *testing.T) {
+	t.Run("has privilege on public schema", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true))
+		require.NoError(t, err)
+
+		// Mock DDL privilege check - has privilege.
+		mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
+			WithArgs("public").
+			WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+
+		hasPrivilege, err := service.checkDDLPrivilege(context.Background())
+		require.NoError(t, err)
+		assert.True(t, hasPrivilege)
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("has privilege on custom schema", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true), WithSchema("custom_schema"))
+		require.NoError(t, err)
+
+		// Mock DDL privilege check - has privilege.
+		mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
+			WithArgs("custom_schema").
+			WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+
+		hasPrivilege, err := service.checkDDLPrivilege(context.Background())
+		require.NoError(t, err)
+		assert.True(t, hasPrivilege)
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("no privilege - returns false", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true))
+		require.NoError(t, err)
+
+		// Mock DDL privilege check - no privilege.
+		mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
+			WithArgs("public").
+			WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(false))
+
+		hasPrivilege, err := service.checkDDLPrivilege(context.Background())
+		require.NoError(t, err)
+		assert.False(t, hasPrivilege)
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("query error - returns error", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true))
+		require.NoError(t, err)
+
+		// Mock DDL privilege check - query error.
+		mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
+			WithArgs("public").
+			WillReturnError(fmt.Errorf("connection refused"))
+
+		hasPrivilege, err := service.checkDDLPrivilege(context.Background())
+		require.Error(t, err)
+		assert.False(t, hasPrivilege)
+		assert.Contains(t, err.Error(), "check DDL privilege")
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+// Test initDB panics when has DDL privilege but schema verification fails.
+func TestInitDB_PanicOnSchemaVerificationWithDDLPrivilege(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return client, nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	service, err := NewService(WithSkipDBInit(true))
+	require.NoError(t, err)
+
+	// Mock DDL privilege check - has privilege.
+	mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+
+	// Mock table creation.
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	// Mock index creation.
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock table exists query - table does not exist (schema verification fails).
+	mock.ExpectQuery(`SELECT EXISTS \(`).
+		WithArgs("public", "memories").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	// Should panic because has DDL privilege but schema verification fails.
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "expected panic when has DDL privilege but schema verification fails")
+		assert.Contains(t, fmt.Sprintf("%v", r), "schema verification failed with DDL privilege")
+	}()
+
+	_ = service.initDB(context.Background())
+}
+
+// Test initDB skips DDL operations when user lacks CREATE privilege.
+func TestInitDB_SkipDDLWhenNoDDLPrivilege(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return client, nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	service, err := NewService(WithSkipDBInit(true))
+	require.NoError(t, err)
+
+	// Mock DDL privilege check - no privilege.
+	mock.ExpectQuery(`SELECT has_schema_privilege\(\$1, 'CREATE'\)`).
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(false))
+
+	// No CREATE TABLE or CREATE INDEX should be expected because we skip DDL.
+
+	err = service.initDB(context.Background())
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
 }

@@ -100,14 +100,46 @@ func buildCreateIndexSQL(schema, tableName, indexSuffix, template string) string
 	return sql
 }
 
+// checkDDLPrivilege checks if the current user has DDL (CREATE) privilege on the schema.
+func (s *Service) checkDDLPrivilege(ctx context.Context) (bool, error) {
+	schemaName := s.opts.schema
+	if schemaName == "" {
+		schemaName = "public"
+	}
+
+	var hasPrivilege bool
+	err := s.db.Query(ctx, func(rows *sql.Rows) error {
+		if rows.Next() {
+			return rows.Scan(&hasPrivilege)
+		}
+		return nil
+	}, `SELECT has_schema_privilege($1, 'CREATE')`, schemaName)
+
+	if err != nil {
+		return false, fmt.Errorf("check DDL privilege on schema %s failed: %w", schemaName, err)
+	}
+	return hasPrivilege, nil
+}
+
 // initDB initializes the database schema.
 func (s *Service) initDB(ctx context.Context) error {
 	log.Info("initializing postgres memory database schema...")
 
-	// Use base table name from opts (before schema prefix is applied)
+	// Check DDL privilege before proceeding.
+	hasDDLPrivilege, err := s.checkDDLPrivilege(ctx)
+	if err != nil {
+		return err
+	}
+	// Skip DDL operations if user lacks CREATE privilege on the schema.
+	if !hasDDLPrivilege {
+		log.Warn("skipping DDL operations: no CREATE privilege on schema")
+		return nil
+	}
+
+	// Use base table name from opts (before schema prefix is applied).
 	baseTableName := s.opts.tableName
 
-	// Create table
+	// Create table.
 	tableSQL := buildCreateTableSQL(s.opts.schema, baseTableName, sqlCreateMemoriesTable)
 	fullTableName := sqldb.BuildTableNameWithSchema(s.opts.schema, "", baseTableName)
 	if _, err := s.db.ExecContext(ctx, tableSQL); err != nil {
@@ -115,14 +147,14 @@ func (s *Service) initDB(ctx context.Context) error {
 	}
 	log.Infof("created table: %s", fullTableName)
 
-	// Index suffix constants for memories table indexes
+	// Index suffix constants for memories table indexes.
 	const (
 		indexSuffixAppUser   = "app_user"
 		indexSuffixUpdatedAt = "updated_at"
 		indexSuffixDeletedAt = "deleted_at"
 	)
 
-	// Create indexes
+	// Create indexes.
 	indexes := []struct {
 		suffix   string
 		template string
@@ -140,9 +172,9 @@ func (s *Service) initDB(ctx context.Context) error {
 		log.Infof("created index: %s on table %s", idx.suffix, fullTableName)
 	}
 
-	// Verify schema
+	// Verify schema. Panic if schema verification fails (user has DDL privilege here).
 	if err := s.verifySchema(ctx); err != nil {
-		return fmt.Errorf("schema verification failed: %w", err)
+		panic(fmt.Sprintf("schema verification failed with DDL privilege: %v", err))
 	}
 
 	log.Info("postgres memory database schema initialized successfully")
