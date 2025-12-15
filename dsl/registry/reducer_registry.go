@@ -52,7 +52,7 @@ func (r *ReducerRegistry) registerBuiltinReducers() {
 }
 
 // Register registers a reducer with the given name.
-// The name should be descriptive and follow snake_case convention (e.g., "append_map_slice", "int_sum").
+// The name should be descriptive and follow snake_case convention (e.g., "my_custom_reducer").
 func (r *ReducerRegistry) Register(name string, reducer graph.StateReducer) error {
 	if name == "" {
 		return fmt.Errorf("reducer name cannot be empty")

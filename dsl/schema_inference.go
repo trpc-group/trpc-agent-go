@@ -5,6 +5,8 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
+
 package dsl
 
 import (
@@ -542,10 +544,10 @@ type parameterInfo struct {
 	Reducer     string
 	Required    bool
 	DefaultFunc func() any
-	Sources     []string          // Track which components use this parameter
-	Kind        string            // High-level kind for front-end: string/number/boolean/object/array/opaque
-	SchemaRef   string            // Optional logical schema identifier (for well-known types)
-	JSONSchema  map[string]any    // Optional inline JSON Schema for complex fields (e.g., output_parsed)
+	Sources     []string       // Track which components use this parameter
+	Kind        string         // High-level kind for front-end: string/number/boolean/object/array/opaque
+	SchemaRef   string         // Optional logical schema identifier (for well-known types)
+	JSONSchema  map[string]any // Optional inline JSON Schema for complex fields (e.g., output_parsed)
 }
 
 // addParameter adds a parameter to the parameter map.
@@ -643,14 +645,12 @@ func inferReducerFromType(typeStr string) string {
 	switch typeStr {
 	case "[]string":
 		return "string_slice"
+	case "[]any", "[]interface{}":
+		return "append"
 	case "[]model.Message":
 		return "message"
-	case "[]map[string]any":
-		return "append_map_slice"
 	case "map[string]any", "map[string]interface{}":
 		return "merge"
-	case "int":
-		return "int_sum"
 	default:
 		return "default"
 	}
@@ -671,6 +671,8 @@ func inferGoType(typeStr string) reflect.Type {
 		return reflect.TypeOf([]string{})
 	case "[]int":
 		return reflect.TypeOf([]int{})
+	case "[]any", "[]interface{}":
+		return reflect.TypeOf([]any{})
 	case "[]model.Message":
 		return reflect.TypeOf([]model.Message{})
 	case "map[string]any", "map[string]interface{}":
@@ -736,7 +738,6 @@ func goTypeForStateVariableKind(kind string) (reflect.Type, string) {
 		return reflect.TypeOf(""), "opaque"
 	}
 }
-
 
 // getReducer returns the appropriate StateReducer for a reducer name.
 // It first tries to resolve from the ReducerRegistry, then falls back to hardcoded built-in reducers.
