@@ -1795,7 +1795,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 
 	for i, tc := range config.ToolCalls {
 		i, tc := i, tc
-		runCtx := agent.CloneContextForGoroutine(ctx)
+		runCtx := agent.CloneContext(ctx)
 		go func(ctx context.Context) {
 			defer wg.Done()
 			msg, err := executeSingleToolCall(ctx, singleToolCallConfig{

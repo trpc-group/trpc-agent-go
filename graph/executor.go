@@ -214,7 +214,7 @@ func (e *Executor) Execute(
 	// Create event channel.
 	eventChan := make(chan *event.Event, e.channelBufferSize)
 	// Start execution in a goroutine.
-	runCtx := agent.CloneContextForGoroutine(ctx)
+	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -1085,7 +1085,7 @@ func (e *Executor) executeStep(
 	results := make(chan error, len(tasks))
 
 	for _, t := range tasks {
-		runCtx := agent.CloneContextForGoroutine(ctx)
+		runCtx := agent.CloneContext(ctx)
 		wg.Add(1)
 		go func(ctx context.Context, t *Task) {
 			defer wg.Done()

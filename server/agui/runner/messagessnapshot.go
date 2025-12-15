@@ -63,7 +63,7 @@ func (r *runner) MessagesSnapshot(ctx context.Context,
 		enableTrack: false,
 	}
 	events := make(chan aguievents.Event)
-	runCtx := agent.CloneContextForGoroutine(ctx)
+	runCtx := agent.CloneContext(ctx)
 	go r.messagesSnapshot(runCtx, input, events)
 	return events, nil
 }

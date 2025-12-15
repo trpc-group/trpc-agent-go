@@ -134,7 +134,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		return nil, fmt.Errorf("session is already running: %v", input.key)
 	}
 	events := make(chan aguievents.Event)
-	runCtx := agent.CloneContextForGoroutine(ctx)
+	runCtx := agent.CloneContext(ctx)
 	go r.run(runCtx, input, events)
 	return events, nil
 }

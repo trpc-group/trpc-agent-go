@@ -510,7 +510,7 @@ func (a *LLMAgent) wrapEventChannel(
 	// Create a new channel with the same capacity as the original channel
 	wrappedChan := make(chan *event.Event, cap(originalChan))
 
-	runCtx := agent.CloneContextForGoroutine(ctx)
+	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
 		tokenUsage := &itelemetry.TokenUsage{}

@@ -16,22 +16,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCloneContextForGoroutine_Default(t *testing.T) {
+func TestCloneContext_Default(t *testing.T) {
 	ctx := context.WithValue(context.Background(), "k", "v")
-	require.Same(t, ctx, CloneContextForGoroutine(ctx))
+	require.Same(t, ctx, CloneContext(ctx))
 }
 
-func TestCloneContextForGoroutine_NilContext(t *testing.T) {
-	require.Nil(t, CloneContextForGoroutine(nil))
+func TestCloneContext_NilContext(t *testing.T) {
+	require.Nil(t, CloneContext(nil))
 }
 
-func TestCloneContextForGoroutine_NilStoredCloner(t *testing.T) {
+func TestCloneContext_NilStoredCloner(t *testing.T) {
 	t.Cleanup(func() { SetGoroutineContextCloner(nil) })
 
 	goroutineContextCloner.Store(GoroutineContextCloner(nil))
 
 	ctx := context.WithValue(context.Background(), "k", "v")
-	require.Same(t, ctx, CloneContextForGoroutine(ctx))
+	require.Same(t, ctx, CloneContext(ctx))
 }
 
 func TestSetGoroutineContextCloner(t *testing.T) {
@@ -42,7 +42,7 @@ func TestSetGoroutineContextCloner(t *testing.T) {
 	SetGoroutineContextCloner(func(ctx context.Context) context.Context {
 		return context.WithValue(ctx, "x", "y")
 	})
-	cloned := CloneContextForGoroutine(ctx)
+	cloned := CloneContext(ctx)
 	require.NotSame(t, ctx, cloned)
 	require.Equal(t, "v", cloned.Value("k"))
 	require.Equal(t, "y", cloned.Value("x"))

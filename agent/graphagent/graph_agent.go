@@ -80,7 +80,7 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	// Setup invocation.
 	ga.setupInvocation(invocation)
 	out := make(chan *event.Event, ga.channelBufferSize)
-	runCtx := agent.CloneContextForGoroutine(ctx)
+	runCtx := agent.CloneContext(ctx)
 	go ga.runWithBarrier(runCtx, invocation, out)
 	return out, nil
 }
@@ -290,7 +290,7 @@ func (ga *GraphAgent) wrapEventChannel(
 	originalChan <-chan *event.Event,
 ) <-chan *event.Event {
 	wrappedChan := make(chan *event.Event, ga.channelBufferSize)
-	runCtx := agent.CloneContextForGoroutine(ctx)
+	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(wrappedChan)
 		var fullRespEvent *event.Event

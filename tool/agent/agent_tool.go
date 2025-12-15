@@ -202,7 +202,7 @@ func (at *Tool) wrapWithCompletion(ctx context.Context, inv *agent.Invocation, s
 		return src
 	}
 	out := make(chan *event.Event)
-	runCtx := agent.CloneContextForGoroutine(ctx)
+	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(out)
 		for evt := range src {
@@ -274,7 +274,7 @@ func (at *Tool) collectResponse(evCh <-chan *event.Event) (string, error) {
 func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
 	stream := tool.NewStream(64)
 
-	runCtx := agent.CloneContextForGoroutine(ctx)
+	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer stream.Writer.Close()
 

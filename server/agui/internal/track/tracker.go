@@ -196,7 +196,7 @@ func (t *tracker) getSessionState(ctx context.Context, key session.Key) *session
 	t.sessionStates[key] = state
 	if t.flushInterval > 0 {
 		state.done = make(chan struct{})
-		flushCtx := agent.CloneContextForGoroutine(ctx)
+		flushCtx := agent.CloneContext(ctx)
 		go t.flushPeriodically(flushCtx, key, state)
 	}
 	return state

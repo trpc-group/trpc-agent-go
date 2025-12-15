@@ -14,9 +14,11 @@ import (
 	"sync/atomic"
 )
 
-// GoroutineContextCloner clones a context before it is used by a new goroutine.
+// GoroutineContextCloner clones a context before it is used by a new
+// goroutine.
 //
-// This hook lets integrations (for example, Tencent Remote Procedure Call (tRPC))
+// This hook lets integrations (for example, Tencent Remote Procedure Call
+// (tRPC))
 // isolate per-goroutine state stored inside context values (such as message
 // metadata) while still preserving cancellation and deadlines.
 type GoroutineContextCloner func(context.Context) context.Context
@@ -27,7 +29,8 @@ func init() {
 	goroutineContextCloner.Store(GoroutineContextCloner(identityContext))
 }
 
-// SetGoroutineContextCloner configures how contexts are cloned for goroutines.
+// SetGoroutineContextCloner configures how contexts are cloned for
+// goroutines.
 //
 // Passing nil resets the cloner to the identity function.
 func SetGoroutineContextCloner(cloner GoroutineContextCloner) {
@@ -37,10 +40,10 @@ func SetGoroutineContextCloner(cloner GoroutineContextCloner) {
 	goroutineContextCloner.Store(cloner)
 }
 
-// CloneContextForGoroutine returns a context safe to use inside a new goroutine.
+// CloneContext returns a context safe to use inside a new goroutine.
 //
 // By default, it returns the input context unchanged.
-func CloneContextForGoroutine(ctx context.Context) context.Context {
+func CloneContext(ctx context.Context) context.Context {
 	if ctx == nil {
 		return nil
 	}
@@ -49,6 +52,14 @@ func CloneContextForGoroutine(ctx context.Context) context.Context {
 		return ctx
 	}
 	return cloner(ctx)
+}
+
+// CloneContextForGoroutine returns a context safe to use inside a new
+// goroutine.
+//
+// Deprecated: use CloneContext.
+func CloneContextForGoroutine(ctx context.Context) context.Context {
+	return CloneContext(ctx)
 }
 
 func identityContext(ctx context.Context) context.Context { return ctx }

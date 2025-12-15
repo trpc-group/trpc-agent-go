@@ -135,7 +135,7 @@ func (a *ParallelAgent) startSubAgents(
 
 	for i, subAgent := range a.subAgents {
 		wg.Add(1)
-		runCtx := agent.CloneContextForGoroutine(ctx)
+		runCtx := agent.CloneContext(ctx)
 		go func(ctx context.Context, idx int, sa agent.Agent) {
 			defer wg.Done()
 			// Recover from panics in sub-agent execution to prevent
@@ -229,7 +229,7 @@ func (a *ParallelAgent) Run(
 ) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, a.channelBufferSize)
 
-	runCtx := agent.CloneContextForGoroutine(ctx)
+	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(eventChan)
 		a.executeParallelRun(ctx, invocation, eventChan)
@@ -282,7 +282,7 @@ func (a *ParallelAgent) mergeEventStreams(
 			continue
 		}
 
-		runCtx := agent.CloneContextForGoroutine(ctx)
+		runCtx := agent.CloneContext(ctx)
 		wg.Add(1)
 		go func(ctx context.Context, inputChan <-chan *event.Event) {
 			defer wg.Done()

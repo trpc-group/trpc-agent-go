@@ -239,7 +239,7 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 		return nil, fmt.Errorf("event converter not set")
 	}
 	eventChan := make(chan *event.Event, r.streamingBufSize)
-	runCtx := agent.CloneContextForGoroutine(ctx)
+	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(eventChan)
 		r.executeStreaming(ctx, invocation, eventChan)
@@ -381,7 +381,7 @@ func (r *A2AAgent) emitFinalEvent(
 // runNonStreaming handles non-streaming A2A communication
 func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, defaultNonStreamingChannelSize)
-	runCtx := agent.CloneContextForGoroutine(ctx)
+	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(eventChan)
 
@@ -440,7 +440,7 @@ func (r *A2AAgent) wrapEventChannelWithTelemetry(
 ) <-chan *event.Event {
 	wrappedChan := make(chan *event.Event, cap(originalChan))
 
-	runCtx := agent.CloneContextForGoroutine(ctx)
+	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
 		defer func() {
