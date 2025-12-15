@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS session_states (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Session states table';
 
 -- Lookup index on (app_name, user_id, session_id, deleted_at)
+-- Using regular index; uniqueness is enforced at application level
 CREATE INDEX idx_session_states_lookup
 ON session_states(app_name, user_id, session_id, deleted_at);
 
@@ -95,6 +96,7 @@ CREATE TABLE IF NOT EXISTS session_summaries (
 COMMENT='Session summaries table';
 
 -- Lookup index on (app_name, user_id, session_id, deleted_at)
+-- Using regular index; uniqueness is enforced at application level
 CREATE INDEX idx_session_summaries_lookup
 ON session_summaries(app_name, user_id, session_id, deleted_at);
 
@@ -119,6 +121,7 @@ CREATE TABLE IF NOT EXISTS app_states (
 COMMENT='Application states table';
 
 -- Lookup index on (app_name, key, deleted_at)
+-- Using regular index; uniqueness is enforced at application level
 CREATE INDEX idx_app_states_lookup
 ON app_states(app_name, `key`, deleted_at);
 
@@ -144,6 +147,7 @@ CREATE TABLE IF NOT EXISTS user_states (
 COMMENT='User states table';
 
 -- Lookup index on (app_name, user_id, key, deleted_at)
+-- Using regular index; uniqueness is enforced at application level
 CREATE INDEX idx_user_states_lookup
 ON user_states(app_name, user_id, `key`, deleted_at);
 

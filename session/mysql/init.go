@@ -11,6 +11,7 @@ package mysql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -178,6 +179,111 @@ type indexDefinition struct {
 	template string
 }
 
+// tableColumn represents a table column definition for schema verification
+type tableColumn struct {
+	name     string
+	dataType string
+	nullable bool
+}
+
+// tableIndex represents a table index definition for schema verification
+type tableIndex struct {
+	table   string   // Base table name (without prefix) like "session_states"
+	suffix  string   // Index suffix like "unique_active", "lookup", "expires"
+	columns []string // Expected columns in the index
+}
+
+// expectedSchema defines the expected schema for each table
+var expectedSchema = map[string]struct {
+	columns []tableColumn
+	indexes []tableIndex
+}{
+	sqldb.TableNameSessionStates: {
+		columns: []tableColumn{
+			{"id", "bigint", false},
+			{"app_name", "varchar", false},
+			{"user_id", "varchar", false},
+			{"session_id", "varchar", false},
+			{"state", "json", true},
+			{"created_at", "timestamp", false},
+			{"updated_at", "timestamp", false},
+			{"expires_at", "timestamp", true},
+			{"deleted_at", "timestamp", true},
+		},
+		indexes: []tableIndex{
+			{sqldb.TableNameSessionStates, sqldb.IndexSuffixLookup, []string{"app_name", "user_id", "session_id", "deleted_at"}},
+			{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+		},
+	},
+	sqldb.TableNameSessionEvents: {
+		columns: []tableColumn{
+			{"id", "bigint", false},
+			{"app_name", "varchar", false},
+			{"user_id", "varchar", false},
+			{"session_id", "varchar", false},
+			{"event", "json", false},
+			{"created_at", "timestamp", false},
+			{"updated_at", "timestamp", false},
+			{"expires_at", "timestamp", true},
+			{"deleted_at", "timestamp", true},
+		},
+		indexes: []tableIndex{
+			{sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookup, []string{"app_name", "user_id", "session_id", "created_at"}},
+			{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+		},
+	},
+	sqldb.TableNameSessionSummaries: {
+		columns: []tableColumn{
+			{"id", "bigint", false},
+			{"app_name", "varchar", false},
+			{"user_id", "varchar", false},
+			{"session_id", "varchar", false},
+			{"filter_key", "varchar", false},
+			{"summary", "json", true},
+			{"updated_at", "timestamp", false},
+			{"expires_at", "timestamp", true},
+			{"deleted_at", "timestamp", true},
+		},
+		indexes: []tableIndex{
+			{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixLookup, []string{"app_name", "user_id", "session_id", "deleted_at"}},
+			{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+		},
+	},
+	sqldb.TableNameAppStates: {
+		columns: []tableColumn{
+			{"id", "bigint", false},
+			{"app_name", "varchar", false},
+			{"key", "varchar", false},
+			{"value", "text", true},
+			{"created_at", "timestamp", false},
+			{"updated_at", "timestamp", false},
+			{"expires_at", "timestamp", true},
+			{"deleted_at", "timestamp", true},
+		},
+		indexes: []tableIndex{
+			{sqldb.TableNameAppStates, sqldb.IndexSuffixLookup, []string{"app_name", "key", "deleted_at"}},
+			{sqldb.TableNameAppStates, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+		},
+	},
+	sqldb.TableNameUserStates: {
+		columns: []tableColumn{
+			{"id", "bigint", false},
+			{"app_name", "varchar", false},
+			{"user_id", "varchar", false},
+			{"key", "varchar", false},
+			{"value", "text", true},
+			{"created_at", "timestamp", false},
+			{"updated_at", "timestamp", false},
+			{"expires_at", "timestamp", true},
+			{"deleted_at", "timestamp", true},
+		},
+		indexes: []tableIndex{
+			{sqldb.TableNameUserStates, sqldb.IndexSuffixLookup, []string{"app_name", "user_id", "key", "deleted_at"}},
+			{sqldb.TableNameUserStates, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+		},
+	},
+}
+
 // Global table definitions
 var tableDefs = []tableDefinition{
 	{sqldb.TableNameSessionStates, sqlCreateSessionStatesTable},
@@ -208,10 +314,7 @@ var indexDefs = []indexDefinition{
 
 // initDB initializes the database schema.
 func (s *Service) initDB(ctx context.Context) error {
-	log.InfoContext(
-		ctx,
-		"initializing mysql session database schema...",
-	)
+	log.InfoContext(ctx, "initializing mysql session database schema...")
 
 	// Create tables
 	for _, tableDef := range tableDefs {
@@ -221,11 +324,7 @@ func (s *Service) initDB(ctx context.Context) error {
 		if _, err := s.mysqlClient.Exec(ctx, sql); err != nil {
 			return fmt.Errorf("create table %s failed: %w", fullTableName, err)
 		}
-		log.InfofContext(
-			ctx,
-			"created table: %s",
-			fullTableName,
-		)
+		log.InfofContext(ctx, "created table: %s", fullTableName)
 	}
 
 	// Create indexes
@@ -250,27 +349,189 @@ func (s *Service) initDB(ctx context.Context) error {
 				)
 			}
 			// Index already exists, log and continue.
-			log.InfofContext(
-				ctx,
-				"index %s already exists on table %s, skipping",
-				indexName,
-				fullTableName,
-			)
+			log.InfofContext(ctx, "index %s already exists on table %s, skipping", indexName, fullTableName)
 		} else {
-			log.InfofContext(
-				ctx,
-				"created index: %s on table %s",
-				indexName,
-				fullTableName,
-			)
+			log.InfofContext(ctx, "created index: %s on table %s", indexName, fullTableName)
 		}
 	}
 
-	log.InfoContext(
-		ctx,
-		"mysql session database schema initialized successfully",
-	)
+	// Verify schema
+	if err := s.verifySchema(ctx); err != nil {
+		return fmt.Errorf("schema verification failed: %w", err)
+	}
+
+	log.InfoContext(ctx, "mysql session database schema initialized successfully")
 	return nil
+}
+
+// verifySchema verifies that the database schema matches expectations.
+func (s *Service) verifySchema(ctx context.Context) error {
+	for tableName, schema := range expectedSchema {
+		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, tableName)
+
+		// Check if table exists
+		exists, err := s.tableExists(ctx, fullTableName)
+		if err != nil {
+			return fmt.Errorf("check table %s existence failed: %w", fullTableName, err)
+		}
+		if !exists {
+			return fmt.Errorf("table %s does not exist", fullTableName)
+		}
+
+		// Verify columns
+		if err := s.verifyColumns(ctx, fullTableName, schema.columns); err != nil {
+			return fmt.Errorf("verify columns for table %s failed: %w", fullTableName, err)
+		}
+
+		// Verify indexes (non-fatal, just log warnings)
+		if err := s.verifyIndexes(ctx, fullTableName, schema.indexes); err != nil {
+			log.WarnfContext(ctx, "verify indexes for table %s failed (non-fatal): %v", fullTableName, err)
+		}
+	}
+
+	return nil
+}
+
+// tableExists checks if a table exists in the database.
+func (s *Service) tableExists(ctx context.Context, tableName string) (bool, error) {
+	var count int
+	err := s.mysqlClient.QueryRow(ctx,
+		[]any{&count},
+		`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?`,
+		tableName)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// verifyColumns verifies that table columns match expectations.
+func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedColumns []tableColumn) error {
+	// Get actual columns from database
+	actualColumns := make(map[string]tableColumn)
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var name, dataType, isNullable string
+		if err := rows.Scan(&name, &dataType, &isNullable); err != nil {
+			return err
+		}
+		actualColumns[name] = tableColumn{
+			name:     name,
+			dataType: dataType,
+			nullable: isNullable == "YES",
+		}
+		return nil
+	}, `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
+		FROM information_schema.columns
+		WHERE table_schema = DATABASE()
+		AND table_name = ?
+		ORDER BY ORDINAL_POSITION`, tableName)
+
+	if err != nil {
+		return fmt.Errorf("query columns failed: %w", err)
+	}
+
+	// Check each expected column
+	for _, expected := range expectedColumns {
+		actual, exists := actualColumns[expected.name]
+		if !exists {
+			return fmt.Errorf("column %s.%s is missing", tableName, expected.name)
+		}
+
+		// Check data type
+		if actual.dataType != expected.dataType {
+			return fmt.Errorf("column %s.%s has type %s, expected %s",
+				tableName, expected.name, actual.dataType, expected.dataType)
+		}
+
+		// Check nullable
+		if actual.nullable != expected.nullable {
+			return fmt.Errorf("column %s.%s nullable mismatch: got %v, expected %v",
+				tableName, expected.name, actual.nullable, expected.nullable)
+		}
+	}
+
+	return nil
+}
+
+// verifyIndexes verifies that table indexes exist.
+func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expectedIndexes []tableIndex) error {
+	// Build map of expected index names
+	expectedIndexNames := make(map[string]bool)
+	for _, expected := range expectedIndexes {
+		expectedIndexName := sqldb.BuildIndexName(s.opts.tablePrefix, expected.table, expected.suffix)
+		expectedIndexNames[expectedIndexName] = true
+	}
+
+	// Get actual indexes from database
+	actualIndexes := make(map[string][]string)
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var indexName, columnName string
+		if err := rows.Scan(&indexName, &columnName); err != nil {
+			return err
+		}
+		actualIndexes[indexName] = append(actualIndexes[indexName], columnName)
+		return nil
+	}, `SELECT INDEX_NAME, COLUMN_NAME
+		FROM information_schema.statistics
+		WHERE table_schema = DATABASE()
+		AND table_name = ?
+		ORDER BY INDEX_NAME, SEQ_IN_INDEX`, fullTableName)
+
+	if err != nil {
+		return fmt.Errorf("query indexes failed: %w", err)
+	}
+
+	// Check each expected index
+	for _, expected := range expectedIndexes {
+		expectedIndexName := sqldb.BuildIndexName(s.opts.tablePrefix, expected.table, expected.suffix)
+		actualColumns, exists := actualIndexes[expectedIndexName]
+		if !exists {
+			// Build CREATE INDEX statement for user reference
+			columnsStr := strings.Join(expected.columns, ", ")
+			createSQL := fmt.Sprintf("CREATE INDEX %s ON %s(%s);",
+				expectedIndexName, fullTableName, columnsStr)
+			log.WarnfContext(ctx, "index %s on table %s is missing, please run: %s",
+				expectedIndexName, fullTableName, createSQL)
+			continue
+		}
+
+		if !stringSlicesEqual(actualColumns, expected.columns) {
+			// Build DROP and CREATE INDEX statements for user reference
+			columnsStr := strings.Join(expected.columns, ", ")
+			dropSQL := fmt.Sprintf("DROP INDEX %s ON %s;", expectedIndexName, fullTableName)
+			createSQL := fmt.Sprintf("CREATE INDEX %s ON %s(%s);",
+				expectedIndexName, fullTableName, columnsStr)
+			log.WarnfContext(ctx, "index %s on table %s has wrong columns: got %v, want %v. "+
+				"Please drop and recreate: %s %s",
+				expectedIndexName, fullTableName, actualColumns, expected.columns, dropSQL, createSQL)
+		}
+	}
+
+	// Check for extra/unexpected indexes
+	for actualName := range actualIndexes {
+		if actualName == "PRIMARY" {
+			continue
+		}
+		if !expectedIndexNames[actualName] {
+			dropSQL := fmt.Sprintf("DROP INDEX %s ON %s;", actualName, fullTableName)
+			log.WarnfContext(ctx, "unexpected index %s found on table %s (wrong name or deprecated index), "+
+				"consider removing: %s", actualName, fullTableName, dropSQL)
+		}
+	}
+
+	return nil
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !strings.EqualFold(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // isDuplicateKeyError checks if the error is a MySQL duplicate key error.
