@@ -7,8 +7,8 @@
 //
 //
 
-// Package rubicresponse scores rubric-graded judge outputs.
-package rubicresponse
+// Package rubricresponse scores rubric-graded judge outputs.
+package rubricresponse
 
 import (
 	"context"
@@ -32,16 +32,16 @@ var rubricBlockRegex = regexp.MustCompile(
 		`Verdict:\s*(.*?)\s*$`, // 5: verdict yes/no
 )
 
-type rubicResponseScorer struct {
+type rubricResponseScorer struct {
 }
 
 // New returns a response scorer for rubric responses.
 func New() responsescorer.ResponseScorer {
-	return &rubicResponseScorer{}
+	return &rubricResponseScorer{}
 }
 
 // ScoreBasedOnResponse scores rubric responses.
-func (e *rubicResponseScorer) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
+func (e *rubricResponseScorer) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
 	_ *metric.EvalMetric) (*evalresult.ScoreResult, error) {
 	content := response.Choices[0].Message.Content
 	matches := rubricBlockRegex.FindAllStringSubmatch(content, -1)

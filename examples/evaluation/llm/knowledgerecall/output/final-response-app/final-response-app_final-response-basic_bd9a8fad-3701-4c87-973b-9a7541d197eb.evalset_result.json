@@ -9,7 +9,7 @@
       "finalEvalStatus": 1,
       "overallEvalMetricResults": [
         {
-          "metricName": "llm_rubic_knowledge_recall",
+          "metricName": "llm_rubric_knowledge_recall",
           "score": 1,
           "evalStatus": 1,
           "threshold": 0.9,
@@ -126,7 +126,7 @@
           },
           "evalMetricResults": [
             {
-              "metricName": "llm_rubic_knowledge_recall",
+              "metricName": "llm_rubric_knowledge_recall",
               "score": 1,
               "evalStatus": 1,
               "threshold": 0.9,

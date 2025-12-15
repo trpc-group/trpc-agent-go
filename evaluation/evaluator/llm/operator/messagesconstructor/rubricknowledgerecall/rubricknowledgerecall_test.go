@@ -7,7 +7,7 @@
 //
 //
 
-package rubicknowledgerecall
+package rubricknowledgerecall
 
 import (
 	"context"

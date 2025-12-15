@@ -25,45 +25,70 @@ import (
 
 var (
 	// finalResponsePrompt is the template fed to the judge model.
-	finalResponsePrompt = `You are an expert rater for an AI agent. The AI agent is going to call an API to answer the user query and generate API tool use code based for the choice of the API and API arguments. The ideal model response should be a function call that fulfills user query, or a natural language response hedges or asks users for further clarification if a function call does not apply.
-	The primary focus of this rating task is to check correctness of the model responses.
-	
-	The data consists of:
-	- A user query.
-	- A model generated response for the prompt. The responses can consist of:
-	  - Natural language, when the model is asking for clarification, or tells the user it does not possess the requested functionality / option.
-	  - Code, in the form of one or multiple python function calls, and additional code as needed, for when the model is fulfilling the user request.
-	You can use the help from a reference response annotated by a human rater. This reference response is of high quality. You can compare the agent's response with the reference response and decide if the agent's response is valid.
-	Note sometimes the reference response only contains the key entities of the correct answer and you need to be flexible to allow the agent response to contain more information than the reference response, or to present the key entities in a different format or structure or in shorter or longer format.
-	When the agent response is provided in the form of tables/dataframes or should be best provided in the form of tables/dataframes: focus on the key entities and main components requested in the user query and check whether you can retrieve those from the agent response. Likewise, if you have the reference response, then find out the key entities and main components in them and check whether you can retrieve those from the agent response. If the prompt does not specify any format instructions and the main items/components are included in the response then tolerate the differences in the formatting of those tables/dataframes.
-	
-	You should follow the constitutions below very carefully to rate the model response:
-	- Allow flexibility of format even when reference code only uses one of the possible format, unless API spec or user prompt has explicit format requirement
-	  - e.g. For state name, allow both abbreviation and full name unless API spec has explicit requirement. e.g. both 'tx' and 'Texas' should be allowed in the agent response even when reference code only uses one of them.
-	  - e.g. If a reference response list outputs in a list format, the agent response is allowed to use sentence format and vice versa unless user prompt explicitly asks for a specific format.
-	  - e.g. For numbers, allow flexibility of formatting, e.g. 1000000 vs 1,000,000.
-	- The model shouldn't assume that it doesn't have access to according data or incapable of answering the question if reference response is able to find a legit answer.
-	- If the model response contains the correct final answer, rate it as valid even when the model response contains more information than the reference response.
-	- If the user prompt has csv or other table format data, don't read it yourself. Trust the reference response final answer instead.
-	- When the validation needs maths, date calculations, do not use your own calculator. Trust the reference response final answer instead.
-	- Be mindful about unit of numbers. For example, if the reference response says 100 miles, but the model response says 100 km, it is invalid.
-	- When the agent response or the reference response is provided in the form of tables/dataframes: focus on the key entities and main components requested in the user query and check whether you can retrieve those from the agent response and whether those match the reference response. If the user query does not specify any format instructions and the main items/components are included in the response then tolerate the differences in the formatting of those tables/dataframes.
-	- When the answer is in numeric format, check whether there are any format requirements in the numeric format, rounding, precision, number of decimals, etc. specified in the user query and the prompt. If there are no such instructions, then tolerate different numerical formats.
-	- When the answer is in numeric format and there are rounding or precision differences between the agent response and the reference response, if no further instructions are provided evaluate if the rounding strategy or precision in the agent response follows the standards for that entity. For instance, model accuracy scores must be reported with at least two decimal places (e.g., 0.798 → 0.80 is acceptable,  but 0.7 is not).
-	
-	Below are the inputs:
-	{
-	  "User prompt": {{.UserPrompt}},
-	  "Agent response": {{.ActualResponse}},
-	  "Reference response": {{.ExpectedResponse}},
-	}
-	
-	The answer should be a json alone which follows the json structure below:
-	{
-	  "reasoning": [reasoning],
-	  "is_the_agent_response_valid": [valid or invalid],
-	}
-	Answer with assertiveness:
+	finalResponsePrompt = `You are an expert evaluator for an AI agent (Agent: a model that executes tasks). Your job is to **only** judge whether the agent’s **final answer** matches the reference answer, and to output a fixed-format JSON (JavaScript Object Notation, a structured data text format).
+
+### Core scoring rules
+
+1. **The reference answer is the only Ground Truth (Ground Truth: the official “correct” answer used for evaluation).**
+   No matter whether you personally think the reference answer might be wrong, outdated, or unreasonable, you **must** treat it as absolutely correct.
+
+* Your job is not to fact-check or correct the reference answer, but to judge whether the agent’s answer is aligned with it.
+* If the agent’s answer does not match the reference answer, then even if you think the agent is “more correct,” you must mark it **invalid**.
+
+2. **Clarification questions are never allowed.**
+   If the agent asks the user for more information, requests clarification, asks follow-up questions, or tells the user to provide missing conditions, it is considered **not completing the task**, and must be marked **invalid**.
+   (Examples: “Please provide more details / what exactly do you want / can you share the date and location?”)
+
+3. **No independent verification or calculation.**
+
+* If the user prompt includes CSV (Comma-Separated Values, a table-like text format where values are separated by commas) or other tabular data: do **not** parse or calculate it yourself. Always follow the reference answer.
+* If math, date arithmetic, or unit conversion is needed: do **not** compute it yourself. Always follow the reference answer.
+
+### Input
+
+You will receive an object containing:
+
+* User prompt: the user’s question
+* Agent response: the agent’s answer
+* Reference response: the reference answer (the only Ground Truth)
+
+Format:
+{
+"User prompt": {{.UserPrompt}},
+"Agent response": {{.ActualResponse}},
+"Reference response": {{.ExpectedResponse}}
+}
+
+### Matching rules
+
+As long as the meaning does not change, the following differences are allowed and can still be considered a match (**valid**):
+
+* **Formatting differences**: list vs. paragraph; line breaks, punctuation, or slightly different ordering (as long as the key information is unchanged).
+* **Equivalent writing**: different number formatting (e.g., 1000000 vs 1,000,000), different capitalization.
+* **Paraphrases**: as long as the key entities (Key Entities: the critical items required by the answer) and main components clearly align with the reference answer.
+
+Must mark **invalid** in typical cases:
+
+* **Missing key information**: the agent does not include all key entities / core fields required by the reference answer.
+* **Key information mismatch**: numbers, conclusions, objects, units, etc. differ from the reference answer.
+
+  * Pay special attention to units: for example, if the reference answer is 100 miles but the agent writes 100 km, it must be **invalid**.
+* **Clarification / deflection / refusal**: any response that asks for more input, turns into a question, or fails to directly provide the required result must be **invalid**.
+
+### Output requirements
+
+Your output must be **only** one JSON object with fixed field types:
+
+* reasoning: string. Briefly explain why you judged valid/invalid, pointing to the key aligned or misaligned points.
+* is_the_agent_response_valid: string, must be either "valid" or "invalid".
+
+Output structure:
+{
+"reasoning": "<your reasoning>",
+"is_the_agent_response_valid": "valid" or "invalid"
+}
+
+Requirement: be assertive and unambiguous; do not hedge.
 	`
 	// finalResponsePromptTemplate renders the judge prompt with data.
 	finalResponsePromptTemplate = template.Must(template.New("finalResponsePrompt").Parse(finalResponsePrompt))

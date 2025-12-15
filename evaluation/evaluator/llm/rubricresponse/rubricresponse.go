@@ -7,8 +7,8 @@
 //
 //
 
-// Package rubicresponse evaluates agent outputs using rubric-based LLM judges.
-package rubicresponse
+// Package rubricresponse evaluates agent outputs using rubric-based LLM judges.
+package rubricresponse
 
 import (
 	"context"
@@ -25,7 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-type rubicResponseEvaluator struct {
+type rubricResponseEvaluator struct {
 	llmBaseEvaluator      llm.LLMEvaluator
 	messagesConstructor   messagesconstructor.MessagesConstructor
 	responsescorer        responsescorer.ResponseScorer
@@ -33,10 +33,10 @@ type rubicResponseEvaluator struct {
 	invocationsAggregator invocationsaggregator.InvocationsAggregator
 }
 
-// New builds the rubic response evaluator.
+// New builds the rubric response evaluator.
 func New(opt ...Option) evaluator.Evaluator {
 	opts := newOptions(opt...)
-	e := &rubicResponseEvaluator{
+	e := &rubricResponseEvaluator{
 		messagesConstructor:   opts.messagesConstructor,
 		responsescorer:        opts.responsescorer,
 		samplesAggregator:     opts.samplesAggregator,
@@ -47,41 +47,41 @@ func New(opt ...Option) evaluator.Evaluator {
 }
 
 // Name returns the name of the evaluator.
-func (e *rubicResponseEvaluator) Name() string {
-	return "llm_rubic_response"
+func (e *rubricResponseEvaluator) Name() string {
+	return "llm_rubric_response"
 }
 
 // Description returns the description of the evaluator.
-func (e *rubicResponseEvaluator) Description() string {
-	return "LLM rubic response evaluator"
+func (e *rubricResponseEvaluator) Description() string {
+	return "LLM rubric response evaluator"
 }
 
 // Evaluate evaluates the response of the agent.
-func (e *rubicResponseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*evalset.Invocation,
+func (e *rubricResponseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
 	return e.llmBaseEvaluator.Evaluate(ctx, actuals, expecteds, evalMetric)
 }
 
 // ConstructMessages constructs the messages for the evaluator.
-func (e *rubicResponseEvaluator) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
+func (e *rubricResponseEvaluator) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
 	return e.messagesConstructor.ConstructMessages(ctx, actual, expected, evalMetric)
 }
 
 // ScoreBasedOnResponse scores the response of the evaluator.
-func (e *rubicResponseEvaluator) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
+func (e *rubricResponseEvaluator) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
 	evalMetric *metric.EvalMetric) (*evalresult.ScoreResult, error) {
 	return e.responsescorer.ScoreBasedOnResponse(ctx, response, evalMetric)
 }
 
 // AggregateSamples aggregates the samples of the evaluator.
-func (e *rubicResponseEvaluator) AggregateSamples(ctx context.Context, samples []*evaluator.PerInvocationResult,
+func (e *rubricResponseEvaluator) AggregateSamples(ctx context.Context, samples []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.PerInvocationResult, error) {
 	return e.samplesAggregator.AggregateSamples(ctx, samples, evalMetric)
 }
 
 // AggregateInvocations aggregates the invocations of the evaluator.
-func (e *rubicResponseEvaluator) AggregateInvocations(ctx context.Context, results []*evaluator.PerInvocationResult,
+func (e *rubricResponseEvaluator) AggregateInvocations(ctx context.Context, results []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
 	return e.invocationsAggregator.AggregateInvocations(ctx, results, evalMetric)
 }

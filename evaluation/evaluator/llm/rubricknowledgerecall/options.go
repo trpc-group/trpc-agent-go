@@ -6,15 +6,15 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package rubicknowledgerecall
+package rubricknowledgerecall
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/invocationsaggregator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/invocationsaggregator/average"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
-	knmessages "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/rubicknowledgerecall"
+	rmessagesconstructor "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/rubricknowledgerecall"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
-	rresponsescorer "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer/rubicresponse"
+	rresponsescorer "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer/rubricresponse"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/samplesaggregator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/samplesaggregator/majorityvote"
 )
@@ -28,7 +28,7 @@ type options struct {
 
 func newOptions(opt ...Option) *options {
 	opts := &options{
-		messagesConstructor:   knmessages.New(),
+		messagesConstructor:   rmessagesconstructor.New(),
 		responsescorer:        rresponsescorer.New(),
 		samplesAggregator:     majorityvote.New(),
 		invocationsAggregator: average.New(),
@@ -39,7 +39,7 @@ func newOptions(opt ...Option) *options {
 	return opts
 }
 
-// Option customizes RubicKnowledgeRecall evaluator dependencies.
+// Option customizes RubricKnowledgeRecall evaluator dependencies.
 type Option func(*options)
 
 // WithMessagesConstructor sets the prompt builder for knowledge recall.

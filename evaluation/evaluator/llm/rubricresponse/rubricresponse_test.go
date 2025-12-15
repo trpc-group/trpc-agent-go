@@ -7,7 +7,7 @@
 //
 //
 
-package rubicresponse
+package rubricresponse
 
 import (
 	"context"
@@ -99,7 +99,7 @@ func (s *stubLLMBase) AggregateInvocations(context.Context, []*evaluator.PerInvo
 	return s.result, nil
 }
 
-func TestRubicResponseEvaluatorDelegates(t *testing.T) {
+func TestRubricResponseEvaluatorDelegates(t *testing.T) {
 	ctx := context.Background()
 	mc := &stubMessagesConstructor{}
 	rs := &stubResponseScorer{}
@@ -111,7 +111,7 @@ func TestRubicResponseEvaluatorDelegates(t *testing.T) {
 		WithSamplesAggregator(sa),
 		WithInvocationsAggregator(ia),
 	)
-	impl, ok := ev.(*rubicResponseEvaluator)
+	impl, ok := ev.(*rubricResponseEvaluator)
 	require.True(t, ok)
 
 	base := &stubLLMBase{result: &evaluator.EvaluateResult{OverallStatus: status.EvalStatusPassed}}
@@ -134,7 +134,7 @@ func TestRubicResponseEvaluatorDelegates(t *testing.T) {
 	assert.True(t, sa.called)
 	assert.True(t, ia.called)
 	assert.True(t, base.evaluateCalled)
-	assert.Equal(t, "llm_rubic_response", impl.Name())
-	assert.Equal(t, "LLM rubic response evaluator", impl.Description())
+	assert.Equal(t, "llm_rubric_response", impl.Name())
+	assert.Equal(t, "LLM rubric response evaluator", impl.Description())
 	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)
 }

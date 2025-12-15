@@ -9,7 +9,7 @@
       "finalEvalStatus": 1,
       "overallEvalMetricResults": [
         {
-          "metricName": "llm_rubic_response",
+          "metricName": "llm_rubric_response",
           "score": 1,
           "evalStatus": 1,
           "threshold": 0.9,
@@ -178,7 +178,7 @@
           },
           "evalMetricResults": [
             {
-              "metricName": "llm_rubic_response",
+              "metricName": "llm_rubric_response",
               "score": 1,
               "evalStatus": 1,
               "threshold": 0.9,

@@ -7,7 +7,7 @@
 //
 //
 
-package rubicknowledgerecall
+package rubricknowledgerecall
 
 import (
 	"context"
@@ -99,7 +99,7 @@ func (s *stubLLMBase) AggregateInvocations(context.Context, []*evaluator.PerInvo
 	return s.result, nil
 }
 
-func TestRubicKnowledgeRecallEvaluatorDelegates(t *testing.T) {
+func TestRubricKnowledgeRecallEvaluatorDelegates(t *testing.T) {
 	ctx := context.Background()
 	mc := &stubMessagesConstructor{}
 	rs := &stubResponseScorer{}
@@ -111,7 +111,7 @@ func TestRubicKnowledgeRecallEvaluatorDelegates(t *testing.T) {
 		WithSamplesAggregator(sa),
 		WithInvocationsAggregator(ia),
 	)
-	impl, ok := ev.(*rubicKnowledgeRecallEvaluator)
+	impl, ok := ev.(*rubricKnowledgeRecallEvaluator)
 	require.True(t, ok)
 
 	base := &stubLLMBase{result: &evaluator.EvaluateResult{OverallStatus: status.EvalStatusPassed}}
@@ -134,7 +134,7 @@ func TestRubicKnowledgeRecallEvaluatorDelegates(t *testing.T) {
 	assert.True(t, sa.called)
 	assert.True(t, ia.called)
 	assert.True(t, base.evaluateCalled)
-	assert.Equal(t, "llm_rubic_knowledge_recall", impl.Name())
-	assert.Equal(t, "LLM rubic knowledge recall evaluator", impl.Description())
+	assert.Equal(t, "llm_rubric_knowledge_recall", impl.Name())
+	assert.Equal(t, "LLM rubric knowledge recall evaluator", impl.Description())
 	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)
 }

@@ -1,6 +1,6 @@
 [
   {
-    "metricName": "llm_rubic_response",
+    "metricName": "llm_rubric_response",
     "threshold": 0.9,
     "criterion": {
       "llmJudge": {

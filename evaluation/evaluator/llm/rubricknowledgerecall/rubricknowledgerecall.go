@@ -6,8 +6,8 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package rubicknowledgerecall evaluates knowledge recall using LLM judges.
-package rubicknowledgerecall
+// Package rubricknowledgerecall evaluates knowledge recall using LLM judges.
+package rubricknowledgerecall
 
 import (
 	"context"
@@ -24,7 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-type rubicKnowledgeRecallEvaluator struct {
+type rubricKnowledgeRecallEvaluator struct {
 	llmBaseEvaluator      llm.LLMEvaluator
 	messagesConstructor   messagesconstructor.MessagesConstructor
 	responsescorer        responsescorer.ResponseScorer
@@ -32,10 +32,10 @@ type rubicKnowledgeRecallEvaluator struct {
 	invocationsAggregator invocationsaggregator.InvocationsAggregator
 }
 
-// New builds the rubic knowledge recall evaluator.
+// New builds the rubric knowledge recall evaluator.
 func New(opt ...Option) evaluator.Evaluator {
 	opts := newOptions(opt...)
-	e := &rubicKnowledgeRecallEvaluator{
+	e := &rubricKnowledgeRecallEvaluator{
 		messagesConstructor:   opts.messagesConstructor,
 		responsescorer:        opts.responsescorer,
 		samplesAggregator:     opts.samplesAggregator,
@@ -46,41 +46,41 @@ func New(opt ...Option) evaluator.Evaluator {
 }
 
 // Name returns the name of the evaluator.
-func (e *rubicKnowledgeRecallEvaluator) Name() string {
-	return "llm_rubic_knowledge_recall"
+func (e *rubricKnowledgeRecallEvaluator) Name() string {
+	return "llm_rubric_knowledge_recall"
 }
 
 // Description returns the description of the evaluator.
-func (e *rubicKnowledgeRecallEvaluator) Description() string {
-	return "LLM rubic knowledge recall evaluator"
+func (e *rubricKnowledgeRecallEvaluator) Description() string {
+	return "LLM rubric knowledge recall evaluator"
 }
 
 // Evaluate evaluates the knowledge recall of the agent.
-func (e *rubicKnowledgeRecallEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*evalset.Invocation,
+func (e *rubricKnowledgeRecallEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
 	return e.llmBaseEvaluator.Evaluate(ctx, actuals, expecteds, evalMetric)
 }
 
 // ConstructMessages constructs the messages for the evaluator.
-func (e *rubicKnowledgeRecallEvaluator) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
+func (e *rubricKnowledgeRecallEvaluator) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
 	return e.messagesConstructor.ConstructMessages(ctx, actual, expected, evalMetric)
 }
 
 // ScoreBasedOnResponse scores the response of the evaluator.
-func (e *rubicKnowledgeRecallEvaluator) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
+func (e *rubricKnowledgeRecallEvaluator) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
 	evalMetric *metric.EvalMetric) (*evalresult.ScoreResult, error) {
 	return e.responsescorer.ScoreBasedOnResponse(ctx, response, evalMetric)
 }
 
 // AggregateSamples aggregates the samples of the evaluator.
-func (e *rubicKnowledgeRecallEvaluator) AggregateSamples(ctx context.Context, samples []*evaluator.PerInvocationResult,
+func (e *rubricKnowledgeRecallEvaluator) AggregateSamples(ctx context.Context, samples []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.PerInvocationResult, error) {
 	return e.samplesAggregator.AggregateSamples(ctx, samples, evalMetric)
 }
 
 // AggregateInvocations aggregates the invocations of the evaluator.
-func (e *rubicKnowledgeRecallEvaluator) AggregateInvocations(ctx context.Context, results []*evaluator.PerInvocationResult,
+func (e *rubricKnowledgeRecallEvaluator) AggregateInvocations(ctx context.Context, results []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
 	return e.invocationsAggregator.AggregateInvocations(ctx, results, evalMetric)
 }

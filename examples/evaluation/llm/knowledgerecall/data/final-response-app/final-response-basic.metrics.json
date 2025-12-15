@@ -1,6 +1,6 @@
 [
   {
-    "metricName": "llm_rubic_knowledge_recall",
+    "metricName": "llm_rubric_knowledge_recall",
     "threshold": 0.9,
     "criterion": {
       "llmJudge": {

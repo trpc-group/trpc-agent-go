@@ -7,7 +7,7 @@
 //
 //
 
-package rubicresponse
+package rubricresponse
 
 import (
 	"context"
