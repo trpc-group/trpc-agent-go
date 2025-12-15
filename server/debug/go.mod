@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/server/debug
 
-go 1.24.10
+go 1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
@@ -15,7 +15,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.38.0
 	go.opentelemetry.io/otel/trace v1.38.0
 	google.golang.org/genai v1.36.0
-	trpc.group/trpc-go/trpc-agent-go v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go v0.7.0
 	trpc.group/trpc-go/trpc-agent-go/evaluation v0.0.0-20251126064502-c8c2594d2519
 )
 
