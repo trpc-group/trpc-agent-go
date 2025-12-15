@@ -155,6 +155,20 @@ type Options struct {
 	// as a system message when available (default: false).
 	AddSessionSummary bool
 
+	// MaxLLMCalls is an optional upper bound on the number of LLM calls
+	// allowed per invocation for this agent. When the value is:
+	//   - > 0: the limit is enforced per invocation.
+	//   - <= 0: no limit is applied (default, preserves existing behavior).
+	MaxLLMCalls int
+
+	// MaxToolIterations is an optional upper bound on how many tool-call
+	// iterations are allowed per invocation for this agent. A "tool iteration"
+	// is defined as an assistant response that contains tool calls and reaches
+	// the FunctionCallResponseProcessor. When the value is:
+	//   - > 0: the limit is enforced per invocation.
+	//   - <= 0: no limit is applied (default, preserves existing behavior).
+	MaxToolIterations int
+
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
@@ -242,6 +256,26 @@ func WithGlobalInstruction(instruction string) Option {
 func WithGenerationConfig(config model.GenerationConfig) Option {
 	return func(opts *Options) {
 		opts.GenerationConfig = config
+	}
+}
+
+// WithMaxLLMCalls sets the optional upper bound on the number of LLM calls
+// allowed per invocation for this agent. When limit is:
+//   - > 0: the limit is enforced per invocation.
+//   - <= 0: no limit is applied (default behavior).
+func WithMaxLLMCalls(limit int) Option {
+	return func(opts *Options) {
+		opts.MaxLLMCalls = limit
+	}
+}
+
+// WithMaxToolIterations sets the optional upper bound on how many tool-call
+// iterations are allowed per invocation for this agent. When limit is:
+//   - > 0: the limit is enforced per invocation.
+//   - <= 0: no limit is applied (default behavior).
+func WithMaxToolIterations(limit int) Option {
+	return func(opts *Options) {
+		opts.MaxToolIterations = limit
 	}
 }
 

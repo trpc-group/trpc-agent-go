@@ -124,3 +124,17 @@ func TestWithMessageFilterMode(t *testing.T) {
 		})
 	}
 }
+
+func TestWithMaxLimits_OnOptions(t *testing.T) {
+	opts := &Options{}
+
+	WithMaxLLMCalls(3)(opts)
+	WithMaxToolIterations(4)(opts)
+
+	if opts.MaxLLMCalls != 3 {
+		t.Fatalf("expected MaxLLMCalls=3, got %d", opts.MaxLLMCalls)
+	}
+	if opts.MaxToolIterations != 4 {
+		t.Fatalf("expected MaxToolIterations=4, got %d", opts.MaxToolIterations)
+	}
+}
