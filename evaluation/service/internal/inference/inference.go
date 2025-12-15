@@ -205,7 +205,7 @@ func convertToolCallsToFunctionCalls(toolCalls *model.ToolCall) (*genai.Function
 	if toolCalls.Function.Name == "" {
 		return nil, errors.New("tool call function name is empty")
 	}
-	var args map[string]interface{}
+	var args map[string]any
 	if len(toolCalls.Function.Arguments) > 0 {
 		if err := json.Unmarshal(toolCalls.Function.Arguments, &args); err != nil {
 			return nil, fmt.Errorf("unmarshal tool arguments: %w", err)
