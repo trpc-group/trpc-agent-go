@@ -91,7 +91,7 @@ func isInternalStateKey(key string) bool {
 	switch key {
 	// Graph metadata keys stored in state delta for instrumentation
 	case MetadataKeyNode, MetadataKeyPregel, MetadataKeyChannel,
-		MetadataKeyState, MetadataKeyCompletion:
+		MetadataKeyState, MetadataKeyCompletion, MetadataKeyNodeCustom:
 		return true
 	default:
 		return false
