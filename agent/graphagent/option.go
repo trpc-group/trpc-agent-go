@@ -19,22 +19,21 @@ import (
 const (
 	defaultChannelBufferSize = 256
 
-	// BranchFilterModePrefix Prefix matching pattern.
+	// BranchFilterModePrefix Prefix matching pattern
 	BranchFilterModePrefix = processor.BranchFilterModePrefix
-	// BranchFilterModeAll include all.
+	// BranchFilterModeAll include all
 	BranchFilterModeAll = processor.BranchFilterModeAll
-	// BranchFilterModeExact exact match.
+	// BranchFilterModeExact exact match
 	BranchFilterModeExact = processor.BranchFilterModeExact
 
-	// TimelineFilterAll includes all historical message records.
-	// Suitable for scenarios requiring full conversation context.
+	// TimelineFilterAll includes all historical message records
+	// Suitable for scenarios requiring full conversation context
 	TimelineFilterAll = processor.TimelineFilterAll
-	// TimelineFilterCurrentRequest only includes messages within the current request cycle.
-	// Filters out previous historical records, keeping only messages related to this request.
+	// TimelineFilterCurrentRequest only includes messages within the current request cycle
+	// Filters out previous historical records, keeping only messages related to this request
 	TimelineFilterCurrentRequest = processor.TimelineFilterCurrentRequest
-	// TimelineFilterCurrentInvocation only includes messages within the current invocation session.
-	// Suitable for scenarios requiring isolation between different invocation cycles
-	// in long-running sessions.
+	// TimelineFilterCurrentInvocation only includes messages within the current invocation session
+	// Suitable for scenarios requiring isolation between different invocation cycles in long-running sessions
 	TimelineFilterCurrentInvocation = processor.TimelineFilterCurrentInvocation
 
 	// ReasoningContentModeKeepAll keeps all reasoning_content in messages.

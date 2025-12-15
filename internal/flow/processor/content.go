@@ -60,6 +60,7 @@ const (
 	// request retain their reasoning_content (for tool call scenarios where the
 	// model needs to reference its previous reasoning). This is the recommended
 	// mode for DeepSeek models according to their API documentation.
+	// Reference: https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
 	ReasoningContentModeDiscardPreviousTurns = "discard_previous_turns"
 
 	// ReasoningContentModeDiscardAll discards all reasoning_content from history.
