@@ -108,15 +108,25 @@ func (p *InstructionRequestProcessor) ProcessRequest(
 		return
 	}
 	if req == nil {
-		log.Errorf("Instruction request processor: request is nil")
+		log.ErrorfContext(
+			ctx,
+			"Instruction request processor: request is nil",
+		)
 		return
 	}
 
 	agentName := invocation.AgentName
-	log.Debugf("Instruction request processor: processing request for agent %s", agentName)
+	log.DebugfContext(
+		ctx,
+		"Instruction request processor: processing request for agent %s",
+		agentName,
+	)
 
 	// Process instruction and system prompt with state injection.
-	processedInstruction, processedSystemPrompt := p.processInstructionsWithState(invocation)
+	processedInstruction, processedSystemPrompt := p.processInstructionsWithState(
+		ctx,
+		invocation,
+	)
 
 	// Update the request messages with processed instructions.
 	p.updateRequestMessages(req, processedInstruction, processedSystemPrompt)
@@ -125,8 +135,12 @@ func (p *InstructionRequestProcessor) ProcessRequest(
 	p.sendPreprocessingEvent(ctx, invocation, ch)
 }
 
-// processInstructionsWithState processes instruction and system prompt with state injection.
-func (p *InstructionRequestProcessor) processInstructionsWithState(invocation *agent.Invocation) (string, string) {
+// processInstructionsWithState processes instruction and system prompt with
+// state injection.
+func (p *InstructionRequestProcessor) processInstructionsWithState(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (string, string) {
 	// Prefer dynamic getters when present; fall back to static fields.
 	var processedInstruction string
 	if p.InstructionGetter != nil {
@@ -153,15 +167,28 @@ func (p *InstructionRequestProcessor) processInstructionsWithState(invocation *a
 	}
 
 	if invocation != nil {
-		processedInstruction = p.injectStateIntoContent(invocation, processedInstruction, "instruction")
-		processedSystemPrompt = p.injectStateIntoContent(invocation, processedSystemPrompt, "system prompt")
+		processedInstruction = p.injectStateIntoContent(
+			ctx,
+			invocation,
+			processedInstruction,
+			"instruction",
+		)
+		processedSystemPrompt = p.injectStateIntoContent(
+			ctx,
+			invocation,
+			processedSystemPrompt,
+			"system prompt",
+		)
 	}
 
 	return processedInstruction, processedSystemPrompt
 }
 
-// combineInstructions combines existing instruction with new JSON instructions.
-func (p *InstructionRequestProcessor) combineInstructions(existingInstruction, jsonInstructions string) string {
+// combineInstructions combines existing instruction with new JSON
+// instructions.
+func (p *InstructionRequestProcessor) combineInstructions(
+	existingInstruction, jsonInstructions string,
+) string {
 	if existingInstruction != "" {
 		return existingInstruction + "\n\n" + jsonInstructions
 	}
@@ -170,6 +197,7 @@ func (p *InstructionRequestProcessor) combineInstructions(existingInstruction, j
 
 // injectStateIntoContent injects session state into the given content.
 func (p *InstructionRequestProcessor) injectStateIntoContent(
+	ctx context.Context,
 	invocation *agent.Invocation,
 	content, contentType string,
 ) string {
@@ -179,7 +207,12 @@ func (p *InstructionRequestProcessor) injectStateIntoContent(
 
 	processedContent, err := state.InjectSessionState(content, invocation)
 	if err != nil {
-		log.Errorf("Failed to inject session state into %s: %v", contentType, err)
+		log.ErrorfContext(
+			ctx,
+			"Failed to inject session state into %s: %v",
+			contentType,
+			err,
+		)
 		return content
 	}
 	return processedContent
@@ -204,12 +237,18 @@ func (p *InstructionRequestProcessor) updateExistingSystemMessage(
 
 	if processedInstruction != "" && !containsInstruction(systemMsg.Content, processedInstruction) {
 		systemMsg.Content += "\n\n" + processedInstruction
-		log.Debugf("Instruction request processor: appended instruction to existing system message")
+		log.Debugf(
+			"Instruction request processor: appended instruction to " +
+				"existing system message",
+		)
 	}
 
 	if processedSystemPrompt != "" && !containsInstruction(systemMsg.Content, processedSystemPrompt) {
 		systemMsg.Content = processedSystemPrompt + "\n\n" + systemMsg.Content
-		log.Debugf("Instruction request processor: prepended system prompt to existing system message")
+		log.Debugf(
+			"Instruction request processor: prepended system prompt to " +
+				"existing system message",
+		)
 	}
 }
 
@@ -222,7 +261,9 @@ func (p *InstructionRequestProcessor) createNewSystemMessage(
 	if systemContent != "" {
 		systemMsg := model.NewSystemMessage(systemContent)
 		req.Messages = append([]model.Message{systemMsg}, req.Messages...)
-		log.Debugf("Instruction request processor: added combined system message")
+		log.Debugf(
+			"Instruction request processor: added combined system message",
+		)
 	}
 }
 
@@ -255,14 +296,20 @@ func (p *InstructionRequestProcessor) sendPreprocessingEvent(
 		return
 	}
 
-	log.Debugf("Instruction request processor: sent preprocessing event")
+	log.DebugfContext(
+		ctx,
+		"Instruction request processor: sent preprocessing event",
+	)
 
 	if err := agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingInstruction),
 	)); err != nil {
-		log.Debugf("Instruction request processor: context cancelled")
+		log.DebugfContext(
+			ctx,
+			"Instruction request processor: context cancelled",
+		)
 	}
 }
 

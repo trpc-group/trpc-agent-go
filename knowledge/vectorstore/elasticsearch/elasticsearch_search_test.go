@@ -162,13 +162,41 @@ func TestVectorStore_Search(t *testing.T) {
 				// Could add more specific assertions if needed
 			},
 		},
+		{
+			name: "keyword_mode_with_tsvector_disabled",
+			query: &vectorstore.SearchQuery{
+				Query:      "hello",
+				SearchMode: vectorstore.SearchModeKeyword,
+				Limit:      1,
+			},
+			setupMock: func(mc *mockClient, vs *VectorStore) {
+				mc.SetSearchHits([]map[string]any{
+					{
+						"_score": 0.9,
+						"_source": map[string]any{
+							"id":      "doc1",
+							"name":    "Doc 1",
+							"content": "Hello world",
+						},
+					},
+				})
+			},
+			wantErr: true,
+			errMsg:  "query vector cannot be empty",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mc := newMockClient()
 			mc.indexExists = true
-			vs := newTestVectorStore(t, mc, WithScoreThreshold(0.5), WithVectorDimension(3))
+			vs := newTestVectorStore(
+				t,
+				mc,
+				WithScoreThreshold(0.5),
+				WithVectorDimension(3),
+				WithEnableTSVector(false),
+			)
 
 			if tt.setupMock != nil {
 				tt.setupMock(mc, vs)

@@ -81,7 +81,10 @@ func (p *TimeRequestProcessor) ProcessRequest(
 	}
 
 	if req == nil {
-		log.Errorf("Time request processor: request is nil")
+		log.ErrorfContext(
+			ctx,
+			"Time request processor: request is nil",
+		)
 		return
 	}
 
@@ -89,7 +92,11 @@ func (p *TimeRequestProcessor) ProcessRequest(
 	if invocation != nil {
 		agentName = invocation.AgentName
 	}
-	log.Debugf("Time request processor: processing request for agent %s", agentName)
+	log.DebugfContext(
+		ctx,
+		"Time request processor: processing request for agent %s",
+		agentName,
+	)
 
 	// Get current time with timezone support.
 	currentTime := p.getCurrentTime()

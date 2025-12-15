@@ -123,7 +123,10 @@ func (s *Service) checkDDLPrivilege(ctx context.Context) (bool, error) {
 
 // initDB initializes the database schema.
 func (s *Service) initDB(ctx context.Context) error {
-	log.Info("initializing postgres memory database schema...")
+	log.InfoContext(
+		ctx,
+		"initializing postgres memory database schema...",
+	)
 
 	// Check DDL privilege before proceeding.
 	hasDDLPrivilege, err := s.checkDDLPrivilege(ctx)
@@ -132,7 +135,7 @@ func (s *Service) initDB(ctx context.Context) error {
 	}
 	// Skip DDL operations if user lacks CREATE privilege on the schema.
 	if !hasDDLPrivilege {
-		log.Warn("skipping DDL operations: no CREATE privilege on schema")
+		log.WarnContext(ctx, "skipping DDL operations: no CREATE privilege on schema")
 		return nil
 	}
 
@@ -145,7 +148,11 @@ func (s *Service) initDB(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, tableSQL); err != nil {
 		return fmt.Errorf("create table %s failed: %w", fullTableName, err)
 	}
-	log.Infof("created table: %s", fullTableName)
+	log.InfofContext(
+		ctx,
+		"created table: %s",
+		fullTableName,
+	)
 
 	// Index suffix constants for memories table indexes.
 	const (
@@ -169,7 +176,12 @@ func (s *Service) initDB(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx, indexSQL); err != nil {
 			return fmt.Errorf("create index %s on table %s failed: %w", idx.suffix, fullTableName, err)
 		}
-		log.Infof("created index: %s on table %s", idx.suffix, fullTableName)
+		log.InfofContext(
+			ctx,
+			"created index: %s on table %s",
+			idx.suffix,
+			fullTableName,
+		)
 	}
 
 	// Verify schema. Panic if schema verification fails (user has DDL privilege here).
@@ -177,7 +189,10 @@ func (s *Service) initDB(ctx context.Context) error {
 		panic(fmt.Sprintf("schema verification failed with DDL privilege: %v", err))
 	}
 
-	log.Info("postgres memory database schema initialized successfully")
+	log.InfoContext(
+		ctx,
+		"postgres memory database schema initialized successfully",
+	)
 	return nil
 }
 
@@ -202,7 +217,12 @@ func (s *Service) verifySchema(ctx context.Context) error {
 
 		// Verify indexes
 		if err := s.verifyIndexes(ctx, fullTableName, schema.indexes); err != nil {
-			log.Warnf("verify indexes for table %s failed (non-fatal): %v", fullTableName, err)
+			log.WarnfContext(
+				ctx,
+				"verify indexes for table %s failed (non-fatal): %v",
+				fullTableName,
+				err,
+			)
 		}
 	}
 
@@ -308,7 +328,12 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 		expectedIndexName := sqldb.BuildIndexName("", expected.table, expected.suffix)
 
 		if !actualIndexes[expectedIndexName] {
-			log.Warnf("index %s on table %s is missing", expectedIndexName, fullTableName)
+			log.WarnfContext(
+				ctx,
+				"index %s on table %s is missing",
+				expectedIndexName,
+				fullTableName,
+			)
 		}
 	}
 

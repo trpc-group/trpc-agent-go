@@ -141,8 +141,10 @@ func (s *SessionService) tryEnqueueJob(ctx context.Context, job *summaryJob) boo
 
 	// If context already cancelled, do not enqueue.
 	if err := ctx.Err(); err != nil {
-		log.Debugf(
-			"summary job context cancelled before enqueue: %v", err,
+		log.DebugfContext(
+			ctx,
+			"summary job context cancelled before enqueue: %v",
+			err,
 		)
 		return false
 	}
@@ -151,7 +153,8 @@ func (s *SessionService) tryEnqueueJob(ctx context.Context, job *summaryJob) boo
 	// sending to a closed channel.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Warnf(
+			log.WarnfContext(
+				ctx,
 				"summary job channel may be closed, falling back to "+
 					"synchronous processing: %v",
 				r,
@@ -165,8 +168,9 @@ func (s *SessionService) tryEnqueueJob(ctx context.Context, job *summaryJob) boo
 		return true // Successfully enqueued.
 	default:
 		// Queue is full, fall back to synchronous processing.
-		log.Warnf(
-			"summary job queue is full, falling back to synchronous " +
+		log.WarnfContext(
+			ctx,
+			"summary job queue is full, falling back to synchronous "+
 				"processing",
 		)
 		return false
@@ -201,7 +205,11 @@ func (s *SessionService) startAsyncSummaryWorker() {
 func (s *SessionService) processSummaryJob(job *summaryJob) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Errorf("panic in summary worker: %v", r)
+			log.ErrorfContext(
+				context.Background(),
+				"panic in summary worker: %v",
+				r,
+			)
 		}
 	}()
 
@@ -217,7 +225,11 @@ func (s *SessionService) processSummaryJob(job *summaryJob) {
 	}
 
 	if err := s.CreateSessionSummary(ctx, job.session, job.filterKey, job.force); err != nil {
-		log.Warnf("summary worker failed to create session summary: %v", err)
+		log.WarnfContext(
+			ctx,
+			"summary worker failed to create session summary: %v",
+			err,
+		)
 	}
 }
 

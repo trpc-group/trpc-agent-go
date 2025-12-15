@@ -525,13 +525,18 @@ Suitable for production environments and applications requiring complex queries,
 
 **Connection Configuration:**
 
+- **`WithPostgresClientDSN(dsn string)`**: PostgreSQL DSN connection string (recommended). Supports two formats:
+  - Key-Value format: `host=localhost port=5432 user=postgres password=secret dbname=mydb sslmode=disable`
+  - URL format: `postgres://user:password@localhost:5432/dbname?sslmode=disable`
 - **`WithHost(host string)`**: PostgreSQL server address. Default is `localhost`.
 - **`WithPort(port int)`**: PostgreSQL server port. Default is `5432`.
 - **`WithUser(user string)`**: Database username. Default is `postgres`.
 - **`WithPassword(password string)`**: Database password. Default is empty string.
 - **`WithDatabase(database string)`**: Database name. Default is `postgres`.
 - **`WithSSLMode(sslMode string)`**: SSL mode. Default is `disable`. Options: `disable`, `require`, `verify-ca`, `verify-full`.
-- **`WithInstanceName(name string)`**: Use pre-configured PostgreSQL instance.
+- **`WithPostgresInstance(name string)`**: Use pre-configured PostgreSQL instance.
+
+> **Priority**: `WithPostgresClientDSN` > Direct connection settings (`WithHost`, etc.) > `WithPostgresInstance`
 
 **Session Configuration:**
 
@@ -565,26 +570,29 @@ Suitable for production environments and applications requiring complex queries,
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 
-// Default configuration (minimal)
+// Using DSN connection (recommended)
 sessionService, err := postgres.NewService(
-    postgres.WithHost("localhost"),
-    postgres.WithPassword("your-password"),
+    postgres.WithPostgresClientDSN("postgres://user:password@localhost:5432/mydb?sslmode=disable"),
 )
-// Effect:
-// - Connect to localhost:5432, database postgres
-// - Each session max 1000 events
-// - Data never expires
-// - 2 async persistence workers
 
-// Complete production environment configuration
+// Or using Key-Value format DSN
 sessionService, err := postgres.NewService(
-    // Connection configuration
+    postgres.WithPostgresClientDSN("host=localhost port=5432 user=postgres password=secret dbname=mydb sslmode=disable"),
+)
+
+// Using individual configuration options (traditional way)
+sessionService, err := postgres.NewService(
     postgres.WithHost("localhost"),
     postgres.WithPort(5432),
     postgres.WithUser("postgres"),
     postgres.WithPassword("your-password"),
     postgres.WithDatabase("trpc_sessions"),
-    postgres.WithSSLMode("require"),
+)
+
+// Complete production environment configuration
+sessionService, err := postgres.NewService(
+    // Connection configuration (DSN recommended)
+    postgres.WithPostgresClientDSN("postgres://user:password@localhost:5432/trpc_sessions?sslmode=require"),
 
     // Session configuration
     postgres.WithSessionEventLimit(1000),
@@ -610,23 +618,19 @@ sessionService, err := postgres.NewService(
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/storage"
-    "trpc.group/trpc-go/trpc-agent-go/session/postgres"
+    "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
+    sessionpg "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 )
 
 // Register PostgreSQL instance
-storage.RegisterPostgresInstance("my-postgres-instance",
-    storage.WithPostgresHost("localhost"),
-    storage.WithPostgresPort(5432),
-    storage.WithPostgresUser("postgres"),
-    storage.WithPostgresPassword("your-password"),
-    storage.WithPostgresDatabase("trpc_sessions"),
+postgres.RegisterPostgresInstance("my-postgres-instance",
+    postgres.WithClientConnString("postgres://user:password@localhost:5432/trpc_sessions?sslmode=disable"),
 )
 
 // Use in session service
-sessionService, err := postgres.NewService(
-    postgres.WithInstanceName("my-postgres-instance"),
-    postgres.WithSessionEventLimit(500),
+sessionService, err := sessionpg.NewService(
+    sessionpg.WithPostgresInstance("my-postgres-instance"),
+    sessionpg.WithSessionEventLimit(500),
 )
 ```
 
@@ -895,23 +899,19 @@ sessionService, err := mysql.NewService(
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/storage"
-    "trpc.group/trpc-go/trpc-agent-go/session/mysql"
+    "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+    sessionmysql "trpc.group/trpc-go/trpc-agent-go/session/mysql"
 )
 
 // Register MySQL instance
-storage.RegisterMySQLInstance("my-mysql-instance",
-    storage.WithMySQLHost("localhost"),
-    storage.WithMySQLPort(3306),
-    storage.WithMySQLUser("root"),
-    storage.WithMySQLPassword("your-password"),
-    storage.WithMySQLDatabase("trpc_sessions"),
+mysql.RegisterMySQLInstance("my-mysql-instance",
+    mysql.WithClientBuilderDSN("root:password@tcp(localhost:3306)/trpc_sessions?parseTime=true&charset=utf8mb4"),
 )
 
 // Use in session service
-sessionService, err := mysql.NewService(
-    mysql.WithInstanceName("my-mysql-instance"),
-    mysql.WithSessionEventLimit(500),
+sessionService, err := sessionmysql.NewService(
+    sessionmysql.WithMySQLInstance("my-mysql-instance"),
+    sessionmysql.WithSessionEventLimit(500),
 )
 ```
 
