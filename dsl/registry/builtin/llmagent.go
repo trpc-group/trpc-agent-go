@@ -455,16 +455,6 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 				}
 			}
 
-			// Validate require_approval if present
-			if ra, ok := mcpToolConfig["require_approval"]; ok {
-				if raStr, ok := ra.(string); ok {
-					if raStr != "always" && raStr != "never" && raStr != "auto" {
-						return fmt.Errorf("mcp_tools[%d].require_approval must be one of: always, never, auto", i)
-					}
-				} else {
-					return fmt.Errorf("mcp_tools[%d].require_approval must be a string", i)
-				}
-			}
 		}
 	}
 

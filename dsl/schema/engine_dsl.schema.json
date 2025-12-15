@@ -236,12 +236,6 @@
                 "description": "Optional list of tool names from this MCP server that the agent is allowed to call. When omitted, all tools are available.",
                 "items": { "type": "string" }
               },
-              "require_approval": {
-                "type": "string",
-                "description": "High-level approval policy for calls to this MCP server (e.g., \"always\", \"never\", \"auto\"). Semantics are enforced at a higher layer.",
-                "enum": ["always", "never", "auto"],
-                "default": "auto"
-              },
               "headers": {
                 "type": "object",
                 "description": "Optional HTTP headers to include when connecting to the MCP server.",
@@ -442,10 +436,6 @@
           "type": "string",
           "enum": ["streamable_http", "sse"],
           "description": "Transport mechanism for MCP. STDIO is intentionally not exposed at the DSL level."
-        },
-        "require_approval": {
-          "type": "boolean",
-          "description": "When true, execution pauses before calling the MCP tool and requires explicit user approval."
         },
         "headers": {
           "type": "object",
