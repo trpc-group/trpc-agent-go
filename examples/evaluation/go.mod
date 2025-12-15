@@ -1,11 +1,13 @@
 module trpc.group/trpc-go/trpc-agent-go/examples/evaluation
 
-go 1.24.10
+go 1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/evaluation => ../../evaluation
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic => ../../model/anthropic
+	trpc.group/trpc-go/trpc-agent-go/model/gemini => ../../model/gemini
+	trpc.group/trpc-go/trpc-agent-go/model/ollama => ../../model/ollama
 	trpc.group/trpc-go/trpc-agent-go/model/provider => ../../model/provider
 	trpc.group/trpc-go/trpc-agent-go/server/debug => ../../server/debug
 )
@@ -35,6 +37,7 @@ require (
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
+	github.com/ollama/ollama v0.13.1 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/rs/cors v1.11.1 // indirect
@@ -68,5 +71,6 @@ require (
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-20251126064502-c8c2594d2519 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.0.0-20251203120347-0b4d62cb115d // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/ollama v0.7.1-0.20251215094804-902d5dace126 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/provider v0.0.0-20251126064502-c8c2594d2519 // indirect
 )
