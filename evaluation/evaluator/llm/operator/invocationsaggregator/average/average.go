@@ -22,7 +22,7 @@ import (
 type averageInvocationsAggregator struct {
 }
 
-// averageInvocationsAggregator computes the mean score across evaluated invocations.
+// New returns an invocations aggregator that averages evaluated scores.
 func New() invocationsaggregator.InvocationsAggregator {
 	return &averageInvocationsAggregator{}
 }

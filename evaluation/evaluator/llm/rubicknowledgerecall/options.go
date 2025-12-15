@@ -39,26 +39,31 @@ func newOptions(opt ...Option) *options {
 	return opts
 }
 
+// Option customizes RubicKnowledgeRecall evaluator dependencies.
 type Option func(*options)
 
+// WithMessagesConstructor sets the prompt builder for knowledge recall.
 func WithMessagesConstructor(mc messagesconstructor.MessagesConstructor) Option {
 	return func(o *options) {
 		o.messagesConstructor = mc
 	}
 }
 
+// WithResponsescorer sets the response scorer implementation.
 func WithResponsescorer(rs responsescorer.ResponseScorer) Option {
 	return func(o *options) {
 		o.responsescorer = rs
 	}
 }
 
+// WithSamplesAggregator sets how multiple judge samples are reduced.
 func WithSamplesAggregator(sa samplesaggregator.SamplesAggregator) Option {
 	return func(o *options) {
 		o.samplesAggregator = sa
 	}
 }
 
+// WithInvocationsAggregator sets how per-invocation scores are aggregated.
 func WithInvocationsAggregator(ia invocationsaggregator.InvocationsAggregator) Option {
 	return func(o *options) {
 		o.invocationsAggregator = ia

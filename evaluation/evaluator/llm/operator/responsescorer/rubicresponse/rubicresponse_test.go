@@ -38,7 +38,7 @@ Verdict: no
 	assert.InDelta(t, 0.5, result.Score, 1e-9)
 	assert.Equal(t, "1", result.RubricScores[0].ID)
 	assert.Equal(t, "r1", result.RubricScores[0].Reason)
-	assert.NotNil(t, result.RubricScores[0].Score)
+	assert.InDelta(t, 1.0, result.RubricScores[0].Score, 1e-9)
 }
 
 func TestScoreBasedOnResponseNoBlocks(t *testing.T) {

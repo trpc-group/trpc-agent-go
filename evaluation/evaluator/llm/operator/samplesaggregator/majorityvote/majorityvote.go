@@ -23,7 +23,7 @@ import (
 type majorityVoteSamplesAggregator struct {
 }
 
-// majorityVoteSamplesAggregator picks the dominant sample based on pass or fail counts.
+// New returns a samples aggregator that selects a representative by majority vote.
 func New() samplesaggregator.SamplesAggregator {
 	return &majorityVoteSamplesAggregator{}
 }

@@ -21,12 +21,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+// rubricBlockRegex extracts rubric ID, property, evidence, reason, and verdict blocks.
 var rubricBlockRegex = regexp.MustCompile(
-	`(?ms)ID:\s*(\d+)\s*` + // 1: ID 数字
-		`Property:\s*(.*?)\s*` + // 2: Property 内容
-		`Evidence:\s*(.*?)\s*` + // 3: Evidence 内容
-		`Reason:\s*(.*?)\s*` + // 4: Reason 内容
-		`Verdict:\s*(.*?)\s*$`, // 5: Verdict 内容（yes / no）
+	`(?ms)ID:\s*(\d+)\s*` + // 1: rubric id
+		`Property:\s*(.*?)\s*` + // 2: property text
+		`Evidence:\s*(.*?)\s*` + // 3: evidence text
+		`Reason:\s*(.*?)\s*` + // 4: reason text
+		`Verdict:\s*(.*?)\s*$`, // 5: verdict yes/no
 )
 
 type rubicResponseScorer struct {
@@ -58,7 +59,7 @@ func (e *rubicResponseScorer) ScoreBasedOnResponse(ctx context.Context, response
 		result.RubricScores = append(result.RubricScores, &evalresult.RubricScore{
 			ID:     rubricID,
 			Reason: reason,
-			Score:  &score,
+			Score:  score,
 		})
 		averageScore += score
 	}
