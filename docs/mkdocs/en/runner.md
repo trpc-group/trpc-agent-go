@@ -335,14 +335,19 @@ r := runner.NewRunner("my-app", reader, // Use reader as the default agent.
 ch, err := r.Run(ctx, userID, sessionID, msg)
 
 // Pick the writer agent by name.
-ch, err = r.Run(ctx, userID, sessionID, msg, agent.WithAgentName("writer"))
+ch, err = r.Run(ctx, userID, sessionID, msg, agent.WithAgentByName("writer"))
 
 // Override with an instance directly (no pre-registration needed).
 custom := llmagent.New("custom", llmagent.WithModel(model))
 ch, err = r.Run(ctx, userID, sessionID, msg, agent.WithAgent(custom))
 ```
 
-Agent selection priority: `WithAgent` > `WithAgentName` > default agent set at construction. 
+- `runner.NewRunner("my-app", agent)`: Set the default agent when creating the Runner.
+- `runner.WithAgent("agentName", agent)`: Pre-register an agent by name so later requests can switch via name.
+- `agent.WithAgentByName("agentName")`: Choose a registered agent by name for a single request without changing the default.
+- `agent.WithAgent(agent)`: Provide an agent instance directly for a single request; highest priority and no pre-registration needed.
+
+Agent selection priority: `agent.WithAgent` > `agent.WithAgentByName` > default agent set at construction. 
 
 The selected agent name is used as the event author and is recorded via `appid.RegisterRunner` for observability.
 

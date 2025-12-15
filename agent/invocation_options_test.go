@@ -106,10 +106,10 @@ func TestRunOptionsAgentSelectors(t *testing.T) {
 
 	WithAgent(override)(opts)
 	assert.Equal(t, override, opts.Agent)
-	assert.Empty(t, opts.AgentName)
+	assert.Empty(t, opts.AgentByName)
 
-	WithAgentName("named")(opts)
-	assert.Equal(t, "named", opts.AgentName)
+	WithAgentByName("named")(opts)
+	assert.Equal(t, "named", opts.AgentByName)
 	assert.Equal(t, override, opts.Agent)
 }
 

@@ -147,10 +147,10 @@ func WithAgent(a Agent) RunOption {
 	}
 }
 
-// WithAgentName sets the agent name that should be resolved for this run.
-func WithAgentName(name string) RunOption {
+// WithAgentByName sets the agent name that should be resolved for this run.
+func WithAgentByName(name string) RunOption {
 	return func(opts *RunOptions) {
-		opts.AgentName = name
+		opts.AgentByName = name
 	}
 }
 
@@ -406,8 +406,8 @@ type RunOptions struct {
 	// Agent overrides the runner's default agent for this run.
 	Agent Agent
 
-	// AgentName instructs the runner to resolve an agent by name for this run.
-	AgentName string
+	// AgentByName instructs the runner to resolve an agent by name for this run.
+	AgentByName string
 
 	// Model is the model to use for this specific run.
 	// If set, it temporarily overrides the agent's default model for this request only.
