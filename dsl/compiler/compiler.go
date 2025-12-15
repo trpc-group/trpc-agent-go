@@ -15,6 +15,7 @@ import (
 	dslcel "trpc.group/trpc-go/trpc-agent-go/dsl/internal/cel"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -914,7 +915,7 @@ func (c *Compiler) applyOutputMapping(result interface{}, outputs []dsl.NodeIO, 
 				return nil, fmt.Errorf("required output '%s' not found in component result (available keys: %v)", sourceFieldName, getStateKeys(resultState))
 			} else {
 				// Optional output not present, skip it
-				fmt.Printf("⚠️  [DEBUG] Optional output '%s' not found in result state, skipping\n", sourceFieldName)
+				log.Debugf("optional output %q not found in result state; skipping", sourceFieldName)
 				continue
 			}
 		}

@@ -14,6 +14,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -199,7 +200,7 @@ func (c *LLMComponent) Execute(ctx context.Context, config registry.ComponentCon
 		}
 	}
 
-	fmt.Printf("🔍 [DEBUG LLM] Node %s executed, response length: %d\n", nodeID, len(assistantMessage.Content))
+	log.Debugf("builtin.llm[%s]: response length: %d", nodeID, len(assistantMessage.Content))
 
 	// Return updated state with new message, last_response, and node_responses
 	return graph.State{

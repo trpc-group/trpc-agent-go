@@ -10,9 +10,8 @@
 package builtin
 
 import (
-	"log"
-
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool/duckduckgo"
 )
 
@@ -33,6 +32,6 @@ func registerBuiltinTools() {
 // registerBuiltinToolSets registers all built-in ToolSets to the DefaultToolSetRegistry.
 func registerBuiltinToolSets() {
 	if err := registry.RegisterBuiltinToolSets(registry.DefaultToolSetRegistry); err != nil {
-		log.Printf("Warning: failed to register built-in toolsets: %v", err)
+		log.Warnf("failed to register built-in toolsets: %v", err)
 	}
 }
