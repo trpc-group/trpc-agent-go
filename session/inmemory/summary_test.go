@@ -31,6 +31,8 @@ func (f *fakeSummarizer) ShouldSummarize(sess *session.Session) bool { return f.
 func (f *fakeSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
 	return f.out, nil
 }
+func (f *fakeSummarizer) SetPrompt(prompt string)  {}
+func (f *fakeSummarizer) SetModel(m model.Model)   {}
 func (f *fakeSummarizer) Metadata() map[string]any { return map[string]any{} }
 
 func TestMemoryService_GetSessionSummaryText_LocalPreferred(t *testing.T) {
@@ -275,6 +277,8 @@ func (f *fakeBlockingSummarizer) Summarize(ctx context.Context, sess *session.Se
 	<-ctx.Done()
 	return "", ctx.Err()
 }
+func (f *fakeBlockingSummarizer) SetPrompt(prompt string)  {}
+func (f *fakeBlockingSummarizer) SetModel(m model.Model)   {}
 func (f *fakeBlockingSummarizer) Metadata() map[string]any { return map[string]any{} }
 
 func TestMemoryService_SummaryJobTimeout_CancelsSummarizer(t *testing.T) {
@@ -893,6 +897,8 @@ func (f *fakeErrorSummarizer) ShouldSummarize(sess *session.Session) bool { retu
 func (f *fakeErrorSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
 	return "", fmt.Errorf("summarizer error")
 }
+func (f *fakeErrorSummarizer) SetPrompt(prompt string)  {}
+func (f *fakeErrorSummarizer) SetModel(m model.Model)   {}
 func (f *fakeErrorSummarizer) Metadata() map[string]any { return map[string]any{} }
 
 func TestMemoryService_StopAsyncSummaryWorker_AlreadyStopped(t *testing.T) {

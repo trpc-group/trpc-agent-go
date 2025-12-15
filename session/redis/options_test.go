@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -25,6 +26,8 @@ func (f *fakeRedisOptionsSummarizer) ShouldSummarize(sess *session.Session) bool
 func (f *fakeRedisOptionsSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
 	return "test summary", nil
 }
+func (f *fakeRedisOptionsSummarizer) SetPrompt(prompt string)  {}
+func (f *fakeRedisOptionsSummarizer) SetModel(m model.Model)   {}
 func (f *fakeRedisOptionsSummarizer) Metadata() map[string]any { return map[string]any{"test": "data"} }
 
 func TestWithAsyncSummaryNum(t *testing.T) {
