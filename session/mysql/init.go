@@ -366,7 +366,13 @@ func (s *Service) initDB(ctx context.Context) error {
 
 // verifySchema verifies that the database schema matches expectations.
 func (s *Service) verifySchema(ctx context.Context) error {
-	for tableName, schema := range expectedSchema {
+	// Use tableDefs order for deterministic verification
+	for _, tableDef := range tableDefs {
+		tableName := tableDef.name
+		schema, ok := expectedSchema[tableName]
+		if !ok {
+			continue
+		}
 		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, tableName)
 
 		// Check if table exists

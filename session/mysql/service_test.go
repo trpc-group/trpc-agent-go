@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
@@ -2460,7 +2461,7 @@ func TestNewService_WithTablePrefix(t *testing.T) {
 		return &mockMySQLClient{db: db}, nil
 	})
 
-	mockDBInit(mock)
+	mockDBInitWithPrefix(mock, "test")
 
 	svc, err := NewService(
 		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
@@ -2687,7 +2688,7 @@ func TestNewService_WithAllOptions(t *testing.T) {
 		return &mockMySQLClient{db: db}, nil
 	})
 
-	mockDBInit(mock)
+	mockDBInitWithPrefix(mock, "myapp")
 
 	svc, err := NewService(
 		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
@@ -2730,14 +2731,64 @@ func TestNewService_WithAllOptions(t *testing.T) {
 
 // mockDBInit mocks the database initialization process
 func mockDBInit(mock sqlmock.Sqlmock) {
-	// Mock: Create 6 tables
-	for i := 0; i < 6; i++ {
+	mockDBInitWithPrefix(mock, "")
+}
+
+// mockDBInitWithPrefix mocks the database initialization process with table prefix
+func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
+	// Mock: Create 5 tables
+	for i := 0; i < 5; i++ {
 		mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 
 	// Mock: Create 12 indexes
 	for i := 0; i < 12; i++ {
 		mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+
+	// Mock: verifySchema queries for each table
+	tableNames := []string{
+		sqldb.TableNameSessionStates,
+		sqldb.TableNameSessionEvents,
+		sqldb.TableNameSessionSummaries,
+		sqldb.TableNameAppStates,
+		sqldb.TableNameUserStates,
+	}
+
+	for _, tableName := range tableNames {
+		fullTableName := sqldb.BuildTableName(tablePrefix, tableName)
+		schema := expectedSchema[tableName]
+
+		// 1. tableExists query
+		mock.ExpectQuery("SELECT COUNT").
+			WithArgs(fullTableName).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+		// 2. verifyColumns query
+		colRows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE"})
+		for _, col := range schema.columns {
+			isNullable := "NO"
+			if col.nullable {
+				isNullable = "YES"
+			}
+			colRows.AddRow(col.name, col.dataType, isNullable)
+		}
+		mock.ExpectQuery("SELECT COLUMN_NAME").
+			WithArgs(fullTableName).
+			WillReturnRows(colRows)
+
+		// 3. verifyIndexes query
+		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME"})
+		for _, idx := range schema.indexes {
+			idxName := sqldb.BuildIndexName(tablePrefix, idx.table, idx.suffix)
+			for _, col := range idx.columns {
+				idxRows.AddRow(idxName, col)
+			}
+		}
+		idxRows.AddRow("PRIMARY", "id")
+		mock.ExpectQuery("SELECT INDEX_NAME").
+			WithArgs(fullTableName).
+			WillReturnRows(idxRows)
 	}
 }
 
