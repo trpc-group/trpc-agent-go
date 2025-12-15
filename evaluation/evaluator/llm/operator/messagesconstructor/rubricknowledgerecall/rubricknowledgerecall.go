@@ -13,7 +13,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"text/template"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -81,7 +80,7 @@ Only respond to the rubric items provided. Do not invent new rubric items.
 # Output Format (repeat this format for every rubric item, starting with a new line)
 
 ID: [The ID of the rubric item, unique within the rubric. If the rubric is numbered 1..N, the ID must match that numbering.]
-Rubric Item: [Repeat the rubric item word-for-word without any changes. Keep punctuation and capitalization exactly as-is. Do not translate or paraphrase.]
+Rubric: [Repeat the rubric item word-for-word without any changes. Keep punctuation and capitalization exactly as-is. Do not translate or paraphrase.]
 Evidence: [Relevant verbatim excerpts (or near-verbatim paraphrases) from <retrieved_knowledge>, with source/location where possible. If there is no relevant evidence, write “none”.]
 Reason: [Explain why the evidence directly supports the rubric item, or why evidence is missing/insufficient/irrelevant; or explain why the item is not applicable, and cite which part of <user_prompt> establishes that.]
 Verdict: [yes|no]
@@ -139,7 +138,6 @@ func (e *rubricKnowledgeRecallMessagesConstructor) ConstructMessages(ctx context
 	if err := rubricKnowledgeRecallPromptTemplate.Execute(&buf, data); err != nil {
 		return nil, fmt.Errorf("execute rubric knowledge recall prompt template: %w", err)
 	}
-	log.Println(buf.String())
 	return []model.Message{
 		{
 			Role:    model.RoleUser,

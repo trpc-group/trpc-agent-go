@@ -26,7 +26,7 @@ const passedVerdict = "yes"
 // rubricBlockRegex extracts rubric ID, property, evidence, reason, and verdict blocks.
 var rubricBlockRegex = regexp.MustCompile(
 	`(?ms)ID:\s*(\d+)\s*` + // 1: rubric id
-		`Property:\s*(.*?)\s*` + // 2: property text
+		`Rubric:\s*(.*?)\s*` + // 2: rubric text
 		`Evidence:\s*(.*?)\s*` + // 3: evidence text
 		`Reason:\s*(.*?)\s*` + // 4: reason text
 		`Verdict:\s*(.*?)\s*$`, // 5: verdict yes/no
@@ -43,6 +43,9 @@ func New() responsescorer.ResponseScorer {
 // ScoreBasedOnResponse scores rubric responses.
 func (e *rubricResponseScorer) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
 	_ *metric.EvalMetric) (*evalresult.ScoreResult, error) {
+	if len(response.Choices) == 0 {
+		return nil, fmt.Errorf("no choices in response")
+	}
 	content := response.Choices[0].Message.Content
 	matches := rubricBlockRegex.FindAllStringSubmatch(content, -1)
 	if len(matches) == 0 {

@@ -26,13 +26,13 @@ func TestScoreBasedOnResponseParsesBlocks(t *testing.T) {
 			{
 				Message: model.Message{Content: `
 ID: 1
-Property: p1
+Rubric: p1
 Evidence: e1
 Reason: r1
 Verdict: yes
 
 ID: 2
-Property: p2
+Rubric: p2
 Evidence: e2
 Reason: r2
 Verdict: no

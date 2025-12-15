@@ -59,7 +59,7 @@ Only respond to the rubric items provided. Do not invent new rubric items.
 # Output Format (repeat this format for every rubric item, starting on a new line)
 
 ID: [The ID of the rubric item, unique within the rubric. If the rubric itself is numbered 1..N, the ID must match that numbering.]
-Rubric Item: [Repeat the rubric item word-for-word without any changes. Keep punctuation and capitalization exactly as-is. Do not translate or paraphrase.]
+Rubric: [Repeat the rubric item word-for-word without any changes. Keep punctuation and capitalization exactly as-is. Do not translate or paraphrase.]
 Evidence: [List the evidence text snippets relevant to this rubric item from <user_prompt> and/or <final_answer>. If no evidence is required to decide, explain why. If it cannot be unambiguously verified, explain why it cannot be verified.]
 Reason: [Explain your reasoning: how the evidence supports/contradicts the final answer, or why the rubric item is not applicable.]
 Verdict: [yes|no]
