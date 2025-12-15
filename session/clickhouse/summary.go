@@ -57,18 +57,14 @@ func (s *Service) CreateSessionSummary(
 		return fmt.Errorf("marshal summary failed: %w", err)
 	}
 
-	var expiresAt *time.Time
-	if s.opts.sessionTTL > 0 {
-		t := summary.UpdatedAt.Add(s.opts.sessionTTL)
-		expiresAt = &t
-	}
-
+	// Note: expires_at is set to NULL - summaries are bound to session lifecycle,
+	// they will be deleted when session expires or is deleted.
 	now := time.Now()
 	// INSERT new version (ReplacingMergeTree will deduplicate based on updated_at)
 	err = s.chClient.Exec(ctx,
 		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, created_at, updated_at, expires_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, filterKey, string(summaryBytes), now, summary.UpdatedAt, expiresAt)
+		key.AppName, key.UserID, key.SessionID, filterKey, string(summaryBytes), now, summary.UpdatedAt, nil)
 
 	if err != nil {
 		return fmt.Errorf("upsert summary failed: %w", err)

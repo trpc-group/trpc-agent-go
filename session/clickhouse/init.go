@@ -28,44 +28,50 @@ const (
 			app_name    String,
 			user_id     String,
 			session_id  String,
-			state       String,
-			extra_data  String,
-			created_at  DateTime64(3),
-			updated_at  DateTime64(3),
-			expires_at  Nullable(DateTime64(3)),
-			deleted_at  Nullable(DateTime64(3))
+			state       JSON,
+			extra_data  JSON,
+			created_at  DateTime64(6),
+			updated_at  DateTime64(6),
+			expires_at  Nullable(DateTime64(6)),
+			deleted_at  Nullable(DateTime64(6))
 		) ENGINE = ReplacingMergeTree(updated_at)
 		PARTITION BY (app_name, cityHash64(user_id) % 64)
 		ORDER BY (user_id, session_id, deleted_at)
 		SETTINGS index_granularity = 8192, allow_nullable_key = 1`
 
+	// expires_at is a reserved field for future use.
+	// Events are bound to session lifecycle - when session expires/is deleted, its events are also deleted.
+	// event_id is included in ORDER BY to ensure uniqueness and prevent deduplication by ReplacingMergeTree.
 	sqlCreateSessionEventsTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			app_name    String,
 			user_id     String,
 			session_id  String,
-			event       String,
-			extra_data  String,
-			created_at  DateTime64(3),
-			updated_at  DateTime64(3),
-			expires_at  Nullable(DateTime64(3)),
-			deleted_at  Nullable(DateTime64(3))
+			event_id    String,
+			event       JSON,
+			extra_data  JSON,
+			created_at  DateTime64(6),
+			updated_at  DateTime64(6),
+			expires_at  Nullable(DateTime64(6)),
+			deleted_at  Nullable(DateTime64(6))
 		) ENGINE = ReplacingMergeTree(updated_at)
 		PARTITION BY (app_name, cityHash64(user_id) % 64)
-		ORDER BY (user_id, session_id, created_at, deleted_at)
+		ORDER BY (user_id, session_id, event_id, deleted_at)
 		SETTINGS index_granularity = 8192, allow_nullable_key = 1`
 
+	// expires_at is a reserved field for future use.
+	// Summaries are bound to session lifecycle - when session expires/is deleted, its summaries are also deleted.
 	sqlCreateSessionSummariesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			app_name    String,
 			user_id     String,
 			session_id  String,
 			filter_key  String,
-			summary     String,
-			created_at  DateTime64(3),
-			updated_at  DateTime64(3),
-			expires_at  Nullable(DateTime64(3)),
-			deleted_at  Nullable(DateTime64(3))
+			summary     JSON,
+			created_at  DateTime64(6),
+			updated_at  DateTime64(6),
+			expires_at  Nullable(DateTime64(6)),
+			deleted_at  Nullable(DateTime64(6))
 		) ENGINE = ReplacingMergeTree(updated_at)
 		PARTITION BY (app_name, cityHash64(user_id) % 64)
 		ORDER BY (user_id, session_id, filter_key, deleted_at)
@@ -76,9 +82,9 @@ const (
 			app_name    String,
 			key         String,
 			value       String,
-			updated_at  DateTime64(3),
-			expires_at  Nullable(DateTime64(3)),
-			deleted_at  Nullable(DateTime64(3))
+			updated_at  DateTime64(6),
+			expires_at  Nullable(DateTime64(6)),
+			deleted_at  Nullable(DateTime64(6))
 		) ENGINE = ReplacingMergeTree(updated_at)
 		PARTITION BY app_name
 		ORDER BY (app_name, key, deleted_at)
@@ -90,31 +96,18 @@ const (
 			user_id     String,
 			key         String,
 			value       String,
-			updated_at  DateTime64(3),
-			expires_at  Nullable(DateTime64(3)),
-			deleted_at  Nullable(DateTime64(3))
+			updated_at  DateTime64(6),
+			expires_at  Nullable(DateTime64(6)),
+			deleted_at  Nullable(DateTime64(6))
 		) ENGINE = ReplacingMergeTree(updated_at)
 		PARTITION BY (app_name, cityHash64(user_id) % 64)
 		ORDER BY (user_id, key, deleted_at)
 		SETTINGS index_granularity = 8192, allow_nullable_key = 1`
-
-	// Index creation SQL (ClickHouse syntax)
-	sqlCreateSessionEventsCreatedAtIndex = `
-		ALTER TABLE {{TABLE_NAME}} ADD INDEX IF NOT EXISTS {{INDEX_NAME}} (created_at) TYPE minmax GRANULARITY 4`
-
-
 )
 
 // tableDefinition defines a table with its SQL template
 type tableDefinition struct {
 	name     string
-	template string
-}
-
-// indexDefinition defines an index with its table, suffix and SQL template
-type indexDefinition struct {
-	table    string
-	suffix   string
 	template string
 }
 
@@ -125,11 +118,6 @@ var tableDefs = []tableDefinition{
 	{sqldb.TableNameSessionSummaries, sqlCreateSessionSummariesTable},
 	{sqldb.TableNameAppStates, sqlCreateAppStatesTable},
 	{sqldb.TableNameUserStates, sqlCreateUserStatesTable},
-}
-
-// Global index definitions
-var indexDefs = []indexDefinition{
-	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixCreatedAt, sqlCreateSessionEventsCreatedAtIndex},
 }
 
 // initDB initializes the database schema.
@@ -145,23 +133,6 @@ func (s *Service) initDB(ctx context.Context) error {
 			return fmt.Errorf("create table %s failed: %w", fullTableName, err)
 		}
 		log.Infof("created table: %s", fullTableName)
-	}
-
-	// Create indexes
-	for _, indexDef := range indexDefs {
-		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, indexDef.table)
-		indexName := sqldb.BuildIndexName(s.opts.tablePrefix, indexDef.table, indexDef.suffix)
-		sql := indexDef.template
-		sql = strings.ReplaceAll(sql, "{{TABLE_NAME}}", fullTableName)
-		sql = strings.ReplaceAll(sql, "{{INDEX_NAME}}", indexName)
-
-		if err := s.chClient.Exec(ctx, sql); err != nil {
-			// ClickHouse ADD INDEX IF NOT EXISTS should not fail if index exists
-			// but we log a warning just in case
-			log.Warnf("create index %s on table %s: %v", indexName, fullTableName, err)
-		} else {
-			log.Infof("created index: %s on table %s", indexName, fullTableName)
-		}
 	}
 
 	log.Info("clickhouse session database schema initialized successfully")

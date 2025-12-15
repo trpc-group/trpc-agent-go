@@ -886,105 +886,108 @@ func (s *Service) softDeleteExpiredSessions(ctx context.Context, now time.Time) 
 		if err != nil {
 			log.Errorf("batch soft delete expired sessions failed: %v", err)
 		}
+
+		// Soft delete events and summaries for expired sessions
+		for _, es := range expiredSessions {
+			key := session.Key{
+				AppName:   es.appName,
+				UserID:    es.userID,
+				SessionID: es.sessionID,
+			}
+			s.softDeleteSessionEvents(ctx, key, now)
+			s.softDeleteSessionSummaries(ctx, key, now)
+		}
 	}
-
-	// Soft delete expired events
-	s.softDeleteExpiredEvents(ctx, now)
-
-	// Soft delete expired summaries
-	s.softDeleteExpiredSummaries(ctx, now)
 }
 
-// softDeleteExpiredEvents marks expired events as deleted.
-func (s *Service) softDeleteExpiredEvents(ctx context.Context, now time.Time) {
+// softDeleteSessionEvents marks all events for a session as deleted.
+func (s *Service) softDeleteSessionEvents(ctx context.Context, key session.Key, now time.Time) {
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT app_name, user_id, session_id, event, created_at, expires_at FROM %s FINAL
-			WHERE expires_at IS NOT NULL AND expires_at <= ?
+		fmt.Sprintf(`SELECT event_id, event, created_at, updated_at FROM %s FINAL
+			WHERE app_name = ? AND user_id = ? AND session_id = ?
 			AND deleted_at IS NULL`, s.tableSessionEvents),
-		now)
+		key.AppName, key.UserID, key.SessionID)
 	if err != nil {
-		log.Errorf("query expired events failed: %v", err)
+		log.Errorf("query session events for delete failed: %v", err)
 		return
 	}
 	defer rows.Close()
 
-	type expiredEvent struct {
-		appName, userID, sessionID, eventData string
-		createdAt                             time.Time
-		expiresAt                             *time.Time
+	type eventRecord struct {
+		eventID, eventData   string
+		createdAt, updatedAt time.Time
 	}
-	var expiredEvents []expiredEvent
+	var events []eventRecord
 
 	for rows.Next() {
-		var ee expiredEvent
-		if err := rows.Scan(&ee.appName, &ee.userID, &ee.sessionID, &ee.eventData, &ee.createdAt, &ee.expiresAt); err != nil {
-			log.Errorf("scan expired event failed: %v", err)
+		var e eventRecord
+		if err := rows.Scan(&e.eventID, &e.eventData, &e.createdAt, &e.updatedAt); err != nil {
+			log.Errorf("scan event failed: %v", err)
 			continue
 		}
-		expiredEvents = append(expiredEvents, ee)
+		events = append(events, e)
 	}
 
-	if len(expiredEvents) > 0 {
+	if len(events) > 0 {
 		err = s.chClient.BatchInsert(ctx,
-			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, extra_data, created_at, updated_at, expires_at, deleted_at)`,
+			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event_id, event, extra_data, created_at, updated_at, deleted_at)`,
 				s.tableSessionEvents),
 			func(batch driver.Batch) error {
-				for _, ee := range expiredEvents {
-					if err := batch.Append(ee.appName, ee.userID, ee.sessionID, ee.eventData, "{}", ee.createdAt, now, ee.expiresAt, now); err != nil {
+				for _, e := range events {
+					if err := batch.Append(key.AppName, key.UserID, key.SessionID, e.eventID, e.eventData, "{}", e.createdAt, now, now); err != nil {
 						return err
 					}
 				}
 				return nil
 			})
 		if err != nil {
-			log.Errorf("batch soft delete expired events failed: %v", err)
+			log.Errorf("batch soft delete session events failed: %v", err)
 		}
 	}
 }
 
-// softDeleteExpiredSummaries marks expired summaries as deleted.
-func (s *Service) softDeleteExpiredSummaries(ctx context.Context, now time.Time) {
+// softDeleteSessionSummaries marks all summaries for a session as deleted.
+func (s *Service) softDeleteSessionSummaries(ctx context.Context, key session.Key, now time.Time) {
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT app_name, user_id, session_id, filter_key, summary, created_at, expires_at FROM %s FINAL
-			WHERE expires_at IS NOT NULL AND expires_at <= ?
+		fmt.Sprintf(`SELECT filter_key, summary, created_at, updated_at FROM %s FINAL
+			WHERE app_name = ? AND user_id = ? AND session_id = ?
 			AND deleted_at IS NULL`, s.tableSessionSummaries),
-		now)
+		key.AppName, key.UserID, key.SessionID)
 	if err != nil {
-		log.Errorf("query expired summaries failed: %v", err)
+		log.Errorf("query session summaries for delete failed: %v", err)
 		return
 	}
 	defer rows.Close()
 
-	type expiredSummary struct {
-		appName, userID, sessionID, filterKey, summaryData string
-		createdAt                                          time.Time
-		expiresAt                                          *time.Time
+	type summaryRecord struct {
+		filterKey, summaryData string
+		createdAt, updatedAt   time.Time
 	}
-	var expiredSummaries []expiredSummary
+	var summaries []summaryRecord
 
 	for rows.Next() {
-		var es expiredSummary
-		if err := rows.Scan(&es.appName, &es.userID, &es.sessionID, &es.filterKey, &es.summaryData, &es.createdAt, &es.expiresAt); err != nil {
-			log.Errorf("scan expired summary failed: %v", err)
+		var s summaryRecord
+		if err := rows.Scan(&s.filterKey, &s.summaryData, &s.createdAt, &s.updatedAt); err != nil {
+			log.Errorf("scan summary failed: %v", err)
 			continue
 		}
-		expiredSummaries = append(expiredSummaries, es)
+		summaries = append(summaries, s)
 	}
 
-	if len(expiredSummaries) > 0 {
+	if len(summaries) > 0 {
 		err = s.chClient.BatchInsert(ctx,
-			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, created_at, updated_at, expires_at, deleted_at)`,
+			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, created_at, updated_at, deleted_at)`,
 				s.tableSessionSummaries),
 			func(batch driver.Batch) error {
-				for _, es := range expiredSummaries {
-					if err := batch.Append(es.appName, es.userID, es.sessionID, es.filterKey, es.summaryData, es.createdAt, now, es.expiresAt, now); err != nil {
+				for _, sum := range summaries {
+					if err := batch.Append(key.AppName, key.UserID, key.SessionID, sum.filterKey, sum.summaryData, sum.createdAt, now, now); err != nil {
 						return err
 					}
 				}
 				return nil
 			})
 		if err != nil {
-			log.Errorf("batch soft delete expired summaries failed: %v", err)
+			log.Errorf("batch soft delete session summaries failed: %v", err)
 		}
 	}
 }

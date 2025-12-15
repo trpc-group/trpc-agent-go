@@ -77,7 +77,8 @@ func (s *Service) getSession(
 	}
 
 	// Batch load events for all sessions
-	eventsList, err := s.getEventsList(ctx, []session.Key{key}, limit, afterTime)
+	// Pass session created_at to filter out events from previous session instances
+	eventsList, err := s.getEventsList(ctx, []session.Key{key}, []time.Time{sessState.CreatedAt}, limit, afterTime)
 	if err != nil {
 		return nil, fmt.Errorf("get events failed: %w", err)
 	}
@@ -157,18 +158,21 @@ func (s *Service) listSessions(
 		sessStates = append(sessStates, &state)
 	}
 
-	// Build session keys for batch loading
+	// Build session keys and created_at times for batch loading
 	sessionKeys := make([]session.Key, 0, len(sessStates))
+	sessionCreatedAts := make([]time.Time, 0, len(sessStates))
 	for _, sessState := range sessStates {
 		sessionKeys = append(sessionKeys, session.Key{
 			AppName:   key.AppName,
 			UserID:    key.UserID,
 			SessionID: sessState.ID,
 		})
+		sessionCreatedAts = append(sessionCreatedAts, sessState.CreatedAt)
 	}
 
 	// Batch load events for all sessions
-	eventsList, err := s.getEventsList(ctx, sessionKeys, limit, afterTime)
+	// Pass session created_at to filter out events from previous session instances
+	eventsList, err := s.getEventsList(ctx, sessionKeys, sessionCreatedAts, limit, afterTime)
 	if err != nil {
 		return nil, fmt.Errorf("get events list failed: %w", err)
 	}
@@ -257,11 +261,14 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, evt *event.Even
 	}
 
 	// Insert event if it has response and is not partial
+	// Events do not have their own expires_at; they are filtered by session's created_at.
+	// Use UnixMicro to preserve microsecond precision (ClickHouse driver has precision loss issue #1545).
 	if evt.Response != nil && !evt.IsPartial && evt.IsValidContent() {
+		eventNowMicro := time.Now().UnixMicro()
 		err = s.chClient.Exec(ctx,
-			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, extra_data, created_at, updated_at, expires_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionEvents),
-			key.AppName, key.UserID, key.SessionID, string(eventBytes), "{}", now, now, expiresAt)
+			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event_id, event, extra_data, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, fromUnixTimestamp64Micro(?), fromUnixTimestamp64Micro(?))`, s.tableSessionEvents),
+			key.AppName, key.UserID, key.SessionID, evt.ID, string(eventBytes), "{}", eventNowMicro, eventNowMicro)
 		if err != nil {
 			return fmt.Errorf("insert event failed: %w", err)
 		}
@@ -349,7 +356,7 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 	// Soft delete session events
 	// Query existing events and insert with deleted_at
 	eventRows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT event, created_at, updated_at, expires_at FROM %s FINAL
+		fmt.Sprintf(`SELECT event_id, event, created_at, updated_at, expires_at FROM %s FINAL
 			WHERE app_name = ? AND user_id = ? AND session_id = ?
 			AND deleted_at IS NULL`, s.tableSessionEvents),
 		key.AppName, key.UserID, key.SessionID)
@@ -359,16 +366,16 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 	defer eventRows.Close()
 
 	for eventRows.Next() {
-		var eventData string
+		var eventID, eventData string
 		var evtCreatedAt, evtUpdatedAt time.Time
 		var evtExpiresAt *time.Time
-		if err := eventRows.Scan(&eventData, &evtCreatedAt, &evtUpdatedAt, &evtExpiresAt); err != nil {
+		if err := eventRows.Scan(&eventID, &eventData, &evtCreatedAt, &evtUpdatedAt, &evtExpiresAt); err != nil {
 			return fmt.Errorf("scan event failed: %w", err)
 		}
 		err = s.chClient.Exec(ctx,
-			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, extra_data, created_at, updated_at, expires_at, deleted_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionEvents),
-			key.AppName, key.UserID, key.SessionID, eventData, "{}", evtCreatedAt, now, evtExpiresAt, now)
+			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event_id, event, extra_data, created_at, updated_at, expires_at, deleted_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionEvents),
+			key.AppName, key.UserID, key.SessionID, eventID, eventData, "{}", evtCreatedAt, now, evtExpiresAt, now)
 		if err != nil {
 			log.Warnf("soft delete event failed: %v", err)
 		}
@@ -405,9 +412,12 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 }
 
 // getEventsList loads events for multiple sessions in batch.
+// sessionCreatedAts contains the created_at time for each session, used to filter out
+// events from previous session instances (when a session expires and is recreated with the same ID).
 func (s *Service) getEventsList(
 	ctx context.Context,
 	sessionKeys []session.Key,
+	sessionCreatedAts []time.Time,
 	limit int,
 	afterTime time.Time,
 ) ([][]event.Event, error) {
@@ -416,14 +426,13 @@ func (s *Service) getEventsList(
 	}
 
 	// Build query with multiple conditions
-	// ClickHouse doesn't support (a, b, c) IN ((?, ?, ?), ...) syntax well
-	// We use OR conditions instead
+	// Each condition includes session key AND event.created_at >= session.created_at
 	conditions := make([]string, len(sessionKeys))
-	args := make([]any, 0, len(sessionKeys)*3)
+	args := make([]any, 0, len(sessionKeys)*4)
 
 	for i, key := range sessionKeys {
-		conditions[i] = "(app_name = ? AND user_id = ? AND session_id = ?)"
-		args = append(args, key.AppName, key.UserID, key.SessionID)
+		conditions[i] = "(app_name = ? AND user_id = ? AND session_id = ? AND created_at >= ?)"
+		args = append(args, key.AppName, key.UserID, key.SessionID, sessionCreatedAts[i])
 	}
 
 	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event FROM %s FINAL
@@ -457,9 +466,6 @@ func (s *Service) getEventsList(
 
 	if limit <= 0 {
 		limit = s.opts.sessionEventLimit
-	}
-	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
-		afterTime = time.Now().Add(-s.opts.sessionTTL)
 	}
 
 	// Build result in same order as sessionKeys
