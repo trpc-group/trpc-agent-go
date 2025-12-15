@@ -2822,4 +2822,3 @@ func TestNewService_WithCustomTableName(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 	service.Close()
 }
-
