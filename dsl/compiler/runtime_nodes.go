@@ -17,7 +17,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
-	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
 )
@@ -417,28 +416,11 @@ func newLLMAgentNodeFuncFromConfig(
 			}
 		}
 
-		var sessionData *session.Session
-		if sess, exists := state[graph.StateKeySession]; exists {
-			if sessData, ok := sess.(*session.Session); ok {
-				sessionData = sessData
-			}
-		}
-
-		var invocation *agent.Invocation
-		if parentInvocation != nil {
-			invocation = parentInvocation.Clone(
-				agent.WithInvocationAgent(llmAgent),
-				agent.WithInvocationMessage(model.NewUserMessage(userInput)),
-				agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
-			)
-		} else {
-			invocation = agent.NewInvocation(
-				agent.WithInvocationAgent(llmAgent),
-				agent.WithInvocationMessage(model.NewUserMessage(userInput)),
-				agent.WithInvocationSession(sessionData),
-				agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
-			)
-		}
+		invocation := parentInvocation.Clone(
+			agent.WithInvocationAgent(llmAgent),
+			agent.WithInvocationMessage(model.NewUserMessage(userInput)),
+			agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
+		)
 
 		subCtx := agent.NewInvocationContext(ctx, invocation)
 
