@@ -149,11 +149,11 @@ func WithAddSessionSummary(addSummary bool) Option {
 // WithSummarySeparateSystemMessage adds the session summary as a standalone
 // system message instead of merging it into the first system message.
 // This automatically enables AddSessionSummary.
-func WithSummarySeparateSystemMessage(standalone bool) Option {
+func WithSummarySeparateSystemMessage(separate bool) Option {
 	return func(opts *Options) {
-		opts.SummarySeparateSystemMessage = standalone
-		if standalone {
-			opts.AddSessionSummary = true // Automatically enable summary
+		opts.SummarySeparateSystemMessage = separate
+		if separate {
+			opts.AddSessionSummary = true // Automatically enable AddSessionSummary.
 		}
 	}
 }
