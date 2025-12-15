@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
@@ -25,7 +26,7 @@ const passedVerdict = "yes"
 
 // rubricBlockRegex extracts rubric ID, property, evidence, reason, and verdict blocks.
 var rubricBlockRegex = regexp.MustCompile(
-	`(?ms)ID:\s*(\d+)\s*` + // 1: rubric id
+	`(?ms)ID:\s*(.*?)\s*` + // 1: rubric id
 		`Rubric:\s*(.*?)\s*` + // 2: rubric text
 		`Evidence:\s*(.*?)\s*` + // 3: evidence text
 		`Reason:\s*(.*?)\s*` + // 4: reason text
@@ -54,9 +55,9 @@ func (e *rubricResponseScorer) ScoreBasedOnResponse(ctx context.Context, respons
 	result := &evalresult.ScoreResult{}
 	averageScore := 0.0
 	for _, match := range matches {
-		rubricID := match[1]
-		reason := match[4]
-		verdict := match[5]
+		rubricID := strings.TrimSpace(match[1])
+		reason := strings.TrimSpace(match[4])
+		verdict := strings.ToLower(strings.TrimSpace(match[5]))
 		var score float64
 		if verdict == passedVerdict {
 			score = 1.0

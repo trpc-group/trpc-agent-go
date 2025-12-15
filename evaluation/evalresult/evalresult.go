@@ -101,9 +101,9 @@ type ScoreResult struct {
 
 // RubricScore captures an individual rubric item score returned by judge models.
 type RubricScore struct {
-	ID     string  // ID identifies the rubric item.
-	Reason string  // Reason explains why the rubric was scored this way.
-	Score  float64 // Score is the numeric rubric score.
+	ID     string  `json:"id,omitempty"`     // ID identifies the rubric item.
+	Reason string  `json:"reason,omitempty"` // Reason explains why the rubric was scored this way.
+	Score  float64 `json:"score,omitempty"`  // Score is the numeric rubric score.
 }
 
 // Manager defines the interface for managing evaluation results.
