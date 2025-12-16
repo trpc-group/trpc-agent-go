@@ -227,13 +227,38 @@ func (v *Validator) validateStateVariables(graphDef *dsl.Graph) error {
 		}
 
 		assignSlice, ok := rawAssignments.([]any)
+		if ok {
+			for i, item := range assignSlice {
+				assignMap, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+
+				field, _ := assignMap["field"].(string)
+				if strings.TrimSpace(field) == "" {
+					// For compatibility with potential "name" field naming.
+					field, _ = assignMap["name"].(string)
+				}
+
+				field = strings.TrimSpace(field)
+				if field == "" {
+					continue
+				}
+
+				if _, exists := declared[field]; !exists {
+					return fmt.Errorf("node %s: assignments[%d] field %q is not declared in state_variables", node.ID, i, field)
+				}
+			}
+			continue
+		}
+
+		assignMaps, ok := rawAssignments.([]map[string]any)
 		if !ok {
 			continue
 		}
 
-		for i, item := range assignSlice {
-			assignMap, ok := item.(map[string]any)
-			if !ok {
+		for i, assignMap := range assignMaps {
+			if assignMap == nil {
 				continue
 			}
 

@@ -33,7 +33,7 @@ func init() {
 // following variables available:
 //   - state: graph.State (global graph state)
 //   - input: JSON-like object representing the node input (currently unused
-//            for builtin.set_state and left as nil).
+//     for builtin.set_state and left as nil).
 type SetStateComponent struct{}
 
 // setStateAssignmentConfig describes a single assignment in config.
@@ -81,22 +81,11 @@ func (c *SetStateComponent) Execute(ctx context.Context, config registry.Compone
 		return graph.State{}, nil
 	}
 
-	rawSlice, ok := raw.([]any)
-	if !ok {
-		// Be tolerant of mis-typed configs.
-		return graph.State{}, nil
-	}
-
-	if len(rawSlice) == 0 {
-		return graph.State{}, nil
-	}
-
 	stateDelta := graph.State{}
 
-	for _, item := range rawSlice {
-		assignMap, ok := item.(map[string]any)
-		if !ok {
-			continue
+	applyAssignment := func(assignMap map[string]any) {
+		if assignMap == nil {
+			return
 		}
 
 		field, _ := assignMap["field"].(string)
@@ -105,17 +94,17 @@ func (c *SetStateComponent) Execute(ctx context.Context, config registry.Compone
 			field, _ = assignMap["name"].(string)
 		}
 		if strings.TrimSpace(field) == "" {
-			continue
+			return
 		}
 
 		rawExpr, ok := assignMap["expr"].(map[string]any)
 		if !ok {
-			continue
+			return
 		}
 
 		exprStr, _ := rawExpr["expression"].(string)
 		if strings.TrimSpace(exprStr) == "" {
-			continue
+			return
 		}
 
 		// Evaluate the expression using CEL with the current graph.State
@@ -125,10 +114,28 @@ func (c *SetStateComponent) Execute(ctx context.Context, config registry.Compone
 		if err != nil {
 			// Be conservative on errors: skip this assignment but do not
 			// fail the entire node execution.
-			continue
+			return
 		}
 
 		stateDelta[field] = value
+	}
+
+	switch list := raw.(type) {
+	case []any:
+		for _, item := range list {
+			assignMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			applyAssignment(assignMap)
+		}
+	case []map[string]any:
+		for _, assignMap := range list {
+			applyAssignment(assignMap)
+		}
+	default:
+		// Be tolerant of mis-typed configs.
+		return graph.State{}, nil
 	}
 
 	return stateDelta, nil

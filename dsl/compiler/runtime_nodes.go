@@ -520,14 +520,33 @@ func createMCPToolSet(config map[string]interface{}) (tool.ToolSet, error) {
 		}
 		connConfig.Command = command
 
-		if argsVal, ok := config["args"]; ok {
-			if argsList, ok := argsVal.([]interface{}); ok {
-				args := make([]string, 0, len(argsList))
-				for _, arg := range argsList {
-					if argStr, ok := arg.(string); ok {
-						args = append(args, argStr)
+		if argsVal, ok := config["args"]; ok && argsVal != nil {
+			args := make([]string, 0)
+			switch argsList := argsVal.(type) {
+			case []string:
+				args = make([]string, 0, len(argsList))
+				for _, argStr := range argsList {
+					argStr = strings.TrimSpace(argStr)
+					if argStr == "" {
+						continue
 					}
+					args = append(args, argStr)
 				}
+			case []any:
+				args = make([]string, 0, len(argsList))
+				for _, arg := range argsList {
+					argStr, ok := arg.(string)
+					if !ok {
+						continue
+					}
+					argStr = strings.TrimSpace(argStr)
+					if argStr == "" {
+						continue
+					}
+					args = append(args, argStr)
+				}
+			}
+			if len(args) > 0 {
 				connConfig.Args = args
 			}
 		}

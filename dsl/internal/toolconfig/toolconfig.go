@@ -64,8 +64,16 @@ func ParseStringSlice(value any, path string) ([]string, error) {
 
 // ParseMCPTools parses and validates the builtin.llmagent mcp_tools block.
 func ParseMCPTools(value any) ([]MCPToolSpec, error) {
-	list, ok := value.([]any)
-	if !ok {
+	var list []any
+	switch v := value.(type) {
+	case []any:
+		list = v
+	case []map[string]any:
+		list = make([]any, 0, len(v))
+		for _, item := range v {
+			list = append(list, item)
+		}
+	default:
 		return nil, fmt.Errorf("mcp_tools must be an array")
 	}
 

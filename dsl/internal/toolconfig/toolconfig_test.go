@@ -75,6 +75,26 @@ func TestParseMCPTools(t *testing.T) {
 		t.Fatalf("headers[X-Test]=%q, want %q", got, "v")
 	}
 
+	specs, err = ParseMCPTools([]map[string]any{
+		{
+			"server_url":    "https://example.invalid/mcp",
+			"transport":     "sse",
+			"allowed_tools": []string{"a", "b"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("got %d specs, want 1", len(specs))
+	}
+	if specs[0].Transport != MCPTransportSSE {
+		t.Fatalf("transport=%q, want %q", specs[0].Transport, MCPTransportSSE)
+	}
+	if len(specs[0].AllowedTools) != 2 {
+		t.Fatalf("allowed_tools=%v", specs[0].AllowedTools)
+	}
+
 	_, err = ParseMCPTools([]any{
 		map[string]any{
 			"server_url": "https://example.invalid/mcp",
