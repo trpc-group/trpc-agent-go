@@ -26,6 +26,7 @@ import (
 	internalknowledge "trpc.group/trpc-go/trpc-agent-go/internal/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/storage/milvus"
 )
@@ -389,7 +390,7 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 		return nil, fmt.Errorf("milvus vector search failed: %w", err)
 	}
 
-	return vs.convertSearchResult(result)
+	return vs.convertSearchResult(result, query.SearchMode)
 }
 
 // searchByKeyword performs keyword-based search using BM25.
@@ -431,7 +432,7 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 		return nil, fmt.Errorf("milvus keyword search failed: %w", err)
 	}
 
-	return vs.convertSearchResult(result)
+	return vs.convertSearchResult(result, query.SearchMode)
 }
 
 // searchByHybrid performs hybrid search combining vector and keyword search.
@@ -484,7 +485,7 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		return nil, fmt.Errorf("milvus hybrid search failed: %w", err)
 	}
 
-	return vs.convertSearchResult(result)
+	return vs.convertSearchResult(result, query.SearchMode)
 }
 
 // searchByFilter performs filter-based search.
@@ -519,7 +520,7 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 		return nil, fmt.Errorf("milvus filter search failed: %w", err)
 	}
 
-	return vs.convertQueryResult(result)
+	return vs.convertQueryResult(result, query.SearchMode)
 }
 
 // DeleteByFilter deletes documents from the vector store based on filter conditions.
@@ -738,9 +739,13 @@ func (vs *VectorStore) buildFilterExpression(filter *vectorstore.SearchFilter) (
 
 	// Filter by metadata.
 	for key, value := range filter.Metadata {
+		// Ensure metadata keys have the correct prefix for the converter
+		if !strings.HasPrefix(key, source.MetadataFieldPrefix) {
+			key = source.MetadataFieldPrefix + key
+		}
 		filters = append(filters, &searchfilter.UniversalFilterCondition{
 			Operator: searchfilter.OperatorEqual,
-			Field:    fmt.Sprintf("%s[\"%s\"]", vs.option.metadataField, key),
+			Field:    key,
 			Value:    value,
 		})
 	}
@@ -936,7 +941,7 @@ func (vs *VectorStore) convertResultToDocument(result client.ResultSet) ([]*docu
 	return docs, embeddings, scores, nil
 }
 
-func (vs *VectorStore) convertSearchResult(result []client.ResultSet) (*vectorstore.SearchResult, error) {
+func (vs *VectorStore) convertSearchResult(result []client.ResultSet, searchMode vectorstore.SearchMode) (*vectorstore.SearchResult, error) {
 	searchResult := &vectorstore.SearchResult{
 		Results: make([]*vectorstore.ScoredDocument, 0),
 	}
@@ -955,7 +960,7 @@ func (vs *VectorStore) convertSearchResult(result []client.ResultSet) (*vectorst
 	}
 
 	// Normalize scores based on metric type
-	normalizedScores := vs.normalizeScores(scores, query.SearchMode)
+	normalizedScores := vs.normalizeScores(scores, searchMode)
 
 	for i, doc := range docs {
 		searchResult.Results = append(searchResult.Results, &vectorstore.ScoredDocument{
@@ -967,7 +972,7 @@ func (vs *VectorStore) convertSearchResult(result []client.ResultSet) (*vectorst
 	return searchResult, nil
 }
 
-func (vs *VectorStore) convertQueryResult(result client.ResultSet) (*vectorstore.SearchResult, error) {
+func (vs *VectorStore) convertQueryResult(result client.ResultSet, searchMode vectorstore.SearchMode) (*vectorstore.SearchResult, error) {
 	searchResult := &vectorstore.SearchResult{
 		Results: make([]*vectorstore.ScoredDocument, 0, result.Len()),
 	}
@@ -994,7 +999,7 @@ func (vs *VectorStore) convertQueryResult(result client.ResultSet) (*vectorstore
 	}
 
 	// Normalize scores based on metric type
-	normalizedScores := vs.normalizeScores(scores, query.SearchMode)
+	normalizedScores := vs.normalizeScores(scores, searchMode)
 
 	for i, doc := range docs {
 		searchResult.Results = append(searchResult.Results, &vectorstore.ScoredDocument{

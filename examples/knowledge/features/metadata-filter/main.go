@@ -138,6 +138,22 @@ func main() {
 		knowledgetool.WithMaxResults(5),
 	)
 	runToolDemo(ctx, modelName, andFilterTool, "How do I get started with Go?")
+
+	// Example 4: Conflicting parameter names test
+	fmt.Println("\n4️⃣ Filter: metadata.difficulty=beginner OR metadata.difficulty=advanced (Parameter conflict test)")
+	conflictFilterTool := knowledgetool.NewKnowledgeSearchTool(
+		kb,
+		knowledgetool.WithToolName("search_any_difficulty"),
+		knowledgetool.WithToolDescription("Search documentation of any difficulty"),
+		knowledgetool.WithConditionedFilter(
+			searchfilter.Or(
+				searchfilter.Equal("metadata.difficulty", "beginner"),
+				searchfilter.Equal("metadata.difficulty", "advanced"),
+			),
+		),
+		knowledgetool.WithMaxResults(5),
+	)
+	runToolDemo(ctx, modelName, conflictFilterTool, "List all documents with any difficulty level.")
 }
 
 func runToolDemo(ctx context.Context, modelName string, searchTool tool.Tool, query string) {
