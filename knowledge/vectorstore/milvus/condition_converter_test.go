@@ -255,8 +255,96 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 				Value:    []int{18, 30},
 			},
 			wantErr:    false,
-			wantFilter: `age >= {age_0} and age <= {age_1}`,
+			wantFilter: `(age >= {age_0} and age <= {age_1})`,
 			wantParams: map[string]any{"age_0": 18, "age_1": 30},
+		},
+		{
+			name: "metadata field equal operator",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.topic",
+				Operator: searchfilter.OperatorEqual,
+				Value:    "AI",
+			},
+			wantErr:    false,
+			wantFilter: `metadata["topic"] == {metadata.topic}`,
+			wantParams: map[string]any{"metadata.topic": "AI"},
+		},
+		{
+			name: "metadata field in operator",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.tags",
+				Operator: searchfilter.OperatorIn,
+				Value:    []any{"AI", "ML", "NLP"},
+			},
+			wantErr:    false,
+			wantFilter: `metadata["tags"] in {metadata.tags}`,
+			wantParams: map[string]any{"metadata.tags": []any{"AI", "ML", "NLP"}},
+		},
+		{
+			name: "metadata field between operator",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.score",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []float64{0.5, 1.0},
+			},
+			wantErr: false,
+			wantFilter: `(metadata["score"] >= {metadata.score_0} and ` +
+				`metadata["score"] <= {metadata.score_1})`,
+			wantParams: map[string]any{"metadata.score_0": 0.5, "metadata.score_1": 1.0},
+		},
+		{
+			name: "metadata field greater than operator",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.count",
+				Operator: searchfilter.OperatorGreaterThan,
+				Value:    100,
+			},
+			wantErr:    false,
+			wantFilter: `metadata["count"] > {metadata.count}`,
+			wantParams: map[string]any{"metadata.count": 100},
+		},
+		{
+			name: "metadata field not in operator",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.category",
+				Operator: searchfilter.OperatorNotIn,
+				Value:    []any{"spam", "ads"},
+			},
+			wantErr:    false,
+			wantFilter: `metadata["category"] not in {metadata.category}`,
+			wantParams: map[string]any{"metadata.category": []any{"spam", "ads"}},
+		},
+		{
+			name: "mixed schema and metadata fields with AND",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorAnd,
+				Value: []*searchfilter.UniversalFilterCondition{
+					{
+						Field:    "doc_id",
+						Operator: searchfilter.OperatorEqual,
+						Value:    "doc123",
+					},
+					{
+						Field:    "metadata.topic",
+						Operator: searchfilter.OperatorIn,
+						Value:    []any{"AI", "ML"},
+					},
+				},
+			},
+			wantErr:    false,
+			wantFilter: `(doc_id == {doc_id} and metadata["topic"] in {metadata.topic})`,
+			wantParams: map[string]any{"doc_id": "doc123", "metadata.topic": []any{"AI", "ML"}},
+		},
+		{
+			name: "metadata field with string containing quotes",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.title",
+				Operator: searchfilter.OperatorEqual,
+				Value:    `He said "Hello"`,
+			},
+			wantErr:    false,
+			wantFilter: `metadata["title"] == {metadata.title}`,
+			wantParams: map[string]any{"metadata.title": `He said "Hello"`},
 		},
 		{
 			name: "invalid operator",
@@ -384,7 +472,7 @@ func TestMilvusFilterConverter_ConvertCondition(t *testing.T) {
 				Value:    []int{18, 30},
 			},
 			wantErr:    false,
-			wantFilter: `age >= {age_0} and age <= {age_1}`,
+			wantFilter: `(age >= {age_0} and age <= {age_1})`,
 		},
 		{
 			name: "and operator",
@@ -511,7 +599,7 @@ func TestMilvusFilterConverter_ConvertCondition(t *testing.T) {
 		},
 	}
 
-	c := &milvusFilterConverter{}
+	c := newMilvusFilterConverter("metadata")
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -49,7 +49,7 @@ func newVectorStoreWithMockClient(mockClient *mockClient, opts ...Option) *Vecto
 	vs := &VectorStore{
 		client:          mockClient,
 		option:          option,
-		filterConverter: &milvusFilterConverter{},
+		filterConverter: newMilvusFilterConverter(option.metadataField),
 	}
 
 	return vs

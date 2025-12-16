@@ -451,16 +451,23 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 
 	annReqs := make([]*client.AnnRequest, 0)
 	if len(vector) > 0 {
-		annReqs = append(annReqs, client.NewAnnRequest(vs.option.vectorField, query.Limit, entity.FloatVector(vector)))
+		annReq := client.NewAnnRequest(vs.option.vectorField, query.Limit, entity.FloatVector(vector))
+		if filterExpr != "" {
+			annReq.WithFilter(filterExpr)
+			for k, v := range filterParams {
+				annReq.WithTemplateParam(k, v)
+			}
+		}
+		annReqs = append(annReqs, annReq)
 	}
+
 	if query.Query != "" {
-		annReqs = append(annReqs, client.NewAnnRequest(vs.option.contentSparseField, query.Limit, entity.Text(query.Query)).WithANNSField(vs.option.contentSparseField))
-	}
-	if len(filterExpr) > 0 {
-		annReq := client.NewAnnRequest(vs.option.metadataField, query.Limit)
-		annReq.WithFilter(filterExpr)
-		for k, v := range filterParams {
-			annReq.WithTemplateParam(k, v)
+		annReq := client.NewAnnRequest(vs.option.contentSparseField, query.Limit, entity.Text(query.Query)).WithANNSField(vs.option.contentSparseField)
+		if filterExpr != "" {
+			annReq.WithFilter(filterExpr)
+			for k, v := range filterParams {
+				annReq.WithTemplateParam(k, v)
+			}
 		}
 		annReqs = append(annReqs, annReq)
 	}
@@ -491,6 +498,11 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 		}
 		filterExpr = expr
 		filterParams = params
+	}
+
+	// Filter-only search requires a non-empty filter expression
+	if filterExpr == "" {
+		return nil, fmt.Errorf("empty filter condition")
 	}
 
 	queryOption := client.NewQueryOption(vs.option.collectionName)
