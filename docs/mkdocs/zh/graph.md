@@ -15,6 +15,7 @@ Graph 将可控的工作流编排与可扩展的 Agent 能力结合，适用于�
 - 内置节点类型封装 LLM、工具与 Agent，减少重复代码；
 - 流式事件、检查点与中断，便于观测与恢复。
 - 节点级重试/退避（指数退避与抖动），支持执行器默认重试策略与带重试元数据的事件观测。
+- 节点主动外抛事件（EventEmitter），支持在 NodeFunc 中发射自定义事件、进度更新和流式文本。
 
 ## 快速开始
 
@@ -303,6 +304,130 @@ if b, ok := event.StateDelta[graph.MetadataKeyModel]; ok {
     _ = json.Unmarshal(b, &md)
 }
 ```
+
+#### 节点主动外抛事件（EventEmitter）
+
+在 NodeFunc 执行过程中，节点可以通过 `EventEmitter` 主动向外部发射自定义事件，用于实时传递进度、中间结果或自定义业务数据。
+
+**获取 EventEmitter**
+
+```go
+func myNode(ctx context.Context, state graph.State) (any, error) {
+    // 从 State 中获取 EventEmitter
+    emitter := graph.GetEventEmitterWithContext(ctx, state)
+    // 或直接调用 emitter := graph.GetEventEmitter(state)
+    return state, nil
+}
+```
+
+**EventEmitter 接口**
+
+```go
+type EventEmitter interface {
+    // Emit 发射任意事件
+    Emit(evt *event.Event) error
+    // EmitCustom 发射自定义事件
+    EmitCustom(eventType string, payload any) error
+    // EmitProgress 发射进度事件（progress: 0-100）
+    EmitProgress(progress float64, message string) error
+    // EmitText 发射流式文本事件
+    EmitText(text string) error
+    // Context 返回关联的 context
+    Context() context.Context
+}
+```
+
+**使用示例**
+
+```go
+func dataProcessNode(ctx context.Context, state graph.State) (any, error) {
+    emitter := graph.GetEventEmitter(state)
+    
+    // 1. 发射自定义事件
+    emitter.EmitCustom("data.loaded", map[string]any{
+        "recordCount": 1000,
+        "source":      "database",
+    })
+    
+    // 2. 发射进度事件
+    total := 100
+    for i := 0; i < total; i++ {
+        processItem(i)
+        progress := float64(i+1) / float64(total) * 100
+        emitter.EmitProgress(progress, fmt.Sprintf("Processing %d/%d", i+1, total))
+    }
+    
+    // 3. 发射流式文本
+    emitter.EmitText("Processing complete.\n")
+    emitter.EmitText("Results: 100 items processed successfully.")
+    
+    return state, nil
+}
+```
+
+**事件流转流程**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant NF as NodeFunc
+    participant EE as EventEmitter
+    participant EC as EventChan
+    participant EX as Executor
+    participant TR as AGUI Translator
+    participant FE as 客户端
+
+    Note over NF,FE: 事件发射阶段
+    NF->>EE: GetEventEmitter(state)
+    EE-->>NF: 返回 EventEmitter 实例
+    
+    alt 发射自定义事件
+        NF->>EE: EmitCustom(eventType, payload)
+    else 发射进度事件
+        NF->>EE: EmitProgress(progress, message)
+    else 发射文本事件
+        NF->>EE: EmitText(text)
+    end
+    
+    Note over EE: 构建 NodeCustomEventMetadata
+    EE->>EE: 注入 NodeID, InvocationID, Timestamp
+    EE->>EC: 发送 Event 到 Chan
+    
+    Note over EC,FE: 事件消费阶段
+    EC->>EX: Executor 接收事件
+    EX->>TR: 传递事件给 Translator
+    
+    alt Custom 类型事件
+        TR->>TR: 转换为 AG-UI CustomEvent
+    else Progress 类型事件
+        TR->>TR: 转换为 AG-UI CustomEvent (含进度信息)
+    else Text 类型事件 (消息上下文)
+        TR->>TR: 转换为 TextMessageContentEvent
+    else Text 类型事件 (非消息上下)
+        TR->>TR: 转换为 AG-UI CustomEvent
+    end
+    
+    TR->>FE: SSE 推送 AG-UI 事件
+    FE->>FE: 处理并更新 UI
+```
+
+**AGUI 事件转换**
+
+当使用 AGUI Server 时，节点发射的事件会自动转换为 AG-UI 协议事件：
+
+| 节点事件类型 | AG-UI 事件类型 | 说明 |
+|-------------|--------------|------|
+| Custom | CustomEvent | 自定义事件，payload 在 `value` 字段 |
+| Progress | CustomEvent | 进度事件，包含 `progress` 和 `message` |
+| Text（消息上下文中）| TextMessageContentEvent | 流式文本追加到当前消息 |
+| Text（非消息上下文）| CustomEvent | 包含 `nodeId` 和 `content` 字段 |
+
+**注意事项**
+
+- **线程安全**：EventEmitter 是线程安全的，可在并发环境中使用
+- **优雅降级**：若 State 中无有效的 ExecutionContext 或 EventChan，`GetEventEmitter` 返回 no-op emitter，所有操作静默成功
+- **错误处理**：业务实践中建议事件发射失败不要中断节点执行，仅记录警告日志，忽略异常
+- **自定义事件元数据**：`_node_custom_metadata` → `graph.MetadataKeyNodeCustom`（结构体 `graph.NodeCustomEventMetadata`）
 
 ### 1. 创建 GraphAgent 和 Runner
 
