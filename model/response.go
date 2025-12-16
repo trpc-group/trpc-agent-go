@@ -211,12 +211,18 @@ func (rsp *Response) IsValidContent() bool {
 	if rsp.IsToolCallResponse() || rsp.IsToolResultResponse() {
 		return true
 	}
-	// Check if event has choices with content.
+	// Check if event has choices with content or reasoning content.
 	for _, choice := range rsp.Choices {
 		if choice.Message.Content != "" {
 			return true
 		}
 		if choice.Delta.Content != "" {
+			return true
+		}
+		if choice.Message.ReasoningContent != "" {
+			return true
+		}
+		if choice.Delta.ReasoningContent != "" {
 			return true
 		}
 	}

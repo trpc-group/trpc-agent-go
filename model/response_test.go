@@ -13,6 +13,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestErrorTypeConstants(t *testing.T) {
@@ -35,9 +37,7 @@ func TestErrorTypeConstants(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.constant != tt.expected {
-				t.Errorf("Error constant = %v, want %v", tt.constant, tt.expected)
-			}
+			assert.Equal(t, tt.expected, tt.constant)
 		})
 	}
 }
@@ -57,18 +57,10 @@ func TestChoice_Structure(t *testing.T) {
 		FinishReason: &finishReason,
 	}
 
-	if choice.Index != 0 {
-		t.Errorf("Choice.Index = %v, want %v", choice.Index, 0)
-	}
-	if choice.Message.Role != RoleAssistant {
-		t.Errorf("Choice.Message.Role = %v, want %v", choice.Message.Role, RoleAssistant)
-	}
-	if choice.Delta.Content != "Streaming content" {
-		t.Errorf("Choice.Delta.Content = %v, want %v", choice.Delta.Content, "Streaming content")
-	}
-	if *choice.FinishReason != "stop" {
-		t.Errorf("Choice.FinishReason = %v, want %v", *choice.FinishReason, "stop")
-	}
+	assert.Equal(t, 0, choice.Index)
+	assert.Equal(t, RoleAssistant, choice.Message.Role)
+	assert.Equal(t, "Streaming content", choice.Delta.Content)
+	assert.Equal(t, "stop", *choice.FinishReason)
 }
 
 func TestUsage_Structure(t *testing.T) {
@@ -78,15 +70,9 @@ func TestUsage_Structure(t *testing.T) {
 		TotalTokens:      30,
 	}
 
-	if usage.PromptTokens != 10 {
-		t.Errorf("Usage.PromptTokens = %v, want %v", usage.PromptTokens, 10)
-	}
-	if usage.CompletionTokens != 20 {
-		t.Errorf("Usage.CompletionTokens = %v, want %v", usage.CompletionTokens, 20)
-	}
-	if usage.TotalTokens != 30 {
-		t.Errorf("Usage.TotalTokens = %v, want %v", usage.TotalTokens, 30)
-	}
+	assert.Equal(t, 10, usage.PromptTokens)
+	assert.Equal(t, 20, usage.CompletionTokens)
+	assert.Equal(t, 30, usage.TotalTokens)
 }
 
 func TestResponse_Structure(t *testing.T) {
@@ -117,27 +103,13 @@ func TestResponse_Structure(t *testing.T) {
 		Done:              true,
 	}
 
-	if response.ID != "chatcmpl-123" {
-		t.Errorf("Response.ID = %v, want %v", response.ID, "chatcmpl-123")
-	}
-	if response.Object != "chat.completion" {
-		t.Errorf("Response.Object = %v, want %v", response.Object, "chat.completion")
-	}
-	if response.Model != "gpt-3.5-turbo" {
-		t.Errorf("Response.Model = %v, want %v", response.Model, "gpt-3.5-turbo")
-	}
-	if len(response.Choices) != 1 {
-		t.Errorf("Response.Choices length = %v, want %v", len(response.Choices), 1)
-	}
-	if response.Usage.TotalTokens != 15 {
-		t.Errorf("Response.Usage.TotalTokens = %v, want %v", response.Usage.TotalTokens, 15)
-	}
-	if *response.SystemFingerprint != "fp_test_123" {
-		t.Errorf("Response.SystemFingerprint = %v, want %v", *response.SystemFingerprint, "fp_test_123")
-	}
-	if !response.Done {
-		t.Errorf("Response.Done = %v, want %v", response.Done, true)
-	}
+	assert.Equal(t, "chatcmpl-123", response.ID)
+	assert.Equal(t, "chat.completion", response.Object)
+	assert.Equal(t, "gpt-3.5-turbo", response.Model)
+	assert.Len(t, response.Choices, 1)
+	assert.Equal(t, 15, response.Usage.TotalTokens)
+	assert.Equal(t, "fp_test_123", *response.SystemFingerprint)
+	assert.True(t, response.Done)
 }
 
 func TestResponseError_Structure(t *testing.T) {
@@ -151,18 +123,10 @@ func TestResponseError_Structure(t *testing.T) {
 		Code:    &code,
 	}
 
-	if err.Message != "Invalid parameter value" {
-		t.Errorf("ResponseError.Message = %v, want %v", err.Message, "Invalid parameter value")
-	}
-	if err.Type != ErrorTypeAPIError {
-		t.Errorf("ResponseError.Type = %v, want %v", err.Type, ErrorTypeAPIError)
-	}
-	if *err.Param != "max_tokens" {
-		t.Errorf("ResponseError.Param = %v, want %v", *err.Param, "max_tokens")
-	}
-	if *err.Code != "invalid_value" {
-		t.Errorf("ResponseError.Code = %v, want %v", *err.Code, "invalid_value")
-	}
+	assert.Equal(t, "Invalid parameter value", err.Message)
+	assert.Equal(t, ErrorTypeAPIError, err.Type)
+	assert.Equal(t, "max_tokens", *err.Param)
+	assert.Equal(t, "invalid_value", *err.Code)
 }
 
 func TestResponse_WithError(t *testing.T) {
@@ -177,16 +141,9 @@ func TestResponse_WithError(t *testing.T) {
 		Done:      true,
 	}
 
-	if response.Error == nil {
-		t.Error("Response.Error should not be nil")
-		return
-	}
-	if response.Error.Message != "API error occurred" {
-		t.Errorf("Response.Error.Message = %v, want %v", response.Error.Message, "API error occurred")
-	}
-	if response.Error.Type != ErrorTypeStreamError {
-		t.Errorf("Response.Error.Type = %v, want %v", response.Error.Type, ErrorTypeStreamError)
-	}
+	assert.NotNil(t, response.Error)
+	assert.Equal(t, "API error occurred", response.Error.Message)
+	assert.Equal(t, ErrorTypeStreamError, response.Error.Type)
 }
 
 func TestResponse_StreamingResponse(t *testing.T) {
@@ -211,15 +168,9 @@ func TestResponse_StreamingResponse(t *testing.T) {
 		Done:      false,
 	}
 
-	if streamChunk.Object != "chat.completion.chunk" {
-		t.Errorf("Stream chunk Object = %v, want %v", streamChunk.Object, "chat.completion.chunk")
-	}
-	if streamChunk.Choices[0].Delta.Content != "partial " {
-		t.Errorf("Stream chunk Delta.Content = %v, want %v", streamChunk.Choices[0].Delta.Content, "partial ")
-	}
-	if streamChunk.Done {
-		t.Errorf("Stream chunk Done = %v, want %v", streamChunk.Done, false)
-	}
+	assert.Equal(t, "chat.completion.chunk", streamChunk.Object)
+	assert.Equal(t, "partial ", streamChunk.Choices[0].Delta.Content)
+	assert.False(t, streamChunk.Done)
 }
 
 func TestResponse_EmptyChoices(t *testing.T) {
@@ -229,9 +180,7 @@ func TestResponse_EmptyChoices(t *testing.T) {
 		Done:    true,
 	}
 
-	if len(response.Choices) != 0 {
-		t.Errorf("Empty response Choices length = %v, want %v", len(response.Choices), 0)
-	}
+	assert.Len(t, response.Choices, 0)
 }
 
 func TestResponse_MultipleChoices(t *testing.T) {
@@ -256,18 +205,10 @@ func TestResponse_MultipleChoices(t *testing.T) {
 		Done: true,
 	}
 
-	if len(response.Choices) != 2 {
-		t.Errorf("Multiple choices length = %v, want %v", len(response.Choices), 2)
-	}
-	if response.Choices[0].Index != 0 {
-		t.Errorf("First choice index = %v, want %v", response.Choices[0].Index, 0)
-	}
-	if response.Choices[1].Index != 1 {
-		t.Errorf("Second choice index = %v, want %v", response.Choices[1].Index, 1)
-	}
-	if response.Choices[1].Message.Content != "Second choice" {
-		t.Errorf("Second choice content = %v, want %v", response.Choices[1].Message.Content, "Second choice")
-	}
+	assert.Len(t, response.Choices, 2)
+	assert.Equal(t, 0, response.Choices[0].Index)
+	assert.Equal(t, 1, response.Choices[1].Index)
+	assert.Equal(t, "Second choice", response.Choices[1].Message.Content)
 }
 
 func TestResponse_IsValidContent(t *testing.T) {
@@ -334,13 +275,57 @@ func TestResponse_IsValidContent(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			name: "valid reasoning content in message",
+			rsp: &Response{
+				Choices: []Choice{{
+					Message: Message{
+						ReasoningContent: "Let me think about this...",
+					},
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "valid reasoning content in delta",
+			rsp: &Response{
+				Choices: []Choice{{
+					Delta: Message{
+						ReasoningContent: "Analyzing the problem...",
+					},
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "both content and reasoning content in message",
+			rsp: &Response{
+				Choices: []Choice{{
+					Message: Message{
+						Content:          "Final answer",
+						ReasoningContent: "Step by step reasoning",
+					},
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "reasoning content in delta with empty message",
+			rsp: &Response{
+				Choices: []Choice{{
+					Message: Message{},
+					Delta: Message{
+						ReasoningContent: "Streaming reasoning...",
+					},
+				}},
+			},
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.rsp.IsValidContent(); got != tt.want {
-				t.Errorf("IsValidContent() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.rsp.IsValidContent())
 		})
 	}
 }
@@ -401,10 +386,7 @@ func TestResponse_IsToolResultResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.rsp.IsToolResultResponse()
-			if got != tt.expected {
-				t.Errorf("IsToolResultResponse() = %v, want %v", got, tt.expected)
-			}
+			assert.Equal(t, tt.expected, tt.rsp.IsToolResultResponse())
 		})
 	}
 }
@@ -475,9 +457,7 @@ func TestResponse_GetToolCallIDs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.rsp.GetToolCallIDs()
-			if !reflect.DeepEqual(got, tt.expected) {
-				t.Errorf("GetToolCallIDs() = %v, want %v", got, tt.expected)
-			}
+			assert.Equal(t, tt.expected, got)
 		})
 	}
 }
@@ -552,9 +532,7 @@ func TestResponse_GetToolResultIDs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.rsp.GetToolResultIDs()
-			if !reflect.DeepEqual(got, tt.expected) {
-				t.Errorf("GetToolResultIDs() = %v, want %v", got, tt.expected)
-			}
+			assert.Equal(t, tt.expected, got)
 		})
 	}
 }
@@ -614,10 +592,7 @@ func TestResponse_IsFinalResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.rsp.IsFinalResponse()
-			if got != tt.expected {
-				t.Errorf("IsFinalResponse() = %v, want %v", got, tt.expected)
-			}
+			assert.Equal(t, tt.expected, tt.rsp.IsFinalResponse())
 		})
 	}
 }
@@ -731,98 +706,60 @@ func TestResponse_Clone(t *testing.T) {
 
 			// Test nil case
 			if tt.response == nil {
-				if clone != nil {
-					t.Errorf("Clone of nil should return nil, got %v", clone)
-				}
+				assert.Nil(t, clone)
 				return
 			}
 
 			// Verify it's a different object
-			if tt.response == clone {
-				t.Error("Clone should return a different object")
-			}
+			assert.NotSame(t, tt.response, clone)
 
 			// Verify all fields are equal
-			if clone.ID != tt.response.ID {
-				t.Errorf("ID mismatch: got %v, want %v", clone.ID, tt.response.ID)
-			}
-			if clone.Object != tt.response.Object {
-				t.Errorf("Object mismatch: got %v, want %v", clone.Object, tt.response.Object)
-			}
-			if clone.Created != tt.response.Created {
-				t.Errorf("Created mismatch: got %v, want %v", clone.Created, tt.response.Created)
-			}
-			if clone.Model != tt.response.Model {
-				t.Errorf("Model mismatch: got %v, want %v", clone.Model, tt.response.Model)
-			}
+			assert.Equal(t, tt.response.ID, clone.ID)
+			assert.Equal(t, tt.response.Object, clone.Object)
+			assert.Equal(t, tt.response.Created, clone.Created)
+			assert.Equal(t, tt.response.Model, clone.Model)
 
 			// Verify Choices is a deep copy
-			if len(clone.Choices) != len(tt.response.Choices) {
-				t.Errorf("Choices length mismatch: got %v, want %v", len(clone.Choices), len(tt.response.Choices))
-			}
-			if len(clone.Choices) > 0 && &clone.Choices[0] == &tt.response.Choices[0] {
-				t.Error("Choices should be deep copied")
-			}
-			for i := range clone.Choices {
-				if !reflect.DeepEqual(clone.Choices[i], tt.response.Choices[i]) {
-					t.Errorf("Choice %d mismatch: got %+v, want %+v", i, clone.Choices[i], tt.response.Choices[i])
+			assert.Len(t, clone.Choices, len(tt.response.Choices))
+			if len(clone.Choices) > 0 {
+				assert.NotSame(t, &tt.response.Choices[0], &clone.Choices[0])
+				for i := range clone.Choices {
+					assert.True(t, reflect.DeepEqual(tt.response.Choices[i], clone.Choices[i]))
 				}
 			}
 
 			// Verify Usage is deep copied
 			if tt.response.Usage != nil {
-				if clone.Usage == nil {
-					t.Error("Usage should be copied")
-				} else {
-					if clone.Usage == tt.response.Usage {
-						t.Error("Usage should be deep copied")
-					}
-					if !reflect.DeepEqual(clone.Usage, tt.response.Usage) {
-						t.Errorf("Usage mismatch: got %+v, want %+v", clone.Usage, tt.response.Usage)
-					}
-				}
-			} else if clone.Usage != nil {
-				t.Error("Usage should be nil")
+				assert.NotNil(t, clone.Usage)
+				assert.NotSame(t, tt.response.Usage, clone.Usage)
+				assert.Equal(t, tt.response.Usage, clone.Usage)
+			} else {
+				assert.Nil(t, clone.Usage)
 			}
 
 			// Verify Error is deep copied
 			if tt.response.Error != nil {
-				if clone.Error == nil {
-					t.Error("Error should be copied")
-				} else {
-					if clone.Error == tt.response.Error {
-						t.Error("Error should be deep copied")
-					}
-					if !reflect.DeepEqual(clone.Error, tt.response.Error) {
-						t.Errorf("Error mismatch: got %+v, want %+v", clone.Error, tt.response.Error)
-					}
-				}
-			} else if clone.Error != nil {
-				t.Error("Error should be nil")
+				assert.NotNil(t, clone.Error)
+				assert.NotSame(t, tt.response.Error, clone.Error)
+				assert.Equal(t, tt.response.Error, clone.Error)
+			} else {
+				assert.Nil(t, clone.Error)
 			}
 
 			// Verify SystemFingerprint is deep copied
 			if tt.response.SystemFingerprint != nil {
-				if clone.SystemFingerprint == nil {
-					t.Error("SystemFingerprint should be copied")
-				} else {
-					if clone.SystemFingerprint == tt.response.SystemFingerprint {
-						t.Error("SystemFingerprint should be deep copied")
-					}
-					if *clone.SystemFingerprint != *tt.response.SystemFingerprint {
-						t.Errorf("SystemFingerprint mismatch: got %v, want %v", *clone.SystemFingerprint, *tt.response.SystemFingerprint)
-					}
-				}
-			} else if clone.SystemFingerprint != nil {
-				t.Error("SystemFingerprint should be nil")
+				assert.NotNil(t, clone.SystemFingerprint)
+				assert.NotSame(t, tt.response.SystemFingerprint, clone.SystemFingerprint)
+				assert.Equal(t, *tt.response.SystemFingerprint, *clone.SystemFingerprint)
+			} else {
+				assert.Nil(t, clone.SystemFingerprint)
 			}
 
 			// Verify modifying clone doesn't affect original
 			if len(clone.Choices) > 0 {
+				originalContent := tt.response.Choices[0].Message.Content
 				clone.Choices[0].Message.Content = "Modified"
-				if tt.response.Choices[0].Message.Content == "Modified" {
-					t.Error("Modifying clone should not affect original")
-				}
+				assert.Equal(t, originalContent, tt.response.Choices[0].Message.Content)
 			}
 		})
 	}
@@ -894,10 +831,7 @@ func TestResponse_IsToolCallResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.rsp.IsToolCallResponse()
-			if got != tt.expected {
-				t.Errorf("IsToolCallResponse() = %v, want %v", got, tt.expected)
-			}
+			assert.Equal(t, tt.expected, tt.rsp.IsToolCallResponse())
 		})
 	}
 }
@@ -927,9 +861,7 @@ func TestResponse_IsPartialResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.rsp.IsPartial != tt.expected {
-				t.Errorf("IsPartial = %v, want %v", tt.rsp.IsPartial, tt.expected)
-			}
+			assert.Equal(t, tt.expected, tt.rsp.IsPartial)
 		})
 	}
 }
@@ -1020,9 +952,7 @@ func TestObjectTypeConstants(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.constant != tt.expected {
-				t.Errorf("Constant = %v, want %v", tt.constant, tt.expected)
-			}
+			assert.Equal(t, tt.expected, tt.constant)
 		})
 	}
 }
@@ -1119,10 +1049,7 @@ func TestResponse_IsUserMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.rsp.IsUserMessage()
-			if result != tt.expected {
-				t.Errorf("IsUserMessage() = %v, want %v", result, tt.expected)
-			}
+			assert.Equal(t, tt.expected, tt.rsp.IsUserMessage())
 		})
 	}
 }
