@@ -1,3 +1,5 @@
+//go:build cgo
+
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //

@@ -32,3 +32,4 @@ pnpm-lock.yaml
 .DS_Store
 .gomodcache
 next-env.d.ts
+.codebuddy
