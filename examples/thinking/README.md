@@ -34,15 +34,15 @@ This example demonstrates a clean chat interface that surfaces the model's inter
 | `-streaming`        | Enable streaming mode for responses          | `true`               |
 | `-thinking`         | Enable reasoning/thinking (if provider supports) | `true`            |
 | `-thinking-tokens`  | Max reasoning tokens (if provider supports)  | `2048`               |
-| `-reasoning-mode`   | How to handle `reasoning_content` in history | `keep_all`           |
+| `-reasoning-mode`   | How to handle `reasoning_content` in history | `discard_previous`   |
 | `-debug`            | Print messages sent to model API             | `true`               |
 
 ### Reasoning Mode Values
 
 | Value              | Description                                                  |
 | ------------------ | ------------------------------------------------------------ |
-| `keep_all`         | Keep all `reasoning_content` in history (default).           |
-| `discard_previous` | Discard `reasoning_content` from previous turns, keep current (recommended for DeepSeek). |
+| `discard_previous` | Discard `reasoning_content` from previous turns, keep current (default, recommended). |
+| `keep_all`         | Keep all `reasoning_content` in history.                     |
 | `discard_all`      | Discard all `reasoning_content` from history.                |
 
 ## Usage
@@ -69,12 +69,12 @@ export DASHSCOPE_API_KEY="your-api-key"
 go run . -model qwq-32b -variant qwen
 ```
 
-### Recommended for DeepSeek (Discard Previous Reasoning)
+### Keep All Reasoning (Optional)
 
-According to DeepSeek API documentation, `reasoning_content` from previous turns should be discarded:
+If you need to keep all `reasoning_content` in history for debugging purposes:
 
 ```bash
-go run . -model deepseek-chat -variant deepseek -reasoning-mode=discard_previous
+go run . -model deepseek-chat -variant deepseek -reasoning-mode=keep_all
 ```
 
 ### Disable Debug Output
@@ -113,7 +113,7 @@ Usage of ./thinking:
   -model string
         Name of the model to use (default "deepseek-reasoner")
   -reasoning-mode string
-        How to handle reasoning_content in history: keep_all, discard_previous, discard_all (default "keep_all")
+        How to handle reasoning_content in history: keep_all, discard_previous, discard_all (default "discard_previous")
   -streaming
         Enable streaming mode for responses (default true)
   -thinking
@@ -133,7 +133,7 @@ You will see a simple interface similar to the Runner demo:
 Model: deepseek-chat
 Streaming: true
 Thinking: true (tokens=2048)
-Reasoning Mode: keep_all
+Reasoning Mode: discard_previous
 Debug: true
 ==================================================
 ✅ Ready! Session: thinking-session-1703123456
@@ -185,5 +185,5 @@ Debug: true
 - This demo uses the in-memory session service for simplicity.
 - Reasoning visibility depends on the provider/model. Enabling flags signals intent but does not guarantee reasoning will be returned.
 - Debug mode is enabled by default to help verify `reasoning_content` handling in multi-turn conversations.
-- For DeepSeek models, use `-reasoning-mode=discard_previous` to follow their API best practices.
+- The default `-reasoning-mode=discard_previous` follows DeepSeek API best practices: discard `reasoning_content` from previous turns while keeping the current turn's reasoning for tool call scenarios.
 - The `calculator` and `current_time` tools are always available to test thinking + tool call scenarios.

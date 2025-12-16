@@ -2726,7 +2726,7 @@ func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {
 			wantReasoning:    "thinking process",
 		},
 		{
-			name: "keep_all mode (empty) preserves reasoning content",
+			name: "default mode (empty) uses discard_previous_turns behavior",
 			mode: "",
 			msg: model.Message{
 				Role:             model.RoleAssistant,
@@ -2735,7 +2735,19 @@ func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {
 			},
 			messageRequestID: "req-1",
 			currentRequestID: "req-2",
-			wantReasoning:    "thinking process",
+			wantReasoning:    "", // Previous request's reasoning is discarded.
+		},
+		{
+			name: "default mode (empty) keeps current request reasoning",
+			mode: "",
+			msg: model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "final answer",
+				ReasoningContent: "thinking process",
+			},
+			messageRequestID: "req-1",
+			currentRequestID: "req-1",
+			wantReasoning:    "thinking process", // Current request's reasoning is kept.
 		},
 		{
 			name: "discard_all mode removes all reasoning content",

@@ -249,8 +249,8 @@ LLMAgent 提供 `WithReasoningContentMode` 来控制对话历史中 `reasoning_c
 
 | 模式 | 常量 | 描述 |
 |------|------|------|
-| 保留全部 | `ReasoningContentModeKeepAll` | 保留历史中的所有 `reasoning_content`（默认，向后兼容）。 |
-| 丢弃之前轮次 | `ReasoningContentModeDiscardPreviousTurns` | 丢弃之前请求轮次的 `reasoning_content`，保留当前请求的。**推荐用于 DeepSeek 模型。** |
+| 丢弃之前轮次 | `ReasoningContentModeDiscardPreviousTurns` | 丢弃之前请求轮次的 `reasoning_content`，保留当前请求的。**（默认，推荐）** |
+| 保留全部 | `ReasoningContentModeKeepAll` | 保留历史中的所有 `reasoning_content`（用于调试）。 |
 | 全部丢弃 | `ReasoningContentModeDiscardAll` | 丢弃历史中的所有 `reasoning_content`，以最大化节省带宽。 |
 
 **使用示例：**

@@ -52,14 +52,14 @@ const (
 // content.
 const (
 	// ReasoningContentModeKeepAll keeps all reasoning_content in history.
-	// This is the default behavior for backward compatibility.
+	// Use this for debugging or when you need to retain thinking chains.
 	ReasoningContentModeKeepAll = "keep_all"
 
 	// ReasoningContentModeDiscardPreviousTurns discards reasoning_content from
 	// messages that belong to previous request turns. Messages within the current
 	// request retain their reasoning_content (for tool call scenarios where the
-	// model needs to reference its previous reasoning). This is the recommended
-	// mode for DeepSeek models according to their API documentation.
+	// model needs to reference its previous reasoning). This is the default mode
+	// and recommended for DeepSeek models according to their API documentation.
 	// Reference: https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
 	ReasoningContentModeDiscardPreviousTurns = "discard_previous_turns"
 
@@ -90,7 +90,8 @@ type ContentRequestProcessor struct {
 	// TimelineFilterMode controls whether to append history messages to the request.
 	TimelineFilterMode string
 	// ReasoningContentMode controls how reasoning_content is handled in multi-turn
-	// conversations. Default is ReasoningContentModeKeepAll for backward compatibility.
+	// conversations. Default is ReasoningContentModeDiscardPreviousTurns, which is
+	// recommended for DeepSeek thinking mode.
 	ReasoningContentMode string
 }
 
@@ -155,9 +156,9 @@ func WithPreserveSameBranch(preserve bool) ContentOption {
 // reasoning_content should be discarded from previous request turns.
 //
 // Available modes:
-//   - ReasoningContentModeKeepAll: Keep all reasoning_content (default).
 //   - ReasoningContentModeDiscardPreviousTurns: Discard reasoning_content from
-//     previous requests, keep for current request (recommended for DeepSeek).
+//     previous requests, keep for current request (default, recommended).
+//   - ReasoningContentModeKeepAll: Keep all reasoning_content.
 //   - ReasoningContentModeDiscardAll: Discard all reasoning_content from history.
 func WithReasoningContentMode(mode string) ContentOption {
 	return func(p *ContentRequestProcessor) {
@@ -380,14 +381,15 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	case ReasoningContentModeDiscardAll:
 		// Discard all reasoning_content.
 		msg.ReasoningContent = ""
-	case ReasoningContentModeDiscardPreviousTurns:
+	case ReasoningContentModeKeepAll:
+		// Keep all reasoning_content: do nothing.
+	default:
+		// ReasoningContentModeDiscardPreviousTurns or empty (default):
 		// Discard reasoning_content from previous requests only.
 		// Current request messages retain their reasoning_content.
 		if messageRequestID != currentRequestID {
 			msg.ReasoningContent = ""
 		}
-	default:
-		// ReasoningContentModeKeepAll or empty: do nothing.
 	}
 	return msg
 }

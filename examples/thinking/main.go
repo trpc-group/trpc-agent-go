@@ -36,7 +36,7 @@ var (
 	thinkingTokens  = flag.Int("thinking-tokens", 2048, "Max reasoning tokens if provider supports it")
 	variant         = flag.String("variant", "openai", "Name of Variant to use when use openai provider, openai / hunyuan / deepseek / qwen")
 	debug           = flag.Bool("debug", true, "Print messages sent to model API for debugging")
-	reasoningMode   = flag.String("reasoning-mode", "keep_all",
+	reasoningMode   = flag.String("reasoning-mode", "discard_previous",
 		"How to handle reasoning_content in history: keep_all, discard_previous, discard_all")
 )
 

@@ -37,11 +37,11 @@ const (
 	TimelineFilterCurrentInvocation = processor.TimelineFilterCurrentInvocation
 
 	// ReasoningContentModeKeepAll keeps all reasoning_content in messages.
-	// This is the default behavior.
+	// Use this for debugging or when you need to retain thinking chains.
 	ReasoningContentModeKeepAll = processor.ReasoningContentModeKeepAll
 	// ReasoningContentModeDiscardPreviousTurns discards reasoning_content from previous
 	// request turns while keeping the current request's reasoning_content.
-	// Recommended for DeepSeek thinking mode.
+	// This is the default mode, recommended for DeepSeek thinking mode.
 	ReasoningContentModeDiscardPreviousTurns = processor.ReasoningContentModeDiscardPreviousTurns
 	// ReasoningContentModeDiscardAll discards all reasoning_content from all messages.
 	ReasoningContentModeDiscardAll = processor.ReasoningContentModeDiscardAll

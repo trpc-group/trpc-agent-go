@@ -653,11 +653,11 @@ graphAgent, err := graphagent.New(
 	//  - graphagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
 	graphagent.WithMessageBranchFilterMode(graphagent.TimelineFilterAll),
 	// 推理内容模式（DeepSeek 思考模式）
-	// 默认值: graphagent.ReasoningContentModeKeepAll
+	// 默认值: graphagent.ReasoningContentModeDiscardPreviousTurns
 	// 可选值:
-	//  - graphagent.ReasoningContentModeKeepAll: 保留所有 reasoning_content
 	//  - graphagent.ReasoningContentModeDiscardPreviousTurns: 丢弃之前请求轮次的
-	//    reasoning_content（DeepSeek 推荐）
+	//    reasoning_content（默认，推荐）
+	//  - graphagent.ReasoningContentModeKeepAll: 保留所有 reasoning_content
 	//  - graphagent.ReasoningContentModeDiscardAll: 丢弃所有 reasoning_content
 	graphagent.WithReasoningContentMode(graphagent.ReasoningContentModeDiscardPreviousTurns),
 	graphagent.WithAgentCallbacks(&agent.Callbacks{

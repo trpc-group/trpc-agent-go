@@ -263,8 +263,8 @@ LLMAgent provides `WithReasoningContentMode` to control how `reasoning_content` 
 
 | Mode | Constant | Description |
 |------|----------|-------------|
-| Keep All | `ReasoningContentModeKeepAll` | Keep all `reasoning_content` in history (default, backward compatible). |
-| Discard Previous Turns | `ReasoningContentModeDiscardPreviousTurns` | Discard `reasoning_content` from previous request turns, keep for current request. **Recommended for DeepSeek models.** |
+| Discard Previous Turns | `ReasoningContentModeDiscardPreviousTurns` | Discard `reasoning_content` from previous request turns, keep for current request. **(Default, recommended)** |
+| Keep All | `ReasoningContentModeKeepAll` | Keep all `reasoning_content` in history (for debugging). |
 | Discard All | `ReasoningContentModeDiscardAll` | Discard all `reasoning_content` from history for maximum bandwidth savings. |
 
 **Usage Example:**
