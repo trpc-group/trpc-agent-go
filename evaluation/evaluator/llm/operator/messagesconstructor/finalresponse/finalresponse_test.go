@@ -37,7 +37,7 @@ func TestConstructMessagesBuildsPrompt(t *testing.T) {
 			{Text: "expected answer"},
 		}},
 	}
-	messages, err := constructor.ConstructMessages(context.Background(), actual, expected, &metric.EvalMetric{})
+	messages, err := constructor.ConstructMessages(context.Background(), []*evalset.Invocation{actual}, []*evalset.Invocation{expected}, &metric.EvalMetric{})
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, model.RoleUser, messages[0].Role)
@@ -54,6 +54,6 @@ func TestConstructMessagesTemplateError(t *testing.T) {
 	}).Parse(`{{explode}}`))
 
 	constructor := New()
-	_, err := constructor.ConstructMessages(context.Background(), &evalset.Invocation{}, &evalset.Invocation{}, nil)
+	_, err := constructor.ConstructMessages(context.Background(), []*evalset.Invocation{}, []*evalset.Invocation{}, nil)
 	require.Error(t, err)
 }

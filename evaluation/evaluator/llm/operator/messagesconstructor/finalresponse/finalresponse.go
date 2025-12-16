@@ -104,8 +104,16 @@ func New() messagesconstructor.MessagesConstructor {
 }
 
 // ConstructMessages builds judge prompts from actual and expected responses.
-func (e *finalResponseMessagesConstructor) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
+func (e *finalResponseMessagesConstructor) ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	_ *metric.EvalMetric) ([]model.Message, error) {
+	if len(actuals) == 0 {
+		return nil, fmt.Errorf("actuals is empty")
+	}
+	if len(expecteds) == 0 {
+		return nil, fmt.Errorf("expecteds is empty")
+	}
+	actual := actuals[0]
+	expected := expecteds[0]
 	data := finalResponsePromptData{
 		UserPrompt:       content.ExtractTextFromContent(actual.UserContent),
 		ActualResponse:   content.ExtractTextFromContent(actual.FinalResponse),

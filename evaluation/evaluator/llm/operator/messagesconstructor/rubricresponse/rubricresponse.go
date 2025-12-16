@@ -100,16 +100,19 @@ func New() messagesconstructor.MessagesConstructor {
 }
 
 // ConstructMessages builds judge prompts for rubric responses.
-func (e *rubricResponseMessagesConstructor) ConstructMessages(ctx context.Context, actual, _ *evalset.Invocation,
+func (e *rubricResponseMessagesConstructor) ConstructMessages(ctx context.Context, actuals, _ []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
-	responseSteps, err := content.ExtractIntermediateData(actual.IntermediateData)
+	if len(actuals) == 0 {
+		return nil, fmt.Errorf("actuals is empty")
+	}
+	responseSteps, err := content.ExtractIntermediateData(actuals[0].IntermediateData)
 	if err != nil {
 		return nil, fmt.Errorf("extract intermediate data: %w", err)
 	}
 	data := rubricResponsePromptData{
-		UserInput:     content.ExtractTextFromContent(actual.UserContent),
+		UserInput:     content.ExtractTextFromContent(actuals[0].UserContent),
 		ResponseSteps: responseSteps,
-		FinalResponse: content.ExtractTextFromContent(actual.FinalResponse),
+		FinalResponse: content.ExtractTextFromContent(actuals[0].FinalResponse),
 		Rubrics:       content.ExtractRubrics(evalMetric.Criterion.LLMJudge.Rubrics),
 	}
 	var buf bytes.Buffer

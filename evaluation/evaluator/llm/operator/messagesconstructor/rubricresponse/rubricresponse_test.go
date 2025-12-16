@@ -43,7 +43,7 @@ func TestConstructMessagesIncludesAllFields(t *testing.T) {
 		},
 	}
 
-	messages, err := constructor.ConstructMessages(context.Background(), actual, nil, evalMetric)
+	messages, err := constructor.ConstructMessages(context.Background(), []*evalset.Invocation{actual}, nil, evalMetric)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, model.RoleUser, messages[0].Role)
@@ -72,6 +72,6 @@ func TestConstructMessagesIntermediateDataError(t *testing.T) {
 		},
 	}
 
-	_, err := constructor.ConstructMessages(context.Background(), actual, nil, evalMetric)
+	_, err := constructor.ConstructMessages(context.Background(), []*evalset.Invocation{actual}, nil, evalMetric)
 	require.Error(t, err)
 }

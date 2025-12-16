@@ -21,6 +21,6 @@ import (
 // MessagesConstructor defines the interface for building judge prompts.
 type MessagesConstructor interface {
 	// ConstructMessages builds prompts for the judge model.
-	ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
+	ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 		evalMetric *metric.EvalMetric) ([]model.Message, error)
 }

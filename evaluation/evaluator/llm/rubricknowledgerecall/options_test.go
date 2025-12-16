@@ -28,7 +28,7 @@ import (
 
 type optionStubMessagesConstructor struct{}
 
-func (s *optionStubMessagesConstructor) ConstructMessages(context.Context, *evalset.Invocation, *evalset.Invocation,
+func (s *optionStubMessagesConstructor) ConstructMessages(context.Context, []*evalset.Invocation, []*evalset.Invocation,
 	*metric.EvalMetric) ([]model.Message, error) {
 	return nil, nil
 }

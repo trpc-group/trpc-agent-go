@@ -63,9 +63,9 @@ func (e *finalResponseEvaluator) Evaluate(ctx context.Context, actuals, expected
 }
 
 // ConstructMessages builds judge prompts from actual and expected responses.
-func (e *finalResponseEvaluator) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
+func (e *finalResponseEvaluator) ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
-	return e.messagesConstructor.ConstructMessages(ctx, actual, expected, evalMetric)
+	return e.messagesConstructor.ConstructMessages(ctx, actuals, expecteds, evalMetric)
 }
 
 // ScoreBasedOnResponse converts judge feedback to a numeric score.

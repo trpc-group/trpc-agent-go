@@ -76,7 +76,7 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 	for i := range actuals {
 		actual := actuals[i]
 		expected := expecteds[i]
-		messages, err := r.ConstructMessages(ctx, actual, expected, evalMetric)
+		messages, err := r.ConstructMessages(ctx, actuals[:i+1], expecteds[:i+1], evalMetric)
 		if err != nil {
 			return nil, fmt.Errorf("construct messages: %w", err)
 		}
@@ -135,9 +135,9 @@ func (r *LLMBaseEvaluator) ScoreBasedOnResponse(ctx context.Context, resp *model
 }
 
 // ConstructMessages delegates prompt construction to the concrete evaluator.
-func (r *LLMBaseEvaluator) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
+func (r *LLMBaseEvaluator) ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
-	return r.LLMEvaluator.ConstructMessages(ctx, actual, expected, evalMetric)
+	return r.LLMEvaluator.ConstructMessages(ctx, actuals, expecteds, evalMetric)
 }
 
 // judgeModelResponse calls the judge model and returns the final response.

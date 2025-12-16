@@ -116,12 +116,12 @@ func New() messagesconstructor.MessagesConstructor {
 }
 
 // ConstructMessages builds judge prompts for knowledge recall evaluation.
-func (e *rubricKnowledgeRecallMessagesConstructor) ConstructMessages(ctx context.Context, actual, _ *evalset.Invocation,
+func (e *rubricKnowledgeRecallMessagesConstructor) ConstructMessages(ctx context.Context, actuals, _ []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
-	if actual == nil {
-		return nil, fmt.Errorf("actual invocation is nil")
+	if len(actuals) == 0 {
+		return nil, fmt.Errorf("actuals is empty")
 	}
-	retrieved, err := content.ExtractKnowledgeRecall(actual.IntermediateData)
+	retrieved, err := content.ExtractKnowledgeRecall(actuals[0].IntermediateData)
 	if err != nil {
 		return nil, fmt.Errorf("extract knowledge recall: %w", err)
 	}
@@ -129,7 +129,7 @@ func (e *rubricKnowledgeRecallMessagesConstructor) ConstructMessages(ctx context
 		retrieved = "No knowledge search results were found."
 	}
 	data := rubricKnowledgeRecallPromptData{
-		UserInput:          content.ExtractTextFromContent(actual.UserContent),
+		UserInput:          content.ExtractTextFromContent(actuals[0].UserContent),
 		RetrievedKnowledge: retrieved,
 		Rubrics:            content.ExtractRubrics(evalMetric.Criterion.LLMJudge.Rubrics),
 	}

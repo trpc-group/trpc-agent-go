@@ -44,12 +44,12 @@ func (f *fakeLLMEvaluator) Evaluate(_ context.Context, _ []*evalset.Invocation, 
 	return nil, nil
 }
 
-func (f *fakeLLMEvaluator) ConstructMessages(_ context.Context, actual, expected *evalset.Invocation,
+func (f *fakeLLMEvaluator) ConstructMessages(_ context.Context, actuals, expecteds []*evalset.Invocation,
 	_ *metric.EvalMetric) ([]model.Message, error) {
 	f.constructMessagesCalled++
 	return []model.Message{{
 		Role:    "user",
-		Content: actual.InvocationID + expected.InvocationID,
+		Content: actuals[0].InvocationID + expecteds[0].InvocationID,
 	}}, nil
 }
 
@@ -187,7 +187,7 @@ func (s *scriptedLLMEvaluator) Evaluate(context.Context, []*evalset.Invocation, 
 	return nil, nil
 }
 
-func (s *scriptedLLMEvaluator) ConstructMessages(context.Context, *evalset.Invocation, *evalset.Invocation,
+func (s *scriptedLLMEvaluator) ConstructMessages(context.Context, []*evalset.Invocation, []*evalset.Invocation,
 	*metric.EvalMetric) ([]model.Message, error) {
 	if s.constructErr != nil {
 		return nil, s.constructErr

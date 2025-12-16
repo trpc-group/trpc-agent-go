@@ -27,10 +27,10 @@ type stubMessagesConstructor struct {
 	called bool
 }
 
-func (s *stubMessagesConstructor) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
+func (s *stubMessagesConstructor) ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	_ *metric.EvalMetric) ([]model.Message, error) {
 	s.called = true
-	return []model.Message{{Role: model.RoleUser, Content: actual.InvocationID + expected.InvocationID}}, nil
+	return []model.Message{{Role: model.RoleUser, Content: actuals[0].InvocationID + expecteds[0].InvocationID}}, nil
 }
 
 type stubResponseScorer struct {
@@ -78,7 +78,7 @@ func (s *stubLLMBase) Evaluate(_ context.Context, _ []*evalset.Invocation, _ []*
 	return s.result, nil
 }
 
-func (s *stubLLMBase) ConstructMessages(context.Context, *evalset.Invocation, *evalset.Invocation,
+func (s *stubLLMBase) ConstructMessages(context.Context, []*evalset.Invocation, []*evalset.Invocation,
 	*metric.EvalMetric) ([]model.Message, error) {
 	return nil, nil
 }
@@ -116,7 +116,7 @@ func TestRubricResponseEvaluatorDelegates(t *testing.T) {
 	base := &stubLLMBase{result: &evaluator.EvaluateResult{OverallStatus: status.EvalStatusPassed}}
 	impl.llmBaseEvaluator = base
 
-	_, err := impl.ConstructMessages(ctx, &evalset.Invocation{InvocationID: "a"}, &evalset.Invocation{InvocationID: "b"}, nil)
+	_, err := impl.ConstructMessages(ctx, []*evalset.Invocation{{InvocationID: "a"}}, []*evalset.Invocation{{InvocationID: "b"}}, nil)
 	require.NoError(t, err)
 	_, err = impl.ScoreBasedOnResponse(ctx, &model.Response{}, nil)
 	require.NoError(t, err)

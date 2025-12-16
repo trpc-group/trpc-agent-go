@@ -62,9 +62,9 @@ func (e *rubricResponseEvaluator) Evaluate(ctx context.Context, actuals, expecte
 }
 
 // ConstructMessages constructs the messages for the evaluator.
-func (e *rubricResponseEvaluator) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
+func (e *rubricResponseEvaluator) ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
-	return e.messagesConstructor.ConstructMessages(ctx, actual, expected, evalMetric)
+	return e.messagesConstructor.ConstructMessages(ctx, actuals, expecteds, evalMetric)
 }
 
 // ScoreBasedOnResponse scores the response of the evaluator.

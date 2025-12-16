@@ -61,9 +61,9 @@ func (e *rubricKnowledgeRecallEvaluator) Evaluate(ctx context.Context, actuals, 
 }
 
 // ConstructMessages constructs the messages for the evaluator.
-func (e *rubricKnowledgeRecallEvaluator) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
+func (e *rubricKnowledgeRecallEvaluator) ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
-	return e.messagesConstructor.ConstructMessages(ctx, actual, expected, evalMetric)
+	return e.messagesConstructor.ConstructMessages(ctx, actuals, expecteds, evalMetric)
 }
 
 // ScoreBasedOnResponse scores the response of the evaluator.
