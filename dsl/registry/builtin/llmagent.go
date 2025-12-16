@@ -128,6 +128,50 @@ func coerceInt(value any, fieldName string) (int, error) {
 	}
 }
 
+func coerceFloat64(value any, fieldName string) (float64, error) {
+	if value == nil {
+		return 0, fmt.Errorf("%s must be a number (got <nil>)", fieldName)
+	}
+
+	switch v := value.(type) {
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, fmt.Errorf("%s must be a number (got %T)", fieldName, value)
+		}
+		return v, nil
+	case float32:
+		return float64(v), nil
+	case int:
+		return float64(v), nil
+	case int8:
+		return float64(v), nil
+	case int16:
+		return float64(v), nil
+	case int32:
+		return float64(v), nil
+	case int64:
+		return float64(v), nil
+	case uint:
+		return float64(v), nil
+	case uint8:
+		return float64(v), nil
+	case uint16:
+		return float64(v), nil
+	case uint32:
+		return float64(v), nil
+	case uint64:
+		return float64(v), nil
+	case json.Number:
+		f, err := v.Float64()
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, fmt.Errorf("%s must be a number (got %T)", fieldName, value)
+		}
+		return f, nil
+	default:
+		return 0, fmt.Errorf("%s must be a number (got %T)", fieldName, value)
+	}
+}
+
 // Metadata returns the component metadata.
 func (c *LLMAgentComponent) Metadata() registry.ComponentMetadata {
 	return registry.ComponentMetadata{
@@ -416,14 +460,9 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 
 	// Validate temperature if present
 	if temperature, ok := config["temperature"]; ok {
-		var temp float64
-		switch v := temperature.(type) {
-		case float64:
-			temp = v
-		case int:
-			temp = float64(v)
-		default:
-			return fmt.Errorf("temperature must be a number")
+		temp, err := coerceFloat64(temperature, "temperature")
+		if err != nil {
+			return err
 		}
 		if temp < 0 || temp > 2 {
 			return fmt.Errorf("temperature must be between 0 and 2")
@@ -443,14 +482,9 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 
 	// Validate top_p if present
 	if topP, ok := config["top_p"]; ok {
-		var tp float64
-		switch v := topP.(type) {
-		case float64:
-			tp = v
-		case int:
-			tp = float64(v)
-		default:
-			return fmt.Errorf("top_p must be a number")
+		tp, err := coerceFloat64(topP, "top_p")
+		if err != nil {
+			return err
 		}
 		if tp < 0 || tp > 1 {
 			return fmt.Errorf("top_p must be between 0 and 1")

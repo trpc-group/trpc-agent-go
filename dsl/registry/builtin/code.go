@@ -178,10 +178,15 @@ func (c *CodeComponent) Execute(ctx context.Context, config registry.ComponentCo
 
 	// Extract timeout (default: 30 seconds)
 	timeout := 30
-	if t, ok := config["timeout"].(int); ok && t > 0 {
+	if timeoutRaw, ok := config["timeout"]; ok {
+		t, err := coerceInt(timeoutRaw, "timeout")
+		if err != nil {
+			return nil, err
+		}
+		if t <= 0 {
+			return nil, fmt.Errorf("timeout must be positive, got: %d", t)
+		}
 		timeout = t
-	} else if t, ok := config["timeout"].(float64); ok && t > 0 {
-		timeout = int(t)
 	}
 
 	// Extract work_dir (optional)
@@ -264,17 +269,12 @@ func (c *CodeComponent) Validate(config registry.ComponentConfig) error {
 
 	// Validate timeout if provided
 	if timeoutRaw, ok := config["timeout"]; ok {
-		switch timeout := timeoutRaw.(type) {
-		case int:
-			if timeout <= 0 {
-				return fmt.Errorf("timeout must be positive, got: %d", timeout)
-			}
-		case float64:
-			if timeout <= 0 {
-				return fmt.Errorf("timeout must be positive, got: %v", timeout)
-			}
-		default:
-			return fmt.Errorf("timeout must be a number")
+		timeout, err := coerceInt(timeoutRaw, "timeout")
+		if err != nil {
+			return err
+		}
+		if timeout <= 0 {
+			return fmt.Errorf("timeout must be positive, got: %d", timeout)
 		}
 	}
 

@@ -90,6 +90,50 @@ func coerceConfigInt(value any, fieldName string) (int, error) {
 	}
 }
 
+func coerceConfigFloat64(value any, fieldName string) (float64, error) {
+	if value == nil {
+		return 0, fmt.Errorf("%s must be a number (got <nil>)", fieldName)
+	}
+
+	switch v := value.(type) {
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, fmt.Errorf("%s must be a number (got %T)", fieldName, value)
+		}
+		return v, nil
+	case float32:
+		return float64(v), nil
+	case int:
+		return float64(v), nil
+	case int8:
+		return float64(v), nil
+	case int16:
+		return float64(v), nil
+	case int32:
+		return float64(v), nil
+	case int64:
+		return float64(v), nil
+	case uint:
+		return float64(v), nil
+	case uint8:
+		return float64(v), nil
+	case uint16:
+		return float64(v), nil
+	case uint32:
+		return float64(v), nil
+	case uint64:
+		return float64(v), nil
+	case json.Number:
+		f, err := v.Float64()
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, fmt.Errorf("%s must be a number (got %T)", fieldName, value)
+		}
+		return f, nil
+	default:
+		return 0, fmt.Errorf("%s must be a number (got %T)", fieldName, value)
+	}
+}
+
 // resolveModelFromConfig constructs a concrete model instance from config.
 // Required: model_spec (provider/model_name/base_url/api_key/headers/extra_fields).
 func resolveModelFromConfig(cfg map[string]any, allowEnvSecrets bool) (model.Model, string, error) {
@@ -367,7 +411,11 @@ func newLLMAgentNodeFuncFromConfig(
 	var genConfig model.GenerationConfig
 	hasGenConfig := false
 
-	if temperature, ok := cfg["temperature"].(float64); ok {
+	if temperatureRaw, ok := cfg["temperature"]; ok {
+		temperature, err := coerceConfigFloat64(temperatureRaw, "temperature")
+		if err != nil {
+			return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
+		}
 		genConfig.Temperature = &temperature
 		hasGenConfig = true
 	}
@@ -384,7 +432,11 @@ func newLLMAgentNodeFuncFromConfig(
 		hasGenConfig = true
 	}
 
-	if topP, ok := cfg["top_p"].(float64); ok {
+	if topPRaw, ok := cfg["top_p"]; ok {
+		topP, err := coerceConfigFloat64(topPRaw, "top_p")
+		if err != nil {
+			return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
+		}
 		genConfig.TopP = &topP
 		hasGenConfig = true
 	}
@@ -410,11 +462,19 @@ func newLLMAgentNodeFuncFromConfig(
 		}
 	}
 
-	if presence, ok := cfg["presence_penalty"].(float64); ok {
+	if presenceRaw, ok := cfg["presence_penalty"]; ok {
+		presence, err := coerceConfigFloat64(presenceRaw, "presence_penalty")
+		if err != nil {
+			return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
+		}
 		genConfig.PresencePenalty = &presence
 		hasGenConfig = true
 	}
-	if freq, ok := cfg["frequency_penalty"].(float64); ok {
+	if freqRaw, ok := cfg["frequency_penalty"]; ok {
+		freq, err := coerceConfigFloat64(freqRaw, "frequency_penalty")
+		if err != nil {
+			return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
+		}
 		genConfig.FrequencyPenalty = &freq
 		hasGenConfig = true
 	}
