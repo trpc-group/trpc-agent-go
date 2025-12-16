@@ -1,12 +1,12 @@
 {
-  "evalSetId": "final-response-basic",
-  "name": "final-response-basic",
+  "evalSetId": "knowledge-recall-basic",
+  "name": "knowledge-recall-basic",
   "evalCases": [
     {
-      "evalId": "qa_paris",
+      "evalId": "knowledge-recall",
       "conversation": [
         {
-          "invocationId": "qa_paris-1",
+          "invocationId": "knowledge-recall-1",
           "userContent": {
             "role": "user",
             "parts": [
@@ -18,7 +18,7 @@
         }
       ],
       "sessionInput": {
-        "appName": "final-response-app",
+        "appName": "knowledge-recall-app",
         "userId": "demo-user"
       }
     }

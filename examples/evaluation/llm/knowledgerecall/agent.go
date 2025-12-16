@@ -13,6 +13,7 @@ import (
 	"context"
 	"log"
 	"math"
+	"os"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -42,11 +43,11 @@ func newQAAgent(modelName string, stream bool) agent.Agent {
 		Stream:      stream,
 	}
 	return llmagent.New(
-		"final-response-agent",
+		"knowledge-recall-agent",
 		llmagent.WithModel(openai.New(modelName)),
 		llmagent.WithTools([]tool.Tool{searchTool, calculatorTool}),
 		llmagent.WithInstruction("Answer the user concisely and accurately."),
-		llmagent.WithDescription("Simple LLM agent for final-response evaluation."),
+		llmagent.WithDescription("Simple LLM agent for knowledge-recall evaluation."),
 		llmagent.WithGenerationConfig(genCfg),
 	)
 }
@@ -55,7 +56,9 @@ func newSearchTool() tool.Tool {
 	ctx := context.Background()
 	// 1. Create embedder.
 	embedder := openaiembedder.New(
-		openaiembedder.WithModel("text-embedding-3-small"),
+		openaiembedder.WithModel(os.Getenv("OPENAI_EMBEDDING_MODEL")),
+		openaiembedder.WithAPIKey(os.Getenv("OPENAI_EMBEDDING_API_KEY")),
+		openaiembedder.WithBaseURL(os.Getenv("OPENAI_EMBEDDING_BASE_URL")),
 	)
 	// 2. Create vector store.
 	vectorStore := vectorinmemory.New()

@@ -24,7 +24,6 @@ import (
 
 var (
 	rubricKnowledgeRecallPrompt = `
-
 # Mission
 
 Your mission is to evaluate whether the retrieved knowledge (<retrieved_knowledge>) is relevant to the user question (<user_prompt>), and whether it is sufficient to support each rubric item in the rubric (<rubric>).

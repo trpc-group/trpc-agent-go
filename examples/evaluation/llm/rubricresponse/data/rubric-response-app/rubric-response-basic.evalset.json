@@ -1,6 +1,6 @@
 {
-  "evalSetId": "final-response-basic",
-  "name": "final-response-basic",
+  "evalSetId": "rubric-response-basic",
+  "name": "rubric-response-basic",
   "evalCases": [
     {
       "evalId": "qa_paris",
@@ -18,7 +18,7 @@
         }
       ],
       "sessionInput": {
-        "appName": "final-response-app",
+        "appName": "rubric-response-app",
         "userId": "demo-user"
       }
     }

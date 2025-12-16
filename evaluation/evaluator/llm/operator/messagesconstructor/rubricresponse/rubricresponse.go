@@ -25,7 +25,6 @@ import (
 
 var (
 	rubricResponsePrompt = `
-
 # Mission
 
 Your mission is to evaluate the quality of an AI agent’s final answer. You will be shown a user prompt (<user_prompt>), the agent’s response (<response>, which contains <final_answer>), and a rubric (<rubric>). You must use the rubric to objectively assess whether the agent’s final answer satisfies each rubric item.

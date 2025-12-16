@@ -20,7 +20,7 @@
             "description": "The final answer is correct.",
             "type": "FINAL_RESPONSE_QUALITY",
             "content": {
-              "text": "The final answer is correct."
+              "text": "Evaluate the correctness of the final answer. A final answer can be considered correct if it directly addresses the user's question, provides the requested information, and is free of errors or contradictions. Correctness is determined by the extent to which the provided information matches the user's requirements and is logically consistent."
             }
           },
           {

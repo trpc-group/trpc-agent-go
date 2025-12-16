@@ -32,10 +32,10 @@ var (
 	outputDir = flag.String("output-dir", "./output", "Directory where evaluation results will be stored")
 	modelName = flag.String("model", "deepseek-chat", "Model to use for evaluation runs")
 	streaming = flag.Bool("streaming", false, "Enable streaming responses from the agent")
-	evalSetID = flag.String("eval-set", "final-response-basic", "Evaluation set identifier to execute")
+	evalSetID = flag.String("eval-set", "rubric-response-basic", "Evaluation set identifier to execute")
 )
 
-const appName = "final-response-app"
+const appName = "rubric-response-app"
 
 func main() {
 	flag.Parse()
@@ -68,7 +68,7 @@ func main() {
 }
 
 func printSummary(result *evaluation.EvaluationResult, outDir string) {
-	fmt.Println("✅ Final-response evaluation completed with local storage")
+	fmt.Println("✅ Rubric response evaluation completed with local storage")
 	fmt.Printf("App: %s\n", result.AppName)
 	fmt.Printf("Eval Set: %s\n", result.EvalSetID)
 	fmt.Printf("Overall Status: %s\n", result.OverallStatus.String())

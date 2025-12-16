@@ -1,11 +1,11 @@
 {
-  "evalSetResultId": "final-response-app_final-response-basic_bd9a8fad-3701-4c87-973b-9a7541d197eb",
-  "evalSetResultName": "final-response-app_final-response-basic_bd9a8fad-3701-4c87-973b-9a7541d197eb",
-  "evalSetId": "final-response-basic",
+  "evalSetResultId": "knowledge-recall-app_knowledge-recall-basic_afdb98a4-4cd4-4c91-8490-7cebcb6adf05",
+  "evalSetResultName": "knowledge-recall-app_knowledge-recall-basic_afdb98a4-4cd4-4c91-8490-7cebcb6adf05",
+  "evalSetId": "knowledge-recall-basic",
   "evalCaseResults": [
     {
-      "evalSetId": "final-response-basic",
-      "evalId": "qa_paris",
+      "evalSetId": "knowledge-recall-basic",
+      "evalId": "knowledge-recall",
       "finalEvalStatus": 1,
       "overallEvalMetricResults": [
         {
@@ -41,9 +41,9 @@
             "score": 1,
             "rubricScores": [
               {
-                "ID": "1",
-                "Reason": "The user prompt asks \"What is trpc-agent-go?\". The retrieved knowledge directly answers this question by defining it as a Go framework for building intelligent agent/AI applications. This information is highly relevant, focused, and adds value by clarifying the topic. The other documents are irrelevant or unreadable, but the presence of relevant evidence is sufficient.",
-                "Score": 1
+                "id": "1",
+                "reason": "The retrieved knowledge directly addresses the user's question \"What is trpc-agent-go?\" by providing a definition and describing its purpose. The evidence is a verbatim excerpt that clarifies the topic, stating it is a Go framework for building intelligent agent systems. This information is focused on the subject and adds value to the user's comprehension without straying into unrelated areas.",
+                "score": 1
               }
             ]
           }
@@ -52,7 +52,7 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "8030612f-2496-4c6f-b209-99f24c1976ef",
+            "invocationId": "a9122ed7-3ecb-421a-8ea8-fab0f299fa58",
             "userContent": {
               "parts": [
                 {
@@ -64,7 +64,7 @@
             "finalResponse": {
               "parts": [
                 {
-                  "text": "Based on the search results, **tRPC-Agent-Go** is a powerful Go framework for building intelligent agent systems. It transforms how developers create AI applications by enabling the creation of autonomous agents that can:\n\n- **Think** - Process information and make decisions\n- **Remember** - Maintain state and context across interactions  \n- **Collaborate** - Work together with other agents or systems\n- **Act** - Execute tasks and perform actions\n\nThe framework is designed to make building AI applications with autonomous agent capabilities easier and more efficient. It appears to be part of the tRPC ecosystem (likely related to Tencent's RPC framework) but specifically focused on AI agent development in Go.\n\nThe framework seems to be positioned as a tool for developers who want to create sophisticated AI-powered applications with agent capabilities without having to build all the underlying infrastructure from scratch."
+                  "text": "Based on the information found, **tRPC-Agent-Go** is a powerful Go framework designed for building intelligent agent systems. It transforms how developers create AI applications by enabling the construction of autonomous agents that can:\n\n1. **Think** - Process information and make decisions\n2. **Remember** - Maintain state and learn from interactions\n3. **Collaborate** - Work together with other agents or systems\n4. **Act** - Execute tasks and interact with their environment\n\nThe framework provides unprecedented ease in developing AI applications, allowing developers to build sophisticated agent-based systems in Go. It appears to be focused on creating autonomous, intelligent agents that can operate independently while working together in complex systems."
                 }
               ],
               "role": "assistant"
@@ -72,49 +72,81 @@
             "intermediateData": {
               "toolUses": [
                 {
-                  "id": "call_00_e9XnwW9fSmaj5m0yb4ngm0a8",
+                  "id": "call_00_k8rLTx9qqsmT2FOu0UWt8CGv",
                   "args": {
-                    "query": "trpc-agent-go"
+                    "query": "trpc-agent-go what is it"
+                  },
+                  "name": "knowledge_search"
+                },
+                {
+                  "id": "call_00_wiia5tLVB5uzhHkAbJcd16oA",
+                  "args": {
+                    "query": "tRPC-Agent-Go framework features capabilities"
+                  },
+                  "name": "knowledge_search"
+                },
+                {
+                  "id": "call_00_rM98zNPtXOQGgS0nIasiX2pt",
+                  "args": {
+                    "query": "tRPC Agent Go autonomous agents AI applications"
                   },
                   "name": "knowledge_search"
                 }
               ],
               "toolResponses": [
                 {
-                  "id": "call_00_e9XnwW9fSmaj5m0yb4ngm0a8",
+                  "id": "call_00_k8rLTx9qqsmT2FOu0UWt8CGv",
                   "name": "knowledge_search",
                   "response": {
                     "documents": [
                       {
                         "metadata": {
-                          "fileId": 6594643
+                          "trpc_agent_go_chunk_index": 1
                         },
-                        "score": 0.9047545194625854,
-                        "text": "tRPC-Agent-Go is a powerful Go framework for building intelligent agent systems that transforms how you create AI applications. Build autonomous agents that think, remember, collaborate, and act with unprecedented ease."
-                      },
-                      {
-                        "metadata": {
-                          "fileId": 6594634
-                        },
-                        "score": 0.9047545194625854,
-                        "text": "tRPC-Agent-Go is a powerful Go framework for building intelligent agent systems that transforms how you create AI applications. Build autonomous agents that think, remember, collaborate, and act with unprecedented ease."
-                      },
-                      {
-                        "metadata": {
-                          "fileId": 6594635
-                        },
-                        "score": 0.9047545194625854,
+                        "score": 0.8783638824326429,
                         "text": "tRPC-Agent-Go is a powerful Go framework for building intelligent agent systems that transforms how you create AI applications. Build autonomous agents that think, remember, collaborate, and act with unprecedented ease."
                       }
                     ],
-                    "message": "Found 3 relevant document(s)"
+                    "message": "Found 1 relevant document(s)"
+                  }
+                },
+                {
+                  "id": "call_00_wiia5tLVB5uzhHkAbJcd16oA",
+                  "name": "knowledge_search",
+                  "response": {
+                    "documents": [
+                      {
+                        "metadata": {
+                          "trpc_agent_go_chunk_index": 1
+                        },
+                        "score": 0.9282973720219204,
+                        "text": "tRPC-Agent-Go is a powerful Go framework for building intelligent agent systems that transforms how you create AI applications. Build autonomous agents that think, remember, collaborate, and act with unprecedented ease."
+                      }
+                    ],
+                    "message": "Found 1 relevant document(s)"
+                  }
+                },
+                {
+                  "id": "call_00_rM98zNPtXOQGgS0nIasiX2pt",
+                  "name": "knowledge_search",
+                  "response": {
+                    "documents": [
+                      {
+                        "metadata": {
+                          "trpc_agent_go_chunk_index": 1
+                        },
+                        "score": 0.9305305464397817,
+                        "text": "tRPC-Agent-Go is a powerful Go framework for building intelligent agent systems that transforms how you create AI applications. Build autonomous agents that think, remember, collaborate, and act with unprecedented ease."
+                      }
+                    ],
+                    "message": "Found 1 relevant document(s)"
                   }
                 }
               ]
             }
           },
           "expectedInvocation": {
-            "invocationId": "qa_paris-1",
+            "invocationId": "knowledge-recall-1",
             "userContent": {
               "parts": [
                 {
@@ -158,9 +190,9 @@
                 "score": 1,
                 "rubricScores": [
                   {
-                    "ID": "1",
-                    "Reason": "The user prompt asks \"What is trpc-agent-go?\". The retrieved knowledge directly answers this question by defining it as a Go framework for building intelligent agent/AI applications. This information is highly relevant, focused, and adds value by clarifying the topic. The other documents are irrelevant or unreadable, but the presence of relevant evidence is sufficient.",
-                    "Score": 1
+                    "id": "1",
+                    "reason": "The retrieved knowledge directly addresses the user's question \"What is trpc-agent-go?\" by providing a definition and describing its purpose. The evidence is a verbatim excerpt that clarifies the topic, stating it is a Go framework for building intelligent agent systems. This information is focused on the subject and adds value to the user's comprehension without straying into unrelated areas.",
+                    "score": 1
                   }
                 ]
               }
@@ -168,9 +200,9 @@
           ]
         }
       ],
-      "sessionId": "6462a347-bc35-42aa-8b1d-0cd0e675d248",
+      "sessionId": "400e911c-7a2a-4d4c-806d-b29104acba77",
       "userId": "demo-user"
     }
   ],
-  "creationTimestamp": 1765506094.0231059
+  "creationTimestamp": 1765855628.6625931
 }

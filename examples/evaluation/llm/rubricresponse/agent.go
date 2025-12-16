@@ -34,11 +34,11 @@ func newQAAgent(modelName string, stream bool) agent.Agent {
 		Stream:      stream,
 	}
 	return llmagent.New(
-		"final-response-agent",
+		"rubric-response-agent",
 		llmagent.WithModel(openai.New(modelName)),
 		llmagent.WithTools([]tool.Tool{calculatorTool}),
 		llmagent.WithInstruction("Answer the user concisely and accurately."),
-		llmagent.WithDescription("Simple LLM agent for final-response evaluation."),
+		llmagent.WithDescription("Simple LLM agent for rubric-response evaluation."),
 		llmagent.WithGenerationConfig(genCfg),
 	)
 }
