@@ -13,7 +13,6 @@ package state
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -129,7 +128,9 @@ func renderStateValue(raw []byte) string {
 	case json.Number:
 		return v.String()
 	default:
-		return fmt.Sprintf("%v", v)
+		// Preserve JSON objects/arrays as JSON text so injection does not
+		// degrade them into Go's fmt representation (e.g. map[k:v]).
+		return string(raw)
 	}
 }
 

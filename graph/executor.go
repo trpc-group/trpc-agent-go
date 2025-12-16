@@ -616,16 +616,6 @@ func (e *Executor) buildCompletionEvent(
 		WithCompletionEventTotalSteps(stepsExecuted),
 		WithCompletionEventTotalDuration(time.Since(startTime)),
 	)
-	if completionEvent.StateDelta == nil {
-		completionEvent.StateDelta = make(map[string][]byte)
-	}
-	// Reuse the deep-copied snapshot to populate StateDelta to avoid an
-	// additional full deep copy.
-	for key, value := range finalStateCopy {
-		if jsonData, err := json.Marshal(value); err == nil {
-			completionEvent.StateDelta[key] = jsonData
-		}
-	}
 	return completionEvent
 }
 
