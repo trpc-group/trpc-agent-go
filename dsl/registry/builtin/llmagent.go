@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/modelspec"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/outputformat"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/toolconfig"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -294,17 +295,8 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 
 	// Validate tools if present
 	if tools, ok := config["tools"]; ok {
-		switch toolsSlice := tools.(type) {
-		case []interface{}:
-			for i, tool := range toolsSlice {
-				if _, ok := tool.(string); !ok {
-					return fmt.Errorf("tools[%d] must be a string", i)
-				}
-			}
-		case []string:
-			// ok
-		default:
-			return fmt.Errorf("tools must be an array")
+		if _, err := toolconfig.ParseStringSlice(tools, "tools"); err != nil {
+			return err
 		}
 	}
 
@@ -350,49 +342,8 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 
 	// Validate mcp_tools if present
 	if mcpTools, ok := config["mcp_tools"]; ok {
-		mcpToolsSlice, ok := mcpTools.([]interface{})
-		if !ok {
-			return fmt.Errorf("mcp_tools must be an array")
-		}
-		for i, mcpTool := range mcpToolsSlice {
-			mcpToolConfig, ok := mcpTool.(map[string]interface{})
-			if !ok {
-				return fmt.Errorf("mcp_tools[%d] must be an object", i)
-			}
-
-			// Validate server_url (required)
-			serverURL, ok := mcpToolConfig["server_url"].(string)
-			if !ok || serverURL == "" {
-				return fmt.Errorf("mcp_tools[%d].server_url is required and must be a non-empty string", i)
-			}
-
-			// Validate transport (optional, defaults to streamable_http)
-			if transportRaw, ok := mcpToolConfig["transport"]; ok {
-				transport, ok := transportRaw.(string)
-				if !ok {
-					return fmt.Errorf("mcp_tools[%d].transport must be a string when present", i)
-				}
-				if transport != "streamable_http" && transport != "sse" {
-					return fmt.Errorf("mcp_tools[%d].transport must be one of: streamable_http, sse", i)
-				}
-			}
-
-			// Validate allowed_tools if present
-			if allowed, ok := mcpToolConfig["allowed_tools"]; ok {
-				switch v := allowed.(type) {
-				case []interface{}:
-					for j, elem := range v {
-						if _, ok := elem.(string); !ok {
-							return fmt.Errorf("mcp_tools[%d].allowed_tools[%d] must be a string", i, j)
-						}
-					}
-				case []string:
-					// ok
-				default:
-					return fmt.Errorf("mcp_tools[%d].allowed_tools must be an array of strings", i)
-				}
-			}
-
+		if _, err := toolconfig.ParseMCPTools(mcpTools); err != nil {
+			return err
 		}
 	}
 

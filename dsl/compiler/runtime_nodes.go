@@ -14,6 +14,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/modelspec"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/outputformat"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/toolconfig"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -81,20 +82,13 @@ func newLLMAgentNodeFuncFromConfig(
 	var tools []tool.Tool
 	if toolsProvider != nil {
 		if toolsConfig, ok := cfg["tools"]; ok {
-			switch v := toolsConfig.(type) {
-			case []interface{}:
-				for _, toolNameInterface := range v {
-					if toolName, ok := toolNameInterface.(string); ok {
-						if t, err := toolsProvider.Get(toolName); err == nil {
-							tools = append(tools, t)
-						}
-					}
-				}
-			case []string:
-				for _, toolName := range v {
-					if t, err := toolsProvider.Get(toolName); err == nil {
-						tools = append(tools, t)
-					}
+			toolNames, err := toolconfig.ParseStringSlice(toolsConfig, "tools")
+			if err != nil {
+				return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
+			}
+			for _, toolName := range toolNames {
+				if t, err := toolsProvider.Get(toolName); err == nil {
+					tools = append(tools, t)
 				}
 			}
 		}
@@ -103,67 +97,35 @@ func newLLMAgentNodeFuncFromConfig(
 	// Resolve MCP toolsets from config (if any).
 	var mcpToolSets []tool.ToolSet
 	if mcpToolsConfig, ok := cfg["mcp_tools"]; ok {
-		if mcpToolsList, ok := mcpToolsConfig.([]interface{}); ok {
-			for idx, mcpToolInterface := range mcpToolsList {
-				mcpToolConfig, ok := mcpToolInterface.(map[string]interface{})
-				if !ok {
-					return nil, fmt.Errorf("builtin.llmagent[%s]: mcp_tools[%d] must be an object", nodeID, idx)
-				}
-
-				rawServerURL, ok := mcpToolConfig["server_url"].(string)
-				serverURL := strings.TrimSpace(rawServerURL)
-				if !ok || serverURL == "" {
-					return nil, fmt.Errorf("builtin.llmagent[%s]: mcp_tools[%d].server_url is required", nodeID, idx)
-				}
-
-				transport := "streamable_http"
-				if t, ok := mcpToolConfig["transport"].(string); ok && strings.TrimSpace(t) != "" {
-					transport = strings.TrimSpace(t)
-				}
-				if transport != "streamable_http" && transport != "sse" {
-					return nil, fmt.Errorf("builtin.llmagent[%s]: mcp_tools[%d].transport %q is not supported (must be \"streamable_http\" or \"sse\")", nodeID, idx, transport)
-				}
-
-				var headers map[string]any
-				if h, ok := mcpToolConfig["headers"].(map[string]any); ok && len(h) > 0 {
-					headers = h
-				}
-
-				var toolFilter []interface{}
-				if allowed, ok := mcpToolConfig["allowed_tools"]; ok {
-					switch v := allowed.(type) {
-					case []interface{}:
-						for _, elem := range v {
-							if name, ok := elem.(string); ok && strings.TrimSpace(name) != "" {
-								toolFilter = append(toolFilter, strings.TrimSpace(name))
-							}
-						}
-					case []string:
-						for _, name := range v {
-							if strings.TrimSpace(name) != "" {
-								toolFilter = append(toolFilter, strings.TrimSpace(name))
-							}
-						}
-					}
-				}
-
-				cfgMap := map[string]any{
-					"transport":  transport,
-					"server_url": serverURL,
-				}
-				if headers != nil {
-					cfgMap["headers"] = headers
-				}
-				if len(toolFilter) > 0 {
-					cfgMap["tool_filter"] = toolFilter
-				}
-
-				toolSet, err := createMCPToolSet(cfgMap)
-				if err != nil {
-					return nil, fmt.Errorf("builtin.llmagent[%s]: failed to create MCP toolset for server %q: %w", nodeID, serverURL, err)
-				}
-				mcpToolSets = append(mcpToolSets, toolSet)
+		toolSpecs, err := toolconfig.ParseMCPTools(mcpToolsConfig)
+		if err != nil {
+			return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
+		}
+		for _, spec := range toolSpecs {
+			cfgMap := map[string]any{
+				"transport":  spec.Transport,
+				"server_url": spec.ServerURL,
 			}
+			if len(spec.Headers) > 0 {
+				headers := make(map[string]any, len(spec.Headers))
+				for k, v := range spec.Headers {
+					headers[k] = v
+				}
+				cfgMap["headers"] = headers
+			}
+			if len(spec.AllowedTools) > 0 {
+				toolFilter := make([]any, 0, len(spec.AllowedTools))
+				for _, name := range spec.AllowedTools {
+					toolFilter = append(toolFilter, name)
+				}
+				cfgMap["tool_filter"] = toolFilter
+			}
+
+			toolSet, err := createMCPToolSet(cfgMap)
+			if err != nil {
+				return nil, fmt.Errorf("builtin.llmagent[%s]: failed to create MCP toolset for server %q: %w", nodeID, spec.ServerURL, err)
+			}
+			mcpToolSets = append(mcpToolSets, toolSet)
 		}
 	}
 
