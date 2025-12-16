@@ -13,6 +13,7 @@ import (
 
 	dsl "trpc.group/trpc-go/trpc-agent-go/dsl"
 	dslcel "trpc.group/trpc-go/trpc-agent-go/dsl/internal/cel"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/mcpconfig"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -665,39 +666,18 @@ func (c *Compiler) createToolsNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 func (c *Compiler) createMCPNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 	engine := node.EngineNode
 
-	rawServerURL, ok := engine.Config["server_url"].(string)
-	serverURL := strings.TrimSpace(rawServerURL)
-	if !ok || serverURL == "" {
-		return nil, fmt.Errorf("server_url is required in MCP node config")
-	}
-
-	rawToolName, ok := engine.Config["tool"].(string)
-	toolName := strings.TrimSpace(rawToolName)
-	if !ok || toolName == "" {
-		return nil, fmt.Errorf("tool is required in MCP node config")
-	}
-
-	transport := "streamable_http"
-	if t, ok := engine.Config["transport"].(string); ok && strings.TrimSpace(t) != "" {
-		transport = strings.TrimSpace(t)
-	}
-	if transport != "streamable_http" && transport != "sse" {
-		return nil, fmt.Errorf("unsupported MCP transport %q; expected \"streamable_http\" or \"sse\"", transport)
-	}
-
-	// Optional headers from config (JSON decoded as map[string]any).
-	var headers map[string]any
-	if h, ok := engine.Config["headers"].(map[string]any); ok && len(h) > 0 {
-		headers = h
+	parsed, err := mcpconfig.ParseNodeConfig(engine.Config)
+	if err != nil {
+		return nil, err
 	}
 
 	// Build configuration map compatible with createMCPToolSet.
 	mcpCfg := map[string]any{
-		"transport":  transport,
-		"server_url": serverURL,
+		"transport":  parsed.Transport,
+		"server_url": parsed.ServerURL,
 	}
-	if headers != nil {
-		mcpCfg["headers"] = headers
+	if len(parsed.Headers) > 0 {
+		mcpCfg["headers"] = parsed.Headers
 	}
 
 	mcpToolSet, err := c.createMCPToolSet(mcpCfg)
@@ -705,11 +685,7 @@ func (c *Compiler) createMCPNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 		return nil, fmt.Errorf("failed to create MCP toolset for node %s: %w", node.ID, err)
 	}
 
-	// Capture params configuration (if any).
-	var params map[string]any
-	if p, ok := engine.Config["params"].(map[string]any); ok && len(p) > 0 {
-		params = p
-	}
+	params := parsed.Params
 
 	// Resolve the primary upstream node for this MCP node, if any, so that
 	// we can build a stable input.* view from the immediate predecessor's
@@ -725,18 +701,18 @@ func (c *Compiler) createMCPNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 		// Resolve the MCP tool from the toolset.
 		var selected tool.Tool
 		for _, t := range mcpToolSet.Tools(ctx) {
-			if decl := t.Declaration(); decl != nil && decl.Name == toolName {
+			if decl := t.Declaration(); decl != nil && decl.Name == parsed.ToolName {
 				selected = t
 				break
 			}
 		}
 		if selected == nil {
-			return nil, fmt.Errorf("MCP tool %q not found on server %q", toolName, serverURL)
+			return nil, fmt.Errorf("MCP tool %q not found on server %q", parsed.ToolName, parsed.ServerURL)
 		}
 
 		callable, ok := selected.(tool.CallableTool)
 		if !ok {
-			return nil, fmt.Errorf("MCP tool %q is not callable", toolName)
+			return nil, fmt.Errorf("MCP tool %q is not callable", parsed.ToolName)
 		}
 
 		// Build the input view for MCP param expressions from the immediate
@@ -774,7 +750,7 @@ func (c *Compiler) createMCPNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 
 		result, err := callable.Call(ctx, payload)
 		if err != nil {
-			return nil, fmt.Errorf("MCP tool %q call failed: %w", toolName, err)
+			return nil, fmt.Errorf("MCP tool %q call failed: %w", parsed.ToolName, err)
 		}
 
 		if result == nil {

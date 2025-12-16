@@ -117,7 +117,7 @@ func ParseMCPTools(value any) ([]MCPToolSpec, error) {
 			}
 		}
 
-		headers, err := parseStringMap(itemMap["headers"], fmt.Sprintf("mcp_tools[%d].headers", i))
+		headers, err := ParseStringMap(itemMap["headers"], fmt.Sprintf("mcp_tools[%d].headers", i))
 		if err != nil {
 			return nil, err
 		}
@@ -134,7 +134,7 @@ func ParseMCPTools(value any) ([]MCPToolSpec, error) {
 	return out, nil
 }
 
-func parseStringMap(value any, path string) (map[string]string, error) {
+func ParseStringMap(value any, path string) (map[string]string, error) {
 	if value == nil {
 		return nil, nil
 	}

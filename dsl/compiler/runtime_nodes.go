@@ -107,18 +107,10 @@ func newLLMAgentNodeFuncFromConfig(
 				"server_url": spec.ServerURL,
 			}
 			if len(spec.Headers) > 0 {
-				headers := make(map[string]any, len(spec.Headers))
-				for k, v := range spec.Headers {
-					headers[k] = v
-				}
-				cfgMap["headers"] = headers
+				cfgMap["headers"] = spec.Headers
 			}
 			if len(spec.AllowedTools) > 0 {
-				toolFilter := make([]any, 0, len(spec.AllowedTools))
-				for _, name := range spec.AllowedTools {
-					toolFilter = append(toolFilter, name)
-				}
-				cfgMap["tool_filter"] = toolFilter
+				cfgMap["tool_filter"] = spec.AllowedTools
 			}
 
 			toolSet, err := createMCPToolSet(cfgMap)
@@ -547,15 +539,34 @@ func createMCPToolSet(config map[string]interface{}) (tool.ToolSet, error) {
 		}
 		connConfig.ServerURL = serverURL
 
-		if headersVal, ok := config["headers"]; ok {
-			if headersMap, ok := headersVal.(map[string]interface{}); ok {
+		if headersVal, ok := config["headers"]; ok && headersVal != nil {
+			switch headersMap := headersVal.(type) {
+			case map[string]string:
+				headers := make(map[string]string, len(headersMap))
+				for k, v := range headersMap {
+					v = strings.TrimSpace(v)
+					if v == "" {
+						continue
+					}
+					headers[k] = v
+				}
+				if len(headers) > 0 {
+					connConfig.Headers = headers
+				}
+			case map[string]interface{}:
 				headers := make(map[string]string)
 				for k, v := range headersMap {
 					if vStr, ok := v.(string); ok {
+						vStr = strings.TrimSpace(vStr)
+						if vStr == "" {
+							continue
+						}
 						headers[k] = vStr
 					}
 				}
-				connConfig.Headers = headers
+				if len(headers) > 0 {
+					connConfig.Headers = headers
+				}
 			}
 		}
 
@@ -566,16 +577,20 @@ func createMCPToolSet(config map[string]interface{}) (tool.ToolSet, error) {
 	var mcpOpts []mcp.ToolSetOption
 
 	if toolFilterVal, ok := config["tool_filter"]; ok {
-		if toolFilterList, ok := toolFilterVal.([]interface{}); ok {
-			toolNames := make([]string, 0, len(toolFilterList))
-			for _, name := range toolFilterList {
+		var toolNames []string
+		switch list := toolFilterVal.(type) {
+		case []string:
+			toolNames = append(toolNames, list...)
+		case []interface{}:
+			toolNames = make([]string, 0, len(list))
+			for _, name := range list {
 				if nameStr, ok := name.(string); ok {
 					toolNames = append(toolNames, nameStr)
 				}
 			}
-			if len(toolNames) > 0 {
-				mcpOpts = append(mcpOpts, mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter(toolNames...)))
-			}
+		}
+		if len(toolNames) > 0 {
+			mcpOpts = append(mcpOpts, mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter(toolNames...)))
 		}
 	}
 
