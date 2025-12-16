@@ -951,39 +951,6 @@ Because the Agent's execution process may be uncertain, `evaluation.WithNumRuns`
 
 ## Usage Guide
 
-### Debug Server Integration
-
-Debug Server bundles evaluation management and run endpoints so you can drive visual evaluation flows from ADK Web/AG UI.
-
-```go
-import (
-	"net/http"
-
-	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
-	evalresultlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
-	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
-	debugserver "trpc.group/trpc-go/trpc-agent-go/server/debug"
-)
-
-agents := map[string]agent.Agent{
-	"math-app": myAgent,
-}
-srv := debugserver.New(
-	agents,
-	debugserver.WithEvalSetManager(evalsetlocal.New(evalset.WithBaseDir("./evaldata"))),
-	debugserver.WithEvalResultManager(evalresultlocal.New(evalresult.WithBaseDir("./evaldata"))),
-	debugserver.WithMetricManager(metriclocal.New(metric.WithBaseDir("./evaldata"))),
-)
-// Debug Server returns an http.Handler; register it to your HTTP server.
-_ = http.ListenAndServe(":8000", srv.Handler())
-```
-
-For a full example, see [examples/evaluation/debug](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/debug).
-
 ### Local File Path
 
 There are three types of local files:

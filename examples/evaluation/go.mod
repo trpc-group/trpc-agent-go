@@ -5,14 +5,12 @@ go 1.24.4
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/evaluation => ../../evaluation
-	trpc.group/trpc-go/trpc-agent-go/server/debug => ../../server/debug
 )
 
 require (
 	google.golang.org/genai v1.33.0
 	trpc.group/trpc-go/trpc-agent-go v0.2.2
 	trpc.group/trpc-go/trpc-agent-go/evaluation v0.0.0-20251126064502-c8c2594d2519
-	trpc.group/trpc-go/trpc-agent-go/server/debug v0.0.0-20251126064502-c8c2594d2519
 )
 
 require (

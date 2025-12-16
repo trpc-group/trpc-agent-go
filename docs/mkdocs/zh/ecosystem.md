@@ -831,7 +831,7 @@ func (s *Service) SearchMemories(ctx context.Context, key memory.UserKey, q stri
 - 鉴权与限流按目标服务指南配置。
 - 返回值严格对齐 `memory.Entry` 与 `memory.Memory`，时间字段使用 UTC。
 - 工具声明（Declaration）应准确描述输入输出，便于前端与模型理解。
-- 补充 README、示例与测试，确保与 `runner`、`server/debug` 组合可用。
+- 补充 README、示例与测试，确保与 runner 相关集成可用。
 
 **可以集成的开源组件示例：**
 
@@ -1007,26 +1007,12 @@ func main() {
 
 **现有实现参考：**
 
-- **ADK Web 兼容 HTTP 服务**：`server/debug`。
-  - 端点（已实现）：
-    - `GET /list-apps`：列出可用 `Agent` 应用。
-    - `GET /apps/{appName}/users/{userId}/sessions`：列出用户会话。
-    - `POST /apps/{appName}/users/{userId}/sessions`：创建会话。
-    - `GET /apps/{appName}/users/{userId}/sessions/{sessionId}`：查询会话。
-    - `POST /run`：非流式对话推理，返回聚合事件列表。
-    - `POST /run_sse`：SSE 流式推理，返回 token 级事件流。
-    - `GET /debug/trace/{event_id}`：按事件查询 Trace 属性。
-    - `GET /debug/trace/session/{session_id}`：按 Session 查询 Trace 列表。
-  - 特性：内置 CORS、会话存储可插拔（默认 In-Memory）、与
-    `runner.Runner` 打通、可观测埋点（导出关键 Span）。
-  - 适用说明：面向 ADK Web 的调试场景。内部由 Agent 构造 runner，并在会话接口与 runner 之间强制使用同一个 `session.Service`。不建议直接用于生产。
 - **A2A Server**：`server/a2a`。
   - 面向 A2A 协议的服务封装，内建 `AuthProvider` 与任务编排，适合
     平台到 Agent 的集成场景。
 
 **与前端协议对齐：**
 
-- **ADK Web**：已对齐请求/响应与事件 Schema，见 `server/debug/internal/schema`。
 - **AG-UI**：参考 `https://github.com/ag-ui-protocol/ag-ui`。
   - 需要的能力：
     - 会话列表/创建/查询。
@@ -1046,42 +1032,17 @@ func main() {
   - 输出事件：将内部 `event.Event` 映射为 UI 期望的 envelope/parts，
     对工具调用与工具响应进行结构化，避免重复文本展示。
 - **流式传输**：
-  - SSE 已在 `server/debug` 实现，优先复用；WebSocket 可作为生态扩展。
+  - 优先使用 SSE；WebSocket 可作为生态扩展。
   - 非流式端点需按 UI 期望聚合最终消息与工具响应。
 - **会话存储**：
   - 通过 `runner.WithSessionService` 注入具体实现，复用 `session` 模块。
-  - 对于 `server/debug`，通过 `debug.WithSessionService(...)` 设置单一会话后端；为保证一致性，会覆盖 runner 侧传入的会话后端。
 - **可观测**：
-  - 复用 `telemetry/trace` 与 `telemetry/metric`。`server/debug` 已演示
-    如何导出关键 Span 与事件属性，便于 UI 侧调试与定位。
+  - 复用 `telemetry/trace` 与 `telemetry/metric`，导出关键 Span 与事件属性，便于 UI 侧调试与定位。
 - **鉴权与安全**：
   - 支持 API Key/JWT/自定义 Header；对敏感端点加速率限制与跨域控制。
 - **开放规范**：
   - 建议在各 `server/*` 子模块附带 `openapi.json`/`README.md`，
     便于前端/集成方对接。
-
-**最小示例（复用 ADK Web 兼容服务）：**
-
-```go
-package main
-
-import (
-    "net/http"
-
-    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    debugsrv "trpc.group/trpc-go/trpc-agent-go/server/debug"
-)
-
-func main() {
-    // 1. 注册 Agent
-    ag := llmagent.New("assistant")
-    s := debugsrv.New(map[string]agent.Agent{
-        ag.Info().Name: ag,
-    })
-    // 2. 暴露 HTTP Handler
-    _ = http.ListenAndServe(":8080", s.Handler())
-}
-```
 
 **AG-UI 适配建议（骨架）：**
 
@@ -1135,7 +1096,6 @@ WebSocket 适配。
 
 链接参考：
 
-- `server/debug`（ADK Web 兼容）与其 `openapi.json`。 
 - `server/a2a`（A2A 协议封装）。 
 
 ### 9. Planner 生态化
@@ -1202,8 +1162,8 @@ func (p *Planner) ProcessPlanningResponse(ctx context.Context, inv *agent.Invoca
 **贡献建议：**
 
 - 在 `planner/<name>/` 提供实现与 README、测试用例、示例。
-- 结合 `docs/overall-introduction.md` 的 Observability 与 `server/debug`
-  端点提供端到端示例，便于前端 UI 演示。
+- 结合 `docs/overall-introduction.md` 的 Observability 提供端到端示例，
+  便于前端 UI 演示。
 - 遵循 goimports 与错误消息风格，注释句末加句号，代码换行约 80 列。
 
 ## 组件关系说明
