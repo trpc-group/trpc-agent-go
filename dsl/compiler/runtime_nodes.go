@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"os"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
 	dslcel "trpc.group/trpc-go/trpc-agent-go/dsl/internal/cel"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -21,118 +21,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
 )
-
-func coerceConfigInt(value any, fieldName string) (int, error) {
-	if value == nil {
-		return 0, fmt.Errorf("%s must be an integer (got <nil>)", fieldName)
-	}
-
-	maxInt := int64(^uint(0) >> 1)
-	minInt := -maxInt - 1
-
-	switch v := value.(type) {
-	case int:
-		return v, nil
-	case int8:
-		return int(v), nil
-	case int16:
-		return int(v), nil
-	case int32:
-		return int(v), nil
-	case int64:
-		if v > maxInt || v < minInt {
-			return 0, fmt.Errorf("%s is too large", fieldName)
-		}
-		return int(v), nil
-	case uint:
-		if uint64(v) > uint64(maxInt) {
-			return 0, fmt.Errorf("%s is too large", fieldName)
-		}
-		return int(v), nil
-	case uint8:
-		return int(v), nil
-	case uint16:
-		return int(v), nil
-	case uint32:
-		if uint64(v) > uint64(maxInt) {
-			return 0, fmt.Errorf("%s is too large", fieldName)
-		}
-		return int(v), nil
-	case uint64:
-		if v > uint64(maxInt) {
-			return 0, fmt.Errorf("%s is too large", fieldName)
-		}
-		return int(v), nil
-	case float32:
-		return coerceConfigInt(float64(v), fieldName)
-	case float64:
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
-		}
-		if v > float64(maxInt) || v < float64(minInt) {
-			return 0, fmt.Errorf("%s is too large", fieldName)
-		}
-		if v != math.Trunc(v) {
-			return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
-		}
-		return int(v), nil
-	case json.Number:
-		n, err := v.Int64()
-		if err != nil {
-			return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
-		}
-		if n > maxInt || n < minInt {
-			return 0, fmt.Errorf("%s is too large", fieldName)
-		}
-		return int(n), nil
-	default:
-		return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
-	}
-}
-
-func coerceConfigFloat64(value any, fieldName string) (float64, error) {
-	if value == nil {
-		return 0, fmt.Errorf("%s must be a number (got <nil>)", fieldName)
-	}
-
-	switch v := value.(type) {
-	case float64:
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return 0, fmt.Errorf("%s must be a number (got %T)", fieldName, value)
-		}
-		return v, nil
-	case float32:
-		return float64(v), nil
-	case int:
-		return float64(v), nil
-	case int8:
-		return float64(v), nil
-	case int16:
-		return float64(v), nil
-	case int32:
-		return float64(v), nil
-	case int64:
-		return float64(v), nil
-	case uint:
-		return float64(v), nil
-	case uint8:
-		return float64(v), nil
-	case uint16:
-		return float64(v), nil
-	case uint32:
-		return float64(v), nil
-	case uint64:
-		return float64(v), nil
-	case json.Number:
-		f, err := v.Float64()
-		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
-			return 0, fmt.Errorf("%s must be a number (got %T)", fieldName, value)
-		}
-		return f, nil
-	default:
-		return 0, fmt.Errorf("%s must be a number (got %T)", fieldName, value)
-	}
-}
 
 // resolveModelFromConfig constructs a concrete model instance from config.
 // Required: model_spec (provider/model_name/base_url/api_key/headers/extra_fields).
@@ -412,7 +300,7 @@ func newLLMAgentNodeFuncFromConfig(
 	hasGenConfig := false
 
 	if temperatureRaw, ok := cfg["temperature"]; ok {
-		temperature, err := coerceConfigFloat64(temperatureRaw, "temperature")
+		temperature, err := numconv.Float64(temperatureRaw, "temperature")
 		if err != nil {
 			return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
 		}
@@ -421,7 +309,7 @@ func newLLMAgentNodeFuncFromConfig(
 	}
 
 	if maxTokensRaw, ok := cfg["max_tokens"]; ok {
-		tokens, err := coerceConfigInt(maxTokensRaw, "max_tokens")
+		tokens, err := numconv.Int(maxTokensRaw, "max_tokens")
 		if err != nil {
 			return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
 		}
@@ -433,7 +321,7 @@ func newLLMAgentNodeFuncFromConfig(
 	}
 
 	if topPRaw, ok := cfg["top_p"]; ok {
-		topP, err := coerceConfigFloat64(topPRaw, "top_p")
+		topP, err := numconv.Float64(topPRaw, "top_p")
 		if err != nil {
 			return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
 		}
@@ -463,7 +351,7 @@ func newLLMAgentNodeFuncFromConfig(
 	}
 
 	if presenceRaw, ok := cfg["presence_penalty"]; ok {
-		presence, err := coerceConfigFloat64(presenceRaw, "presence_penalty")
+		presence, err := numconv.Float64(presenceRaw, "presence_penalty")
 		if err != nil {
 			return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
 		}
@@ -471,7 +359,7 @@ func newLLMAgentNodeFuncFromConfig(
 		hasGenConfig = true
 	}
 	if freqRaw, ok := cfg["frequency_penalty"]; ok {
-		freq, err := coerceConfigFloat64(freqRaw, "frequency_penalty")
+		freq, err := numconv.Float64(freqRaw, "frequency_penalty")
 		if err != nil {
 			return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
 		}
@@ -489,7 +377,7 @@ func newLLMAgentNodeFuncFromConfig(
 		hasGenConfig = true
 	}
 	if thinkingTokensRaw, ok := cfg["thinking_tokens"]; ok {
-		tokens, err := coerceConfigInt(thinkingTokensRaw, "thinking_tokens")
+		tokens, err := numconv.Int(thinkingTokensRaw, "thinking_tokens")
 		if err != nil {
 			return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
 		}

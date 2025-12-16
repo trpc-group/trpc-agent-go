@@ -11,12 +11,11 @@ package builtin
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"math"
 	"reflect"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -59,118 +58,6 @@ func init() {
 //	  }
 //	}
 type LLMAgentComponent struct{}
-
-func coerceInt(value any, fieldName string) (int, error) {
-	if value == nil {
-		return 0, fmt.Errorf("%s must be an integer (got <nil>)", fieldName)
-	}
-
-	maxInt := int64(^uint(0) >> 1)
-	minInt := -maxInt - 1
-
-	switch v := value.(type) {
-	case int:
-		return v, nil
-	case int8:
-		return int(v), nil
-	case int16:
-		return int(v), nil
-	case int32:
-		return int(v), nil
-	case int64:
-		if v > maxInt || v < minInt {
-			return 0, fmt.Errorf("%s is too large", fieldName)
-		}
-		return int(v), nil
-	case uint:
-		if uint64(v) > uint64(maxInt) {
-			return 0, fmt.Errorf("%s is too large", fieldName)
-		}
-		return int(v), nil
-	case uint8:
-		return int(v), nil
-	case uint16:
-		return int(v), nil
-	case uint32:
-		if uint64(v) > uint64(maxInt) {
-			return 0, fmt.Errorf("%s is too large", fieldName)
-		}
-		return int(v), nil
-	case uint64:
-		if v > uint64(maxInt) {
-			return 0, fmt.Errorf("%s is too large", fieldName)
-		}
-		return int(v), nil
-	case float32:
-		return coerceInt(float64(v), fieldName)
-	case float64:
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
-		}
-		if v > float64(maxInt) || v < float64(minInt) {
-			return 0, fmt.Errorf("%s is too large", fieldName)
-		}
-		if v != math.Trunc(v) {
-			return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
-		}
-		return int(v), nil
-	case json.Number:
-		n, err := v.Int64()
-		if err != nil {
-			return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
-		}
-		if n > maxInt || n < minInt {
-			return 0, fmt.Errorf("%s is too large", fieldName)
-		}
-		return int(n), nil
-	default:
-		return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
-	}
-}
-
-func coerceFloat64(value any, fieldName string) (float64, error) {
-	if value == nil {
-		return 0, fmt.Errorf("%s must be a number (got <nil>)", fieldName)
-	}
-
-	switch v := value.(type) {
-	case float64:
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return 0, fmt.Errorf("%s must be a number (got %T)", fieldName, value)
-		}
-		return v, nil
-	case float32:
-		return float64(v), nil
-	case int:
-		return float64(v), nil
-	case int8:
-		return float64(v), nil
-	case int16:
-		return float64(v), nil
-	case int32:
-		return float64(v), nil
-	case int64:
-		return float64(v), nil
-	case uint:
-		return float64(v), nil
-	case uint8:
-		return float64(v), nil
-	case uint16:
-		return float64(v), nil
-	case uint32:
-		return float64(v), nil
-	case uint64:
-		return float64(v), nil
-	case json.Number:
-		f, err := v.Float64()
-		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
-			return 0, fmt.Errorf("%s must be a number (got %T)", fieldName, value)
-		}
-		return f, nil
-	default:
-		return 0, fmt.Errorf("%s must be a number (got %T)", fieldName, value)
-	}
-}
 
 // Metadata returns the component metadata.
 func (c *LLMAgentComponent) Metadata() registry.ComponentMetadata {
@@ -460,7 +347,7 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 
 	// Validate temperature if present
 	if temperature, ok := config["temperature"]; ok {
-		temp, err := coerceFloat64(temperature, "temperature")
+		temp, err := numconv.Float64(temperature, "temperature")
 		if err != nil {
 			return err
 		}
@@ -471,7 +358,7 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 
 	// Validate max_tokens if present
 	if maxTokens, ok := config["max_tokens"]; ok {
-		tokens, err := coerceInt(maxTokens, "max_tokens")
+		tokens, err := numconv.Int(maxTokens, "max_tokens")
 		if err != nil {
 			return err
 		}
@@ -482,7 +369,7 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 
 	// Validate top_p if present
 	if topP, ok := config["top_p"]; ok {
-		tp, err := coerceFloat64(topP, "top_p")
+		tp, err := numconv.Float64(topP, "top_p")
 		if err != nil {
 			return err
 		}

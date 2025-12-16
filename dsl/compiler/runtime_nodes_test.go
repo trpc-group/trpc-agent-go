@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"math"
 	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
 )
 
 func TestCoerceConfigInt(t *testing.T) {
@@ -25,7 +27,7 @@ func TestCoerceConfigInt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := coerceConfigInt(tt.value, "max_tokens")
+			got, err := numconv.Int(tt.value, "max_tokens")
 			if tt.wantError {
 				if err == nil {
 					t.Fatalf("expected error, got nil")
@@ -62,7 +64,7 @@ func TestCoerceConfigFloat64(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := coerceConfigFloat64(tt.value, "temperature")
+			got, err := numconv.Float64(tt.value, "temperature")
 			if tt.wantError {
 				if err == nil {
 					t.Fatalf("expected error, got nil")

@@ -9,10 +9,9 @@ package registry
 
 import (
 	"context"
-	"encoding/json"
-	"math"
 	"reflect"
 
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -151,132 +150,28 @@ func (c ComponentConfig) GetString(key string) string {
 
 // GetInt retrieves an int config value.
 func (c ComponentConfig) GetInt(key string) int {
-	if v, ok := c[key]; ok {
-		switch val := v.(type) {
-		case int:
-			return val
-		case int8:
-			return int(val)
-		case int16:
-			return int(val)
-		case int32:
-			return int(val)
-		case int64:
-			maxInt := int64(^uint(0) >> 1)
-			minInt := -maxInt - 1
-			if val > maxInt || val < minInt {
-				return 0
-			}
-			return int(val)
-		case uint:
-			maxInt := uint64(int64(^uint(0) >> 1))
-			if uint64(val) > maxInt {
-				return 0
-			}
-			return int(val)
-		case uint8:
-			return int(val)
-		case uint16:
-			return int(val)
-		case uint32:
-			maxInt := uint64(int64(^uint(0) >> 1))
-			if uint64(val) > maxInt {
-				return 0
-			}
-			return int(val)
-		case uint64:
-			maxInt := uint64(int64(^uint(0) >> 1))
-			if val > maxInt {
-				return 0
-			}
-			return int(val)
-		case float32:
-			f := float64(val)
-			if math.IsNaN(f) || math.IsInf(f, 0) {
-				return 0
-			}
-			maxInt := float64(int64(^uint(0) >> 1))
-			minInt := -maxInt - 1
-			if f > maxInt || f < minInt {
-				return 0
-			}
-			return int(f)
-		case float64:
-			if math.IsNaN(val) || math.IsInf(val, 0) {
-				return 0
-			}
-			maxInt := float64(int64(^uint(0) >> 1))
-			minInt := -maxInt - 1
-			if val > maxInt || val < minInt {
-				return 0
-			}
-			return int(val)
-		case json.Number:
-			if i, err := val.Int64(); err == nil {
-				maxInt := int64(^uint(0) >> 1)
-				minInt := -maxInt - 1
-				if i > maxInt || i < minInt {
-					return 0
-				}
-				return int(i)
-			}
-			if f, err := val.Float64(); err == nil {
-				if math.IsNaN(f) || math.IsInf(f, 0) {
-					return 0
-				}
-				maxInt := float64(int64(^uint(0) >> 1))
-				minInt := -maxInt - 1
-				if f > maxInt || f < minInt {
-					return 0
-				}
-				return int(f)
-			}
-		}
+	v, ok := c[key]
+	if !ok {
+		return 0
 	}
-	return 0
+	val, err := numconv.IntTrunc(v, key)
+	if err != nil {
+		return 0
+	}
+	return val
 }
 
 // GetFloat retrieves a float64 config value.
 func (c ComponentConfig) GetFloat(key string) float64 {
-	if v, ok := c[key]; ok {
-		switch f := v.(type) {
-		case float64:
-			if math.IsNaN(f) || math.IsInf(f, 0) {
-				return 0.0
-			}
-			return f
-		case float32:
-			return float64(f)
-		case int:
-			return float64(f)
-		case int8:
-			return float64(f)
-		case int16:
-			return float64(f)
-		case int32:
-			return float64(f)
-		case int64:
-			return float64(f)
-		case uint:
-			return float64(f)
-		case uint8:
-			return float64(f)
-		case uint16:
-			return float64(f)
-		case uint32:
-			return float64(f)
-		case uint64:
-			return float64(f)
-		case json.Number:
-			if ff, err := f.Float64(); err == nil {
-				if math.IsNaN(ff) || math.IsInf(ff, 0) {
-					return 0.0
-				}
-				return ff
-			}
-		}
+	v, ok := c[key]
+	if !ok {
+		return 0.0
 	}
-	return 0.0
+	val, err := numconv.Float64(v, key)
+	if err != nil {
+		return 0.0
+	}
+	return val
 }
 
 // GetBool retrieves a bool config value.

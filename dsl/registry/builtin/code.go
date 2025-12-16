@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
@@ -179,7 +180,7 @@ func (c *CodeComponent) Execute(ctx context.Context, config registry.ComponentCo
 	// Extract timeout (default: 30 seconds)
 	timeout := 30
 	if timeoutRaw, ok := config["timeout"]; ok {
-		t, err := coerceInt(timeoutRaw, "timeout")
+		t, err := numconv.Int(timeoutRaw, "timeout")
 		if err != nil {
 			return nil, err
 		}
@@ -269,7 +270,7 @@ func (c *CodeComponent) Validate(config registry.ComponentConfig) error {
 
 	// Validate timeout if provided
 	if timeoutRaw, ok := config["timeout"]; ok {
-		timeout, err := coerceInt(timeoutRaw, "timeout")
+		timeout, err := numconv.Int(timeoutRaw, "timeout")
 		if err != nil {
 			return err
 		}
