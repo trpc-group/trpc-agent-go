@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/invocationsaggregator/average"
@@ -37,7 +36,7 @@ func (s *optionStubMessagesConstructor) ConstructMessages(context.Context, *eval
 type optionStubResponseScorer struct{}
 
 func (s *optionStubResponseScorer) ScoreBasedOnResponse(context.Context, *model.Response,
-	*metric.EvalMetric) (*evalresult.ScoreResult, error) {
+	*metric.EvalMetric) (*evaluator.ScoreResult, error) {
 	return nil, nil
 }
 

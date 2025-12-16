@@ -13,7 +13,6 @@ package finalresponse
 import (
 	"context"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm"
@@ -71,7 +70,7 @@ func (e *finalResponseEvaluator) ConstructMessages(ctx context.Context, actual, 
 
 // ScoreBasedOnResponse converts judge feedback to a numeric score.
 func (e *finalResponseEvaluator) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
-	evalMetric *metric.EvalMetric) (*evalresult.ScoreResult, error) {
+	evalMetric *metric.EvalMetric) (*evaluator.ScoreResult, error) {
 	return e.responsescorer.ScoreBasedOnResponse(ctx, response, evalMetric)
 }
 

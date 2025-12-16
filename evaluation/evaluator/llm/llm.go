@@ -14,7 +14,6 @@ import (
 	"context"
 	"fmt"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/invocationsaggregator"
@@ -131,7 +130,7 @@ func (r *LLMBaseEvaluator) AggregateSamples(ctx context.Context, samples []*eval
 
 // ScoreBasedOnResponse delegates response scoring to the concrete evaluator.
 func (r *LLMBaseEvaluator) ScoreBasedOnResponse(ctx context.Context, resp *model.Response,
-	evalMetric *metric.EvalMetric) (*evalresult.ScoreResult, error) {
+	evalMetric *metric.EvalMetric) (*evaluator.ScoreResult, error) {
 	return r.LLMEvaluator.ScoreBasedOnResponse(ctx, resp, evalMetric)
 }
 

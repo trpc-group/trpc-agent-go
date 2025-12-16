@@ -13,7 +13,6 @@ package rubricresponse
 import (
 	"context"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm"
@@ -70,7 +69,7 @@ func (e *rubricResponseEvaluator) ConstructMessages(ctx context.Context, actual,
 
 // ScoreBasedOnResponse scores the response of the evaluator.
 func (e *rubricResponseEvaluator) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
-	evalMetric *metric.EvalMetric) (*evalresult.ScoreResult, error) {
+	evalMetric *metric.EvalMetric) (*evaluator.ScoreResult, error) {
 	return e.responsescorer.ScoreBasedOnResponse(ctx, response, evalMetric)
 }
 

@@ -13,7 +13,7 @@ package responsescorer
 import (
 	"context"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -22,5 +22,5 @@ import (
 type ResponseScorer interface {
 	// ScoreBasedOnResponse extracts a score from the judge response.
 	ScoreBasedOnResponse(ctx context.Context, resp *model.Response,
-		evalMetric *metric.EvalMetric) (*evalresult.ScoreResult, error)
+		evalMetric *metric.EvalMetric) (*evaluator.ScoreResult, error)
 }

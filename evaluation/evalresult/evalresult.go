@@ -91,14 +91,6 @@ type EvalMetricResultPerInvocation struct {
 	EvalMetricResults []*EvalMetricResult `json:"evalMetricResults,omitempty"`
 }
 
-// ScoreResult represents the score and rationale for a single metric evaluation.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
-type ScoreResult struct {
-	Reason       string         `json:"reason,omitempty"`
-	Score        float64        `json:"score,omitempty"`
-	RubricScores []*RubricScore `json:"rubricScores,omitempty"`
-}
-
 // RubricScore captures an individual rubric item score returned by judge models.
 type RubricScore struct {
 	ID     string  `json:"id,omitempty"`     // ID identifies the rubric item.

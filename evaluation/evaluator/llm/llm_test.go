@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
@@ -55,10 +54,10 @@ func (f *fakeLLMEvaluator) ConstructMessages(_ context.Context, actual, expected
 }
 
 func (f *fakeLLMEvaluator) ScoreBasedOnResponse(_ context.Context, _ *model.Response,
-	_ *metric.EvalMetric) (*evalresult.ScoreResult, error) {
+	_ *metric.EvalMetric) (*evaluator.ScoreResult, error) {
 	f.scoreBasedOnResponseCalls++
 	score := 0.9
-	return &evalresult.ScoreResult{Score: score}, nil
+	return &evaluator.ScoreResult{Score: score, RubricScores: nil}, nil
 }
 
 func (f *fakeLLMEvaluator) AggregateSamples(_ context.Context, samples []*evaluator.PerInvocationResult,
@@ -197,12 +196,12 @@ func (s *scriptedLLMEvaluator) ConstructMessages(context.Context, *evalset.Invoc
 }
 
 func (s *scriptedLLMEvaluator) ScoreBasedOnResponse(context.Context, *model.Response,
-	*metric.EvalMetric) (*evalresult.ScoreResult, error) {
+	*metric.EvalMetric) (*evaluator.ScoreResult, error) {
 	if s.scoreErr != nil {
 		return nil, s.scoreErr
 	}
 	score := s.scoreValue
-	return &evalresult.ScoreResult{Score: score}, nil
+	return &evaluator.ScoreResult{Score: score, RubricScores: nil}, nil
 }
 
 func (s *scriptedLLMEvaluator) AggregateSamples(_ context.Context, samples []*evaluator.PerInvocationResult,

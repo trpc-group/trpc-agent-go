@@ -16,7 +16,7 @@ import (
 	"regexp"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -37,7 +37,7 @@ func New() responsescorer.ResponseScorer {
 
 // ScoreBasedOnResponse converts judge feedback to a numeric score.
 func (e *finalResponseResponseScorer) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
-	_ *metric.EvalMetric) (*evalresult.ScoreResult, error) {
+	_ *metric.EvalMetric) (*evaluator.ScoreResult, error) {
 	if len(response.Choices) == 0 {
 		return nil, fmt.Errorf("no choices in response")
 	}
@@ -50,7 +50,7 @@ func (e *finalResponseResponseScorer) ScoreBasedOnResponse(ctx context.Context, 
 	if label == labelValid {
 		score = 1.0
 	}
-	return &evalresult.ScoreResult{Score: score}, nil
+	return &evaluator.ScoreResult{Score: score, RubricScores: nil}, nil
 }
 
 // extractLabel extracts the validity label from the judge response.

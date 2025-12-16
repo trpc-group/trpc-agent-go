@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
@@ -39,9 +38,9 @@ type stubResponseScorer struct {
 }
 
 func (s *stubResponseScorer) ScoreBasedOnResponse(ctx context.Context, _ *model.Response,
-	_ *metric.EvalMetric) (*evalresult.ScoreResult, error) {
+	_ *metric.EvalMetric) (*evaluator.ScoreResult, error) {
 	s.called = true
-	return &evalresult.ScoreResult{Score: 1}, nil
+	return &evaluator.ScoreResult{Score: 1, RubricScores: nil}, nil
 }
 
 type stubSamplesAggregator struct {
@@ -85,7 +84,7 @@ func (s *stubLLMBase) ConstructMessages(context.Context, *evalset.Invocation, *e
 }
 
 func (s *stubLLMBase) ScoreBasedOnResponse(context.Context, *model.Response,
-	*metric.EvalMetric) (*evalresult.ScoreResult, error) {
+	*metric.EvalMetric) (*evaluator.ScoreResult, error) {
 	return nil, nil
 }
 

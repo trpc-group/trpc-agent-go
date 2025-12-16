@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -43,7 +44,7 @@ func New() responsescorer.ResponseScorer {
 
 // ScoreBasedOnResponse scores rubric responses.
 func (e *rubricResponseScorer) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
-	_ *metric.EvalMetric) (*evalresult.ScoreResult, error) {
+	_ *metric.EvalMetric) (*evaluator.ScoreResult, error) {
 	if len(response.Choices) == 0 {
 		return nil, fmt.Errorf("no choices in response")
 	}
@@ -52,7 +53,7 @@ func (e *rubricResponseScorer) ScoreBasedOnResponse(ctx context.Context, respons
 	if len(matches) == 0 {
 		return nil, fmt.Errorf("no rubric blocks found in response")
 	}
-	result := &evalresult.ScoreResult{}
+	result := &evaluator.ScoreResult{}
 	averageScore := 0.0
 	for _, match := range matches {
 		rubricID := strings.TrimSpace(match[1])

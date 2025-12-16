@@ -65,3 +65,11 @@ type PerInvocationDetails struct {
 	// RubricScores contains the scores for the rubric items.
 	RubricScores []*evalresult.RubricScore `json:"rubricScores,omitempty"`
 }
+
+// ScoreResult represents the score and rationale for a single metric evaluation.
+// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
+type ScoreResult struct {
+	Reason       string                    `json:"reason,omitempty"`
+	Score        float64                   `json:"score,omitempty"`
+	RubricScores []*evalresult.RubricScore `json:"rubricScores,omitempty"`
+}
