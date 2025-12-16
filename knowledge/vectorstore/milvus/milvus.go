@@ -969,6 +969,18 @@ func (vs *VectorStore) convertQueryResult(result client.ResultSet) (*vectorstore
 		return nil, fmt.Errorf("convert result to document failed: %w", err)
 	}
 
+	// For filter-only queries, Query API doesn't return scores
+	// Assign default score of 1.0 to all documents
+	if len(scores) == 0 {
+		for _, doc := range docs {
+			searchResult.Results = append(searchResult.Results, &vectorstore.ScoredDocument{
+				Document: doc,
+				Score:    1.0,
+			})
+		}
+		return searchResult, nil
+	}
+
 	// Normalize scores based on metric type
 	normalizedScores := vs.normalizeScores(scores, query.SearchMode)
 
