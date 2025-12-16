@@ -524,13 +524,22 @@ summary:{appName}:{userID}:{sessionID}:{filterKey} -> String (JSON)
 
 **连接配置：**
 
+方式一：
+- **`WithPostgresClientDSN(dsn string)`**：PostgreSQL DSN。 示例：`postgres://user:password@localhost:5432/dbname`
+
+
+方式二：
 - **`WithHost(host string)`**：PostgreSQL 服务器地址。默认值为 `localhost`。
 - **`WithPort(port int)`**：PostgreSQL 服务器端口。默认值为 `5432`。
 - **`WithUser(user string)`**：数据库用户名。默认值为 `postgres`。
 - **`WithPassword(password string)`**：数据库密码。默认值为空字符串。
 - **`WithDatabase(database string)`**：数据库名称。默认值为 `postgres`。
 - **`WithSSLMode(sslMode string)`**：SSL 模式。默认值为 `disable`。可选值：`disable`、`require`、`verify-ca`、`verify-full`。
-- **`WithInstanceName(name string)`**：使用预配置的 PostgreSQL 实例。
+
+方式三：
+- **`WithPostgresInstance(name string)`**：使用预配置的 PostgreSQL 实例。
+
+优先级：方式一 > 方式二 > 方式三
 
 **会话配置：**
 
@@ -566,24 +575,13 @@ import "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 
 // 默认配置（最简）
 sessionService, err := postgres.NewService(
-    postgres.WithHost("localhost"),
-    postgres.WithPassword("your-password"),
+    postgres.WithPostgresClientDSN("postgres://user:password@localhost:5432/mydb?sslmode=disable"),
 )
-// 效果：
-// - 连接 localhost:5432，数据库 postgres
-// - 每个会话最多 1000 个事件
-// - 数据永不过期
-// - 2 个异步持久化 worker
+
 
 // 生产环境完整配置
 sessionService, err := postgres.NewService(
-    // 连接配置
-    postgres.WithHost("localhost"),
-    postgres.WithPort(5432),
-    postgres.WithUser("postgres"),
-    postgres.WithPassword("your-password"),
-    postgres.WithDatabase("trpc_sessions"),
-    postgres.WithSSLMode("require"),
+    postgres.WithPostgresClientDSN("postgres://user:password@localhost:5432/trpc_sessions?sslmode=require"),
 
     // 会话配置
     postgres.WithSessionEventLimit(1000),
@@ -609,23 +607,19 @@ sessionService, err := postgres.NewService(
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/storage"
-    "trpc.group/trpc-go/trpc-agent-go/session/postgres"
+    "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
+    sessionpg "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 )
 
 // 注册 PostgreSQL 实例
-storage.RegisterPostgresInstance("my-postgres-instance",
-    storage.WithPostgresHost("localhost"),
-    storage.WithPostgresPort(5432),
-    storage.WithPostgresUser("postgres"),
-    storage.WithPostgresPassword("your-password"),
-    storage.WithPostgresDatabase("trpc_sessions"),
+postgres.RegisterPostgresInstance("my-postgres-instance",
+    postgres.WithClientConnString("postgres://user:password@localhost:5432/trpc_sessions?sslmode=disable"),
 )
 
 // 在会话服务中使用
-sessionService, err := postgres.NewService(
-    postgres.WithInstanceName("my-postgres-instance"),
-    postgres.WithSessionEventLimit(500),
+sessionService, err := sessionpg.NewService(
+    sessionpg.WithPostgresInstance("my-postgres-instance"),
+    sessionpg.WithSessionEventLimit(500),
 )
 ```
 
@@ -894,23 +888,19 @@ sessionService, err := mysql.NewService(
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/storage"
-    "trpc.group/trpc-go/trpc-agent-go/session/mysql"
+    "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+    sessionmysql "trpc.group/trpc-go/trpc-agent-go/session/mysql"
 )
 
 // 注册 MySQL 实例
-storage.RegisterMySQLInstance("my-mysql-instance",
-    storage.WithMySQLHost("localhost"),
-    storage.WithMySQLPort(3306),
-    storage.WithMySQLUser("root"),
-    storage.WithMySQLPassword("your-password"),
-    storage.WithMySQLDatabase("trpc_sessions"),
+mysql.RegisterMySQLInstance("my-mysql-instance",
+    mysql.WithClientBuilderDSN("root:password@tcp(localhost:3306)/trpc_sessions?parseTime=true&charset=utf8mb4"),
 )
 
 // 在会话服务中使用
-sessionService, err := mysql.NewService(
-    mysql.WithInstanceName("my-mysql-instance"),
-    mysql.WithSessionEventLimit(500),
+sessionService, err := sessionmysql.NewService(
+    sessionmysql.WithMySQLInstance("my-mysql-instance"),
+    sessionmysql.WithSessionEventLimit(500),
 )
 ```
 

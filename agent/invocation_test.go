@@ -317,10 +317,38 @@ func TestInvocation_AddNoticeChannel_Panic(t *testing.T) {
 	require.Nil(t, ch)
 }
 
+func TestInvocation_NotifyCompletion_Panic(t *testing.T) {
+	inv := &Invocation{}
+
+	err := inv.NotifyCompletion(context.Background(), "test-key")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "noticeMu is uninitialized")
+}
+
 func TestInvocation_AddNoticeChannelAndWait_Panic(t *testing.T) {
 	inv := &Invocation{}
 
 	err := inv.AddNoticeChannelAndWait(context.Background(), "test-key", 2*time.Second)
+	require.Error(t, err)
+}
+
+func TestInvocation_AddNoticeChannelAndWait_NoTimeoutUsesContext(t *testing.T) {
+	inv := NewInvocation()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- inv.AddNoticeChannelAndWait(
+			ctx,
+			"test-key",
+			WaitNoticeWithoutTimeout,
+		)
+	}()
+
+	cancel()
+
+	err := <-done
 	require.Error(t, err)
 }
 
@@ -336,6 +364,14 @@ func TestInvocation_AddNoticeChannelAndWait_nil(t *testing.T) {
 
 	err := inv.AddNoticeChannelAndWait(context.Background(), "test-key", 2*time.Second)
 	require.Error(t, err)
+}
+
+func TestInvocation_CleanupNotice_NilInvocation(t *testing.T) {
+	var inv *Invocation
+
+	require.NotPanics(t, func() {
+		inv.CleanupNotice(context.Background())
+	})
 }
 
 func TestInvocation_cloneState(t *testing.T) {
@@ -618,4 +654,73 @@ func TestWithModelName_Integration(t *testing.T) {
 	)
 
 	require.Equal(t, "gpt-4-turbo", inv.RunOptions.ModelName)
+}
+
+func TestInvocation_IncLLMCallCount_NoLimitOrNil(t *testing.T) {
+	// nil invocation should be a no-op
+	var nilInv *Invocation
+	require.NoError(t, nilInv.IncLLMCallCount())
+
+	// MaxLLMCalls <= 0 should be treated as "no limit"
+	inv := &Invocation{}
+	err := inv.IncLLMCallCount()
+	require.NoError(t, err)
+	require.Equal(t, 0, inv.llmCallCount, "counter should not increment when no limit is configured")
+}
+
+func TestInvocation_IncLLMCallCount_WithLimitAndOverflow(t *testing.T) {
+	inv := &Invocation{
+		MaxLLMCalls: 2,
+	}
+
+	// First call within limit.
+	err := inv.IncLLMCallCount()
+	require.NoError(t, err)
+	require.Equal(t, 1, inv.llmCallCount)
+
+	// Second call still within limit.
+	err = inv.IncLLMCallCount()
+	require.NoError(t, err)
+	require.Equal(t, 2, inv.llmCallCount)
+
+	// Third call exceeds limit and should return a StopError.
+	err = inv.IncLLMCallCount()
+	require.Error(t, err)
+	stopErr, ok := AsStopError(err)
+	require.True(t, ok, "expected StopError when LLM call limit exceeded")
+	require.Contains(t, stopErr.Message, "max LLM calls (2) exceeded")
+	require.Equal(t, 3, inv.llmCallCount, "counter should still increment on overflow check")
+}
+
+func TestInvocation_IncToolIteration_NoLimitOrNil(t *testing.T) {
+	// nil invocation should be a no-op and report not exceeded.
+	var nilInv *Invocation
+	require.False(t, nilInv.IncToolIteration())
+
+	// MaxToolIterations <= 0 should be treated as "no limit".
+	inv := &Invocation{}
+	exceeded := inv.IncToolIteration()
+	require.False(t, exceeded)
+	require.Equal(t, 0, inv.toolIterationCount, "counter should not increment when no limit is configured")
+}
+
+func TestInvocation_IncToolIteration_WithLimitAndOverflow(t *testing.T) {
+	inv := &Invocation{
+		MaxToolIterations: 2,
+	}
+
+	// First iteration within limit.
+	exceeded := inv.IncToolIteration()
+	require.False(t, exceeded)
+	require.Equal(t, 1, inv.toolIterationCount)
+
+	// Second iteration still within limit.
+	exceeded = inv.IncToolIteration()
+	require.False(t, exceeded)
+	require.Equal(t, 2, inv.toolIterationCount)
+
+	// Third iteration exceeds limit and should report true.
+	exceeded = inv.IncToolIteration()
+	require.True(t, exceeded, "expected true when tool iteration limit is exceeded")
+	require.Equal(t, 3, inv.toolIterationCount)
 }

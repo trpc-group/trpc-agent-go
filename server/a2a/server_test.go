@@ -1234,6 +1234,185 @@ func TestProcessAgentStreamingEvents_SendFailure(t *testing.T) {
 	assert.True(t, cleaned)
 }
 
+func TestProcessAgentStreamingEvents_FinalSendFailureAndCleanFailure(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	events := make(chan *event.Event)
+	close(events)
+
+	proc := createTestMessageProcessor()
+
+	sendCount := 0
+	sub := &mockTaskSubscriber{
+		sendFunc: func(protocol.StreamingMessageEvent) error {
+			sendCount++
+			if sendCount == 2 || sendCount == 3 {
+				return fmt.Errorf("send fail")
+			}
+			return nil
+		},
+	}
+
+	var cleaned bool
+	handler := &mockTaskHandler{
+		cleanTaskFunc: func(taskID *string) error {
+			cleaned = true
+			return fmt.Errorf("clean fail")
+		},
+	}
+
+	assert.NotPanics(t, func() {
+		proc.processAgentStreamingEvents(
+			ctx,
+			"task",
+			"user1",
+			"session1",
+			msg,
+			events,
+			sub,
+			handler,
+		)
+	})
+	assert.True(t, cleaned)
+}
+
+func TestMessageProcessor_ProcessMessage_Streaming_BuildTaskError(
+	t *testing.T,
+) {
+	ctxID := "ctx"
+	msg := protocol.Message{
+		Kind:      "message",
+		MessageID: "msg-build-task",
+		ContextID: &ctxID,
+		Role:      protocol.MessageRoleUser,
+		Parts: []protocol.Part{
+			protocol.NewTextPart("hi"),
+		},
+	}
+
+	ctx := context.WithValue(
+		context.Background(),
+		auth.AuthUserKey,
+		&auth.User{ID: ""},
+	)
+
+	proc := createTestMessageProcessor()
+	proc.debugLogging = true
+
+	handler := &mockTaskHandler{
+		buildTaskFunc: func(
+			specificTaskID *string,
+			contextID *string,
+		) (string, error) {
+			return "", fmt.Errorf("build task failed")
+		},
+	}
+
+	res, err := proc.ProcessMessage(
+		ctx,
+		msg,
+		taskmanager.ProcessOptions{Streaming: true},
+		handler,
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+}
+
+func TestMessageProcessor_ProcessMessage_ConversionError_WithAuthUser(
+	t *testing.T,
+) {
+	ctxID := "ctx"
+	msg := protocol.Message{
+		Kind:      "message",
+		MessageID: "conv-err-auth",
+		ContextID: &ctxID,
+		Role:      protocol.MessageRoleUser,
+		Parts: []protocol.Part{
+			protocol.NewTextPart("hi"),
+		},
+	}
+	ctx := context.WithValue(
+		context.Background(),
+		auth.AuthUserKey,
+		&auth.User{ID: "user"},
+	)
+
+	proc := createTestMessageProcessor()
+	proc.a2aToAgentConverter = &errorA2AMessageConverter{}
+	handler := &mockTaskHandler{
+		buildTaskFunc: func(
+			specificTaskID *string,
+			contextID *string,
+		) (string, error) {
+			return "task", nil
+		},
+	}
+
+	res, err := proc.ProcessMessage(
+		ctx,
+		msg,
+		taskmanager.ProcessOptions{Streaming: false},
+		handler,
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+	assert.NotNil(t, res.Result)
+}
+
+func TestMessageProcessor_ProcessMessage_RunnerError_WithAuthUser(
+	t *testing.T,
+) {
+	ctxID := "ctx"
+	msg := protocol.Message{
+		Kind:      "message",
+		MessageID: "runner-err-auth",
+		ContextID: &ctxID,
+		Role:      protocol.MessageRoleUser,
+		Parts: []protocol.Part{
+			protocol.NewTextPart("hi"),
+		},
+	}
+	ctx := context.WithValue(
+		context.Background(),
+		auth.AuthUserKey,
+		&auth.User{ID: "user"},
+	)
+
+	proc := createTestMessageProcessor()
+	proc.runner = &mockRunner{
+		runFunc: func(
+			ctx context.Context,
+			userID string,
+			sessionID string,
+			message model.Message,
+			opts ...agent.RunOption,
+		) (<-chan *event.Event, error) {
+			return nil, errors.New("runner failed")
+		},
+	}
+	handler := &mockTaskHandler{
+		buildTaskFunc: func(
+			specificTaskID *string,
+			contextID *string,
+		) (string, error) {
+			return "task", nil
+		},
+	}
+
+	res, err := proc.ProcessMessage(
+		ctx,
+		msg,
+		taskmanager.ProcessOptions{Streaming: false},
+		handler,
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+	assert.NotNil(t, res.Result)
+}
+
 func TestProcessAgentStreamingEvents_ConverterError(t *testing.T) {
 	ctx := context.Background()
 	ctxID := "ctx"

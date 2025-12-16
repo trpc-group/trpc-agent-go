@@ -108,6 +108,8 @@ func (l *recordingLogger) Fatalf(format string, args ...any) {
 type mockSummarizer interface {
 	ShouldSummarize(sess *session.Session) bool
 	Summarize(ctx context.Context, sess *session.Session) (string, error)
+	SetPrompt(prompt string)
+	SetModel(m model.Model)
 	Metadata() map[string]any
 }
 
@@ -1481,7 +1483,9 @@ func TestUpdateSessionState_InvalidPrefix(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestUpdateSessionState_SessionNotFound(t *testing.T) {
+func TestUpdateSessionState_SessionNotFound_ErrNoRows(
+	t *testing.T,
+) {
 	s, mock, db := setupMockService(t, nil)
 	defer db.Close()
 
@@ -1497,7 +1501,9 @@ func TestUpdateSessionState_SessionNotFound(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestUpdateSessionState_QueryError(t *testing.T) {
+func TestUpdateSessionState_QueryError_Propagates(
+	t *testing.T,
+) {
 	s, mock, db := setupMockService(t, nil)
 	defer db.Close()
 
@@ -1598,6 +1604,60 @@ func TestAppendEvent_SyncMode(t *testing.T) {
 	err := s.AppendEvent(context.Background(), sess, evt)
 	require.NoError(t, err)
 
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAppendEvent_SyncMode_ExpiredSession(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	sess := &session.Session{
+		ID:      "test-session",
+		AppName: "test-app",
+		UserID:  "test-user",
+		State:   session.StateMap{},
+		Events:  []event.Event{},
+	}
+
+	evt := event.New("test-invocation", "test-author")
+	evt.Timestamp = time.Now()
+	evt.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "test response",
+				},
+			},
+		},
+	}
+
+	sessState := &SessionState{
+		ID:    "test-session",
+		State: session.StateMap{},
+	}
+	stateBytes, _ := json.Marshal(sessState)
+	expiredAt := time.Now().Add(-time.Hour)
+	stateRows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, expiredAt)
+
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnRows(stateRows)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			"test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO session_events").
+		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err := s.AppendEvent(context.Background(), sess, evt)
+	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1728,6 +1788,147 @@ func TestAppendTrackEvent_AsyncRecover(t *testing.T) {
 		err := service.AppendTrackEvent(context.Background(), sess, trackEvent)
 		require.NoError(t, err)
 	})
+}
+
+func TestStartAsyncPersistWorker_ProcessesEvents(t *testing.T) {
+	db, mock, err := sqlmock.New(
+		sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp),
+	)
+	require.NoError(t, err)
+	defer db.Close()
+
+	mock.MatchExpectationsInOrder(false)
+
+	s := createTestService(
+		t,
+		db,
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(1),
+	)
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	baseState := &SessionState{
+		ID:    key.SessionID,
+		State: session.StateMap{},
+	}
+	stateBytes, err := json.Marshal(baseState)
+	require.NoError(t, err)
+
+	stateRows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(stateRows)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO session_events").
+		WithArgs(
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	trackState := &SessionState{
+		ID:    key.SessionID,
+		State: session.StateMap{},
+	}
+	trackStateBytes, err := json.Marshal(trackState)
+	require.NoError(t, err)
+
+	trackRows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(trackStateBytes, nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(trackRows)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO session_track_events").
+		WithArgs(
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+			"agui",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	s.startAsyncPersistWorker()
+
+	evt := event.New("inv-1", "author")
+	evt.StateDelta = map[string][]byte{
+		"key1": []byte(`"value1"`),
+	}
+	evt.Response = &model.Response{
+		Object: model.ObjectTypeChatCompletion,
+		Done:   true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "ok",
+				},
+			},
+		},
+	}
+
+	trackEvent := &session.TrackEvent{
+		Track:     "agui",
+		Payload:   json.RawMessage(`"payload"`),
+		Timestamp: time.Now(),
+	}
+
+	s.eventPairChans[0] <- &sessionEventPair{
+		key:   key,
+		event: evt,
+	}
+	s.trackEventChans[0] <- &trackEventPair{
+		key:   key,
+		event: trackEvent,
+	}
+
+	for _, ch := range s.eventPairChans {
+		close(ch)
+	}
+	for _, ch := range s.trackEventChans {
+		close(ch)
+	}
+	s.persistWg.Wait()
+
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestAppendTrackEvent_Errors(t *testing.T) {
@@ -2607,6 +2808,72 @@ func TestNewService_WithInstance_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestNewService_WithDSN_Success(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	var capturedConnString string
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		opts := &storage.ClientBuilderOpts{}
+		for _, opt := range builderOpts {
+			opt(opts)
+		}
+		capturedConnString = opts.ConnString
+		return &mockPostgresClient{db: db}, nil
+	})
+
+	dsn := "postgres://user:password@localhost:5432/mydb?sslmode=disable"
+	svc, err := NewService(
+		WithPostgresClientDSN(dsn),
+		WithSkipDBInit(true),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	assert.Equal(t, dsn, capturedConnString)
+
+	err = svc.Close()
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNewService_DSNPriority(t *testing.T) {
+	db, _, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	var capturedConnString string
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		opts := &storage.ClientBuilderOpts{}
+		for _, opt := range builderOpts {
+			opt(opts)
+		}
+		capturedConnString = opts.ConnString
+		return &mockPostgresClient{db: db}, nil
+	})
+
+	// DSN should take priority over host settings
+	dsn := "postgres://dsn-user:password@dsn-host:5432/dsndb"
+	svc, err := NewService(
+		WithPostgresClientDSN(dsn),
+		WithHost("other-host"),
+		WithPort(5433),
+		WithUser("other-user"),
+		WithSkipDBInit(true),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	assert.Equal(t, dsn, capturedConnString, "DSN should take priority over host settings")
+
+	_ = svc.Close()
+}
+
 func TestAppendEventHook(t *testing.T) {
 	t.Run("hook modifies event before storage (skip db)", func(t *testing.T) {
 		db, _, err := sqlmock.New()
@@ -2778,4 +3045,159 @@ func TestGetSessionHook(t *testing.T) {
 		_, _ = s.GetSession(ctx, key)
 		assert.Equal(t, []string{"hook1_before", "hook2_before", "hook2_after", "hook1_after"}, order)
 	})
+}
+
+func TestUpdateSessionState_DisallowPrefixedKeys(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	stateWithAppPrefix := session.StateMap{
+		session.StateAppPrefix + "foo": []byte("bar"),
+	}
+	err = s.UpdateSessionState(ctx, key, stateWithAppPrefix)
+	require.Error(t, err)
+
+	stateWithUserPrefix := session.StateMap{
+		session.StateUserPrefix + "foo": []byte("bar"),
+	}
+	err = s.UpdateSessionState(ctx, key, stateWithUserPrefix)
+	require.Error(t, err)
+}
+
+func TestUpdateSessionState_SessionNotFound(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	mock.ExpectQuery("SELECT state FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"state"}))
+
+	err = s.UpdateSessionState(ctx, key, session.StateMap{
+		"key1": []byte("value1"),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "session not found")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateSessionState_QueryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	mock.ExpectQuery("SELECT state FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnError(fmt.Errorf("query failed"))
+
+	err = s.UpdateSessionState(ctx, key, session.StateMap{
+		"key1": []byte("value1"),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "query failed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateSessionState_UnmarshalError_InvalidJSON(
+	t *testing.T,
+) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	mock.ExpectQuery("SELECT state FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(
+			sqlmock.NewRows([]string{"state"}).
+				AddRow([]byte("not-json")),
+		)
+
+	err = s.UpdateSessionState(ctx, key, session.StateMap{
+		"key1": []byte("value1"),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unmarshal state")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateSessionState_Success(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSessionTTL(1*time.Hour))
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	currentState := session.StateMap{
+		"existing": []byte(`"old"`),
+	}
+	currentBytes, err := json.Marshal(currentState)
+	require.NoError(t, err)
+
+	mock.ExpectQuery("SELECT state FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(
+			sqlmock.NewRows([]string{"state"}).
+				AddRow(currentBytes),
+		)
+
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err = s.UpdateSessionState(ctx, key, session.StateMap{
+		"newKey": []byte(`"newValue"`),
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

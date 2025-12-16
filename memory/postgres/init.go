@@ -64,7 +64,10 @@ func buildCreateIndexSQL(schema, tableName, indexSuffix, template string) string
 
 // initDB initializes the database schema.
 func (s *Service) initDB(ctx context.Context) error {
-	log.Info("initializing postgres memory database schema...")
+	log.InfoContext(
+		ctx,
+		"initializing postgres memory database schema...",
+	)
 
 	// Use base table name from opts (before schema prefix is applied)
 	baseTableName := s.opts.tableName
@@ -75,7 +78,11 @@ func (s *Service) initDB(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, tableSQL); err != nil {
 		return fmt.Errorf("create table %s failed: %w", fullTableName, err)
 	}
-	log.Infof("created table: %s", fullTableName)
+	log.InfofContext(
+		ctx,
+		"created table: %s",
+		fullTableName,
+	)
 
 	// Index suffix constants for memories table indexes
 	const (
@@ -99,9 +106,17 @@ func (s *Service) initDB(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx, indexSQL); err != nil {
 			return fmt.Errorf("create index %s on table %s failed: %w", idx.suffix, fullTableName, err)
 		}
-		log.Infof("created index: %s on table %s", idx.suffix, fullTableName)
+		log.InfofContext(
+			ctx,
+			"created index: %s on table %s",
+			idx.suffix,
+			fullTableName,
+		)
 	}
 
-	log.Info("postgres memory database schema initialized successfully")
+	log.InfoContext(
+		ctx,
+		"postgres memory database schema initialized successfully",
+	)
 	return nil
 }

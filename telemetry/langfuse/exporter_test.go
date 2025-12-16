@@ -215,6 +215,46 @@ func TestTransformSpan(t *testing.T) {
 	}
 }
 
+func TestTransformInvokeAgent(t *testing.T) {
+	span := &tracepb.Span{
+		Name: "agent-span",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key: itelemetry.KeyGenAIInputMessages,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","content":"hi"}]`},
+				},
+			},
+			{
+				Key: itelemetry.KeyGenAIOutputMessages,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"assistant","content":"hello"}]`},
+				},
+			},
+			{
+				Key: "other.attribute",
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: "keep-this"},
+				},
+			},
+		},
+	}
+
+	transformInvokeAgent(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		if attr.Value != nil {
+			attrMap[attr.Key] = attr.Value.GetStringValue()
+		}
+	}
+
+	assert.Equal(t, observationTypeAgent, attrMap[observationType])
+	assert.Equal(t, `[{"role":"user","content":"hi"}]`, attrMap[observationInput])
+	assert.Equal(t, `[{"role":"assistant","content":"hello"}]`, attrMap[observationOutput])
+	assert.Equal(t, "keep-this", attrMap["other.attribute"])
+}
+
 func TestTransformCallLLM(t *testing.T) {
 	tests := []struct {
 		name     string

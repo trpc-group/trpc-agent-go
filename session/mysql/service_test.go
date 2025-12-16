@@ -527,6 +527,10 @@ func (m *mockSummarizer) ShouldSummarize(sess *session.Session) bool {
 	return true
 }
 
+func (m *mockSummarizer) SetPrompt(prompt string) {}
+
+func (m *mockSummarizer) SetModel(mdl model.Model) {}
+
 func (m *mockSummarizer) Metadata() map[string]any {
 	return map[string]any{"type": "mock"}
 }
@@ -635,6 +639,27 @@ func TestDeleteUserState(t *testing.T) {
 	}
 }
 
+func TestCleanupExpiredSessions_QueryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSoftDelete(true), WithSessionTTL(time.Hour))
+
+	ctx := context.Background()
+	now := time.Now()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT app_name, user_id, session_id, " +
+			"MAX(updated_at) as updated_at FROM session_events",
+	)).
+		WillReturnError(assert.AnError)
+
+	s.cleanupExpiredSessions(ctx, now)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestCleanupExpiredStates(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -704,13 +729,81 @@ func TestCleanupExpiredForUser(t *testing.T) {
 			userKey := session.UserKey{AppName: "test-app", UserID: "user-123"}
 
 			if tt.softDelete {
-				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
-					WithArgs(sqlmock.AnyArg(), userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+				mock.ExpectExec(
+					regexp.QuoteMeta(
+						"UPDATE session_states SET deleted_at = ?",
+					),
+				).
+					WithArgs(
+						sqlmock.AnyArg(),
+						userKey.AppName,
+						userKey.UserID,
+						sqlmock.AnyArg(),
+					).
 					WillReturnResult(sqlmock.NewResult(0, 1))
 			} else {
-				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states")).
-					WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+				mock.ExpectExec(
+					regexp.QuoteMeta("DELETE FROM session_states"),
+				).
+					WithArgs(
+						userKey.AppName,
+						userKey.UserID,
+						sqlmock.AnyArg(),
+					).
 					WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+
+			s.cleanupExpiredForUser(ctx, userKey)
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestCleanupExpiredForUser_ExecError(t *testing.T) {
+	tests := []struct {
+		name       string
+		softDelete bool
+	}{
+		{"SoftDeleteExecError", true},
+		{"HardDeleteExecError", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+
+			s := createTestService(t, db, WithSoftDelete(tt.softDelete))
+			ctx := context.Background()
+			userKey := session.UserKey{
+				AppName: "test-app",
+				UserID:  "user-123",
+			}
+
+			if tt.softDelete {
+				mock.ExpectExec(
+					regexp.QuoteMeta(
+						"UPDATE session_states SET deleted_at = ?",
+					),
+				).
+					WithArgs(
+						sqlmock.AnyArg(),
+						userKey.AppName,
+						userKey.UserID,
+						sqlmock.AnyArg(),
+					).
+					WillReturnError(assert.AnError)
+			} else {
+				mock.ExpectExec(
+					regexp.QuoteMeta("DELETE FROM session_states"),
+				).
+					WithArgs(
+						userKey.AppName,
+						userKey.UserID,
+						sqlmock.AnyArg(),
+					).
+					WillReturnError(assert.AnError)
 			}
 
 			s.cleanupExpiredForUser(ctx, userKey)
@@ -1110,7 +1203,9 @@ func TestUpdateSessionState_InvalidPrefix(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestUpdateSessionState_SessionNotFound(t *testing.T) {
+func TestUpdateSessionState_SessionNotFound_ErrNoRows(
+	t *testing.T,
+) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -1130,7 +1225,9 @@ func TestUpdateSessionState_SessionNotFound(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestUpdateSessionState_QueryError(t *testing.T) {
+func TestUpdateSessionState_QueryError_Propagates(
+	t *testing.T,
+) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -2399,4 +2496,229 @@ func TestGetSessionHook(t *testing.T) {
 		_, _ = s.GetSession(ctx, key)
 		assert.Equal(t, []string{"hook1_before", "hook2_before", "hook2_after", "hook1_after"}, order)
 	})
+}
+
+func TestUpdateSessionState_DisallowPrefixedKeys(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	stateWithAppPrefix := session.StateMap{
+		session.StateAppPrefix + "foo": []byte("bar"),
+	}
+	err = s.UpdateSessionState(ctx, key, stateWithAppPrefix)
+	require.Error(t, err)
+
+	stateWithUserPrefix := session.StateMap{
+		session.StateUserPrefix + "foo": []byte("bar"),
+	}
+	err = s.UpdateSessionState(ctx, key, stateWithUserPrefix)
+	require.Error(t, err)
+}
+
+func TestUpdateSessionState_SessionNotFound(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	mock.ExpectQuery(
+		regexp.QuoteMeta("SELECT state FROM session_states"),
+	).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnError(sql.ErrNoRows)
+
+	err = s.UpdateSessionState(ctx, key, session.StateMap{
+		"key1": []byte("value1"),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "session not found")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateSessionState_Success(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSessionTTL(1*time.Hour))
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	currentState := session.StateMap{
+		"existing": []byte(`"old"`),
+	}
+	currentBytes, err := json.Marshal(currentState)
+	require.NoError(t, err)
+
+	mock.ExpectQuery(
+		regexp.QuoteMeta("SELECT state FROM session_states"),
+	).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(
+			sqlmock.NewRows([]string{"state"}).AddRow(currentBytes),
+		)
+
+	mock.ExpectExec(
+		regexp.QuoteMeta("UPDATE session_states SET state = ?, "+
+			"updated_at = ?, expires_at = ?"),
+	).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err = s.UpdateSessionState(ctx, key, session.StateMap{
+		"newKey": []byte(`"newValue"`),
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateSessionState_QueryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	mock.ExpectQuery(
+		regexp.QuoteMeta("SELECT state FROM session_states"),
+	).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnError(fmt.Errorf("query failed"))
+
+	err = s.UpdateSessionState(ctx, key, session.StateMap{
+		"key1": []byte("value1"),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "query failed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateSessionState_UnmarshalError_InvalidJSON(
+	t *testing.T,
+) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	mock.ExpectQuery(
+		regexp.QuoteMeta("SELECT state FROM session_states"),
+	).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(
+			sqlmock.NewRows([]string{"state"}).AddRow([]byte("not-json")),
+		)
+
+	err = s.UpdateSessionState(ctx, key, session.StateMap{
+		"key1": []byte("value1"),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unmarshal state")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAppendEventInternal_AsyncPersistEnqueue(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithEnableAsyncPersist(true))
+	s.eventPairChans = []chan *sessionEventPair{
+		make(chan *sessionEventPair, 1),
+	}
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess",
+	}
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	sess.Hash = 0
+
+	evt := event.New("inv-1", "author")
+
+	err = s.appendEventInternal(ctx, sess, evt, key)
+	require.NoError(t, err)
+
+	select {
+	case pair := <-s.eventPairChans[0]:
+		require.NotNil(t, pair)
+		assert.Equal(t, key, pair.key)
+		assert.Equal(t, evt, pair.event)
+	default:
+		t.Fatal("expected event to be enqueued")
+	}
+}
+
+func TestAppendEventInternal_SendOnClosedChannel(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithEnableAsyncPersist(true))
+	s.eventPairChans = []chan *sessionEventPair{
+		make(chan *sessionEventPair, 1),
+	}
+	close(s.eventPairChans[0])
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess",
+	}
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	sess.Hash = 0
+
+	evt := event.New("inv-1", "author")
+
+	// Should not panic even though channel is closed.
+	err = s.appendEventInternal(ctx, sess, evt, key)
+	require.NoError(t, err)
 }

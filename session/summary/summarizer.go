@@ -144,6 +144,10 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 			return "", fmt.Errorf("pre-summary hook failed: %w", hookErr)
 		}
 		if hookErr == nil {
+			// Propagate context modifications from pre-hook to subsequent operations.
+			if hookCtx.Ctx != nil {
+				ctx = hookCtx.Ctx
+			}
 			if hookCtx.Text != "" {
 				conversationText = hookCtx.Text
 			} else if len(hookCtx.Events) > 0 {
@@ -225,6 +229,27 @@ func (s *sessionSummarizer) filterEventsForSummary(events []event.Event) []event
 	// If no user message found in filtered events, return empty slice.
 	// This prevents generating summaries without proper context.
 	return []event.Event{}
+}
+
+// SetPrompt updates the summarizer's prompt dynamically.
+// The prompt must include the placeholder {conversation_text}, which will be
+// replaced with the extracted conversation when generating the summary.
+// If an empty prompt is provided, it will be ignored and the current prompt
+// will remain unchanged.
+func (s *sessionSummarizer) SetPrompt(prompt string) {
+	if prompt != "" {
+		s.prompt = prompt
+	}
+}
+
+// SetModel updates the summarizer's model dynamically.
+// This allows switching to different models at runtime based on different
+// scenarios or requirements. If nil is provided, it will be ignored and the
+// current model will remain unchanged.
+func (s *sessionSummarizer) SetModel(m model.Model) {
+	if m != nil {
+		s.model = m
+	}
 }
 
 // Metadata returns metadata about the summarizer configuration.

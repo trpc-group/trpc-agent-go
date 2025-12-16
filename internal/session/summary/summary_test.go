@@ -47,6 +47,10 @@ func (m *mockSummarizerWithTs) FilterEventsForSummary(
 	return events
 }
 
+func (m *mockSummarizerWithTs) SetPrompt(prompt string) {}
+
+func (m *mockSummarizerWithTs) SetModel(mdl model.Model) {}
+
 func (m *mockSummarizerWithTs) Metadata() map[string]any { return nil }
 
 func TestSummarizeSession_UsesLastIncludedTimestamp(t *testing.T) {
@@ -99,6 +103,8 @@ func (f *fakeSummarizer) ShouldSummarize(sess *session.Session) bool { return f.
 func (f *fakeSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
 	return f.out, nil
 }
+func (f *fakeSummarizer) SetPrompt(prompt string)  {}
+func (f *fakeSummarizer) SetModel(m model.Model)   {}
 func (f *fakeSummarizer) Metadata() map[string]any { return map[string]any{} }
 
 type fakeSummarizerWithTs struct {
@@ -116,6 +122,8 @@ func (f *fakeSummarizerWithTs) Summarize(ctx context.Context, sess *session.Sess
 	}
 	return f.out, nil
 }
+func (f *fakeSummarizerWithTs) SetPrompt(prompt string)  {}
+func (f *fakeSummarizerWithTs) SetModel(m model.Model)   {}
 func (f *fakeSummarizerWithTs) Metadata() map[string]any { return map[string]any{} }
 
 func makeEvent(content string, ts time.Time, filterKey string) event.Event {

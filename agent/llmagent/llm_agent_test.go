@@ -1481,6 +1481,47 @@ func TestLLMAgent_RunWithModel_Priority(t *testing.T) {
 	require.Equal(t, modelFromWithModel, inv.Model)
 }
 
+// TestLLMAgent_SetupInvocation_PropagatesMaxLimits verifies that per-agent
+// safety limits (MaxLLMCalls / MaxToolIterations) are copied into each
+// Invocation during setupInvocation. When the agent is created without limits,
+// the invocation should see zero values, which are treated as "no limit" by
+// the Invocation helpers.
+func TestLLMAgent_SetupInvocation_PropagatesMaxLimits(t *testing.T) {
+	// Agent configured with explicit limits.
+	llmWithLimits := New(
+		"limits-agent",
+		WithModel(newDummyModel()),
+		WithMaxLLMCalls(3),
+		WithMaxToolIterations(5),
+	)
+
+	invWithLimits := &agent.Invocation{
+		InvocationID: "inv-with-limits",
+		AgentName:    "limits-agent",
+		Message:      model.NewUserMessage("hello"),
+	}
+
+	llmWithLimits.setupInvocation(invWithLimits)
+	require.Equal(t, 3, invWithLimits.MaxLLMCalls)
+	require.Equal(t, 5, invWithLimits.MaxToolIterations)
+
+	// Agent without limits should leave invocation limits at zero.
+	llmNoLimits := New(
+		"no-limits-agent",
+		WithModel(newDummyModel()),
+	)
+
+	invNoLimits := &agent.Invocation{
+		InvocationID: "inv-no-limits",
+		AgentName:    "no-limits-agent",
+		Message:      model.NewUserMessage("hello"),
+	}
+
+	llmNoLimits.setupInvocation(invNoLimits)
+	require.Equal(t, 0, invNoLimits.MaxLLMCalls)
+	require.Equal(t, 0, invNoLimits.MaxToolIterations)
+}
+
 func TestLLMAgent_MessageFilterMode(t *testing.T) {
 	options := &Options{
 		messageBranchFilterMode: "prefix",

@@ -350,7 +350,12 @@ func (s *Server) registerRoutes() {
 // ---- Handlers -----------------------------------------------------------
 
 func (s *Server) handleEventTrace(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleEventTrace called: path=%s", r.URL.Path)
+	ctx := r.Context()
+	log.InfofContext(
+		ctx,
+		"handleEventTrace called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	eventID := vars["event_id"]
 	trace, ok := s.traces[eventID]
@@ -363,7 +368,12 @@ func (s *Server) handleEventTrace(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionTrace(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleSessionTrace called: path=%s", r.URL.Path)
+	ctx := r.Context()
+	log.InfofContext(
+		ctx,
+		"handleSessionTrace called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	sessionID := vars["session_id"]
 	var spans []schema.Span
@@ -400,12 +410,17 @@ func buildTraceAttributes(attributes attribute.Set) map[string]any {
 						},
 					})
 				}
-				bts, _ := json.Marshal(&schema.TraceLLMRequest{
-					Contents: contents,
-				})
+				bts, _ := json.Marshal(
+					&schema.TraceLLMRequest{
+						Contents: contents,
+					},
+				)
 				result[string(attr.Key)] = string(bts)
 			} else {
-				log.Debugf("failed to unmarshal LLM request: %s", attr.Value.AsString())
+				log.Debugf(
+					"failed to unmarshal LLM request: %s",
+					attr.Value.AsString(),
+				)
 			}
 		} else {
 			result[string(attr.Key)] = attr.Value.AsString()
@@ -415,7 +430,11 @@ func buildTraceAttributes(attributes attribute.Set) map[string]any {
 }
 
 func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleListApps called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleListApps called: path=%s",
+		r.URL.Path,
+	)
 	var apps []string
 	for name := range s.agents {
 		apps = append(apps, name)
@@ -424,13 +443,18 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleListSessions called: path=%s", r.URL.Path)
+	ctx := r.Context()
+	log.InfofContext(
+		ctx,
+		"handleListSessions called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	userID := vars["userId"]
 
 	userKey := session.UserKey{AppName: appName, UserID: userID}
-	sessions, err := s.sessionSvc.ListSessions(r.Context(), userKey)
+	sessions, err := s.sessionSvc.ListSessions(ctx, userKey)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -448,13 +472,18 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleCreateSession called: path=%s", r.URL.Path)
+	ctx := r.Context()
+	log.InfofContext(
+		ctx,
+		"handleCreateSession called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	userID := vars["userId"]
 
 	key := session.Key{AppName: appName, UserID: userID}
-	sess, err := s.sessionSvc.CreateSession(r.Context(), key, session.StateMap{})
+	sess, err := s.sessionSvc.CreateSession(ctx, key, session.StateMap{})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -463,12 +492,17 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleGetSession called: path=%s", r.URL.Path)
+	ctx := r.Context()
+	log.InfofContext(
+		ctx,
+		"handleGetSession called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	userID := vars["userId"]
 	sessionID := vars["sessionId"]
-	sess, err := s.sessionSvc.GetSession(r.Context(), session.Key{
+	sess, err := s.sessionSvc.GetSession(ctx, session.Key{
 		AppName:   appName,
 		UserID:    userID,
 		SessionID: sessionID,
@@ -547,7 +581,12 @@ func convertContentToMessage(content schema.Content) model.Message {
 }
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleRun called: path=%s", r.URL.Path)
+	ctx := r.Context()
+	log.InfofContext(
+		ctx,
+		"handleRun called: path=%s",
+		r.URL.Path,
+	)
 
 	var req schema.AgentRunRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -569,8 +608,8 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	ctx := newDetachedContext(r.Context())
-	out, err := rn.Run(ctx, req.UserID, req.SessionID,
+	runCtx := newDetachedContext(ctx)
+	out, err := rn.Run(runCtx, req.UserID, req.SessionID,
 		convertContentToMessage(req.NewMessage))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -592,7 +631,12 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleRunSSE called: path=%s", r.URL.Path)
+	ctx := r.Context()
+	log.InfofContext(
+		ctx,
+		"handleRunSSE called: path=%s",
+		r.URL.Path,
+	)
 
 	var req schema.AgentRunRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -616,8 +660,8 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	ctx := newDetachedContext(r.Context())
-	out, err := rn.Run(ctx, req.UserID, req.SessionID,
+	runCtx := newDetachedContext(ctx)
+	out, err := rn.Run(runCtx, req.UserID, req.SessionID,
 		convertContentToMessage(req.NewMessage))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -632,7 +676,11 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 			}
 			data, err := json.Marshal(sseEvent)
 			if err != nil {
-				log.Errorf("Error marshalling SSE event: %v", err)
+				log.ErrorfContext(
+					ctx,
+					"Error marshalling SSE event: %v",
+					err,
+				)
 				continue
 			}
 			fmt.Fprintf(w, "data: %s\n\n", data)
@@ -647,7 +695,11 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 			}
 			data, err := json.Marshal(sseEvent)
 			if err != nil {
-				log.Errorf("Error marshalling SSE event: %v", err)
+				log.ErrorfContext(
+					ctx,
+					"Error marshalling SSE event: %v",
+					err,
+				)
 				break
 			}
 			fmt.Fprintf(w, "data: %s\n\n", data)
@@ -655,12 +707,20 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	log.Infof("handleRunSSE finished for session %s", req.SessionID)
+	log.InfofContext(
+		ctx,
+		"handleRunSSE finished for session %s",
+		req.SessionID,
+	)
 }
 
 // handleCreateEvalSet creates an eval set.
 func (s *Server) handleCreateEvalSet(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleCreateEvalSet called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleCreateEvalSet called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	var req schema.CreateEvalSetRequest
@@ -679,7 +739,11 @@ func (s *Server) handleCreateEvalSet(w http.ResponseWriter, r *http.Request) {
 
 // handleCreateEvalSetLegacy creates an eval set.
 func (s *Server) handleCreateEvalSetLegacy(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleCreateEvalSetLegacy called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleCreateEvalSetLegacy called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	evalSetID := vars["evalSetId"]
@@ -693,7 +757,11 @@ func (s *Server) handleCreateEvalSetLegacy(w http.ResponseWriter, r *http.Reques
 
 // handleListEvalSetsLegacy lists all eval sets.
 func (s *Server) handleListEvalSetsLegacy(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleListEvalSets called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleListEvalSets called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	ids, err := s.evalSetManager.List(r.Context(), appName)
@@ -705,7 +773,11 @@ func (s *Server) handleListEvalSetsLegacy(w http.ResponseWriter, r *http.Request
 
 // handleListEvalSets lists all eval sets.
 func (s *Server) handleListEvalSets(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleListEvalSets called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleListEvalSets called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	ids, err := s.evalSetManager.List(r.Context(), appName)
@@ -717,7 +789,11 @@ func (s *Server) handleListEvalSets(w http.ResponseWriter, r *http.Request) {
 
 // handleAddSessionToEvalSet adds a session to an eval set.
 func (s *Server) handleAddSessionToEvalSet(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleAddSessionToEvalSet called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleAddSessionToEvalSet called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	evalSetID := vars["evalSetId"]
@@ -753,7 +829,11 @@ func (s *Server) handleAddSessionToEvalSet(w http.ResponseWriter, r *http.Reques
 
 // handleListEvalsInSet lists all eval cases in an eval set.
 func (s *Server) handleListEvalsInSet(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleListEvalsInSet called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleListEvalsInSet called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	evalSetID := vars["evalSetId"]
@@ -773,7 +853,11 @@ func (s *Server) handleListEvalsInSet(w http.ResponseWriter, r *http.Request) {
 
 // handleGetEvalCase gets a single eval case.
 func (s *Server) handleGetEvalCase(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleGetEvalCase called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleGetEvalCase called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	evalSetID := vars["evalSetId"]
@@ -789,7 +873,11 @@ func (s *Server) handleGetEvalCase(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateEvalCase updates a stored eval case.
 func (s *Server) handleUpdateEvalCase(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleUpdateEvalCase called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleUpdateEvalCase called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	evalSetID := vars["evalSetId"]
@@ -816,7 +904,11 @@ func (s *Server) handleUpdateEvalCase(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteEvalCase deletes an eval case.
 func (s *Server) handleDeleteEvalCase(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleDeleteEvalCase called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleDeleteEvalCase called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	evalSetID := vars["evalSetId"]
@@ -830,7 +922,11 @@ func (s *Server) handleDeleteEvalCase(w http.ResponseWriter, r *http.Request) {
 
 // handleRunEvalLegacy runs an eval given the details in the eval request.
 func (s *Server) handleRunEvalLegacy(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleRunEvalLegacy called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleRunEvalLegacy called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	evalSetID := vars["evalSetId"]
@@ -895,7 +991,11 @@ func (s *Server) handleRunEvalLegacy(w http.ResponseWriter, r *http.Request) {
 
 // handleRunEval runs an eval given the details in the eval request.
 func (s *Server) handleRunEval(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleRunEval called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleRunEval called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	evalSetID := vars["evalSetId"]
@@ -960,7 +1060,11 @@ func (s *Server) handleRunEval(w http.ResponseWriter, r *http.Request) {
 
 // handleGetEvalResultLegacy gets a full eval set result.
 func (s *Server) handleGetEvalResultLegacy(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleGetEvalResultLegacy called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleGetEvalResultLegacy called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	evalResultID := vars["evalResultId"]
@@ -975,7 +1079,11 @@ func (s *Server) handleGetEvalResultLegacy(w http.ResponseWriter, r *http.Reques
 
 // handleGetEvalResult gets a full eval set result.
 func (s *Server) handleGetEvalResult(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleGetEvalResult called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleGetEvalResult called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	evalResultID := vars["evalResultId"]
@@ -990,7 +1098,11 @@ func (s *Server) handleGetEvalResult(w http.ResponseWriter, r *http.Request) {
 
 // handleListEvalResultsLegacy lists all eval result IDs for an app.
 func (s *Server) handleListEvalResultsLegacy(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleListEvalResults called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleListEvalResults called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	ids, err := s.evalResultManager.List(r.Context(), appName)
@@ -1002,7 +1114,11 @@ func (s *Server) handleListEvalResultsLegacy(w http.ResponseWriter, r *http.Requ
 
 // handleListEvalResults lists all eval results for an app.
 func (s *Server) handleListEvalResults(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleListEvalResults called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleListEvalResults called: path=%s",
+		r.URL.Path,
+	)
 	vars := mux.Vars(r)
 	appName := vars["appName"]
 	ids, err := s.evalResultManager.List(r.Context(), appName)
@@ -1014,7 +1130,11 @@ func (s *Server) handleListEvalResults(w http.ResponseWriter, r *http.Request) {
 
 // handleListMetricsInfo lists metadata for the registered evaluation metrics.
 func (s *Server) handleListMetricsInfo(w http.ResponseWriter, r *http.Request) {
-	log.Infof("handleListMetricsInfo called: path=%s", r.URL.Path)
+	log.InfofContext(
+		r.Context(),
+		"handleListMetricsInfo called: path=%s",
+		r.URL.Path,
+	)
 	response := &schema.ListMetricsInfoResponse{MetricsInfo: s.buildMetricInfos()}
 	s.writeJSON(w, response)
 }

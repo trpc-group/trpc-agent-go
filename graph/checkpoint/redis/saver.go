@@ -288,7 +288,11 @@ func (s *Saver) getCheckpointIDs(ctx context.Context, lineageID, checkpointNS st
 	var checkpointIDs []string
 	for _, id := range members {
 		if id == "" {
-			log.Warnf("invalid checkpoint id format: %s", id)
+			log.WarnfContext(
+				ctx,
+				"invalid checkpoint id format: %s",
+				id,
+			)
 			continue
 		}
 		checkpointIDs = append(checkpointIDs, id)

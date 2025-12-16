@@ -169,7 +169,8 @@ func (c *defaultEventToA2AMessage) getMetadataTypeKey() string {
 }
 
 // ConvertToA2AMessage converts an Agent event to an A2A protocol message.
-// For non-streaming responses, it returns the full content including tool calls.
+// For non-streaming responses, it returns the full content including
+// tool calls.
 func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 	ctx context.Context,
 	event *event.Event,
@@ -180,26 +181,36 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 	}
 
 	if event.Response.Error != nil {
-		return nil, fmt.Errorf("A2A server received error event from agent, event ID: %s, error: %v",
-			event.ID, event.Response.Error)
+		return nil, fmt.Errorf(
+			"A2A server received error event from agent, "+
+				"event ID: %s, error: %v",
+			event.ID,
+			event.Response.Error,
+		)
 	}
 
-	// Additional safety check for choices array bounds
+	// Additional safety check for choices array bounds.
 	if len(event.Response.Choices) == 0 {
-		log.Debugf("no choices in response, event: %v", event.ID)
+		log.DebugfContext(
+			ctx,
+			"no choices in response, event: %v",
+			event.ID,
+		)
 		return nil, nil
 	}
 
-	// Check if this is a tool call event
+	// Check if this is a tool call event.
 	if isToolCallEvent(event) {
 		return c.convertToolCallToA2AMessage(event)
 	}
 
+	// Check if this is a code execution event.
 	if isCodeExecutionEvent(event) {
 		return c.convertCodeExecutionToA2AMessage(event)
 	}
 
-	return c.convertContentToA2AMessage(event)
+	// Fallback to plain content conversion.
+	return c.convertContentToA2AMessage(ctx, event)
 }
 
 // convertCodeExecutionToA2AMessage converts code execution events to A2A DataPart messages.
@@ -268,6 +279,7 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AMessage(
 // convertContentToA2AMessage converts message content to A2A message.
 // It creates a message with text parts containing the content.
 func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
+	ctx context.Context,
 	event *event.Event,
 ) (protocol.UnaryMessageResult, error) {
 	choice := event.Response.Choices[0]
@@ -282,7 +294,11 @@ func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
 		return &msg, nil
 	}
 
-	log.Debugf("content is empty, event: %v", event)
+	log.DebugfContext(
+		ctx,
+		"content is empty, event: %v",
+		event,
+	)
 	return nil, nil
 }
 
@@ -298,13 +314,21 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 	}
 
 	if evt.Response.Error != nil {
-		return nil, fmt.Errorf("A2A server received error event from agent, event ID: %s, error: %v",
-			evt.ID, evt.Response.Error)
+		return nil, fmt.Errorf(
+			"A2A server received error event from agent, "+
+				"event ID: %s, error: %v",
+			evt.ID,
+			evt.Response.Error,
+		)
 	}
 
 	// Additional safety check for choices array bounds
 	if len(evt.Response.Choices) == 0 {
-		log.Debugf("no choices in response, event: %v", evt.ID)
+		log.DebugfContext(
+			ctx,
+			"no choices in response, event: %v",
+			evt.ID,
+		)
 		return nil, nil
 	}
 
@@ -317,12 +341,13 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 		return c.convertCodeExecutionToA2AStreamingMessage(evt, options)
 	}
 
-	return c.convertDeltaContentToA2AStreamingMessage(evt, options)
+	return c.convertDeltaContentToA2AStreamingMessage(ctx, evt, options)
 }
 
 // convertDeltaContentToA2AStreamingMessage converts delta content to A2A streaming message.
 // It creates a task artifact update event for incremental content updates.
 func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
+	ctx context.Context,
 	event *event.Event,
 	options EventToA2AStreamingOptions,
 ) (protocol.StreamingMessageResult, error) {
@@ -348,7 +373,11 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 		return &taskArtifact, nil
 	}
 
-	log.Debugf("delta content is empty, event: %v", event)
+	log.DebugfContext(
+		ctx,
+		"delta content is empty, event: %v",
+		event,
+	)
 	return nil, nil
 }
 

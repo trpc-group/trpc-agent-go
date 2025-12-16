@@ -105,8 +105,39 @@ type Invocation struct {
 	state   map[string]any
 	stateMu sync.RWMutex
 
+	// MaxLLMCalls is an optional upper bound on the number of LLM calls
+	// allowed for this invocation. When the value is:
+	//   - > 0: the limit is enforced for this invocation.
+	//   - <= 0: no limit is applied (default, preserves existing behavior).
+	//
+	// Typical usage:
+	//   - LLMAgent copies its per-agent limits into these fields in setupInvocation.
+	//   - Other agent implementations may set them explicitly when constructing
+	//     invocations. If left at zero, IncLLMCallCount/IncToolIteration are no-ops.
+	MaxLLMCalls int
+
+	// MaxToolIterations is an optional upper bound on how many tool-call
+	// iterations are allowed for this invocation. A "tool iteration" is defined
+	// as an assistant response that contains tool calls and triggers the
+	// FunctionCallResponseProcessor. When the value is:
+	//   - > 0: the limit is enforced for this invocation.
+	//   - <= 0: no limit is applied (default, preserves existing behavior).
+	MaxToolIterations int
+
 	// timingInfo stores timing information for the first LLM call in this invocation.
 	timingInfo *model.TimingInfo
+
+	// llmCallCount tracks how many LLM calls have been made in this invocation.
+	// This is used together with MaxLLMCalls to enforce a per-invocation limit.
+	// Note: counters are invocation-scoped. When child invocations are created
+	// via Clone (for example, in transfer_to_agent or AgentTool), the counters
+	// start from zero for each invocation.
+	llmCallCount int
+
+	// toolIterationCount tracks how many tool call iterations have been processed
+	// in this invocation. This is used together with MaxToolIterations
+	// to guard against unbounded tool_call -> LLM -> tool_call loops.
+	toolIterationCount int
 }
 
 // DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
@@ -540,8 +571,15 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 		agentName = inv.AgentName
 		requestID = inv.RunOptions.RequestID
 	}
-	log.Tracef("[agent.EmitEvent]queue monitoring:RequestID: %s channel capacity: %d, current length: %d, branch: %s, agent name:%s",
-		requestID, cap(ch), len(ch), e.Branch, agentName)
+	log.Tracef(
+		"[agent.EmitEvent]queue monitoring:RequestID: %s channel capacity: "+
+			"%d, current length: %d, branch: %s, agent name:%s",
+		requestID,
+		cap(ch),
+		len(ch),
+		e.Branch,
+		agentName,
+	)
 	return event.EmitEvent(ctx, ch, e)
 }
 
@@ -647,6 +685,46 @@ func (inv *Invocation) GetOrCreateTimingInfo() *model.TimingInfo {
 	return inv.timingInfo
 }
 
+// IncLLMCallCount increments the LLM call counter for this invocation and
+// enforces the optional MaxLLMCalls limit. When the limit is not set or
+// non-positive, no restriction is applied. When the limit is exceeded, a
+// StopError is returned so callers can terminate the flow early.
+func (inv *Invocation) IncLLMCallCount() error {
+	if inv == nil {
+		return nil
+	}
+	limit := inv.MaxLLMCalls
+	if limit <= 0 {
+		// No limit configured, preserve existing behavior.
+		return nil
+	}
+	inv.llmCallCount++
+	if inv.llmCallCount > limit {
+		return NewStopError(
+			fmt.Sprintf("max LLM calls (%d) exceeded", limit),
+		)
+	}
+	return nil
+}
+
+// IncToolIteration increments the tool iteration counter and reports whether
+// the MaxToolIterations limit has been exceeded. A "tool iteration" is
+// defined as an assistant response that contains tool calls and triggers the
+// FunctionCallResponseProcessor. When the limit is not set or non-positive,
+// this method always returns false, preserving existing behavior.
+func (inv *Invocation) IncToolIteration() bool {
+	if inv == nil {
+		return false
+	}
+	limit := inv.MaxToolIterations
+	if limit <= 0 {
+		// No limit configured, preserve existing behavior.
+		return false
+	}
+	inv.toolIterationCount++
+	return inv.toolIterationCount > limit
+}
+
 // DeleteState removes a value from the invocation state.
 //
 // Example:
@@ -684,8 +762,13 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 	select {
 	case <-ch:
 	case <-time.After(timeout):
-		log.Infof("[AddNoticeChannelAndWait]: Wait for notification message timeout. key: %s, timeout: %d(s)",
-			key, int64(timeout/time.Second))
+		log.InfofContext(
+			ctx,
+			"[AddNoticeChannelAndWait]: Wait for notification message "+
+				"timeout. key: %s, timeout: %d(s)",
+			key,
+			int64(timeout/time.Second),
+		)
 		return NewWaitNoticeTimeoutError(fmt.Sprintf("Timeout waiting for completion of event %s", key))
 	case <-ctx.Done():
 		return ctx.Err()
@@ -696,7 +779,11 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 // AddNoticeChannel add a new notice channel
 func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan any {
 	if inv == nil || inv.noticeMu == nil {
-		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
+		log.ErrorContext(
+			ctx,
+			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+				"Clone method to create Invocation",
+		)
 		return nil
 	}
 	inv.noticeMu.Lock()
@@ -718,8 +805,16 @@ func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan an
 // NotifyCompletion notify completion signal to waiting task
 func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 	if inv == nil || inv.noticeMu == nil {
-		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
-		return fmt.Errorf("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation key:%s", key)
+		log.ErrorContext(
+			ctx,
+			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+				"Clone method to create Invocation",
+		)
+		return fmt.Errorf(
+			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+				"Clone method to create Invocation key:%s",
+			key,
+		)
 	}
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
@@ -755,7 +850,11 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 // upon completion to prevent resource leaks.
 func (inv *Invocation) CleanupNotice(ctx context.Context) {
 	if inv == nil || inv.noticeMu == nil {
-		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
+		log.ErrorContext(
+			ctx,
+			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+				"Clone method to create Invocation",
+		)
 		return
 	}
 	inv.noticeMu.Lock()

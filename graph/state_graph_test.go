@@ -125,6 +125,28 @@ func TestWithToolSets_CopiesSlice(t *testing.T) {
 	}
 }
 
+func TestMergeToolsWithToolSets_EmitsConflictWarning(t *testing.T) {
+	base := map[string]tool.Tool{
+		"simple_echo": &echoTool{name: "simple_echo"},
+	}
+	toolSets := []tool.ToolSet{
+		&simpleToolSet{name: "simple"},
+	}
+
+	out := mergeToolsWithToolSets(
+		context.Background(),
+		base,
+		toolSets,
+	)
+
+	if len(out) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(out))
+	}
+	if _, ok := out["simple_echo"]; !ok {
+		t.Fatalf("expected key simple_echo in merged tools")
+	}
+}
+
 // blockingTool is a test tool that blocks until allowed, reporting start and
 // optionally respecting context cancellation.
 type blockingTool struct {
@@ -304,6 +326,37 @@ func TestProcessToolCalls_SerialVsParallel(t *testing.T) {
 			t.Fatalf("order not preserved: %s then %s", msgs[0].ToolName, msgs[1].ToolName)
 		}
 	})
+}
+
+func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
+	ctx := context.Background()
+	agentEvents := make(chan *event.Event, 1)
+	parentEventChan := make(chan *event.Event, 1)
+
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			Object: ObjectTypeGraphExecution,
+			Done:   true,
+		},
+		StateDelta: map[string][]byte{
+			"bad": []byte("not-json"),
+		},
+	}
+	close(agentEvents)
+
+	last, final, raw, err := processAgentEventStream(
+		ctx,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "", last)
+	require.NotNil(t, final)
+	require.Len(t, raw, 1)
 }
 
 func TestProcessToolCalls_ParallelCancelOnFirstError(t *testing.T) {

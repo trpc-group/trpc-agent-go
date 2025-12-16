@@ -276,7 +276,8 @@ func (r *runner) processAgentEvents(
 		flushChan:        flushChan,
 		processedEventCh: processedEventCh,
 	}
-	go r.runEventLoop(ctx, loop)
+	runCtx := agent.CloneContext(ctx)
+	go r.runEventLoop(runCtx, loop)
 	return processedEventCh
 }
 
@@ -335,7 +336,7 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	r.handleEventPersistence(ctx, loop.sess, agentEvent)
 
 	// Capture graph-level completion snapshot for final event.
-	if agentEvent.Response != nil && agentEvent.Done && agentEvent.Object == graph.ObjectTypeGraphExecution {
+	if isGraphCompletionEvent(agentEvent) {
 		loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
 	}
 
@@ -396,7 +397,19 @@ func (r *runner) handleEventPersistence(
 		return
 	}
 
-	if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
+	persistEvent := agentEvent
+	if isGraphCompletionEvent(agentEvent) {
+		eventCopy := *agentEvent
+		eventCopy.Response = agentEvent.Response.Clone()
+		eventCopy.Response.Choices = nil
+		persistEvent = &eventCopy
+	}
+
+	if err := r.sessionService.AppendEvent(
+		ctx,
+		sess,
+		persistEvent,
+	); err != nil {
 		log.Errorf("Failed to append event to session: %v", err)
 		return
 	}
@@ -428,6 +441,14 @@ func (r *runner) handleEventPersistence(
 func (r *runner) shouldPersistEvent(agentEvent *event.Event) bool {
 	return len(agentEvent.StateDelta) > 0 ||
 		(agentEvent.Response != nil && !agentEvent.IsPartial && agentEvent.IsValidContent())
+}
+
+func isGraphCompletionEvent(agentEvent *event.Event) bool {
+	if agentEvent == nil || agentEvent.Response == nil {
+		return false
+	}
+	return agentEvent.Done &&
+		agentEvent.Object == graph.ObjectTypeGraphExecution
 }
 
 // captureGraphCompletion captures the final state delta and choices from a

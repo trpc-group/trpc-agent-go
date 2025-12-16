@@ -124,6 +124,67 @@ func TestSessionSummarizer_PostHook_ModifiesOutput(t *testing.T) {
 	assert.Equal(t, "POST_HOOKED", summary)
 }
 
+func TestSessionSummarizer_PreHook_ContextPropagation(t *testing.T) {
+	model := &echoPromptModel{}
+	type ctxKey string
+	const contextKey ctxKey = "pre-hook-key"
+
+	var capturedVal any
+	s := NewSummarizer(model, WithPreSummaryHook(func(in *PreSummaryHookContext) error {
+		capturedVal = in.Ctx.Value(contextKey)
+		return nil
+	}))
+
+	ctx := context.WithValue(context.Background(), contextKey, "pre-ctx-value")
+	sess := &session.Session{ID: "sess", Events: []event.Event{newEventWithContent("origin")}}
+	_, err := s.Summarize(ctx, sess)
+	require.NoError(t, err)
+	assert.Equal(t, "pre-ctx-value", capturedVal)
+}
+
+func TestSessionSummarizer_PostHook_ContextPropagation(t *testing.T) {
+	model := &echoPromptModel{}
+	type ctxKey string
+	const contextKey ctxKey = "post-hook-key"
+
+	var capturedVal any
+	s := NewSummarizer(model, WithPostSummaryHook(func(in *PostSummaryHookContext) error {
+		capturedVal = in.Ctx.Value(contextKey)
+		return nil
+	}))
+
+	ctx := context.WithValue(context.Background(), contextKey, "ctx-value")
+	sess := &session.Session{ID: "sess", Events: []event.Event{newEventWithContent("origin")}}
+	_, err := s.Summarize(ctx, sess)
+	require.NoError(t, err)
+	assert.Equal(t, "ctx-value", capturedVal)
+}
+
+func TestSessionSummarizer_PreHook_ContextPropagationToPostHook(t *testing.T) {
+	model := &echoPromptModel{}
+	type ctxKey string
+	const preHookKey ctxKey = "pre-hook-injected-key"
+
+	var capturedVal any
+	s := NewSummarizer(model,
+		WithPreSummaryHook(func(in *PreSummaryHookContext) error {
+			// PreHook injects a new value into context.
+			in.Ctx = context.WithValue(in.Ctx, preHookKey, "injected-by-pre-hook")
+			return nil
+		}),
+		WithPostSummaryHook(func(in *PostSummaryHookContext) error {
+			// PostHook should be able to read the value injected by PreHook.
+			capturedVal = in.Ctx.Value(preHookKey)
+			return nil
+		}),
+	)
+
+	sess := &session.Session{ID: "sess", Events: []event.Event{newEventWithContent("origin")}}
+	_, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	assert.Equal(t, "injected-by-pre-hook", capturedVal)
+}
+
 func TestSessionSummarizer_PostHook_ErrorBehavior(t *testing.T) {
 	model := &echoPromptModel{}
 	hookErr := assert.AnError
