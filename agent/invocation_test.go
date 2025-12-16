@@ -655,3 +655,72 @@ func TestWithModelName_Integration(t *testing.T) {
 
 	require.Equal(t, "gpt-4-turbo", inv.RunOptions.ModelName)
 }
+
+func TestInvocation_IncLLMCallCount_NoLimitOrNil(t *testing.T) {
+	// nil invocation should be a no-op
+	var nilInv *Invocation
+	require.NoError(t, nilInv.IncLLMCallCount())
+
+	// MaxLLMCalls <= 0 should be treated as "no limit"
+	inv := &Invocation{}
+	err := inv.IncLLMCallCount()
+	require.NoError(t, err)
+	require.Equal(t, 0, inv.llmCallCount, "counter should not increment when no limit is configured")
+}
+
+func TestInvocation_IncLLMCallCount_WithLimitAndOverflow(t *testing.T) {
+	inv := &Invocation{
+		MaxLLMCalls: 2,
+	}
+
+	// First call within limit.
+	err := inv.IncLLMCallCount()
+	require.NoError(t, err)
+	require.Equal(t, 1, inv.llmCallCount)
+
+	// Second call still within limit.
+	err = inv.IncLLMCallCount()
+	require.NoError(t, err)
+	require.Equal(t, 2, inv.llmCallCount)
+
+	// Third call exceeds limit and should return a StopError.
+	err = inv.IncLLMCallCount()
+	require.Error(t, err)
+	stopErr, ok := AsStopError(err)
+	require.True(t, ok, "expected StopError when LLM call limit exceeded")
+	require.Contains(t, stopErr.Message, "max LLM calls (2) exceeded")
+	require.Equal(t, 3, inv.llmCallCount, "counter should still increment on overflow check")
+}
+
+func TestInvocation_IncToolIteration_NoLimitOrNil(t *testing.T) {
+	// nil invocation should be a no-op and report not exceeded.
+	var nilInv *Invocation
+	require.False(t, nilInv.IncToolIteration())
+
+	// MaxToolIterations <= 0 should be treated as "no limit".
+	inv := &Invocation{}
+	exceeded := inv.IncToolIteration()
+	require.False(t, exceeded)
+	require.Equal(t, 0, inv.toolIterationCount, "counter should not increment when no limit is configured")
+}
+
+func TestInvocation_IncToolIteration_WithLimitAndOverflow(t *testing.T) {
+	inv := &Invocation{
+		MaxToolIterations: 2,
+	}
+
+	// First iteration within limit.
+	exceeded := inv.IncToolIteration()
+	require.False(t, exceeded)
+	require.Equal(t, 1, inv.toolIterationCount)
+
+	// Second iteration still within limit.
+	exceeded = inv.IncToolIteration()
+	require.False(t, exceeded)
+	require.Equal(t, 2, inv.toolIterationCount)
+
+	// Third iteration exceeds limit and should report true.
+	exceeded = inv.IncToolIteration()
+	require.True(t, exceeded, "expected true when tool iteration limit is exceeded")
+	require.Equal(t, 3, inv.toolIterationCount)
+}

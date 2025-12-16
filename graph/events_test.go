@@ -286,6 +286,28 @@ func TestNewGraphCompletionEvent(t *testing.T) {
 	require.Equal(t, 3, cm.FinalStateKeys) // includes StateKeyLastResponse + k1 + k2
 }
 
+func TestNewGraphCompletionEvent_EncodeJSONBytes(t *testing.T) {
+	jsonBytes := []byte(`{"runs":null}`)
+	bin := []byte{1, 2}
+	final := State{
+		StateKeyLastResponse: "ok",
+		"json_bytes":         jsonBytes,
+		"bin":                bin,
+	}
+	e := NewGraphCompletionEvent(
+		WithCompletionEventInvocationID("inv"),
+		WithCompletionEventFinalState(final),
+		WithCompletionEventTotalSteps(1),
+		WithCompletionEventTotalDuration(1*time.Millisecond),
+	)
+
+	require.Equal(t, jsonBytes, e.StateDelta["json_bytes"])
+
+	var decoded []byte
+	require.NoError(t, json.Unmarshal(e.StateDelta["bin"], &decoded))
+	require.Equal(t, bin, decoded)
+}
+
 func TestNewGraphCompletionEvent_SerializeFinalStateSkipsInternalAndUnserializable(t *testing.T) {
 	final := State{
 		StateKeyLastResponse: "ok",

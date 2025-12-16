@@ -1365,8 +1365,20 @@ func serializeFinalState(e *event.Event, state State) {
 		if isInternalStateKey(key) {
 			continue
 		}
+
 		// Marshal a deep-copied snapshot to avoid racing on shared references.
-		if jsonData, err := json.Marshal(deepCopyAny(value)); err == nil {
+		snapshot := deepCopyAny(value)
+
+		// Special case: when users put JSON bytes into graph state (e.g.,
+		// json.Marshal output), encoding/json would base64 it if we marshal the
+		// []byte again. If it's already valid JSON, keep it as-is so downstream
+		// consumers can json.Unmarshal it directly.
+		if raw, ok := snapshot.([]byte); ok && json.Valid(raw) {
+			e.StateDelta[key] = raw
+			continue
+		}
+
+		if jsonData, err := json.Marshal(snapshot); err == nil {
 			e.StateDelta[key] = jsonData
 		}
 	}

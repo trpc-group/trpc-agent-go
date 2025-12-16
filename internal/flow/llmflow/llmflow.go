@@ -75,7 +75,8 @@ func New(
 func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, f.channelBufferSize) // Configurable buffered channel for events.
 
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		defer close(eventChan)
 
 		// Optionally resume from pending tool calls before starting a new
@@ -144,7 +145,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 				break
 			}
 		}
-	}()
+	}(runCtx)
 
 	return eventChan, nil
 }
@@ -532,6 +533,13 @@ func (f *Flow) callLLM(
 		"Calling LLM for agent %s",
 		invocation.AgentName,
 	)
+
+	// Enforce optional per-invocation LLM call limit. When the limit is not
+	// configured (<= 0), this is a no-op and preserves existing behavior.
+	if err := invocation.IncLLMCallCount(); err != nil {
+		log.Errorf("LLM call limit exceeded for agent %s: %v", invocation.AgentName, err)
+		return nil, err
+	}
 
 	// Run before model callbacks if they exist.
 	if f.modelCallbacks != nil {

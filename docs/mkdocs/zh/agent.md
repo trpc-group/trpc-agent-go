@@ -400,9 +400,17 @@ type Invocation struct {
     eventFilterKey string
     parent         *Invocation
 
-    // 调用级别的状态（延迟初始化，通过 stateMu 保护并发）
+    // 调用级状态（延迟初始化，通过 stateMu 保护并发）
     state   map[string]any
     stateMu sync.RWMutex
+
+    // 可选的调用级安全限制（通常由 LLMAgent 在 setupInvocation 中设置）。
+    MaxLLMCalls      int
+    MaxToolIterations int
+
+    // 与 MaxLLMCalls / MaxToolIterations 配套使用的内部计数器。
+    llmCallCount       int
+    toolIterationCount int
 }
 ```
 
