@@ -12,7 +12,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.71.0
 	trpc.group/trpc-go/trpc-agent-go v0.6.0
-	trpc.group/trpc-go/trpc-agent-go/storage/milvus v0.0.4
+	trpc.group/trpc-go/trpc-agent-go/storage/milvus v0.0.0-20251216100013-73147c973dde
 )
 
 require (
