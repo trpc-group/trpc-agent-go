@@ -527,6 +527,12 @@ func (p *panicSummarizer) Metadata() map[string]any {
 	return map[string]any{}
 }
 
+func (p *panicSummarizer) SetPrompt(prompt string) {
+}
+
+func (p *panicSummarizer) SetModel(m model.Model) {
+}
+
 func TestMemoryService_ProcessSummaryJob_RecoversFromPanic(t *testing.T) {
 	s := NewSessionService(
 		WithSummarizer(&panicSummarizer{}),
@@ -1033,4 +1039,65 @@ func TestMemoryService_GetSessionSummaryText_FilterKeyEmptySummary(t *testing.T)
 	text, ok := s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey("user-messages"))
 	require.True(t, ok)
 	require.Equal(t, "full-summary", text)
+}
+
+// traceCtxKey is a context key type for trace ID in tests.
+type traceCtxKey string
+
+// traceIDKey is the context key for trace ID.
+const traceIDKey traceCtxKey = "trace-id"
+
+// ctxCaptureSummarizer captures context value during Summarize call.
+type ctxCaptureSummarizer struct {
+	capturedVal any
+	done        chan struct{}
+}
+
+func (c *ctxCaptureSummarizer) ShouldSummarize(sess *session.Session) bool { return true }
+func (c *ctxCaptureSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	c.capturedVal = ctx.Value(traceIDKey)
+	close(c.done)
+	return "captured-summary", nil
+}
+func (c *ctxCaptureSummarizer) SetPrompt(prompt string)  {}
+func (c *ctxCaptureSummarizer) SetModel(m model.Model)   {}
+func (c *ctxCaptureSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+func TestMemoryService_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
+	captureSummarizer := &ctxCaptureSummarizer{done: make(chan struct{})}
+	s := NewSessionService(
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(10),
+		WithSummarizer(captureSummarizer),
+	)
+	defer s.Close()
+
+	// Create a session first.
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-ctx"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append an event to make delta non-empty.
+	e := event.New("inv", "user")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Create context with trace ID value.
+	ctx := context.WithValue(context.Background(), traceIDKey, "trace-12345")
+
+	// Enqueue summary job with context containing trace ID.
+	err = s.EnqueueSummaryJob(ctx, sess, "", false)
+	require.NoError(t, err)
+
+	// Wait for async processing to complete.
+	select {
+	case <-captureSummarizer.done:
+		// Summarizer was called.
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for summarizer to be called")
+	}
+
+	// Verify the context value was preserved in async worker.
+	assert.Equal(t, "trace-12345", captureSummarizer.capturedVal)
 }

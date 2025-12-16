@@ -19,6 +19,7 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"go.uber.org/multierr"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -195,7 +196,8 @@ func (t *tracker) getSessionState(ctx context.Context, key session.Key) *session
 	t.sessionStates[key] = state
 	if t.flushInterval > 0 {
 		state.done = make(chan struct{})
-		go t.flushPeriodically(ctx, key, state)
+		flushCtx := agent.CloneContext(ctx)
+		go t.flushPeriodically(flushCtx, key, state)
 	}
 	return state
 }
