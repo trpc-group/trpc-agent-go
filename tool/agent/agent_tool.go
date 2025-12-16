@@ -202,7 +202,8 @@ func (at *Tool) wrapWithCompletion(ctx context.Context, inv *agent.Invocation, s
 		return src
 	}
 	out := make(chan *event.Event)
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		defer close(out)
 		for evt := range src {
 			if evt != nil && evt.RequiresCompletion {
@@ -213,7 +214,7 @@ func (at *Tool) wrapWithCompletion(ctx context.Context, inv *agent.Invocation, s
 			}
 			out <- evt
 		}
-	}()
+	}(runCtx)
 	return out
 }
 
@@ -273,7 +274,8 @@ func (at *Tool) collectResponse(evCh <-chan *event.Event) (string, error) {
 func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
 	stream := tool.NewStream(64)
 
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		defer stream.Writer.Close()
 
 		// Try to reuse parent invocation for consistent invocationId/session
@@ -330,7 +332,7 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 				}
 			}
 		}
-	}()
+	}(runCtx)
 
 	return stream.Reader, nil
 }
