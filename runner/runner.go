@@ -276,7 +276,8 @@ func (r *runner) processAgentEvents(
 		flushChan:        flushChan,
 		processedEventCh: processedEventCh,
 	}
-	go r.runEventLoop(ctx, loop)
+	runCtx := agent.CloneContext(ctx)
+	go r.runEventLoop(runCtx, loop)
 	return processedEventCh
 }
 

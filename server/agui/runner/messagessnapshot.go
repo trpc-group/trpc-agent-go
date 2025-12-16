@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/reduce"
@@ -62,7 +63,8 @@ func (r *runner) MessagesSnapshot(ctx context.Context,
 		enableTrack: false,
 	}
 	events := make(chan aguievents.Event)
-	go r.messagesSnapshot(ctx, input, events)
+	runCtx := agent.CloneContext(ctx)
+	go r.messagesSnapshot(runCtx, input, events)
 	return events, nil
 }
 
