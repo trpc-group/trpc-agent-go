@@ -237,6 +237,31 @@ type ResponseError struct {
 
 ## OpenAI Model
 
+### 模型名称参数
+
+使用 `openai.New(name string, opts ...Option)` 创建 OpenAI 模型实例时，第一个参数是实际发送给 OpenAI API 的模型名称，作为告诉 API 使用哪个语言模型的**特定模型标识符**。
+
+由于框架支持与 OpenAI API 兼容的不同模型，您可以从各种模型提供商获取基础 URL、API 密钥和模型名称：
+
+**1. OpenAI 官方**
+
+- 基础 URL：`https://api.openai.com/v1`
+- 模型名称：`gpt-4o`、`gpt-4o-mini` 等
+
+**2. DeepSeek**
+
+- 基础 URL：`https://api.deepseek.com`
+- 模型名称：`deepseek-chat`、`deepseek-reasoner`
+
+**3. 腾讯混元**
+
+- 基础 URL：`https://api.hunyuan.cloud.tencent.com/v1`
+- 模型名称：`hunyuan-2.0-thinking-20251109`、`hunyuan-2.0-instruct-20251111` 等
+
+**4. 其他提供商**
+
+- **Qwen**：基础 URL `https://dashscope.aliyuncs.com/compatible-mode/v1`，模型名称：各种 Qwen 模型
+
 OpenAI Model 用于对接 OpenAI 及其兼容平台，支持流式输出、多模态与高级参数配置，并提供丰富的回调机制、批量处理与重试能力，同时可灵活设置自定义 HTTP Header.
 
 ### 配置方式
@@ -1933,7 +1958,7 @@ Provider 支持以下 `Option`：
 | ------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | `WithAPIKey` / `WithBaseURL`                                                                      | 设置模型的 API Key 和 Base URL                 |
 | `WithHTTPClientName` / `WithHTTPClientTransport`                                                  | 配置 HTTP 客户端属性                           |
-| `WithHeaders`                                                                                     | 追加 HTTP Header                     |
+| `WithHeaders`                                                                                     | 追加 HTTP Header                               |
 | `WithChannelBufferSize`                                                                           | 调整响应 channel 缓冲区容量                    |
 | `WithCallbacks`                                                                                   | 配置 OpenAI / Anthropic 的请求、响应、流式回调 |
 | `WithExtraFields`                                                                                 | 配置请求体自定义字段                           |

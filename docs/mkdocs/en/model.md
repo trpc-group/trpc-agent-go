@@ -237,6 +237,31 @@ type ResponseError struct {
 
 ## OpenAI Model
 
+### Model Name Parameter
+
+When creating an OpenAI model instance using `openai.New(name string, opts ...Option)`, the first parameter is the actual model name that gets sent to the OpenAI API, as the **specific model identifier** that tells the API which language model to use.
+
+Since the framework supports different models compatible with the OpenAI API, you can obtain the base URL, API key, and model name from various model providers:
+
+**1. OpenAI Official**
+
+- Base URL: `https://api.openai.com/v1`
+- Model Names: `gpt-4o`, `gpt-4o-mini`, etc.
+
+**2. DeepSeek**
+
+- Base URL: `https://api.deepseek.com`
+- Model Names: `deepseek-chat`, `deepseek-reasoner`
+
+**3. Tencent Hunyuan**
+
+- Base URL: `https://api.hunyuan.cloud.tencent.com/v1`
+- Model Names: `hunyuan-2.0-thinking-20251109`, `hunyuan-2.0-instruct-20251111`, etc.
+
+**4. Other Providers**
+
+- **Qwen**: Base URL `https://dashscope.aliyuncs.com/compatible-mode/v1`, Model Names: various qwen models
+
 The OpenAI Model is used to interface with OpenAI and its compatible platforms. It supports streaming output, multimodal and advanced parameter configuration, and provides rich callback mechanisms, batch processing and retry capabilities. It also allows for flexible setting of custom HTTP headers.
 
 ### Configuration Method
@@ -1836,7 +1861,7 @@ llm := anthropic.New("claude-sonnet-4-0",
 
 If you need to set headers conditionally (e.g., only for certain paths or depending on context values), you can use middleware:
 
-```go
+````go
 import (
     anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
     "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
@@ -1862,7 +1887,7 @@ import (
 	    ),
 	)
 	```
-	
+
 ##### 3. Using Custom `http.RoundTripper`
 
 For injecting headers at the HTTP transport layer, ideal for scenarios requiring proxying, TLS, custom monitoring, and other capabilities.
@@ -1887,7 +1912,7 @@ llm := anthropic.New("claude-sonnet-4-0",
         anthropic.WithHTTPClientTransport(headerRoundTripper{base: http.DefaultTransport}),
     ),
 )
-```
+````
 
 Regarding **"per-request" headers**:
 
