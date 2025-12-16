@@ -21,7 +21,7 @@ English | [中文](README.zh_CN.md)
 - 🧩 **Agent Skills**: Reusable `SKILL.md` workflows with safe execution
 - 📦 **Artifacts**: Versioned storage for files produced by agents and tools
 - ✅ **Evaluation & Benchmarks**: Eval sets + metrics to measure quality over time
-- 🖥️ **UI & Server Integration**: Debug server, AG-UI (Agent-User Interaction),
+- 🖥️ **UI & Server Integration**: AG-UI (Agent-User Interaction),
   and Agent-to-Agent (A2A) interoperability
 - 📊 **Production Ready**: Built-in telemetry, tracing, and enterprise-grade reliability
 - ⚡ **High Performance**: Optimized for scalability and low latency
@@ -399,16 +399,7 @@ Example: [examples/mcptool](examples/mcptool)
 - Enables dynamic tool execution and context-rich interactions between agents
   and LLMs.
 
-### 9. Debug Web Demo
-
-Example: [examples/debugserver](examples/debugserver)
-
-- Launches a **debug Server** that speaks ADK-compatible HTTP endpoints.
-- Front-end: [google/adk-web](https://github.com/google/adk-web) connects via
-  `/run_sse`, streams agent responses in real-time.
-- Great starting point for building your own chat UI.
-
-### 10. AG-UI Demo
+### 9. AG-UI Demo
 
 Example: [examples/agui](examples/agui)
 
@@ -416,7 +407,7 @@ Example: [examples/agui](examples/agui)
 - Built-in Server-Sent Events (SSE) server, plus client samples (for example,
   CopilotKit).
 
-### 11. Evaluation
+### 10. Evaluation
 
 Example: [examples/evaluation](examples/evaluation)
 
@@ -424,7 +415,7 @@ Example: [examples/evaluation](examples/evaluation)
 - Includes local file-backed runs and in-memory runs, plus a debug +
   evaluation server demo.
 
-### 12. Agent Skills
+### 11. Agent Skills
 
 Example: [examples/skillrun](examples/skillrun)
 
@@ -432,14 +423,14 @@ Example: [examples/skillrun](examples/skillrun)
 - Built-in tools: `skill_load`, `skill_list_docs`, `skill_select_docs`,
   `skill_run` (runs commands in an isolated workspace).
 
-### 13. Artifacts
+### 12. Artifacts
 
 Example: [examples/artifact](examples/artifact)
 
 - Save and retrieve versioned files (images, text, reports) produced by tools.
 - Supports multiple backends (in-memory, S3, COS).
 
-### 14. A2A Interop
+### 13. A2A Interop
 
 Example: [examples/a2aadk](examples/a2aadk)
 

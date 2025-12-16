@@ -21,7 +21,7 @@
 - 🧩 **Agent Skills**：可复用的 `SKILL.md` 工作流，支持安全执行
 - 📦 **Artifacts**：对 agent/tool 产出的文件进行版本化存储
 - ✅ **评测与基准**：EvalSet + Metric 用于长期质量度量
-- 🖥️ **UI 与服务集成**：Debug Server、AG-UI（Agent-User Interaction），
+- 🖥️ **UI 与服务集成**：AG-UI（Agent-User Interaction），
   以及 Agent-to-Agent（A2A）互通
 - 📊 **生产就绪**：内置 telemetry、tracing 和企业级可靠性
 - ⚡ **高性能**：针对可扩展性和低延迟进行优化
@@ -392,43 +392,35 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 - 提供遵循 MCP 规范的 structured prompts、tool 调用、resource 与 session 消息。
 - 使 agent 与 LLM 之间能够进行动态工具执行与上下文丰富的交互。
 
-### 9. 调试 Web Demo
-
-示例：[examples/debugserver](examples/debugserver)
-
-- 启动一个 **debug Server**，提供与 ADK 兼容的 HTTP endpoint。
-- 前端：[google/adk-web](https://github.com/google/adk-web) 通过 `/run_sse` 连接，并实时流式展示 agent 的响应。
-- 是搭建你自定义聊天 UI 的优秀起点。
-
-### 10. AG-UI Demo
+### 9. AG-UI Demo
 
 示例：[examples/agui](examples/agui)
 
 - 通过 AG-UI（Agent-User Interaction）协议对外暴露 Runner。
 - 默认提供 Server-Sent Events（SSE）服务端实现，并提供客户端示例（例如 CopilotKit）。
 
-### 11. 评测（Evaluation）
+### 10. 评测（Evaluation）
 
 示例：[examples/evaluation](examples/evaluation)
 
 - 通过可复用的 EvalSet 与可插拔的 Metric 对 agent 进行评测。
 - 包含本地文件（local）与内存（inmemory）两种模式，并提供 Debug + 评测服务端示例。
 
-### 12. Agent Skills
+### 11. Agent Skills
 
 示例：[examples/skillrun](examples/skillrun)
 
 - Skill 是一个包含 `SKILL.md` 规范的文件夹，可附带 docs/scripts。
 - 内置工具：`skill_load`、`skill_list_docs`、`skill_select_docs`、`skill_run`（在隔离工作空间里执行命令）。
 
-### 13. Artifacts
+### 12. Artifacts
 
 示例：[examples/artifact](examples/artifact)
 
 - 保存并读取工具产出的版本化文件（图片、文本、报告等）。
 - 支持多种后端（in-memory、S3、COS）。
 
-### 14. A2A 互通
+### 13. A2A 互通
 
 示例：[examples/a2aadk](examples/a2aadk)
 
