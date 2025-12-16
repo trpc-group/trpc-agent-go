@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -12,13 +11,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
 	dslcel "trpc.group/trpc-go/trpc-agent-go/dsl/internal/cel"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/modelspec"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/outputformat"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
 )
@@ -30,131 +29,22 @@ func resolveModelFromConfig(cfg map[string]any, allowEnvSecrets bool) (model.Mod
 		return nil, "", fmt.Errorf("model config is nil")
 	}
 
-	resolveEnvString := func(value string, fieldPath string) (string, error) {
-		value = strings.TrimSpace(value)
-		if !strings.HasPrefix(value, "env:") {
-			return value, nil
-		}
-		if !allowEnvSecrets {
-			return "", fmt.Errorf("%s uses an env placeholder but env secrets are disabled (enable compiler.WithAllowEnvSecrets(true) for local debugging)", fieldPath)
-		}
-		varName := strings.TrimSpace(strings.TrimPrefix(value, "env:"))
-		if varName == "" {
-			return "", fmt.Errorf("%s env placeholder is invalid (expected env:VAR)", fieldPath)
-		}
-		envVal, ok := os.LookupEnv(varName)
-		if !ok || strings.TrimSpace(envVal) == "" {
-			return "", fmt.Errorf("environment variable %q is not set (required by %s)", varName, fieldPath)
-		}
-		return envVal, nil
+	specRaw, ok := cfg["model_spec"]
+	if !ok || specRaw == nil {
+		return nil, "", fmt.Errorf("model_spec is required")
 	}
 
-	if specRaw, ok := cfg["model_spec"]; ok && specRaw != nil {
-		spec, ok := specRaw.(map[string]any)
-		if !ok {
-			return nil, "", fmt.Errorf("model_spec must be an object")
-		}
-
-		providerName, _ := spec["provider"].(string)
-		modelName, _ := spec["model_name"].(string)
-		providerName = strings.TrimSpace(providerName)
-		modelName = strings.TrimSpace(modelName)
-		if providerName == "" {
-			return nil, "", fmt.Errorf("model_spec.provider is required")
-		}
-		if modelName == "" {
-			return nil, "", fmt.Errorf("model_spec.model_name is required")
-		}
-
-		// Common options extracted from spec.
-		apiKeyRaw, ok := spec["api_key"]
-		if !ok || apiKeyRaw == nil {
-			return nil, "", fmt.Errorf("model_spec.api_key is required")
-		}
-		apiKey, ok := apiKeyRaw.(string)
-		if !ok {
-			return nil, "", fmt.Errorf("model_spec.api_key must be a string")
-		}
-		apiKey, err := resolveEnvString(apiKey, "model_spec.api_key")
-		if err != nil {
-			return nil, "", err
-		}
-		apiKey = strings.TrimSpace(apiKey)
-		if apiKey == "" {
-			return nil, "", fmt.Errorf("model_spec.api_key is required")
-		}
-
-		var baseURL string
-		if baseURLRaw, ok := spec["base_url"]; ok && baseURLRaw != nil {
-			baseURLStr, ok := baseURLRaw.(string)
-			if !ok {
-				return nil, "", fmt.Errorf("model_spec.base_url must be a string")
-			}
-			baseURL, err = resolveEnvString(baseURLStr, "model_spec.base_url")
-			if err != nil {
-				return nil, "", err
-			}
-			baseURL = strings.TrimSpace(baseURL)
-		}
-
-		var headers map[string]string
-		if headersRaw, ok := spec["headers"]; ok && headersRaw != nil {
-			switch h := headersRaw.(type) {
-			case map[string]any:
-				headers = make(map[string]string)
-				for k, v := range h {
-					vStr, ok := v.(string)
-					if !ok {
-						return nil, "", fmt.Errorf("model_spec.headers[%q] must be a string", k)
-					}
-					vStr, err := resolveEnvString(vStr, fmt.Sprintf("model_spec.headers[%q]", k))
-					if err != nil {
-						return nil, "", err
-					}
-					if strings.TrimSpace(vStr) != "" {
-						headers[k] = vStr
-					}
-				}
-			case map[string]string:
-				if len(h) > 0 {
-					headers = make(map[string]string, len(h))
-					for k, v := range h {
-						vResolved, err := resolveEnvString(v, fmt.Sprintf("model_spec.headers[%q]", k))
-						if err != nil {
-							return nil, "", err
-						}
-						if strings.TrimSpace(vResolved) != "" {
-							headers[k] = vResolved
-						}
-					}
-				}
-			default:
-				return nil, "", fmt.Errorf("model_spec.headers must be an object")
-			}
-		}
-
-		extraFields, _ := spec["extra_fields"].(map[string]any)
-
-		switch strings.ToLower(providerName) {
-		case "openai":
-			var opts []openai.Option
-			opts = append(opts, openai.WithAPIKey(apiKey))
-			if baseURL != "" {
-				opts = append(opts, openai.WithBaseURL(baseURL))
-			}
-			if len(headers) > 0 {
-				opts = append(opts, openai.WithHeaders(headers))
-			}
-			if len(extraFields) > 0 {
-				opts = append(opts, openai.WithExtraFields(extraFields))
-			}
-			return openai.New(modelName, opts...), modelName, nil
-		default:
-			return nil, "", fmt.Errorf("unsupported model_spec.provider %q (only \"openai\" is supported in this version)", providerName)
-		}
+	spec, err := modelspec.Parse(specRaw)
+	if err != nil {
+		return nil, "", err
 	}
 
-	return nil, "", fmt.Errorf("model_spec is required")
+	spec, err = modelspec.ResolveEnv(spec, allowEnvSecrets)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return modelspec.NewModel(spec)
 }
 
 // newLLMAgentNodeFuncFromConfig creates a NodeFunc for a builtin.llmagent node

@@ -13,8 +13,8 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/modelspec"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/outputformat"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
@@ -281,21 +281,8 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 	if !ok || specRaw == nil {
 		return fmt.Errorf("model_spec is required")
 	}
-	spec, ok := specRaw.(map[string]any)
-	if !ok {
-		return fmt.Errorf("model_spec must be an object")
-	}
-	providerName, _ := spec["provider"].(string)
-	modelName, _ := spec["model_name"].(string)
-	apiKey, _ := spec["api_key"].(string)
-	if strings.TrimSpace(providerName) == "" {
-		return fmt.Errorf("model_spec.provider cannot be empty")
-	}
-	if strings.TrimSpace(modelName) == "" {
-		return fmt.Errorf("model_spec.model_name cannot be empty")
-	}
-	if strings.TrimSpace(apiKey) == "" {
-		return fmt.Errorf("model_spec.api_key cannot be empty")
+	if _, err := modelspec.Parse(specRaw); err != nil {
+		return err
 	}
 
 	// Validate instruction if present
