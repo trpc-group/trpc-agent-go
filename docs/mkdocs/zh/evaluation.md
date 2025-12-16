@@ -637,6 +637,7 @@ Evaluator 根据实际会话、预期会话 与评估指标计算最终评估结
 
 ```go
 import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -662,10 +663,18 @@ type EvaluateResult struct {
 
 // PerInvocationResult 表示单次会话的评估结果
 type PerInvocationResult struct {
-	ActualInvocation   *evalset.Invocation // 实际会话
-	ExpectedInvocation *evalset.Invocation // 预期会话
-	Score              float64             // 当前会话得分
-	Status             status.EvalStatus   // 当前会话状态
+	ActualInvocation   *evalset.Invocation   // 实际会话
+	ExpectedInvocation *evalset.Invocation   // 预期会话
+	Score              float64               // 当前会话得分
+	Status             status.EvalStatus     // 当前会话状态
+	Details            *PerInvocationDetails // 额外信息，例如原因和评分
+}
+
+// PerInvocationDetails 表示单轮评估的额外信息
+type PerInvocationDetails struct {
+	Reason       string                    // 评分原因
+	Score        float64                   // 评估得分
+	RubricScores []*evalresult.RubricScore // 各项评估细则结果
 }
 ```
 
@@ -692,14 +701,10 @@ type Registry interface {
 
 框架默认注册了以下评估器：
 
-- `tool_trajectory_avg_score` 工具轨迹一致性评估器。
-  - 对于单次会话：
-    - 若实际工具调用序列与预期完全一致，则计 1 分；
-    - 若不一致，则计 0 分。
-  - 对于多次会话：计算各会话得分的平均值作为最终得分。
-- `llm_final_response` LLM 最终响应评估器。
-  - 单次采样：评估模型返回 `is_the_agent_response_valid` 字段，`valid` 计 1 分，否则计 0 分。
-  - 多次采样：按多数表决决定最终判定，再与 `EvalMetric.Threshold` 比较得出通过/未通过，评估调用次数与生成参数由 `LLMCriterion.JudgeModel` 配置。
+- `tool_trajectory_avg_score` 工具轨迹一致性评估器，需要配置预期输出。
+- `llm_final_response` LLM 最终响应评估器，需要配置预期输出。
+- `llm_rubric_response` LLM rubric 响应评估器，需要评估集提供会话输入并配置 LLMJudge/rubrics。
+- `llm_rubric_knowledge_recall` LLM rubric 知识召回评估器，需要评估集提供会话输入并配置 LLMJudge/rubrics。
 
 ### 评估结果 -- EvalResult
 
@@ -754,6 +759,27 @@ type EvalMetricResult struct {
 	Criterion  *criterion.Criterion     // 评估准则
 	Details    *EvalMetricResultDetails // 额外信息，如评分过程、错误描述等
 }
+
+// EvalMetricResultDetails 表示指标评估的附加信息
+type EvalMetricResultDetails struct {
+	Reason       string         // 评分原因
+	Score        float64        // 评估得分
+	RubricScores []*RubricScore // 各项评估细则结果
+}
+
+// RubricScore 表示单条评估细则结果
+type RubricScore struct {
+	ID     string  // 评估细则 ID
+	Reason string  // 评分原因
+	Score  float64 // 评估得分
+}
+
+// ScoreResult 表示单项指标的评分结果
+type ScoreResult struct {
+	Reason       string         // 评分原因
+	Score        float64        // 评估得分
+	RubricScores []*RubricScore // 各项评估细则结果
+}
 ```
 
 EvalMetricResultPerInvocation 表示单轮对话的逐指标评估结果，用于分析具体对话在不同指标下的表现差异。
@@ -768,14 +794,6 @@ type EvalMetricResultPerInvocation struct {
 	EvalMetricResults  []*EvalMetricResult // 各指标评估结果
 }
 
-// ScoreResult 表示单项指标的分数结果
-type ScoreResult struct {
-	Score float64 // 得分
-}
-
-// EvalMetricResultDetails 预留字段
-type EvalMetricResultDetails struct {
-}
 ```
 
 EvalResult Manager 负责管理评估结果的存储、查询与列表操作，接口定义如下：
@@ -1333,7 +1351,21 @@ LLMCriterion 用于配置基于大模型的评估准则，适用于需要由模�
 ```go
 // LLMCriterion 配置评估模型
 type LLMCriterion struct {
+	Rubrics    []*Rubric           // 评估细则配置
 	JudgeModel *JudgeModelOptions // 评估模型配置
+}
+
+// Rubric 定义评估细则
+type Rubric struct {
+	ID          string         // 评估细则唯一标识
+	Description string         // 评估细则描述，供人类阅读
+	Type        string         // 评估细则类型
+	Content     *RubricContent // 评估细则内容，供评估模型阅读
+}
+
+// RubricContent 定义评估细则内容
+type RubricContent struct {
+	Text string // 评估细则具体内容
 }
 
 // JudgeModelOptions 定义评估模型的详细参数
@@ -1348,6 +1380,7 @@ type JudgeModelOptions struct {
 }
 ```
 
+- `Rubrics` 用于定义评估细则，仅在 rubric 类评估器中使用，无需配置预期输出，评估模型将根据评估细则逐项评估。
 - `NumSamples` 控制评估模型调用次数，未配置时默认值为 1。
 - `Generation` 默认使用 `MaxTokens=2000`、`Temperature=0.8`、`Stream=false`。
 
@@ -1360,16 +1393,34 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-criterion := criterion.New(
-	criterion.WithLLMJudge(
-		llm.New(
-			"openai",
-			"deepseek-chat",
+	criterion := criterion.New(
+		criterion.WithLLMJudge(
+			llm.New(
+				"openai",
+				"deepseek-chat",
 			llm.WithNumSamples(3),
 			llm.WithGeneration(&model.GenerationConfig{
 				MaxTokens:   floatPtr(512),
 				Temperature: floatPtr(1.0),
 				Stream:      false,
+			}),
+			llm.WithRubrics([]*llm.Rubric{
+				{
+					ID:   "1",
+					Type: "FINAL_RESPONSE_QUALITY",
+					Description: "The final answer is correct.",
+					Content: &llm.RubricContent{
+						Text: "The final answer directly addresses the user question, provides the required result, and is consistent with the facts given.",
+					},
+				},
+				{
+					ID:   "2",
+					Type: "CONTEXT_RELEVANCE",
+					Description: "The final answer is relevant to the user prompt.",
+					Content: &llm.RubricContent{
+						Text: "The final answer stays on topic and does not include unrelated or missing key points from the user prompt.",
+					},
+				},
 			}),
 		),
 	),
@@ -1451,4 +1502,115 @@ evalMetric := &metric.EvalMetric{
 ```
 
 评估提示词会包含用户输入、参考答案与 Agent 的最终回答，适用于自动化校验最终文本输出。
-其中 `ptr` 同样用于构造指针字段。
+
+#### LLM Rubric 响应评估器
+
+LLM Rubric 响应评估器对应的指标名称为 `llm_rubric_response`，用于按评估细则判定 Agent 最终回答是否满足各项要求。
+
+评估逻辑：
+
+- 使用 `LLMCriterion` 的 `Rubrics` 构造提示，评估模型返回每个 rubric 的 `yes`/`no` 判定。
+- 单次采样得分为所有 rubric 得分的平均值（`yes`=1，`no`=0）。
+- 多次采样按多数表决选择代表结果，再与 `EvalMetric.Threshold` 比较得出通过/未通过。
+
+典型配置示例：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+evalMetric := &metric.EvalMetric{
+	MetricName: "llm_rubric_response",
+	Threshold:  0.9,
+	Criterion: criterion.New(
+		criterion.WithLLMJudge(
+			cllm.New(
+				"openai",
+				"deepseek-chat",
+				cllm.WithNumSamples(3),
+				cllm.WithGeneration(&model.GenerationConfig{
+					MaxTokens:   ptr(512),
+					Temperature: ptr(1.0),
+					Stream:      false,
+				}),
+				cllm.WithRubrics([]*cllm.Rubric{
+					{
+						ID:          "1",
+						Type:        "FINAL_RESPONSE_QUALITY",
+						Description: "The final answer is correct.",
+						Content: &cllm.RubricContent{
+							Text: "The final answer is correct and consistent with the user request.",
+						},
+					},
+					{
+						ID:          "2",
+						Type:        "CONTEXT_RELEVANCE",
+						Description: "The final answer is relevant to the user prompt.",
+						Content: &cllm.RubricContent{
+							Text: "The final answer is relevant to the user prompt without unrelated content.",
+						},
+					},
+				}),
+			),
+		),
+	),
+}
+```
+
+rubric 响应评估器适用于需要多维度打分的文本回答，示例可参考 `examples/evaluation/llm/rubricresponse`。
+
+#### LLM Rubric 知识召回评估器
+
+LLM Rubric 知识召回评估器对应的指标名称为 `llm_rubric_knowledge_recall`，用于判定检索到的知识是否支撑用户问题中的关键信息。
+
+评估逻辑：
+
+- 从 `IntermediateData.ToolResponses` 中提取 `knowledge_search`/`knowledge_search_with_agentic_filter` 工具的响应，作为检索结果。
+- 结合 `Rubrics` 生成提示，评估模型对每个 rubric 返回 `yes`/`no`，单次采样得分为平均值。
+- 多次采样使用多数表决确定代表结果，再与阈值比较得到最终结论。
+
+典型配置示例：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+evalMetric := &metric.EvalMetric{
+	MetricName: "llm_rubric_knowledge_recall",
+	Threshold:  0.9,
+	Criterion: criterion.New(
+		criterion.WithLLMJudge(
+			cllm.New(
+				"openai",
+				"deepseek-chat",
+				cllm.WithNumSamples(3),
+				cllm.WithGeneration(&model.GenerationConfig{
+					MaxTokens:   ptr(512),
+					Temperature: ptr(1.0),
+					Stream:      false,
+				}),
+				cllm.WithRubrics([]*cllm.Rubric{
+					{
+						ID:          "1",
+						Type:        "KNOWLEDGE_RELEVANCE",
+						Description: "The recalled knowledge is relevant to the user's prompt.",
+						Content: &cllm.RubricContent{
+							Text: "The retrieved knowledge directly supports the user prompt and includes key facts.",
+						},
+					},
+				}),
+			),
+		),
+	),
+}
+```
+
+该评估器要求 Agent 的工具调用返回检索结果，示例可参考 `examples/evaluation/llm/knowledgerecall`。
