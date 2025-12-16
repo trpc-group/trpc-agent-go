@@ -13,6 +13,7 @@ import (
 	"context"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
@@ -33,6 +34,7 @@ type Options struct {
 	AggregatorFactory  aggregator.Factory    // AggregatorFactory builds an aggregator for each run.
 	AggregationOption  []aggregator.Option   // AggregationOption is the aggregation options for each run.
 	FlushInterval      time.Duration         // FlushInterval controls how often buffered AG-UI events are flushed for a session.
+	StartSpan          StartSpan             // StartSpan starts a span for an AG-UI run.
 }
 
 // NewOptions creates a new options instance.
@@ -44,6 +46,7 @@ func NewOptions(opt ...Option) *Options {
 		RunOptionResolver: defaultRunOptionResolver,
 		AggregatorFactory: aggregator.New,
 		FlushInterval:     track.DefaultFlushInterval,
+		StartSpan:         defaultStartSpan,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -136,6 +139,16 @@ func WithRunOptionResolver(r RunOptionResolver) Option {
 	}
 }
 
+// StartSpan starts a span for an AG-UI run and returns the updated context.
+type StartSpan func(ctx context.Context, input *adapter.RunAgentInput) (context.Context, trace.Span, error)
+
+// WithStartSpan sets the span starter for AG-UI runs.
+func WithStartSpan(start StartSpan) Option {
+	return func(o *Options) {
+		o.StartSpan = start
+	}
+}
+
 // defaultUserIDResolver is the default user ID resolver.
 func defaultUserIDResolver(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
 	return "user", nil
@@ -154,4 +167,9 @@ func defaultRunAgentInputHook(ctx context.Context, input *adapter.RunAgentInput)
 // defaultRunOptionResolver is the default run option resolver.
 func defaultRunOptionResolver(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
 	return nil, nil
+}
+
+// defaultStartSpan returns the original context and a non-recording span.
+func defaultStartSpan(ctx context.Context, _ *adapter.RunAgentInput) (context.Context, trace.Span, error) {
+	return ctx, trace.SpanFromContext(ctx), nil
 }

@@ -17,6 +17,7 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/stretchr/testify/assert"
+	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -170,6 +171,70 @@ func TestRunRunOptionResolverError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve run option")
 	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunStartSpanError(t *testing.T) {
+	startErr := errors.New("start span fail")
+	underlying := &fakeRunner{}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	}
+	r := &runner{
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator {
+			return &fakeTranslator{}
+		},
+		userIDResolver: defaultUserIDResolver,
+		runOptionResolver: func(ctx context.Context, in *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			assert.Same(t, input, in)
+			return nil, nil
+		},
+		startSpan: func(ctx context.Context, in *adapter.RunAgentInput) (context.Context, trace.Span, error) {
+			assert.Same(t, input, in)
+			return ctx, trace.SpanFromContext(ctx), startErr
+		},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.Nil(t, eventsCh)
+	assert.ErrorIs(t, err, startErr)
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunStartSpanNilSpan(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	}
+	r := &runner{
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator {
+			return &fakeTranslator{}
+		},
+		userIDResolver:    defaultUserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan: func(ctx context.Context, in *adapter.RunAgentInput) (context.Context, trace.Span, error) {
+			return ctx, nil, nil
+		},
+	}
+
+	ch, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	evts := collectEvents(t, ch)
+	assert.Len(t, evts, 1)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	assert.Equal(t, 1, underlying.calls)
 }
 
 func TestRunFlushesTracker(t *testing.T) {
