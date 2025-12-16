@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -1219,9 +1220,15 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	isolated := dummyNode.agentIsolatedMessages
 	scope := dummyNode.agentEventScope
 	inputFromLast := dummyNode.agentInputFromLastResponse
-	return func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, "agent_node_execution")
-		defer span.End()
+	return func(ctx context.Context, state State) (a any, err error) {
+		ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, agentName))
+		defer func() {
+			if err != nil {
+				span.SetStatus(codes.Error, err.Error())
+				span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+			}
+			span.End()
+		}()
 
 		// Extract execution context for event emission.
 		invocationID, _, _, _, eventChan := extractExecutionContext(state)
@@ -1282,6 +1289,8 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		// Build invocation for the target agent with custom runtime state and scope.
 		invocation := buildAgentInvocationWithStateAndScope(ctx, parentForInput, childState, targetAgent, scope)
 
+		itelemetry.TraceBeforeInvokeAgent(span, invocation, targetAgent.Info().Description, "", nil)
+
 		// Emit agent execution start event.
 		startTime := time.Now()
 		emitAgentStartEvent(ctx, eventChan, invocationID, nodeID, startTime)
@@ -1300,12 +1309,13 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		}
 
 		// Process agent event stream and capture completion state.
-		lastResponse, finalState, rawDelta, err := processAgentEventStream(
+		lastResponse, finalState, rawDelta, fullRespEvent, err := processAgentEventStream(
 			ctx, agentEventChan, nodeCallbacks, nodeID, state, eventChan, agentName,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process agent event stream: %w", err)
 		}
+		itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, nil)
 		// Emit agent execution complete event.
 		endTime := time.Now()
 		emitAgentCompleteEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime)
@@ -1335,10 +1345,11 @@ func processAgentEventStream(
 	state State,
 	eventChan chan<- *event.Event,
 	agentName string,
-) (string, State, map[string][]byte, error) {
+) (string, State, map[string][]byte, *event.Event, error) {
 	var lastResponse string
 	var finalState State
 	var rawDelta map[string][]byte
+	var fullRespEvent *event.Event
 
 	for agentEvent := range agentEventChan {
 		// Run node callbacks for this event.
@@ -1353,13 +1364,19 @@ func processAgentEventStream(
 
 		// Forward the event to the parent event channel.
 		if err := event.EmitEvent(ctx, eventChan, agentEvent); err != nil {
-			return "", nil, nil, err
+			return "", nil, nil, fullRespEvent, err
 		}
 
 		// Track the last response for state update.
 		if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 &&
 			agentEvent.Response.Choices[0].Message.Content != "" {
 			lastResponse = agentEvent.Response.Choices[0].Message.Content
+		}
+
+		if agentEvent.Response != nil {
+			if !agentEvent.Response.IsPartial {
+				fullRespEvent = agentEvent
+			}
 		}
 
 		// Capture subgraph completion state from its final graph.execution event.
@@ -1388,7 +1405,7 @@ func processAgentEventStream(
 		}
 	}
 
-	return lastResponse, finalState, rawDelta, nil
+	return lastResponse, finalState, rawDelta, fullRespEvent, nil
 }
 
 // buildAgentInvocationWithStateAndScope builds an invocation for the target agent
