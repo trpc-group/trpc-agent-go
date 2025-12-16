@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -20,6 +21,74 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
 )
+
+func coerceConfigInt(value any, fieldName string) (int, error) {
+	if value == nil {
+		return 0, fmt.Errorf("%s must be an integer (got <nil>)", fieldName)
+	}
+
+	maxInt := int64(^uint(0) >> 1)
+	minInt := -maxInt - 1
+
+	switch v := value.(type) {
+	case int:
+		return v, nil
+	case int8:
+		return int(v), nil
+	case int16:
+		return int(v), nil
+	case int32:
+		return int(v), nil
+	case int64:
+		if v > maxInt || v < minInt {
+			return 0, fmt.Errorf("%s is too large", fieldName)
+		}
+		return int(v), nil
+	case uint:
+		if uint64(v) > uint64(maxInt) {
+			return 0, fmt.Errorf("%s is too large", fieldName)
+		}
+		return int(v), nil
+	case uint8:
+		return int(v), nil
+	case uint16:
+		return int(v), nil
+	case uint32:
+		if uint64(v) > uint64(maxInt) {
+			return 0, fmt.Errorf("%s is too large", fieldName)
+		}
+		return int(v), nil
+	case uint64:
+		if v > uint64(maxInt) {
+			return 0, fmt.Errorf("%s is too large", fieldName)
+		}
+		return int(v), nil
+	case float32:
+		return coerceConfigInt(float64(v), fieldName)
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
+		}
+		if v > float64(maxInt) || v < float64(minInt) {
+			return 0, fmt.Errorf("%s is too large", fieldName)
+		}
+		if v != math.Trunc(v) {
+			return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
+		}
+		return int(v), nil
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
+		}
+		if n > maxInt || n < minInt {
+			return 0, fmt.Errorf("%s is too large", fieldName)
+		}
+		return int(n), nil
+	default:
+		return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
+	}
+}
 
 // resolveModelFromConfig constructs a concrete model instance from config.
 // Required: model_spec (provider/model_name/base_url/api_key/headers/extra_fields).
@@ -303,8 +372,14 @@ func newLLMAgentNodeFuncFromConfig(
 		hasGenConfig = true
 	}
 
-	if maxTokens, ok := cfg["max_tokens"].(float64); ok {
-		tokens := int(maxTokens)
+	if maxTokensRaw, ok := cfg["max_tokens"]; ok {
+		tokens, err := coerceConfigInt(maxTokensRaw, "max_tokens")
+		if err != nil {
+			return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
+		}
+		if tokens <= 0 {
+			return nil, fmt.Errorf("builtin.llmagent[%s]: max_tokens must be positive", nodeID)
+		}
 		genConfig.MaxTokens = &tokens
 		hasGenConfig = true
 	}
@@ -353,8 +428,14 @@ func newLLMAgentNodeFuncFromConfig(
 		genConfig.ThinkingEnabled = &thinkingEnabled
 		hasGenConfig = true
 	}
-	if thinkingTokensRaw, ok := cfg["thinking_tokens"].(float64); ok {
-		tokens := int(thinkingTokensRaw)
+	if thinkingTokensRaw, ok := cfg["thinking_tokens"]; ok {
+		tokens, err := coerceConfigInt(thinkingTokensRaw, "thinking_tokens")
+		if err != nil {
+			return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
+		}
+		if tokens <= 0 {
+			return nil, fmt.Errorf("builtin.llmagent[%s]: thinking_tokens must be positive", nodeID)
+		}
 		genConfig.ThinkingTokens = &tokens
 		hasGenConfig = true
 	}

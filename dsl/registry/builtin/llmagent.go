@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 
@@ -58,6 +59,74 @@ func init() {
 //	  }
 //	}
 type LLMAgentComponent struct{}
+
+func coerceInt(value any, fieldName string) (int, error) {
+	if value == nil {
+		return 0, fmt.Errorf("%s must be an integer (got <nil>)", fieldName)
+	}
+
+	maxInt := int64(^uint(0) >> 1)
+	minInt := -maxInt - 1
+
+	switch v := value.(type) {
+	case int:
+		return v, nil
+	case int8:
+		return int(v), nil
+	case int16:
+		return int(v), nil
+	case int32:
+		return int(v), nil
+	case int64:
+		if v > maxInt || v < minInt {
+			return 0, fmt.Errorf("%s is too large", fieldName)
+		}
+		return int(v), nil
+	case uint:
+		if uint64(v) > uint64(maxInt) {
+			return 0, fmt.Errorf("%s is too large", fieldName)
+		}
+		return int(v), nil
+	case uint8:
+		return int(v), nil
+	case uint16:
+		return int(v), nil
+	case uint32:
+		if uint64(v) > uint64(maxInt) {
+			return 0, fmt.Errorf("%s is too large", fieldName)
+		}
+		return int(v), nil
+	case uint64:
+		if v > uint64(maxInt) {
+			return 0, fmt.Errorf("%s is too large", fieldName)
+		}
+		return int(v), nil
+	case float32:
+		return coerceInt(float64(v), fieldName)
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
+		}
+		if v > float64(maxInt) || v < float64(minInt) {
+			return 0, fmt.Errorf("%s is too large", fieldName)
+		}
+		if v != math.Trunc(v) {
+			return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
+		}
+		return int(v), nil
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
+		}
+		if n > maxInt || n < minInt {
+			return 0, fmt.Errorf("%s is too large", fieldName)
+		}
+		return int(n), nil
+	default:
+		return 0, fmt.Errorf("%s must be an integer (got %T)", fieldName, value)
+	}
+}
 
 // Metadata returns the component metadata.
 func (c *LLMAgentComponent) Metadata() registry.ComponentMetadata {
@@ -363,31 +432,9 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 
 	// Validate max_tokens if present
 	if maxTokens, ok := config["max_tokens"]; ok {
-		var tokens int
-		switch v := maxTokens.(type) {
-		case int:
-			tokens = v
-		case float64:
-			maxInt := int(^uint(0) >> 1)
-			if v > float64(maxInt) {
-				return fmt.Errorf("max_tokens is too large")
-			}
-			if v != float64(int(v)) {
-				return fmt.Errorf("max_tokens must be an integer")
-			}
-			tokens = int(v)
-		case json.Number:
-			n, err := v.Int64()
-			if err != nil {
-				return fmt.Errorf("max_tokens must be an integer")
-			}
-			maxInt := int64(^uint(0) >> 1)
-			if n > maxInt {
-				return fmt.Errorf("max_tokens is too large")
-			}
-			tokens = int(n)
-		default:
-			return fmt.Errorf("max_tokens must be an integer")
+		tokens, err := coerceInt(maxTokens, "max_tokens")
+		if err != nil {
+			return err
 		}
 		if tokens <= 0 {
 			return fmt.Errorf("max_tokens must be positive")
