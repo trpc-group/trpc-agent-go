@@ -52,7 +52,8 @@ type ServiceOpts struct {
 	userStateTTL time.Duration // TTL for user state
 
 	// Cleanup
-	cleanupInterval  time.Duration // Interval for automatic cleanup of expired/deleted data
+	cleanupInterval time.Duration // Interval for automatic cleanup of expired/deleted data
+	// deletedRetention configures the retention period for soft-deleted data.
 	deletedRetention time.Duration // Retention period for soft-deleted data before physical cleanup
 
 	// Summarizer integrates LLM summarization.
@@ -83,7 +84,7 @@ var defaultOptions = ServiceOpts{
 	batchTimeout:      defaultBatchTimeout,
 	asyncSummaryNum:   defaultAsyncSummaryNum,
 	summaryQueueSize:  defaultSummaryQueueSize,
-	deletedRetention:  defaultDeletedRetention,
+	deletedRetention:  0, // Disabled by default, relying on Native TTL
 }
 
 // WithSessionEventLimit sets the limit of events in a session.
@@ -189,7 +190,7 @@ func WithUserStateTTL(ttl time.Duration) ServiceOpt {
 
 // WithCleanupInterval sets the interval for automatic cleanup of expired/deleted data.
 // If set to 0, automatic cleanup will be determined based on TTL configuration.
-// Default cleanup interval is 1 hour if any TTL is configured.
+// Deprecated: ClickHouse Native TTL is recommended over application-level cleanup.
 func WithCleanupInterval(interval time.Duration) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.cleanupInterval = interval
@@ -197,8 +198,11 @@ func WithCleanupInterval(interval time.Duration) ServiceOpt {
 }
 
 // WithDeletedRetention sets the retention period for soft-deleted data.
-// After this period, soft-deleted records will be physically removed via ALTER TABLE DELETE.
-// Default is 24 hours. Set to 0 to disable physical cleanup of deleted data.
+//
+// Caution: This option relies on application-level periodic cleanup (using ALTER TABLE DELETE),
+// which may have performance impact on large datasets.
+// For production environments with large data volume, it is recommended to use
+// ClickHouse Native TTL for physical cleanup instead of this option.
 func WithDeletedRetention(retention time.Duration) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.deletedRetention = retention

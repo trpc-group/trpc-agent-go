@@ -212,8 +212,8 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, evt *event.Even
 	var createdAt time.Time
 	rows, err := s.chClient.Query(ctx,
 		fmt.Sprintf(`SELECT state, created_at FROM %s FINAL
-			WHERE app_name = ? AND user_id = ? AND session_id = ?
-			AND deleted_at IS NULL`, s.tableSessionStates),
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND deleted_at IS NULL`, s.tableSessionStates),
 		key.AppName, key.UserID, key.SessionID)
 
 	if err != nil {
@@ -354,58 +354,29 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 	}
 
 	// Soft delete session events
-	// Query existing events and insert with deleted_at
-	eventRows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT event_id, event, created_at, updated_at, expires_at FROM %s FINAL
-			WHERE app_name = ? AND user_id = ? AND session_id = ?
-			AND deleted_at IS NULL`, s.tableSessionEvents),
-		key.AppName, key.UserID, key.SessionID)
+	// Use INSERT INTO ... SELECT ... for batch soft delete
+	err = s.chClient.Exec(ctx,
+		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event_id, event, extra_data, created_at, updated_at, expires_at, deleted_at)
+			SELECT app_name, user_id, session_id, event_id, event, extra_data, created_at, ? AS updated_at, expires_at, ? AS deleted_at
+			FROM %s FINAL
+			WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+			s.tableSessionEvents, s.tableSessionEvents),
+		now, now, key.AppName, key.UserID, key.SessionID)
 	if err != nil {
-		return fmt.Errorf("get session events for delete failed: %w", err)
-	}
-	defer eventRows.Close()
-
-	for eventRows.Next() {
-		var eventID, eventData string
-		var evtCreatedAt, evtUpdatedAt time.Time
-		var evtExpiresAt *time.Time
-		if err := eventRows.Scan(&eventID, &eventData, &evtCreatedAt, &evtUpdatedAt, &evtExpiresAt); err != nil {
-			return fmt.Errorf("scan event failed: %w", err)
-		}
-		err = s.chClient.Exec(ctx,
-			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event_id, event, extra_data, created_at, updated_at, expires_at, deleted_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionEvents),
-			key.AppName, key.UserID, key.SessionID, eventID, eventData, "{}", evtCreatedAt, now, evtExpiresAt, now)
-		if err != nil {
-			log.Warnf("soft delete event failed: %v", err)
-		}
+		return fmt.Errorf("soft delete session events failed: %w", err)
 	}
 
 	// Soft delete session summaries
-	summaryRows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT filter_key, summary, created_at, updated_at, expires_at FROM %s FINAL
-			WHERE app_name = ? AND user_id = ? AND session_id = ?
-			AND deleted_at IS NULL`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID)
+	// Use INSERT INTO ... SELECT ... for batch soft delete
+	err = s.chClient.Exec(ctx,
+		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, created_at, updated_at, expires_at, deleted_at)
+			SELECT app_name, user_id, session_id, filter_key, summary, created_at, ? AS updated_at, expires_at, ? AS deleted_at
+			FROM %s FINAL
+			WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+			s.tableSessionSummaries, s.tableSessionSummaries),
+		now, now, key.AppName, key.UserID, key.SessionID)
 	if err != nil {
-		return fmt.Errorf("get session summaries for delete failed: %w", err)
-	}
-	defer summaryRows.Close()
-
-	for summaryRows.Next() {
-		var filterKey, summaryData string
-		var sumCreatedAt, sumUpdatedAt time.Time
-		var sumExpiresAt *time.Time
-		if err := summaryRows.Scan(&filterKey, &summaryData, &sumCreatedAt, &sumUpdatedAt, &sumExpiresAt); err != nil {
-			return fmt.Errorf("scan summary failed: %w", err)
-		}
-		err = s.chClient.Exec(ctx,
-			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, created_at, updated_at, expires_at, deleted_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionSummaries),
-			key.AppName, key.UserID, key.SessionID, filterKey, summaryData, sumCreatedAt, now, sumExpiresAt, now)
-		if err != nil {
-			log.Warnf("soft delete summary failed: %v", err)
-		}
+		return fmt.Errorf("soft delete session summaries failed: %w", err)
 	}
 
 	return nil

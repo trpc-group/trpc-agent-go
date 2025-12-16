@@ -21,7 +21,7 @@ import (
 // SQL templates for table creation (ClickHouse syntax)
 // Using ReplacingMergeTree with updated_at as version column for deduplication.
 // Partition by (app_name, cityHash64(user_id) % 64) for user-centric query optimization.
-// ORDER BY includes deleted_at for soft delete support (reserved for future use).
+// CRITICAL: deleted_at is NOT included in ORDER BY to allow ReplacingMergeTree to collapse deleted records.
 const (
 	sqlCreateSessionStatesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
@@ -36,12 +36,9 @@ const (
 			deleted_at  Nullable(DateTime64(6))
 		) ENGINE = ReplacingMergeTree(updated_at)
 		PARTITION BY (app_name, cityHash64(user_id) % 64)
-		ORDER BY (user_id, session_id, deleted_at)
-		SETTINGS index_granularity = 8192, allow_nullable_key = 1`
+		ORDER BY (app_name, user_id, session_id)
+		SETTINGS allow_nullable_key = 1`
 
-	// expires_at is a reserved field for future use.
-	// Events are bound to session lifecycle - when session expires/is deleted, its events are also deleted.
-	// event_id is included in ORDER BY to ensure uniqueness and prevent deduplication by ReplacingMergeTree.
 	sqlCreateSessionEventsTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			app_name    String,
@@ -56,11 +53,9 @@ const (
 			deleted_at  Nullable(DateTime64(6))
 		) ENGINE = ReplacingMergeTree(updated_at)
 		PARTITION BY (app_name, cityHash64(user_id) % 64)
-		ORDER BY (user_id, session_id, event_id, deleted_at)
-		SETTINGS index_granularity = 8192, allow_nullable_key = 1`
+		ORDER BY (app_name, user_id, session_id, event_id)
+		SETTINGS allow_nullable_key = 1`
 
-	// expires_at is a reserved field for future use.
-	// Summaries are bound to session lifecycle - when session expires/is deleted, its summaries are also deleted.
 	sqlCreateSessionSummariesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			app_name    String,
@@ -74,8 +69,8 @@ const (
 			deleted_at  Nullable(DateTime64(6))
 		) ENGINE = ReplacingMergeTree(updated_at)
 		PARTITION BY (app_name, cityHash64(user_id) % 64)
-		ORDER BY (user_id, session_id, filter_key, deleted_at)
-		SETTINGS index_granularity = 8192, allow_nullable_key = 1`
+		ORDER BY (app_name, user_id, session_id, filter_key)
+		SETTINGS allow_nullable_key = 1`
 
 	sqlCreateAppStatesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
@@ -87,8 +82,8 @@ const (
 			deleted_at  Nullable(DateTime64(6))
 		) ENGINE = ReplacingMergeTree(updated_at)
 		PARTITION BY app_name
-		ORDER BY (app_name, key, deleted_at)
-		SETTINGS index_granularity = 8192, allow_nullable_key = 1`
+		ORDER BY (app_name, key)
+		SETTINGS allow_nullable_key = 1`
 
 	sqlCreateUserStatesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
@@ -101,8 +96,8 @@ const (
 			deleted_at  Nullable(DateTime64(6))
 		) ENGINE = ReplacingMergeTree(updated_at)
 		PARTITION BY (app_name, cityHash64(user_id) % 64)
-		ORDER BY (user_id, key, deleted_at)
-		SETTINGS index_granularity = 8192, allow_nullable_key = 1`
+		ORDER BY (app_name, user_id, key)
+		SETTINGS allow_nullable_key = 1`
 )
 
 // tableDefinition defines a table with its SQL template

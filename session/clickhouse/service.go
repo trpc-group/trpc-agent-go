@@ -61,7 +61,6 @@ type Service struct {
 type sessionEventPair struct {
 	key   session.Key
 	event *event.Event
-	state session.StateMap
 }
 
 // summaryJob represents a summary job to be processed asynchronously.
@@ -239,8 +238,8 @@ func (s *Service) CreateSession(
 	}
 
 	if sessionExists && (existingExpiresAt == nil || existingExpiresAt.After(now)) {
-		log.Errorf("CreateSession: session already exists (app=%s, user=%s, session=%s, expires=%v)",
-			key.AppName, key.UserID, key.SessionID, existingExpiresAt)
+		log.Infof("CreateSession: session already exists (app=%s, user=%s, session=%s)",
+			key.AppName, key.UserID, key.SessionID)
 		return nil, fmt.Errorf("session already exists and has not expired")
 	}
 
@@ -657,7 +656,7 @@ func (s *Service) appendEventInternal(
 		// Hash key to determine which worker channel to use
 		index := sess.Hash % len(s.eventPairChans)
 		select {
-		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e, state: sess.State}:
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
