@@ -99,12 +99,71 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	); err != nil {
 		return fmt.Errorf("failed to create execute tool metric GenAIClientOperationDuration: %w", err)
 	}
+
+	if err := initInvokeAgentMetrics(mp); err != nil {
+		return err
+	}
+
 	return nil
 }
 
 // GetMeterProvider returns the meter provider.
 func GetMeterProvider() metric.MeterProvider {
 	return itelemetry.MeterProvider
+}
+
+func initInvokeAgentMetrics(mp metric.MeterProvider) error {
+	if mp == nil {
+		return fmt.Errorf("invoke agent meter provider is nil")
+	}
+
+	itelemetry.InvokeAgentMeter = mp.Meter(metrics.MeterNameInvokeAgent)
+	meterName := metrics.MeterNameInvokeAgent
+	var err error
+	if itelemetry.InvokeAgentMetricGenAIRequestCnt, err = itelemetry.InvokeAgentMeter.Int64Counter(
+		metrics.MetricTRPCAgentGoClientRequestCnt,
+		metric.WithDescription("Total number of gen ai requests"),
+		metric.WithUnit("1"),
+	); err != nil {
+		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricTRPCAgentGoClientRequestCnt, err)
+	}
+	if itelemetry.InvokeMetricGenAIClientTokenUsage, err = itelemetry.InvokeAgentMeter.Int64Histogram(
+		metrics.MetricGenAIClientTokenUsage,
+		metric.WithDescription("Input tokens usage"),
+		metric.WithUnit("{token}"),
+	); err != nil {
+		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIClientTokenUsage, err)
+	}
+	if itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken, err = itelemetry.InvokeAgentMeter.Float64Histogram(
+		metrics.MetricGenAIServerTimeToFirstToken,
+		metric.WithDescription("Time to first token for server"),
+		metric.WithUnit("s"),
+	); err != nil {
+		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIServerTimeToFirstToken, err)
+	}
+	if itelemetry.InvokeAgentMetricGenAIClientOperationDuration, err = itelemetry.InvokeAgentMeter.Float64Histogram(
+		metrics.MetricGenAIClientOperationDuration,
+		metric.WithDescription("Duration of client operation"),
+		metric.WithUnit("s"),
+	); err != nil {
+		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIClientOperationDuration, err)
+	}
+	if itelemetry.InvokeAgentMetricGenAIClientTimePerOutputToken, err = itelemetry.InvokeAgentMeter.Float64Histogram(
+		metrics.MetricGenAIServerTimePerOutputToken,
+		metric.WithDescription("Time per output token for server"),
+		metric.WithUnit("s"),
+	); err != nil {
+		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIServerTimePerOutputToken, err)
+	}
+	if itelemetry.InvokeAgentMetricGenAIClientOutputTokenPerTime, err = itelemetry.InvokeAgentMeter.Float64Histogram(
+		metrics.MetricTRPCAgentGoClientOutputTokenPerTime,
+		metric.WithDescription("Output tokens per second for server"),
+		metric.WithUnit("{token}/s"),
+	); err != nil {
+		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricTRPCAgentGoClientOutputTokenPerTime, err)
+	}
+
+	return nil
 }
 
 // NewMeterProvider creates a new meter provider with optional configuration.
