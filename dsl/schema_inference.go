@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/outputformat"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -323,17 +324,8 @@ func (si *SchemaInference) ComputeVariableGroups(graphDef *Graph, nodeID string)
 				Origin:   "node_output",
 				Kind:     "object",
 			}
-			if ofmt, ok := engine.Config["output_format"].(map[string]any); ok {
-				formatType, _ := ofmt["type"].(string)
-				formatType = strings.TrimSpace(formatType)
-				if formatType == "" {
-					formatType = "text"
-				}
-				if formatType == "json" {
-					if schema, ok := ofmt["schema"].(map[string]any); ok {
-						gv.JSONSchema = schema
-					}
-				}
+			if schema := outputformat.StructuredSchema(engine.Config["output_format"]); schema != nil {
+				gv.JSONSchema = schema
 			}
 			vars = append(vars, gv)
 		} else if engine.NodeType == "builtin.mcp" {

@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/outputformat"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -322,26 +323,8 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 
 	// Validate output_format if present
 	if outputFormat, ok := config["output_format"]; ok {
-		ofMap, ok := outputFormat.(map[string]any)
-		if !ok {
-			return fmt.Errorf("output_format must be an object")
-		}
-
-		if t, ok := ofMap["type"]; ok {
-			typeStr, ok := t.(string)
-			if !ok {
-				return fmt.Errorf("output_format.type must be a string when present")
-			}
-			typeStr = strings.TrimSpace(typeStr)
-			if typeStr != "" && typeStr != "text" && typeStr != "json" {
-				return fmt.Errorf("output_format.type must be one of: text, json")
-			}
-		}
-
-		if schema, ok := ofMap["schema"]; ok {
-			if _, ok := schema.(map[string]any); !ok {
-				return fmt.Errorf("output_format.schema must be an object when present")
-			}
+		if _, err := outputformat.Parse(outputFormat); err != nil {
+			return err
 		}
 	}
 

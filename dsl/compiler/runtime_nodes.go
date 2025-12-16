@@ -13,6 +13,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
 	dslcel "trpc.group/trpc-go/trpc-agent-go/dsl/internal/cel"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/outputformat"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -280,21 +281,7 @@ func newLLMAgentNodeFuncFromConfig(
 	// output_format.type == "json", we treat output_format.schema as the
 	// JSON Schema for structured output and expose it via
 	// node_structured[<id>].output_parsed.
-	var structuredOutput map[string]any
-	if ofmtRaw, ok := cfg["output_format"]; ok {
-		if ofmt, ok := ofmtRaw.(map[string]any); ok {
-			formatType, _ := ofmt["type"].(string)
-			formatType = strings.TrimSpace(formatType)
-			if formatType == "" {
-				formatType = "text"
-			}
-			if formatType == "json" {
-				if schema, ok := ofmt["schema"].(map[string]any); ok {
-					structuredOutput = schema
-				}
-			}
-		}
-	}
+	structuredOutput := outputformat.StructuredSchema(cfg["output_format"])
 
 	var genConfig model.GenerationConfig
 	hasGenConfig := false

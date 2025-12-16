@@ -3,6 +3,8 @@ package dsl
 import (
 	"fmt"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/outputformat"
 )
 
 // Diagnostic describes a generic diagnostic message used by multiple APIs.
@@ -18,10 +20,10 @@ type Diagnostic struct {
 // between two nodes. It matches the EdgeInspectionResult schema in
 // dsl/schema/engine_api.openapi.json.
 type EdgeInspectionResult struct {
-	Valid             bool              `json:"valid"`
-	Errors            []Diagnostic      `json:"errors,omitempty"`
-	SourceOutputSchema map[string]any   `json:"source_output_schema,omitempty"`
-	TargetInputSchema  map[string]any   `json:"target_input_schema,omitempty"`
+	Valid              bool           `json:"valid"`
+	Errors             []Diagnostic   `json:"errors,omitempty"`
+	SourceOutputSchema map[string]any `json:"source_output_schema,omitempty"`
+	TargetInputSchema  map[string]any `json:"target_input_schema,omitempty"`
 }
 
 // InspectEdge performs a lightweight type-compatibility check between two
@@ -111,21 +113,10 @@ func inferNodeOutputSchema(node *Node) map[string]any {
 			"properties": props,
 		}
 
-		if ofmtRaw, ok := cfg["output_format"]; ok {
-			if ofmt, ok := ofmtRaw.(map[string]any); ok {
-				formatType, _ := ofmt["type"].(string)
-				formatType = strings.TrimSpace(formatType)
-				if formatType == "" {
-					formatType = "text"
-				}
-				if formatType == "json" {
-					if schema, ok := ofmt["schema"].(map[string]any); ok {
-						props["output_parsed"] = map[string]any{
-							"type":       "object",
-							"properties": schema["properties"],
-						}
-					}
-				}
+		if schema := outputformat.StructuredSchema(cfg["output_format"]); schema != nil {
+			props["output_parsed"] = map[string]any{
+				"type":       "object",
+				"properties": schema["properties"],
 			}
 		}
 
