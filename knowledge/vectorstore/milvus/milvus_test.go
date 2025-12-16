@@ -49,7 +49,7 @@ func newVectorStoreWithMockClient(mockClient *mockClient, opts ...Option) *Vecto
 	vs := &VectorStore{
 		client:          mockClient,
 		option:          option,
-		filterConverter: &milvusFilterConverter{},
+		filterConverter: newMilvusFilterConverter(option.metadataField),
 	}
 
 	return vs
@@ -774,7 +774,7 @@ func TestVectorStore_SearchByFilter(t *testing.T) {
 					Content: "machine learning basics",
 				}, []float64{1.0, 0.5, 0.2})
 			},
-			wantErr: false,
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
