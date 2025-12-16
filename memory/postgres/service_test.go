@@ -983,9 +983,9 @@ func TestNewService_WithHost(t *testing.T) {
 		FROM pg_indexes
 		WHERE schemaname = \$1
 		AND tablename = \$2`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-		AddRow("memories_app_user").
-		AddRow("memories_updated_at").
-		AddRow("memories_deleted_at"))
+		AddRow("idx_memories_app_user").
+		AddRow("idx_memories_updated_at").
+		AddRow("idx_memories_deleted_at"))
 
 	service, err := NewService(WithHost("localhost"), WithPort(5432), WithDatabase("testdb"))
 	require.NoError(t, err)
@@ -1542,9 +1542,9 @@ func TestNewService_ConnectionSettingsPriority(t *testing.T) {
 		FROM pg_indexes
 		WHERE schemaname = \$1
 		AND tablename = \$2`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-		AddRow("memories_app_user").
-		AddRow("memories_updated_at").
-		AddRow("memories_deleted_at"))
+		AddRow("idx_memories_app_user").
+		AddRow("idx_memories_updated_at").
+		AddRow("idx_memories_deleted_at"))
 
 	service, err := NewService(
 		WithHost("customhost"),
@@ -1612,9 +1612,9 @@ func TestNewService_DSNPriority(t *testing.T) {
 		FROM pg_indexes
 		WHERE schemaname = \$1
 		AND tablename = \$2`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-		AddRow("memories_app_user").
-		AddRow("memories_updated_at").
-		AddRow("memories_deleted_at"))
+		AddRow("idx_memories_app_user").
+		AddRow("idx_memories_updated_at").
+		AddRow("idx_memories_deleted_at"))
 
 	dsn := "postgres://dsn-user:password@dsn-host:5432/dsndb?sslmode=disable"
 	service, err := NewService(
@@ -2065,9 +2065,9 @@ func TestNewService_WithSchema(t *testing.T) {
 		FROM pg_indexes
 		WHERE schemaname = \$1
 		AND tablename = \$2`).WithArgs("test_schema", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-		AddRow("memories_app_user").
-		AddRow("memories_updated_at").
-		AddRow("memories_deleted_at"))
+		AddRow("idx_memories_app_user").
+		AddRow("idx_memories_updated_at").
+		AddRow("idx_memories_deleted_at"))
 
 	service, err := NewService(
 		WithHost("localhost"),
@@ -2166,9 +2166,9 @@ func TestService_WithSchema(t *testing.T) {
 		FROM pg_indexes
 		WHERE schemaname = \$1
 		AND tablename = \$2`).WithArgs("test_schema", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-		AddRow("memories_app_user").
-		AddRow("memories_updated_at").
-		AddRow("memories_deleted_at"))
+		AddRow("idx_memories_app_user").
+		AddRow("idx_memories_updated_at").
+		AddRow("idx_memories_deleted_at"))
 
 	service, err := NewService(
 		WithHost("localhost"),
@@ -2252,6 +2252,31 @@ func TestParseTableName(t *testing.T) {
 
 // Test schema verification error scenarios for better coverage.
 func TestSchemaVerificationErrors(t *testing.T) {
+	// Test table does not exist.
+	t.Run("table does not exist", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true))
+		require.NoError(t, err)
+
+		// Mock table exists query to return false.
+		mock.ExpectQuery(`SELECT EXISTS \(`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+		err = service.verifySchema(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "does not exist")
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
 	// Test tableExists query failure.
 	t.Run("tableExists query failure", func(t *testing.T) {
 		db, mock := setupMockDB(t)
@@ -2459,6 +2484,41 @@ func TestSchemaVerificationErrors(t *testing.T) {
 		err = service.verifySchema(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "check table")
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	// Test verifyIndexes query failure.
+	t.Run("verifyIndexes query failure", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		originalBuilder := storage.GetClientBuilder()
+		client := &testClient{db: db}
+		storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		})
+		defer storage.SetClientBuilder(originalBuilder)
+
+		service, err := NewService(WithSkipDBInit(true))
+		require.NoError(t, err)
+
+		// Mock table exists.
+		mock.ExpectQuery(`SELECT EXISTS \(`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		// Mock columns query - all correct.
+		mock.ExpectQuery(`SELECT column_name, data_type, is_nullable`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
+			AddRow("memory_id", "text", "NO").
+			AddRow("app_name", "text", "NO").
+			AddRow("user_id", "text", "NO").
+			AddRow("memory_data", "jsonb", "NO").
+			AddRow("created_at", "timestamp without time zone", "NO").
+			AddRow("updated_at", "timestamp without time zone", "NO").
+			AddRow("deleted_at", "timestamp without time zone", "YES"))
+		// Mock indexes query to fail.
+		mock.ExpectQuery(`SELECT indexname`).WillReturnError(fmt.Errorf("indexes query failed"))
+
+		err = service.verifySchema(context.Background())
+		require.NoError(t, err) // verifyIndexes failure is logged but not fatal.
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -2732,9 +2792,9 @@ func TestNewService_FallbackToDefaultConnString(t *testing.T) {
 		FROM pg_indexes
 		WHERE schemaname = \$1
 		AND tablename = \$2`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-		AddRow("memories_app_user").
-		AddRow("memories_updated_at").
-		AddRow("memories_deleted_at"))
+		AddRow("idx_memories_app_user").
+		AddRow("idx_memories_updated_at").
+		AddRow("idx_memories_deleted_at"))
 
 	// Create service without DSN, host, or instanceName - should use default
 	// connection string.

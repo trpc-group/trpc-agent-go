@@ -60,12 +60,14 @@ type tableIndex struct {
 	columns []string
 }
 
+const tableNameMemories = "memories"
+
 // expectedSchema defines the expected schema for the memories table.
 var expectedSchema = map[string]struct {
 	columns []tableColumn
 	indexes []tableIndex
 }{
-	"memories": {
+	tableNameMemories: {
 		columns: []tableColumn{
 			{"memory_id", "text", false},
 			{"app_name", "text", false},
@@ -112,6 +114,7 @@ func (s *Service) checkDDLPrivilege(ctx context.Context) (bool, error) {
 		if rows.Next() {
 			return rows.Scan(&hasPrivilege)
 		}
+		// If no rows returned, hasPrivilege remains false (default).
 		return nil
 	}, `SELECT has_schema_privilege($1, 'CREATE')`, schemaName)
 
@@ -203,10 +206,8 @@ func (s *Service) verifySchema(ctx context.Context) error {
 	fullTableName := sqldb.BuildTableNameWithSchema(s.opts.schema, "", baseTableName)
 
 	// Get schema definition for "memories" table type.
-	schema, ok := expectedSchema["memories"]
-	if !ok {
-		return fmt.Errorf("no schema definition found for memories table")
-	}
+	// Note: expectedSchema is a compile-time constant, so this lookup always succeeds.
+	schema := expectedSchema[tableNameMemories]
 
 	// Check if table exists.
 	exists, err := s.tableExists(ctx, fullTableName)
@@ -264,7 +265,7 @@ func (s *Service) tableExists(ctx context.Context, fullTableName string) (bool, 
 // verifyColumns verifies that table columns match expectations.
 func (s *Service) verifyColumns(ctx context.Context, fullTableName string, expectedColumns []tableColumn) error {
 	schema, tableName := parseTableName(fullTableName)
-	// Get actual columns from database
+	// Get actual columns from database.
 	actualColumns := make(map[string]tableColumn)
 	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
@@ -290,20 +291,20 @@ func (s *Service) verifyColumns(ctx context.Context, fullTableName string, expec
 		return fmt.Errorf("query columns failed: %w", err)
 	}
 
-	// Check each expected column
+	// Check each expected column.
 	for _, expected := range expectedColumns {
 		actual, exists := actualColumns[expected.name]
 		if !exists {
 			return fmt.Errorf("column %s.%s is missing", tableName, expected.name)
 		}
 
-		// Check data type
+		// Check data type.
 		if actual.dataType != expected.dataType {
 			return fmt.Errorf("column %s.%s has type %s, expected %s",
 				tableName, expected.name, actual.dataType, expected.dataType)
 		}
 
-		// Check nullable
+		// Check nullable.
 		if actual.nullable != expected.nullable {
 			return fmt.Errorf("column %s.%s nullable mismatch: got %v, expected %v",
 				tableName, expected.name, actual.nullable, expected.nullable)
@@ -316,7 +317,7 @@ func (s *Service) verifyColumns(ctx context.Context, fullTableName string, expec
 // verifyIndexes verifies that table indexes exist.
 func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expectedIndexes []tableIndex) error {
 	schema, tableName := parseTableName(fullTableName)
-	// Get actual indexes from database
+	// Get actual indexes from database.
 	actualIndexes := make(map[string]bool)
 	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
@@ -336,9 +337,9 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 		return fmt.Errorf("query indexes failed: %w", err)
 	}
 
-	// Check each expected index
+	// Check each expected index.
 	for _, expected := range expectedIndexes {
-		// Use sqldb.BuildIndexName to construct the expected index name
+		// Use sqldb.BuildIndexName to construct the expected index name.
 		expectedIndexName := sqldb.BuildIndexName("", expected.table, expected.suffix)
 
 		if !actualIndexes[expectedIndexName] {
@@ -358,8 +359,9 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 // Examples:
 // - "memories" -> ("public", "memories")
 // - "myschema.memories" -> ("myschema", "memories")
+// - "myschema.prefix.table" -> ("myschema", "prefix.table")
 func parseTableName(fullTableName string) (schema, tableName string) {
-	parts := strings.Split(fullTableName, ".")
+	parts := strings.SplitN(fullTableName, ".", 2)
 	if len(parts) == 2 {
 		return parts[0], parts[1]
 	}
