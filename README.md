@@ -363,7 +363,7 @@ See individual `README.md` files in each example folder for usage details.
 
 Architecture
 
-![architecture](docs/mkdocs/assets/img/component_architecture.png)
+![architecture](docs/mkdocs/assets/img/component_architecture.svg)
 
 ### 🔄 **Execution Flow**
 
@@ -387,8 +387,6 @@ Key packages:
 | `knowledge` | Implements RAG knowledge retrieval capabilities.                                                            |
 | `planner`   | Provides Agent planning and reasoning capabilities.                                                         |
 
-Execution flow
-![execution](docs/mkdocs/assets/img/timing_diagram.png)
 
 ## Using Built-in Agents
 

@@ -355,7 +355,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 
 架构图
 
-![architecture](docs/mkdocs/assets/img/component_architecture.png)
+![architecture](docs/mkdocs/assets/img/component_architecture.svg)
 
 ### 🔄 **执行流程**
 
@@ -378,10 +378,6 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 | `memory`    | 记录用户长期记忆与个性化信息。                                     |
 | `knowledge` | 实现 RAG 知识检索能力。                                            |
 | `planner`   | 提供 agent 的规划与推理能力。                                      |
-
-- 时序图
-
-![execution](docs/mkdocs/assets/img/timing_diagram.png)
 
 ## 使用内置 Agents
 
