@@ -3059,7 +3059,7 @@
 <li>默认忽略 Hook 错误，需中断时使用 <code>WithSummaryHookAbortOnError(true)</code>。</li>
 </ul>
 <p><strong>上下文注入机制：</strong></p>
-<p>启用摘要后，框架会将摘要作为系统消息前置到 LLM 输入，同时包含摘要时间点之后的所有增量事件，保证完整上下文：</p>
+<p>启用摘要后，框架会将摘要作为独立的系统消息插入到第一个现有系统消息之后，同时包含摘要时间点之后的所有增量事件，保证完整上下文：</p>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
@@ -3070,17 +3070,39 @@
 <span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-3-10">10</a></span>
-<span class="normal"><a href="#__codelineno-3-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a>┌─────────────────────────────────────────┐
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>│ System Prompt                           │
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a>├─────────────────────────────────────────┤
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a>│ Session Summary (system message)        │ ← Compressed history
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a>├─────────────────────────────────────────┤
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a>│ Event 1 (after summary)                 │ ┐
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a>│ Event 2                                 │ │
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a>│ Event 3                                 │ │ New events
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a>│ ...                                     │ │ (fully retained)
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a>│ Event N (current message)               │ ┘
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a>└─────────────────────────────────────────┘
+<span class="normal"><a href="#__codelineno-3-11">11</a></span>
+<span class="normal"><a href="#__codelineno-3-12">12</a></span>
+<span class="normal"><a href="#__codelineno-3-13">13</a></span>
+<span class="normal"><a href="#__codelineno-3-14">14</a></span>
+<span class="normal"><a href="#__codelineno-3-15">15</a></span>
+<span class="normal"><a href="#__codelineno-3-16">16</a></span>
+<span class="normal"><a href="#__codelineno-3-17">17</a></span>
+<span class="normal"><a href="#__codelineno-3-18">18</a></span>
+<span class="normal"><a href="#__codelineno-3-19">19</a></span>
+<span class="normal"><a href="#__codelineno-3-20">20</a></span>
+<span class="normal"><a href="#__codelineno-3-21">21</a></span>
+<span class="normal"><a href="#__codelineno-3-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a>When AddSessionSummary = true:
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>┌─────────────────────────────────────────┐
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a>│ Existing System Message (optional)      │ ← 如果存在
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a>├─────────────────────────────────────────┤
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a>│ Session Summary (system message)        │ ← 插入到第一个系统消息之后
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a>├─────────────────────────────────────────┤
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a>│ Event 1 (after summary)                 │ ┐
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a>│ Event 2                                 │ │
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a>│ Event 3                                 │ │ 摘要后的所有增量事件
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a>│ ...                                     │ │ （完整保留）
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a>│ Event N (current message)               │ ┘
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a>└─────────────────────────────────────────┘
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a>When AddSessionSummary = false:
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a>┌─────────────────────────────────────────┐
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a>│ System Prompt                           │
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a>├─────────────────────────────────────────┤
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a>│ Event N-k+1                             │ ┐
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a>│ Event N-k+2                             │ │ 最近 k 轮对话
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a>│ ...                                     │ │ （当 MaxHistoryRuns=k 时）
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a>│ Event N (current message)               │ ┘
+</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22"></a>└─────────────────────────────────────────┘
 </span></code></pre></div></td></tr></table></div>
 <p><strong>重要提示：</strong> 启用 <code>WithAddSessionSummary(true)</code> 时，<code>WithMaxHistoryRuns</code> 参数将被忽略，摘要后的所有事件都会完整保留。</p>
 <p>详细配置和高级用法请参见 <a href="#会话摘要">会话摘要</a> 章节。</p>
@@ -3475,17 +3497,23 @@
 <p>适用于生产环境和需要复杂查询的应用，提供关系型数据库的完整能力。</p>
 <h3 id="_16">配置选项</h3>
 <p><strong>连接配置：</strong></p>
-<p>方式一：
-- <strong><code>WithPostgresClientDSN(dsn string)</code></strong>：PostgreSQL DSN。 示例：<code>postgres://user:password@localhost:5432/dbname</code></p>
-<p>方式二：
-- <strong><code>WithHost(host string)</code></strong>：PostgreSQL 服务器地址。默认值为 <code>localhost</code>。
-- <strong><code>WithPort(port int)</code></strong>：PostgreSQL 服务器端口。默认值为 <code>5432</code>。
-- <strong><code>WithUser(user string)</code></strong>：数据库用户名。默认值为 <code>postgres</code>。
-- <strong><code>WithPassword(password string)</code></strong>：数据库密码。默认值为空字符串。
-- <strong><code>WithDatabase(database string)</code></strong>：数据库名称。默认值为 <code>postgres</code>。
-- <strong><code>WithSSLMode(sslMode string)</code></strong>：SSL 模式。默认值为 <code>disable</code>。可选值：<code>disable</code>、<code>require</code>、<code>verify-ca</code>、<code>verify-full</code>。</p>
-<p>方式三：
-- <strong><code>WithPostgresInstance(name string)</code></strong>：使用预配置的 PostgreSQL 实例。</p>
+<p>方式一：</p>
+<ul>
+<li><strong><code>WithPostgresClientDSN(dsn string)</code></strong>：PostgreSQL DSN。 示例：<code>postgres://user:password@localhost:5432/dbname</code></li>
+</ul>
+<p>方式二：</p>
+<ul>
+<li><strong><code>WithHost(host string)</code></strong>：PostgreSQL 服务器地址。默认值为 <code>localhost</code>。</li>
+<li><strong><code>WithPort(port int)</code></strong>：PostgreSQL 服务器端口。默认值为 <code>5432</code>。</li>
+<li><strong><code>WithUser(user string)</code></strong>：数据库用户名。默认值为 <code>postgres</code>。</li>
+<li><strong><code>WithPassword(password string)</code></strong>：数据库密码。默认值为空字符串。</li>
+<li><strong><code>WithDatabase(database string)</code></strong>：数据库名称。默认值为 <code>postgres</code>。</li>
+<li><strong><code>WithSSLMode(sslMode string)</code></strong>：SSL 模式。默认值为 <code>disable</code>。可选值：<code>disable</code>、<code>require</code>、<code>verify-ca</code>、<code>verify-full</code>。</li>
+</ul>
+<p>方式三：</p>
+<ul>
+<li><strong><code>WithPostgresInstance(name string)</code></strong>：使用预配置的 PostgreSQL 实例。</li>
+</ul>
 <p>优先级：方式一 &gt; 方式二 &gt; 方式三</p>
 <p><strong>会话配置：</strong></p>
 <ul>
@@ -4737,7 +4765,7 @@
 </span></code></pre></div></td></tr></table></div>
 <p><strong>工作方式：</strong></p>
 <ul>
-<li>摘要作为系统消息自动前置到 LLM 输入</li>
+<li>会话摘要作为独立的系统消息插入到第一个现有系统消息之后（如果没有系统消息则前置添加）</li>
 <li>包含摘要时间点之后的<strong>所有增量事件</strong>（不截断）</li>
 <li>保证完整上下文：浓缩历史 + 完整新对话</li>
 <li><strong><code>WithMaxHistoryRuns</code> 参数被忽略</strong></li>
@@ -5352,7 +5380,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月15日 03:16:06 UTC">2025-12-15 03:16:06</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月17日 02:25:43 UTC">2025-12-17 02:25:43</span>
   </span>
 
     
