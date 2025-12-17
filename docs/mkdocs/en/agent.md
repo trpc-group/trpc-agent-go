@@ -253,6 +253,41 @@ llmAgent := llmagent.New(
 )
 ```
 
+### Reasoning Content Mode (DeepSeek Thinking Mode)
+
+When using models with thinking/reasoning capabilities (such as DeepSeek), the model outputs both `reasoning_content` (thinking chain) and `content` (final answer). According to [DeepSeek API documentation](https://api-docs.deepseek.com/guides/thinking_mode), in multi-turn conversations, you should not send the previous turn's `reasoning_content` to the model.
+
+LLMAgent provides `WithReasoningContentMode` to control how `reasoning_content` is handled in conversation history:
+
+**Available Modes:**
+
+| Mode | Constant | Description |
+|------|----------|-------------|
+| Discard Previous Turns | `ReasoningContentModeDiscardPreviousTurns` | Discard `reasoning_content` from previous request turns, keep for current request. **(Default, recommended)** |
+| Keep All | `ReasoningContentModeKeepAll` | Keep all `reasoning_content` in history (for debugging). |
+| Discard All | `ReasoningContentModeDiscardAll` | Discard all `reasoning_content` from history for maximum bandwidth savings. |
+
+**Usage Example:**
+
+```go
+// Recommended configuration for DeepSeek models with thinking mode.
+agent := llmagent.New(
+    "deepseek-agent",
+    llmagent.WithModel(deepseekModel),
+    llmagent.WithInstruction("You are a helpful assistant."),
+    // Discard reasoning_content from previous turns (recommended for DeepSeek).
+    llmagent.WithReasoningContentMode(llmagent.ReasoningContentModeDiscardPreviousTurns),
+)
+```
+
+**How It Works:**
+
+- **`keep_all`**: All `reasoning_content` is preserved in session history. Use this if you need to retain thinking chains for debugging or analysis.
+- **`discard_previous_turns`**: When building the message list for a new request, `reasoning_content` from messages belonging to previous requests is cleared. Messages within the current request (e.g., during tool call loops) retain their `reasoning_content`. This follows DeepSeek's recommendation.
+- **`discard_all`**: All `reasoning_content` is stripped from historical messages before sending to the model.
+
+**Note:** This option only affects how historical messages are processed before sending to the model. The current response's `reasoning_content` is always captured and stored in session events.
+
 ### Delegation Visibility Options
 
 When building multi‑Agent systems (task delegation between Agents), LLMAgent provides a unified fallback option for delegation events. Transfer events always include announcement text and are tagged `transfer` so UIs (User Interfaces) can filter them if desired.

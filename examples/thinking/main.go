@@ -35,6 +35,9 @@ var (
 	thinkingEnabled = flag.Bool("thinking", true, "Enable reasoning/thinking mode if provider supports it")
 	thinkingTokens  = flag.Int("thinking-tokens", 2048, "Max reasoning tokens if provider supports it")
 	variant         = flag.String("variant", "openai", "Name of Variant to use when use openai provider, openai / hunyuan / deepseek / qwen")
+	debug           = flag.Bool("debug", true, "Print messages sent to model API for debugging")
+	reasoningMode   = flag.String("reasoning-mode", "discard_previous",
+		"How to handle reasoning_content in history: keep_all, discard_previous, discard_all")
 )
 
 func main() {
@@ -44,6 +47,8 @@ func main() {
 	fmt.Printf("\nModel: %s\n", *modelName)
 	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Printf("Thinking: %t (tokens=%d)\n", *thinkingEnabled, *thinkingTokens)
+	fmt.Printf("Reasoning Mode: %s\n", *reasoningMode)
+	fmt.Printf("Debug: %t\n", *debug)
 	fmt.Println(strings.Repeat("=", 50))
 
 	chat := &thinkingChat{modelName: *modelName, streaming: *streaming, variant: *variant}
@@ -75,7 +80,14 @@ func (c *thinkingChat) run(ctx context.Context) error {
 }
 
 func (c *thinkingChat) setup(_ context.Context) error {
-	modelInstance := openai.New(c.modelName, openai.WithVariant(openai.Variant(c.variant)))
+	modelOpts := []openai.Option{openai.WithVariant(openai.Variant(c.variant))}
+
+	// Add debug callback if enabled.
+	if *debug {
+		modelOpts = append(modelOpts, openai.WithChatRequestCallback(printChatRequestMessages))
+	}
+
+	modelInstance := openai.New(c.modelName, modelOpts...)
 
 	// always use in-memory session for this demo
 	var sessionService session.Service = sessioninmemory.NewSessionService()
@@ -90,13 +102,17 @@ func (c *thinkingChat) setup(_ context.Context) error {
 		genConfig.ThinkingTokens = thinkingTokens
 	}
 
-	agent := llmagent.New(
-		"thinking-assistant",
+	agentOpts := []llmagent.Option{
 		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("A focused demo showing reasoning content."),
-		llmagent.WithInstruction("Be helpful and conversational."),
+		llmagent.WithDescription("A focused demo showing reasoning content with optional tools."),
+		llmagent.WithInstruction("Be helpful and conversational. Use tools when appropriate."),
 		llmagent.WithGenerationConfig(genConfig),
-	)
+		llmagent.WithTools(buildTools()),
+	}
+	// Add reasoning content mode based on flag.
+	agentOpts = append(agentOpts, llmagent.WithReasoningContentMode(resolveReasoningMode()))
+
+	agent := llmagent.New("thinking-assistant", agentOpts...)
 
 	c.runner = runner.NewRunner(
 		"thinking-demo",
@@ -108,7 +124,7 @@ func (c *thinkingChat) setup(_ context.Context) error {
 	c.appName = "thinking-demo"
 	c.sessSvc = sessionService
 	fmt.Printf("✅ Ready! Session: %s\n", c.sessionID)
-	fmt.Printf("(Note: dim text indicates internal reasoning; normal text is the final answer)\n\n")
+	fmt.Println()
 	return nil
 }
 
@@ -296,6 +312,18 @@ func (c *thinkingChat) startNewSession() {
 	fmt.Printf("   Current:  %s\n", c.sessionID)
 	fmt.Printf("   (Conversation history has been reset)\n")
 	fmt.Println()
+}
+
+// resolveReasoningMode converts the flag value to llmagent constant.
+func resolveReasoningMode() string {
+	switch *reasoningMode {
+	case "discard_previous", "discard-previous":
+		return llmagent.ReasoningContentModeDiscardPreviousTurns
+	case "discard_all", "discard-all":
+		return llmagent.ReasoningContentModeDiscardAll
+	default:
+		return llmagent.ReasoningContentModeKeepAll
+	}
 }
 
 func intPtr(i int) *int           { return &i }
