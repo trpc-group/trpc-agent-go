@@ -18,6 +18,11 @@ English | [中文](README.zh_CN.md)
 - 🧰 **Rich Tool Ecosystem**: Seamless integration with external APIs, databases, and services
 - 💾 **Persistent Memory**: Long-term state management and contextual awareness
 - 🔗 **Multi-Agent Collaboration**: Chain, parallel, and graph-based agent workflows
+- 🧩 **Agent Skills**: Reusable `SKILL.md` workflows with safe execution
+- 📦 **Artifacts**: Versioned storage for files produced by agents and tools
+- ✅ **Evaluation & Benchmarks**: Eval sets + metrics to measure quality over time
+- 🖥️ **UI & Server Integration**: AG-UI (Agent-User Interaction),
+  and Agent-to-Agent (A2A) interoperability
 - 📊 **Production Ready**: Built-in telemetry, tracing, and enterprise-grade reliability
 - ⚡ **High Performance**: Optimized for scalability and low latency
 
@@ -104,6 +109,36 @@ runner := runner.NewRunner("app", agent,
 
 </td>
 </tr>
+<tr>
+<td>
+
+### 🧩 **Agent Skills**
+
+```go
+// Skills are folders with a SKILL.md spec.
+repo, _ := skill.NewFSRepository("./skills")
+
+// Let the agent load and run skills on demand.
+tools := []tool.Tool{
+    skilltool.NewLoadTool(repo),
+    skilltool.NewRunTool(repo, localexec.New()),
+}
+```
+
+</td>
+<td>
+
+### ✅ **Evaluation & Benchmarks**
+
+```go
+evaluator, _ := evaluation.New("app", runner,
+    evaluation.WithNumRuns(3))
+result, _ := evaluator.Evaluate(ctx, "math-basic")
+_ = result.OverallStatus
+```
+
+</td>
+</tr>
 </table>
 
 ## Table of Contents
@@ -113,7 +148,7 @@ runner := runner.NewRunner("app", agent,
 - [Documentation](#documentation)
 - [Quick Start](#quick-start)
 - [Examples](#examples)
-  - [Tool Usage](#1-tool-usage-examples)
+  - [Tool Usage](#1-tool-usage)
   - [LLM-only Agent](#2-llm-only-agent)
   - [Multi-Agent Runners](#3-multi-agent-runners)
   - [Graph Agent](#4-graph-agent)
@@ -121,6 +156,12 @@ runner := runner.NewRunner("app", agent,
   - [Knowledge](#6-knowledge)
   - [Telemetry & Tracing](#7-telemetry--tracing)
   - [MCP Integration](#8-mcp-integration)
+  - [Debug Web Demo](#9-debug-web-demo)
+  - [AG-UI Demo](#10-ag-ui-demo)
+  - [Evaluation](#11-evaluation)
+  - [Agent Skills](#12-agent-skills)
+  - [Artifacts](#13-artifacts)
+  - [A2A Interop](#14-a2a-interop)
 - [Architecture Overview](#architecture-overview)
 - [Using Built-in Agents](#using-built-in-agents)
 - [Future Enhancements](#future-enhancements)
@@ -276,19 +317,25 @@ The `examples` directory contains runnable demos covering every major feature.
 - [examples/agenttool](examples/agenttool) shows streaming and non-streaming
   patterns.
 
-### 2. LLM-Only Agent ([examples/llmagent](examples/llmagent))
+### 2. LLM-Only Agent
+
+Example: [examples/llmagent](examples/llmagent)
 
 - Wrap any chat-completion model as an `LLMAgent`.
 - Configure system instructions, temperature, max tokens, etc.
 - Receive incremental `event.Event` updates while the model streams.
 
-### 3. Multi-Agent Runners ([examples/multiagent](examples/multiagent))
+### 3. Multi-Agent Runners
+
+Example: [examples/multiagent](examples/multiagent)
 
 - **ChainAgent** – linear pipeline of sub-agents.
 - **ParallelAgent** – run sub-agents concurrently and merge results.
 - **CycleAgent** – iterate until a termination condition is met.
 
-### 4. Graph Agent ([examples/graph](examples/graph))
+### 4. Graph Agent
+
+Example: [examples/graph](examples/graph)
 
 - **GraphAgent** – demonstrates building and executing complex, conditional
   workflows using the `graph` and `agent/graph` packages. It shows
@@ -320,22 +367,30 @@ sg.AddMultiConditionalEdges(
 sg.SetFinishPoint("A").SetFinishPoint("B")
 ```
 
-### 5. Memory ([examples/memory](examples/memory))
+### 5. Memory
+
+Example: [examples/memory](examples/memory)
 
 - In‑memory and Redis memory services with CRUD, search and tool integration.
 - How to configure, call tools and customize prompts.
 
-### 6. Knowledge ([examples/knowledge](examples/knowledge))
+### 6. Knowledge
+
+Example: [examples/knowledge](examples/knowledge)
 
 - Basic RAG example: load sources, embed to a vector store, and search.
 - How to use conversation context and tune loading/concurrency options.
 
-### 7. Telemetry & Tracing ([examples/telemetry](examples/telemetry))
+### 7. Telemetry & Tracing
+
+Example: [examples/telemetry](examples/telemetry)
 
 - OpenTelemetry hooks across model, tool and runner layers.
 - Export traces to OTLP endpoint for real-time analysis.
 
-### 8. MCP Integration ([examples/mcptool](examples/mcptool))
+### 8. MCP Integration
+
+Example: [examples/mcptool](examples/mcptool)
 
 - Wrapper utilities around **trpc-mcp-go**, an implementation of the
   **Model Context Protocol (MCP)**.
@@ -344,6 +399,47 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 - Enables dynamic tool execution and context-rich interactions between agents
   and LLMs.
 
+<<<<<<< HEAD
+### 9. AG-UI Demo
+
+Example: [examples/agui](examples/agui)
+
+- Exposes a Runner through the AG-UI (Agent-User Interaction) protocol.
+- Built-in Server-Sent Events (SSE) server, plus client samples (for example,
+  CopilotKit).
+
+### 10. Evaluation
+
+Example: [examples/evaluation](examples/evaluation)
+
+- Evaluate an agent with repeatable eval sets and pluggable metrics.
+- Includes local file-backed runs and in-memory runs, plus a debug +
+  evaluation server demo.
+
+### 11. Agent Skills
+
+Example: [examples/skillrun](examples/skillrun)
+
+- Skills are folders with a `SKILL.md` spec + optional docs/scripts.
+- Built-in tools: `skill_load`, `skill_list_docs`, `skill_select_docs`,
+  `skill_run` (runs commands in an isolated workspace).
+
+### 12. Artifacts
+
+Example: [examples/artifact](examples/artifact)
+
+- Save and retrieve versioned files (images, text, reports) produced by tools.
+- Supports multiple backends (in-memory, S3, COS).
+
+### 13. A2A Interop
+
+Example: [examples/a2aadk](examples/a2aadk)
+
+- Agent-to-Agent (A2A) interop with an ADK Python A2A server.
+- Demonstrates streaming, tool calls, and code execution across runtimes.
+
+=======
+>>>>>>> main
 Other notable examples:
 
 - [examples/humaninloop](examples/humaninloop) – Human in the loop.
@@ -355,7 +451,7 @@ See individual `README.md` files in each example folder for usage details.
 
 Architecture
 
-![architecture](docs/mkdocs/assets/img/component_architecture.png)
+![architecture](docs/mkdocs/assets/img/component_architecture.svg)
 
 ### 🔄 **Execution Flow**
 
@@ -378,9 +474,13 @@ Key packages:
 | `memory`    | Records user long-term memory and personalized information.                                                 |
 | `knowledge` | Implements RAG knowledge retrieval capabilities.                                                            |
 | `planner`   | Provides Agent planning and reasoning capabilities.                                                         |
+| `artifact`  | Stores and retrieves versioned files produced by agents and tools (images, reports, etc.).                 |
+| `skill`     | Loads and executes reusable Agent Skills defined by `SKILL.md`.                                             |
+| `event`     | Defines event types and streaming payloads used across Runner and servers.                                  |
+| `evaluation` | Evaluates agents on eval sets using pluggable metrics and stores results.                                  |
+| `server`    | Exposes HTTP servers (Debug, AG-UI, A2A) for integration and UIs.                                           |
+| `telemetry` | OpenTelemetry tracing and metrics instrumentation.                                                          |
 
-Execution flow
-![execution](docs/mkdocs/assets/img/timing_diagram.png)
 
 ## Using Built-in Agents
 
