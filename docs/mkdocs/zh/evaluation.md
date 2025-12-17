@@ -10,7 +10,7 @@ Evaluation 提供完整的 Agent 评估框架，支持本地文件和内存两�
 
 local 在本地文件系统上维护评估集、评估指标和评估结果。
 
-完整示例参见 [examples/evaluation/local](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/local)。
+完整示例参见 [examples/evaluation/local](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/local) 和 [examples/evaluation/tooltrajectory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/tooltrajectory)。
 
 #### 代码
 
@@ -793,7 +793,6 @@ type EvalMetricResultPerInvocation struct {
 	ExpectedInvocation *evalset.Invocation // 预期的对话结果
 	EvalMetricResults  []*EvalMetricResult // 各指标评估结果
 }
-
 ```
 
 EvalResult Manager 负责管理评估结果的存储、查询与列表操作，接口定义如下：
@@ -1351,7 +1350,7 @@ LLMCriterion 用于配置基于大模型的评估准则，适用于需要由模�
 ```go
 // LLMCriterion 配置评估模型
 type LLMCriterion struct {
-	Rubrics    []*Rubric           // 评估细则配置
+	Rubrics    []*Rubric          // 评估细则配置
 	JudgeModel *JudgeModelOptions // 评估模型配置
 }
 
@@ -1393,11 +1392,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-	criterion := criterion.New(
-		criterion.WithLLMJudge(
-			llm.New(
-				"openai",
-				"deepseek-chat",
+criterion := criterion.New(
+	criterion.WithLLMJudge(
+		llm.New(
+			"openai",
+			"deepseek-chat",
 			llm.WithNumSamples(3),
 			llm.WithGeneration(&model.GenerationConfig{
 				MaxTokens:   floatPtr(512),
@@ -1406,16 +1405,16 @@ import (
 			}),
 			llm.WithRubrics([]*llm.Rubric{
 				{
-					ID:   "1",
-					Type: "FINAL_RESPONSE_QUALITY",
+					ID:          "1",
+					Type:        "FINAL_RESPONSE_QUALITY",
 					Description: "The final answer is correct.",
 					Content: &llm.RubricContent{
 						Text: "The final answer directly addresses the user question, provides the required result, and is consistent with the facts given.",
 					},
 				},
 				{
-					ID:   "2",
-					Type: "CONTEXT_RELEVANCE",
+					ID:          "2",
+					Type:        "CONTEXT_RELEVANCE",
 					Description: "The final answer is relevant to the user prompt.",
 					Content: &llm.RubricContent{
 						Text: "The final answer stays on topic and does not include unrelated or missing key points from the user prompt.",
@@ -1426,6 +1425,7 @@ import (
 	),
 )
 ```
+
 
 ### 评估器
 
@@ -1461,9 +1461,25 @@ evalMetric := &metric.EvalMetric{
 }
 ```
 
+对应的指标配置文件写法示例：
+
+```json
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {}
+    }
+  }
+]
+```
+
+完整示例参见 [examples/evaluation/local](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/local)。
+
 #### LLM 最终响应评估器
 
-LLM 最终响应评估器对应的指标名称为 `llm_final_response`，通过评估模型判定 Agent 的最终回答是否有效。
+LLM 最终响应评估器对应的指标名称为 `llm_final_response`，通过评估模型判定 Agent 的最终回答是否有效。评估提示词会包含用户输入、参考答案与 Agent 的最终回答，适用于自动化校验最终文本输出。
 
 评估逻辑：
 
@@ -1501,7 +1517,32 @@ evalMetric := &metric.EvalMetric{
 }
 ```
 
-评估提示词会包含用户输入、参考答案与 Agent 的最终回答，适用于自动化校验最终文本输出。
+对应的指标配置文件写法示例：
+
+```json
+[
+  {
+    "metricName": "llm_final_response",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "gpt-4o",
+          "numSamples": 3,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 1.0,
+            "stream": false
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+完整示例参见 [examples/evaluation/llm/finalresponse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/finalresponse)。
 
 #### LLM Rubric 响应评估器
 
@@ -1561,7 +1602,50 @@ evalMetric := &metric.EvalMetric{
 }
 ```
 
-rubric 响应评估器适用于需要多维度打分的文本回答，示例可参考 `examples/evaluation/llm/rubricresponse`。
+对应的指标配置文件写法示例：
+
+```json
+[
+  {
+    "metricName": "llm_rubric_response",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "deepseek-chat",
+          "numSamples": 3,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 1.0,
+            "stream": false
+          }
+        },
+        "rubrics": [
+          {
+            "id": "1",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "description": "The final answer is correct.",
+            "content": {
+              "text": "The final answer is correct and consistent with the user request."
+            }
+          },
+          {
+            "id": "2",
+            "type": "CONTEXT_RELEVANCE",
+            "description": "The final answer is relevant to the user prompt.",
+            "content": {
+              "text": "The final answer is relevant to the user prompt without unrelated content."
+            }
+          }
+        ]
+      }
+    }
+  }
+]
+```
+
+完整示例参见 [examples/evaluation/llm/rubricresponse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/rubricresponse)。
 
 #### LLM Rubric 知识召回评估器
 
@@ -1613,4 +1697,39 @@ evalMetric := &metric.EvalMetric{
 }
 ```
 
-该评估器要求 Agent 的工具调用返回检索结果，示例可参考 `examples/evaluation/llm/knowledgerecall`。
+对应的指标配置文件写法示例：
+
+```json
+[
+  {
+    "metricName": "llm_rubric_knowledge_recall",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "deepseek-chat",
+          "numSamples": 3,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 1.0,
+            "stream": false
+          }
+        },
+        "rubrics": [
+          {
+            "id": "1",
+            "type": "KNOWLEDGE_RELEVANCE",
+            "description": "The recalled knowledge is relevant to the user's prompt.",
+            "content": {
+              "text": "The retrieved knowledge directly supports the user prompt and includes key facts."
+            }
+          }
+        ]
+      }
+    }
+  }
+]
+```
+
+该评估器要求 Agent 的工具调用返回检索结果，完整示例参见 [examples/evaluation/llm/knowledgerecall](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/knowledgerecall)。
