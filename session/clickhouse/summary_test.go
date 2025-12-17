@@ -16,11 +16,22 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 type mockSummarizer struct {
 	summarizeFunc func(ctx context.Context, session *session.Session) (string, error)
+}
+
+// SetModel implements summary.SessionSummarizer.
+func (*mockSummarizer) SetModel(m model.Model) {
+	panic("unimplemented")
+}
+
+// SetPrompt implements summary.SessionSummarizer.
+func (m *mockSummarizer) SetPrompt(prompt string) {
+	panic("unimplemented")
 }
 
 func (m *mockSummarizer) Summarize(ctx context.Context, session *session.Session) (string, error) {

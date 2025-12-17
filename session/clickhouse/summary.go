@@ -16,9 +16,9 @@ import (
 	"fmt"
 	"time"
 
-	isummary "trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
 
 // CreateSessionSummary is the internal implementation that returns the summary.

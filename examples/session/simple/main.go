@@ -19,12 +19,31 @@
 //	go run main.go -session=mysql
 //	go run main.go -session=clickhouse
 //
-// Environment variables by session type:
+// Environment variables by session type (example usage):
 //
-//	redis:      REDIS_ADDR (default: localhost:6379)
-//	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
-//	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
-//	clickhouse: CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, CLICKHOUSE_PASSWORD, CLICKHOUSE_DATABASE
+//	redis:
+//		export REDIS_ADDR="localhost:6379"
+//
+//	postgres:
+//		export PG_HOST="localhost"
+//		export PG_PORT="5432"
+//		export PG_USER="postgres"
+//		export PG_PASSWORD="password"
+//		export PG_DATABASE="trpc_agent"
+//
+//	mysql:
+//		export MYSQL_HOST="localhost"
+//		export MYSQL_PORT="3306"
+//		export MYSQL_USER="root"
+//		export MYSQL_PASSWORD="password"
+//		export MYSQL_DATABASE="trpc_agent"
+//
+//	clickhouse:
+//		export CLICKHOUSE_HOST="localhost"
+//		export CLICKHOUSE_PORT="9000"
+//		export CLICKHOUSE_USER="default"
+//		export CLICKHOUSE_PASSWORD=""
+//		export CLICKHOUSE_DATABASE="trpc_agent"
 package main
 
 import (
@@ -120,61 +139,6 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 
 	modelInstance := openai.New(c.modelName)
 
-<<<<<<< HEAD
-	var (
-		err            error
-		sessionService session.Service
-	)
-	switch *sessServiceName {
-	case "inmemory":
-		sessionService = sessioninmemory.NewSessionService(
-			sessioninmemory.WithSessionEventLimit(*eventLimit),
-			sessioninmemory.WithSessionTTL(*sessionTTL),
-		)
-
-	case "redis":
-		redisURL := fmt.Sprintf("redis://%s", redisAddr)
-		sessionService, err = redis.NewService(
-			redis.WithRedisClientURL(redisURL),
-			redis.WithSessionEventLimit(*eventLimit),
-			redis.WithSessionTTL(*sessionTTL),
-		)
-		if err != nil {
-			return fmt.Errorf("failed to create redis session service: %w", err)
-		}
-
-	case "pgsql":
-		pgDSN := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-			pgUser, pgPassword, pgHost, pgPort, pgDatabase)
-		sessionService, err = postgres.NewService(
-			postgres.WithPostgresClientDSN(pgDSN),
-			postgres.WithTablePrefix("trpc_"),
-			postgres.WithSessionEventLimit(*eventLimit),
-			postgres.WithSessionTTL(*sessionTTL),
-		)
-		if err != nil {
-			return fmt.Errorf("failed to create postgres session service: %w", err)
-		}
-
-	case "mysql":
-		mysqlDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4",
-			mysqlUser, mysqlPassword, mysqlHost, mysqlPort, mysqlDatabase)
-		sessionService, err = mysql.NewService(
-			mysql.WithMySQLClientDSN(mysqlDSN),
-			mysql.WithTablePrefix("trpc_"),
-			mysql.WithSessionEventLimit(*eventLimit),
-			mysql.WithSessionTTL(*sessionTTL),
-		)
-		if err != nil {
-			return fmt.Errorf("failed to create mysql session service: %w", err)
-		}
-
-	default:
-		return fmt.Errorf("invalid session service name: %s", *sessServiceName)
-	}
-
-=======
->>>>>>> d9a274b4 (improve example of session)
 	genConfig := model.GenerationConfig{
 		Stream: c.streaming,
 	}
