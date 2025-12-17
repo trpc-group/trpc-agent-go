@@ -15,9 +15,9 @@ import (
 	"fmt"
 	"time"
 
-	isummary "trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
 
 // CreateSessionSummary generates a summary for the session and stores it on the session object.
@@ -109,7 +109,7 @@ func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Se
 
 	// If async workers are not initialized, fall back to synchronous processing.
 	if len(s.summaryJobChans) == 0 {
-		return s.CreateSessionSummary(ctx, sess, filterKey, force)
+		return isummary.CreateSessionSummaryWithCascade(ctx, sess, filterKey, force, s.CreateSessionSummary)
 	}
 
 	// Do not check storage existence before enqueueing. The worker and
@@ -130,7 +130,7 @@ func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Se
 	}
 
 	// If async enqueue failed, fall back to synchronous processing.
-	return s.CreateSessionSummary(ctx, sess, filterKey, force)
+	return isummary.CreateSessionSummaryWithCascade(ctx, sess, filterKey, force, s.CreateSessionSummary)
 }
 
 // tryEnqueueJob attempts to enqueue a summary job to the appropriate channel.
