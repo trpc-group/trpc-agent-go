@@ -45,41 +45,28 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
             "invocationId": "invocation-actual",
             "userContent": {
               "role": "user",
-              "parts": [
-                {
-                  "text": "calculate 1 + 2."
-                }
-              ]
+              "content": "calculate 1 + 2."
             },
             "finalResponse": {
               "role": "assistant",
-              "parts": [
-                {
-                  "text": "final: 1+2=3."
-                }
-              ]
+              "content": "final: 1+2=3."
             },
             "intermediateData": {
-              "toolUses": [
+              "toolCalls": [
                 {
                   "id": "tool-call-1",
-                  "name": "calculator",
-                  "args": {
-                    "operation": "add",
-                    "a": 1,
-                    "b": 2
+                  "type": "function",
+                  "function": {
+                    "name": "calculator",
+                    "arguments": "{\"operation\":\"add\",\"a\":1,\"b\":2}"
                   }
                 }
               ],
               "intermediateResponses": [
-                [
-                  "assistant",
-                  [
-                    {
-                      "text": "thinking..."
-                    }
-                  ]
-                ]
+                {
+                  "role": "assistant",
+                  "content": "thinking..."
+                }
               ]
             },
             "creationTimestamp": 1700000000
@@ -88,40 +75,28 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
             "invocationId": "invocation-expected",
             "userContent": {
               "role": "user",
-              "parts": [
-                {
-                  "text": "calculate 1 + 2."
-                }
-              ]
+              "content": "calculate 1 + 2."
             },
             "finalResponse": {
               "role": "assistant",
-              "parts": [
-                {
-                  "text": "final: 1+2=3."
-                }
-              ]
+              "content": "final: 1+2=3."
             },
             "intermediateData": {
-              "toolUses": [
+              "toolCalls": [
                 {
-                  "name": "calculator",
-                  "args": {
-                    "operation": "add",
-                    "a": 1,
-                    "b": 2
+                  "id": "tool-call-1",
+                  "type": "function",
+                  "function": {
+                    "name": "calculator",
+                    "arguments": "{\"operation\":\"add\",\"a\":1,\"b\":2}"
                   }
                 }
               ],
               "intermediateResponses": [
-                [
-                  "assistant",
-                  [
-                    {
-                      "text": "thinking..."
-                    }
-                  ]
-                ]
+                {
+                  "role": "assistant",
+                  "content": "thinking..."
+                }
               ]
             },
             "creationTimestamp": 1700000000

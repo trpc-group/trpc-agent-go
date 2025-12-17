@@ -7,7 +7,6 @@
 //
 //
 
-// package
 // Package epochtime provides EpochTime type to be compatible with ADK Web.
 package epochtime
 

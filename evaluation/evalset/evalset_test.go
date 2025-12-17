@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestEvalSetJSONRoundTrip(t *testing.T) {
@@ -30,48 +31,36 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
           "invocationId": "invoke-1",
           "userContent": {
             "role": "user",
-            "parts": [
-              {
-                "text": "Hello agent."
-              }
-            ]
+            "content": "Hello agent."
           },
           "finalResponse": {
             "role": "assistant",
-            "parts": [
-              {
-                "text": "Greetings, user."
-              }
-            ]
+            "content": "Greetings, user."
           },
           "intermediateData": {
-            "toolUses": [
+            "toolCalls": [
               {
-                "name": "calculator",
-                "args": {
-                  "operation": "add",
-                  "a": 1,
-                  "b": 2
+                "id": "use-1",
+                "type": "function",
+                "function": {
+                  "name": "calculator",
+                  "arguments": "{\"operation\":\"add\",\"a\":1,\"b\":2}"
                 }
               }
             ],
             "toolResponses": [
               {
-                "name": "calculator",
-                "response": {
-                  "result": 3
-                }
+                "role": "tool",
+                "tool_id": "use-1",
+                "tool_name": "calculator",
+                "content": "{\"result\":3}"
               }
             ],
             "intermediateResponses": [
-              [
-                "assistant",
-                [
-                  {
-                    "text": "Let me compute that."
-                  }
-                ]
-              ]
+              {
+                "role": "assistant",
+                "content": "Let me compute that."
+              }
             ]
           },
           "creationTimestamp": 1700000100
@@ -115,32 +104,32 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
 	assert.Len(t, firstCase.Conversation, 1)
 	firstInvocation := firstCase.Conversation[0]
 	assert.Equal(t, "invoke-1", firstInvocation.InvocationID)
-	assert.Equal(t, "user", firstInvocation.UserContent.Role)
-	assert.Len(t, firstInvocation.UserContent.Parts, 1)
-	assert.Equal(t, "Hello agent.", firstInvocation.UserContent.Parts[0].Text)
-	assert.Equal(t, "assistant", firstInvocation.FinalResponse.Role)
-	assert.Len(t, firstInvocation.FinalResponse.Parts, 1)
-	assert.Equal(t, "Greetings, user.", firstInvocation.FinalResponse.Parts[0].Text)
+	assert.Equal(t, model.RoleUser, firstInvocation.UserContent.Role)
+	assert.Equal(t, "Hello agent.", firstInvocation.UserContent.Content)
+	assert.Equal(t, model.RoleAssistant, firstInvocation.FinalResponse.Role)
+	assert.Equal(t, "Greetings, user.", firstInvocation.FinalResponse.Content)
 	assert.NotNil(t, firstInvocation.CreationTimestamp)
 	assert.WithinDuration(t, time.Unix(1700000100, 0).UTC(), firstInvocation.CreationTimestamp.Time, time.Nanosecond)
 
 	assert.NotNil(t, firstInvocation.IntermediateData)
-	assert.Len(t, firstInvocation.IntermediateData.ToolUses, 1)
-	assert.Equal(t, "calculator", firstInvocation.IntermediateData.ToolUses[0].Name)
-	assert.Equal(t, map[string]any{"operation": "add", "a": float64(1), "b": float64(2)},
-		firstInvocation.IntermediateData.ToolUses[0].Args)
+	assert.Len(t, firstInvocation.IntermediateData.ToolCalls, 1)
+	assert.Equal(t, "calculator", firstInvocation.IntermediateData.ToolCalls[0].Function.Name)
+	var args map[string]any
+	assert.NoError(t, json.Unmarshal(firstInvocation.IntermediateData.ToolCalls[0].Function.Arguments, &args))
+	assert.Equal(t, map[string]any{"operation": "add", "a": float64(1), "b": float64(2)}, args)
 
 	assert.Len(t, firstInvocation.IntermediateData.ToolResponses, 1)
 	expectedToolResponse := map[string]any{"result": float64(3)}
-	assert.Equal(t, "calculator", firstInvocation.IntermediateData.ToolResponses[0].Name)
-	assert.Equal(t, expectedToolResponse, firstInvocation.IntermediateData.ToolResponses[0].Response)
+	assert.Equal(t, "use-1", firstInvocation.IntermediateData.ToolResponses[0].ToolID)
+	assert.Equal(t, "calculator", firstInvocation.IntermediateData.ToolResponses[0].ToolName)
+	var response map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(firstInvocation.IntermediateData.ToolResponses[0].Content), &response))
+	assert.Equal(t, expectedToolResponse, response)
 
-	expectedIntermediateResponses := [][]any{
+	expectedIntermediateResponses := []*model.Message{
 		{
-			"assistant",
-			[]any{
-				map[string]any{"text": "Let me compute that."},
-			},
+			Role:    "assistant",
+			Content: "Let me compute that.",
 		},
 	}
 	assert.Equal(t, expectedIntermediateResponses, firstInvocation.IntermediateData.IntermediateResponses)

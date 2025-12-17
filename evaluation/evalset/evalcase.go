@@ -10,8 +10,8 @@
 package evalset
 
 import (
-	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // EvalCase represents a single evaluation case.
@@ -33,9 +33,9 @@ type Invocation struct {
 	// InvocationID uniquely identifies this invocation.
 	InvocationID string `json:"invocationId,omitempty"`
 	// UserContent represents the user's input.
-	UserContent *genai.Content `json:"userContent,omitempty"`
+	UserContent *model.Message `json:"userContent,omitempty"`
 	// FinalResponse represents the agent's final response.
-	FinalResponse *genai.Content `json:"finalResponse,omitempty"`
+	FinalResponse *model.Message `json:"finalResponse,omitempty"`
 	// IntermediateData contains intermediate steps during execution.
 	IntermediateData *IntermediateData `json:"intermediateData,omitempty"`
 	// CreationTimestamp when this invocation was created.
@@ -45,14 +45,12 @@ type Invocation struct {
 // IntermediateData contains intermediate execution data.
 // It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type IntermediateData struct {
-	// ToolUses represents tool calls made during execution.
-	ToolUses []*genai.FunctionCall `json:"toolUses,omitempty"`
+	// ToolCalls represents tool calls made during execution.
+	ToolCalls []*model.ToolCall `json:"toolCalls,omitempty"`
 	// ToolResponses represents tool responses made during execution.
-	ToolResponses []*genai.FunctionResponse `json:"toolResponses,omitempty"`
+	ToolResponses []*model.Message `json:"toolResponses,omitempty"`
 	// IntermediateResponses represents intermediate responses, including text responses and tool responses.
-	// For each intermediate response, the first element is the author string,
-	// and the second element is the genai.Part slice.
-	IntermediateResponses [][]any `json:"intermediateResponses,omitempty"`
+	IntermediateResponses []*model.Message `json:"intermediateResponses,omitempty"`
 }
 
 // SessionInput represents values that help initialize a session.
