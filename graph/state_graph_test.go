@@ -344,7 +344,7 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 	}
 	close(agentEvents)
 
-	last, final, raw, _, err := processAgentEventStream(
+	last, final, raw, _, _, err := processAgentEventStream(
 		ctx,
 		agentEvents,
 		nil,
