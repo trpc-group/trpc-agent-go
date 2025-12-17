@@ -1230,7 +1230,7 @@ func TestProcessModelResponse_EventAndErrors(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestProcessModelResponse_DoneSkipsEvent(t *testing.T) {
+func TestProcessModelResponse_DoneWithContentEmitsEvent(t *testing.T) {
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
 	_, span := tracer.Start(context.Background(), "s")
 	evch := make(chan *event.Event, 1)
@@ -1247,7 +1247,38 @@ func TestProcessModelResponse_DoneSkipsEvent(t *testing.T) {
 	require.NoError(t, err)
 	select {
 	case <-evch:
-		t.Fatalf("expected no event when Done=true")
+		// Expected: Done responses with meaningful content should be emitted.
+	default:
+		t.Fatalf("expected event when Done=true and has content")
+	}
+}
+
+func TestProcessModelResponse_DoneWithoutContentSkipsEvent(t *testing.T) {
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	_, span := tracer.Start(context.Background(), "s")
+	evch := make(chan *event.Event, 1)
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Index: 0,
+			Message: model.Message{
+				Role: model.RoleAssistant,
+			},
+		}},
+	}
+	_, _, err := processModelResponse(context.Background(), modelResponseConfig{
+		Response:     rsp,
+		EventChan:    evch,
+		InvocationID: "inv",
+		SessionID:    "sid",
+		LLMModel:     &dummyModel{},
+		Request:      &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}},
+		Span:         span,
+	})
+	require.NoError(t, err)
+	select {
+	case <-evch:
+		t.Fatalf("expected no event when Done=true and content is empty")
 	default:
 	}
 }

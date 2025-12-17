@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -86,6 +87,30 @@ func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-ch
 func (m *mockAgent) Tools() []tool.Tool {
 	return []tool.Tool{}
 }
+
+type staticModel struct {
+	name    string
+	content string
+}
+
+func (m *staticModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done:      true,
+		IsPartial: false,
+		Choices: []model.Choice{{
+			Index:   0,
+			Message: model.NewAssistantMessage(m.content),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *staticModel) Info() model.Info { return model.Info{Name: m.name} }
 
 func TestRunner_SessionIntegration(t *testing.T) {
 	// Create an in-memory session service.
@@ -897,12 +922,72 @@ func TestGraphCompletionNotPersistedAsMessage(t *testing.T) {
 		sess.Events[1].Object)
 }
 
+func TestRunner_GraphAgentPersistsLLMDoneResponses(t *testing.T) {
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	sg.AddLLMNode(
+		"n1",
+		&staticModel{name: "m1", content: "first"},
+		"i1",
+		nil,
+	)
+	sg.AddLLMNode(
+		"n2",
+		&staticModel{name: "m2", content: "second"},
+		"i2",
+		nil,
+	)
+	sg.AddEdge("n1", "n2")
+	compiled := sg.SetEntryPoint("n1").SetFinishPoint("n2").MustCompile()
+
+	ga, err := graphagent.New("ga", compiled)
+	require.NoError(t, err)
+
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner("app", ga, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+	)
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range ch {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.True(t, last.IsRunnerCompletion())
+	require.Empty(t, last.Response.Choices)
+
+	sess, err := svc.GetSession(context.Background(), session.Key{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: "s",
+	})
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 3)
+	require.True(t, sess.Events[0].IsUserMessage())
+
+	require.Equal(t, model.RoleAssistant,
+		sess.Events[1].Choices[0].Message.Role)
+	require.Equal(t, "first",
+		sess.Events[1].Choices[0].Message.Content)
+
+	require.Equal(t, model.RoleAssistant,
+		sess.Events[2].Choices[0].Message.Role)
+	require.Equal(t, "second",
+		sess.Events[2].Choices[0].Message.Content)
+}
+
 func TestPropagateGraphCompletion_NilStateValue(t *testing.T) {
 	// Call propagateGraphCompletion directly to cover the nil-value copy branch.
 	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
 	ev := event.NewResponseEvent("inv", "app", &model.Response{ID: "rc", Object: model.ObjectTypeRunnerCompletion, Done: true})
 	delta := map[string][]byte{"nil": nil}
-	rr.propagateGraphCompletion(ev, delta, nil)
+	rr.propagateGraphCompletion(ev, delta, nil, false)
 	require.Contains(t, ev.StateDelta, "nil")
 	require.Nil(t, ev.StateDelta["nil"]) // explicit nil copy branch covered
 }
