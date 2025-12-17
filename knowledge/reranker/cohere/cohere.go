@@ -7,6 +7,7 @@
 //
 //
 
+// Package cohere provides a Reranker implementation using Cohere's Rerank API.
 package cohere
 
 import (
