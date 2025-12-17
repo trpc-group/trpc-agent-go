@@ -12,6 +12,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -22,6 +23,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -252,6 +255,158 @@ func (m *completionWaitAgent) Info() agent.Info {
 func (m *completionWaitAgent) SubAgents() []agent.Agent        { return nil }
 func (m *completionWaitAgent) FindSubAgent(string) agent.Agent { return nil }
 
+type sessionMirrorAgent struct {
+	name string
+	inv  string
+}
+
+const (
+	graphCompletionMsg   = "graph-done"
+	graphCompletionAgent = "graph-completion"
+	graphStateKey        = "graph_key"
+	graphStateValue      = "graph_value"
+)
+
+type graphCompletionMockAgent struct {
+	name string
+}
+
+func (m *graphCompletionMockAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+
+		evt := event.NewResponseEvent(
+			inv.InvocationID,
+			m.name,
+			&model.Response{
+				Object: graph.ObjectTypeGraphExecution,
+				Done:   true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(
+						graphCompletionMsg,
+					),
+				}},
+			},
+		)
+		evt.StateDelta = map[string][]byte{
+			graphStateKey: []byte(graphStateValue),
+		}
+		_ = agent.EmitEvent(ctx, inv, ch, evt)
+	}()
+	return ch, nil
+}
+
+func (m *graphCompletionMockAgent) Tools() []tool.Tool { return nil }
+func (m *graphCompletionMockAgent) Info() agent.Info {
+	return agent.Info{Name: m.name, Description: "graph completion"}
+}
+func (m *graphCompletionMockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (m *graphCompletionMockAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
+func (m *sessionMirrorAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	m.inv = inv.InvocationID
+	ch := make(chan *event.Event, 3)
+	go func() {
+		defer close(ch)
+
+		const toolID = "tool-call-1"
+		toolResult := event.NewResponseEvent(
+			inv.InvocationID,
+			m.name,
+			&model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleTool,
+						ToolID:  toolID,
+						Content: "ok",
+					},
+				}},
+			},
+		)
+		_ = agent.EmitEvent(ctx, inv, ch, toolResult)
+
+		barrier := event.New(inv.InvocationID, m.name)
+		barrier.RequiresCompletion = true
+		completionID := agent.GetAppendEventNoticeKey(barrier.ID)
+		_ = inv.AddNoticeChannel(ctx, completionID)
+		_ = agent.EmitEvent(ctx, inv, ch, barrier)
+
+		if err := inv.AddNoticeChannelAndWait(
+			ctx, completionID, 500*time.Millisecond,
+		); err != nil {
+			errEvt := event.NewErrorEvent(
+				inv.InvocationID,
+				m.name,
+				model.ErrorTypeFlowError,
+				err.Error(),
+			)
+			_ = agent.EmitEvent(ctx, inv, ch, errEvt)
+			return
+		}
+
+		if !sessionHasToolResult(inv.Session, inv.InvocationID, toolID) {
+			errEvt := event.NewErrorEvent(
+				inv.InvocationID,
+				m.name,
+				model.ErrorTypeFlowError,
+				"tool result not mirrored to session",
+			)
+			_ = agent.EmitEvent(ctx, inv, ch, errEvt)
+			return
+		}
+
+		done := event.NewResponseEvent(inv.InvocationID, m.name, &model.Response{
+			Done:    true,
+			Choices: []model.Choice{{Message: model.NewAssistantMessage("done")}},
+		})
+		_ = agent.EmitEvent(ctx, inv, ch, done)
+	}()
+	return ch, nil
+}
+
+func (m *sessionMirrorAgent) Tools() []tool.Tool { return nil }
+func (m *sessionMirrorAgent) Info() agent.Info {
+	return agent.Info{Name: m.name, Description: "mirror session"}
+}
+func (m *sessionMirrorAgent) SubAgents() []agent.Agent        { return nil }
+func (m *sessionMirrorAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func sessionHasToolResult(
+	sess *session.Session,
+	invocationID string,
+	toolID string,
+) bool {
+	if sess == nil {
+		return false
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	for i := range sess.Events {
+		evt := sess.Events[i]
+		if evt.InvocationID != invocationID || evt.Response == nil {
+			continue
+		}
+		if !evt.Response.IsToolResultResponse() {
+			continue
+		}
+		for _, id := range evt.Response.GetToolResultIDs() {
+			if id == toolID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type filterKeyAgent struct {
 	name string
 	seen string
@@ -268,6 +423,126 @@ func (m *filterKeyAgent) Tools() []tool.Tool              { return nil }
 func (m *filterKeyAgent) Info() agent.Info                { return agent.Info{Name: m.name, Description: "fk"} }
 func (m *filterKeyAgent) SubAgents() []agent.Agent        { return nil }
 func (m *filterKeyAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func TestTool_Call_MirrorsChildEventsToSession(t *testing.T) {
+	sa := &sessionMirrorAgent{name: "session-mirror"}
+	at := NewTool(sa)
+
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	got, err := at.Call(ctx, []byte(`{"request":"hi"}`))
+	require.NoError(t, err)
+	require.Equal(t, "done", got)
+	require.NotEmpty(t, sa.inv)
+	require.True(t, sessionHasToolResult(sess, sa.inv, "tool-call-1"))
+}
+
+func TestTool_Call_UsesSessionAppender(t *testing.T) {
+	sa := &sessionMirrorAgent{name: "session-mirror"}
+	at := NewTool(sa)
+
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+
+	var appendCount int
+	appender.Attach(parent, func(
+		ctx context.Context,
+		evt *event.Event,
+	) error {
+		appendCount++
+		sess.UpdateUserSession(evt)
+		return nil
+	})
+
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	got, err := at.Call(ctx, []byte(`{"request":"hi"}`))
+	require.NoError(t, err)
+	require.Equal(t, "done", got)
+	require.NotEmpty(t, sa.inv)
+	require.Greater(t, appendCount, 0)
+	require.True(t, sessionHasToolResult(sess, sa.inv, "tool-call-1"))
+}
+
+func TestTool_Call_AppenderError_NoDuplicateEvents(t *testing.T) {
+	sa := &sessionMirrorAgent{name: "session-mirror"}
+	at := NewTool(sa)
+
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	appender.Attach(parent, func(
+		ctx context.Context,
+		evt *event.Event,
+	) error {
+		sess.UpdateUserSession(evt)
+		return errors.New("append failed")
+	})
+
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	got, err := at.Call(ctx, []byte(`{"request":"hi"}`))
+	require.NoError(t, err)
+	require.Equal(t, "done", got)
+	require.NotEmpty(t, sa.inv)
+
+	const toolID = "tool-call-1"
+	require.Equal(t, 1, countToolResultEvents(sess, sa.inv, toolID))
+	require.Equal(t, 3, sess.GetEventCount())
+}
+
+func TestTool_Call_GraphCompletion_StripsChoicesForPersistence(t *testing.T) {
+	sa := &graphCompletionMockAgent{name: graphCompletionAgent}
+	at := NewTool(sa)
+
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+
+	var persistedGraph *event.Event
+	appender.Attach(parent, func(
+		ctx context.Context,
+		evt *event.Event,
+	) error {
+		if evt != nil && evt.Done &&
+			evt.Object == graph.ObjectTypeGraphExecution {
+			copyEvt := *evt
+			if evt.Response != nil {
+				copyEvt.Response = evt.Response.Clone()
+			}
+			persistedGraph = &copyEvt
+		}
+		sess.UpdateUserSession(evt)
+		return nil
+	})
+
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	got, err := at.Call(ctx, []byte(`{"request":"hi"}`))
+	require.NoError(t, err)
+	require.Equal(t, graphCompletionMsg, got)
+
+	require.NotNil(t, persistedGraph)
+	require.NotNil(t, persistedGraph.Response)
+	require.Len(t, persistedGraph.Response.Choices, 0)
+	require.Contains(t, persistedGraph.StateDelta, graphStateKey)
+	require.Equal(
+		t,
+		[]byte(graphStateValue),
+		persistedGraph.StateDelta[graphStateKey],
+	)
+	require.Contains(t, sess.State, graphStateKey)
+	require.Equal(t, []byte(graphStateValue), sess.State[graphStateKey])
+}
 
 func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 	sa := &streamingMockAgent{name: "stream-agent"}
@@ -322,6 +597,36 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 	if !strings.HasPrefix(sa.seenFilterKey, expectedPrefix) {
 		t.Fatalf("expected sub agent filter key to start with %q, got %q", expectedPrefix, sa.seenFilterKey)
 	}
+}
+
+func countToolResultEvents(
+	sess *session.Session,
+	invocationID string,
+	toolID string,
+) int {
+	if sess == nil {
+		return 0
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	var count int
+	for i := range sess.Events {
+		evt := sess.Events[i]
+		if evt.InvocationID != invocationID || evt.Response == nil {
+			continue
+		}
+		if !evt.Response.IsToolResultResponse() {
+			continue
+		}
+		for _, id := range evt.Response.GetToolResultIDs() {
+			if id == toolID {
+				count++
+				break
+			}
+		}
+	}
+	return count
 }
 
 func TestTool_HistoryScope_ParentBranch_Streamable_FilterKeyPrefix(t *testing.T) {
