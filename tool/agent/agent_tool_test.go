@@ -544,6 +544,297 @@ func TestTool_Call_GraphCompletion_StripsChoicesForPersistence(t *testing.T) {
 	require.Equal(t, []byte(graphStateValue), sess.State[graphStateKey])
 }
 
+func TestTool_shouldMirrorEventToSession_Cases(t *testing.T) {
+	t.Run("nil event", func(t *testing.T) {
+		require.False(t, shouldMirrorEventToSession(nil))
+	})
+
+	t.Run("state delta", func(t *testing.T) {
+		evt := event.New("inv", "author")
+		evt.StateDelta = map[string][]byte{"k": []byte("v")}
+		require.True(t, shouldMirrorEventToSession(evt))
+	})
+
+	t.Run("no response", func(t *testing.T) {
+		evt := &event.Event{}
+		require.False(t, shouldMirrorEventToSession(evt))
+	})
+
+	t.Run("partial response", func(t *testing.T) {
+		evt := event.NewResponseEvent("inv", "author", &model.Response{
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Delta: model.Message{Content: "x"},
+			}},
+		})
+		require.False(t, shouldMirrorEventToSession(evt))
+	})
+
+	t.Run("invalid content", func(t *testing.T) {
+		evt := event.NewResponseEvent("inv", "author", &model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage(""),
+			}},
+		})
+		require.False(t, shouldMirrorEventToSession(evt))
+	})
+}
+
+func TestTool_sessionHasEventID_Cases(t *testing.T) {
+	require.False(t, sessionHasEventID(nil, "id"))
+
+	inv := agent.NewInvocation()
+	require.False(t, sessionHasEventID(inv, "id"))
+	require.False(t, sessionHasEventID(inv, ""))
+
+	sess := session.NewSession("app", "user", "session")
+	inv.Session = sess
+
+	const (
+		existsID  = "exists"
+		missingID = "missing"
+	)
+	evt := event.NewResponseEvent(inv.InvocationID, "a", &model.Response{
+		Choices: []model.Choice{{
+			Message: model.NewUserMessage("seed"),
+		}},
+	})
+	evt.ID = existsID
+	sess.UpdateUserSession(evt)
+
+	require.True(t, sessionHasEventID(inv, existsID))
+	require.False(t, sessionHasEventID(inv, missingID))
+}
+
+func TestTool_appendEvent_AppenderError_FallbackUpdatesSession(t *testing.T) {
+	at := NewTool(&mockAgent{name: "x", description: "x"})
+	sess := session.NewSession("app", "user", "session")
+	inv := agent.NewInvocation(agent.WithInvocationSession(sess))
+
+	const appendErrMsg = "append failed"
+	appender.Attach(inv, func(
+		ctx context.Context,
+		evt *event.Event,
+	) error {
+		return errors.New(appendErrMsg)
+	})
+
+	evt := event.NewResponseEvent(inv.InvocationID, "a", &model.Response{
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("ok"),
+		}},
+	})
+
+	sess.UpdateUserSession(event.NewResponseEvent(
+		inv.InvocationID,
+		"user",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("seed"),
+			}},
+		},
+	))
+	at.appendEvent(context.Background(), inv, evt)
+
+	require.Equal(t, 2, sess.GetEventCount())
+}
+
+func TestTool_appendEvent_AppenderError_EmptyIDUpdatesSession(t *testing.T) {
+	at := NewTool(&mockAgent{name: "x", description: "x"})
+	sess := session.NewSession("app", "user", "session")
+	inv := agent.NewInvocation(agent.WithInvocationSession(sess))
+
+	appender.Attach(inv, func(
+		ctx context.Context,
+		evt *event.Event,
+	) error {
+		return errors.New("append failed")
+	})
+
+	evt := event.NewResponseEvent(inv.InvocationID, "a", &model.Response{
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("ok"),
+		}},
+	})
+	evt.ID = ""
+
+	sess.UpdateUserSession(event.NewResponseEvent(
+		inv.InvocationID,
+		"user",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("seed"),
+			}},
+		},
+	))
+	at.appendEvent(context.Background(), inv, evt)
+
+	require.Equal(t, 2, sess.GetEventCount())
+}
+
+func TestTool_ensureUserMessageForCall_EarlyReturns(t *testing.T) {
+	at := NewTool(&mockAgent{name: "x", description: "x"})
+	sess := session.NewSession("app", "user", "session")
+
+	t.Run("non user role", func(t *testing.T) {
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(sess),
+			agent.WithInvocationMessage(model.NewAssistantMessage("x")),
+		)
+		at.ensureUserMessageForCall(context.Background(), inv)
+		require.Equal(t, 0, sess.GetEventCount())
+	})
+
+	t.Run("empty content", func(t *testing.T) {
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(sess),
+			agent.WithInvocationMessage(model.NewUserMessage("")),
+		)
+		at.ensureUserMessageForCall(context.Background(), inv)
+		require.Equal(t, 0, sess.GetEventCount())
+	})
+}
+
+func TestTool_ensureUserMessageForCall_SkipsWhenUserExists(t *testing.T) {
+	at := NewTool(&mockAgent{name: "x", description: "x"})
+	sess := session.NewSession("app", "user", "session")
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+	)
+
+	userEvt := event.NewResponseEvent(inv.InvocationID, "user", &model.Response{
+		Choices: []model.Choice{{
+			Message: model.NewUserMessage("seed"),
+		}},
+	})
+	sess.UpdateUserSession(userEvt)
+
+	at.ensureUserMessageForCall(context.Background(), inv)
+	require.Equal(t, 1, sess.GetEventCount())
+}
+
+func TestTool_ensureUserMessageForCall_NilCases(t *testing.T) {
+	at := NewTool(&mockAgent{name: "x", description: "x"})
+	at.ensureUserMessageForCall(context.Background(), nil)
+
+	inv := agent.NewInvocation()
+	at.ensureUserMessageForCall(context.Background(), inv)
+}
+
+func TestTool_wrapWithCompletion_NotifyCompletionError(t *testing.T) {
+	at := NewTool(&mockAgent{name: "x", description: "x"})
+
+	src := make(chan *event.Event, 1)
+	evt := event.New("inv", "author")
+	evt.RequiresCompletion = true
+	src <- evt
+	close(src)
+
+	badInv := &agent.Invocation{}
+	out := at.wrapWithCompletion(context.Background(), badInv, src)
+	got, ok := <-out
+	require.True(t, ok)
+	require.Same(t, evt, got)
+
+	_, ok = <-out
+	require.False(t, ok)
+}
+
+func TestTool_wrapWithCallSemantics_NilInvocationReturnsSrc(t *testing.T) {
+	at := NewTool(&mockAgent{name: "x", description: "x"})
+
+	src := make(chan *event.Event, 1)
+	src <- event.New("inv", "author")
+	close(src)
+
+	out := at.wrapWithCallSemantics(context.Background(), nil, src)
+	require.Equal(
+		t,
+		reflect.ValueOf(src).Pointer(),
+		reflect.ValueOf(out).Pointer(),
+	)
+}
+
+func TestTool_wrapWithCallSemantics_NotifyCompletionError(t *testing.T) {
+	at := NewTool(&mockAgent{name: "x", description: "x"})
+
+	sess := session.NewSession("app", "user", "session")
+	badInv := &agent.Invocation{
+		Session: sess,
+		Message: model.NewAssistantMessage("x"),
+	}
+
+	src := make(chan *event.Event, 1)
+	evt := event.New("inv", "author")
+	evt.RequiresCompletion = true
+	src <- evt
+	close(src)
+
+	out := at.wrapWithCallSemantics(context.Background(), badInv, src)
+	_, ok := <-out
+	require.True(t, ok)
+	_, ok = <-out
+	require.False(t, ok)
+}
+
+func TestTool_wrapWithCallSemantics_ForwardsNilEvents(t *testing.T) {
+	at := NewTool(&mockAgent{name: "x", description: "x"})
+	sess := session.NewSession("app", "user", "session")
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewAssistantMessage("x")),
+	)
+
+	src := make(chan *event.Event, 1)
+	src <- nil
+	close(src)
+
+	out := at.wrapWithCallSemantics(context.Background(), inv, src)
+	got, ok := <-out
+	require.True(t, ok)
+	require.Nil(t, got)
+	_, ok = <-out
+	require.False(t, ok)
+}
+
+func TestTool_wrapWithCallSemantics_SessionNilUsesCompletion(t *testing.T) {
+	at := NewTool(&mockAgent{name: "x", description: "x"})
+	inv := agent.NewInvocation()
+
+	src := make(chan *event.Event, 1)
+	evt := event.New(inv.InvocationID, "author")
+	evt.RequiresCompletion = true
+	completionID := agent.GetAppendEventNoticeKey(evt.ID)
+	require.NotNil(t, inv.AddNoticeChannel(context.Background(), completionID))
+	src <- evt
+	close(src)
+
+	out := at.wrapWithCallSemantics(context.Background(), inv, src)
+	_, ok := <-out
+	require.True(t, ok)
+	_, ok = <-out
+	require.False(t, ok)
+
+	require.NoError(t, inv.AddNoticeChannelAndWait(
+		context.Background(), completionID, time.Second,
+	))
+}
+
+func TestTool_isGraphCompletionEvent_NilCases(t *testing.T) {
+	require.False(t, isGraphCompletionEvent(nil))
+	require.False(t, isGraphCompletionEvent(&event.Event{}))
+}
+
+func TestTool_appendEvent_NilCases(t *testing.T) {
+	at := NewTool(&mockAgent{name: "x", description: "x"})
+	at.appendEvent(context.Background(), nil, nil)
+
+	inv := agent.NewInvocation()
+	at.appendEvent(context.Background(), inv, nil)
+	at.appendEvent(context.Background(), inv, event.New("inv", "author"))
+}
+
 func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 	sa := &streamingMockAgent{name: "stream-agent"}
 	at := NewTool(sa, WithStreamInner(true))
