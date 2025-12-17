@@ -41,6 +41,8 @@ const (
 	ObjectTypeGraphNodeComplete = "graph.node.complete"
 	// ObjectTypeGraphNodeError is the object type for node error events.
 	ObjectTypeGraphNodeError = "graph.node.error"
+	// ObjectTypeGraphNodeCustom is the object type for node custom events emitted by NodeFunc.
+	ObjectTypeGraphNodeCustom = "graph.node.custom"
 	// ObjectTypeGraphPregelStep is the object type for Pregel step events.
 	ObjectTypeGraphPregelStep = "graph.pregel.step"
 	// ObjectTypeGraphPregelPlanning is the object type for Pregel planning events.
@@ -84,6 +86,8 @@ const (
 	// MetadataKeyCacheHit is a synthetic key set on node completion events when
 	// a cache hit occurs for the node's output.
 	MetadataKeyCacheHit = "_cache_hit"
+	// MetadataKeyNodeCustom is the key for node custom event metadata.
+	MetadataKeyNodeCustom = "_node_custom_metadata"
 )
 
 // NodeType represents the type of a graph node.
@@ -336,6 +340,46 @@ type CompletionMetadata struct {
 	FinalStateKeys int `json:"finalStateKeys"`
 }
 
+// NodeCustomEventCategory represents the category of node custom events.
+type NodeCustomEventCategory string
+
+// Node custom event category constants.
+const (
+	// NodeCustomEventCategoryCustom is the category for general custom events.
+	NodeCustomEventCategoryCustom NodeCustomEventCategory = "custom"
+	// NodeCustomEventCategoryProgress is the category for progress events.
+	NodeCustomEventCategoryProgress NodeCustomEventCategory = "progress"
+	// NodeCustomEventCategoryText is the category for streaming text events.
+	NodeCustomEventCategoryText NodeCustomEventCategory = "text"
+)
+
+// String returns the string representation of the node custom event category.
+func (c NodeCustomEventCategory) String() string {
+	return string(c)
+}
+
+// NodeCustomEventMetadata contains metadata about node custom events.
+type NodeCustomEventMetadata struct {
+	// EventType is the user-defined event type.
+	EventType string `json:"eventType"`
+	// Category is the category of the custom event (custom, progress, text).
+	Category NodeCustomEventCategory `json:"category"`
+	// NodeID is the ID of the node that emitted the event.
+	NodeID string `json:"nodeId"`
+	// InvocationID is the invocation ID of the current execution.
+	InvocationID string `json:"invocationId"`
+	// StepNumber is the Pregel step number when the event was emitted.
+	StepNumber int `json:"stepNumber,omitempty"`
+	// Timestamp is when the event was emitted.
+	Timestamp time.Time `json:"timestamp"`
+	// Payload is the custom payload data.
+	Payload any `json:"payload,omitempty"`
+	// Progress is the progress percentage (0-100) for progress events.
+	Progress float64 `json:"progress,omitempty"`
+	// Message is the message for progress events or text content for text events.
+	Message string `json:"message,omitempty"`
+}
+
 // EventOption is a function that configures a graph event.
 type EventOption func(*event.Event)
 
@@ -419,6 +463,20 @@ func WithStateMetadata(metadata StateUpdateMetadata) EventOption {
 		// Marshal metadata to JSON.
 		if jsonData, err := json.Marshal(metadata); err == nil {
 			e.StateDelta[MetadataKeyState] = jsonData
+		}
+	}
+}
+
+// WithNodeCustomMetadata adds node custom event metadata to the event.
+func WithNodeCustomMetadata(metadata NodeCustomEventMetadata) EventOption {
+	return func(e *event.Event) {
+		// Store metadata in StateDelta as JSON.
+		if e.StateDelta == nil {
+			e.StateDelta = make(map[string][]byte)
+		}
+		// Marshal metadata to JSON.
+		if jsonData, err := json.Marshal(metadata); err == nil {
+			e.StateDelta[MetadataKeyNodeCustom] = jsonData
 		}
 	}
 }
@@ -1365,8 +1423,20 @@ func serializeFinalState(e *event.Event, state State) {
 		if isInternalStateKey(key) {
 			continue
 		}
+
 		// Marshal a deep-copied snapshot to avoid racing on shared references.
-		if jsonData, err := json.Marshal(deepCopyAny(value)); err == nil {
+		snapshot := deepCopyAny(value)
+
+		// Special case: when users put JSON bytes into graph state (e.g.,
+		// json.Marshal output), encoding/json would base64 it if we marshal the
+		// []byte again. If it's already valid JSON, keep it as-is so downstream
+		// consumers can json.Unmarshal it directly.
+		if raw, ok := snapshot.([]byte); ok && json.Valid(raw) {
+			e.StateDelta[key] = raw
+			continue
+		}
+
+		if jsonData, err := json.Marshal(snapshot); err == nil {
 			e.StateDelta[key] = jsonData
 		}
 	}
@@ -1517,4 +1587,204 @@ func NewCheckpointCommittedEvent(opts ...CheckpointEventOption) *event.Event {
 	}
 
 	return e
+}
+
+// NodeCustomEventOptions contains options for creating node custom events.
+type NodeCustomEventOptions struct {
+	InvocationID string
+	NodeID       string
+	EventType    string
+	Category     NodeCustomEventCategory
+	StepNumber   int
+	Payload      any
+	Progress     float64
+	Message      string
+	Branch       string
+}
+
+// NodeCustomEventOption is a function that configures node custom event options.
+type NodeCustomEventOption func(*NodeCustomEventOptions)
+
+// WithNodeCustomEventInvocationID sets the invocation ID for node custom events.
+func WithNodeCustomEventInvocationID(invocationID string) NodeCustomEventOption {
+	return func(opts *NodeCustomEventOptions) {
+		opts.InvocationID = invocationID
+	}
+}
+
+// WithNodeCustomEventNodeID sets the node ID for node custom events.
+func WithNodeCustomEventNodeID(nodeID string) NodeCustomEventOption {
+	return func(opts *NodeCustomEventOptions) {
+		opts.NodeID = nodeID
+	}
+}
+
+// WithNodeCustomEventEventType sets the event type for node custom events.
+func WithNodeCustomEventEventType(eventType string) NodeCustomEventOption {
+	return func(opts *NodeCustomEventOptions) {
+		opts.EventType = eventType
+	}
+}
+
+// WithNodeCustomEventCategory sets the category for node custom events.
+func WithNodeCustomEventCategory(category NodeCustomEventCategory) NodeCustomEventOption {
+	return func(opts *NodeCustomEventOptions) {
+		opts.Category = category
+	}
+}
+
+// WithNodeCustomEventStepNumber sets the step number for node custom events.
+func WithNodeCustomEventStepNumber(stepNumber int) NodeCustomEventOption {
+	return func(opts *NodeCustomEventOptions) {
+		opts.StepNumber = stepNumber
+	}
+}
+
+// WithNodeCustomEventPayload sets the payload for node custom events.
+func WithNodeCustomEventPayload(payload any) NodeCustomEventOption {
+	return func(opts *NodeCustomEventOptions) {
+		opts.Payload = payload
+	}
+}
+
+// WithNodeCustomEventProgress sets the progress for node custom events.
+func WithNodeCustomEventProgress(progress float64) NodeCustomEventOption {
+	return func(opts *NodeCustomEventOptions) {
+		opts.Progress = progress
+	}
+}
+
+// WithNodeCustomEventMessage sets the message for node custom events.
+func WithNodeCustomEventMessage(message string) NodeCustomEventOption {
+	return func(opts *NodeCustomEventOptions) {
+		opts.Message = message
+	}
+}
+
+// WithNodeCustomEventBranch sets the branch for node custom events.
+func WithNodeCustomEventBranch(branch string) NodeCustomEventOption {
+	return func(opts *NodeCustomEventOptions) {
+		opts.Branch = branch
+	}
+}
+
+// NewNodeCustomEvent creates a new node custom event.
+// This function is used for creating general custom events emitted by NodeFunc.
+func NewNodeCustomEvent(opts ...NodeCustomEventOption) *event.Event {
+	options := &NodeCustomEventOptions{
+		Category: NodeCustomEventCategoryCustom,
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	metadata := NodeCustomEventMetadata{
+		EventType:    options.EventType,
+		Category:     options.Category,
+		NodeID:       options.NodeID,
+		InvocationID: options.InvocationID,
+		StepNumber:   options.StepNumber,
+		Timestamp:    time.Now(),
+		Payload:      options.Payload,
+		Progress:     options.Progress,
+		Message:      options.Message,
+	}
+
+	evt := NewGraphEvent(
+		options.InvocationID,
+		formatNodeAuthor(options.NodeID, AuthorGraphNode),
+		ObjectTypeGraphNodeCustom,
+		WithNodeCustomMetadata(metadata),
+	)
+	if options.Branch != "" {
+		evt.Branch = options.Branch
+	}
+	return evt
+}
+
+// NewNodeProgressEvent creates a new progress event for node execution.
+// Progress should be a value between 0 and 100.
+func NewNodeProgressEvent(opts ...NodeCustomEventOption) *event.Event {
+	options := &NodeCustomEventOptions{
+		EventType: "progress",
+		Category:  NodeCustomEventCategoryProgress,
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	// Ensure category and event type are set for progress events
+	options.Category = NodeCustomEventCategoryProgress
+	if options.EventType == "" {
+		options.EventType = "progress"
+	}
+
+	// Clamp progress to 0-100
+	if options.Progress < 0 {
+		options.Progress = 0
+	}
+	if options.Progress > 100 {
+		options.Progress = 100
+	}
+
+	metadata := NodeCustomEventMetadata{
+		EventType:    options.EventType,
+		Category:     options.Category,
+		NodeID:       options.NodeID,
+		InvocationID: options.InvocationID,
+		StepNumber:   options.StepNumber,
+		Timestamp:    time.Now(),
+		Progress:     options.Progress,
+		Message:      options.Message,
+	}
+
+	evt := NewGraphEvent(
+		options.InvocationID,
+		formatNodeAuthor(options.NodeID, AuthorGraphNode),
+		ObjectTypeGraphNodeCustom,
+		WithNodeCustomMetadata(metadata),
+	)
+	if options.Branch != "" {
+		evt.Branch = options.Branch
+	}
+	return evt
+}
+
+// NewNodeTextEvent creates a new streaming text event for node execution.
+// This is useful for streaming intermediate text output from a node.
+func NewNodeTextEvent(opts ...NodeCustomEventOption) *event.Event {
+	options := &NodeCustomEventOptions{
+		EventType: "text",
+		Category:  NodeCustomEventCategoryText,
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	// Ensure category and event type are set for text events
+	options.Category = NodeCustomEventCategoryText
+	if options.EventType == "" {
+		options.EventType = "text"
+	}
+
+	metadata := NodeCustomEventMetadata{
+		EventType:    options.EventType,
+		Category:     options.Category,
+		NodeID:       options.NodeID,
+		InvocationID: options.InvocationID,
+		StepNumber:   options.StepNumber,
+		Timestamp:    time.Now(),
+		Message:      options.Message,
+	}
+
+	evt := NewGraphEvent(
+		options.InvocationID,
+		formatNodeAuthor(options.NodeID, AuthorGraphNode),
+		ObjectTypeGraphNodeCustom,
+		WithNodeCustomMetadata(metadata),
+	)
+	if options.Branch != "" {
+		evt.Branch = options.Branch
+	}
+	return evt
 }

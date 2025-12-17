@@ -236,11 +236,12 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			// Add session summary as a system message if enabled and available.
 			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
 			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
-				// Merge existing system messages first, then merge summary into the single system message.
+				// Insert summary as a separate system message after the first system message.
 				systemMsgIndex := findSystemMessageIndex(req.Messages)
 				if systemMsgIndex >= 0 {
-					// Merge summary into the existing system message.
-					req.Messages[systemMsgIndex].Content += "\n\n" + msg.Content
+					// Insert summary as a new system message after the first system message.
+					req.Messages = append(req.Messages[:systemMsgIndex+1],
+						append([]model.Message{*msg}, req.Messages[systemMsgIndex+1:]...)...)
 				} else {
 					// No system message exists, prepend new system message.
 					req.Messages = append([]model.Message{*msg}, req.Messages...)

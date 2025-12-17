@@ -239,10 +239,11 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 		return nil, fmt.Errorf("event converter not set")
 	}
 	eventChan := make(chan *event.Event, r.streamingBufSize)
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		defer close(eventChan)
 		r.executeStreaming(ctx, invocation, eventChan)
-	}()
+	}(runCtx)
 	return eventChan, nil
 }
 
@@ -380,7 +381,8 @@ func (r *A2AAgent) emitFinalEvent(
 // runNonStreaming handles non-streaming A2A communication
 func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, defaultNonStreamingChannelSize)
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		defer close(eventChan)
 
 		// Construct A2A message from session
@@ -426,7 +428,7 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 		for _, evt := range events {
 			agent.EmitEvent(ctx, invocation, eventChan, evt)
 		}
-	}()
+	}(runCtx)
 	return eventChan, nil
 }
 
@@ -438,12 +440,14 @@ func (r *A2AAgent) wrapEventChannelWithTelemetry(
 ) <-chan *event.Event {
 	wrappedChan := make(chan *event.Event, cap(originalChan))
 
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
+		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
 			if fullRespEvent != nil {
 				log.Debug("fullRespEvent is not ni")
-				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, nil)
+				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage)
 			}
 			span.End()
 			close(wrappedChan)
@@ -451,13 +455,18 @@ func (r *A2AAgent) wrapEventChannelWithTelemetry(
 
 		for evt := range originalChan {
 			if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
+				if evt.Response.Usage != nil {
+					tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
+					tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
+					tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
+				}
 				fullRespEvent = evt
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
 			}
 		}
-	}()
+	}(runCtx)
 
 	return wrappedChan
 }

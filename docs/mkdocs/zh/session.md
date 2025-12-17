@@ -255,18 +255,29 @@ summarizer := summary.NewSummarizer(
 
 **上下文注入机制：**
 
-启用摘要后，框架会将摘要作为系统消息前置到 LLM 输入，同时包含摘要时间点之后的所有增量事件，保证完整上下文：
+启用摘要后，框架会将摘要作为独立的系统消息插入到第一个现有系统消息之后，同时包含摘要时间点之后的所有增量事件，保证完整上下文：
 
 ```
+When AddSessionSummary = true:
 ┌─────────────────────────────────────────┐
-│ System Prompt                           │
+│ Existing System Message (optional)      │ ← 如果存在
 ├─────────────────────────────────────────┤
-│ Session Summary (system message)        │ ← Compressed history
+│ Session Summary (system message)        │ ← 插入到第一个系统消息之后
 ├─────────────────────────────────────────┤
 │ Event 1 (after summary)                 │ ┐
 │ Event 2                                 │ │
-│ Event 3                                 │ │ New events
-│ ...                                     │ │ (fully retained)
+│ Event 3                                 │ │ 摘要后的所有增量事件
+│ ...                                     │ │ （完整保留）
+│ Event N (current message)               │ ┘
+└─────────────────────────────────────────┘
+
+When AddSessionSummary = false:
+┌─────────────────────────────────────────┐
+│ System Prompt                           │
+├─────────────────────────────────────────┤
+│ Event N-k+1                             │ ┐
+│ Event N-k+2                             │ │ 最近 k 轮对话
+│ ...                                     │ │ （当 MaxHistoryRuns=k 时）
 │ Event N (current message)               │ ┘
 └─────────────────────────────────────────┘
 ```
@@ -525,10 +536,11 @@ summary:{appName}:{userID}:{sessionID}:{filterKey} -> String (JSON)
 **连接配置：**
 
 方式一：
+
 - **`WithPostgresClientDSN(dsn string)`**：PostgreSQL DSN。 示例：`postgres://user:password@localhost:5432/dbname`
 
-
 方式二：
+
 - **`WithHost(host string)`**：PostgreSQL 服务器地址。默认值为 `localhost`。
 - **`WithPort(port int)`**：PostgreSQL 服务器端口。默认值为 `5432`。
 - **`WithUser(user string)`**：数据库用户名。默认值为 `postgres`。
@@ -537,6 +549,7 @@ summary:{appName}:{userID}:{sessionID}:{filterKey} -> String (JSON)
 - **`WithSSLMode(sslMode string)`**：SSL 模式。默认值为 `disable`。可选值：`disable`、`require`、`verify-ca`、`verify-full`。
 
 方式三：
+
 - **`WithPostgresInstance(name string)`**：使用预配置的 PostgreSQL 实例。
 
 优先级：方式一 > 方式二 > 方式三
@@ -678,10 +691,10 @@ sessionService, err := postgres.NewService(
 
 **删除行为对比：**
 
-| 配置               | 删除操作                        | 查询行为                  | 数据恢复 |
-| ------------------ | ------------------------------- | ------------------------- | -------- |
+| 配置               | 删除操作                        | 查询行为                                                | 数据恢复 |
+| ------------------ | ------------------------------- | ------------------------------------------------------- | -------- |
 | `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 查询附带 `WHERE deleted_at IS NULL`，仅返回未软删除数据 | 可恢复   |
-| `softDelete=false` | `DELETE FROM ...`               | 查询所有记录              | 不可恢复 |
+| `softDelete=false` | `DELETE FROM ...`               | 查询所有记录                                            | 不可恢复 |
 
 **TTL 自动清理：**
 
@@ -936,10 +949,10 @@ sessionService, err := mysql.NewService(
 
 **删除行为对比：**
 
-| 配置               | 删除操作                        | 查询行为                  | 数据恢复 |
-| ------------------ | ------------------------------- | ------------------------- | -------- |
+| 配置               | 删除操作                        | 查询行为                                                | 数据恢复 |
+| ------------------ | ------------------------------- | ------------------------------------------------------- | -------- |
 | `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 查询附带 `WHERE deleted_at IS NULL`，仅返回未软删除数据 | 可恢复   |
-| `softDelete=false` | `DELETE FROM ...`               | 查询所有记录              | 不可恢复 |
+| `softDelete=false` | `DELETE FROM ...`               | 查询所有记录                                            | 不可恢复 |
 
 **TTL 自动清理：**
 
@@ -1327,7 +1340,7 @@ llmagent.WithAddSessionSummary(true)
 
 **工作方式：**
 
-- 摘要作为系统消息自动前置到 LLM 输入
+- 会话摘要作为独立的系统消息插入到第一个现有系统消息之后（如果没有系统消息则前置添加）
 - 包含摘要时间点之后的**所有增量事件**（不截断）
 - 保证完整上下文：浓缩历史 + 完整新对话
 - **`WithMaxHistoryRuns` 参数被忽略**

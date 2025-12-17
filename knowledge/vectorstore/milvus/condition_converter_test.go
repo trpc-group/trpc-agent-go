@@ -19,164 +19,197 @@ import (
 )
 
 func TestMilvusFilterConverter_Convert(t *testing.T) {
+	type args struct {
+		cond *searchfilter.UniversalFilterCondition
+	}
+	type testHandler func(t *testing.T, res *convertResult, err error)
+
+	c := newMilvusFilterConverter("metadata")
+
 	tests := []struct {
-		name       string
-		condition  *searchfilter.UniversalFilterCondition
-		wantErr    bool
-		wantFilter string
-		wantParams map[string]any
+		name    string
+		args    args
+		handler testHandler
 	}{
 		{
-			name:      "nil condition",
-			condition: nil,
-			wantErr:   true,
+			name: "nil condition",
+			args: args{cond: nil},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.Error(t, err)
+			},
 		},
 		{
 			name: "equal operator with string value",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "name",
 				Operator: searchfilter.OperatorEqual,
 				Value:    "test",
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `name == {name_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"name_1": "test"}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `name == {name}`,
-			wantParams: map[string]any{"name": "test"},
 		},
 		{
 			name: "equal operator with numeric value",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "age",
 				Operator: searchfilter.OperatorEqual,
 				Value:    25,
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `age == {age_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"age_1": 25}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `age == {age}`,
-			wantParams: map[string]any{"age": 25},
 		},
 		{
 			name: "not equal operator with string value",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "status",
 				Operator: searchfilter.OperatorNotEqual,
 				Value:    "active",
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `status != {status_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"status_1": "active"}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `status != {status}`,
-			wantParams: map[string]any{"status": "active"},
 		},
 		{
 			name: "greater than operator",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "score",
 				Operator: searchfilter.OperatorGreaterThan,
 				Value:    90,
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `score > {score_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"score_1": 90}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `score > {score}`,
-			wantParams: map[string]any{"score": 90},
 		},
 		{
 			name: "greater than or equal operator",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "score",
 				Operator: searchfilter.OperatorGreaterThanOrEqual,
 				Value:    80,
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `score >= {score_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"score_1": 80}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `score >= {score}`,
-			wantParams: map[string]any{"score": 80},
 		},
 		{
 			name: "less than operator",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "price",
 				Operator: searchfilter.OperatorLessThan,
 				Value:    100,
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `price < {price_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"price_1": 100}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `price < {price}`,
-			wantParams: map[string]any{"price": 100},
 		},
 		{
 			name: "less than or equal operator",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "price",
 				Operator: searchfilter.OperatorLessThanOrEqual,
 				Value:    50,
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `price <= {price_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"price_1": 50}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `price <= {price}`,
-			wantParams: map[string]any{"price": 50},
 		},
 		{
 			name: "boolean value",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "active",
 				Operator: searchfilter.OperatorEqual,
 				Value:    true,
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `active == {active_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"active_1": true}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `active == {active}`,
-			wantParams: map[string]any{"active": true},
 		},
 		{
 			name: "metadata.xx field",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "metadata.active",
 				Operator: searchfilter.OperatorEqual,
 				Value:    true,
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `metadata["active"] == {metadata_active_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"metadata_active_1": true}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `metadata["active"] == {metadata.active}`,
-			wantParams: map[string]any{"metadata.active": true},
 		},
 		{
 			name: "in operator with string values",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "name",
 				Operator: searchfilter.OperatorIn,
 				Value:    []any{"Alice", "Bob", "Charlie"},
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `name in {name_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"name_1": []any{"Alice", "Bob", "Charlie"}}, res.params)
 			},
-			wantFilter: `name in {name}`,
-			wantErr:    false,
-			wantParams: map[string]any{"name": []any{"Alice", "Bob", "Charlie"}},
 		},
 		{
 			name: "not in operator with numeric values",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "age",
 				Operator: searchfilter.OperatorNotIn,
 				Value:    []any{18, 25, 30},
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `age not in {age_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"age_1": []any{18, 25, 30}}, res.params)
 			},
-			wantFilter: `age not in {age}`,
-			wantErr:    false,
-			wantParams: map[string]any{"age": []any{18, 25, 30}},
 		},
 		{
 			name: "like operator",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "name",
 				Operator: searchfilter.OperatorLike,
 				Value:    "test",
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `name like {name_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"name_1": "test"}, res.params)
 			},
-			wantFilter: `name like {name}`,
-			wantErr:    false,
-			wantParams: map[string]any{"name": "test"},
 		},
 		{
 			name: "not like operator",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "name",
 				Operator: searchfilter.OperatorNotLike,
 				Value:    "test",
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `name not like {name_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"name_1": "test"}, res.params)
 			},
-			wantFilter: `name not like {name}`,
-			wantErr:    false,
-			wantParams: map[string]any{"name": "test"},
 		},
 		{
 			name: "logical AND operator",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Operator: searchfilter.OperatorAnd,
 				Value: []*searchfilter.UniversalFilterCondition{
 					{
@@ -190,14 +223,16 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 						Value:    25,
 					},
 				},
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `(name == {name_1}) and (age > {age_2})`, res.exprStr)
+				assert.Equal(t, map[string]any{"name_1": "test", "age_2": 25}, res.params)
 			},
-			wantFilter: `(name == {name}) and (age > {age})`,
-			wantErr:    false,
-			wantParams: map[string]any{"name": "test", "age": 25},
 		},
 		{
 			name: "logical OR operator",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Operator: searchfilter.OperatorOr,
 				Value: []*searchfilter.UniversalFilterCondition{
 					{
@@ -211,14 +246,16 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 						Value:    80,
 					},
 				},
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `(status == {status_1}) or (score < {score_2})`, res.exprStr)
+				assert.Equal(t, map[string]any{"status_1": "active", "score_2": 80}, res.params)
 			},
-			wantFilter: `(status == {status}) or (score < {score})`,
-			wantErr:    false,
-			wantParams: map[string]any{"status": "active", "score": 80},
 		},
 		{
 			name: "composite condition with nested operators",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Operator: searchfilter.OperatorAnd,
 				Value: []*searchfilter.UniversalFilterCondition{
 					{
@@ -242,288 +279,211 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 						},
 					},
 				},
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `(name == {name_1}) and ((status == {status_2}) or (score < {score_3}))`, res.exprStr)
+				assert.Equal(t, map[string]any{"name_1": "test", "status_2": "active", "score_3": 80}, res.params)
 			},
-			wantFilter: `(name == {name}) and ((status == {status}) or (score < {score}))`,
-			wantErr:    false,
-			wantParams: map[string]any{"name": "test", "status": "active", "score": 80},
 		},
 		{
 			name: "between operator",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "age",
 				Operator: searchfilter.OperatorBetween,
 				Value:    []int{18, 30},
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `age >= {age_1_0} and age <= {age_1_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"age_1_0": 18, "age_1_1": 30}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `age >= {age_0} and age <= {age_1}`,
-			wantParams: map[string]any{"age_0": 18, "age_1": 30},
 		},
 		{
-			name: "invalid operator",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "active",
-				Operator: "invalid",
-				Value:    true,
-			},
-			wantErr: true,
-		},
-	}
-
-	c := &milvusFilterConverter{metadataFieldName: "metadata"}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cr, err := c.Convert(tt.condition)
-
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-
-			assert.NoError(t, err)
-			assert.Equal(t, tt.wantFilter, cr.exprStr)
-			if tt.wantParams != nil {
-				assert.Equal(t, tt.wantParams, cr.params)
-			}
-		})
-	}
-}
-
-func TestMilvusFilterConverter_ConvertCondition(t *testing.T) {
-	tests := []struct {
-		name       string
-		condition  *searchfilter.UniversalFilterCondition
-		wantErr    bool
-		wantFilter string
-	}{
-		{
-			name: "equal operator with string value",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "name",
+			name: "metadata field equal operator",
+			args: args{cond: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.topic",
 				Operator: searchfilter.OperatorEqual,
-				Value:    "test",
+				Value:    "AI",
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `metadata["topic"] == {metadata_topic_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"metadata_topic_1": "AI"}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `name == {name}`,
 		},
 		{
-			name: "equal operator with numeric value",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "age",
-				Operator: searchfilter.OperatorEqual,
-				Value:    25,
+			name: "metadata field in operator",
+			args: args{cond: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.tags",
+				Operator: searchfilter.OperatorIn,
+				Value:    []any{"AI", "ML", "NLP"},
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `metadata["tags"] in {metadata_tags_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"metadata_tags_1": []any{"AI", "ML", "NLP"}}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `age == {age}`,
 		},
 		{
-			name: "not equal operator with string value",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "status",
-				Operator: searchfilter.OperatorNotEqual,
-				Value:    "active",
+			name: "metadata field between operator",
+			args: args{cond: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.score",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []float64{0.5, 1.0},
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `metadata["score"] >= {metadata_score_1_0} and metadata["score"] <= {metadata_score_1_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"metadata_score_1_0": 0.5, "metadata_score_1_1": 1.0}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `status != {status}`,
 		},
 		{
-			name: "greater than operator",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "score",
+			name: "metadata field greater than operator",
+			args: args{cond: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.count",
 				Operator: searchfilter.OperatorGreaterThan,
-				Value:    90,
-			},
-			wantErr:    false,
-			wantFilter: `score > {score}`,
-		},
-		{
-			name: "greater than or equal operator",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "score",
-				Operator: searchfilter.OperatorGreaterThanOrEqual,
-				Value:    80,
-			},
-			wantErr:    false,
-			wantFilter: `score >= {score}`,
-		},
-		{
-			name: "less than operator",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "price",
-				Operator: searchfilter.OperatorLessThan,
 				Value:    100,
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `metadata["count"] > {metadata_count_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"metadata_count_1": 100}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `price < {price}`,
 		},
 		{
-			name: "less than or equal operator",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "price",
-				Operator: searchfilter.OperatorLessThanOrEqual,
-				Value:    50,
+			name: "metadata field not in operator",
+			args: args{cond: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.category",
+				Operator: searchfilter.OperatorNotIn,
+				Value:    []any{"spam", "ads"},
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `metadata["category"] not in {metadata_category_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"metadata_category_1": []any{"spam", "ads"}}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `price <= {price}`,
 		},
 		{
-			name: "boolean value",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "active",
-				Operator: searchfilter.OperatorEqual,
-				Value:    true,
-			},
-			wantErr:    false,
-			wantFilter: `active == {active}`,
-		},
-		{
-			name: "between operator",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "age",
-				Operator: searchfilter.OperatorBetween,
-				Value:    []int{18, 30},
-			},
-			wantErr:    false,
-			wantFilter: `age >= {age_0} and age <= {age_1}`,
-		},
-		{
-			name: "and operator",
-			condition: &searchfilter.UniversalFilterCondition{
+			name: "mixed schema and metadata fields with AND",
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Operator: searchfilter.OperatorAnd,
 				Value: []*searchfilter.UniversalFilterCondition{
 					{
-						Field:    "name",
+						Field:    "doc_id",
 						Operator: searchfilter.OperatorEqual,
-						Value:    "test",
+						Value:    "doc123",
+					},
+					{
+						Field:    "metadata.topic",
+						Operator: searchfilter.OperatorIn,
+						Value:    []any{"AI", "ML"},
 					},
 				},
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `(doc_id == {doc_id_1}) and (metadata["topic"] in {metadata_topic_2})`, res.exprStr)
+				assert.Equal(t, map[string]any{"doc_id_1": "doc123", "metadata_topic_2": []any{"AI", "ML"}}, res.params)
 			},
-			wantErr:    false,
-			wantFilter: `name == {name}`,
+		},
+		{
+			name: "metadata field with string containing quotes",
+			args: args{cond: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.title",
+				Operator: searchfilter.OperatorEqual,
+				Value:    `He said "Hello"`,
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `metadata["title"] == {metadata_title_1}`, res.exprStr)
+				assert.Equal(t, map[string]any{"metadata_title_1": `He said "Hello"`}, res.params)
+			},
 		},
 		{
 			name: "invalid operator",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "active",
 				Operator: "invalid",
 				Value:    true,
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.Error(t, err)
 			},
-			wantErr: true,
 		},
 		{
-			name: "empty filed equal to string",
-			condition: &searchfilter.UniversalFilterCondition{
+			name: "empty field equal to string",
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "",
 				Operator: searchfilter.OperatorEqual,
 				Value:    "test",
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.Error(t, err)
 			},
-			wantErr: true,
 		},
 		{
 			name: "empty field not equal to string",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "",
 				Operator: searchfilter.OperatorNotEqual,
 				Value:    "test",
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.Error(t, err)
 			},
-			wantErr: true,
-		},
-		{
-			name: "empty field greater than",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "",
-				Operator: searchfilter.OperatorGreaterThan,
-				Value:    10,
-			},
-			wantErr: true,
-		},
-		{
-			name: "empty field greater than or equal",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "",
-				Operator: searchfilter.OperatorGreaterThanOrEqual,
-				Value:    10,
-			},
-			wantErr: true,
-		},
-		{
-			name: "empty field less than",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "",
-				Operator: searchfilter.OperatorLessThan,
-				Value:    10,
-			},
-			wantErr: true,
-		},
-		{
-			name: "empty field less than or equal",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "",
-				Operator: searchfilter.OperatorLessThanOrEqual,
-				Value:    10,
-			},
-			wantErr: true,
-		},
-		{
-			name: "empty field like",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "",
-				Operator: searchfilter.OperatorLike,
-				Value:    "test",
-			},
-			wantErr: true,
 		},
 		{
 			name: "invalid in",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "age",
 				Operator: searchfilter.OperatorIn,
 				Value:    []any{},
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.Error(t, err)
 			},
-			wantErr: true,
-		},
-		{
-			name: "invalid in with empty field",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "",
-				Operator: searchfilter.OperatorIn,
-				Value:    []any{1, 2, 3},
-			},
-			wantErr: true,
 		},
 		{
 			name: "invalid between",
-			condition: &searchfilter.UniversalFilterCondition{
+			args: args{cond: &searchfilter.UniversalFilterCondition{
 				Field:    "age",
 				Operator: searchfilter.OperatorBetween,
 				Value:    []any{},
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.Error(t, err)
 			},
-			wantErr: true,
 		},
 		{
-			name: "invalid not in with empty field",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "",
-				Operator: searchfilter.OperatorBetween,
-				Value:    []any{1, 2},
+			name: "same field used multiple times (conflict check)",
+			args: args{cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Value: []*searchfilter.UniversalFilterCondition{
+					{
+						Field:    "age",
+						Operator: searchfilter.OperatorGreaterThan,
+						Value:    10,
+					},
+					{
+						Field:    "age",
+						Operator: searchfilter.OperatorLessThan,
+						Value:    5,
+					},
+				},
+			}},
+			handler: func(t *testing.T, res *convertResult, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, `(age > {age_1}) or (age < {age_2})`, res.exprStr)
+				assert.Equal(t, map[string]any{"age_1": 10, "age_2": 5}, res.params)
 			},
-			wantErr: true,
 		},
 	}
 
-	c := &milvusFilterConverter{}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cr, err := c.convertCondition(tt.condition)
-
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-
-			assert.NoError(t, err)
-			assert.Equal(t, tt.wantFilter, cr.exprStr)
+			res, err := c.Convert(tt.args.cond)
+			tt.handler(t, res, err)
 		})
 	}
 }

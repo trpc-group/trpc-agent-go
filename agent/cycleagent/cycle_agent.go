@@ -283,7 +283,8 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 	// Setup invocation.
 	a.setupInvocation(invocation)
 
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		defer close(eventChan)
 
 		// Handle before agent callbacks.
@@ -313,7 +314,7 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 
 		// Handle after agent callbacks.
 		a.handleAfterAgentCallbacks(ctx, invocation, eventChan, fullRespEvent)
-	}()
+	}(runCtx)
 
 	return eventChan, nil
 }

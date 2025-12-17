@@ -1059,6 +1059,8 @@ func (c *ctxCaptureSummarizer) Summarize(ctx context.Context, sess *session.Sess
 	close(c.done)
 	return "captured-summary", nil
 }
+func (c *ctxCaptureSummarizer) SetPrompt(prompt string)  {}
+func (c *ctxCaptureSummarizer) SetModel(m model.Model)   {}
 func (c *ctxCaptureSummarizer) Metadata() map[string]any { return map[string]any{} }
 
 func TestMemoryService_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {

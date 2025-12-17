@@ -522,7 +522,8 @@ func (a *LLMAgent) wrapEventChannel(
 	// Create a new channel with the same capacity as the original channel
 	wrappedChan := make(chan *event.Event, cap(originalChan))
 
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
@@ -536,13 +537,12 @@ func (a *LLMAgent) wrapEventChannel(
 		// Forward all events from the original channel
 		for evt := range originalChan {
 			if evt != nil && evt.Response != nil {
-
-				if evt.Response.Usage != nil {
-					tokenUsage.PromptTokens = evt.Response.Usage.PromptTokens
-					tokenUsage.CompletionTokens = evt.Response.Usage.CompletionTokens
-					tokenUsage.TotalTokens = evt.Response.Usage.TotalTokens
-				}
 				if !evt.Response.IsPartial {
+					if evt.Response.Usage != nil {
+						tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
+						tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
+						tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
+					}
 					fullRespEvent = evt
 				}
 
@@ -588,7 +588,7 @@ func (a *LLMAgent) wrapEventChannel(
 
 			agent.EmitEvent(ctx, invocation, wrappedChan, evt)
 		}
-	}()
+	}(runCtx)
 
 	return wrappedChan
 }

@@ -344,7 +344,7 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 	}
 	close(agentEvents)
 
-	last, final, raw, err := processAgentEventStream(
+	last, final, raw, _, _, err := processAgentEventStream(
 		ctx,
 		agentEvents,
 		nil,
@@ -357,6 +357,56 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 	require.Equal(t, "", last)
 	require.NotNil(t, final)
 	require.Len(t, raw, 1)
+}
+
+func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
+	ctx := context.Background()
+	agentEvents := make(chan *event.Event, 2)
+	parentEventChan := make(chan *event.Event, 2)
+
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			IsPartial: true,
+			Usage: &model.Usage{
+				PromptTokens:     1,
+				CompletionTokens: 2,
+				TotalTokens:      3,
+			},
+			Choices: []model.Choice{{Message: model.NewAssistantMessage("partial")}},
+		},
+	}
+
+	finalUsage := &model.Usage{
+		PromptTokens:     10,
+		CompletionTokens: 20,
+		TotalTokens:      30,
+	}
+	finalEvent := &event.Event{
+		Response: &model.Response{
+			IsPartial: false,
+			Usage:     finalUsage,
+			Choices:   []model.Choice{{Message: model.NewAssistantMessage("final")}},
+		},
+	}
+	agentEvents <- finalEvent
+	close(agentEvents)
+
+	last, _, _, fullRespEvent, tokenUsage, err := processAgentEventStream(
+		ctx,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "final", last)
+	require.Equal(t, finalUsage.PromptTokens, tokenUsage.PromptTokens)
+	require.Equal(t, finalUsage.CompletionTokens, tokenUsage.CompletionTokens)
+	require.Equal(t, finalUsage.TotalTokens, tokenUsage.TotalTokens)
+	require.Equal(t, finalEvent, fullRespEvent)
+	require.Len(t, parentEventChan, 2)
 }
 
 func TestProcessToolCalls_ParallelCancelOnFirstError(t *testing.T) {

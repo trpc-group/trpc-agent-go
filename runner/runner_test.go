@@ -354,6 +354,55 @@ func TestRunner_InvocationInjection(t *testing.T) {
 	assert.Contains(t, agentEvent.Response.Choices[0].Message.Content, "Invocation found in context with ID:")
 }
 
+func TestRunner_Run_WithAgentNameRegistry(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	defaultAgent := &mockAgent{name: "default-agent"}
+	altAgent := &mockAgent{name: "alt-agent"}
+	r := NewRunner("test-app", defaultAgent,
+		WithSessionService(sessionService),
+		WithAgent("alt", altAgent),
+	)
+
+	ctx := context.Background()
+	msg := model.NewUserMessage("hello")
+	ch, err := r.Run(ctx, "user", "session", msg, agent.WithAgentByName("alt"))
+	require.NoError(t, err)
+
+	var events []*event.Event
+	for e := range ch {
+		events = append(events, e)
+	}
+	require.Len(t, events, 2)
+	assert.Equal(t, "alt-agent", events[0].Author)
+	assert.Contains(t, events[0].Response.Choices[0].Message.Content, "hello")
+}
+
+func TestRunner_Run_WithAgentInstanceOverride(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	defaultAgent := &mockAgent{name: "default-agent"}
+	override := &mockAgent{name: "override-agent"}
+	r := NewRunner("test-app", defaultAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	msg := model.NewUserMessage("hi")
+	ch, err := r.Run(ctx, "user", "session", msg, agent.WithAgent(override))
+	require.NoError(t, err)
+
+	var events []*event.Event
+	for e := range ch {
+		events = append(events, e)
+	}
+	require.Len(t, events, 2)
+	assert.Equal(t, "override-agent", events[0].Author)
+}
+
+func TestRunner_Run_WithAgentNameNotFound(t *testing.T) {
+	r := NewRunner("test-app", &mockAgent{name: "default"}, WithSessionService(sessioninmemory.NewSessionService()))
+	ch, err := r.Run(context.Background(), "user", "session", model.NewUserMessage("hi"), agent.WithAgentByName("missing"))
+	require.Error(t, err)
+	require.Nil(t, ch)
+}
+
 // invocationVerificationAgent is a simple mock agent that verifies invocation is present in context.
 type invocationVerificationAgent struct {
 	name string
@@ -1049,7 +1098,8 @@ func TestRunner_Close_SessionServiceError(t *testing.T) {
 	// fails on Close.
 	r := &runner{
 		appName:             "test-app",
-		agent:               mockAgent,
+		defaultAgentName:    mockAgent.name,
+		agents:              map[string]agent.Agent{mockAgent.name: mockAgent},
 		sessionService:      errorSessionService,
 		ownedSessionService: true, // Mark as owned to trigger Close in runner.Close().
 	}
