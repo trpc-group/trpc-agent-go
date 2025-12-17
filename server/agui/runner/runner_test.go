@@ -17,6 +17,7 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/stretchr/testify/assert"
+	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -130,6 +131,7 @@ func TestRunUnderlyingRunnerError(t *testing.T) {
 		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator { return fakeTrans },
 		userIDResolver:    NewOptions().UserIDResolver,
 		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
 	}
 
 	input := &adapter.RunAgentInput{
@@ -172,6 +174,36 @@ func TestRunRunOptionResolverError(t *testing.T) {
 	assert.Equal(t, 0, underlying.calls)
 }
 
+func TestRunStartSpanError(t *testing.T) {
+	startErr := errors.New("start span fail")
+	underlying := &fakeRunner{}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	}
+	r := &runner{
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator {
+			return &fakeTranslator{}
+		},
+		userIDResolver: defaultUserIDResolver,
+		runOptionResolver: func(ctx context.Context, in *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			assert.Same(t, input, in)
+			return nil, nil
+		},
+		startSpan: func(ctx context.Context, in *adapter.RunAgentInput) (context.Context, trace.Span, error) {
+			assert.Same(t, input, in)
+			return ctx, trace.SpanFromContext(ctx), startErr
+		},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.Nil(t, eventsCh)
+	assert.ErrorIs(t, err, startErr)
+	assert.Equal(t, 0, underlying.calls)
+}
+
 func TestRunFlushesTracker(t *testing.T) {
 	recorder := &flushRecorder{}
 	underlying := &fakeRunner{
@@ -188,6 +220,7 @@ func TestRunFlushesTracker(t *testing.T) {
 		userIDResolver:    defaultUserIDResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		tracker:           recorder,
+		startSpan:         defaultStartSpan,
 	}
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
@@ -282,6 +315,7 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 			resolverCalled = true
 			return []agent.RunOption{agent.WithRequestID("resolver-request-id")}, nil
 		},
+		startSpan: defaultStartSpan,
 	}
 
 	eventsCh, err := r.Run(context.Background(), input)
@@ -314,6 +348,7 @@ func TestRunTranslateError(t *testing.T) {
 		},
 		userIDResolver:    NewOptions().UserIDResolver,
 		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
 	}
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
@@ -354,6 +389,7 @@ func TestRunNormal(t *testing.T) {
 			return "user-123", nil
 		},
 		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
 	}
 
 	input := &adapter.RunAgentInput{
@@ -415,6 +451,7 @@ func TestRunAgentInputHook(t *testing.T) {
 				return replaced, nil
 			},
 			runOptionResolver: defaultRunOptionResolver,
+			startSpan:         defaultStartSpan,
 		}
 
 		eventsCh, err := r.Run(context.Background(), baseInput)
@@ -455,6 +492,7 @@ func TestRunAgentInputHook(t *testing.T) {
 				return nil, nil
 			},
 			runOptionResolver: defaultRunOptionResolver,
+			startSpan:         defaultStartSpan,
 		}
 
 		ch, err := r.Run(context.Background(), input)
@@ -471,6 +509,7 @@ func TestRunAgentInputHook(t *testing.T) {
 				return nil, wantErr
 			},
 			runOptionResolver: defaultRunOptionResolver,
+			startSpan:         defaultStartSpan,
 		}
 		_, err := r.Run(context.Background(), &adapter.RunAgentInput{})
 		assert.Error(t, err)
@@ -745,6 +784,7 @@ func TestRunnerAfterTranslateCallbackOverridesEmission(t *testing.T) {
 		userIDResolver:     NewOptions().UserIDResolver,
 		translateCallbacks: callbacks,
 		runOptionResolver:  defaultRunOptionResolver,
+		startSpan:          defaultStartSpan,
 	}
 
 	input := &adapter.RunAgentInput{
@@ -860,6 +900,7 @@ func TestRunTrackingErrorsAreIgnored(t *testing.T) {
 			appendErr: appendErr,
 			flushErr:  flushErr,
 		},
+		startSpan: defaultStartSpan,
 	}
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
@@ -915,6 +956,7 @@ func TestTranslateCallbackError(t *testing.T) {
 			translatorFactory:  defaultTranslatorFactory,
 			userIDResolver:     defaultUserIDResolver,
 			runOptionResolver:  defaultRunOptionResolver,
+			startSpan:          defaultStartSpan,
 		}
 		input := &adapter.RunAgentInput{
 			ThreadID: "thread",
@@ -947,6 +989,7 @@ func TestTranslateCallbackError(t *testing.T) {
 			translatorFactory:  defaultTranslatorFactory,
 			userIDResolver:     defaultUserIDResolver,
 			runOptionResolver:  defaultRunOptionResolver,
+			startSpan:          defaultStartSpan,
 		}
 		input := &adapter.RunAgentInput{
 			ThreadID: "thread",

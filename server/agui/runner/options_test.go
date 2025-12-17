@@ -17,6 +17,7 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/stretchr/testify/assert"
+	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
@@ -48,6 +49,13 @@ func TestNewOptionsDefaults(t *testing.T) {
 	resolvedOpts, err := opts.RunOptionResolver(context.Background(), input)
 	assert.NoError(t, err)
 	assert.Nil(t, resolvedOpts)
+
+	assert.NotNil(t, opts.StartSpan)
+	rootCtx := context.Background()
+	ctx, span, err := opts.StartSpan(rootCtx, input)
+	assert.NoError(t, err)
+	assert.Equal(t, rootCtx, ctx)
+	assert.NotNil(t, span)
 }
 
 func TestWithUserIDResolver(t *testing.T) {
@@ -150,4 +158,17 @@ func TestWithRunOptionResolver(t *testing.T) {
 	assert.NotNil(t, opts.RunOptionResolver)
 	opts.RunOptionResolver(context.Background(), nil)
 	assert.True(t, called)
+}
+
+func TestWithStartSpan(t *testing.T) {
+	called := false
+	start := func(ctx context.Context, input *adapter.RunAgentInput) (context.Context, trace.Span, error) {
+		called = true
+		return ctx, trace.SpanFromContext(ctx), errors.New("start failed")
+	}
+
+	opts := NewOptions(WithStartSpan(start))
+	_, _, err := opts.StartSpan(context.Background(), &adapter.RunAgentInput{})
+	assert.True(t, called)
+	assert.EqualError(t, err, "start failed")
 }

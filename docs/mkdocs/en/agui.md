@@ -192,6 +192,52 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 `RunOptionResolver` executes for every incoming `RunAgentInput`. Its return value is forwarded to `runner.Run` in order. Returning an error surfaces a `RunError` to the client, while returning `nil` means no extra options are added.
 
+### Observability Reporting
+
+AG-UI Runner exposes `WithStartSpan` to create a tracing span at the beginning of each run and attach request attributes.
+
+```go
+import (
+    "go.opentelemetry.io/otel/attribute"
+    "go.opentelemetry.io/otel/trace"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+)
+
+// Custom StartSpan: set threadId/userId/input as span attributes
+func startSpan(ctx context.Context, input *adapter.RunAgentInput) (context.Context, trace.Span, error) {
+    userID, _ := userIDResolver(ctx, input)
+    attrs := []attribute.KeyValue{
+        attribute.String("session.id", input.ThreadID),
+        attribute.String("user.id", userID),
+        attribute.String("trace.input", input.Messages[len(input.Messages)-1].Content),
+    }
+    return atrace.Tracer.Start(ctx, "agui-run", trace.WithAttributes(attrs...))
+}
+
+func userIDResolver(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
+    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
+        return user, nil
+    }
+    return "anonymous", nil
+}
+
+r := runner.NewRunner(agent.Info().Name, agent)
+server, err := agui.New(r,
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithUserIDResolver(userIDResolver),
+        aguirunner.WithStartSpan(startSpan),
+    ),
+)
+```
+
+Pair this with an `AfterTranslate` callback to accumulate output and write it to `trace.output`. This keeps streaming events aligned with backend traces so you can inspect both input and final output in your observability platform. 
+
+For a Langfuse-specific example, see [examples/agui/server/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse).
+
 ### Event Translation Callback
 
 AG-UI provides an event translation callback mechanism, allowing custom logic to be inserted before and after the event translation process.

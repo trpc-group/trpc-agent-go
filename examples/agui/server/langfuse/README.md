@@ -13,7 +13,7 @@ Langfuse offers multiple deployment options. See the [official self-hosting guid
 ```bash
 export LANGFUSE_PUBLIC_KEY="your-public-key"
 export LANGFUSE_SECRET_KEY="your-secret-key"
-export LANGFUSE_HOST="http://localhost:3000"   # replace with your Langfuse base URL
+export LANGFUSE_HOST="localhost:3000"          # Langfuse host in host:port format (no http://)
 export LANGFUSE_INSECURE="true"                # keep false in production
 ```
 
@@ -40,9 +40,9 @@ On startup you should see a log entry similar to the one below.
 
 ## What Happens During a Request
 
-When a client posts an AG-UI run request, the custom SSE service in `sse.go` resolves the user ID, captures the latest user message, and starts an OpenTelemetry span enriched with Langfuse-specific attributes such as `langfuse.session.id`, `langfuse.user.id`, and `langfuse.trace.input`. The span context is propagated through the runner so every streamed event shares the same trace.
+When a client posts an AG-UI run request, the runner calls a `StartSpan` hook (see `startSpan` in `main.go`) to create an OpenTelemetry span enriched with Langfuse-specific attributes such as `langfuse.session.id`, `langfuse.user.id`, and `langfuse.trace.input`. The span context is propagated through the AG-UI runner so every streamed event shares the same trace.
 
-After each event is translated for AG-UI delivery, an `AfterTranslate` callback aggregates the incremental text deltas and records the final answer in the span attribute `langfuse.trace.output`. This guarantees that both the user prompt and the final model output appear side by side in Langfuse for easy inspection.
+After each event is translated for AG-UI delivery, an `AfterTranslate` callback aggregates incremental text deltas and records the final answer in the span attribute `langfuse.trace.output`. This guarantees that both the user prompt and the final model output appear side by side in Langfuse for easy inspection.
 
 ## Observing the Trace in Langfuse
 

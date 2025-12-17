@@ -195,6 +195,52 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 若返回错误，则会发送 `RunError` 事件；返回 `nil` 则表示不追加任何 `RunOption`。
 
+### 可观测平台上报
+
+AG-UI Runner 提供 `WithStartSpan`，用于在每次 run 开始时统一创建追踪 span 并写入请求相关属性。
+
+```go
+import (
+    "go.opentelemetry.io/otel/attribute"
+    "go.opentelemetry.io/otel/trace"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+)
+
+// 自定义 StartSpan，设置 threadId/userId/input 等属性
+func startSpan(ctx context.Context, input *adapter.RunAgentInput) (context.Context, trace.Span, error) {
+    userID, _ := userIDResolver(ctx, input)
+    attrs := []attribute.KeyValue{
+        attribute.String("session.id", input.ThreadID),
+        attribute.String("user.id", userID),
+        attribute.String("trace.input", input.Messages[len(input.Messages)-1].Content),
+    }
+    return atrace.Tracer.Start(ctx, "agui-run", trace.WithAttributes(attrs...))
+}
+
+func userIDResolver(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
+    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
+        return user, nil
+    }
+    return "anonymous", nil
+}
+
+r := runner.NewRunner(agent.Info().Name, agent)
+server, err := agui.New(r,
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithUserIDResolver(userIDResolver),
+        aguirunner.WithStartSpan(startSpan),
+    ),
+)
+```
+
+配合事件翻译回调 `AfterTranslate`，可在累积输出并写入 `trace.output`。这样前端流式事件与后端 trace 对齐，便于在可观测平台中同时查看输入和最终输出。 
+
+与 Langfuse 可观测平台的结合示例可参考 [examples/agui/server/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse)。
+
 ### 事件翻译回调
 
 AG-UI 提供了事件翻译的回调机制，便于在事件翻译流程的前后插入自定义逻辑。
