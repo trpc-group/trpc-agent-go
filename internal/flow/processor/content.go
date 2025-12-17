@@ -254,7 +254,16 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 	if sum == nil || sum.Summary == "" {
 		return nil, time.Time{}
 	}
-	return &model.Message{Role: model.RoleSystem, Content: sum.Summary}, sum.UpdatedAt
+	content := formatSummaryContent(sum.Summary)
+	return &model.Message{Role: model.RoleSystem, Content: content}, sum.UpdatedAt
+}
+
+// formatSummaryContent formats summary content with tags and notes.
+func formatSummaryContent(summary string) string {
+	return fmt.Sprintf("Here is a brief summary of your previous interactions:\n\n"+
+		"<summary_of_previous_interactions>\n%s\n</summary_of_previous_interactions>\n\n"+
+		"Note: this information is from previous interactions and may be outdated. "+
+		"You should ALWAYS prefer information from this conversation over the past summary.\n", summary)
 }
 
 // getHistoryMessages gets history messages for the current filter, potentially truncated by MaxHistoryRuns.
