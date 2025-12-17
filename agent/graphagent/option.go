@@ -35,6 +35,16 @@ const (
 	// TimelineFilterCurrentInvocation only includes messages within the current invocation session
 	// Suitable for scenarios requiring isolation between different invocation cycles in long-running sessions
 	TimelineFilterCurrentInvocation = processor.TimelineFilterCurrentInvocation
+
+	// ReasoningContentModeKeepAll keeps all reasoning_content in messages.
+	// Use this for debugging or when you need to retain thinking chains.
+	ReasoningContentModeKeepAll = processor.ReasoningContentModeKeepAll
+	// ReasoningContentModeDiscardPreviousTurns discards reasoning_content from previous
+	// request turns while keeping the current request's reasoning_content.
+	// This is the default mode, recommended for DeepSeek thinking mode.
+	ReasoningContentModeDiscardPreviousTurns = processor.ReasoningContentModeDiscardPreviousTurns
+	// ReasoningContentModeDiscardAll discards all reasoning_content from all messages.
+	ReasoningContentModeDiscardAll = processor.ReasoningContentModeDiscardAll
 )
 
 // MessageFilterMode is the mode for filtering messages.
@@ -84,6 +94,10 @@ type Options struct {
 	messageTimelineFilterMode string
 	// MessageBranchFilterMode is the message branch filter mode.
 	messageBranchFilterMode string
+	// ReasoningContentMode controls how reasoning_content is handled in multi-turn
+	// conversations. This is useful for models like DeepSeek that output reasoning_content
+	// in thinking mode.
+	ReasoningContentMode string
 }
 
 var (
@@ -184,5 +198,14 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 		default:
 			panic("invalid option value")
 		}
+	}
+}
+
+// WithReasoningContentMode sets the reasoning content mode for handling reasoning_content
+// in multi-turn conversations. This is useful for models like DeepSeek that output
+// reasoning_content in thinking mode.
+func WithReasoningContentMode(mode string) Option {
+	return func(opts *Options) {
+		opts.ReasoningContentMode = mode
 	}
 }

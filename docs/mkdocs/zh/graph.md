@@ -777,6 +777,14 @@ graphAgent, err := graphagent.New(
 	//  - graphagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
 	//  - graphagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
 	graphagent.WithMessageBranchFilterMode(graphagent.TimelineFilterAll),
+	// 推理内容模式（DeepSeek 思考模式）
+	// 默认值: graphagent.ReasoningContentModeDiscardPreviousTurns
+	// 可选值:
+	//  - graphagent.ReasoningContentModeDiscardPreviousTurns: 丢弃之前请求轮次的
+	//    reasoning_content（默认，推荐）
+	//  - graphagent.ReasoningContentModeKeepAll: 保留所有 reasoning_content
+	//  - graphagent.ReasoningContentModeDiscardAll: 丢弃所有 reasoning_content
+	graphagent.WithReasoningContentMode(graphagent.ReasoningContentModeDiscardPreviousTurns),
 	graphagent.WithAgentCallbacks(&agent.Callbacks{
 		// Agent 级回调配置
 	}),

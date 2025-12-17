@@ -549,11 +549,19 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 				},
 			}
 		case model.RoleAssistant:
+			assistantMsg := &openai.ChatCompletionAssistantMessageParam{
+				Content:   m.convertAssistantMessageContent(msg),
+				ToolCalls: m.convertToolCalls(msg.ToolCalls),
+			}
+			// Pass reasoning_content to API if present (required by DeepSeek for
+			// tool call scenarios within the same request turn).
+			if msg.ReasoningContent != "" {
+				assistantMsg.SetExtraFields(map[string]any{
+					model.ReasoningContentKey: msg.ReasoningContent,
+				})
+			}
 			result[i] = openai.ChatCompletionMessageParamUnion{
-				OfAssistant: &openai.ChatCompletionAssistantMessageParam{
-					Content:   m.convertAssistantMessageContent(msg),
-					ToolCalls: m.convertToolCalls(msg.ToolCalls),
-				},
+				OfAssistant: assistantMsg,
 			}
 		case model.RoleTool:
 			result[i] = openai.ChatCompletionMessageParamUnion{
