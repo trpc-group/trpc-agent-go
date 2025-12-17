@@ -75,7 +75,8 @@ func New(
 func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, f.channelBufferSize) // Configurable buffered channel for events.
 
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		defer close(eventChan)
 
 		// Optionally resume from pending tool calls before starting a new
@@ -95,7 +96,12 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 				// Treat context cancellation as graceful termination (common in streaming
 				// pipelines where the client closes the stream after final event).
 				if errors.Is(err, context.Canceled) {
-					log.Debugf("Flow context canceled for agent %s; exiting without error", invocation.AgentName)
+					log.DebugfContext(
+						ctx,
+						"Flow context canceled for agent %s; exiting "+
+							"without error",
+						invocation.AgentName,
+					)
 					return
 				}
 				var errorEvent *event.Event
@@ -106,7 +112,12 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 						agent.ErrorTypeStopAgentError,
 						err.Error(),
 					)
-					log.Errorf("Flow step stopped for agent %s: %v", invocation.AgentName, err)
+					log.ErrorfContext(
+						ctx,
+						"Flow step stopped for agent %s: %v",
+						invocation.AgentName,
+						err,
+					)
 				} else {
 					// Send error event through channel instead of just logging.
 					errorEvent = event.NewErrorEvent(
@@ -115,7 +126,12 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 						model.ErrorTypeFlowError,
 						err.Error(),
 					)
-					log.Errorf("Flow step failed for agent %s: %v", invocation.AgentName, err)
+					log.ErrorfContext(
+						ctx,
+						"Flow step failed for agent %s: %v",
+						invocation.AgentName,
+						err,
+					)
 				}
 
 				agent.EmitEvent(ctx, invocation, eventChan, errorEvent)
@@ -129,7 +145,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 				break
 			}
 		}
-	}()
+	}(runCtx)
 
 	return eventChan, nil
 }
@@ -313,7 +329,12 @@ func (f *Flow) handleAfterModelCallbacks(
 			return nil, err
 		}
 
-		log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
+		log.ErrorfContext(
+			ctx,
+			"After model callback failed for agent %s: %v",
+			invocation.AgentName,
+			err,
+		)
 		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
@@ -507,7 +528,18 @@ func (f *Flow) callLLM(
 		return nil, errors.New("no model available for LLM call")
 	}
 
-	log.Debugf("Calling LLM for agent %s", invocation.AgentName)
+	log.DebugfContext(
+		ctx,
+		"Calling LLM for agent %s",
+		invocation.AgentName,
+	)
+
+	// Enforce optional per-invocation LLM call limit. When the limit is not
+	// configured (<= 0), this is a no-op and preserves existing behavior.
+	if err := invocation.IncLLMCallCount(); err != nil {
+		log.Errorf("LLM call limit exceeded for agent %s: %v", invocation.AgentName, err)
+		return nil, err
+	}
 
 	// Run before model callbacks if they exist.
 	if f.modelCallbacks != nil {
@@ -515,7 +547,12 @@ func (f *Flow) callLLM(
 			Request: llmRequest,
 		})
 		if err != nil {
-			log.Errorf("Before model callback failed for agent %s: %v", invocation.AgentName, err)
+			log.ErrorfContext(
+				ctx,
+				"Before model callback failed for agent %s: %v",
+				invocation.AgentName,
+				err,
+			)
 			return nil, err
 		}
 		// Use the context from result if provided.
@@ -534,7 +571,12 @@ func (f *Flow) callLLM(
 	// Call the model.
 	responseChan, err := invocation.Model.GenerateContent(ctx, llmRequest)
 	if err != nil {
-		log.Errorf("LLM call failed for agent %s: %v", invocation.AgentName, err)
+		log.ErrorfContext(
+			ctx,
+			"LLM call failed for agent %s: %v",
+			invocation.AgentName,
+			err,
+		)
 		return nil, err
 	}
 
@@ -557,4 +599,13 @@ func (f *Flow) postprocess(
 	for _, processor := range f.responseProcessors {
 		processor.ProcessResponse(ctx, invocation, llmRequest, llmResponse, eventChan)
 	}
+}
+
+// WaitEventTimeout returns the remaining time until the context deadline.
+// If the context has no deadline, it returns the default event completion timeout.
+func WaitEventTimeout(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		return time.Until(deadline)
+	}
+	return eventCompletionTimeout
 }

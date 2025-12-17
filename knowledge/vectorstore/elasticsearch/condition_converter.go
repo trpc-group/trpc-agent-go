@@ -18,11 +18,23 @@ import (
 
 	"github.com/elastic/go-elasticsearch/v9/typedapi/types"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // esConverter converts a filter condition to an Elasticsearch query.
-type esConverter struct{}
+type esConverter struct {
+	metadataFieldName string
+}
+
+// convertFieldName converts metadata.xxx fields to ES field path.
+func (c *esConverter) convertFieldName(field string) string {
+	if strings.HasPrefix(field, source.MetadataFieldPrefix) {
+		actualField := strings.TrimPrefix(field, source.MetadataFieldPrefix)
+		return fmt.Sprintf("%s.%s", c.metadataFieldName, actualField)
+	}
+	return field
+}
 
 // Convert converts a filter condition to an Elasticsearch query filter.
 func (c *esConverter) Convert(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
@@ -114,9 +126,10 @@ func (c *esConverter) buildComparisonCondition(cond *searchfilter.UniversalFilte
 }
 
 func (c *esConverter) convertEqual(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
+	fieldName := c.convertFieldName(cond.Field)
 	return &types.Query{
 		Term: map[string]types.TermQuery{
-			cond.Field: {
+			fieldName: {
 				Value: cond.Value,
 			},
 		},
@@ -124,12 +137,13 @@ func (c *esConverter) convertEqual(cond *searchfilter.UniversalFilterCondition) 
 }
 
 func (c *esConverter) convertNotEqual(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
+	fieldName := c.convertFieldName(cond.Field)
 	return &types.Query{
 		Bool: &types.BoolQuery{
 			MustNot: []types.Query{
 				{
 					Term: map[string]types.TermQuery{
-						cond.Field: {
+						fieldName: {
 							Value: cond.Value,
 						},
 					},
@@ -140,9 +154,10 @@ func (c *esConverter) convertNotEqual(cond *searchfilter.UniversalFilterConditio
 }
 
 func (c *esConverter) convertRange(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
+	fieldName := c.convertFieldName(cond.Field)
 	return &types.Query{
 		Range: map[string]types.RangeQuery{
-			cond.Field: map[string]any{
+			fieldName: map[string]any{
 				cond.Operator: cond.Value,
 			},
 		},
@@ -158,9 +173,10 @@ func (c *esConverter) buildBetweenCondition(cond *searchfilter.UniversalFilterCo
 		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
 	}
 
+	fieldName := c.convertFieldName(cond.Field)
 	return &types.Query{
 		Range: map[string]types.RangeQuery{
-			cond.Field: map[string]any{
+			fieldName: map[string]any{
 				"gte": value.Index(0).Interface(),
 				"lte": value.Index(1).Interface(),
 			},
@@ -177,10 +193,11 @@ func (c *esConverter) buildInCondition(cond *searchfilter.UniversalFilterConditi
 		return nil, fmt.Errorf("in operator value must be a slice with at least one element: %v", cond.Value)
 	}
 
+	fieldName := c.convertFieldName(cond.Field)
 	termsQuery := types.Query{
 		Terms: &types.TermsQuery{
 			TermsQuery: map[string]types.TermsQueryField{
-				cond.Field: cond.Value,
+				fieldName: cond.Value,
 			},
 		},
 	}
@@ -205,12 +222,13 @@ func (c *esConverter) buildLikeCondition(cond *searchfilter.UniversalFilterCondi
 		return nil, fmt.Errorf("like operator value must be a string: %v", cond.Value)
 	}
 
+	fieldName := c.convertFieldName(cond.Field)
 	wildcardPattern := strings.ReplaceAll(valueStr, "%", "*")
 	wildcardPattern = strings.ReplaceAll(wildcardPattern, "_", "?")
 
 	wildcardQuery := types.Query{
 		Wildcard: map[string]types.WildcardQuery{
-			cond.Field: {
+			fieldName: {
 				Value: &wildcardPattern,
 			},
 		},

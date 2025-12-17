@@ -1415,3 +1415,203 @@ func TestCopySessionWithoutTracks(t *testing.T) {
 	copied.State["foo"][0] = 'x'
 	assert.Equal(t, byte('b'), sess.State["foo"][0])
 }
+
+func TestAppendEventHook(t *testing.T) {
+	t.Run("hook modifies event before storage", func(t *testing.T) {
+		hookCalled := false
+		service := NewSessionService(
+			WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+				hookCalled = true
+				ctx.Event.Tag = "hook_processed"
+				return next()
+			}),
+		)
+		defer service.Close()
+
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+		sess, err := service.CreateSession(context.Background(), key, nil)
+		require.NoError(t, err)
+
+		// First add a user message
+		userEvt := event.New("inv0", "user")
+		userEvt.Response = &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "Hello"}}},
+		}
+		err = service.AppendEvent(context.Background(), sess, userEvt)
+		require.NoError(t, err)
+
+		// Then add assistant message
+		evt := event.New("inv1", "assistant")
+		evt.Response = &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Hi there"}}},
+		}
+
+		err = service.AppendEvent(context.Background(), sess, evt)
+		require.NoError(t, err)
+		assert.True(t, hookCalled)
+
+		retrieved, err := service.GetSession(context.Background(), key)
+		require.NoError(t, err)
+		require.Len(t, retrieved.Events, 2)
+
+		// Check the assistant event has the metadata
+		assert.Equal(t, "hook_processed", retrieved.Events[1].Tag)
+	})
+
+	t.Run("hook can abort event storage", func(t *testing.T) {
+		service := NewSessionService(
+			WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+				return nil // skip next()
+			}),
+		)
+		defer service.Close()
+
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+		sess, err := service.CreateSession(context.Background(), key, nil)
+		require.NoError(t, err)
+
+		evt := event.New("inv1", "assistant")
+		evt.Response = &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Hello"}}},
+		}
+
+		err = service.AppendEvent(context.Background(), sess, evt)
+		require.NoError(t, err)
+
+		retrieved, err := service.GetSession(context.Background(), key)
+		require.NoError(t, err)
+		assert.Len(t, retrieved.Events, 0)
+	})
+
+	t.Run("multiple hooks execute in order", func(t *testing.T) {
+		order := []string{}
+		service := NewSessionService(
+			WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+				order = append(order, "hook1_before")
+				err := next()
+				order = append(order, "hook1_after")
+				return err
+			}),
+			WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+				order = append(order, "hook2_before")
+				err := next()
+				order = append(order, "hook2_after")
+				return err
+			}),
+		)
+		defer service.Close()
+
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+		sess, err := service.CreateSession(context.Background(), key, nil)
+		require.NoError(t, err)
+
+		evt := event.New("inv1", "assistant")
+		evt.Response = &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Hello"}}},
+		}
+
+		err = service.AppendEvent(context.Background(), sess, evt)
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{"hook1_before", "hook2_before", "hook2_after", "hook1_after"}, order)
+	})
+}
+
+func TestGetSessionHook(t *testing.T) {
+	t.Run("hook modifies session after retrieval", func(t *testing.T) {
+		hookCalled := false
+		service := NewSessionService(
+			WithGetSessionHook(func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+				hookCalled = true
+				sess, err := next()
+				if err != nil || sess == nil {
+					return sess, err
+				}
+				sess.State["hook_added"] = []byte("true")
+				return sess, nil
+			}),
+		)
+		defer service.Close()
+
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+		_, err := service.CreateSession(context.Background(), key, nil)
+		require.NoError(t, err)
+
+		retrieved, err := service.GetSession(context.Background(), key)
+		require.NoError(t, err)
+		assert.True(t, hookCalled)
+		assert.Equal(t, []byte("true"), retrieved.State["hook_added"])
+	})
+
+	t.Run("hook can filter events", func(t *testing.T) {
+		service := NewSessionService(
+			WithGetSessionHook(func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+				sess, err := next()
+				if err != nil || sess == nil {
+					return sess, err
+				}
+				filtered := make([]event.Event, 0)
+				for _, e := range sess.Events {
+					if e.Tag != "skip" {
+						filtered = append(filtered, e)
+					}
+				}
+				sess.Events = filtered
+				return sess, nil
+			}),
+		)
+		defer service.Close()
+
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+		sess, err := service.CreateSession(context.Background(), key, nil)
+		require.NoError(t, err)
+
+		evt1 := event.New("inv1", "user")
+		evt1.Response = &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "Q1"}}},
+		}
+		evt1.Tag = "skip"
+		err = service.AppendEvent(context.Background(), sess, evt1)
+		require.NoError(t, err)
+
+		evt2 := event.New("inv2", "assistant")
+		evt2.Response = &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "A1"}}},
+		}
+		err = service.AppendEvent(context.Background(), sess, evt2)
+		require.NoError(t, err)
+
+		retrieved, err := service.GetSession(context.Background(), key)
+		require.NoError(t, err)
+		assert.Len(t, retrieved.Events, 1)
+		assert.Equal(t, "A1", retrieved.Events[0].Response.Choices[0].Message.Content)
+	})
+
+	t.Run("multiple hooks execute in order", func(t *testing.T) {
+		order := []string{}
+		service := NewSessionService(
+			WithGetSessionHook(func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+				order = append(order, "hook1_before")
+				sess, err := next()
+				order = append(order, "hook1_after")
+				return sess, err
+			}),
+			WithGetSessionHook(func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+				order = append(order, "hook2_before")
+				sess, err := next()
+				order = append(order, "hook2_after")
+				return sess, err
+			}),
+		)
+		defer service.Close()
+
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+		_, err := service.CreateSession(context.Background(), key, nil)
+		require.NoError(t, err)
+
+		_, err = service.GetSession(context.Background(), key)
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{"hook1_before", "hook2_before", "hook2_after", "hook1_after"}, order)
+	})
+}

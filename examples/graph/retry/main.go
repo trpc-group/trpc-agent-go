@@ -214,10 +214,6 @@ func handleStreaming(ch <-chan *event.Event) error {
 		started bool
 	)
 	for ev := range ch {
-		if ev.Error != nil {
-			fmt.Printf("❌ Error: %s\n", ev.Error.Message)
-			continue
-		}
 		// Show retry metadata when verbose
 		if *verbose && ev.StateDelta != nil {
 			if b, ok := ev.StateDelta[graph.MetadataKeyNode]; ok {
@@ -234,6 +230,10 @@ func handleStreaming(ch <-chan *event.Event) error {
 					}
 				}
 			}
+		}
+		if ev.Error != nil {
+			fmt.Printf("❌ Error: %s\n", ev.Error.Message)
+			continue
 		}
 		// Stream model deltas
 		if len(ev.Response.Choices) > 0 {

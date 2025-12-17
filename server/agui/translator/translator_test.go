@@ -240,6 +240,71 @@ func TestTextMessageEventInvalidObject(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestTextMessageEventChunkFinishReasonEndsStream(t *testing.T) {
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
+	assert.True(t, ok)
+
+	firstChunk := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "hi"},
+		}},
+	}
+	initialEvents, err := translator.textMessageEvent(firstChunk)
+	assert.NoError(t, err)
+	assert.Len(t, initialEvents, 2)
+	assert.True(t, translator.receivingMessage)
+
+	reason := "stop"
+	finishChunk := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta:        model.Message{Role: model.RoleAssistant},
+			FinishReason: &reason,
+		}},
+	}
+	events, err := translator.textMessageEvent(finishChunk)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	end, ok := events[0].(*aguievents.TextMessageEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-1", end.MessageID)
+	assert.False(t, translator.receivingMessage)
+}
+
+func TestTextMessageEventChunkWithContentAndFinishReason(t *testing.T) {
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
+	assert.True(t, ok)
+
+	reason := "stop"
+	chunk := &model.Response{
+		ID:     "msg-finish",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta:        model.Message{Role: model.RoleAssistant, Content: "done"},
+			FinishReason: &reason,
+		}},
+	}
+	events, err := translator.textMessageEvent(chunk)
+	assert.NoError(t, err)
+	assert.Len(t, events, 3)
+
+	start, ok := events[0].(*aguievents.TextMessageStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-finish", start.MessageID)
+
+	content, ok := events[1].(*aguievents.TextMessageContentEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "done", content.Delta)
+
+	end, ok := events[2].(*aguievents.TextMessageEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-finish", end.MessageID)
+	assert.False(t, translator.receivingMessage)
+}
+
 func TestGraphModelMetadataProducesText(t *testing.T) {
 	tr, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
@@ -1072,4 +1137,199 @@ func TestTranslateSubagentGraph_NonStream(t *testing.T) {
 	assert.Equal(t, 1, transferToolStarts)
 	assert.Equal(t, 1, calcToolStarts)
 	assert.Equal(t, 1, runFinished)
+}
+
+func TestGraphNodeCustomEvents_CustomCategory(t *testing.T) {
+	tr := New(context.Background(), "thread", "run")
+
+	meta := graph.NodeCustomEventMetadata{
+		EventType:    "my.custom.event",
+		Category:     graph.NodeCustomEventCategoryCustom,
+		NodeID:       "test-node",
+		InvocationID: "test-invocation",
+		StepNumber:   1,
+		Payload:      map[string]any{"key": "value"},
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "custom-evt-1",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNodeCustom: raw,
+		},
+	}
+
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	customEvt, ok := events[0].(*aguievents.CustomEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "my.custom.event", customEvt.Name)
+
+	value, ok := customEvt.Value.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "test-node", value["nodeId"])
+	assert.Equal(t, 1, value["stepNumber"])
+	assert.NotNil(t, value["payload"])
+}
+
+func TestGraphNodeCustomEvents_ProgressCategory(t *testing.T) {
+	tr := New(context.Background(), "thread", "run")
+
+	meta := graph.NodeCustomEventMetadata{
+		EventType:    "progress",
+		Category:     graph.NodeCustomEventCategoryProgress,
+		NodeID:       "processing-node",
+		InvocationID: "test-invocation",
+		Progress:     75.5,
+		Message:      "Processing 75% complete",
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "progress-evt-1",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNodeCustom: raw,
+		},
+	}
+
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	customEvt, ok := events[0].(*aguievents.CustomEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "progress", customEvt.Name)
+
+	value, ok := customEvt.Value.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "processing-node", value["nodeId"])
+	assert.Equal(t, 75.5, value["progress"])
+	assert.Equal(t, "Processing 75% complete", value["message"])
+}
+
+func TestGraphNodeCustomEvents_TextCategory_NotReceivingMessage(t *testing.T) {
+	tr := New(context.Background(), "thread", "run")
+
+	meta := graph.NodeCustomEventMetadata{
+		EventType:    "text",
+		Category:     graph.NodeCustomEventCategoryText,
+		NodeID:       "streaming-node",
+		InvocationID: "test-invocation",
+		Message:      "Hello streaming text",
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "text-evt-1",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNodeCustom: raw,
+		},
+	}
+
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	// Since we're not in a message context, it should be a CustomEvent
+	customEvt, ok := events[0].(*aguievents.CustomEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "text", customEvt.Name)
+
+	value, ok := customEvt.Value.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "streaming-node", value["nodeId"])
+	assert.Equal(t, "Hello streaming text", value["content"])
+}
+
+func TestGraphNodeCustomEvents_TextCategory_WhileReceivingMessage(t *testing.T) {
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
+	assert.True(t, ok)
+
+	// First, start receiving a message
+	chunkRsp := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "Hello"},
+		}},
+	}
+	_, err := translator.textMessageEvent(chunkRsp)
+	assert.NoError(t, err)
+	assert.True(t, translator.receivingMessage)
+
+	// Now send a text event while receiving message
+	meta := graph.NodeCustomEventMetadata{
+		EventType:    "text",
+		Category:     graph.NodeCustomEventCategoryText,
+		NodeID:       "streaming-node",
+		InvocationID: "test-invocation",
+		Message:      "Streaming text content",
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "text-evt-2",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNodeCustom: raw,
+		},
+	}
+
+	events, err := translator.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	// Since we're in a message context, it should be a TextMessageContentEvent
+	contentEvt, ok := events[0].(*aguievents.TextMessageContentEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-1", contentEvt.MessageID)
+	assert.Equal(t, "Streaming text content", contentEvt.Delta)
+}
+
+func TestGraphNodeCustomEvents_InvalidMetadata(t *testing.T) {
+	tr, ok := New(context.Background(), "thread", "run").(*translator)
+	assert.True(t, ok)
+
+	evt := &agentevent.Event{
+		ID: "invalid-evt",
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNodeCustom: []byte("invalid json"),
+		},
+	}
+
+	events := tr.graphNodeCustomEvents(evt)
+	assert.Len(t, events, 1)
+
+	errEvt, ok := events[0].(*aguievents.RunErrorEvent)
+	assert.True(t, ok)
+	assert.Contains(t, errEvt.Message, "invalid graph node custom metadata")
+}
+
+func TestGraphNodeCustomEvents_EmptyStateDelta(t *testing.T) {
+	tr, ok := New(context.Background(), "thread", "run").(*translator)
+	assert.True(t, ok)
+
+	// Test nil StateDelta
+	evt := &agentevent.Event{
+		ID: "empty-evt",
+	}
+	events := tr.graphNodeCustomEvents(evt)
+	assert.Empty(t, events)
+
+	// Test empty MetadataKeyNodeCustom
+	evt2 := &agentevent.Event{
+		ID:         "empty-evt-2",
+		StateDelta: map[string][]byte{},
+	}
+	events = tr.graphNodeCustomEvents(evt2)
+	assert.Empty(t, events)
 }

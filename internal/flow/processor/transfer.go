@@ -18,9 +18,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-// TransferTag is the tag for transfer events.
-const TransferTag = "transfer"
-
 // TransferResponseProcessor handles agent transfer operations after LLM responses.
 type TransferResponseProcessor struct {
 	// endInvocationAfterTransfer controls whether to end the current agent invocation after transfer.
@@ -50,7 +47,11 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		return
 	}
 
-	log.Debugf("Transfer response processor: processing response for agent %s", invocation.AgentName)
+	log.DebugfContext(
+		ctx,
+		"Transfer response processor: processing response for agent %s",
+		invocation.AgentName,
+	)
 
 	// Check if there's a pending transfer in the invocation.
 	if invocation.TransferInfo == nil {
@@ -68,7 +69,11 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	}
 
 	if targetAgent == nil {
-		log.Errorf("Target agent '%s' not found in sub-agents", targetAgentName)
+		log.ErrorfContext(
+			ctx,
+			"Target agent '%s' not found in sub-agents",
+			targetAgentName,
+		)
 		// Send error event.
 		agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
 			invocation.InvocationID,
@@ -84,7 +89,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypeTransfer),
-		event.WithTag(TransferTag),
+		event.WithTag(event.TransferTag),
 	)
 	transferEvent.Response = &model.Response{
 		ID:        "transfer-" + rsp.ID,
@@ -128,17 +133,26 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			targetInvocation.InvocationID,
 			targetAgent.Info().Name,
 			&model.Response{Choices: []model.Choice{{Message: targetInvocation.Message}}},
-			event.WithTag(TransferTag),
+			event.WithTag(event.TransferTag),
 		))
 	}
 
 	// Actually call the target agent's Run method with the target invocation in context
 	// so tools can correctly access agent.InvocationFromContext(ctx).
-	log.Debugf("Transfer response processor: starting target agent '%s'", targetAgent.Info().Name)
+	log.DebugfContext(
+		ctx,
+		"Transfer response processor: starting target agent '%s'",
+		targetAgent.Info().Name,
+	)
 	targetCtx := agent.NewInvocationContext(ctx, targetInvocation)
 	targetEventChan, err := targetAgent.Run(targetCtx, targetInvocation)
 	if err != nil {
-		log.Errorf("Failed to run target agent '%s': %v", targetAgent.Info().Name, err)
+		log.ErrorfContext(
+			ctx,
+			"Failed to run target agent '%s': %v",
+			targetAgent.Info().Name,
+			err,
+		)
 		// Send error event.
 		agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
 			invocation.InvocationID,
@@ -154,12 +168,22 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		if err := event.EmitEvent(ctx, ch, targetEvent); err != nil {
 			return
 		}
-		log.Debugf("Transfer response processor: forwarded event from target agent %s", targetAgent.Info().Name)
+		log.DebugfContext(
+			ctx,
+			"Transfer response processor: forwarded event from "+
+				"target agent %s",
+			targetAgent.Info().Name,
+		)
 	}
 
 	// Clear the transfer info and end the original invocation to stop further LLM calls.
 	// Do NOT mutate Agent/AgentName here to avoid author mismatches for any in-flight LLM stream.
-	log.Debugf("Transfer response processor: target agent '%s' completed; ending original invocation", targetAgent.Info().Name)
+	log.DebugfContext(
+		ctx,
+		"Transfer response processor: target agent '%s' completed; "+
+			"ending original invocation",
+		targetAgent.Info().Name,
+	)
 	invocation.TransferInfo = nil
 	invocation.EndInvocation = p.endInvocationAfterTransfer
 }

@@ -155,6 +155,29 @@ jobs:
             echo "✓ All files are properly formatted and use modern 'any' type"
           fi
           echo "::endgroup::"
+      - name: goimports
+        run: |
+          echo "::group::Checking import formatting with goimports"
+          go install golang.org/x/tools/cmd/goimports@latest
+          files=$(goimports -l .)
+          if [ -n "$files" ]; then
+            echo "::error::Found files with incorrect import formatting."
+            echo "goimports checks:"
+            echo "  - Import statement formatting"
+            echo "  - Import grouping (stdlib, external, internal)"
+            echo "  - Import sorting within groups"
+            echo ""
+            echo "Files that need attention:"
+            echo "$files"
+            echo ""
+            echo "You can fix this automatically by running:"
+            echo "  go install golang.org/x/tools/cmd/goimports@latest"
+            echo "  goimports -w ."
+            exit 1
+          else
+            echo "✓ All files have properly formatted imports"
+          fi
+          echo "::endgroup::"
       - name: license
         run: |
           echo "::group::Checking license headers in Go files"

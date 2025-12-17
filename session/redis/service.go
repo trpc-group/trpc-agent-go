@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
@@ -49,9 +51,6 @@ type SessionState struct {
 type Service struct {
 	opts            ServiceOpts
 	redisClient     redis.UniversalClient
-	sessionTTL      time.Duration            // TTL for session state and event list
-	appStateTTL     time.Duration            // TTL for app state
-	userStateTTL    time.Duration            // TTL for user state
 	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
 	trackEventChans []chan *trackEventPair   // channel for track events to persistence.
 	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
@@ -72,6 +71,7 @@ type trackEventPair struct {
 
 // summaryJob represents a summary job to be processed asynchronously.
 type summaryJob struct {
+	ctx       context.Context // Detached context preserving values but not cancel.
 	filterKey string
 	force     bool
 	session   *session.Session
@@ -102,11 +102,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 
 	s := &Service{
-		opts:         opts,
-		redisClient:  redisClient,
-		sessionTTL:   opts.sessionTTL,
-		appStateTTL:  opts.appStateTTL,
-		userStateTTL: opts.userStateTTL,
+		opts:        opts,
+		redisClient: redisClient,
 	}
 	if opts.enableAsyncPersist {
 		s.startAsyncPersistWorker()
@@ -153,9 +150,9 @@ func (s *Service) CreateSession(
 	pipe := s.redisClient.Pipeline()
 	// Store session state
 	pipe.HSet(ctx, sessKey, key.SessionID, sessBytes)
-	if s.sessionTTL > 0 {
+	if s.opts.sessionTTL > 0 {
 		// expire session state, don't expire event list, it's still empty
-		pipe.Expire(ctx, sessKey, s.sessionTTL)
+		pipe.Expire(ctx, sessKey, s.opts.sessionTTL)
 	}
 	// Query app and user states
 	userStateCmd := pipe.HGetAll(ctx, userStateKey)
@@ -197,7 +194,16 @@ func (s *Service) GetSession(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
-	sess, err := s.getSession(ctx, key, opt.EventNum, opt.EventTime)
+
+	hctx := &session.GetSessionContext{
+		Context: ctx,
+		Key:     key,
+		Options: opt,
+	}
+	final := func(c *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+		return s.getSession(c.Context, c.Key, c.Options.EventNum, c.Options.EventTime)
+	}
+	sess, err := hook.RunGetSessionHooks(s.opts.getSessionHooks, hctx, final)
 	if err != nil {
 		return nil, fmt.Errorf("redis session service get session state failed: %w", err)
 	}
@@ -249,8 +255,8 @@ func (s *Service) UpdateAppState(ctx context.Context, appName string, state sess
 		pipe.HSet(ctx, appStateKey, k, v)
 	}
 	// Set TTL for app state if configured
-	if s.appStateTTL > 0 {
-		pipe.Expire(ctx, appStateKey, s.appStateTTL)
+	if s.opts.appStateTTL > 0 {
+		pipe.Expire(ctx, appStateKey, s.opts.appStateTTL)
 	}
 
 	// should not return redis.Nil error
@@ -315,8 +321,8 @@ func (s *Service) UpdateUserState(ctx context.Context, userKey session.UserKey, 
 		pipe.HSet(ctx, userStateKey, k, v)
 	}
 	// Set TTL for user state if configured
-	if s.userStateTTL > 0 {
-		pipe.Expire(ctx, userStateKey, s.userStateTTL)
+	if s.opts.userStateTTL > 0 {
+		pipe.Expire(ctx, userStateKey, s.opts.userStateTTL)
 	}
 
 	// should not return redis.Nil error
@@ -407,8 +413,8 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 	pipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
 
 	// Refresh TTL if configured
-	if s.sessionTTL > 0 {
-		pipe.Expire(ctx, getSessionStateKey(key), s.sessionTTL)
+	if s.opts.sessionTTL > 0 {
+		pipe.Expire(ctx, getSessionStateKey(key), s.opts.sessionTTL)
 	}
 
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -456,15 +462,41 @@ func (s *Service) AppendEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+
+	hctx := &session.AppendEventContext{
+		Context: ctx,
+		Session: sess,
+		Event:   event,
+		Key:     key,
+	}
+	final := func(c *session.AppendEventContext, next func() error) error {
+		return s.appendEventInternal(c.Context, c.Session, c.Event, c.Key, opts...)
+	}
+	return hook.RunAppendEventHooks(s.opts.appendEventHooks, hctx, final)
+}
+
+// appendEventInternal is the internal implementation of AppendEvent.
+func (s *Service) appendEventInternal(
+	ctx context.Context,
+	sess *session.Session,
+	e *event.Event,
+	key session.Key,
+	opts ...session.Option,
+) error {
 	// update user session with the given event
-	sess.UpdateUserSession(event, opts...)
+	sess.UpdateUserSession(e, opts...)
 
 	// persist event to redis asynchronously
 	if s.opts.enableAsyncPersist {
 		defer func() {
 			if r := recover(); r != nil {
-				if err, ok := r.(error); ok && err.Error() == "send on closed channel" {
-					log.Errorf("redis session service append event failed: %v", r)
+				if err, ok := r.(error); ok &&
+					err.Error() == "send on closed channel" {
+					log.ErrorfContext(
+						ctx,
+						"redis session service append event failed: %v",
+						r,
+					)
 					return
 				}
 				panic(r)
@@ -473,14 +505,14 @@ func (s *Service) AppendEvent(
 
 		index := sess.Hash % len(s.eventPairChans)
 		select {
-		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		return nil
 	}
 
-	if err := s.addEvent(ctx, key, event); err != nil {
+	if err := s.addEvent(ctx, key, e); err != nil {
 		return fmt.Errorf("redis session service append event failed: %w", err)
 	}
 
@@ -510,8 +542,14 @@ func (s *Service) AppendTrackEvent(
 	if s.opts.enableAsyncPersist {
 		defer func() {
 			if r := recover(); r != nil {
-				if err, ok := r.(error); ok && err.Error() == "send on closed channel" {
-					log.Errorf("redis session service append track event failed: %v", r)
+				if err, ok := r.(error); ok &&
+					err.Error() == "send on closed channel" {
+					log.ErrorfContext(
+						ctx,
+						"redis session service append track event "+
+							"failed: %v",
+						r,
+					)
 					return
 				}
 				panic(r)
@@ -583,41 +621,112 @@ func getSessionSummaryKey(key session.Key) string {
 	return fmt.Sprintf("sesssum:{%s}:%s", key.AppName, key.UserID)
 }
 
+func (s *Service) fetchSessionMeta(
+	ctx context.Context,
+	key session.Key,
+) (*SessionState, *redis.StringCmd, session.StateMap, session.StateMap, error) {
+	sessKey := getSessionStateKey(key)
+	userStateKey := getUserStateKey(key)
+	appStateKey := getAppStateKey(key.AppName)
+	sessSummaryKey := getSessionSummaryKey(key)
+
+	pipe := s.redisClient.Pipeline()
+	userStateCmd := pipe.HGetAll(ctx, userStateKey)
+	appStateCmd := pipe.HGetAll(ctx, appStateKey)
+	sessCmd := pipe.HGet(ctx, sessKey, key.SessionID)
+	summariesCmd := pipe.HGet(ctx, sessSummaryKey, key.SessionID)
+
+	s.appendSessionTTL(ctx, pipe, key, sessKey, sessSummaryKey, appStateKey, userStateKey)
+
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, nil, nil, nil, fmt.Errorf("get session state failed: %w", err)
+	}
+
+	sessState, err := processSessionStateCmd(sessCmd)
+	if err != nil || sessState == nil {
+		return sessState, nil, nil, nil, err
+	}
+
+	appState, err := processStateCmd(appStateCmd)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	userState, err := processStateCmd(userStateCmd)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	return sessState, summariesCmd, appState, userState, nil
+}
+
+func (s *Service) appendSessionTTL(
+	ctx context.Context,
+	pipe redis.Pipeliner,
+	key session.Key,
+	sessKey string,
+	sessSummaryKey string,
+	appStateKey string,
+	userStateKey string,
+) {
+	if s.opts.sessionTTL > 0 {
+		pipe.Expire(ctx, sessKey, s.opts.sessionTTL)
+		pipe.Expire(ctx, getEventKey(key), s.opts.sessionTTL)
+		pipe.Expire(ctx, sessSummaryKey, s.opts.sessionTTL)
+	}
+	if s.opts.appStateTTL > 0 {
+		pipe.Expire(ctx, appStateKey, s.opts.appStateTTL)
+	}
+	if s.opts.userStateTTL > 0 {
+		pipe.Expire(ctx, userStateKey, s.opts.userStateTTL)
+	}
+}
+
+func normalizeSessionEvents(events [][]event.Event) []event.Event {
+	if len(events) == 0 {
+		return nil
+	}
+	return events[0]
+}
+
+func attachTrackEvents(
+	sess *session.Session,
+	trackEvents []map[session.Track][]session.TrackEvent,
+) {
+	if len(trackEvents) == 0 || len(trackEvents[0]) == 0 {
+		return
+	}
+
+	sess.Tracks = make(map[session.Track]*session.TrackEvents, len(trackEvents[0]))
+	for trackName, history := range trackEvents[0] {
+		sess.Tracks[trackName] = &session.TrackEvents{
+			Track:  trackName,
+			Events: history,
+		}
+	}
+}
+
+func attachSummaries(sess *session.Session, summariesCmd *redis.StringCmd) {
+	if len(sess.Events) == 0 || summariesCmd == nil {
+		return
+	}
+
+	if bytes, err := summariesCmd.Bytes(); err == nil && len(bytes) > 0 {
+		var summaries map[string]*session.Summary
+		if err := json.Unmarshal(bytes, &summaries); err == nil && len(summaries) > 0 {
+			sess.Summaries = summaries
+		}
+	}
+}
+
 func (s *Service) getSession(
 	ctx context.Context,
 	key session.Key,
 	limit int,
 	afterTime time.Time,
 ) (*session.Session, error) {
-	sessKey := getSessionStateKey(key)
-	userStateKey := getUserStateKey(key)
-	appStateKey := getAppStateKey(key.AppName)
-	sessSummaryKey := getSessionSummaryKey(key)
-	pipe := s.redisClient.Pipeline()
-	userStateCmd := pipe.HGetAll(ctx, userStateKey)
-	appStateCmd := pipe.HGetAll(ctx, appStateKey)
-
-	sessCmd := pipe.HGet(ctx, sessKey, key.SessionID)
-	// Read summaries from separate hash in the same pipeline.
-	summariesCmd := pipe.HGet(ctx, sessSummaryKey, key.SessionID)
-	// Add TTL refresh commands to the same pipeline if configured
-	if s.sessionTTL > 0 {
-		pipe.Expire(ctx, sessKey, s.sessionTTL)
-		pipe.Expire(ctx, getEventKey(key), s.sessionTTL)
-		pipe.Expire(ctx, sessSummaryKey, s.sessionTTL)
-	}
-	if s.appStateTTL > 0 {
-		pipe.Expire(ctx, appStateKey, s.appStateTTL)
-	}
-	if s.userStateTTL > 0 {
-		pipe.Expire(ctx, userStateKey, s.userStateTTL)
-	}
-	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
-		return nil, fmt.Errorf("get session state failed: %w", err)
-	}
-
-	// query session state
-	sessState, err := processSessionStateCmd(sessCmd)
+	sessState, summariesCmd, appState, userState, err := s.fetchSessionMeta(
+		ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -625,30 +734,15 @@ func (s *Service) getSession(
 		return nil, nil
 	}
 
-	// query app state
-	appState, err := processStateCmd(appStateCmd)
-	if err != nil {
-		return nil, err
-	}
-
-	// query user state
-	userState, err := processStateCmd(userStateCmd)
-	if err != nil {
-		return nil, err
-	}
-
 	events, err := s.getEventsList(ctx, []session.Key{key}, limit, afterTime)
 	if err != nil {
 		return nil, fmt.Errorf("get events failed: %w", err)
 	}
 
-	if len(events) == 0 {
-		events = make([][]event.Event, 1)
-	}
 	sess := session.NewSession(
 		key.AppName, key.UserID, key.SessionID,
 		session.WithSessionState(sessState.State),
-		session.WithSessionEvents(events[0]),
+		session.WithSessionEvents(normalizeSessionEvents(events)),
 		session.WithSessionCreatedAt(sessState.CreatedAt),
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
@@ -657,27 +751,8 @@ func (s *Service) getSession(
 	if err != nil {
 		return nil, fmt.Errorf("get track events failed: %w", err)
 	}
-	if len(trackEvents) > 0 && len(trackEvents[0]) > 0 {
-		sess.Tracks = make(map[session.Track]*session.TrackEvents, len(trackEvents[0]))
-		for trackName, history := range trackEvents[0] {
-			sess.Tracks[trackName] = &session.TrackEvents{
-				Track:  trackName,
-				Events: history,
-			}
-		}
-	}
-
-	// Attach summaries only if there are events to summarize.
-	// Since summaries are generated based on the filtered events (sess.Events),
-	// we only need to check if sess.Events is non-empty.
-	if len(sess.Events) > 0 {
-		if bytes, err := summariesCmd.Bytes(); err == nil && len(bytes) > 0 {
-			var summaries map[string]*session.Summary
-			if err := json.Unmarshal(bytes, &summaries); err == nil && len(summaries) > 0 {
-				sess.Summaries = summaries
-			}
-		}
-	}
+	attachTrackEvents(sess, trackEvents)
+	attachSummaries(sess, summariesCmd)
 	return mergeState(appState, userState, sess), nil
 }
 
@@ -786,7 +861,7 @@ func (s *Service) getEventsList(
 		if !ok {
 			return nil, fmt.Errorf("get events failed: %w", err)
 		}
-		events, err := processEventCmd(eventCmd)
+		events, err := processEventCmd(ctx, eventCmd)
 		if err != nil {
 			return nil, fmt.Errorf("process event cmd failed: %w", err)
 		}
@@ -802,39 +877,50 @@ func (s *Service) getEventsList(
 	return sessEventsList, nil
 }
 
-func (s *Service) getTrackEvents(
-	ctx context.Context,
+type trackQuery struct {
+	sessionIdx int
+	track      session.Track
+	cmd        *redis.StringSliceCmd
+}
+
+func validateSessionTrackInputs(
 	sessionKeys []session.Key,
 	sessionStates []*SessionState,
-	limit int,
-	afterTime time.Time,
-) ([]map[session.Track][]session.TrackEvent, error) {
-	if len(sessionKeys) == 0 {
-		return nil, nil
-	}
-
+) error {
 	if len(sessionStates) != len(sessionKeys) {
-		return nil, fmt.Errorf("session states count mismatch: %d != %d", len(sessionStates), len(sessionKeys))
+		return fmt.Errorf(
+			"session states count mismatch: %d != %d",
+			len(sessionStates),
+			len(sessionKeys),
+		)
 	}
-	trackLists := make([][]session.Track, len(sessionKeys))
-	for i := range sessionKeys {
+	return nil
+}
+
+func buildTrackLists(sessionStates []*SessionState) ([][]session.Track, error) {
+	trackLists := make([][]session.Track, len(sessionStates))
+	for i := range sessionStates {
 		tracks, err := session.TracksFromState(sessionStates[i].State)
 		if err != nil {
 			return nil, fmt.Errorf("get track list failed: %w", err)
 		}
 		trackLists[i] = tracks
 	}
+	return trackLists, nil
+}
 
-	// Prepare pipelined fetch for all tracks.
-	type trackQuery struct {
-		sessionIdx int
-		track      session.Track
-		cmd        *redis.StringSliceCmd
-	}
+func (s *Service) buildTrackQueries(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	trackLists [][]session.Track,
+	limit int,
+	afterTime time.Time,
+) ([]*trackQuery, redis.Pipeliner) {
 	queries := make([]*trackQuery, 0)
 	dataPipe := s.redisClient.Pipeline()
 	minScore := fmt.Sprintf("%d", afterTime.UnixNano())
 	maxScore := fmt.Sprintf("%d", time.Now().UnixNano())
+
 	for i, key := range sessionKeys {
 		tracks := trackLists[i]
 		for _, track := range tracks {
@@ -848,9 +934,7 @@ func (s *Service) getTrackEvents(
 				zrangeBy.Count = int64(limit)
 			}
 			cmd := dataPipe.ZRevRangeByScore(ctx, trackKey, zrangeBy)
-			if s.sessionTTL > 0 {
-				dataPipe.Expire(ctx, trackKey, s.sessionTTL)
-			}
+			s.appendTrackTTL(ctx, dataPipe, trackKey)
 			queries = append(queries, &trackQuery{
 				sessionIdx: i,
 				track:      track,
@@ -859,19 +943,33 @@ func (s *Service) getTrackEvents(
 		}
 	}
 
-	if len(queries) == 0 {
-		results := make([]map[session.Track][]session.TrackEvent, len(sessionKeys))
-		for i := range results {
-			results[i] = make(map[session.Track][]session.TrackEvent)
-		}
-		return results, nil
-	}
+	return queries, dataPipe
+}
 
-	if _, err := dataPipe.Exec(ctx); err != nil && err != redis.Nil {
-		return nil, fmt.Errorf("get track events: %w", err)
+func (s *Service) appendTrackTTL(
+	ctx context.Context,
+	pipe redis.Pipeliner,
+	trackKey string,
+) {
+	if s.opts.sessionTTL > 0 {
+		pipe.Expire(ctx, trackKey, s.opts.sessionTTL)
 	}
+}
 
-	results := make([]map[session.Track][]session.TrackEvent, len(sessionKeys))
+func newTrackResults(count int) []map[session.Track][]session.TrackEvent {
+	results := make([]map[session.Track][]session.TrackEvent, count)
+	for i := range results {
+		results[i] = make(map[session.Track][]session.TrackEvent)
+	}
+	return results
+}
+
+func collectTrackQueryResults(
+	queries []*trackQuery,
+	sessionCount int,
+) ([]map[session.Track][]session.TrackEvent, error) {
+	results := newTrackResults(sessionCount)
+
 	for _, query := range queries {
 		values, err := query.cmd.Result()
 		if err != nil {
@@ -880,6 +978,7 @@ func (s *Service) getTrackEvents(
 			}
 			return nil, fmt.Errorf("get track events: %w", err)
 		}
+
 		events := make([]session.TrackEvent, 0, len(values))
 		for _, raw := range values {
 			var event session.TrackEvent
@@ -888,23 +987,46 @@ func (s *Service) getTrackEvents(
 			}
 			events = append(events, event)
 		}
-		// reverse events to get chronological order (oldest first).
+		// Reverse events to get chronological order (oldest first).
 		if len(events) > 1 {
-			for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
-				events[i], events[j] = events[j], events[i]
-			}
+			slices.Reverse(events)
 		}
-		if results[query.sessionIdx] == nil {
-			results[query.sessionIdx] = make(map[session.Track][]session.TrackEvent)
-		}
+
 		results[query.sessionIdx][query.track] = events
 	}
-	for i := range results {
-		if results[i] == nil {
-			results[i] = make(map[session.Track][]session.TrackEvent)
-		}
-	}
 	return results, nil
+}
+
+func (s *Service) getTrackEvents(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	sessionStates []*SessionState,
+	limit int,
+	afterTime time.Time,
+) ([]map[session.Track][]session.TrackEvent, error) {
+	if len(sessionKeys) == 0 {
+		return nil, nil
+	}
+
+	if err := validateSessionTrackInputs(sessionKeys, sessionStates); err != nil {
+		return nil, err
+	}
+
+	trackLists, err := buildTrackLists(sessionStates)
+	if err != nil {
+		return nil, err
+	}
+
+	queries, dataPipe := s.buildTrackQueries(
+		ctx, sessionKeys, trackLists, limit, afterTime)
+	if len(queries) == 0 {
+		return newTrackResults(len(sessionKeys)), nil
+	}
+
+	if _, err := dataPipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, fmt.Errorf("get track events: %w", err)
+	}
+	return collectTrackQueryResults(queries, len(sessionKeys))
 }
 
 func processStateCmd(cmd *redis.MapStringStringCmd) (session.StateMap, error) {
@@ -956,7 +1078,10 @@ func processSessStateCmdList(cmd *redis.MapStringStringCmd) ([]*SessionState, er
 	return sessStates, nil
 }
 
-func processEventCmd(cmd *redis.StringSliceCmd) ([]event.Event, error) {
+func processEventCmd(
+	ctx context.Context,
+	cmd *redis.StringSliceCmd,
+) ([]event.Event, error) {
 	eventsBytes, err := cmd.Result()
 	if err == redis.Nil || len(eventsBytes) == 0 {
 		return []event.Event{}, nil
@@ -968,11 +1093,16 @@ func processEventCmd(cmd *redis.StringSliceCmd) ([]event.Event, error) {
 	for _, eventBytes := range eventsBytes {
 		event := &event.Event{}
 		if err := json.Unmarshal([]byte(eventBytes), &event); err != nil {
-			// Skip malformed or legacy-format events to avoid breaking the whole session fetch.
-			// Log and continue so that readable events can still be returned.
-			// Common root causes include: historical []byte fields encoded as plain string
-			// which triggers base64 decoding errors during JSON unmarshal.
-			log.Warnf("skip malformed event in redis history: %v", err)
+			// Skip malformed or legacy-format events to avoid breaking the
+			// whole session fetch. Log and continue so that readable events
+			// can still be returned. Common root causes include: historical
+			// []byte fields encoded as plain string which triggers base64
+			// decoding errors during JSON unmarshal.
+			log.WarnfContext(
+				ctx,
+				"skip malformed event in redis history: %v",
+				err,
+			)
 			continue
 		}
 		events = append(events, *event)
@@ -1010,8 +1140,8 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	// update session state
 	txPipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
 	// Set TTL for session state and event list if configured
-	if s.sessionTTL > 0 {
-		txPipe.Expire(ctx, getSessionStateKey(key), s.sessionTTL)
+	if s.opts.sessionTTL > 0 {
+		txPipe.Expire(ctx, getSessionStateKey(key), s.opts.sessionTTL)
 	}
 
 	// update event list if the event has response and is not partial
@@ -1021,8 +1151,8 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 			Member: eventBytes,
 		})
 		// Set TTL for session state and event list if configured
-		if s.sessionTTL > 0 {
-			txPipe.Expire(ctx, getEventKey(key), s.sessionTTL)
+		if s.opts.sessionTTL > 0 {
+			txPipe.Expire(ctx, getEventKey(key), s.opts.sessionTTL)
 		}
 	}
 
@@ -1069,8 +1199,8 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 	// Update session state.
 	txPipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
 	// Set TTL for session state if configured.
-	if s.sessionTTL > 0 {
-		txPipe.Expire(ctx, getSessionStateKey(key), s.sessionTTL)
+	if s.opts.sessionTTL > 0 {
+		txPipe.Expire(ctx, getSessionStateKey(key), s.opts.sessionTTL)
 	}
 
 	// Update track event list.
@@ -1080,8 +1210,8 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		Member: eventBytes,
 	})
 	// Set TTL for track event list if configured.
-	if s.sessionTTL > 0 {
-		txPipe.Expire(ctx, trackKey, s.sessionTTL)
+	if s.opts.sessionTTL > 0 {
+		txPipe.Expire(ctx, trackKey, s.opts.sessionTTL)
 	}
 
 	if _, err := txPipe.Exec(ctx); err != nil {
@@ -1141,11 +1271,27 @@ func (s *Service) startAsyncPersistWorker() {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
 			for eventPair := range eventPairChan {
-				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
-				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, session key:%s",
-					cap(eventPairChan), len(eventPairChan), getSessionStateKey(eventPair.key))
+				ctx := context.Background()
+				ctx, cancel := context.WithTimeout(
+					ctx,
+					defaultAsyncPersistTimeout,
+				)
+				log.DebugfContext(
+					ctx,
+					"Session persistence queue monitoring: channel "+
+						"capacity: %d, current length: %d, "+
+						"session key:%s",
+					cap(eventPairChan),
+					len(eventPairChan),
+					getSessionStateKey(eventPair.key),
+				)
 				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
-					log.Errorf("redis session service persistence event failed: %w", err)
+					log.ErrorfContext(
+						ctx,
+						"redis session service persistence event "+
+							"failed: %w",
+						err,
+					)
 				}
 				cancel()
 			}
@@ -1155,12 +1301,31 @@ func (s *Service) startAsyncPersistWorker() {
 		go func(trackEventChan chan *trackEventPair) {
 			defer s.persistWg.Done()
 			for trackEvent := range trackEventChan {
-				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
-				log.Debugf("Session track persistence queue monitoring: channel capacity: %d, current length: %d, "+
-					"session key:%s, track key:%s", cap(trackEventChan), len(trackEventChan),
-					getSessionStateKey(trackEvent.key), getTrackKey(trackEvent.key, trackEvent.event.Track))
+				ctx := context.Background()
+				ctx, cancel := context.WithTimeout(
+					ctx,
+					defaultAsyncPersistTimeout,
+				)
+				log.DebugfContext(
+					ctx,
+					"Session track persistence queue monitoring: "+
+						"channel capacity: %d, current length: %d, "+
+						"session key:%s, track key:%s",
+					cap(trackEventChan),
+					len(trackEventChan),
+					getSessionStateKey(trackEvent.key),
+					getTrackKey(
+						trackEvent.key,
+						trackEvent.event.Track,
+					),
+				)
 				if err := s.addTrackEvent(ctx, trackEvent.key, trackEvent.event); err != nil {
-					log.Errorf("redis session service persistence track event failed: %w", err)
+					log.ErrorfContext(
+						ctx,
+						"redis session service persistence track event "+
+							"failed: %w",
+						err,
+					)
 				}
 				cancel()
 			}

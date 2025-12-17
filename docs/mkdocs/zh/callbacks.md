@@ -438,6 +438,35 @@ llmAgent := llmagent.New(
 )
 ```
 
+### 在回调中停止 agent {#stop-agent-via-callbacks}
+
+当需要终止执行并向 runner 事件流发出 `stop_agent_error` 时，在回调中返回 `agent.NewStopError`。适用于配额校验、风控、人工中断等场景。
+
+```go
+agentCallbacks := agent.NewCallbacks().
+  RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+    if args.Invocation != nil && args.Invocation.TokenUsage.Total >= maxTokens {
+      return nil, agent.NewStopError("token limit reached")
+    }
+    return nil, nil
+  }).
+  RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+    if args.Error != nil {
+      return nil, args.Error
+    }
+    if args.FullResponseEvent != nil && args.FullResponseEvent.Response != nil &&
+      args.FullResponseEvent.Response.Usage.TotalTokens >= maxTokens {
+      return nil, agent.NewStopError("token limit reached after response")
+    }
+    return nil, nil
+  })
+```
+
+说明：
+
+- Flow 会把 `StopError` 转换成 `stop_agent_error` 事件并停止循环。下游可以通过 `event.Error.Type == agent.ErrorTypeStopAgentError` 识别。
+- 若需要对正在进行的模型或工具调用做硬截止，请同时使用 context 取消；关于上下文取消的模式见 runner 文档的中断说明。
+
 完整示例请参考 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go)。
 
 ### 传统 Agent 回调（已弃用）

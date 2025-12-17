@@ -437,6 +437,38 @@ llmAgent := llmagent.New(
 )
 ```
 
+### Stop agent via callbacks {#stop-agent-via-callbacks}
+
+Use `agent.NewStopError` in callbacks when you need to halt execution and emit `stop_agent_error` to the runner stream.
+This is useful for quota checks, guard rails, or manual aborts.
+
+```go
+agentCallbacks := agent.NewCallbacks().
+  RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+    if args.Invocation != nil && args.Invocation.TokenUsage.Total >= maxTokens {
+      return nil, agent.NewStopError("token limit reached")
+    }
+    return nil, nil
+  }).
+  RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+    if args.Error != nil {
+      return nil, args.Error
+    }
+    if args.FullResponseEvent != nil && args.FullResponseEvent.Response != nil &&
+      args.FullResponseEvent.Response.Usage.TotalTokens >= maxTokens {
+      return nil, agent.NewStopError("token limit reached after response")
+    }
+    return nil, nil
+  })
+```
+
+Notes:
+
+- The flow turns the `StopError` into a `stop_agent_error` event and stops the loop. Downstream consumers can detect
+  `event.Error.Type == agent.ErrorTypeStopAgentError`.
+- Pair with context cancellation when you need a hard cutoff that also stops in-flight model calls or tool executions;
+  see the runner docs for context cancellation patterns.
+
 For a complete example, see [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go).
 
 ### Legacy Agent Callbacks (Deprecated)

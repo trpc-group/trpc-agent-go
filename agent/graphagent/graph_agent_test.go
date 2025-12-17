@@ -15,14 +15,18 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -400,6 +404,20 @@ type mockAgent struct {
 	tools          []tool.Tool
 }
 
+type stubSummarizer struct {
+	summary string
+}
+
+func (s *stubSummarizer) ShouldSummarize(_ *session.Session) bool { return true }
+func (s *stubSummarizer) Summarize(_ context.Context, _ *session.Session) (string, error) {
+	return s.summary, nil
+}
+func (s *stubSummarizer) SetPrompt(prompt string)  {}
+func (s *stubSummarizer) SetModel(m model.Model)   {}
+func (s *stubSummarizer) Metadata() map[string]any { return nil }
+
+var _ summary.SessionSummarizer = (*stubSummarizer)(nil)
+
 func (m *mockAgent) Info() agent.Info {
 	return agent.Info{
 		Name:        m.name,
@@ -631,6 +649,158 @@ func TestGraphAgent_CreateInitialStateWithSession(t *testing.T) {
 	require.Greater(t, eventCount, 0)
 }
 
+func TestGraphAgent_CreateInitialStateWithSessionSummary(t *testing.T) {
+	const agentName = "test-agent"
+	schema := graph.NewStateSchema().
+		AddField("messages", graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New(agentName, g, WithAddSessionSummary(true))
+	require.NoError(t, err)
+
+	sess := &session.Session{
+		ID: "test-session",
+		Summaries: map[string]*session.Summary{
+			agentName: {
+				Summary:   "branch summary content",
+				UpdatedAt: time.Now(),
+			},
+		},
+	}
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationEventFilterKey(agentName),
+	)
+	graphAgent.setupInvocation(invocation)
+
+	state := graphAgent.createInitialState(context.Background(), invocation)
+	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+	require.True(t, ok)
+	require.Len(t, messages, 2)
+	require.Equal(t, model.RoleSystem, messages[0].Role)
+	require.Equal(t, "branch summary content", messages[0].Content)
+	require.Equal(t, model.RoleUser, messages[1].Role)
+	require.Equal(t, "hello", messages[1].Content)
+}
+
+func TestGraphAgent_CreateInitialStateWithSessionSummary_Disabled(t *testing.T) {
+	const agentName = "test-agent"
+	schema := graph.NewStateSchema().
+		AddField("messages", graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New(agentName, g)
+	require.NoError(t, err)
+
+	sess := &session.Session{
+		ID: "test-session",
+		Summaries: map[string]*session.Summary{
+			agentName: {
+				Summary:   "branch summary content",
+				UpdatedAt: time.Now(),
+			},
+		},
+	}
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationEventFilterKey(agentName),
+	)
+	graphAgent.setupInvocation(invocation)
+
+	state := graphAgent.createInitialState(context.Background(), invocation)
+	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+	require.True(t, ok)
+	require.Len(t, messages, 1)
+	require.Equal(t, model.RoleUser, messages[0].Role)
+	require.Equal(t, "hello", messages[0].Content)
+}
+
+func TestGraphAgent_CreateInitialStateWithSessionSummary_FromService(t *testing.T) {
+	const agentName = "test-agent"
+	ctx := context.Background()
+
+	schema := graph.NewStateSchema().
+		AddField("messages", graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New(agentName, g, WithAddSessionSummary(true))
+	require.NoError(t, err)
+
+	// Session service with a stub summarizer to emulate real summarization flow.
+	sum := &stubSummarizer{summary: "auto summary from service"}
+	sessSvc := inmemory.NewSessionService(inmemory.WithSummarizer(sum))
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := sessSvc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	evt := event.NewResponseEvent("inv-1", agentName, &model.Response{
+		Choices: []model.Choice{{Message: model.Message{
+			Role:    model.RoleUser,
+			Content: "hi there",
+		}}},
+	})
+	evt.FilterKey = agentName
+	require.NoError(t, sessSvc.AppendEvent(ctx, sess, evt))
+	require.NoError(t, sessSvc.CreateSessionSummary(ctx, sess, agentName, true))
+
+	// Reload session to ensure we read persisted summaries.
+	storedSess, err := sessSvc.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, storedSess)
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(storedSess),
+		agent.WithInvocationMessage(model.NewUserMessage("next turn")),
+		agent.WithInvocationEventFilterKey(agentName),
+	)
+	graphAgent.setupInvocation(invocation)
+
+	state := graphAgent.createInitialState(ctx, invocation)
+	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+	require.True(t, ok)
+	require.GreaterOrEqual(t, len(messages), 1)
+	require.Equal(t, model.RoleSystem, messages[0].Role)
+	require.Equal(t, "auto summary from service", messages[0].Content)
+	// Summary already covers prior history, so the latest run may start with summary only.
+}
+
 // TestGraphAgent_CreateInitialStateWithResume tests checkpoint resume behavior.
 func TestGraphAgent_CreateInitialStateWithResume(t *testing.T) {
 	// Create a simple graph.
@@ -837,9 +1007,18 @@ func TestGraphAgent_BeforeCallbackReturnsError(t *testing.T) {
 		AgentName:    "test-before-err",
 	}
 
-	_, err = ga.Run(context.Background(), inv)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "before callback failed")
+	events, err := ga.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	// Collect events and expect a final error event.
+	var collected []*event.Event
+	for e := range events {
+		collected = append(collected, e)
+	}
+	require.Len(t, collected, 1)
+	require.NotNil(t, collected[0].Error)
+	require.Equal(t, model.ErrorTypeFlowError, collected[0].Error.Type)
+	require.Contains(t, collected[0].Error.Message, "before callback failed")
 }
 
 func TestGraphAgent_AfterCallbackReturnsResponse(t *testing.T) {
@@ -861,7 +1040,13 @@ func TestGraphAgent_AfterCallbackReturnsResponse(t *testing.T) {
 
 	// Create callbacks with after agent.
 	callbacks := agent.NewCallbacks()
-	callbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
+	var callbackErr error
+	callbacks.RegisterAfterAgent(func(
+		ctx context.Context,
+		inv *agent.Invocation,
+		err error,
+	) (*model.Response, error) {
+		callbackErr = err
 		return &model.Response{
 			Object: "after.custom",
 			Done:   true,
@@ -895,6 +1080,9 @@ func TestGraphAgent_AfterCallbackReturnsResponse(t *testing.T) {
 
 	// Should have graph execution event(s) plus after callback event.
 	require.Greater(t, len(collected), 0)
+
+	// After-callback in success path should see nil error.
+	require.NoError(t, callbackErr)
 
 	// Last event should be from after callback.
 	last := collected[len(collected)-1]
@@ -952,4 +1140,177 @@ func TestGraphAgent_AfterCallbackReturnsError(t *testing.T) {
 	require.NotNil(t, last.Error)
 	require.Equal(t, agent.ErrorTypeAgentCallbackError, last.Error.Type)
 	require.Contains(t, last.Error.Message, "after callback failed")
+}
+
+func TestGraphAgent_AfterCallbackReceivesExecutionError(t *testing.T) {
+	// Create a simple graph that fails at the node.
+	schema := graph.NewStateSchema().
+		AddField("output", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("fail", func(
+			ctx context.Context,
+			state graph.State,
+		) (any, error) {
+			return nil, fmt.Errorf("node failed")
+		}).
+		SetEntryPoint("fail").
+		SetFinishPoint("fail").
+		Compile()
+	require.NoError(t, err)
+
+	// After-agent callback should receive non-nil error derived from the
+	// final response event.
+	callbacks := agent.NewCallbacks()
+	var callbackErr error
+	callbacks.RegisterAfterAgent(func(
+		ctx context.Context,
+		inv *agent.Invocation,
+		err error,
+	) (*model.Response, error) {
+		callbackErr = err
+		return nil, nil
+	})
+
+	ga, err := New(
+		"test-after-exec-err",
+		g,
+		WithAgentCallbacks(callbacks),
+	)
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-after-exec-err",
+		AgentName:    "test-after-exec-err",
+		Message:      model.NewUserMessage("test"),
+	}
+
+	events, err := ga.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	// Drain all events to ensure after-callback has run.
+	for range events {
+	}
+
+	require.Error(t, callbackErr)
+	require.Contains(t, callbackErr.Error(), "flow_error:")
+}
+
+func TestGraphAgent_BarrierWaitsForCompletion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	schema := graph.NewStateSchema().
+		AddField(graph.StateKeyMessages, graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		})
+	g, err := graph.NewStateGraph(schema).
+		AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"ok": true}, nil
+		}).
+		SetEntryPoint("done").
+		SetFinishPoint("done").
+		Compile()
+	require.NoError(t, err)
+
+	ga, err := New("barrier-test", g)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "u", "s")),
+	)
+	barrier.Enable(inv)
+
+	ch, err := ga.Run(ctx, inv)
+	require.NoError(t, err)
+
+	var barrierEvt *event.Event
+	select {
+	case barrierEvt = <-ch:
+	case <-ctx.Done():
+		t.Fatalf("did not receive barrier event: %v", ctx.Err())
+	}
+	require.NotNil(t, barrierEvt)
+	require.Equal(t, graph.ObjectTypeGraphBarrier, barrierEvt.Object)
+	require.True(t, barrierEvt.RequiresCompletion)
+
+	select {
+	case evt, ok := <-ch:
+		if ok {
+			t.Fatalf("unexpected event before completion: %+v", evt)
+		}
+	default:
+	}
+
+	completionID := agent.GetAppendEventNoticeKey(barrierEvt.ID)
+	require.NoError(t, inv.NotifyCompletion(ctx, completionID))
+
+	var received []*event.Event
+	for {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				goto done
+			}
+			received = append(received, evt)
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for graph events: %v", ctx.Err())
+		}
+	}
+done:
+	require.NotEmpty(t, received)
+	var hasGraphExec bool
+	for _, evt := range received {
+		if evt.Object == graph.ObjectTypeGraphExecution {
+			hasGraphExec = true
+		}
+	}
+	require.True(t, hasGraphExec)
+}
+
+func TestGraphAgent_RunWithBarrierEmitError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	schema := graph.NewStateSchema().
+		AddField("done", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+	g, err := graph.NewStateGraph(schema).
+		AddNode("finish", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"done": "ok"}, nil
+		}).
+		SetEntryPoint("finish").
+		SetFinishPoint("finish").
+		Compile()
+	require.NoError(t, err)
+
+	ga, err := New("barrier-error", g)
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		AgentName:    "barrier-error",
+		InvocationID: "inv-barrier-error",
+		// noticeMu left nil to force AddNoticeChannel to fail.
+	}
+	barrier.Enable(inv)
+
+	out := make(chan *event.Event, 1)
+	go ga.runWithBarrier(ctx, inv, out)
+
+	var events []*event.Event
+	for evt := range out {
+		events = append(events, evt)
+	}
+
+	require.Len(t, events, 1)
+	require.NotNil(t, events[0].Response)
+	require.NotNil(t, events[0].Response.Error)
+	require.Equal(t, model.ErrorTypeFlowError, events[0].Response.Error.Type)
+	require.Contains(t, events[0].Response.Error.Message, "add notice channel")
 }

@@ -86,7 +86,12 @@ func (c *summaryChat) setup(_ context.Context) error {
 	//   - {conversation_text}: The conversation content to be summarized
 	//   - {max_summary_words}: The maximum word count for the summary (only included when max-words > 0)
 	sum := summary.NewSummarizer(llm, summary.WithMaxSummaryWords(*flagMaxWords),
-		summary.WithSkipRecentEvents(*flagSkipRecent),
+		summary.WithSkipRecent(func(_ []event.Event) int {
+			if *flagSkipRecent > 0 {
+				return *flagSkipRecent
+			}
+			return 0
+		}),
 		summary.WithChecksAny(
 			summary.CheckEventThreshold(*flagEvents),
 			summary.CheckTokenThreshold(*flagTokens),

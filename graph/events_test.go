@@ -286,6 +286,28 @@ func TestNewGraphCompletionEvent(t *testing.T) {
 	require.Equal(t, 3, cm.FinalStateKeys) // includes StateKeyLastResponse + k1 + k2
 }
 
+func TestNewGraphCompletionEvent_EncodeJSONBytes(t *testing.T) {
+	jsonBytes := []byte(`{"runs":null}`)
+	bin := []byte{1, 2}
+	final := State{
+		StateKeyLastResponse: "ok",
+		"json_bytes":         jsonBytes,
+		"bin":                bin,
+	}
+	e := NewGraphCompletionEvent(
+		WithCompletionEventInvocationID("inv"),
+		WithCompletionEventFinalState(final),
+		WithCompletionEventTotalSteps(1),
+		WithCompletionEventTotalDuration(1*time.Millisecond),
+	)
+
+	require.Equal(t, jsonBytes, e.StateDelta["json_bytes"])
+
+	var decoded []byte
+	require.NoError(t, json.Unmarshal(e.StateDelta["bin"], &decoded))
+	require.Equal(t, bin, decoded)
+}
+
 func TestNewGraphCompletionEvent_SerializeFinalStateSkipsInternalAndUnserializable(t *testing.T) {
 	final := State{
 		StateKeyLastResponse: "ok",
@@ -349,4 +371,276 @@ func TestNewGraphCompletionEvent_NilFinalState(t *testing.T) {
 	var cm CompletionMetadata
 	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyCompletion], &cm))
 	require.Equal(t, 0, cm.FinalStateKeys)
+}
+
+func TestWithNodeCustomMetadata(t *testing.T) {
+	e := event.New("inv-1", AuthorGraphNode)
+
+	customMeta := NodeCustomEventMetadata{
+		EventType:    "test_event",
+		Category:     NodeCustomEventCategoryCustom,
+		NodeID:       "node-1",
+		InvocationID: "inv-1",
+		StepNumber:   5,
+		Timestamp:    time.Now().UTC(),
+		Payload:      map[string]any{"key": "value"},
+		Progress:     50.0,
+		Message:      "test message",
+	}
+	WithNodeCustomMetadata(customMeta)(e)
+	require.Contains(t, e.StateDelta, MetadataKeyNodeCustom)
+
+	var meta NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyNodeCustom], &meta))
+	require.Equal(t, "test_event", meta.EventType)
+	require.Equal(t, NodeCustomEventCategoryCustom, meta.Category)
+	require.Equal(t, "node-1", meta.NodeID)
+	require.Equal(t, "inv-1", meta.InvocationID)
+	require.Equal(t, 5, meta.StepNumber)
+	require.Equal(t, 50.0, meta.Progress)
+	require.Equal(t, "test message", meta.Message)
+}
+
+func TestNewNodeCustomEvent(t *testing.T) {
+	e := NewNodeCustomEvent(
+		WithNodeCustomEventInvocationID("inv-custom"),
+		WithNodeCustomEventNodeID("node-custom"),
+		WithNodeCustomEventEventType("my_custom_event"),
+		WithNodeCustomEventCategory(NodeCustomEventCategoryCustom),
+		WithNodeCustomEventStepNumber(7),
+		WithNodeCustomEventPayload(map[string]any{"data": 123}),
+		WithNodeCustomEventProgress(25.5),
+		WithNodeCustomEventMessage("custom message"),
+	)
+
+	require.Equal(t, ObjectTypeGraphNodeCustom, e.Object)
+	require.Equal(t, "inv-custom", e.InvocationID)
+	require.Equal(t, "node-custom", e.Author)
+	require.Empty(t, e.Branch)
+
+	var meta NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyNodeCustom], &meta))
+	require.Equal(t, "my_custom_event", meta.EventType)
+	require.Equal(t, NodeCustomEventCategoryCustom, meta.Category)
+	require.Equal(t, "node-custom", meta.NodeID)
+	require.Equal(t, "inv-custom", meta.InvocationID)
+	require.Equal(t, 7, meta.StepNumber)
+	require.Equal(t, 25.5, meta.Progress)
+	require.Equal(t, "custom message", meta.Message)
+	require.NotNil(t, meta.Payload)
+	require.False(t, meta.Timestamp.IsZero())
+}
+
+func TestNewNodeCustomEvent_WithBranch(t *testing.T) {
+	e := NewNodeCustomEvent(
+		WithNodeCustomEventInvocationID("inv-branch"),
+		WithNodeCustomEventNodeID("node-branch"),
+		WithNodeCustomEventEventType("branch_event"),
+		WithNodeCustomEventBranch("feature-branch"),
+	)
+
+	require.Equal(t, ObjectTypeGraphNodeCustom, e.Object)
+	require.Equal(t, "feature-branch", e.Branch)
+	require.Equal(t, "node-branch", e.Author)
+
+	var meta NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyNodeCustom], &meta))
+	require.Equal(t, "branch_event", meta.EventType)
+	require.Equal(t, "node-branch", meta.NodeID)
+}
+
+func TestNewNodeCustomEvent_DefaultCategory(t *testing.T) {
+	// 不设置Category时，应该默认为NodeCustomEventCategoryCustom
+	e := NewNodeCustomEvent(
+		WithNodeCustomEventInvocationID("inv-default"),
+		WithNodeCustomEventNodeID("node-default"),
+		WithNodeCustomEventEventType("default_event"),
+	)
+
+	var meta NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyNodeCustom], &meta))
+	require.Equal(t, NodeCustomEventCategoryCustom, meta.Category)
+}
+
+func TestNewNodeCustomEvent_EmptyNodeID(t *testing.T) {
+	// 当NodeID为空时，author应该回退到AuthorGraphNode
+	e := NewNodeCustomEvent(
+		WithNodeCustomEventInvocationID("inv-empty"),
+		WithNodeCustomEventEventType("empty_node_event"),
+	)
+
+	require.Equal(t, AuthorGraphNode, e.Author)
+
+	var meta NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyNodeCustom], &meta))
+	require.Empty(t, meta.NodeID)
+}
+
+func TestNewNodeProgressEvent(t *testing.T) {
+	e := NewNodeProgressEvent(
+		WithNodeCustomEventInvocationID("inv-progress"),
+		WithNodeCustomEventNodeID("node-progress"),
+		WithNodeCustomEventStepNumber(3),
+		WithNodeCustomEventProgress(75.0),
+		WithNodeCustomEventMessage("Processing 75%"),
+	)
+
+	require.Equal(t, ObjectTypeGraphNodeCustom, e.Object)
+	require.Equal(t, "inv-progress", e.InvocationID)
+	require.Equal(t, "node-progress", e.Author)
+
+	var meta NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyNodeCustom], &meta))
+	require.Equal(t, "progress", meta.EventType)
+	require.Equal(t, NodeCustomEventCategoryProgress, meta.Category)
+	require.Equal(t, "node-progress", meta.NodeID)
+	require.Equal(t, 3, meta.StepNumber)
+	require.Equal(t, 75.0, meta.Progress)
+	require.Equal(t, "Processing 75%", meta.Message)
+}
+
+func TestNewNodeProgressEvent_WithBranch(t *testing.T) {
+	e := NewNodeProgressEvent(
+		WithNodeCustomEventInvocationID("inv-progress-branch"),
+		WithNodeCustomEventNodeID("node-progress-branch"),
+		WithNodeCustomEventProgress(50.0),
+		WithNodeCustomEventBranch("dev-branch"),
+	)
+
+	require.Equal(t, "dev-branch", e.Branch)
+}
+
+func TestNewNodeProgressEvent_ClampProgress(t *testing.T) {
+	// 测试progress被限制在0-100范围内
+
+	// 负数应该被限制为0
+	e1 := NewNodeProgressEvent(
+		WithNodeCustomEventInvocationID("inv"),
+		WithNodeCustomEventNodeID("node"),
+		WithNodeCustomEventProgress(-10.0),
+	)
+	var meta1 NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(e1.StateDelta[MetadataKeyNodeCustom], &meta1))
+	require.Equal(t, 0.0, meta1.Progress)
+
+	// 超过100应该被限制为100
+	e2 := NewNodeProgressEvent(
+		WithNodeCustomEventInvocationID("inv"),
+		WithNodeCustomEventNodeID("node"),
+		WithNodeCustomEventProgress(150.0),
+	)
+	var meta2 NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(e2.StateDelta[MetadataKeyNodeCustom], &meta2))
+	require.Equal(t, 100.0, meta2.Progress)
+
+	// 正常范围内的值应该保持不变
+	e3 := NewNodeProgressEvent(
+		WithNodeCustomEventInvocationID("inv"),
+		WithNodeCustomEventNodeID("node"),
+		WithNodeCustomEventProgress(50.0),
+	)
+	var meta3 NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(e3.StateDelta[MetadataKeyNodeCustom], &meta3))
+	require.Equal(t, 50.0, meta3.Progress)
+}
+
+func TestNewNodeProgressEvent_CustomEventType(t *testing.T) {
+	// 可以覆盖默认的event type
+	e := NewNodeProgressEvent(
+		WithNodeCustomEventInvocationID("inv"),
+		WithNodeCustomEventNodeID("node"),
+		WithNodeCustomEventEventType("custom_progress"),
+		WithNodeCustomEventProgress(30.0),
+	)
+
+	var meta NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyNodeCustom], &meta))
+	require.Equal(t, "custom_progress", meta.EventType)
+	require.Equal(t, NodeCustomEventCategoryProgress, meta.Category)
+}
+
+func TestNewNodeTextEvent(t *testing.T) {
+	e := NewNodeTextEvent(
+		WithNodeCustomEventInvocationID("inv-text"),
+		WithNodeCustomEventNodeID("node-text"),
+		WithNodeCustomEventStepNumber(2),
+		WithNodeCustomEventMessage("Hello, streaming text"),
+	)
+
+	require.Equal(t, ObjectTypeGraphNodeCustom, e.Object)
+	require.Equal(t, "inv-text", e.InvocationID)
+	require.Equal(t, "node-text", e.Author)
+
+	var meta NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyNodeCustom], &meta))
+	require.Equal(t, "text", meta.EventType)
+	require.Equal(t, NodeCustomEventCategoryText, meta.Category)
+	require.Equal(t, "node-text", meta.NodeID)
+	require.Equal(t, 2, meta.StepNumber)
+	require.Equal(t, "Hello, streaming text", meta.Message)
+}
+
+func TestNewNodeTextEvent_WithBranch(t *testing.T) {
+	e := NewNodeTextEvent(
+		WithNodeCustomEventInvocationID("inv-text-branch"),
+		WithNodeCustomEventNodeID("node-text-branch"),
+		WithNodeCustomEventMessage("Branch text"),
+		WithNodeCustomEventBranch("text-branch"),
+	)
+
+	require.Equal(t, "text-branch", e.Branch)
+}
+
+func TestNewNodeTextEvent_CustomEventType(t *testing.T) {
+	// 可以覆盖默认的event type
+	e := NewNodeTextEvent(
+		WithNodeCustomEventInvocationID("inv"),
+		WithNodeCustomEventNodeID("node"),
+		WithNodeCustomEventEventType("custom_text"),
+		WithNodeCustomEventMessage("Custom text message"),
+	)
+
+	var meta NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyNodeCustom], &meta))
+	require.Equal(t, "custom_text", meta.EventType)
+	require.Equal(t, NodeCustomEventCategoryText, meta.Category)
+}
+
+func TestNodeCustomEventOptions(t *testing.T) {
+	// 测试所有WithNodeCustomEvent*选项函数
+	opts := &NodeCustomEventOptions{}
+
+	WithNodeCustomEventInvocationID("test-inv")(opts)
+	require.Equal(t, "test-inv", opts.InvocationID)
+
+	WithNodeCustomEventNodeID("test-node")(opts)
+	require.Equal(t, "test-node", opts.NodeID)
+
+	WithNodeCustomEventEventType("test-event")(opts)
+	require.Equal(t, "test-event", opts.EventType)
+
+	WithNodeCustomEventCategory(NodeCustomEventCategoryProgress)(opts)
+	require.Equal(t, NodeCustomEventCategoryProgress, opts.Category)
+
+	WithNodeCustomEventStepNumber(10)(opts)
+	require.Equal(t, 10, opts.StepNumber)
+
+	payload := map[string]any{"key": "value"}
+	WithNodeCustomEventPayload(payload)(opts)
+	require.Equal(t, payload, opts.Payload)
+
+	WithNodeCustomEventProgress(80.5)(opts)
+	require.Equal(t, 80.5, opts.Progress)
+
+	WithNodeCustomEventMessage("test message")(opts)
+	require.Equal(t, "test message", opts.Message)
+
+	WithNodeCustomEventBranch("test-branch")(opts)
+	require.Equal(t, "test-branch", opts.Branch)
+}
+
+func TestNodeCustomEventCategoryString(t *testing.T) {
+	require.Equal(t, "custom", NodeCustomEventCategoryCustom.String())
+	require.Equal(t, "progress", NodeCustomEventCategoryProgress.String())
+	require.Equal(t, "text", NodeCustomEventCategoryText.String())
 }

@@ -4,6 +4,12 @@
 
 tRPC-Agent-Go provides powerful session management capabilities to maintain conversation history and context information during Agent-user interactions. Through automatic persistence of conversation records, intelligent summary compression, and flexible storage backends, session management offers complete infrastructure for building stateful intelligent Agents.
 
+### Positioning
+
+A Session manages the context of the current conversation, with isolation dimensions `<appName, userID, SessionID>`. It stores user messages, Agent responses, tool call results, and brief summaries generated based on this content within the conversation, supporting multi-turn question-and-answer scenarios.
+
+Within the same conversation, it allows for seamless transitions between multiple turns of question-and-answer, preventing users from restating the same question or providing the same parameters in each turn.
+
 ### 🎯 Key Features
 
 - **Context Management**: Automatically load conversation history for true multi-turn dialogues
@@ -222,6 +228,31 @@ llmAgent := llmagent.New(
 r := runner.NewRunner("my-agent", llmAgent,
     runner.WithSessionService(sessionService))
 ```
+
+#### Summary hooks (pre/post)
+
+You can inject hooks to tweak summary input or output:
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithPreSummaryHook(func(ctx *summary.PreSummaryHookContext) error {
+        // Optionally modify ctx.Text or ctx.Events before summarization.
+        return nil
+    }),
+    summary.WithPostSummaryHook(func(ctx *summary.PostSummaryHookContext) error {
+        // Optionally modify ctx.Summary before returning to caller.
+        return nil
+    }),
+    summary.WithSummaryHookAbortOnError(true), // Abort when hook returns error (optional).
+)
+```
+
+Notes:
+
+- Pre-hook can mutate `ctx.Text` (preferred) or `ctx.Events`; post-hook can mutate `ctx.Summary`.
+- Default behavior ignores hook errors; enable abort with
+  `WithSummaryHookAbortOnError(true)`.
 
 **Context Injection Mechanism:**
 
@@ -494,13 +525,18 @@ Suitable for production environments and applications requiring complex queries,
 
 **Connection Configuration:**
 
+- **`WithPostgresClientDSN(dsn string)`**: PostgreSQL DSN connection string (recommended). Supports two formats:
+  - Key-Value format: `host=localhost port=5432 user=postgres password=secret dbname=mydb sslmode=disable`
+  - URL format: `postgres://user:password@localhost:5432/dbname?sslmode=disable`
 - **`WithHost(host string)`**: PostgreSQL server address. Default is `localhost`.
 - **`WithPort(port int)`**: PostgreSQL server port. Default is `5432`.
 - **`WithUser(user string)`**: Database username. Default is `postgres`.
 - **`WithPassword(password string)`**: Database password. Default is empty string.
 - **`WithDatabase(database string)`**: Database name. Default is `postgres`.
 - **`WithSSLMode(sslMode string)`**: SSL mode. Default is `disable`. Options: `disable`, `require`, `verify-ca`, `verify-full`.
-- **`WithInstanceName(name string)`**: Use pre-configured PostgreSQL instance.
+- **`WithPostgresInstance(name string)`**: Use pre-configured PostgreSQL instance.
+
+> **Priority**: `WithPostgresClientDSN` > Direct connection settings (`WithHost`, etc.) > `WithPostgresInstance`
 
 **Session Configuration:**
 
@@ -534,26 +570,29 @@ Suitable for production environments and applications requiring complex queries,
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 
-// Default configuration (minimal)
+// Using DSN connection (recommended)
 sessionService, err := postgres.NewService(
-    postgres.WithHost("localhost"),
-    postgres.WithPassword("your-password"),
+    postgres.WithPostgresClientDSN("postgres://user:password@localhost:5432/mydb?sslmode=disable"),
 )
-// Effect:
-// - Connect to localhost:5432, database postgres
-// - Each session max 1000 events
-// - Data never expires
-// - 2 async persistence workers
 
-// Complete production environment configuration
+// Or using Key-Value format DSN
 sessionService, err := postgres.NewService(
-    // Connection configuration
+    postgres.WithPostgresClientDSN("host=localhost port=5432 user=postgres password=secret dbname=mydb sslmode=disable"),
+)
+
+// Using individual configuration options (traditional way)
+sessionService, err := postgres.NewService(
     postgres.WithHost("localhost"),
     postgres.WithPort(5432),
     postgres.WithUser("postgres"),
     postgres.WithPassword("your-password"),
     postgres.WithDatabase("trpc_sessions"),
-    postgres.WithSSLMode("require"),
+)
+
+// Complete production environment configuration
+sessionService, err := postgres.NewService(
+    // Connection configuration (DSN recommended)
+    postgres.WithPostgresClientDSN("postgres://user:password@localhost:5432/trpc_sessions?sslmode=require"),
 
     // Session configuration
     postgres.WithSessionEventLimit(1000),
@@ -579,23 +618,19 @@ sessionService, err := postgres.NewService(
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/storage"
-    "trpc.group/trpc-go/trpc-agent-go/session/postgres"
+    "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
+    sessionpg "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 )
 
 // Register PostgreSQL instance
-storage.RegisterPostgresInstance("my-postgres-instance",
-    storage.WithPostgresHost("localhost"),
-    storage.WithPostgresPort(5432),
-    storage.WithPostgresUser("postgres"),
-    storage.WithPostgresPassword("your-password"),
-    storage.WithPostgresDatabase("trpc_sessions"),
+postgres.RegisterPostgresInstance("my-postgres-instance",
+    postgres.WithClientConnString("postgres://user:password@localhost:5432/trpc_sessions?sslmode=disable"),
 )
 
 // Use in session service
-sessionService, err := postgres.NewService(
-    postgres.WithInstanceName("my-postgres-instance"),
-    postgres.WithSessionEventLimit(500),
+sessionService, err := sessionpg.NewService(
+    sessionpg.WithPostgresInstance("my-postgres-instance"),
+    sessionpg.WithSessionEventLimit(500),
 )
 ```
 
@@ -654,10 +689,10 @@ sessionService, err := postgres.NewService(
 
 **Delete Behavior Comparison:**
 
-| Configuration      | Delete Operation                | Query Behavior              | Data Recovery   |
-| ------------------ | ------------------------------- | --------------------------- | --------------- |
-| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | Filter `deleted_at IS NULL` | Recoverable     |
-| `softDelete=false` | `DELETE FROM ...`               | Query all records           | Not recoverable |
+| Configuration      | Delete Operation                | Query Behavior                                                                   | Data Recovery   |
+| ------------------ | ------------------------------- | -------------------------------------------------------------------------------- | --------------- |
+| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | Queries include `WHERE deleted_at IS NULL`, returning only non-soft-deleted rows | Recoverable     |
+| `softDelete=false` | `DELETE FROM ...`               | Query all records                                                                | Not recoverable |
 
 **TTL Auto Cleanup:**
 
@@ -673,7 +708,7 @@ sessionService, err := postgres.NewService(
 // Cleanup behavior:
 // - softDelete=true: Expired data marked as deleted_at = NOW()
 // - softDelete=false: Expired data physically deleted
-// - Queries always filter deleted_at IS NULL
+// - Queries always append `WHERE deleted_at IS NULL`, returning only non-soft-deleted rows.
 ```
 
 ### Use with Summary
@@ -864,23 +899,19 @@ sessionService, err := mysql.NewService(
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/storage"
-    "trpc.group/trpc-go/trpc-agent-go/session/mysql"
+    "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+    sessionmysql "trpc.group/trpc-go/trpc-agent-go/session/mysql"
 )
 
 // Register MySQL instance
-storage.RegisterMySQLInstance("my-mysql-instance",
-    storage.WithMySQLHost("localhost"),
-    storage.WithMySQLPort(3306),
-    storage.WithMySQLUser("root"),
-    storage.WithMySQLPassword("your-password"),
-    storage.WithMySQLDatabase("trpc_sessions"),
+mysql.RegisterMySQLInstance("my-mysql-instance",
+    mysql.WithClientBuilderDSN("root:password@tcp(localhost:3306)/trpc_sessions?parseTime=true&charset=utf8mb4"),
 )
 
 // Use in session service
-sessionService, err := mysql.NewService(
-    mysql.WithInstanceName("my-mysql-instance"),
-    mysql.WithSessionEventLimit(500),
+sessionService, err := sessionmysql.NewService(
+    sessionmysql.WithMySQLInstance("my-mysql-instance"),
+    sessionmysql.WithSessionEventLimit(500),
 )
 ```
 
@@ -916,10 +947,10 @@ sessionService, err := mysql.NewService(
 
 **Delete Behavior Comparison:**
 
-| Configuration      | Delete Operation                | Query Behavior              | Data Recovery   |
-| ------------------ | ------------------------------- | --------------------------- | --------------- |
-| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | Filter `deleted_at IS NULL` | Recoverable     |
-| `softDelete=false` | `DELETE FROM ...`               | Query all records           | Not recoverable |
+| Configuration      | Delete Operation                | Query Behavior                                                                   | Data Recovery   |
+| ------------------ | ------------------------------- | -------------------------------------------------------------------------------- | --------------- |
+| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | Queries include `WHERE deleted_at IS NULL`, returning only non-soft-deleted rows | Recoverable     |
+| `softDelete=false` | `DELETE FROM ...`               | Query all records                                                                | Not recoverable |
 
 **TTL Auto Cleanup:**
 
@@ -935,7 +966,7 @@ sessionService, err := mysql.NewService(
 // Cleanup behavior:
 // - softDelete=true: Expired data marked as deleted_at = NOW()
 // - softDelete=false: Expired data physically deleted
-// - Queries always filter deleted_at IS NULL
+// - Queries always append `WHERE deleted_at IS NULL`, returning only non-soft-deleted rows.
 ```
 
 ### Use with Summary
@@ -1050,6 +1081,14 @@ CREATE TABLE user_states (
 - MySQL uses `ON DUPLICATE KEY UPDATE` syntax for UPSERT
 
 ## Advanced Usage
+
+### Hook Capabilities (Append/Get)
+
+- **AppendEventHook**: Intercept/modify/abort events before they are stored. Useful for content safety or auditing (e.g., tagging `violation=<word>`), or short-circuiting persistence. For filterKey usage, see the “Session Summarization / FilterKey with AppendEventHook” section below.
+- **GetSessionHook**: Intercept/modify/filter sessions after they are read. Useful for removing tagged events or dynamically augmenting the returned session state.
+- **Chain-of-responsibility**: Hooks call `next()` to continue; returning early short-circuits later hooks, and errors bubble up.
+- **Backend parity**: Memory, Redis, MySQL, and PostgreSQL share the same hook interface—inject hook slices when constructing the service.
+- **Example**: See `examples/session/hook` ([code](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook))
 
 ### Direct Use of Session Service API
 
@@ -1204,7 +1243,7 @@ The framework provides two distinct modes for managing conversation context sent
 
 **Mode 1: With Summary (`WithAddSessionSummary(true)`)**
 
-- The session summary is prepended as a system message.
+- The session summary is inserted as a separate system message after the first existing system message (or prepended if no system message exists).
 - **All incremental events** after the summary timestamp are included (no truncation).
 - This ensures complete context: condensed history (summary) + all new conversations since summarization.
 - `WithMaxHistoryRuns` is **ignored** in this mode.
@@ -1221,9 +1260,9 @@ The framework provides two distinct modes for managing conversation context sent
 ```
 When AddSessionSummary = true:
 ┌─────────────────────────────────────┐
-│ System Prompt                       │
+│ Existing System Message (optional)  │ ← If present
 ├─────────────────────────────────────┤
-│ Session Summary (system message)    │ ← Condensed history
+│ Session Summary (system message)    │ ← Inserted after first system message
 ├─────────────────────────────────────┤
 │ Event 1 (after summary timestamp)   │ ┐
 │ Event 2                             │ │ All incremental
@@ -1284,7 +1323,7 @@ Configure the summarizer behavior with the following options:
 
 - **`WithMaxSummaryWords(maxWords int)`**: Limit the summary to a maximum word count. The limit is included in the prompt to guide the model's generation. Example: `WithMaxSummaryWords(150)` requests summaries within 150 words.
 - **`WithPrompt(prompt string)`**: Provide a custom summarization prompt. The prompt must include the placeholder `{conversation_text}`, which will be replaced with the conversation content. Optionally include `{max_summary_words}` for word limit instructions.
-- **`WithSkipRecentEvents(count int)`**: Skip the most recent events during summarization. These events will be excluded from the summary input but remain in the session. Useful for avoiding summarization of very recent, potentially incomplete conversations. A value <= 0 means no events are skipped. Example: `WithSkipRecentEvents(2)` skips the last 2 events.
+- **`WithSkipRecent(skipFunc SkipRecentFunc)`**: Skip the _most recent_ events during summarization using a custom function. The function receives all events and returns how many tail events to skip. Return 0 to skip none. Useful for avoiding summarizing very recent/incomplete conversations, or applying time/content-based skipping strategies.
 
 **Example with custom prompt:**
 
@@ -1303,8 +1342,50 @@ summarizer := summary.NewSummarizer(
     summaryModel,
     summary.WithPrompt(customPrompt), // Custom Prompt
     summary.WithMaxSummaryWords(100), // Inject into {max_summary_words}
-    summary.WithSkipRecentEvents(2),  // Skip the last 2 events
     summary.WithEventThreshold(15),
+)
+
+// Skip a fixed number of recent events (compatible with old behavior)
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithSkipRecent(func(_ []event.Event) int { return 2 }), // skip last 2 events
+    summary.WithEventThreshold(10),
+)
+
+// Skip events from the last 5 minutes (time window)
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithSkipRecent(func(events []event.Event) int {
+        cutoff := time.Now().Add(-5 * time.Minute)
+        skip := 0
+        for i := len(events) - 1; i >= 0; i-- {
+            if events[i].Timestamp.After(cutoff) {
+                skip++
+            } else {
+                break
+            }
+        }
+        return skip
+    }),
+    summary.WithEventThreshold(10),
+)
+
+// Skip trailing tool-call messages only
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithSkipRecent(func(events []event.Event) int {
+        skip := 0
+        for i := len(events) - 1; i >= 0; i-- {
+            if events[i].Response != nil && len(events[i].Response.Choices) > 0 &&
+                events[i].Response.Choices[0].Message.Role == model.RoleTool {
+                skip++
+            } else {
+                break
+            }
+        }
+        return skip
+    }),
+    summary.WithEventThreshold(10),
 )
 ```
 
@@ -1438,6 +1519,80 @@ The `GetSessionSummaryText` method supports an optional `WithSummaryFilterKey` o
 5. **Balance word limits**: Set `WithMaxSummaryWords` to balance between preserving context and reducing token usage. Typical values range from 100-300 words.
 
 6. **Test trigger conditions**: Experiment with different combinations of `WithChecksAny` and `WithChecksAll` to find the right balance between summary frequency and cost.
+
+### Summarizing by Event Type
+
+In real-world applications, you may want to generate separate summaries for different types of events. For example:
+
+- **User Message Summary**: Summarize user needs and questions
+- **Tool Call Summary**: Record which tools were used and their results
+- **System Event Summary**: Track system state changes
+
+To achieve this, you need to set the `FilterKey` field on events to identify their type.
+
+#### Setting FilterKey with AppendEventHook
+
+The recommended approach is to use `AppendEventHook` to automatically set `FilterKey` before events are persisted:
+
+```go
+sessionService := inmemory.NewSessionService(
+    inmemory.WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+        // Auto-categorize by event author
+        prefix := "my-app/"  // Must add appName prefix
+        switch ctx.Event.Author {
+        case "user":
+            ctx.Event.FilterKey = prefix + "user-messages"
+        case "tool":
+            ctx.Event.FilterKey = prefix + "tool-calls"
+        default:
+            ctx.Event.FilterKey = prefix + "misc"
+        }
+        return next()
+    }),
+)
+```
+
+Once FilterKey is set, you can generate independent summaries for different event types:
+
+```go
+// Generate summary for user messages
+err := sessionService.CreateSessionSummary(ctx, sess, "my-app/user-messages", false)
+
+// Generate summary for tool calls
+err := sessionService.CreateSessionSummary(ctx, sess, "my-app/tool-calls", false)
+
+// Retrieve summary for specific type
+userSummary, found := sessionService.GetSessionSummaryText(
+    ctx, sess, session.WithSummaryFilterKey("my-app/user-messages"))
+```
+
+#### FilterKey Prefix Convention
+
+**⚠️ Important: FilterKey must include the `appName + "/"` prefix.**
+
+**Why:** The Runner uses `appName + "/"` as the filter prefix when filtering events. If your FilterKey lacks this prefix, events will be filtered out, causing:
+
+- LLM cannot see conversation history, may repeatedly trigger tool calls
+- Summary content is incomplete, losing important context
+
+**Example:**
+
+```go
+// ✅ Correct: with appName prefix
+evt.FilterKey = "my-app/user-messages"
+
+// ❌ Wrong: no prefix, events will be filtered out
+evt.FilterKey = "user-messages"
+```
+
+**Technical Details:** The framework uses prefix matching (`strings.HasPrefix`) to determine which events should be included in the context. See `ContentRequestProcessor` filtering logic for details.
+
+#### Complete Examples
+
+See the following examples for complete FilterKey usage scenarios:
+
+- [examples/session/hook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook) - Hook basics
+- [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - Summarizing by FilterKey
 
 ### Performance Considerations
 

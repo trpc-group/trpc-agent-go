@@ -49,6 +49,24 @@ const (
 	TimelineFilterCurrentInvocation = processor.TimelineFilterCurrentInvocation
 )
 
+// MessageFilterMode is the mode for filtering messages.
+type MessageFilterMode int
+
+const (
+	// FullContext Includes all messages with prefix matching (including historical messages).
+	// equivalent to TimelineFilterAll + BranchFilterModePrefix.
+	FullContext MessageFilterMode = iota
+	// RequestContext includes only messages from the current request cycle that match the branch prefix.
+	// equivalent to TimelineFilterCurrentRequest + BranchFilterModePrefix.
+	RequestContext
+	// IsolatedRequest includes only messages from the current request cycle that exactly match the branch.
+	// equivalent to TimelineFilterCurrentRequest + BranchFilterModeExact.
+	IsolatedRequest
+	// IsolatedInvocation includes only messages from current invocation session that exactly match the branch,
+	// equivalent to TimelineFilterCurrentInvocation + BranchFilterModeExact.
+	IsolatedInvocation
+)
+
 var (
 	defaultOptions = Options{
 		ChannelBufferSize:          defaultChannelBufferSize,
@@ -137,6 +155,20 @@ type Options struct {
 	// as a system message when available (default: false).
 	AddSessionSummary bool
 
+	// MaxLLMCalls is an optional upper bound on the number of LLM calls
+	// allowed per invocation for this agent. When the value is:
+	//   - > 0: the limit is enforced per invocation.
+	//   - <= 0: no limit is applied (default, preserves existing behavior).
+	MaxLLMCalls int
+
+	// MaxToolIterations is an optional upper bound on how many tool-call
+	// iterations are allowed per invocation for this agent. A "tool iteration"
+	// is defined as an assistant response that contains tool calls and reaches
+	// the FunctionCallResponseProcessor. When the value is:
+	//   - > 0: the limit is enforced per invocation.
+	//   - <= 0: no limit is applied (default, preserves existing behavior).
+	MaxToolIterations int
+
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
@@ -224,6 +256,26 @@ func WithGlobalInstruction(instruction string) Option {
 func WithGenerationConfig(config model.GenerationConfig) Option {
 	return func(opts *Options) {
 		opts.GenerationConfig = config
+	}
+}
+
+// WithMaxLLMCalls sets the optional upper bound on the number of LLM calls
+// allowed per invocation for this agent. When limit is:
+//   - > 0: the limit is enforced per invocation.
+//   - <= 0: no limit is applied (default behavior).
+func WithMaxLLMCalls(limit int) Option {
+	return func(opts *Options) {
+		opts.MaxLLMCalls = limit
+	}
+}
+
+// WithMaxToolIterations sets the optional upper bound on how many tool-call
+// iterations are allowed per invocation for this agent. When limit is:
+//   - > 0: the limit is enforced per invocation.
+//   - <= 0: no limit is applied (default behavior).
+func WithMaxToolIterations(limit int) Option {
+	return func(opts *Options) {
+		opts.MaxToolIterations = limit
 	}
 }
 
@@ -514,5 +566,27 @@ func WithMessageBranchFilterMode(mode string) Option {
 func WithToolFilter(filter tool.FilterFunc) Option {
 	return func(opts *Options) {
 		opts.toolFilter = filter
+	}
+}
+
+// WithMessageFilterMode sets the message filter mode.
+func WithMessageFilterMode(mode MessageFilterMode) Option {
+	return func(opts *Options) {
+		switch mode {
+		case FullContext:
+			opts.messageBranchFilterMode = BranchFilterModePrefix
+			opts.messageTimelineFilterMode = TimelineFilterAll
+		case RequestContext:
+			opts.messageBranchFilterMode = BranchFilterModePrefix
+			opts.messageTimelineFilterMode = TimelineFilterCurrentRequest
+		case IsolatedRequest:
+			opts.messageBranchFilterMode = BranchFilterModeExact
+			opts.messageTimelineFilterMode = TimelineFilterCurrentRequest
+		case IsolatedInvocation:
+			opts.messageBranchFilterMode = BranchFilterModeExact
+			opts.messageTimelineFilterMode = TimelineFilterCurrentInvocation
+		default:
+			panic("invalid option value")
+		}
 	}
 }

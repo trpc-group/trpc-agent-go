@@ -84,11 +84,11 @@ func TestRunner_EnqueueSummaryJob_Calls(t *testing.T) {
 		assert.Len(t, mockSessionService.enqueueSummaryJobCalls, 0, "Should not call EnqueueSummaryJob for non-qualifying events")
 	})
 
-	t.Run("calls EnqueueSummaryJob for events with state delta", func(t *testing.T) {
+	t.Run("does not call EnqueueSummaryJob for events with state delta only", func(t *testing.T) {
 		// Create mock session service
 		mockSessionService := &mockSessionService{}
 
-		// Create a mock agent that generates events with state delta
+		// Create a mock agent that generates events with state delta only (no response)
 		stateDeltaAgent := &stateDeltaMockAgent{name: "state-delta-agent"}
 
 		// Create runner with mock session service
@@ -107,11 +107,9 @@ func TestRunner_EnqueueSummaryJob_Calls(t *testing.T) {
 		// Wait a bit for async processing
 		time.Sleep(100 * time.Millisecond)
 
-		// Verify EnqueueSummaryJob was called once; full-session will be cascaded by worker.
-		require.Len(t, mockSessionService.enqueueSummaryJobCalls, 1, "Should call EnqueueSummaryJob once for state delta events")
-		onlyCall := mockSessionService.enqueueSummaryJobCalls[0]
-		assert.Equal(t, "test-filter", onlyCall.filterKey, "Call should use event's FilterKey")
-		assert.False(t, onlyCall.force, "Call should not force")
+		// Verify EnqueueSummaryJob was NOT called for state delta only events
+		// because the new logic only triggers summary for assistant responses
+		require.Len(t, mockSessionService.enqueueSummaryJobCalls, 0, "Should not call EnqueueSummaryJob for state delta only events")
 	})
 
 	t.Run("handles EnqueueSummaryJob errors gracefully", func(t *testing.T) {

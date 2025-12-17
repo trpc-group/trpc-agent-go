@@ -69,10 +69,11 @@ func (a *ChainAgent) createSubAgentInvocation(
 // It executes sub-agents in sequence, passing events through as they are generated.
 func (a *ChainAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	eventChan := make(chan *event.Event, a.channelBufferSize)
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		defer close(eventChan)
 		a.executeChainRun(ctx, invocation, eventChan)
-	}()
+	}(runCtx)
 
 	return eventChan, nil
 }
@@ -197,6 +198,9 @@ func (a *ChainAgent) executeSubAgents(
 			}
 			if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
 				return nil, tokenUsage
+			}
+			if subEvent != nil && subEvent.Error != nil {
+				return subEvent, tokenUsage
 			}
 		}
 

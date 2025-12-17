@@ -166,7 +166,7 @@ eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
 In long-running conversations, users may interrupt the agent while it is still
 in a tool-calling phase (for example, the last message in the session is an
 assistant message with `tool_calls`, but no tool result has been written yet).
-When you later reuse the same `sessionID`, you can ask the Runner to *resume*
+When you later reuse the same `sessionID`, you can ask the Runner to _resume_
 from that point instead of asking the model to repeat the tool calls:
 
 ```go
@@ -512,6 +512,45 @@ for event := range eventChan {
 }
 ```
 
+### Stopping a Run Safely
+
+- **Cancel the context**: Wrap `runner.Run` with `context.WithCancel`.
+  Call `cancel()` when turn count or token budget is hit. `llmflow`
+  treats `context.Canceled` as graceful exit and closes the agent event
+  channel, so the runner loop finishes cleanly without blocking writers.
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+eventCh, err := r.Run(ctx, userID, sessionID, message)
+if err != nil {
+    return err
+}
+
+turns := 0
+for evt := range eventCh {
+    if evt.Error != nil {
+        log.Printf("event error: %s", evt.Error.Message)
+        continue
+    }
+    // ... handle evt ...
+    if evt.IsFinalResponse() {
+        break
+    }
+    turns++
+    if turns >= maxTurns {
+        cancel() // stop further model/tool calls.
+    }
+}
+```
+
+- **Emit a stop event**: Inside custom processors or tools, return `agent.NewStopError("reason")`. `llmflow` converts it into a
+  `stop_agent_error` event and stops the flow. Still pair with context cancel for hard cutoffs.
+
+- **Avoid breaking the runner loop directly**: Breaking the event-loop reader leaves the agent goroutine running and can block on channel
+  writes. Prefer context cancellation or `StopError`.
+
 ### Resource Management
 
 #### 🔒 Closing Runner (Important)
@@ -553,7 +592,7 @@ sessionService := redis.NewService(redis.WithRedisClientURL("redis://localhost:6
 defer sessionService.Close()  // YOU are responsible for closing it
 
 // Runner uses but doesn't own this session service
-r := runner.NewRunner("my-app", agent, 
+r := runner.NewRunner("my-app", agent,
 	runner.WithSessionService(sessionService))
 defer r.Close()  // This will NOT close sessionService (you provided it) (trpc-agent-go >= v0.5.0)
 
@@ -585,12 +624,12 @@ func (s *Service) Stop() error {
 	if err := s.runner.Close(); err != nil {
 		return err
 	}
-	
+
 	// If you provided your own session service, close it here
 	if s.sessionService != nil {
 		return s.sessionService.Close()
 	}
-	
+
 	return nil
 }
 ```

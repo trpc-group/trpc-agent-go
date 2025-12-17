@@ -14,11 +14,85 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
+
+type mockSummarizerWithTs struct {
+	last time.Time
+}
+
+func (m *mockSummarizerWithTs) ShouldSummarize(_ *session.Session) bool { return true }
+
+func (m *mockSummarizerWithTs) Summarize(
+	_ context.Context, sess *session.Session,
+) (string, error) {
+	if m.last.IsZero() && len(sess.Events) > 0 {
+		m.last = sess.Events[len(sess.Events)-1].Timestamp
+	}
+	if sess.State == nil {
+		sess.State = make(session.StateMap)
+	}
+	sess.State[lastIncludedTsKey] = []byte(m.last.UTC().Format(time.RFC3339Nano))
+	return "ok", nil
+}
+
+func (m *mockSummarizerWithTs) FilterEventsForSummary(
+	events []event.Event,
+) []event.Event {
+	return events
+}
+
+func (m *mockSummarizerWithTs) SetPrompt(prompt string) {}
+
+func (m *mockSummarizerWithTs) SetModel(mdl model.Model) {}
+
+func (m *mockSummarizerWithTs) Metadata() map[string]any { return nil }
+
+func TestSummarizeSession_UsesLastIncludedTimestamp(t *testing.T) {
+	t1 := time.Date(2023, 1, 1, 10, 0, 0, 0, time.UTC)
+	t2 := time.Date(2023, 1, 1, 11, 0, 0, 0, time.UTC)
+	sess := &session.Session{
+		ID: "s1",
+		Events: []event.Event{
+			{Author: "user", Timestamp: t1, Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "e1"}}}}},
+			{Author: "user", Timestamp: t2, Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "e2"}}}}},
+		},
+	}
+
+	ms := &mockSummarizerWithTs{}
+	updated, err := SummarizeSession(context.Background(), ms, sess, "", false)
+	require.NoError(t, err)
+	require.True(t, updated)
+
+	sess.SummariesMu.RLock()
+	sum := sess.Summaries[""]
+	sess.SummariesMu.RUnlock()
+	require.NotNil(t, sum)
+	assert.True(t, sum.UpdatedAt.Equal(t2.UTC()))
+}
+
+func TestSelectUpdatedAt_Fallbacks(t *testing.T) {
+	prev := time.Date(2023, 1, 2, 9, 0, 0, 0, time.UTC)
+	latest := time.Date(2023, 1, 2, 10, 0, 0, 0, time.UTC)
+
+	t.Run("no delta keeps prev", func(t *testing.T) {
+		got := selectUpdatedAt(nil, prev, latest, false)
+		assert.True(t, got.Equal(prev.UTC()))
+	})
+
+	t.Run("invalid ts falls back to latest", func(t *testing.T) {
+		tmp := &session.Session{State: session.StateMap{
+			lastIncludedTsKey: []byte("bad-ts"),
+		}}
+		got := selectUpdatedAt(tmp, prev, latest, true)
+		assert.True(t, got.Equal(latest.UTC()))
+	})
+}
 
 type fakeSummarizer struct {
 	allow bool
@@ -29,7 +103,28 @@ func (f *fakeSummarizer) ShouldSummarize(sess *session.Session) bool { return f.
 func (f *fakeSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
 	return f.out, nil
 }
+func (f *fakeSummarizer) SetPrompt(prompt string)  {}
+func (f *fakeSummarizer) SetModel(m model.Model)   {}
 func (f *fakeSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+type fakeSummarizerWithTs struct {
+	out string
+	ts  time.Time
+}
+
+func (f *fakeSummarizerWithTs) ShouldSummarize(sess *session.Session) bool { return true }
+func (f *fakeSummarizerWithTs) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	if sess.State == nil {
+		sess.State = make(session.StateMap)
+	}
+	if !f.ts.IsZero() {
+		sess.State[lastIncludedTsKey] = []byte(f.ts.UTC().Format(time.RFC3339Nano))
+	}
+	return f.out, nil
+}
+func (f *fakeSummarizerWithTs) SetPrompt(prompt string)  {}
+func (f *fakeSummarizerWithTs) SetModel(m model.Model)   {}
+func (f *fakeSummarizerWithTs) Metadata() map[string]any { return map[string]any{} }
 
 func makeEvent(content string, ts time.Time, filterKey string) event.Event {
 	return event.Event{
@@ -188,6 +283,32 @@ func TestComputeDeltaSince_WithTime(t *testing.T) {
 	require.Equal(t, "e2", delta[0].Response.Choices[0].Message.Content)
 	require.Equal(t, "e3", delta[1].Response.Choices[0].Message.Content)
 	require.Equal(t, base.Events[2].Timestamp, latestTs)
+}
+
+func TestSummarizeSession_UsesLastIncludedTimestampWhenProvided(t *testing.T) {
+	now := time.Now()
+	t1 := now.Add(-3 * time.Minute)
+	t2 := now.Add(-2 * time.Minute)
+	t3 := now.Add(-1 * time.Minute)
+
+	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("e1", t1, ""),
+		makeEvent("e2", t2, ""),
+		makeEvent("e3", t3, ""),
+	}
+
+	s := &fakeSummarizerWithTs{
+		out: "sum",
+		ts:  t2, // simulate summarizer skipping the latest event and using t2 as last included
+	}
+
+	updated, err := SummarizeSession(context.Background(), s, base, "", false)
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.NotNil(t, base.Summaries)
+	require.Equal(t, "sum", base.Summaries[""].Summary)
+	require.Equal(t, t2.UTC(), base.Summaries[""].UpdatedAt)
 }
 
 func TestPickSummaryText(t *testing.T) {

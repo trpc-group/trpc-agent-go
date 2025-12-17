@@ -426,7 +426,12 @@ func (s *Service) verifySchema(ctx context.Context) error {
 
 		// Verify indexes
 		if err := s.verifyIndexes(ctx, fullTableName, schema.indexes); err != nil {
-			log.Warnf("verify indexes for table %s failed (non-fatal): %v", fullTableName, err)
+			log.WarnfContext(
+				ctx,
+				"verify indexes for table %s failed (non-fatal): %v",
+				fullTableName,
+				err,
+			)
 		}
 	}
 
@@ -528,11 +533,21 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 
 	// Check each expected index
 	for _, expected := range expectedIndexes {
-		// Use sqldb.BuildIndexNameWithSchema to construct the expected index name
-		expectedIndexName := sqldb.BuildIndexNameWithSchema(s.opts.schema, s.opts.tablePrefix, expected.table, expected.suffix)
+		// Use sqldb.BuildIndexNameWithSchema to construct the expected index.
+		expectedIndexName := sqldb.BuildIndexNameWithSchema(
+			s.opts.schema,
+			s.opts.tablePrefix,
+			expected.table,
+			expected.suffix,
+		)
 
 		if !actualIndexes[expectedIndexName] {
-			log.Warnf("index %s on table %s is missing", expectedIndexName, fullTableName)
+			log.WarnfContext(
+				ctx,
+				"index %s on table %s is missing",
+				expectedIndexName,
+				fullTableName,
+			)
 		}
 	}
 

@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -28,6 +29,7 @@ import (
 	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -669,10 +671,12 @@ func mergeToolsWithToolSets(
 		for _, t := range setTools {
 			name := t.Declaration().Name
 			if _, ok := out[name]; ok {
-				log.Warnf(
-					"tool %s already exists at %s toolset, "+
-						"will be overridden",
-					name, toolSet.Name(),
+				log.WarnfContext(
+					ctx,
+					"tool %s already exists at %s toolset, will be "+
+						"overridden",
+					name,
+					toolSet.Name(),
 				)
 			}
 			out[name] = t
@@ -1216,9 +1220,15 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	isolated := dummyNode.agentIsolatedMessages
 	scope := dummyNode.agentEventScope
 	inputFromLast := dummyNode.agentInputFromLastResponse
-	return func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, "agent_node_execution")
-		defer span.End()
+	return func(ctx context.Context, state State) (a any, err error) {
+		ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, agentName))
+		defer func() {
+			if err != nil {
+				span.SetStatus(codes.Error, err.Error())
+				span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+			}
+			span.End()
+		}()
 
 		// Extract execution context for event emission.
 		invocationID, _, _, _, eventChan := extractExecutionContext(state)
@@ -1279,6 +1289,8 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		// Build invocation for the target agent with custom runtime state and scope.
 		invocation := buildAgentInvocationWithStateAndScope(ctx, parentForInput, childState, targetAgent, scope)
 
+		itelemetry.TraceBeforeInvokeAgent(span, invocation, targetAgent.Info().Description, "", nil)
+
 		// Emit agent execution start event.
 		startTime := time.Now()
 		emitAgentStartEvent(ctx, eventChan, invocationID, nodeID, startTime)
@@ -1297,12 +1309,13 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		}
 
 		// Process agent event stream and capture completion state.
-		lastResponse, finalState, rawDelta, err := processAgentEventStream(
+		lastResponse, finalState, rawDelta, fullRespEvent, err := processAgentEventStream(
 			ctx, agentEventChan, nodeCallbacks, nodeID, state, eventChan, agentName,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process agent event stream: %w", err)
 		}
+		itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, nil)
 		// Emit agent execution complete event.
 		endTime := time.Now()
 		emitAgentCompleteEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime)
@@ -1332,10 +1345,11 @@ func processAgentEventStream(
 	state State,
 	eventChan chan<- *event.Event,
 	agentName string,
-) (string, State, map[string][]byte, error) {
+) (string, State, map[string][]byte, *event.Event, error) {
 	var lastResponse string
 	var finalState State
 	var rawDelta map[string][]byte
+	var fullRespEvent *event.Event
 
 	for agentEvent := range agentEventChan {
 		// Run node callbacks for this event.
@@ -1350,13 +1364,19 @@ func processAgentEventStream(
 
 		// Forward the event to the parent event channel.
 		if err := event.EmitEvent(ctx, eventChan, agentEvent); err != nil {
-			return "", nil, nil, err
+			return "", nil, nil, fullRespEvent, err
 		}
 
 		// Track the last response for state update.
 		if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 &&
 			agentEvent.Response.Choices[0].Message.Content != "" {
 			lastResponse = agentEvent.Response.Choices[0].Message.Content
+		}
+
+		if agentEvent.Response != nil {
+			if !agentEvent.Response.IsPartial {
+				fullRespEvent = agentEvent
+			}
 		}
 
 		// Capture subgraph completion state from its final graph.execution event.
@@ -1372,7 +1392,12 @@ func processAgentEventStream(
 					// Debug-only: record keys that failed to unmarshal to
 					// help diagnose type drift. RawStateDelta still
 					// carries the original JSON.
-					log.Debugf("subgraph: failed to unmarshal final state key=%s: %v", k, err)
+					log.DebugfContext(
+						ctx,
+						"subgraph: failed to unmarshal final state key=%s: %v",
+						k,
+						err,
+					)
 				}
 			}
 			finalState = tmp
@@ -1380,7 +1405,7 @@ func processAgentEventStream(
 		}
 	}
 
-	return lastResponse, finalState, rawDelta, nil
+	return lastResponse, finalState, rawDelta, fullRespEvent, nil
 }
 
 // buildAgentInvocationWithStateAndScope builds an invocation for the target agent
@@ -1408,16 +1433,27 @@ func buildAgentInvocationWithStateAndScope(
 	}
 
 	// Clone from parent invocation if available to preserve linkage and filtering.
-	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok && parentInvocation != nil {
-		base := scope
-		if base == "" {
-			base = targetAgent.Info().Name
+	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok &&
+		parentInvocation != nil {
+		base := util.If(scope != "", scope, targetAgent.Info().Name)
+		parentKey := parentInvocation.GetEventFilterKey()
+		var filterKey string
+		if parentKey == "" {
+			filterKey = base + agent.EventFilterKeyDelimiter +
+				uuid.NewString()
+		} else {
+			filterKey = parentKey + agent.EventFilterKeyDelimiter +
+				base + agent.EventFilterKeyDelimiter +
+				uuid.NewString()
 		}
-		filterKey := parentInvocation.GetEventFilterKey() + agent.EventFilterKeyDelimiter + base + uuid.NewString()
 		inv := parentInvocation.Clone(
 			agent.WithInvocationAgent(targetAgent),
-			agent.WithInvocationMessage(model.NewUserMessage(userInput)),
-			agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: runtime}),
+			agent.WithInvocationMessage(
+				model.NewUserMessage(userInput),
+			),
+			agent.WithInvocationRunOptions(agent.RunOptions{
+				RuntimeState: runtime,
+			}),
 			agent.WithInvocationEventFilterKey(filterKey),
 		)
 		return inv
@@ -1776,7 +1812,8 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 
 	for i, tc := range config.ToolCalls {
 		i, tc := i, tc
-		go func() {
+		runCtx := agent.CloneContext(ctx)
+		go func(ctx context.Context) {
 			defer wg.Done()
 			msg, err := executeSingleToolCall(ctx, singleToolCallConfig{
 				ToolCall:      tc,
@@ -1794,7 +1831,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 				return
 			}
 			results <- result{idx: i, msg: msg}
-		}()
+		}(runCtx)
 	}
 
 	go func() {

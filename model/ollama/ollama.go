@@ -22,7 +22,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ollama/ollama/api"
@@ -47,9 +46,7 @@ type Model struct {
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
 	enableTokenTailoring       bool                    // Enable automatic token tailoring.
 	maxInputTokens             int                     // Max input tokens for token tailoring.
-	tokenCounterOnce           sync.Once               // sync.Once for lazy initialization of tokenCounter.
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
-	tailoringStrategyOnce      sync.Once               // sync.Once for lazy initialization of tailoringStrategy.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 	// Token tailoring budget parameters (instance-level overrides).
 	protocolOverheadTokens int
@@ -111,14 +108,8 @@ func New(name string, opts ...Option) *Model {
 	// Create Ollama API client.
 	client := api.NewClient(baseURL, o.httpClient)
 
-	// Provide defaults at construction time when token tailoring is enabled.
-	if o.maxInputTokens > 0 {
-		if o.tokenCounter == nil {
-			o.tokenCounter = model.NewSimpleTokenCounter()
-		}
-		if o.tailoringStrategy == nil {
-			o.tailoringStrategy = model.NewMiddleOutStrategy(o.tokenCounter)
-		}
+	if o.tailoringStrategy == nil {
+		o.tailoringStrategy = model.NewMiddleOutStrategy(o.tokenCounter)
 	}
 	m := &Model{
 		client:                     client,
@@ -144,7 +135,11 @@ func New(name string, opts ...Option) *Model {
 	}
 	m.contextWindow, err = m.getContextWindow()
 	if err != nil {
-		log.Warnf("failed to get context window for %s: %v", m.name, err)
+		log.Warnf(
+			"failed to get context window for %s: %v",
+			m.name,
+			err,
+		)
 		m.contextWindow = imodel.ResolveContextWindow(m.name)
 	}
 	return m
@@ -216,45 +211,37 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			// Use default parameters.
 			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
 		}
-		log.Debugf("auto-calculated max input tokens: model=%s, contextWindow=%d, maxInputTokens=%d",
-			m.name, contextWindow, maxInputTokens)
-	}
-
-	// Determine token counter using priority: user config > default.
-	tokenCounter := m.tokenCounter
-	if tokenCounter == nil {
-		m.tokenCounterOnce.Do(func() {
-			if m.tokenCounter == nil {
-				m.tokenCounter = model.NewSimpleTokenCounter()
-			}
-		})
-		tokenCounter = m.tokenCounter
-	}
-
-	// Determine tailoring strategy using priority: user config > default.
-	tailoringStrategy := m.tailoringStrategy
-	if tailoringStrategy == nil {
-		m.tailoringStrategyOnce.Do(func() {
-			if m.tailoringStrategy == nil {
-				m.tailoringStrategy = model.NewMiddleOutStrategy(tokenCounter)
-			}
-		})
-		tailoringStrategy = m.tailoringStrategy
+		log.DebugfContext(
+			ctx,
+			"auto-calculated max input tokens: model=%s, "+
+				"contextWindow=%d, maxInputTokens=%d",
+			m.name,
+			contextWindow,
+			maxInputTokens,
+		)
 	}
 
 	// Apply token tailoring.
-	tailored, err := tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
+	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
-		log.Warn("token tailoring failed in ollama.Model", err)
+		log.WarnContext(
+			ctx,
+			"token tailoring failed in ollama.Model",
+			err,
+		)
 		return
 	}
 
 	request.Messages = tailored
 
 	// Calculate remaining tokens for output based on context window.
-	usedTokens, err := tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
+	usedTokens, err := m.tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
 	if err != nil {
-		log.Warn("failed to count tokens after tailoring", err)
+		log.WarnContext(
+			ctx,
+			"failed to count tokens after tailoring",
+			err,
+		)
 		return
 	}
 
@@ -276,8 +263,14 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		}
 		if maxOutputTokens > 0 {
 			request.GenerationConfig.MaxTokens = &maxOutputTokens
-			log.Debugf("token tailoring: contextWindow=%d, usedTokens=%d, maxOutputTokens=%d",
-				m.contextWindow, usedTokens, maxOutputTokens)
+			log.DebugfContext(
+				ctx,
+				"token tailoring: contextWindow=%d, usedTokens=%d, "+
+					"maxOutputTokens=%d",
+				m.contextWindow,
+				usedTokens,
+				maxOutputTokens,
+			)
 		}
 	}
 }

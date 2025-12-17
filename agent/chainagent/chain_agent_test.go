@@ -12,6 +12,7 @@ package chainagent
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,6 +97,40 @@ func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-ch
 
 func (m *mockAgent) Tools() []tool.Tool {
 	return m.tools
+}
+
+type mockErrorEventAgent struct {
+	name string
+}
+
+func (m *mockErrorEventAgent) Info() agent.Info                { return agent.Info{Name: m.name} }
+func (m *mockErrorEventAgent) SubAgents() []agent.Agent        { return nil }
+func (m *mockErrorEventAgent) FindSubAgent(string) agent.Agent { return nil }
+func (m *mockErrorEventAgent) Tools() []tool.Tool              { return nil }
+func (m *mockErrorEventAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		evt := event.NewErrorEvent(inv.InvocationID, m.name, model.ErrorTypeFlowError, "boom")
+		_ = agent.EmitEvent(ctx, inv, ch, evt)
+	}()
+	return ch, nil
+}
+
+type countingAgent struct {
+	name     string
+	runCount *int32
+}
+
+func (m *countingAgent) Info() agent.Info                { return agent.Info{Name: m.name} }
+func (m *countingAgent) SubAgents() []agent.Agent        { return nil }
+func (m *countingAgent) FindSubAgent(string) agent.Agent { return nil }
+func (m *countingAgent) Tools() []tool.Tool              { return nil }
+func (m *countingAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	atomic.AddInt32(m.runCount, 1)
+	ch := make(chan *event.Event, 1)
+	close(ch)
+	return ch, nil
 }
 
 func TestChainAgent_Sequential(t *testing.T) {
@@ -225,6 +260,35 @@ func TestChainAgent_SubAgentError(t *testing.T) {
 	lastEvent := events[len(events)-1]
 	require.NotNil(t, lastEvent.Error)
 	require.Equal(t, model.ErrorTypeFlowError, lastEvent.Error.Type)
+}
+
+func TestChainAgent_ErrorEventStopsSubsequentAgents(t *testing.T) {
+	var downstreamRuns int32
+
+	errAgent := &mockErrorEventAgent{name: "err-agent"}
+	downstream := &countingAgent{name: "next-agent", runCount: &downstreamRuns}
+
+	chain := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{errAgent, downstream}),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	inv := &agent.Invocation{InvocationID: "inv-error-event", AgentName: "test-chain"}
+	ch, err := chain.Run(ctx, inv)
+	require.NoError(t, err)
+
+	var events []*event.Event
+	for evt := range ch {
+		events = append(events, evt)
+	}
+
+	require.Equal(t, int32(0), atomic.LoadInt32(&downstreamRuns))
+	require.NotEmpty(t, events)
+	require.NotNil(t, events[len(events)-1].Error)
+	require.Equal(t, model.ErrorTypeFlowError, events[len(events)-1].Error.Type)
 }
 
 func TestChainAgent_EmptySubAgents(t *testing.T) {

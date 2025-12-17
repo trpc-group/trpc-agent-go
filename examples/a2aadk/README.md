@@ -2,18 +2,25 @@
 
 This example shows how the `trpc-agent-go` A2A client talks to an ADK Python A2A server.
 
-- `trpc_agent/main.go`: connects to the ADK server via `a2aagent` and runs three sample prompts (two chats + one tool call).
-- `adk/adk_server.py`: builds an ADK A2A server with streaming + tools and logs user/session metadata.
+Two example cases are provided:
+
+| Case | Server | Client | Features |
+| ---- | ------ | ------ | -------- |
+| Tool Call | `adk/adk_server.py` (port 8081) | `trpc_agent/main.go` | Streaming + tools (`calculator`, `current_time`) |
+| Code Execution | `adk/adk_codeexec_server.py` (port 8082) | `trpc_agent_codeexec/main.go` | Streaming + Python code execution |
 
 ## Directory layout
 
 ```
 examples/a2aadk/
-├── README.md          # This guide
+├── README.md                       # This guide
 ├── trpc_agent/
-│   └── main.go        # Go client that calls the ADK server
+│   └── main.go                     # Go client for tool call example
+├── trpc_agent_codeexec/
+│   └── main.go                     # Go client for code execution example
 └── adk/
-    └── adk_server.py  # ADK A2A server implementation
+    ├── adk_server.py               # ADK server with tools
+    └── adk_codeexec_server.py      # ADK server with code execution
 ```
 
 ## Prerequisites
@@ -45,43 +52,58 @@ examples/a2aadk/
    export OPENAI_API_URL="https://your-endpoint/v1"
    ```
 
-## Start the ADK A2A server
+## Case 1: Tool Call Example
+
+### Start the server
 
 ```bash
 cd trpc-agent-go/examples/a2aadk/adk
 python3 adk_server.py
-# Or: uvicorn adk_server:a2a_app --host 0.0.0.0 --port 8081
 ```
 
-Server highlights:
-
-- Streaming responses plus two example tools: `calculator` and `current_time`.
-- `logging_request_converter` wraps `convert_a2a_request_to_agent_run_request` so each request prints `user_id` / `session_id` for debugging.
-- You can plug custom `request_converter` / auth modules into `A2aAgentExecutorConfig` to read `X-User-ID` headers and populate ADK sessions.
-
-## Run the Go A2A client
+### Run the client
 
 ```bash
 cd trpc-agent-go
 go run ./examples/a2aadk/trpc_agent --url http://localhost:8081
 ```
 
-Client behavior:
+Server highlights:
+- Streaming responses plus two example tools: `calculator` and `current_time`.
+- `logging_request_converter` prints `user_id` / `session_id` for debugging.
 
-1. Sends three prompts in order (two normal chats plus one tool-using prompt).
-2. Streams tool-call/tool-response logs in real time but prints the assistant answer only once at the end.
-3. Automatically forwards local `userID` / `sessionID` through the `X-User-ID` HTTP header.
-4. Works around ADK's final-event content duplication by capturing content from intermediate events only (see "ADK-specific notes" below).
+## Case 2: Code Execution Example
+
+### Start the server
+
+```bash
+cd trpc-agent-go/examples/a2aadk/adk
+python3 adk_codeexec_server.py
+```
+
+### Run the client
+
+```bash
+cd trpc-agent-go
+go run ./examples/a2aadk/trpc_agent_codeexec --url http://localhost:8082
+```
+
+Server highlights:
+- ADK agent with `PythonCodeExecution` enabled.
+- LLM can generate and execute Python code, returning results via A2A protocol.
+
+Client behavior:
+- Displays code execution events (`💻 Code Execution`) and results (`📊 Execution Result`) separately.
+- Uses MessageID-based deduplication to handle ADK's repeated event delivery.
 
 ## ADK-specific notes
 
 | Scenario | Details |
 | -------- | ------- |
-| No incremental text | ADK A2A events send "full content so far" in every delta (cumulative streaming). The client captures the last valid intermediate event rather than reading deltas incrementally. |
-| Final event duplication bug | **Important**: ADK's current A2A implementation may send a malformed final event that duplicates content or prepends the user's question. The client works around this by only capturing content from non-final events and ignoring the final event payload. |
-| User propagation | `a2aagent` places `Session.UserID` into the `X-User-ID` header. Override via `a2aagent.WithUserIDHeader(...)` if another header is needed. |
-| Reading user ID in ADK | Enable A2A auth/request converter components to extract the header or `AgentRunRequest.user_id` and store it in the session context. `logging_request_converter` in this example is a reference implementation; production setups can inject their own logic via `A2aAgentExecutorConfig`. |
-| Session diagnostics | Expect logs like `📋 Session Info - User: xxx, Session: xxx`. They confirm that the header propagated correctly without extra wiring. |
+| Cumulative streaming | ADK A2A events send "full content so far" in every delta. The client captures the last valid intermediate event rather than reading deltas incrementally. |
+| Final event duplication | ADK may send a malformed final event that duplicates content. The client ignores the final event payload. |
+| Code execution event duplication | ADK may send repeated code execution events with the same MessageID. The client uses MessageID-based deduplication. |
+| User propagation | `a2aagent` places `Session.UserID` into the `X-User-ID` header. Override via `a2aagent.WithUserIDHeader(...)`. |
 
 ## FAQ
 

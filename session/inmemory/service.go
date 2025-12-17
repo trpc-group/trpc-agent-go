@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -98,8 +99,9 @@ type SessionService struct {
 	once            sync.Once          // ensure Close is called only once
 }
 
-// summaryJob represents a summary job to be processed asynchronously
+// summaryJob represents a summary job to be processed asynchronously.
 type summaryJob struct {
+	ctx       context.Context // Detached context preserving values but not cancel.
 	filterKey string
 	force     bool
 	session   *session.Session
@@ -232,6 +234,24 @@ func (s *SessionService) GetSession(
 	if err := key.CheckSessionKey(); err != nil {
 		return nil, err
 	}
+
+	opt := &session.Options{}
+	for _, o := range opts {
+		o(opt)
+	}
+
+	hctx := &session.GetSessionContext{
+		Context: ctx,
+		Key:     key,
+		Options: opt,
+	}
+	final := func(c *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+		return s.getSession(c.Context, c.Key, c.Options)
+	}
+	return hook.RunGetSessionHooks(s.opts.getSessionHooks, hctx, final)
+}
+
+func (s *SessionService) getSession(ctx context.Context, key session.Key, opt *session.Options) (*session.Session, error) {
 	app, ok := s.getAppSessions(key.AppName)
 	if !ok {
 		return nil, nil
@@ -259,7 +279,10 @@ func (s *SessionService) GetSession(
 	copiedSess := sess.Clone()
 
 	// apply filtering options if provided
-	copiedSess.ApplyEventFiltering(opts...)
+	copiedSess.ApplyEventFiltering(
+		session.WithEventNum(opt.EventNum),
+		session.WithEventTime(opt.EventTime),
+	)
 
 	appState := getValidState(app.appState)
 	userState := getValidState(app.userState[key.UserID])
@@ -588,10 +611,9 @@ func (s *SessionService) ListUserStates(ctx context.Context, userKey session.Use
 func (s *SessionService) AppendEvent(
 	ctx context.Context,
 	sess *session.Session,
-	event *event.Event,
+	evt *event.Event,
 	opts ...session.Option,
 ) error {
-	sess.UpdateUserSession(event, opts...)
 	key := session.Key{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
@@ -600,6 +622,27 @@ func (s *SessionService) AppendEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+
+	hctx := &session.AppendEventContext{
+		Context: ctx,
+		Session: sess,
+		Event:   evt,
+		Key:     key,
+	}
+	final := func(c *session.AppendEventContext, next func() error) error {
+		return s.appendEvent(c.Context, c.Session, c.Event, c.Key, opts...)
+	}
+	return hook.RunAppendEventHooks(s.opts.appendEventHooks, hctx, final)
+}
+
+func (s *SessionService) appendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	key session.Key,
+	opts ...session.Option,
+) error {
+	sess.UpdateUserSession(evt, opts...)
 
 	app, ok := s.getAppSessions(key.AppName)
 	if !ok {
@@ -627,7 +670,7 @@ func (s *SessionService) AppendEvent(
 	}
 
 	// update stored session with the given event
-	s.updateStoredSession(storedSession, event)
+	s.updateStoredSession(storedSession, evt)
 
 	// Update the session in the wrapper and refresh TTL.
 	storedSessionWithTTL.session = storedSession

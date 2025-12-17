@@ -37,9 +37,11 @@ How the Knowledge system integrates with Agents:
 
 ## Quick Start
 
+> **Full Example**: [examples/knowledge/basic](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/basic)
+
 ### Environment Requirements
 
-- Go 1.24.1 or laster
+- Go 1.24.1 or later
 - Valid LLM API key (OpenAI compatible interface)
 - Vector database (optional, for production environment)
 
@@ -63,19 +65,20 @@ import (
     "context"
     "log"
 
-    // Core components.
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/event"
     "trpc.group/trpc-go/trpc-agent-go/knowledge"
     openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
     "trpc.group/trpc-go/trpc-agent-go/knowledge/source"
     dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
     filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+    knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
     vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
     "trpc.group/trpc-go/trpc-agent-go/model"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+
 
     // Import PDF reader to register it (optional - has separate go.mod to avoid unnecessary dependencies).
     // _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
@@ -92,8 +95,7 @@ func main() {
     // 2. Create vector store.
     vectorStore := vectorinmemory.New()
 
-    // 3. Create knowledge sources (ensure these paths exist or replace with your own paths).
-    // The following files are in https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge.
+    // 3. Create knowledge sources.
     sources := []source.Source{
         filesource.New([]string{"./data/llm.md"}),
         dirsource.New([]string{"./dir"}),
@@ -104,137 +106,39 @@ func main() {
         knowledge.WithEmbedder(embedder),
         knowledge.WithVectorStore(vectorStore),
         knowledge.WithSources(sources),
-        knowledge.WithEnableSourceSync(true), // Enable incremental sync to keep vector storage consistent with sources.
+        knowledge.WithEnableSourceSync(true),
     )
 
     // 5. Load documents.
-    log.Println("🚀 Starting to load Knowledge ...")
     if err := kb.Load(ctx); err != nil {
         log.Fatalf("Failed to load knowledge base: %v", err)
     }
-    log.Println("✅ Knowledge loading completed!")
 
-    // 6. Create LLM model.
+    // 6. Create search tool.
+    searchTool := knowledgetool.NewKnowledgeSearchTool(
+        kb,
+        knowledgetool.WithToolName("knowledge_search"),
+        knowledgetool.WithToolDescription("Search for relevant information in the knowledge base."),
+    )
+
+    // 7. Create Agent and add tool.
     modelInstance := openai.New("claude-4-sonnet-20250514")
-
-    // 7. Create Agent and integrate Knowledge.
     llmAgent := llmagent.New(
         "knowledge-assistant",
         llmagent.WithModel(modelInstance),
-        llmagent.WithDescription("Intelligent assistant with Knowledge access capabilities"),
-        llmagent.WithInstruction("Use the knowledge_search tool to retrieve relevant information from Knowledge and answer questions based on retrieved content."),
-        llmagent.WithKnowledge(kb), // Automatically add knowledge_search tool.
+        llmagent.WithTools([]tool.Tool{searchTool}),
     )
 
-    // 8. Create Runner.
+    // 8. Create Runner and execute.
     sessionService := inmemory.NewSessionService()
-    appRunner := runner.NewRunner(
-        "knowledge-chat",
-        llmAgent,
-        runner.WithSessionService(sessionService),
-    )
+    appRunner := runner.NewRunner("knowledge-chat", llmAgent, runner.WithSessionService(sessionService))
 
-    // 9. Execute conversation (Agent will automatically use knowledge_search tool).
-    log.Println("🔍 Starting to search Knowledge ...")
     message := model.NewUserMessage("Please tell me about LLM information")
-    eventChan, err := appRunner.Run(ctx, "user123", "session456", message)
+    _, err := appRunner.Run(ctx, "user123", "session456", message)
     if err != nil {
         log.Fatalf("Failed to run agent: %v", err)
     }
-
-    // 10. Handle response ...
 }
-```
-
-### Manual Search Example
-
-```go
-
-package main
-
-import (
-    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
-    vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
-    "trpc.group/trpc-go/trpc-agent-go/knowledge"
-    "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
-)
-
-// Create Elasticsearch vector store with multi-version support (v7, v8, v9)
-esVS, err := vectorelasticsearch.New(
-    vectorelasticsearch.WithAddresses([]string{"http://localhost:9200"}),
-    vectorelasticsearch.WithUsername(os.Getenv("ELASTICSEARCH_USERNAME")),
-    vectorelasticsearch.WithPassword(os.Getenv("ELASTICSEARCH_PASSWORD")),
-    vectorelasticsearch.WithAPIKey(os.Getenv("ELASTICSEARCH_API_KEY")),
-    vectorelasticsearch.WithIndexName(getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_documents")),
-    vectorelasticsearch.WithMaxRetries(3),
-    // Version options: "v7", "v8", "v9" (default "v9")
-    vectorelasticsearch.WithVersion("v9"),
-    // Optional custom method to build documents for retrieval. Falls back to the default if not provided.
-    vectorelasticsearch.WithDocBuilder(docBuilder),
-)
-if err != nil {
-    // Handle error.
-}
-
-// OpenAI Embedder configuration.
-embedder := openaiembedder.New(
-    openaiembedder.WithModel("text-embedding-3-small"), // Embedding model, can also be set via OPENAI_EMBEDDING_MODEL environment variable.
-)
-
-kb := knowledge.New(
-    knowledge.WithVectorStore(esVS),
-    knowledge.WithEmbedder(embedder),
-)
-
-filterCondition := &searchfilter.UniversalFilterCondition{
-    Operator: searchfilter.OperatorAnd,
-    Value: []*searchfilter.UniversalFilterCondition{
-        {
-            Field: "tag",
-            Operator: searchfilter.OperatorEqual,
-            Value: "tag",
-        },
-        {
-            Field: "age",
-            Operator: searchfilter.OperatorGreaterThanOrEqual,
-            Value: 18,
-        },
-        {
-            Field: "create_time",
-            Operator: searchfilter.OperatorBetween,
-            Value: []string{"2024-10-11 12:11:00", "2025-10-11 12:11:00"},
-        },
-        {
-            Operator: searchfilter.OperatorOr,
-            Value: []*searchfilter.UniversalFilterCondition{
-                {
-                    Field: "login_time",
-                    Operator: searchfilter.OperatorLessThanOrEqual,
-                    Value: "2025-01-11 12:11:00",
-                },
-                {
-                    Field: "status",
-                    Operator: searchfilter.OperatorEqual,
-                    Value: "logout",
-                },
-            },
-        },
-    },
-}
-
-req := &knowledge.SearchRequest{
-    Query: "any text"
-    MaxResults: 5,
-    MinScore: 0.7,
-    SearchFilter: &knowledge.SearchFilter{
-        DocumentIDs: []string{"id1","id2"},
-        Metadata: map[string]any{
-            "title": "title test",
-        },
-        FilterCondition: filterCondition,
-    }
-}
-searchResult, err := kb.Search(ctx, req)
 ```
 
 ## Core Concepts
@@ -275,59 +179,42 @@ knowledge/
 
 ### Integration with Agent
 
-The Knowledge system provides two ways to integrate with Agent: automatic integration and manual tool construction.
+The Knowledge system provides two ways to integrate with Agent: manual tool construction and automatic integration.
 
-#### Method 1: Automatic Integration (Recommended)
+#### Method 1: Manual Tool Construction (Recommended)
 
-Use `llmagent.WithKnowledge(kb)` to integrate Knowledge into Agent. The framework automatically registers the `knowledge_search` tool without needing to manually create custom tools.
-
-```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/model"
-    "trpc.group/trpc-go/trpc-agent-go/tool" // Optional: use when adding other tools.
-)
-
-// Create Knowledge.
-// kb := ...
-
-// Create Agent and integrate Knowledge.
-llmAgent := llmagent.New(
-    "knowledge-assistant",
-    llmagent.WithModel(modelInstance),
-    llmagent.WithDescription("Intelligent assistant with Knowledge access capabilities"),
-    llmagent.WithInstruction("Use the knowledge_search tool to retrieve relevant information from Knowledge and answer questions based on retrieved content."),
-    llmagent.WithKnowledge(kb), // Automatically add knowledge_search tool.
-    // llmagent.WithTools([]tool.Tool{otherTool}), // Optional: add other tools.
-)
-```
-
-#### Method 2: Manual Tool Construction
-
-Use the manual construction method to configure knowledge base, which allows building multiple knowledge bases.
-
-**Using NewKnowledgeSearchTool to create basic search tool:**
+Use `NewKnowledgeSearchTool` to manually create search tools, allowing flexible configuration of tool name, description, and support for building multiple knowledge bases.
 
 ```go
 import (
     knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// Create Knowledge.
-// kb := ...
-
-// Create basic search tool.
+// Create search tool.
 searchTool := knowledgetool.NewKnowledgeSearchTool(
-    kb,                    // Knowledge instance
+    kb,
     knowledgetool.WithToolName("knowledge_search"),
     knowledgetool.WithToolDescription("Search for relevant information in the knowledge base."),
 )
 
-// Create Agent and manually add tool.
+// Create Agent and add tool.
 llmAgent := llmagent.New(
     "knowledge-assistant",
     llmagent.WithModel(modelInstance),
     llmagent.WithTools([]tool.Tool{searchTool}),
+)
+```
+
+#### Method 2: Automatic Integration
+
+Use `llmagent.WithKnowledge(kb)` to integrate Knowledge into Agent. The framework automatically registers the `knowledge_search` tool.
+
+```go
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithKnowledge(kb), // Automatically add knowledge_search tool.
 )
 ```
 
@@ -359,14 +246,17 @@ llmAgent := llmagent.New(
 
 ### Vector Store
 
+> **Example Code**: [examples/knowledge/vectorstores](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores)
+
 Vector storage can be configured through options in code. Configuration sources can be configuration files, command line parameters, or environment variables, which users can implement themselves.
 
 trpc-agent-go supports multiple vector store implementations:
 
 - **Memory**: In-memory vector store, suitable for testing and small-scale data
-- **PgVector**: PostgreSQL + pgvector extension based vector store, supports hybrid search
-- **TcVector**: Tencent Cloud Vector Database, supports remote embedding computation and hybrid search
-- **Elasticsearch**: Supports v7/v8/v9 multi-version Elasticsearch vector store
+- **PgVector**: PostgreSQL + pgvector extension based vector store, supports hybrid search - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/postgres)
+- **TcVector**: Tencent Cloud Vector Database, supports remote embedding computation and hybrid search - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/tcvector)
+- **Elasticsearch**: Supports v7/v8/v9 multi-version Elasticsearch vector store - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/elasticsearch)
+- **Milvus**: High-performance vector database, supports billion-scale vector search - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/milvus)
 
 #### Vector Store Configuration Examples
 
@@ -595,7 +485,14 @@ kb := knowledge.New(
 
 ### Document Source Configuration
 
+> 📁 **Example Code**: [examples/knowledge/sources](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources)
+
 The source module provides multiple document source types, each supporting rich configuration options:
+
+- **File source (file)**: Single file processing - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/file-source)
+- **Directory source (dir)**: Batch directory processing - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/directory-source)
+- **URL source (url)**: Get content from web pages - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/url-source)
+- **Auto source (auto)**: Intelligent type recognition - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/auto-source)
 
 ```go
 import (
@@ -691,7 +588,17 @@ err := kb.Load(ctx,
 
 ## Filter Functionality
 
+> 📁 **Example Code**: [examples/knowledge/features/metadata-filter](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/metadata-filter)
+
 The Knowledge system provides powerful filter functionality that allows precise search based on document metadata. This includes both static filters and intelligent filters.
+
+> **Important: Filter Field Naming Convention**
+>
+> When using filters, **metadata fields should use the `metadata.` prefix**:
+> - The `metadata.` prefix distinguishes metadata fields from system fields (e.g., `id`, `name`, `content`)
+> - Whether using `WithKnowledgeFilter()`, `tool.WithFilter()`, or `searchfilter.Equal()`, metadata fields should include the `metadata.` prefix
+> - If you customized the metadata field name via `WithMetadataField()`, still use the `metadata.` prefix; the framework will automatically convert it to the actual field name
+> - Custom table columns added via `WithDocBuilder` (e.g., `status`, `priority`) use the field name directly without prefix
 
 ### Basic Filters
 
@@ -708,8 +615,8 @@ llmAgent := llmagent.New(
     llmagent.WithModel(modelInstance),
     llmagent.WithKnowledge(kb),
     llmagent.WithKnowledgeFilter(map[string]interface{}{
-        "category": "documentation",
-        "topic":    "programming",
+        "metadata.category": "documentation",
+        "metadata.topic":    "programming",
     }),
 )
 ```
@@ -728,9 +635,9 @@ eventCh, err := runner.Run(
     sessionID,
     message,
     agent.WithKnowledgeFilter(map[string]interface{}{
-        "user_level": "premium",     // Filter by user level
-        "region":     "china",       // Filter by region
-        "language":   "zh",          // Filter by language
+        "metadata.user_level": "premium",     // Filter by user level
+        "metadata.region":     "china",       // Filter by region
+        "metadata.language":   "zh",          // Filter by language
     }),
 )
 ```
@@ -743,8 +650,8 @@ llmAgent := llmagent.New(
     "assistant",
     llmagent.WithKnowledge(kb),
     llmagent.WithKnowledgeFilter(map[string]interface{}{
-        "category": "general",
-        "source":   "internal",
+        "metadata.category": "general",
+        "metadata.source":   "internal",
     }),
 )
 
@@ -752,20 +659,22 @@ llmAgent := llmagent.New(
 eventCh, err := runner.Run(
     ctx, userID, sessionID, message,
     agent.WithKnowledgeFilter(map[string]interface{}{
-        "source": "external",  // Will be overridden by Agent-level "internal"
-        "topic":  "api",       // Add new filter condition (not in Agent-level)
+        "metadata.source": "external",  // Will be overridden by Agent-level "internal"
+        "metadata.topic":  "api",       // Add new filter condition (not in Agent-level)
     }),
 )
 
 // Final effective filter:
 // {
-//     "category": "general",   // From Agent-level
-//     "source":   "internal",  // From Agent-level (overrode Runner-level "external")
-//     "topic":    "api",       // From Runner-level (added)
+//     "metadata.category": "general",   // From Agent-level
+//     "metadata.source":   "internal",  // From Agent-level (overrode Runner-level "external")
+//     "metadata.topic":    "api",       // From Runner-level (added)
 // }
 ```
 
 ### Intelligent Filters (Agentic Filter)
+
+> 📁 **Example Code**: [examples/knowledge/features/agentic-filter](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/agentic-filter)
 
 Intelligent filters are an advanced feature of the Knowledge system that allows LLM Agents to dynamically select appropriate filter conditions based on user queries.
 
@@ -828,12 +737,12 @@ llmAgent := llmagent.New(
     llmagent.WithKnowledge(kb),
     // Agent-level metadata filter
     llmagent.WithKnowledgeFilter(map[string]interface{}{
-        "source":   "official",      // Official source
-        "category": "documentation", // Documentation category
+        "metadata.source":   "official",      // Official source
+        "metadata.category": "documentation", // Documentation category
     }),
-    // Agent-level complex condition filter
+    // Agent-level complex condition filter (metadata fields use metadata. prefix)
     llmagent.WithKnowledgeConditionedFilter(
-        searchfilter.Equal("status", "published"), // Published status
+        searchfilter.Equal("metadata.status", "published"), // Published status
     ),
 )
 
@@ -842,26 +751,26 @@ eventCh, err := runner.Run(
     ctx, userID, sessionID, message,
     // Runner-level metadata filter
     agent.WithKnowledgeFilter(map[string]interface{}{
-        "region":   "china",  // China region
-        "language": "zh",     // Chinese language
+        "metadata.region":   "china",  // China region
+        "metadata.language": "zh",     // Chinese language
     }),
     // Runner-level complex condition filter
     agent.WithKnowledgeConditionedFilter(
-        searchfilter.GreaterThan("priority", 5), // Priority greater than 5
+        searchfilter.GreaterThan("metadata.priority", 5), // Priority greater than 5
     ),
 )
 
 // 3. LLM intelligent filter (dynamically generated by LLM)
-// Example: User asks "find API related docs", LLM might generate {"topic": "api"}
+// Example: User asks "find API related docs", LLM might generate {"field": "metadata.topic", "value": "api"}
 
 // Final effective filter conditions (all combined with AND):
-// source = "official" AND 
-// category = "documentation" AND 
-// status = "published" AND
-// region = "china" AND 
-// language = "zh" AND 
-// priority > 5 AND
-// topic = "api"
+// metadata.source = "official" AND 
+// metadata.category = "documentation" AND 
+// metadata.status = "published" AND
+// metadata.region = "china" AND 
+// metadata.language = "zh" AND 
+// metadata.priority > 5 AND
+// metadata.topic = "api"
 //
 // i.e., must satisfy all conditions at all levels
 ```
@@ -874,13 +783,13 @@ searchTool := tool.NewKnowledgeSearchTool(
     kb,
     // Agent-level metadata filter
     tool.WithFilter(map[string]interface{}{
-        "source": "official",
+        "metadata.source": "official",
     }),
-    // Agent-level complex condition filter
+    // Agent-level complex condition filter (metadata fields use metadata. prefix)
     tool.WithConditionedFilter(
         searchfilter.Or(
-            searchfilter.Equal("topic", "programming"),
-            searchfilter.Equal("topic", "llm"),
+            searchfilter.Equal("metadata.topic", "programming"),
+            searchfilter.Equal("metadata.topic", "llm"),
         ),
     ),
 )
@@ -892,35 +801,39 @@ llmAgent := llmagent.New(
 )
 
 // Final filter conditions:
-// source = "official" AND (topic = "programming" OR topic = "llm")
+// metadata.source = "official" AND (metadata.topic = "programming" OR metadata.topic = "llm")
 // i.e., must be official source AND topic is either programming or LLM
 ```
 
 ##### Common Filter Helper Functions
 
 ```go
-// Comparison operators
-searchfilter.Equal(field, value)              // field = value
-searchfilter.NotEqual(field, value)           // field != value
-searchfilter.GreaterThan(field, value)        // field > value
-searchfilter.GreaterThanOrEqual(field, value) // field >= value
-searchfilter.LessThan(field, value)           // field < value
-searchfilter.LessThanOrEqual(field, value)    // field <= value
-searchfilter.In(field, values...)             // field IN (...)
-searchfilter.NotIn(field, values...)          // field NOT IN (...)
-searchfilter.Like(field, pattern)             // field LIKE pattern
-searchfilter.Between(field, min, max)         // field BETWEEN min AND max
+// Comparison operators (Note: metadata fields need metadata. prefix)
+searchfilter.Equal("metadata.topic", value)              // metadata.topic = value
+searchfilter.NotEqual("metadata.status", value)          // metadata.status != value
+searchfilter.GreaterThan("metadata.priority", value)     // metadata.priority > value
+searchfilter.GreaterThanOrEqual("metadata.score", value) // metadata.score >= value
+searchfilter.LessThan("metadata.age", value)             // metadata.age < value
+searchfilter.LessThanOrEqual("metadata.level", value)    // metadata.level <= value
+searchfilter.In("metadata.category", values...)          // metadata.category IN (...)
+searchfilter.NotIn("metadata.type", values...)           // metadata.type NOT IN (...)
+searchfilter.Like("metadata.title", pattern)             // metadata.title LIKE pattern
+searchfilter.Between("metadata.date", min, max)          // metadata.date BETWEEN min AND max
+
+// Custom table columns (added via WithDocBuilder) don't need prefix
+searchfilter.NotEqual("status", "deleted")               // status != "deleted"
+searchfilter.GreaterThanOrEqual("priority", 3)           // priority >= 3
 
 // Logical operators
 searchfilter.And(conditions...)               // AND combination
 searchfilter.Or(conditions...)                // OR combination
 
-// Nested example: (status = 'published') AND (category = 'doc' OR category = 'tutorial')
+// Nested example: (metadata.status = 'published') AND (metadata.category = 'doc' OR metadata.category = 'tutorial')
 searchfilter.And(
-    searchfilter.Equal("status", "published"),
+    searchfilter.Equal("metadata.status", "published"),
     searchfilter.Or(
-        searchfilter.Equal("category", "documentation"),
-        searchfilter.Equal("category", "tutorial"),
+        searchfilter.Equal("metadata.category", "documentation"),
+        searchfilter.Equal("metadata.category", "tutorial"),
     ),
 )
 ```
@@ -1039,6 +952,8 @@ vectorStore, err := vectortcvector.New(
 - ⚠️ Only suitable for development and testing
 
 ### Knowledge Base Management Functionality
+
+> 📁 **Example Code**: [examples/knowledge/features/management](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/management)
 
 The Knowledge system provides powerful knowledge base management functionality, supporting dynamic source management and intelligent synchronization mechanisms.
 
@@ -1170,6 +1085,8 @@ kb := knowledge.New(
 ```
 
 ## Complete Example
+
+> 📁 **All Examples**: [examples/knowledge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge)
 
 The following is a complete example showing how to create an Agent with Knowledge access capabilities:
 

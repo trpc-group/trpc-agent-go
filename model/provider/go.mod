@@ -8,6 +8,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic => ../../model/anthropic
 	trpc.group/trpc-go/trpc-agent-go/model/gemini => ../../model/gemini
+	trpc.group/trpc-go/trpc-agent-go/model/hunyuan => ../../model/hunyuan
 	trpc.group/trpc-go/trpc-agent-go/model/ollama => ../../model/ollama
 )
 

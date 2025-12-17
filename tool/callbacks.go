@@ -107,6 +107,45 @@ type AfterToolCallbackStructured = func(
 	args *AfterToolArgs,
 ) (*AfterToolResult, error)
 
+// ToolResultMessagesInput contains all parameters for generating messages from a tool result.
+type ToolResultMessagesInput struct {
+	// ToolName is the name of the tool.
+	ToolName string
+	// Declaration is the tool declaration.
+	Declaration *Declaration
+	// Arguments is the final tool arguments in JSON bytes (after before-tool callbacks).
+	Arguments []byte
+	// Result is the final tool execution result (after after-tool callbacks).
+	Result any
+	// ToolCallID is the ID of the tool call issued by the model.
+	ToolCallID string
+	// DefaultToolMessage is the default tool response message that the framework
+	// would send if no custom messages are provided by the callback.
+	// The concrete type is framework-specific (typically model.Message).
+	DefaultToolMessage any
+}
+
+// ToolResultMessagesFunc converts a tool execution result into one or more messages
+// to be sent back to the model.
+//
+// Behavior contract:
+//   - If the callback returns (nil, nil) or an empty slice, the framework will
+//     fall back to DefaultToolMessage.
+//   - If the callback returns non-empty messages, they will replace the default
+//     tool message. Callers are expected to return a value that the framework
+//     understands (typically []model.Message) and to include at least one
+//     RoleTool message whose ToolID matches ToolCallID to remain
+//     protocol-compatible.
+//
+// To avoid import cycles, the return type is any. When using llmagent with
+// the built-in OpenAI/Anthropic adapters, the recommended return type is
+// []model.Message (or a single model.Message), which will be type-asserted
+// by the framework.
+type ToolResultMessagesFunc = func(
+	ctx context.Context,
+	in *ToolResultMessagesInput,
+) (any, error)
+
 // Callbacks holds callbacks for tool operations.
 // Internally stores the new structured callback types.
 type Callbacks struct {
@@ -114,6 +153,10 @@ type Callbacks struct {
 	BeforeTool []BeforeToolCallbackStructured
 	// AfterTool is a list of callbacks called after the tool is executed.
 	AfterTool []AfterToolCallbackStructured
+	// ToolResultMessages is an optional callback that can convert a tool
+	// execution result into one or more messages to be sent back to the model.
+	// When set, it is invoked after the tool and AfterTool callbacks have run.
+	ToolResultMessages ToolResultMessagesFunc
 	// continueOnError controls whether to continue executing callbacks when an error occurs.
 	// Default: false (stop on first error)
 	continueOnError bool
@@ -145,6 +188,14 @@ func NewCallbacks(opts ...CallbacksOption) *Callbacks {
 	for _, opt := range opts {
 		opt(c)
 	}
+	return c
+}
+
+// RegisterToolResultMessages registers a ToolResultMessages callback.
+// The callback will be invoked once per tool execution, after the tool has
+// completed and after all AfterTool callbacks have run.
+func (c *Callbacks) RegisterToolResultMessages(cb ToolResultMessagesFunc) *Callbacks {
+	c.ToolResultMessages = cb
 	return c
 }
 

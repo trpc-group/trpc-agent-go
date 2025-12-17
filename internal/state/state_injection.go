@@ -11,8 +11,8 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -95,13 +95,7 @@ func InjectSessionState(template string, invocation *agent.Invocation) (string, 
 		// Get the value from session state.
 		if invocation != nil && invocation.Session != nil && invocation.Session.State != nil {
 			if jsonBytes, exists := invocation.Session.State[varName]; exists {
-				// Try to unmarshal as JSON first.
-				var jsonValue any
-				if err := json.Unmarshal(jsonBytes, &jsonValue); err == nil {
-					return fmt.Sprintf("%v", jsonValue)
-				}
-				// If JSON unmarshaling fails, treat as string.
-				return string(jsonBytes)
+				return renderStateValue(jsonBytes)
 			}
 		}
 
@@ -115,6 +109,29 @@ func InjectSessionState(template string, invocation *agent.Invocation) (string, 
 		return match
 	})
 	return result, nil
+}
+
+// renderStateValue converts a raw state value to its string representation.
+// It preserves JSON semantics while avoiding scientific notation and precision
+// issues for numeric literals by decoding them into json.Number.
+func renderStateValue(raw []byte) string {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var jsonValue any
+	if err := dec.Decode(&jsonValue); err != nil {
+		// Not valid JSON, treat as plain string.
+		return string(raw)
+	}
+	switch v := jsonValue.(type) {
+	case string:
+		return v
+	case json.Number:
+		return v.String()
+	default:
+		// Preserve JSON objects/arrays as JSON text so injection does not
+		// degrade them into Go's fmt representation (e.g. map[k:v]).
+		return string(raw)
+	}
 }
 
 // isValidStateName checks if the variable name is a valid state name.

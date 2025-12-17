@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -169,9 +170,16 @@ func (at *Tool) callWithParentInvocation(
 	parentInv *agent.Invocation,
 	message model.Message,
 ) (string, error) {
+	// If the parent invocation does not have a session, fall back to isolated mode.
+	if parentInv.Session == nil {
+		return at.callWithIsolatedRunner(ctx, message)
+	}
+	// Flush all events emitted before this tool call so that the snapshot sees all events.
+	if err := flush.Invoke(ctx, parentInv); err != nil {
+		return "", fmt.Errorf("flush parent invocation session: %w", err)
+	}
 	// Build child filter key based on history scope.
 	childKey := at.buildChildFilterKey(parentInv)
-
 	// Clone parent invocation with child-specific settings.
 	subInv := parentInv.Clone(
 		agent.WithInvocationAgent(at.agent),
@@ -179,16 +187,35 @@ func (at *Tool) callWithParentInvocation(
 		agent.WithInvocationEventFilterKey(childKey),
 	)
 
-	// Ensure current tool input is visible to the child content processor by
-	// appending it into the shared session.
-	at.injectToolInputEvent(subInv, message)
-
 	// Run the agent and collect response.
 	evCh, err := at.agent.Run(agent.NewInvocationContext(ctx, subInv), subInv)
 	if err != nil {
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
-	return at.collectResponse(evCh)
+	childCtx := agent.NewInvocationContext(ctx, subInv)
+	return at.collectResponse(at.wrapWithCompletion(childCtx, subInv, evCh))
+}
+
+// wrapWithCompletion consumes events, notifies completion when required, and forwards to a new channel.
+func (at *Tool) wrapWithCompletion(ctx context.Context, inv *agent.Invocation, src <-chan *event.Event) <-chan *event.Event {
+	if inv == nil {
+		return src
+	}
+	out := make(chan *event.Event)
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
+		defer close(out)
+		for evt := range src {
+			if evt != nil && evt.RequiresCompletion {
+				completionID := agent.GetAppendEventNoticeKey(evt.ID)
+				if err := inv.NotifyCompletion(ctx, completionID); err != nil {
+					log.Errorf("AgentTool: notify completion failed: %v", err)
+				}
+			}
+			out <- evt
+		}
+	}(runCtx)
+	return out
 }
 
 // callWithIsolatedRunner executes the agent in an isolated environment using
@@ -223,26 +250,6 @@ func (at *Tool) buildChildFilterKey(parentInv *agent.Invocation) string {
 	return childKey
 }
 
-// injectToolInputEvent appends the tool input message as an event into the
-// session, making it visible to the child content processor.
-func (at *Tool) injectToolInputEvent(
-	subInv *agent.Invocation,
-	message model.Message,
-) {
-	if subInv.Session != nil && message.Content != "" {
-		evt := event.NewResponseEvent(
-			subInv.InvocationID,
-			"user",
-			&model.Response{
-				Done:    false,
-				Choices: []model.Choice{{Index: 0, Message: message}},
-			},
-		)
-		agent.InjectIntoEvent(subInv, evt)
-		subInv.Session.Events = append(subInv.Session.Events, *evt)
-	}
-}
-
 // collectResponse collects and concatenates assistant messages from the event
 // channel, returning the complete response text.
 func (at *Tool) collectResponse(evCh <-chan *event.Event) (string, error) {
@@ -267,7 +274,8 @@ func (at *Tool) collectResponse(evCh <-chan *event.Event) (string, error) {
 func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
 	stream := tool.NewStream(64)
 
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		defer stream.Writer.Close()
 
 		// Try to reuse parent invocation for consistent invocationId/session
@@ -275,37 +283,20 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 		message := model.NewUserMessage(string(jsonArgs))
 
 		if ok && parentInv != nil && parentInv.Session != nil {
-			// Build child filter key based on history scope.
-			uniqueFilterKey := at.agent.Info().Name + "-" + uuid.NewString()
-			if at.historyScope == HistoryScopeParentBranch {
-				if pk := parentInv.GetEventFilterKey(); pk != "" {
-					uniqueFilterKey = pk + agent.EventFilterKeyDelimiter + uniqueFilterKey
-				}
+			if err := flush.Invoke(ctx, parentInv); err != nil {
+				err := fmt.Errorf("flush parent invocation session failed: %w", err)
+				stream.Writer.Send(tool.StreamChunk{Content: err.Error()}, err)
+				return
 			}
-
+			childKey := at.buildChildFilterKey(parentInv)
 			subInv := parentInv.Clone(
 				agent.WithInvocationAgent(at.agent),
 				agent.WithInvocationMessage(message),
 				// Reset event filter key to the sub-agent name so that content
 				// processors fetch session messages belonging to the sub-agent,
 				// not the parent agent. Use unique FilterKey to prevent cross-invocation event pollution.
-				agent.WithInvocationEventFilterKey(uniqueFilterKey),
+				agent.WithInvocationEventFilterKey(childKey),
 			)
-			// Store tool input as Event via sub-agent's event channel (safe concurrency).
-			// This ensures the tool input is available throughout all LLM calls within this AgentTool invocation.
-			if message.Content != "" {
-				evt := event.NewResponseEvent(
-					subInv.InvocationID,
-					"user", // Use "user" as author like Runner does for user messages.
-					&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
-				)
-				agent.InjectIntoEvent(subInv, evt) // This will set the uniqueFilterKey.
-
-				// Send the tool input event as the first event in the stream.
-				if stream.Writer.Send(tool.StreamChunk{Content: evt}, nil) {
-					return
-				}
-			}
 
 			subCtx := agent.NewInvocationContext(ctx, subInv)
 			evCh, err := at.agent.Run(subCtx, subInv)
@@ -313,7 +304,9 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 				_ = stream.Writer.Send(tool.StreamChunk{Content: fmt.Sprintf("agent tool run error: %v", err)}, nil)
 				return
 			}
-			for ev := range evCh {
+			wrapped := at.wrapWithCompletion(subCtx, subInv, evCh)
+
+			for ev := range wrapped {
 				if stream.Writer.Send(tool.StreamChunk{Content: ev}, nil) {
 					return
 				}
@@ -339,7 +332,7 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 				}
 			}
 		}
-	}()
+	}(runCtx)
 
 	return stream.Reader, nil
 }

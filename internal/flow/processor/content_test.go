@@ -2097,9 +2097,10 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 	sinceTime := baseTime.Add(-time.Hour)
 
 	tests := []struct {
-		name     string
-		setup    func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time)
-		expected bool
+		name                string
+		setup               func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time)
+		expected            bool
+		isInvocationMessage bool
 	}{
 		{
 			name: "nil response",
@@ -2183,6 +2184,30 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 			expected: false,
 		},
 		{
+			name: "timestamp equal since when not zero time",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{}
+				evt := event.Event{
+					RequestID:    "123",
+					InvocationID: "123",
+					Version:      event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Content: "content",
+								},
+							},
+						},
+					},
+					Timestamp: sinceTime,
+				}
+				inv := &agent.Invocation{InvocationID: "123", RunOptions: agent.RunOptions{RequestID: "123"}}
+				return p, evt, inv, "", false, sinceTime
+			},
+			expected: false,
+		},
+		{
 			name: "TimelineFilterCurrentRequest with different request ID",
 			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
 				p := &ContentRequestProcessor{
@@ -2235,6 +2260,41 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 				return p, evt, inv, "", true, baseTime
 			},
 			expected: true,
+		},
+		{
+			name: "TimelineFilterCurrentRequest with same request ID",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					TimelineFilterMode: TimelineFilterCurrentRequest,
+				}
+				evt := event.Event{
+					Version: event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Role:    model.RoleUser,
+									Content: "content",
+								},
+							},
+						},
+					},
+					Timestamp:    baseTime,
+					RequestID:    "req1",
+					InvocationID: "inv1",
+				}
+				inv := &agent.Invocation{
+					InvocationID: "inv1",
+					RunOptions:   agent.RunOptions{RequestID: "req1"},
+					Message: model.Message{
+						Role:    model.RoleUser,
+						Content: "content",
+					},
+				}
+				return p, evt, inv, "", true, baseTime
+			},
+			expected:            true,
+			isInvocationMessage: true,
 		},
 		{
 			name: "TimelineFilterCurrentInvocation with same invocation ID",
@@ -2366,7 +2426,8 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 				}
 				return p, evt, inv, "", true, baseTime
 			},
-			expected: true,
+			expected:            true,
+			isInvocationMessage: true,
 		},
 		{
 			name: "BranchFilterModeExact with different filter key",
@@ -2482,9 +2543,162 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p, evt, inv, filter, isZeroTime, since := tt.setup()
-			result := p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since)
+			result, isInvocationMessage := p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since)
 			if result != tt.expected {
 				t.Errorf("shouldIncludeEvent() = %v, want %v", result, tt.expected)
+			}
+			if isInvocationMessage != tt.isInvocationMessage {
+				t.Errorf("shouldIncludeEvent() = %v, want %v", isInvocationMessage, tt.isInvocationMessage)
+			}
+		})
+	}
+}
+
+func TestInsertInvocationMessage(t *testing.T) {
+	createInvocation := func(id, requestID, content string) *agent.Invocation {
+		return &agent.Invocation{
+			InvocationID: id,
+			RunOptions: agent.RunOptions{
+				RequestID: requestID,
+			},
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: content,
+			},
+		}
+	}
+
+	createEvent := func(requestID, invocationID string, message *model.Message) event.Event {
+		evt := event.Event{
+			InvocationID: invocationID,
+			RequestID:    requestID,
+			Response:     &model.Response{},
+		}
+		if message != nil {
+			evt.Response = &model.Response{
+				Choices: []model.Choice{
+					{Message: *message},
+				},
+			}
+		}
+		return evt
+	}
+
+	tests := []struct {
+		name       string
+		events     []event.Event
+		invocation *agent.Invocation
+		wantEvents []event.Event
+		wantLength int
+	}{
+		{
+			name:       "empty content should return original events unchanged",
+			events:     []event.Event{createEvent("req1", "inv1", nil)},
+			invocation: createInvocation("inv1", "req1", ""),
+			wantEvents: []event.Event{createEvent("req1", "inv1", nil)},
+			wantLength: 1,
+		},
+		{
+			name:       "empty events slice with non-empty content should insert new event",
+			events:     []event.Event{},
+			invocation: createInvocation("inv1", "req1", "Hello"),
+			wantEvents: []event.Event{createEvent("req1", "inv1", &model.Message{
+				Role:    model.RoleUser,
+				Content: "Hello",
+			})},
+			wantLength: 1,
+		},
+		{
+			name: "should append to end when no matching requestID and invocationID found",
+			events: []event.Event{
+				createEvent("req1", "inv1", nil),
+				createEvent("req1", "inv2", nil),
+			},
+			invocation: createInvocation("inv3", "req1", "New message"),
+			wantLength: 3,
+		},
+		{
+			name: "should insert at correct position when match found",
+			events: []event.Event{
+				createEvent("req1", "inv1", nil),
+				createEvent("req1", "inv2", nil),
+				createEvent("req1", "inv3", nil),
+			},
+			invocation: createInvocation("inv2", "req1", "Inserted message"),
+			wantEvents: []event.Event{
+				createEvent("req1", "inv1", nil),
+				createEvent("req1", "inv2", &model.Message{
+					Role:    model.RoleUser,
+					Content: "Inserted message",
+				}),
+				createEvent("req1", "inv2", nil),
+				createEvent("req1", "inv3", nil),
+			},
+			wantLength: 4,
+		},
+		{
+			name: "should handle multiple requestIDs correctly",
+			events: []event.Event{
+				createEvent("req1", "inv1", nil),
+				createEvent("req2", "inv3", nil),
+				createEvent("req1", "inv2", nil),
+			},
+			invocation: createInvocation("inv2", "req1", "Message for inv2"),
+			wantEvents: []event.Event{
+				createEvent("req1", "inv1", nil),
+				createEvent("req2", "inv3", nil),
+				createEvent("req1", "inv2", &model.Message{
+					Role:    model.RoleUser,
+					Content: "Message for inv2",
+				}),
+				createEvent("req1", "inv2", nil),
+			},
+			wantLength: 4,
+		},
+		{
+			name:       "nil events slice should be handled",
+			events:     nil,
+			invocation: createInvocation("inv1", "req1", "Test message"),
+			wantLength: 1,
+			wantEvents: []event.Event{
+				createEvent("req1", "inv1", &model.Message{
+					Role:    model.RoleUser,
+					Content: "Test message",
+				}),
+			},
+		},
+	}
+
+	processor := &ContentRequestProcessor{}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var inputEvents []event.Event
+			if tt.events != nil {
+				inputEvents = make([]event.Event, len(tt.events))
+				copy(inputEvents, tt.events)
+			}
+
+			got := processor.insertInvocationMessage(inputEvents, tt.invocation)
+
+			if len(got) != tt.wantLength {
+				t.Errorf("insertInvocationMessage() length = %d, want %d", len(got), tt.wantLength)
+			}
+
+			if tt.wantEvents != nil {
+				if len(got) != len(tt.wantEvents) {
+					t.Errorf("insertInvocationMessage() got %d events, want %d", len(got), len(tt.wantEvents))
+				} else {
+					for i, evt := range got {
+						wantEvt := tt.wantEvents[i]
+						if evt.InvocationID != wantEvt.InvocationID || evt.RequestID != wantEvt.RequestID {
+							t.Errorf("event at index %d mismatch", i)
+						}
+						if !reflect.DeepEqual(evt.Response, wantEvt.Response) {
+							t.Errorf("event at index %d mismatch", i)
+						}
+					}
+				}
 			}
 		})
 	}

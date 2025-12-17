@@ -43,6 +43,10 @@ func (m *mockSummarizerImpl) Summarize(ctx context.Context, sess *session.Sessio
 	return m.summaryText, nil
 }
 
+func (m *mockSummarizerImpl) SetPrompt(prompt string) {}
+
+func (m *mockSummarizerImpl) SetModel(mdl model.Model) {}
+
 func (m *mockSummarizerImpl) Metadata() map[string]any {
 	return map[string]any{}
 }
@@ -110,7 +114,7 @@ func TestCreateSessionSummary_CreateNewSummary(t *testing.T) {
 func TestCreateSessionSummary_WithTTL(t *testing.T) {
 	summarizer := &mockSummarizerImpl{summaryText: "new summary", shouldSummarize: true}
 	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
-	s.sessionTTL = 1 * time.Hour
+	s.opts.sessionTTL = 1 * time.Hour
 	defer db.Close()
 
 	sess := &session.Session{
@@ -901,6 +905,8 @@ func (f *fakeSummarizer) ShouldSummarize(sess *session.Session) bool { return f.
 func (f *fakeSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
 	return f.out, nil
 }
+func (f *fakeSummarizer) SetPrompt(prompt string)  {}
+func (f *fakeSummarizer) SetModel(m model.Model)   {}
 func (f *fakeSummarizer) Metadata() map[string]any { return map[string]any{} }
 
 type fakeErrorSummarizer struct{}
@@ -909,6 +915,8 @@ func (f *fakeErrorSummarizer) ShouldSummarize(sess *session.Session) bool { retu
 func (f *fakeErrorSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
 	return "", fmt.Errorf("summarizer error")
 }
+func (f *fakeErrorSummarizer) SetPrompt(prompt string)  {}
+func (f *fakeErrorSummarizer) SetModel(m model.Model)   {}
 func (f *fakeErrorSummarizer) Metadata() map[string]any { return map[string]any{} }
 
 func TestEnqueueSummaryJob_NoAsyncWorkers(t *testing.T) {
@@ -996,6 +1004,91 @@ func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
 
 	// Clean up
 	s.Close()
+}
+
+type doneNoErrContext struct {
+	context.Context
+	done <-chan struct{}
+}
+
+func (c doneNoErrContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (doneNoErrContext) Err() error {
+	return nil
+}
+
+func TestTryEnqueueJob_ContextDoneBranch(t *testing.T) {
+	summarizer := &mockSummarizerImpl{
+		summaryText:     "test",
+		shouldSummarize: true,
+	}
+	s, _, db := setupMockService(t, &TestServiceOpts{
+		summarizer:       summarizer,
+		asyncSummaryNum:  1,
+		summaryQueueSize: 1,
+	})
+	defer db.Close()
+	// Initialize channels without starting workers to keep queue full.
+	s.summaryJobChans = []chan *summaryJob{
+		make(chan *summaryJob, 1),
+	}
+
+	sess := session.NewSession("app", "user", "sid")
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   sess,
+	}
+	s.summaryJobChans[0] <- job
+
+	doneCh := make(chan struct{})
+	close(doneCh)
+	ctx := doneNoErrContext{
+		Context: context.Background(),
+		done:    doneCh,
+	}
+
+	result := s.tryEnqueueJob(ctx, job)
+	assert.False(t, result)
+}
+
+func TestProcessSummaryJob_NilJob_Recovers(t *testing.T) {
+	summarizer := &mockSummarizerImpl{
+		summaryText:     "test",
+		shouldSummarize: true,
+	}
+	s, _, db := setupMockService(t, &TestServiceOpts{
+		summarizer: summarizer,
+	})
+	defer db.Close()
+	defer s.Close()
+
+	require.NotPanics(t, func() {
+		s.processSummaryJob(nil)
+	})
+}
+
+func TestProcessSummaryJob_NilSession_LogsWarning(t *testing.T) {
+	summarizer := &mockSummarizerImpl{
+		summaryText:     "test",
+		shouldSummarize: true,
+	}
+	s, _, db := setupMockService(t, &TestServiceOpts{
+		summarizer: summarizer,
+	})
+	defer db.Close()
+	defer s.Close()
+
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   nil,
+	}
+	require.NotPanics(t, func() {
+		s.processSummaryJob(job)
+	})
 }
 
 func TestTryEnqueueJob_SendSuccess(t *testing.T) {
@@ -1119,9 +1212,10 @@ func TestTryEnqueueJob_QueueFull(t *testing.T) {
 
 	s := createTestService(t, db, WithAsyncSummaryNum(1), WithSummaryQueueSize(1))
 
-	// Start async workers to initialize channels
-	s.startAsyncSummaryWorker()
-	defer s.Close() // This will close the channels
+	// Initialize channels without starting workers to keep queue full.
+	s.summaryJobChans = []chan *summaryJob{
+		make(chan *summaryJob, 1),
+	}
 
 	ctx := context.Background()
 	sess := session.NewSession("test-app", "user-456", "session-123")
@@ -1132,9 +1226,8 @@ func TestTryEnqueueJob_QueueFull(t *testing.T) {
 	}
 
 	// Fill the queue by sending to the channel directly
-	index := sess.Hash % len(s.summaryJobChans)
 	select {
-	case s.summaryJobChans[index] <- job:
+	case s.summaryJobChans[0] <- job:
 		// Successfully sent, now try to enqueue another which should fail
 	default:
 		t.Skip("Could not fill queue for testing")

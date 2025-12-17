@@ -37,7 +37,7 @@ const (
 	ObjectTypePreprocessingPlanning = "preprocessing.planning"
 	// ObjectTypePostprocessingPlanning is the object type for planning postprocessing events.
 	ObjectTypePostprocessingPlanning = "postprocessing.planning"
-
+	// ObjectTypePostprocessingCodeExecution is the object type for code execution postprocessing events.
 	ObjectTypePostprocessingCodeExecution = "postprocessing.code_execution"
 	// ObjectTypeTransfer is the object type for agent transfer events.
 	ObjectTypeTransfer = "agent.transfer"
@@ -229,7 +229,7 @@ func (rsp *Response) IsUserMessage() bool {
 		return false
 	}
 	for _, choice := range rsp.Choices {
-		if choice.Message.Role == RoleUser {
+		if choice.Message.Role == RoleUser || choice.Delta.Role == RoleUser {
 			return true
 		}
 	}
@@ -238,12 +238,12 @@ func (rsp *Response) IsUserMessage() bool {
 
 // IsToolResultResponse  checks if the response is a tool call result response.
 func (rsp *Response) IsToolResultResponse() bool {
-	return rsp != nil && len(rsp.Choices) > 0 && rsp.Choices[0].Message.ToolID != ""
+	return rsp != nil && len(rsp.Choices) > 0 && (rsp.Choices[0].Message.ToolID != "" || rsp.Choices[0].Delta.ToolID != "")
 }
 
 // IsToolCallResponse checks if the response is related to tool calls.
 func (rsp *Response) IsToolCallResponse() bool {
-	return rsp != nil && len(rsp.Choices) > 0 && len(rsp.Choices[0].Message.ToolCalls) > 0
+	return rsp != nil && len(rsp.Choices) > 0 && (len(rsp.Choices[0].Message.ToolCalls) > 0 || len(rsp.Choices[0].Delta.ToolCalls) > 0)
 }
 
 // GetToolCallIDs gets the IDs of tool calls from the response.
@@ -254,6 +254,9 @@ func (rsp *Response) GetToolCallIDs() []string {
 	}
 	for _, choice := range rsp.Choices {
 		for _, toolCall := range choice.Message.ToolCalls {
+			ids = append(ids, toolCall.ID)
+		}
+		for _, toolCall := range choice.Delta.ToolCalls {
 			ids = append(ids, toolCall.ID)
 		}
 	}
@@ -269,6 +272,9 @@ func (rsp *Response) GetToolResultIDs() []string {
 	for _, choice := range rsp.Choices {
 		if choice.Message.ToolID != "" {
 			ids = append(ids, choice.Message.ToolID)
+		}
+		if choice.Delta.ToolID != "" {
+			ids = append(ids, choice.Delta.ToolID)
 		}
 	}
 	return ids

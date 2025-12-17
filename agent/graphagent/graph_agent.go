@@ -17,114 +17,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
-
-var defaultChannelBufferSize = 256
-
-const (
-	// BranchFilterModePrefix Prefix matching pattern
-	BranchFilterModePrefix = processor.BranchFilterModePrefix
-	// BranchFilterModeAll include all
-	BranchFilterModeAll = processor.BranchFilterModeAll
-	// BranchFilterModeExact exact match
-	BranchFilterModeExact = processor.BranchFilterModeExact
-
-	// TimelineFilterAll includes all historical message records
-	// Suitable for scenarios requiring full conversation context
-	TimelineFilterAll = processor.TimelineFilterAll
-	// TimelineFilterCurrentRequest only includes messages within the current request cycle
-	// Filters out previous historical records, keeping only messages related to this request
-	TimelineFilterCurrentRequest = processor.TimelineFilterCurrentRequest
-	// TimelineFilterCurrentInvocation only includes messages within the current invocation session
-	// Suitable for scenarios requiring isolation between different invocation cycles in long-running sessions
-	TimelineFilterCurrentInvocation = processor.TimelineFilterCurrentInvocation
-)
-
-// Option is a function that configures a GraphAgent.
-type Option func(*Options)
-
-// WithDescription sets the description of the agent.
-func WithDescription(description string) Option {
-	return func(opts *Options) {
-		opts.Description = description
-	}
-}
-
-// WithAgentCallbacks sets the agent callbacks.
-func WithAgentCallbacks(callbacks *agent.Callbacks) Option {
-	return func(opts *Options) {
-		opts.AgentCallbacks = callbacks
-	}
-}
-
-// WithInitialState sets the initial state for graph execution.
-func WithInitialState(state graph.State) Option {
-	return func(opts *Options) {
-		opts.InitialState = state
-	}
-}
-
-// WithChannelBufferSize sets the buffer size for event channels.
-func WithChannelBufferSize(size int) Option {
-	return func(opts *Options) {
-		if size < 0 {
-			size = defaultChannelBufferSize
-		}
-		opts.ChannelBufferSize = size
-	}
-}
-
-// WithSubAgents sets the list of sub-agents available to this agent.
-func WithSubAgents(subAgents []agent.Agent) Option {
-	return func(opts *Options) {
-		opts.SubAgents = subAgents
-	}
-}
-
-// WithCheckpointSaver sets the checkpoint saver for the executor.
-func WithCheckpointSaver(saver graph.CheckpointSaver) Option {
-	return func(opts *Options) {
-		opts.CheckpointSaver = saver
-	}
-}
-
-// WithMessageTimelineFilterMode sets the message timeline filter mode.
-func WithMessageTimelineFilterMode(mode string) Option {
-	return func(opts *Options) {
-		opts.messageTimelineFilterMode = mode
-	}
-}
-
-// WithMessageBranchFilterMode sets the message branch filter mode.
-func WithMessageBranchFilterMode(mode string) Option {
-	return func(opts *Options) {
-		opts.messageBranchFilterMode = mode
-	}
-}
-
-// Options contains configuration options for creating a GraphAgent.
-type Options struct {
-	// Description is a description of the agent.
-	Description string
-	// SubAgents is the list of sub-agents available to this agent.
-	SubAgents []agent.Agent
-	// AgentCallbacks contains callbacks for agent operations.
-	AgentCallbacks *agent.Callbacks
-	// InitialState is the initial state for graph execution.
-	InitialState graph.State
-	// ChannelBufferSize is the buffer size for event channels (default: 256).
-	ChannelBufferSize int
-	// CheckpointSaver is the checkpoint saver for the executor.
-	CheckpointSaver graph.CheckpointSaver
-
-	// MessageTimelineFilterMode is the message timeline filter mode.
-	messageTimelineFilterMode string
-	// MessageBranchFilterMode is the message branch filter mode.
-	messageBranchFilterMode string
-}
 
 // GraphAgent is an agent that executes a graph.
 type GraphAgent struct {
@@ -142,7 +41,7 @@ type GraphAgent struct {
 // New creates a new GraphAgent with the given graph and options.
 func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 	// set default channel buffer size.
-	var options Options = Options{ChannelBufferSize: defaultChannelBufferSize}
+	options := defaultOptions
 
 	// Apply function options.
 	for _, opt := range opts {
@@ -180,10 +79,71 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	// Setup invocation.
 	ga.setupInvocation(invocation)
+	out := make(chan *event.Event, ga.channelBufferSize)
+	runCtx := agent.CloneContext(ctx)
+	go ga.runWithBarrier(runCtx, invocation, out)
+	return out, nil
+}
 
-	// Prepare initial state.
-	initialState := ga.createInitialState(ctx, invocation)
+// runWithBarrier emits a start barrier, waits for completion, then runs the graph with callbacks
+// pipeline and forwards all events to the provided output channel.
+func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invocation, out chan<- *event.Event) {
+	defer close(out)
+	// Emit a barrier event and wait for completion in a dedicated goroutine so that the runner can append all prior
+	// events before GraphAgent reads history.
+	if err := ga.emitStartBarrierAndWait(ctx, invocation, out); err != nil {
+		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
+			model.ErrorTypeFlowError, err.Error())
+		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
+			log.Errorf("graphagent: emit error event failed: %v", emitErr)
+		}
+		return
+	}
+	innerChan, err := ga.runWithCallbacks(ctx, invocation)
+	if err != nil {
+		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
+			model.ErrorTypeFlowError, err.Error())
+		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
+			log.Errorf("graphagent: emit error event failed: %v.", emitErr)
+		}
+		return
+	}
+	for evt := range innerChan {
+		if err := event.EmitEvent(ctx, out, evt); err != nil {
+			log.Errorf("graphagent: emit event failed: %v.", err)
+			return
+		}
+	}
+}
 
+// emitStartBarrierAndWait emits a barrier event and waits until the runner has processed it,
+// ensuring that all prior events have been appended to the session before GraphAgent reads history.
+func (ga *GraphAgent) emitStartBarrierAndWait(ctx context.Context, invocation *agent.Invocation,
+	ch chan<- *event.Event) error {
+	// If graph barrier is not enabled, skip.
+	if !barrier.Enabled(invocation) {
+		return nil
+	}
+	barrier := event.New(invocation.InvocationID, invocation.AgentName,
+		event.WithObject(graph.ObjectTypeGraphBarrier))
+	barrier.RequiresCompletion = true
+	completionID := agent.GetAppendEventNoticeKey(barrier.ID)
+	if noticeCh := invocation.AddNoticeChannel(ctx, completionID); noticeCh == nil {
+		return fmt.Errorf("add notice channel for %s", completionID)
+	}
+	if err := agent.EmitEvent(ctx, invocation, ch, barrier); err != nil {
+		return fmt.Errorf("emit barrier event: %w", err)
+	}
+	timeout := llmflow.WaitEventTimeout(ctx)
+	if err := invocation.AddNoticeChannelAndWait(ctx, completionID, timeout); err != nil {
+		return fmt.Errorf("wait for barrier completion: %w", err)
+	}
+	return nil
+}
+
+// runWithCallbacks executes the GraphAgent flow: prepare initial state, run before-agent callbacks, execute the graph,
+// and wrap with after-agent callbacks when present.
+func (ga *GraphAgent) runWithCallbacks(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	// Execute the graph.
 	if ga.agentCallbacks != nil {
 		result, err := ga.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
@@ -206,6 +166,13 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 			return eventChan, nil
 		}
 	}
+
+	// Prepare initial state after callbacks so that any modifications
+	// made by callbacks to the invocation (for example, RuntimeState,
+	// Session, or Message) are visible to the graph execution.
+	initialState := ga.createInitialState(ctx, invocation)
+
+	// Execute the graph.
 	eventChan, err := ga.executor.Execute(ctx, initialState, invocation)
 	if err != nil {
 		return nil, err
@@ -242,6 +209,8 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		// Default processor: include (possibly overridden) + preserve same branch.
 		p := processor.NewContentRequestProcessor(
 			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
+			processor.WithAddSessionSummary(ga.options.AddSessionSummary),
+			processor.WithMaxHistoryRuns(ga.options.MaxHistoryRuns),
 			processor.WithPreserveSameBranch(true),
 			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
 		)
@@ -321,7 +290,8 @@ func (ga *GraphAgent) wrapEventChannel(
 	originalChan <-chan *event.Event,
 ) <-chan *event.Event {
 	wrappedChan := make(chan *event.Event, ga.channelBufferSize)
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		defer close(wrappedChan)
 		var fullRespEvent *event.Event
 		// Forward all events from the original channel
@@ -333,10 +303,25 @@ func (ga *GraphAgent) wrapEventChannel(
 				return
 			}
 		}
+
+		// Collect error from the final response event so after-agent
+		// callbacks can observe execution failures, matching LLMAgent
+		// semantics.
+		var agentErr error
+		if fullRespEvent != nil &&
+			fullRespEvent.Response != nil &&
+			fullRespEvent.Response.Error != nil {
+			agentErr = fmt.Errorf(
+				"%s: %s",
+				fullRespEvent.Response.Error.Type,
+				fullRespEvent.Response.Error.Message,
+			)
+		}
+
 		// After all events are processed, run after agent callbacks
 		result, err := ga.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
 			Invocation:        invocation,
-			Error:             nil,
+			Error:             agentErr,
 			FullResponseEvent: fullRespEvent,
 		})
 		// Use the context from result if provided.
@@ -362,7 +347,7 @@ func (ga *GraphAgent) wrapEventChannel(
 		}
 
 		agent.EmitEvent(ctx, invocation, wrappedChan, evt)
-	}()
+	}(runCtx)
 	return wrappedChan
 }
 

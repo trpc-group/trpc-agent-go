@@ -69,23 +69,6 @@ llmAgent := llmagent.New(
     llmagent.WithDescription("A helpful AI assistant for demonstrations"),              // 设置描述
     llmagent.WithInstruction("Be helpful, concise, and informative in your responses"), // 设置指令
     llmagent.WithGenerationConfig(genConfig),                                           // 设置生成参数
-
-    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
-    // 时间维度过滤条件
-    // 默认值: llmagent.TimelineFilterAll
-    // 可选值:
-    //  - llmagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
-    //  - llmagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
-    //  - llmagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
-    llmagent.WithMessageTimelineFilterMode(llmagent.BranchFilterModeAll),
-    // 分支维度过滤条件
-    // 默认值: llmagent.BranchFilterModePrefix
-    // 可选值:
-    //  - llmagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
-    //  - llmagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
-    //  - llmagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
-    llmagent.WithMessageBranchFilterMode(llmagent.TimelineFilterAll),
-
 )
 ```
 
@@ -148,6 +131,112 @@ eventChan, err := runner.Run(ctx, "user-001", "session-001", message)
 if err != nil {
     log.Fatalf("执行 Agent 失败: %v", err)
 }
+```
+
+### 消息可见性选项
+当前Agent可在需要时根据不同场景控制其对其他Agent生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
+在与model交互时仅将可见的内容输入给模型。 
+
+TIPS:
+ - 不同sessionID的消息在任何场景下都是互不可见的，以下管控策略均针对同一个sessionID的消息
+ - invocation.Message在任何场景下均可见
+ - 未配置选项时，默认值为FullContext
+
+配置:
+- `llmagent.WithMessageFilterMode(MessageFilterMode)`:
+  - `FullContext`: 所有能通过filterKey做前缀匹配的消息
+  - `RequestContext`: 仅包含当前请求周期内通过filterKey前缀匹配的消息
+  - `IsolatedRequest`: 仅包含当前请求周期内通过filterKey完全匹配的消息
+  - `IsolatedInvocation`: 仅包含当前invocation周期内通过filterKey完全匹配的消息
+
+推荐用法示例（该用法仅基于高级用法基础之上做了简化配置）:
+
+```go
+taskagentA := llmagent.New(
+  "coordinator",
+  llmagent.WithModel(modelInstance),
+  // 对taskagentA、taskagentB生成的所有消息可见（包含同一sessionID的历史会话消息）
+  llmagent.WithMessageFilterMode(llmagent.FullContext)
+  // 对taskagentA、taskagentB当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
+  llmagent.WithMessageFilterMode(llmagent.RequestContext)
+  // 仅对taskagentA当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）
+  llmagent.WithMessageFilterMode(llmagent.IsolatedRequest)
+  // agent执性顺序：taskagentA-invocation1 -> taskagentB-invocation2 -> taskagentA-invocation3(当前执行阶段)
+  // 仅对taskagentA当前taskagentA-invocation3期间生成的消息可见（不包含自己的历史会话消息以及taskagentA-invocation1期间生成的消息）
+  llmagent.WithMessageFilterMode(llmagent.IsolatedInvocation)
+)
+
+taskagentB := llmagent.New(
+  "coordinator",
+  llmagent.WithModel(modelInstance),
+  // 对taskagentA、taskagentB生成的所有消息可见（包含同一sessionID的历史会话消息）
+  llmagent.WithMessageFilterMode(llmagent.FullContext),
+  // 对taskagentA、taskagentB当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
+  llmagent.WithMessageFilterMode(llmagent.RequestContext),
+  // 仅对taskagentB当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）
+  llmagent.WithMessageFilterMode(llmagent.IsolatedRequest),
+  // agent执性顺序：taskagentA-invocation1 -> taskagentB-invocation2 -> taskagentA-invocation3 -> taskagentB-invocation4(当前执行阶段)
+  // 仅对taskagentB当前taskagentB-invocation4期间生成的消息可见（不包含自己的历史会话消息以及taskagentB-invocation2期间生成的消息）
+  llmagent.WithMessageFilterMode(llmagent.IsolatedInvocation),
+)
+
+// 循环执行taskagentA、taskagentB
+cycleAgent := cycleagent.New(
+  "coordinator",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithSubAgents([]agent.Agent{taskagentA, taskagentB}),
+  llmagent.WithMessageFilterMode(llmagent.FullContext)
+)
+
+// 创建 Runner
+runner := runner.NewRunner("demo-app", chainagent)
+
+// 直接发送消息，无需创建复杂的 Invocation
+message := model.NewUserMessage("Hello! Can you tell me about yourself?")
+eventChan, err := runner.Run(ctx, "user-001", "session-001", message)
+if err != nil {
+    log.Fatalf("执行 Agent 失败: %v", err)
+}
+```
+
+高阶用法示例：
+可以单独通过 `WithMessageTimelineFilterMode`、`WithMessageBranchFilterMode`控制当前agent对历史消息与其他agent生成的消息可见性。
+当前agent在与模型交互时，最终将同时满足两个条件的消息输入给模型。
+
+`配置:`
+- `WithMessageTimelineFilterMode`: 时间维度可见性控制
+  - `TimelineFilterAll`: 包含历史消息以及当前请求中所生成的消息
+  - `TimelineFilterCurrentRequest`: 仅包含当前请求(一次runner.Run为一次请求)中所生成的消息
+  - `TimelineFilterCurrentInvocation`: 仅包含当前invocation上下文中生成的消息
+- `WithMessageBranchFilterMode`: 分支维度可见性控制（用于控制对其他agent生成消息的可见性）
+  - `BranchFilterModePrefix`: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配
+  - `BranchFilterModeAll`: 所有agent的均消息
+  - `BranchFilterModeExact`: 仅自己生成的消息可见
+  
+```go
+llmAgent := llmagent.New(
+    "demo-agent",                      // Agent 名称
+    llmagent.WithModel(modelInstance), // 设置模型
+    llmagent.WithDescription("A helpful AI assistant for demonstrations"),              // 设置描述
+    llmagent.WithInstruction("Be helpful, concise, and informative in your responses"), // 设置指令
+    llmagent.WithGenerationConfig(genConfig),                                           // 设置生成参数
+
+    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+    // 时间维度过滤条件
+    // 默认值: llmagent.TimelineFilterAll
+    // 可选值:
+    //  - llmagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
+    //  - llmagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
+    //  - llmagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
+    llmagent.WithMessageTimelineFilterMode(llmagent.TimelineFilterAll),
+    // 分支维度过滤条件
+    // 默认值: llmagent.BranchFilterModePrefix
+    // 可选值:
+    //  - llmagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
+    //  - llmagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
+    //  - llmagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
+    llmagent.WithMessageBranchFilterMode(llmagent.BranchFilterModePrefix),
+)
 ```
 
 ### 委托可见性选项
@@ -311,9 +400,17 @@ type Invocation struct {
     eventFilterKey string
     parent         *Invocation
 
-    // 调用级别的状态（延迟初始化，通过 stateMu 保护并发）
+    // 调用级状态（延迟初始化，通过 stateMu 保护并发）
     state   map[string]any
     stateMu sync.RWMutex
+
+    // 可选的调用级安全限制（通常由 LLMAgent 在 setupInvocation 中设置）。
+    MaxLLMCalls      int
+    MaxToolIterations int
+
+    // 与 MaxLLMCalls / MaxToolIterations 配套使用的内部计数器。
+    llmCallCount       int
+    toolIterationCount int
 }
 ```
 

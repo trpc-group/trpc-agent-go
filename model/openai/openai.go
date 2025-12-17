@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"sync"
 	"time"
 
 	openai "github.com/openai/openai-go"
@@ -64,6 +63,27 @@ const (
 	VariantQwen Variant = "qwen"
 )
 
+// thinkingValueConvertor converts ThinkingEnabled bool to the variant-specific value.
+type thinkingValueConvertor func(enabled bool) any
+
+// defaultThinkingValueConvertor returns the bool value as-is.
+var defaultThinkingValueConvertor = func(enabled bool) any {
+	return enabled
+}
+
+// deepSeekThinkingValueConvertor converts to DeepSeek 3.2 format: {"type": "enabled"/"disabled"}.
+var deepSeekThinkingValueConvertor = func(enabled bool) any {
+	const (
+		thinkingTypeEnabled  = "enabled"
+		thinkingTypeDisabled = "disabled"
+	)
+	thinkingType := thinkingTypeDisabled
+	if enabled {
+		thinkingType = thinkingTypeEnabled
+	}
+	return map[string]string{"type": thinkingType}
+}
+
 // variantConfig holds configuration for different variants.
 type variantConfig struct {
 	// Default file upload path for this variant.
@@ -84,6 +104,8 @@ type variantConfig struct {
 	apiKeyName string
 	// Thinking key for this variant.
 	thinkingEnabledKey string
+	// thinkingValueConvertor converts ThinkingEnabled to variant-specific format.
+	thinkingValueConvertor thinkingValueConvertor
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
@@ -103,6 +125,7 @@ var variantConfigs = map[Variant]variantConfig{
 		skipFileTypeInContent:     false,
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		thinkingEnabledKey:        model.ThinkingEnabledKey,
+		thinkingValueConvertor:    defaultThinkingValueConvertor,
 	},
 	VariantDeepSeek: {
 		fileUploadPath:            "/openapi/v1/files",
@@ -112,7 +135,9 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		apiKeyName:                deepSeekAPIKeyName,
 		defaultBaseURL:            defaultDeepSeekBaseURL,
-		thinkingEnabledKey:        model.ThinkingEnabledKey,
+		// DeepSeek 3.2 uses {"thinking": {"type": "enabled"}} format.
+		thinkingEnabledKey:     "thinking",
+		thinkingValueConvertor: deepSeekThinkingValueConvertor,
 	},
 	VariantHunyuan: {
 		fileUploadPath:        "/openapi/v1/files/uploads",
@@ -160,7 +185,8 @@ var variantConfigs = map[Variant]variantConfig{
 			r.ContentLength = int64(body.Len())
 			return r, nil
 		},
-		thinkingEnabledKey: model.ThinkingEnabledKey,
+		thinkingEnabledKey:     model.ThinkingEnabledKey,
+		thinkingValueConvertor: defaultThinkingValueConvertor,
 	},
 	VariantQwen: {
 		fileUploadPath:            "/openapi/v1/files",
@@ -171,7 +197,8 @@ var variantConfigs = map[Variant]variantConfig{
 		apiKeyName:                qwenAPIKeyName,
 		defaultBaseURL:            defaultQwenBaseURL,
 		// refer:https://help.aliyun.com/zh/model-studio/deep-thinking
-		thinkingEnabledKey: model.EnabledThinkingKey,
+		thinkingEnabledKey:     model.EnabledThinkingKey,
+		thinkingValueConvertor: defaultThinkingValueConvertor,
 	},
 }
 
@@ -195,9 +222,7 @@ type Model struct {
 	batchBaseURL               string
 	enableTokenTailoring       bool                    // Enable automatic token tailoring.
 	maxInputTokens             int                     // Max input tokens for token tailoring.
-	tokenCounterOnce           sync.Once               // sync.Once for lazy initialization of tokenCounter.
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
-	tailoringStrategyOnce      sync.Once               // sync.Once for lazy initialization of tailoringStrategy.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 	// Token tailoring budget parameters (instance-level overrides).
 	protocolOverheadTokens int
@@ -242,15 +267,8 @@ func New(name string, opts ...Option) *Model {
 
 	client := openai.NewClient(clientOpts...)
 
-	// Provide defaults at construction time when token tailoring is enabled.
-	// These are best-effort defaults; user-provided counter/strategy always take priority.
-	if o.MaxInputTokens > 0 {
-		if o.TokenCounter == nil {
-			o.TokenCounter = model.NewSimpleTokenCounter()
-		}
-		if o.TailoringStrategy == nil {
-			o.TailoringStrategy = model.NewMiddleOutStrategy(o.TokenCounter)
-		}
+	if o.TailoringStrategy == nil {
+		o.TailoringStrategy = model.NewMiddleOutStrategy(o.TokenCounter)
 	}
 
 	return &Model{
@@ -351,45 +369,37 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			// Use default parameters.
 			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
 		}
-		log.Debugf("auto-calculated max input tokens: model=%s, contextWindow=%d, maxInputTokens=%d",
-			m.name, contextWindow, maxInputTokens)
-	}
-
-	// Determine token counter using priority: user config > default.
-	tokenCounter := m.tokenCounter
-	if tokenCounter == nil {
-		m.tokenCounterOnce.Do(func() {
-			if m.tokenCounter == nil {
-				m.tokenCounter = model.NewSimpleTokenCounter()
-			}
-		})
-		tokenCounter = m.tokenCounter
-	}
-
-	// Determine tailoring strategy using priority: user config > default.
-	tailoringStrategy := m.tailoringStrategy
-	if tailoringStrategy == nil {
-		m.tailoringStrategyOnce.Do(func() {
-			if m.tailoringStrategy == nil {
-				m.tailoringStrategy = model.NewMiddleOutStrategy(tokenCounter)
-			}
-		})
-		tailoringStrategy = m.tailoringStrategy
+		log.DebugfContext(
+			ctx,
+			"auto-calculated max input tokens: model=%s, "+
+				"contextWindow=%d, maxInputTokens=%d",
+			m.name,
+			contextWindow,
+			maxInputTokens,
+		)
 	}
 
 	// Apply token tailoring.
-	tailored, err := tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
+	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
-		log.Warn("token tailoring failed in openai.Model", err)
+		log.WarnContext(
+			ctx,
+			"token tailoring failed in openai.Model",
+			err,
+		)
 		return
 	}
 
 	request.Messages = tailored
 
 	// Calculate remaining tokens for output based on context window.
-	usedTokens, err := tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
+	usedTokens, err := m.tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
 	if err != nil {
-		log.Warn("failed to count tokens after tailoring", err)
+		log.WarnContext(
+			ctx,
+			"failed to count tokens after tailoring",
+			err,
+		)
 		return
 	}
 
@@ -413,8 +423,14 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		}
 		if maxOutputTokens > 0 {
 			request.GenerationConfig.MaxTokens = &maxOutputTokens
-			log.Debugf("token tailoring: contextWindow=%d, usedTokens=%d, maxOutputTokens=%d",
-				contextWindow, usedTokens, maxOutputTokens)
+			log.DebugfContext(
+				ctx,
+				"token tailoring: contextWindow=%d, usedTokens=%d, "+
+					"maxOutputTokens=%d",
+				contextWindow,
+				usedTokens,
+				maxOutputTokens,
+			)
 		}
 	}
 }
@@ -485,7 +501,7 @@ func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionN
 	return chatRequest, opts
 }
 
-// buildThinkingOption converts our Request to OpenAI request RequestOption
+// buildThinkingOption converts our Request to OpenAI request RequestOption.
 func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestOption {
 	var opts []openaiopt.RequestOption
 	if request.ThinkingTokens != nil {
@@ -494,13 +510,17 @@ func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestO
 	if request.ThinkingEnabled == nil {
 		return opts
 	}
-	// Set default API key and base URL if not specified.
-	cfg, ok := variantConfigs[m.variant]
-	if !ok || cfg.thinkingEnabledKey == "" {
-		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingEnabledKey, *request.ThinkingEnabled))
-		return opts
+	// Use variant-specific key and value convertor.
+	cfg := m.variantConfig
+	key := cfg.thinkingEnabledKey
+	if key == "" {
+		key = model.ThinkingEnabledKey
 	}
-	opts = append(opts, openaiopt.WithJSONSet(cfg.thinkingEnabledKey, *request.ThinkingEnabled))
+	convertor := cfg.thinkingValueConvertor
+	if convertor == nil {
+		convertor = defaultThinkingValueConvertor
+	}
+	opts = append(opts, openaiopt.WithJSONSet(key, convertor(*request.ThinkingEnabled)))
 	return opts
 }
 

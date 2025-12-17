@@ -68,8 +68,16 @@ func TestGraphAgent_BeforeCallback_Error(t *testing.T) {
 	require.NoError(t, err)
 	inv := &agent.Invocation{Message: model.NewUserMessage("hi")}
 	ch, err := ga.Run(context.Background(), inv)
-	require.Error(t, err)
-	require.Nil(t, ch)
+	require.NoError(t, err)
+	// Expect an error event on the stream (plus the barrier).
+	var events []*event.Event
+	for e := range ch {
+		events = append(events, e)
+	}
+	require.Equal(t, len(events), 1)
+	require.Equal(t, model.ObjectTypeError, events[0].Object)
+	require.Equal(t, model.ErrorTypeFlowError, events[0].Error.Type)
+	require.NotNil(t, events[0].Error.Message)
 }
 
 func TestGraphAgent_AfterCallback_CustomResponseAppended(t *testing.T) {

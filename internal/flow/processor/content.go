@@ -161,7 +161,10 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	ch chan<- *event.Event,
 ) {
 	if req == nil {
-		log.Errorf("Content request processor: request is nil")
+		log.ErrorfContext(
+			ctx,
+			"Content request processor: request is nil",
+		)
 		return
 	}
 
@@ -192,11 +195,12 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			// Add session summary as a system message if enabled and available.
 			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
 			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
-				// Merge existing system messages first, then merge summary into the single system message.
-				req.Messages = p.mergeSystemMessages(req.Messages)
-				if len(req.Messages) > 0 && req.Messages[0].Role == model.RoleSystem {
-					// Merge summary into the existing system message.
-					req.Messages[0].Content += "\n\n" + msg.Content
+				// Insert summary as a separate system message after the first system message.
+				systemMsgIndex := findSystemMessageIndex(req.Messages)
+				if systemMsgIndex >= 0 {
+					// Insert summary as a new system message after the first system message.
+					req.Messages = append(req.Messages[:systemMsgIndex+1],
+						append([]model.Message{*msg}, req.Messages[systemMsgIndex+1:]...)...)
 				} else {
 					// No system message exists, prepend new system message.
 					req.Messages = append([]model.Message{*msg}, req.Messages...)
@@ -206,13 +210,17 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		}
 		messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
 		req.Messages = append(req.Messages, messages...)
-		needToAddInvocationMessage = summaryUpdatedAt.IsZero() && len(messages) == 0
+		needToAddInvocationMessage = len(messages) == 0
 	}
 
 	if invocation.Message.Content != "" && needToAddInvocationMessage {
 		req.Messages = append(req.Messages, invocation.Message)
-		log.Debugf("Content request processor: added invocation message with role %s (no session or empty session)",
-			invocation.Message.Role)
+		log.DebugfContext(
+			ctx,
+			"Content request processor: added invocation message with "+
+				"role %s (no session or empty session)",
+			invocation.Message.Role,
+		)
 	}
 
 	// Send a preprocessing event.
@@ -257,16 +265,26 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	}
 	isZeroTime := since.IsZero()
 	filter := inv.GetEventFilterKey()
+	var includedInvocationMessage bool
 
 	var events []event.Event
 	inv.Session.EventMu.RLock()
 	for _, evt := range inv.Session.Events {
-		if !p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since) {
+		shouldInclude, isInvocationMessage := p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since)
+		if !shouldInclude {
 			continue
+		}
+		if isInvocationMessage {
+			includedInvocationMessage = true
 		}
 		events = append(events, evt)
 	}
 	inv.Session.EventMu.RUnlock()
+
+	// insert invocation message
+	if !includedInvocationMessage && inv.Message.Content != "" {
+		events = p.insertInvocationMessage(events, inv)
+	}
 
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
@@ -295,6 +313,36 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 		messages = messages[startIdx:]
 	}
 	return messages
+}
+
+func (p *ContentRequestProcessor) insertInvocationMessage(
+	events []event.Event, inv *agent.Invocation) []event.Event {
+	if inv.Message.Content == "" {
+		return events
+	}
+	userMsgEvent := event.NewResponseEvent(inv.InvocationID, "user", &model.Response{
+		Choices: []model.Choice{
+			{Message: inv.Message},
+		},
+	})
+	userMsgEvent.RequestID = inv.RunOptions.RequestID
+	if len(events) == 0 {
+		return []event.Event{*userMsgEvent}
+	}
+	insertIndex := -1
+	for index, evt := range events {
+		if evt.RequestID == inv.RunOptions.RequestID && evt.InvocationID == inv.InvocationID {
+			insertIndex = index
+			break
+		}
+	}
+	if insertIndex == -1 {
+		return append(events, *userMsgEvent)
+	}
+	events = append(events, event.Event{})
+	copy(events[insertIndex+1:], events[insertIndex:])
+	events[insertIndex] = *userMsgEvent
+	return events
 }
 
 func (p *ContentRequestProcessor) mergeUserMessages(
@@ -350,70 +398,32 @@ func (p *ContentRequestProcessor) mergeUserMessages(
 	return merged
 }
 
-// mergeSystemMessages merges all consecutive system messages at the beginning of the message list
-// into a single system message to ensure API compatibility.
-func (p *ContentRequestProcessor) mergeSystemMessages(messages []model.Message) []model.Message {
-	if len(messages) == 0 {
-		return messages
-	}
-
-	var systemContents []string
-	var result []model.Message
-
-	// Collect all system messages at the beginning
-	for _, msg := range messages {
-		if msg.Role == model.RoleSystem {
-			systemContents = append(systemContents, msg.Content)
-		} else {
-			break
-		}
-	}
-
-	// If we have system messages, merge them into one
-	if len(systemContents) > 0 {
-		mergedContent := strings.Join(systemContents, "\n\n")
-		mergedSystemMsg := model.Message{
-			Role:    model.RoleSystem,
-			Content: mergedContent,
-		}
-		result = append(result, mergedSystemMsg)
-	}
-
-	// Add the remaining non-system messages
-	startIdx := len(systemContents)
-	if startIdx < len(messages) {
-		result = append(result, messages[startIdx:]...)
-	}
-
-	return result
-}
-
 func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent.Invocation, filter string,
-	isZeroTime bool, since time.Time) bool {
+	isZeroTime bool, since time.Time) (bool, bool) {
 	if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
-		return false
+		return false, false
 	}
 
-	if !isZeroTime && evt.Timestamp.Before(since) {
-		return false
+	// check is invocation message
+	if inv.RunOptions.RequestID == evt.RequestID && evt.IsUserMessage() && evt.Choices[0].Message.Content == inv.Message.Content {
+		return true, true
+	}
+
+	// Use strict After so events stamped exactly at summary UpdatedAt are
+	// treated as already summarized and not re-sent.
+	if !isZeroTime && !evt.Timestamp.After(since) {
+		return false, false
 	}
 
 	// Check timeline filter
 	switch p.TimelineFilterMode {
 	case TimelineFilterCurrentRequest:
 		if inv.RunOptions.RequestID != evt.RequestID {
-			return false
+			return false, false
 		}
 	case TimelineFilterCurrentInvocation:
 		if evt.InvocationID != inv.InvocationID {
-			if !evt.IsUserMessage() {
-				return false
-			}
-			// User messages are usually sent from the runner append to the session, so in most cases, the invocationID is not equal.
-			// Therefore, to prevent the loss of user messages, we need to make further judgments
-			if inv.RunOptions.RequestID != evt.RequestID || evt.Choices[0].Message.Content != inv.Message.Content {
-				return false
-			}
+			return false, false
 		}
 	default:
 	}
@@ -422,16 +432,16 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 	switch p.BranchFilterMode {
 	case BranchFilterModeExact:
 		if evt.FilterKey != filter {
-			return false
+			return false, false
 		}
 	case BranchFilterModePrefix:
 		if !evt.Filter(filter) {
-			return false
+			return false, false
 		}
 	default:
 	}
 
-	return true
+	return true, false
 }
 
 // isOtherAgentReply checks whether the event is a reply from another agent.

@@ -13,6 +13,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -23,6 +24,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -216,6 +219,11 @@ func (r *runner) Run(
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
 	ctx = agent.NewInvocationContext(ctx, invocation)
 
+	// Create flush channel and attach flusher before agent.Run to ensure cloned invocations inherit it.
+	flushChan := make(chan *flush.FlushRequest)
+	flush.Attach(ctx, invocation, flushChan)
+	barrier.Enable(invocation)
+
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)
 	if err != nil {
@@ -224,7 +232,7 @@ func (r *runner) Run(
 	}
 
 	// Process the agent events and emit them to the output channel.
-	return r.processAgentEvents(ctx, sess, invocation, agentEventCh), nil
+	return r.processAgentEvents(ctx, sess, invocation, agentEventCh, flushChan), nil
 }
 
 // getOrCreateSession returns an existing session or creates a new one.
@@ -241,62 +249,140 @@ func (r *runner) getOrCreateSession(
 	return r.sessionService.CreateSession(ctx, key, session.StateMap{})
 }
 
+// eventLoopContext bundles all channels and state required by the event loop.
+type eventLoopContext struct {
+	sess             *session.Session
+	invocation       *agent.Invocation
+	agentEventCh     <-chan *event.Event
+	flushChan        chan *flush.FlushRequest
+	processedEventCh chan *event.Event
+	finalStateDelta  map[string][]byte
+	finalChoices     []model.Choice
+}
+
 // processAgentEvents consumes agent events, persists to session, and emits.
 func (r *runner) processAgentEvents(
 	ctx context.Context,
 	sess *session.Session,
 	invocation *agent.Invocation,
 	agentEventCh <-chan *event.Event,
+	flushChan chan *flush.FlushRequest,
 ) chan *event.Event {
 	processedEventCh := make(chan *event.Event, cap(agentEventCh))
-	// Capture the graph-level final snapshot if present so we can propagate it
-	// to the terminal runner-completion event. This makes “final output”
-	// discoverable from the very last event without requiring graph-specific
-	// branching in user code.
-	var finalStateDelta map[string][]byte
-	var finalChoices []model.Choice
-	// Start a goroutine to process and append events to session.
-	go func() {
-		defer func() {
-			if rr := recover(); rr != nil {
-				log.Errorf("panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
-			}
-			close(processedEventCh)
-			invocation.CleanupNotice(ctx)
-		}()
+	loop := &eventLoopContext{
+		sess:             sess,
+		invocation:       invocation,
+		agentEventCh:     agentEventCh,
+		flushChan:        flushChan,
+		processedEventCh: processedEventCh,
+	}
+	runCtx := agent.CloneContext(ctx)
+	go r.runEventLoop(runCtx, loop)
+	return processedEventCh
+}
 
-		// Process all agent events.
-		for agentEvent := range agentEventCh {
-			if agentEvent == nil {
-				log.Debug("agentEvent is nil.")
-				continue
-			}
-
-			// Append qualifying events to session and trigger summarization.
-			r.handleEventPersistence(ctx, sess, agentEvent)
-
-			// Capture graph-level completion snapshot for final event.
-			if agentEvent.Done && agentEvent.Object == graph.ObjectTypeGraphExecution {
-				finalStateDelta, finalChoices = r.captureGraphCompletion(agentEvent)
-			}
-
-			// Notify completion if required.
-			if agentEvent.RequiresCompletion {
-				completionID := agent.GetAppendEventNoticeKey(agentEvent.ID)
-				invocation.NotifyCompletion(ctx, completionID)
-			}
-
-			// Emit event to output channel.
-			if err := event.EmitEvent(ctx, processedEventCh, agentEvent); err != nil {
+// runEventLoop drives the main event processing loop for a single invocation.
+func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
+	defer func() {
+		if rr := recover(); rr != nil {
+			log.Errorf("panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
+		}
+		// Agent event stream completed.
+		r.safeEmitRunnerCompletion(ctx, loop)
+		// Disable further flush requests for this invocation.
+		flush.Clear(loop.invocation)
+		close(loop.processedEventCh)
+		loop.invocation.CleanupNotice(ctx)
+	}()
+	for {
+		select {
+		case agentEvent, ok := <-loop.agentEventCh:
+			if !ok {
 				return
 			}
+			if err := r.processSingleAgentEvent(ctx, loop, agentEvent); err != nil {
+				log.Errorf("process single agent event: %v", err)
+				return
+			}
+		case req, ok := <-loop.flushChan:
+			// Flush channel closed, disable further flush handling.
+			if !ok {
+				loop.flushChan = nil
+				continue
+			}
+			if req == nil || req.ACK == nil {
+				log.Errorf("flush request is nil or ACK is nil")
+				continue
+			}
+			// Handle the flush request.
+			if err := r.handleFlushRequest(ctx, loop, req); err != nil {
+				log.Errorf("handle flush request: %v", err)
+			}
+		case <-ctx.Done():
+			return
 		}
+	}
+}
 
-		// Emit final runner completion event.
-		r.emitRunnerCompletion(ctx, invocation, sess, processedEventCh,
-			finalStateDelta, finalChoices)
+// processSingleAgentEvent handles a single agent event.
+func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopContext, agentEvent *event.Event) error {
+	if agentEvent == nil {
+		// Preserve existing behavior: skip nil events without failing the loop.
+		log.Errorf("agentEvent is nil")
+		return nil
+	}
+
+	// Append qualifying events to session and trigger summarization.
+	r.handleEventPersistence(ctx, loop.sess, agentEvent)
+
+	// Capture graph-level completion snapshot for final event.
+	if isGraphCompletionEvent(agentEvent) {
+		loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
+	}
+
+	// Notify completion if required.
+	if agentEvent.RequiresCompletion {
+		completionID := agent.GetAppendEventNoticeKey(agentEvent.ID)
+		loop.invocation.NotifyCompletion(ctx, completionID)
+	}
+
+	// Emit event to output channel.
+	if err := event.EmitEvent(ctx, loop.processedEventCh, agentEvent); err != nil {
+		return fmt.Errorf("emit event to output channel: %w", err)
+	}
+
+	return nil
+}
+
+// safeEmitRunnerCompletion guards emitRunnerCompletion against panics from session services.
+func (r *runner) safeEmitRunnerCompletion(ctx context.Context, loop *eventLoopContext) {
+	defer func() {
+		if rr := recover(); rr != nil {
+			log.Errorf("panic emitting runner completion: %v\n%s", rr, string(debug.Stack()))
+		}
 	}()
-	return processedEventCh
+	r.emitRunnerCompletion(ctx, loop)
+}
+
+// handleFlushRequest drains buffered agent events when a flush request arrives and closes the request's ACK channel
+// once all events currently buffered in the agent event channel have been processed.
+func (r *runner) handleFlushRequest(ctx context.Context, loop *eventLoopContext, req *flush.FlushRequest) error {
+	defer close(req.ACK)
+	for {
+		select {
+		case agentEvent, ok := <-loop.agentEventCh:
+			if !ok {
+				return nil
+			}
+			if err := r.processSingleAgentEvent(ctx, loop, agentEvent); err != nil {
+				return fmt.Errorf("process single agent event: %w", err)
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
 }
 
 // handleEventPersistence appends qualifying events to the session and triggers
@@ -311,12 +397,33 @@ func (r *runner) handleEventPersistence(
 		return
 	}
 
-	if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
+	persistEvent := agentEvent
+	if isGraphCompletionEvent(agentEvent) {
+		eventCopy := *agentEvent
+		eventCopy.Response = agentEvent.Response.Clone()
+		eventCopy.Response.Choices = nil
+		persistEvent = &eventCopy
+	}
+
+	if err := r.sessionService.AppendEvent(
+		ctx,
+		sess,
+		persistEvent,
+	); err != nil {
 		log.Errorf("Failed to append event to session: %v", err)
 		return
 	}
 
-	// Trigger summarization immediately after appending a qualifying event.
+	// Trigger summarization only after final assistant responses.
+	// Skip user messages, tool calls, and tool results to ensure summary
+	// always contains complete Q&A pairs (including tool call round-trips).
+	if agentEvent.IsUserMessage() ||
+		agentEvent.IsToolCallResponse() ||
+		agentEvent.IsToolResultResponse() ||
+		!agentEvent.IsValidContent() {
+		return
+	}
+
 	// Use EnqueueSummaryJob for true asynchronous processing.
 	// Prefer filter-specific summarization to avoid scanning all filters.
 	if err := r.sessionService.EnqueueSummaryJob(
@@ -334,6 +441,14 @@ func (r *runner) handleEventPersistence(
 func (r *runner) shouldPersistEvent(agentEvent *event.Event) bool {
 	return len(agentEvent.StateDelta) > 0 ||
 		(agentEvent.Response != nil && !agentEvent.IsPartial && agentEvent.IsValidContent())
+}
+
+func isGraphCompletionEvent(agentEvent *event.Event) bool {
+	if agentEvent == nil || agentEvent.Response == nil {
+		return false
+	}
+	return agentEvent.Done &&
+		agentEvent.Object == graph.ObjectTypeGraphExecution
 }
 
 // captureGraphCompletion captures the final state delta and choices from a
@@ -361,17 +476,10 @@ func (r *runner) captureGraphCompletion(
 
 // emitRunnerCompletion creates and emits the final runner completion event,
 // optionally propagating graph-level completion data.
-func (r *runner) emitRunnerCompletion(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	sess *session.Session,
-	processedEventCh chan *event.Event,
-	finalStateDelta map[string][]byte,
-	finalChoices []model.Choice,
-) {
+func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContext) {
 	// Create runner completion event.
 	runnerCompletionEvent := event.NewResponseEvent(
-		invocation.InvocationID,
+		loop.invocation.InvocationID,
 		r.appName,
 		&model.Response{
 			ID:        "runner-completion-" + uuid.New().String(),
@@ -383,17 +491,17 @@ func (r *runner) emitRunnerCompletion(
 	)
 
 	// Propagate graph-level completion data if available.
-	if len(finalStateDelta) > 0 {
-		r.propagateGraphCompletion(runnerCompletionEvent, finalStateDelta, finalChoices)
+	if len(loop.finalStateDelta) > 0 {
+		r.propagateGraphCompletion(runnerCompletionEvent, loop.finalStateDelta, loop.finalChoices)
 	}
 
 	// Append runner completion event to session.
-	if err := r.sessionService.AppendEvent(ctx, sess, runnerCompletionEvent); err != nil {
+	if err := r.sessionService.AppendEvent(ctx, loop.sess, runnerCompletionEvent); err != nil {
 		log.Errorf("Failed to append runner completion event to session: %v", err)
 	}
 
 	// Send the runner completion event to output channel.
-	agent.EmitEvent(ctx, invocation, processedEventCh, runnerCompletionEvent)
+	agent.EmitEvent(ctx, loop.invocation, loop.processedEventCh, runnerCompletionEvent)
 }
 
 // propagateGraphCompletion propagates graph-level completion data (state delta

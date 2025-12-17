@@ -795,6 +795,26 @@ func (f *flushRecorder) Flush(ctx context.Context, key session.Key) error {
 	return nil
 }
 
+type errorTracker struct {
+	appendErr error
+	flushErr  error
+}
+
+func (e *errorTracker) AppendEvent(ctx context.Context,
+	_ session.Key, _ aguievents.Event) error {
+	return e.appendErr
+}
+
+func (e *errorTracker) GetEvents(ctx context.Context,
+	_ session.Key) (*session.TrackEvents, error) {
+	return nil, nil
+}
+
+func (e *errorTracker) Flush(ctx context.Context,
+	_ session.Key) error {
+	return e.flushErr
+}
+
 type fakeRunner struct {
 	run func(ctx context.Context,
 		userID, sessionID string,
@@ -816,6 +836,47 @@ func (f *fakeRunner) Run(ctx context.Context,
 
 func (f *fakeRunner) Close() error {
 	return nil
+}
+
+func TestRunTrackingErrorsAreIgnored(t *testing.T) {
+	appendErr := errors.New("append failed")
+	flushErr := errors.New("flush failed")
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		tracker: &errorTracker{
+			appendErr: appendErr,
+			flushErr:  flushErr,
+		},
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []model.Message{
+			{
+				Role:    model.RoleUser,
+				Content: "hi",
+			},
+		},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	assert.Len(t, evts, 1)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
 }
 
 func collectEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Event {

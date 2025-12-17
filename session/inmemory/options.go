@@ -12,6 +12,7 @@ package inmemory
 import (
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
@@ -44,6 +45,10 @@ type serviceOpts struct {
 	summaryQueueSize int
 	// summaryJobTimeout is the timeout for processing a single summary job.
 	summaryJobTimeout time.Duration
+	// appendEventHooks are hooks for AppendEvent.
+	appendEventHooks []session.AppendEventHook
+	// getSessionHooks are hooks for GetSession.
+	getSessionHooks []session.GetSessionHook
 }
 
 // ServiceOpt is the option for the in-memory session service.
@@ -134,5 +139,19 @@ func WithSummaryJobTimeout(timeout time.Duration) ServiceOpt {
 			return
 		}
 		opts.summaryJobTimeout = timeout
+	}
+}
+
+// WithAppendEventHook adds AppendEvent hooks.
+func WithAppendEventHook(hooks ...session.AppendEventHook) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.appendEventHooks = append(opts.appendEventHooks, hooks...)
+	}
+}
+
+// WithGetSessionHook adds GetSession hooks.
+func WithGetSessionHook(hooks ...session.GetSessionHook) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.getSessionHooks = append(opts.getSessionHooks, hooks...)
 	}
 }

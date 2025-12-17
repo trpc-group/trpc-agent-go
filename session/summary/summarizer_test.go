@@ -397,54 +397,49 @@ func (e *emptyResponseModel) GenerateContent(ctx context.Context, req *model.Req
 	return ch, nil
 }
 
-func TestSessionSummarizer_WithSkipRecentEvents(t *testing.T) {
-	t.Run("skipRecentEvents option sets correct value", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithSkipRecentEvents(5))
-		assert.Equal(t, 5, s.(*sessionSummarizer).skipRecentEvents)
+func TestSessionSummarizer_WithSkipRecent(t *testing.T) {
+	t.Run("skipRecentFunc is set when configured", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{}, WithSkipRecent(func(events []event.Event) int { return 5 }))
+		assert.NotNil(t, s.(*sessionSummarizer).skipRecentFunc)
 	})
 
-	t.Run("skipRecentEvents defaults to zero", func(t *testing.T) {
+	t.Run("skipRecentFunc nil by default", func(t *testing.T) {
 		s := NewSummarizer(&fakeModel{})
-		assert.Equal(t, 0, s.(*sessionSummarizer).skipRecentEvents)
-	})
-
-	t.Run("negative skipRecentEvents values are ignored", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithSkipRecentEvents(-1))
-		assert.Equal(t, 0, s.(*sessionSummarizer).skipRecentEvents)
+		assert.Nil(t, s.(*sessionSummarizer).skipRecentFunc)
 	})
 }
 
 func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 	s := &sessionSummarizer{}
 
-	t.Run("no filtering when skipRecentEvents is zero", func(t *testing.T) {
+	t.Run("no filtering when skipRecentFunc is nil", func(t *testing.T) {
 		events := []event.Event{
-			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "msg1"}}}}},
-			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "msg2"}}}}},
+			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "msg1"}}}}},
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "msg2"}}}}},
 		}
 		filtered := s.filterEventsForSummary(events)
 		assert.Equal(t, events, filtered)
 	})
 
-	t.Run("no filtering when events count <= skipRecentEvents", func(t *testing.T) {
-		s := &sessionSummarizer{skipRecentEvents: 5}
+	t.Run("returns empty when skip count >= events length", func(t *testing.T) {
+		s := &sessionSummarizer{skipRecentFunc: func(_ []event.Event) int { return 5 }}
 		events := []event.Event{
-			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "msg1"}}}}},
-			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "msg2"}}}}},
+			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "msg1"}}}}},
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "msg2"}}}}},
 		}
 		filtered := s.filterEventsForSummary(events)
-		assert.Equal(t, events, filtered)
+		assert.Empty(t, filtered)
 	})
 
 	t.Run("filters recent events and keeps user message context", func(t *testing.T) {
-		s := &sessionSummarizer{skipRecentEvents: 2}
+		s := &sessionSummarizer{skipRecentFunc: func(_ []event.Event) int { return 2 }}
 		events := []event.Event{
-			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "user1"}}}}},
-			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "assistant1"}}}}},
-			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "user2"}}}}},
-			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "assistant2"}}}}},
-			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent1"}}}}},      // should be skipped
-			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent2"}}}}}, // should be skipped
+			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "user1"}}}}},
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant1"}}}}},
+			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "user2"}}}}},
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant2"}}}}},
+			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "recent1"}}}}},           // should be skipped
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "recent2"}}}}}, // should be skipped
 		}
 		filtered := s.filterEventsForSummary(events)
 		// Should keep events 0-3 (up to and including the last user message before recent events)
@@ -454,26 +449,26 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 	})
 
 	t.Run("returns empty slice when no user message in filtered events", func(t *testing.T) {
-		s := &sessionSummarizer{skipRecentEvents: 1}
+		s := &sessionSummarizer{skipRecentFunc: func(_ []event.Event) int { return 1 }}
 		events := []event.Event{
-			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "assistant1"}}}}},
-			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "user1"}}}}}, // will be skipped
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant1"}}}}},
+			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "user1"}}}}}, // will be skipped
 		}
 		filtered := s.filterEventsForSummary(events)
 		assert.Empty(t, filtered)
 	})
 
 	t.Run("keeps all events up to last user message when filtering", func(t *testing.T) {
-		s := &sessionSummarizer{skipRecentEvents: 3}
+		s := &sessionSummarizer{skipRecentFunc: func(_ []event.Event) int { return 3 }}
 		events := []event.Event{
-			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "user1"}}}}},
-			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "assistant1"}}}}},
-			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "assistant2"}}}}},
-			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "user2"}}}}},
-			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "assistant3"}}}}},
-			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent1"}}}}}, // skipped
-			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent2"}}}}},      // skipped
-			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent3"}}}}}, // skipped
+			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "user1"}}}}},
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant1"}}}}},
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant2"}}}}},
+			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "user2"}}}}},
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant3"}}}}},
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "recent1"}}}}}, // skipped
+			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "recent2"}}}}},           // skipped
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "recent3"}}}}}, // skipped
 		}
 		filtered := s.filterEventsForSummary(events)
 		// Should keep events 0-4 (up to and including the last user message before recent events)
@@ -481,11 +476,12 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 		assert.Equal(t, expected, filtered)
 		assert.Len(t, filtered, 5)
 	})
+
 }
 
-func TestSessionSummarizer_SummarizeWithSkipRecentEvents(t *testing.T) {
+func TestSessionSummarizer_SummarizeWithSkipRecent(t *testing.T) {
 	t.Run("summarizes only non-recent events", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithSkipRecentEvents(2))
+		s := NewSummarizer(&fakeModel{}, WithSkipRecent(func(_ []event.Event) int { return 2 }))
 
 		// Create session with 5 events
 		sess := &session.Session{
@@ -493,27 +489,27 @@ func TestSessionSummarizer_SummarizeWithSkipRecentEvents(t *testing.T) {
 			Events: []event.Event{
 				{
 					Author:   "user",
-					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "hello"}}}},
+					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}},
 				},
 				{
 					Author:   "assistant",
-					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "hi there"}}}},
+					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hi there"}}}},
 				},
 				{
 					Author:   "user",
-					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "how are you"}}}},
+					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "how are you"}}}},
 				},
 				{
 					Author:   "assistant",
-					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "I'm fine"}}}},
+					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "I'm fine"}}}},
 				},
 				{
 					Author:   "user", // This will be skipped
-					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent message"}}}},
+					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "recent message"}}}},
 				},
 				{
 					Author:   "assistant", // This will be skipped
-					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent response"}}}},
+					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "recent response"}}}},
 				},
 			},
 		}
@@ -531,7 +527,7 @@ func TestSessionSummarizer_SummarizeWithSkipRecentEvents(t *testing.T) {
 	})
 
 	t.Run("errors when filtered events have no user message", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithSkipRecentEvents(2))
+		s := NewSummarizer(&fakeModel{}, WithSkipRecent(func(_ []event.Event) int { return 2 }))
 
 		// Create session where filtering removes all user messages
 		sess := &session.Session{
@@ -539,15 +535,15 @@ func TestSessionSummarizer_SummarizeWithSkipRecentEvents(t *testing.T) {
 			Events: []event.Event{
 				{
 					Author:   "assistant",
-					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "response1"}}}},
+					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "response1"}}}},
 				},
 				{
 					Author:   "user", // This will be skipped
-					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "user message"}}}},
+					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "user message"}}}},
 				},
 				{
 					Author:   "assistant", // This will be skipped
-					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "response2"}}}},
+					Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "response2"}}}},
 				},
 			},
 		}
@@ -558,9 +554,319 @@ func TestSessionSummarizer_SummarizeWithSkipRecentEvents(t *testing.T) {
 	})
 }
 
-func TestSessionSummarizer_Metadata_IncludesSkipRecentEvents(t *testing.T) {
-	s := NewSummarizer(&fakeModel{}, WithSkipRecentEvents(3))
+func TestSessionSummarizer_RecordLastIncludedTimestamp(t *testing.T) {
+	now := time.Now().UTC()
+	keepTs := now.Add(-2 * time.Minute)
+	sess := &session.Session{
+		ID: "ts-session",
+		Events: []event.Event{
+			{
+				Author:    "user",
+				Timestamp: keepTs,
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Role: model.RoleUser, Content: "keep"},
+				}}},
+			},
+			{
+				Author:    "user",
+				Timestamp: now.Add(-time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Role: model.RoleUser, Content: "skip"},
+				}}},
+			},
+		},
+	}
+
+	s := NewSummarizer(&fakeModel{}, WithSkipRecent(func(_ []event.Event) int { return 1 }))
+	_, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+
+	require.NotNil(t, sess.State)
+	raw := sess.State[lastIncludedTsKey]
+	require.NotEmpty(t, raw)
+
+	got, err := time.Parse(time.RFC3339Nano, string(raw))
+	require.NoError(t, err)
+	assert.True(t, got.Equal(keepTs))
+}
+
+func TestSessionSummarizer_RecordLastIncludedTimestamp_NoStateOrEvents(t *testing.T) {
+	s := &sessionSummarizer{}
+
+	t.Run("nil session", func(t *testing.T) {
+		s.recordLastIncludedTimestamp(nil, nil)
+	})
+
+	t.Run("empty events does nothing", func(t *testing.T) {
+		sess := &session.Session{}
+		s.recordLastIncludedTimestamp(sess, []event.Event{})
+		assert.Nil(t, sess.State)
+	})
+}
+
+func TestSessionSummarizer_Metadata_IncludesSkipRecent(t *testing.T) {
+	s := NewSummarizer(&fakeModel{}, WithSkipRecent(func(_ []event.Event) int { return 3 }))
 	metadata := s.Metadata()
 
-	assert.Equal(t, 3, metadata[metadataKeySkipRecentEvents])
+	assert.Equal(t, true, metadata[metadataKeySkipRecentEnabled])
+}
+
+func TestSessionSummarizer_SetPrompt(t *testing.T) {
+	t.Run("updates prompt successfully", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{})
+		originalPrompt := s.(*sessionSummarizer).prompt
+
+		newPrompt := "Custom prompt with {conversation_text} and {max_summary_words} words."
+		s.(*sessionSummarizer).SetPrompt(newPrompt)
+
+		assert.NotEqual(t, originalPrompt, s.(*sessionSummarizer).prompt)
+		assert.Equal(t, newPrompt, s.(*sessionSummarizer).prompt)
+	})
+
+	t.Run("ignores empty prompt", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{})
+		originalPrompt := s.(*sessionSummarizer).prompt
+
+		s.(*sessionSummarizer).SetPrompt("")
+
+		assert.Equal(t, originalPrompt, s.(*sessionSummarizer).prompt)
+	})
+
+	t.Run("updated prompt is used in summarization", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{})
+
+		// Set a custom prompt that includes specific markers.
+		customPrompt := "Test custom prompt: {conversation_text}"
+		s.(*sessionSummarizer).SetPrompt(customPrompt)
+
+		sess := &session.Session{
+			ID: "test",
+			Events: []event.Event{
+				{
+					Response: &model.Response{
+						Choices: []model.Choice{{
+							Message: model.Message{Content: "Hello world"},
+						}},
+					},
+					Timestamp: time.Now(),
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotEmpty(t, text)
+
+		// fakeModel returns the prompt as part of the summary,
+		// so we can verify the custom prompt was used.
+		assert.Contains(t, text, "Test custom prompt")
+	})
+
+	t.Run("SetPrompt with placeholder replacement", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{}, WithMaxSummaryWords(50))
+
+		// Set a custom prompt with both placeholders.
+		customPrompt := "Summarize in {max_summary_words} words: {conversation_text}"
+		s.(*sessionSummarizer).SetPrompt(customPrompt)
+
+		sess := &session.Session{
+			ID: "test",
+			Events: []event.Event{
+				{
+					Response: &model.Response{
+						Choices: []model.Choice{{
+							Message: model.Message{Content: "Test content"},
+						}},
+					},
+					Timestamp: time.Now(),
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotEmpty(t, text)
+
+		// Verify placeholder was replaced with actual number.
+		assert.Contains(t, text, "50")
+		assert.Contains(t, text, "Summarize in")
+	})
+
+	t.Run("multiple SetPrompt calls", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{})
+
+		firstPrompt := "First prompt: {conversation_text}"
+		s.(*sessionSummarizer).SetPrompt(firstPrompt)
+		assert.Equal(t, firstPrompt, s.(*sessionSummarizer).prompt)
+
+		secondPrompt := "Second prompt: {conversation_text}"
+		s.(*sessionSummarizer).SetPrompt(secondPrompt)
+		assert.Equal(t, secondPrompt, s.(*sessionSummarizer).prompt)
+
+		// Empty prompt should not change.
+		s.(*sessionSummarizer).SetPrompt("")
+		assert.Equal(t, secondPrompt, s.(*sessionSummarizer).prompt)
+	})
+
+	t.Run("SetPrompt on nil summarizer", func(t *testing.T) {
+		var s *sessionSummarizer
+		// Should not panic
+		assert.NotPanics(t, func() {
+			if s != nil {
+				s.SetPrompt("test")
+			}
+		})
+	})
+}
+
+func TestSessionSummarizer_SetModel(t *testing.T) {
+	t.Run("updates model successfully", func(t *testing.T) {
+		originalModel := &fakeModel{}
+		s := NewSummarizer(originalModel)
+		assert.Same(t, originalModel, s.(*sessionSummarizer).model)
+
+		newModel := &customOutputModel{output: "new"}
+		s.(*sessionSummarizer).SetModel(newModel)
+
+		assert.Same(t, newModel, s.(*sessionSummarizer).model)
+		assert.NotSame(t, originalModel, s.(*sessionSummarizer).model)
+	})
+
+	t.Run("ignores nil model", func(t *testing.T) {
+		originalModel := &fakeModel{}
+		s := NewSummarizer(originalModel)
+
+		s.(*sessionSummarizer).SetModel(nil)
+
+		assert.Equal(t, originalModel, s.(*sessionSummarizer).model)
+	})
+
+	t.Run("updated model is used in summarization", func(t *testing.T) {
+		originalModel := &fakeModel{}
+		s := NewSummarizer(originalModel)
+
+		sess := &session.Session{
+			ID: "test",
+			Events: []event.Event{
+				{
+					Response: &model.Response{
+						Choices: []model.Choice{{
+							Message: model.Message{Content: "Hello world"},
+						}},
+					},
+					Timestamp: time.Now(),
+				},
+			},
+		}
+
+		// Use original model
+		text1, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotEmpty(t, text1)
+
+		// Switch to a different model that returns different output
+		newModel := &customOutputModel{output: "Custom model summary"}
+		s.(*sessionSummarizer).SetModel(newModel)
+
+		text2, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotEmpty(t, text2)
+		assert.Contains(t, text2, "Custom model summary")
+	})
+
+	t.Run("model metadata updates after SetModel", func(t *testing.T) {
+		model1 := &fakeModel{}
+		s := NewSummarizer(model1)
+
+		metadata1 := s.Metadata()
+		assert.Equal(t, "fake", metadata1[metadataKeyModelName])
+
+		// Switch to a different model
+		model2 := &customOutputModel{output: "test"}
+		s.(*sessionSummarizer).SetModel(model2)
+
+		metadata2 := s.Metadata()
+		assert.Equal(t, "custom-output", metadata2[metadataKeyModelName])
+		assert.NotEqual(t, metadata1[metadataKeyModelName], metadata2[metadataKeyModelName])
+	})
+
+	t.Run("multiple SetModel calls", func(t *testing.T) {
+		model1 := &fakeModel{}
+		s := NewSummarizer(model1)
+		assert.Equal(t, model1, s.(*sessionSummarizer).model)
+
+		model2 := &customOutputModel{output: "test"}
+		s.(*sessionSummarizer).SetModel(model2)
+		assert.Equal(t, model2, s.(*sessionSummarizer).model)
+
+		model3 := &fakeModel{}
+		s.(*sessionSummarizer).SetModel(model3)
+		assert.Equal(t, model3, s.(*sessionSummarizer).model)
+
+		// Nil model should not change
+		s.(*sessionSummarizer).SetModel(nil)
+		assert.Equal(t, model3, s.(*sessionSummarizer).model)
+	})
+
+	t.Run("SetModel with error model", func(t *testing.T) {
+		originalModel := &fakeModel{}
+		s := NewSummarizer(originalModel)
+
+		sess := &session.Session{
+			ID: "test",
+			Events: []event.Event{
+				{
+					Response: &model.Response{
+						Choices: []model.Choice{{
+							Message: model.Message{Content: "Hello"},
+						}},
+					},
+					Timestamp: time.Now(),
+				},
+			},
+		}
+
+		// Original model should work
+		_, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+
+		// Switch to error model
+		errorModel := &errorModel{}
+		s.(*sessionSummarizer).SetModel(errorModel)
+
+		_, err = s.Summarize(context.Background(), sess)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "model error")
+	})
+
+	t.Run("SetModel on nil summarizer", func(t *testing.T) {
+		var s *sessionSummarizer
+		// Should not panic
+		assert.NotPanics(t, func() {
+			if s != nil {
+				s.SetModel(&fakeModel{})
+			}
+		})
+	})
+}
+
+// customOutputModel returns a custom output for testing.
+type customOutputModel struct {
+	output string
+}
+
+func (c *customOutputModel) Info() model.Info {
+	return model.Info{Name: "custom-output"}
+}
+
+func (c *customOutputModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{Message: model.Message{Content: c.output}},
+		},
+	}
+	close(ch)
+	return ch, nil
 }

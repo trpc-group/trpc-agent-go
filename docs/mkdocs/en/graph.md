@@ -15,6 +15,7 @@ Highlights:
 - Built‑in node types wrap LLM, Tools, and Agent to reduce boilerplate.
 - Streaming events, checkpoints, and interrupts for observability and recovery.
 - Node‑level retry/backoff with exponential delay and jitter, plus executor‑level defaults and rich retry metadata in events.
+- Node event emitter (EventEmitter) for emitting custom events, progress updates, and streaming text from within NodeFunc.
 
 ## Quick Start
 
@@ -302,6 +303,133 @@ if b, ok := event.StateDelta[graph.MetadataKeyModel]; ok {
 }
 ```
 
+#### Node Event Emitter (EventEmitter)
+
+During NodeFunc execution, nodes can proactively emit custom events to the outside through `EventEmitter`, for real-time delivery of progress, intermediate results, or custom business data.
+
+**Getting EventEmitter**
+
+```go
+func myNode(ctx context.Context, state graph.State) (any, error) {
+    // Get EventEmitter from State
+    emitter := graph.GetEventEmitterWithContext(ctx, state)
+    // Or use a custom context
+    // emitter := graph.GetEventEmitter(state)
+    
+    // Use emitter to emit events...
+    return state, nil
+}
+```
+
+**EventEmitter Interface**
+
+```go
+type EventEmitter interface {
+    // Emit sends any event
+    Emit(evt *event.Event) error
+    // EmitCustom emits a custom event
+    EmitCustom(eventType string, payload any) error
+    // EmitProgress emits a progress event (progress: 0-100)
+    EmitProgress(progress float64, message string) error
+    // EmitText emits a streaming text event
+    EmitText(text string) error
+    // Context returns the associated context
+    Context() context.Context
+}
+```
+
+**Usage Examples**
+
+```go
+func dataProcessNode(ctx context.Context, state graph.State) (any, error) {
+    emitter := graph.GetEventEmitter(state)
+    
+    // 1. Emit custom event
+    emitter.EmitCustom("data.loaded", map[string]any{
+        "recordCount": 1000,
+        "source":      "database",
+    })
+    
+    // 2. Emit progress events
+    total := 100
+    for i := 0; i < total; i++ {
+        processItem(i)
+        progress := float64(i+1) / float64(total) * 100
+        emitter.EmitProgress(progress, fmt.Sprintf("Processing %d/%d", i+1, total))
+    }
+    
+    // 3. Emit streaming text
+    emitter.EmitText("Processing complete.\n")
+    emitter.EmitText("Results: 100 items processed successfully.")
+    
+    return state, nil
+}
+```
+
+**Event Flow Diagram**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant NF as NodeFunc
+    participant EE as EventEmitter
+    participant EC as EventChan
+    participant EX as Executor
+    participant TR as AGUI Translator
+    participant FE as Frontend Client
+
+    Note over NF,FE: Event Emission Phase
+    NF->>EE: GetEventEmitter(state)
+    EE-->>NF: Return EventEmitter instance
+    
+    alt Emit Custom Event
+        NF->>EE: EmitCustom(eventType, payload)
+    else Emit Progress Event
+        NF->>EE: EmitProgress(progress, message)
+    else Emit Text Event
+        NF->>EE: EmitText(text)
+    end
+    
+    Note over EE: Build NodeCustomEventMetadata
+    EE->>EE: Inject NodeID, InvocationID, Timestamp
+    EE->>EC: Send Event to channel
+    
+    Note over EC,FE: Event Consumption Phase
+    EC->>EX: Executor receives event
+    EX->>TR: Pass event to Translator
+    
+    alt Custom Event
+        TR->>TR: Convert to AG-UI CustomEvent
+    else Progress Event
+        TR->>TR: Convert to AG-UI CustomEvent (with progress info)
+    else Text Event (in message context)
+        TR->>TR: Convert to TextMessageContentEvent
+    else Text Event (not in message context)
+        TR->>TR: Convert to AG-UI CustomEvent
+    end
+    
+    TR->>FE: SSE push AG-UI event
+    FE->>FE: Process and update UI
+```
+
+**AGUI Event Conversion**
+
+When using AGUI Server, events emitted by nodes are automatically converted to AG-UI protocol events:
+
+| Node Event Type | AG-UI Event Type | Description |
+|-----------------|------------------|-------------|
+| Custom | CustomEvent | Custom event, payload in `value` field |
+| Progress | CustomEvent | Progress event with `progress` and `message` |
+| Text (in message context) | TextMessageContentEvent | Streaming text appended to current message |
+| Text (not in message context) | CustomEvent | Contains `nodeId` and `content` fields |
+
+**Notes**
+
+- **Thread Safety**: EventEmitter is thread-safe and can be used in concurrent environments
+- **Graceful Degradation**: If State has no valid ExecutionContext or EventChan, `GetEventEmitter` returns a no-op emitter that silently succeeds for all operations
+- **Error Handling**: Event emission failures do not interrupt node execution; it's recommended to only log warnings
+- **Custom Event Metadata**: `_node_custom_metadata` → `graph.MetadataKeyNodeCustom` (struct `graph.NodeCustomEventMetadata`)
+
 ### 1. Creating GraphAgent and Runner
 
 Users mainly use the Graph package by creating GraphAgent and then using it through Runner. This is the recommended usage pattern:
@@ -508,6 +636,39 @@ stateGraph.
     SetFinishPoint("ask")
 ```
 
+#### Using RemoveAllMessages to Clear Message History
+
+When chaining multiple LLM nodes, `MessageReducer` accumulates messages. If each
+LLM node requires an isolated message context (without inheriting the previous
+node's conversation history), use `RemoveAllMessages` to clear previous messages:
+
+```go
+// In the prompt preparation node, clear messages before setting new UserInput.
+func preparePromptNode(ctx context.Context, state graph.State) (any, error) {
+    userMessage := buildUserMessage(...)
+    return graph.State{
+        // Key: Clear previous messages first to avoid accumulation.
+        graph.StateKeyMessages:  graph.RemoveAllMessages{},
+        graph.StateKeyUserInput: userMessage,
+    }, nil
+}
+```
+
+**Use cases**:
+
+- Multiple independent LLM nodes within the same Graph, where each node doesn't
+  need the previous node's conversation history
+- Loop structures where each iteration requires a fresh message context
+- Scenarios requiring complete message list reconstruction
+
+**Notes**:
+
+- `RemoveAllMessages{}` is a special `MessageOp` that `MessageReducer` recognizes
+  and uses to clear the message list
+- Must set `RemoveAllMessages{}` **before** setting `StateKeyUserInput`
+- `WithSubgraphIsolatedMessages(true)` only works for `AddSubgraphNode`, not for
+  `AddLLMNode`; use `RemoveAllMessages` to isolate messages between LLM nodes
+
 ### 3. GraphAgent Configuration Options
 
 GraphAgent supports various configuration options:
@@ -524,6 +685,8 @@ graphAgent, err := graphagent.New(
     graphagent.WithChannelBufferSize(1024),            // Tune event buffer size
     graphagent.WithCheckpointSaver(memorySaver),       // Persist checkpoints if needed
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // Register sub-agents by name
+    graphagent.WithAddSessionSummary(true),            // Inject session summary as system message
+    graphagent.WithMaxHistoryRuns(5),                  // Truncate history when summaries are off
     // Set the filter mode for messages passed to the model. The final messages passed to the model must satisfy both WithMessageTimelineFilterMode and WithMessageBranchFilterMode conditions.
     // Timeline dimension filter conditions
     // Default: graphagent.TimelineFilterAll
@@ -548,6 +711,42 @@ graphAgent, err := graphagent.New(
 
 > Model/tool callbacks are configured per node, e.g. `AddLLMNode(..., graph.WithModelCallbacks(...))`
 > or `AddToolsNode(..., graph.WithToolCallbacks(...))`.
+
+Session summary notes:
+
+- `WithAddSessionSummary(true)` takes effect only when `Session.Summaries` contains a summary for the invocation’s filter key. Summaries are typically produced by SessionService + SessionSummarizer, and Runner will auto‑enqueue summarization after persisting events.
+- GraphAgent reads summaries only; it does not generate them. If you bypass Runner, call `sessionService.CreateSessionSummary` or `EnqueueSummaryJob` after appending events.
+- Summary injection works only when `TimelineFilterMode` is `TimelineFilterAll`.
+
+#### Concurrency considerations
+
+When using Graph + GraphAgent in a concurrent environment (for example, serving many requests from a single long‑lived process), keep the following in mind:
+
+- CheckpointSaver and Cache implementations must be concurrency‑safe  
+  The `CheckpointSaver` and `Cache` interfaces are intentionally storage‑agnostic. A single `Executor`/`GraphAgent` instance may call their methods from multiple goroutines when several invocations run in parallel. If you provide your own implementations, ensure:
+  - All exported methods (`Get`/`GetTuple`/`List`/`Put`/`PutWrites`/`PutFull`/`DeleteLineage` for `CheckpointSaver`, and `Get`/`Set`/`Clear` for `Cache`) are safe for concurrent use.
+  - Internal maps, connection pools, or in‑memory buffers are properly synchronized.
+
+- NodeFunc, tools, and callbacks should treat state as per‑invocation, not global  
+  Each node receives an isolated copy of graph state for the current task. This copy is safe to mutate inside the node, but it is not safe to:
+  - Store references to that state (or its internal maps/slices) in global variables and modify them from other goroutines later.
+  - Access `StateKeyExecContext` (`*graph.ExecutionContext`) and bypass its internal locks when reading/writing `execCtx.State` or `execCtx.pendingTasks`.
+  If you need shared mutable state across nodes or invocations, protect it with your own synchronization (for example, `sync.Mutex` or `sync.RWMutex`) or use external services (such as databases or caches).
+
+- Do not share a single *agent.Invocation across goroutines  
+  The framework expects each `Run` call (GraphAgent, Runner, or other Agent types) to operate on its own `*agent.Invocation`. Reusing the same `*agent.Invocation` instance in multiple goroutines and calling `Run` concurrently can cause data races on fields like `Branch`, `RunOptions`, or callback state. Prefer:
+  - Creating a fresh `*agent.Invocation` per request, or
+  - Cloning from a parent invocation using `invocation.Clone(...)` when you need linkage.
+
+- Parallel tools require tool implementations to be safe for concurrent use  
+  Tools in a `Tools` node can be executed in parallel when `WithEnableParallelTools(true)` is used on that node:
+  - The framework guarantees that the `tools` map is only read during execution.
+  - It also guarantees that the shared graph state passed to tools is only read; updates are written back by nodes, not by tools.
+  However, each `tool.Tool` implementation and its `tool.Callbacks` may be invoked from multiple goroutines at the same time. Make sure:
+  - Tool implementations do not mutate shared global state without proper locking.
+  - Any internal caches, HTTP clients, or client pools inside tools are safe for concurrent use.
+
+These constraints are especially important in long‑running services where a single `Graph`/`Executor`/`GraphAgent` instance is reused for many invocations.
 
 Once sub-agents are registered you can delegate within the graph via agent nodes:
 
@@ -1687,6 +1886,187 @@ Tip: setting entry and finish points implicitly connects to virtual Start/End no
   There's no need to add these two edges explicitly.
 
 Constants: `graph.Start == "__start__"`, `graph.End == "__end__"`.
+
+### Message Visibility Options
+The Agent can dynamically manage the visibility of messages generated by other Agents and historical session messages based on different scenarios. This is configurable through relevant options.
+When interacting with the model, only the visible content is passed as input.
+
+TIPS:
+- Messages from different sessionIDs are never visible to each other under any circumstances. The following control strategies only apply to messages sharing the same sessionID.
+- Invocation.Message always visible regardless of the configuration.
+- The related configuration only controls the initial value of State[graph.StateKeyMessages].
+- The messages generated by the Agent node have a filterKey corresponding to the subAgent name. As a result, when using IsolatedRequestor IsolatedInvocationfor filtering, these messages are not visible to the current graphAgent.
+- When the option is not configured, the default value is FullContext.
+
+Config:
+- `llmagent.WithMessageFilterMode(MessageFilterMode)`:
+  - `FullContext`: Includes historical messages and messages generated in the current request, filtered by prefix matching with the filterKey.
+  - `RequestContext`: Only includes messages generated in the current request, filtered by prefix matching with the filterKey.
+  - `IsolatedRequest`: Only includes messages generated in the current request, filtered by exact matching with the filterKey.
+  - `IsolatedInvocation`: Only includes messages generated in the current Invocation context, filtered by exact matching with the filterKey.
+
+Recommended Usage Examples (These examples are simplified configurations based on advanced usage):
+
+Example 1: Message Visibility Control for graphAgent
+```go
+subgraphAgentA := graphagent.New(
+    "subgraphA", subgraph,
+    // All messages generated by parentAgent, subgraphAgentA, and subgraphAgentB (including messages from task1 and task2) are visible (includes historical messages from the same sessionID)
+    graphagent.WithMessageFilterMode(graphagent.FullContext),
+    // All messages generated during the current runner.Run by parentAgent, subgraphAgentA, and subgraphAgentB (including messages from task1 and task2) are visible (excludes historical messages from previous sessions)
+    graphagent.WithMessageFilterMode(graphagent.RequestContext),
+    // Only messages generated by subgraphAgentA during the current runner.Run are visible (excludes its own historical messages)
+    graphagent.WithMessageFilterMode(graphagent.IsolatedRequest),
+    // Only messages generated during the current invocation of subgraphAgentA are visible (in this example, subgraphAgentA executes only once, making it equivalent to graphagent.IsolatedRequest)
+    graphagent.WithMessageFilterMode(graphagent.IsolatedInvocation),
+)
+
+subgraphAgentB := graphagent.New(
+    "subgraphB", subgraph,
+    // All messages generated by parentAgent, subgraphAgentA, and subgraphAgentB (including messages from task1 and task2) are visible (includes historical messages from the same sessionID)
+    graphagent.WithMessageFilterMode(graphagent.FullContext),
+    // All messages generated during the current runner.Run by parentAgent, subgraphAgentA, and subgraphAgentB (including messages from task1 and task2) are visible (excludes historical messages from previous sessions)
+    graphagent.WithMessageFilterMode(graphagent.RequestContext),
+    // Only messages generated by subgraphAgentB (including messages from task1 and task2) during the current runner.Run are visible (excludes its own historical messages)
+    graphagent.WithMessageFilterMode(graphagent.IsolatedRequest),
+    // Only messages generated during the current invocation of subgraphAgentB are visible, excluding historical messages (messages generated during task1 and task2 executions are not visible to each other).
+    graphagent.WithMessageFilterMode(graphagent.IsolatedInvocation),
+)
+
+sg.AddAgentNode("subgraphA")
+sg.AddNode("fanout", func(ctx context.Context, state graph.State) (any, error) {
+    return []*graph.Command{
+        {
+            GoTo: "subgraph",
+            Update: graph.State{
+                "task": "task 1"
+            },
+        },
+        {
+            GoTo: "subgraph",
+            Update: graph.State{
+                "task": "task 2"
+            },
+        },
+    }, nil
+})
+sg.AddAgentNode("subgraphB")
+sg.AddEdge("subgraphA", "fanout")
+sg.SetEntryPoint(subgraphA)
+graph, err := sg.Compile()
+if err != nil {
+    log.Fatalf("Failed to Compile state graph, err: %w", err)
+}
+parentAgent := graphagent.New(
+    "subgraph", graph,
+    // subagent
+    graphagent.WithSubAgents(subgraphAgent)
+)
+```
+
+Example 2: Message Visibility Control for LLM Agent node
+```go
+taskagentA := llmagent.New(
+  "coordinator",
+  llmagent.WithModel(modelInstance),
+  // Makes all messages generated by taskagentA and taskagentB visible (including historical session messages under the same sessionID)
+  llmagent.WithMessageFilterMode(llmagent.FullContext),
+  // Makes all messages generated during the current runner.Run of taskagentA and taskagentB visible (excluding historical session messages)
+  llmagent.WithMessageFilterMode(llmagent.RequestContext),
+  // Only makes messages generated during the current runner.Run of taskagentA visible (excluding its own historical session messages)
+  llmagent.WithMessageFilterMode(llmagent.IsolatedRequest),
+  // Agent execution order: taskagentA-invocation1 -> taskagentB-invocation2 -> taskagentA-invocation3 (current execution phase)
+  // Only makes messages generated during the current taskagentA-invocation3 phase visible (excluding its own historical session messages and messages generated during taskagentA-invocation1)
+  llmagent.WithMessageFilterMode(llmagent.IsolatedInvocation),
+)
+
+taskagentB := llmagent.New(
+  "coordinator",
+  llmagent.WithModel(modelInstance),
+  // Makes all messages generated by taskagentA and taskagentB visible (including historical session messages under the same sessionID)
+  llmagent.WithMessageFilterMode(llmagent.FullContext),
+  // Makes all messages generated during the current runner.Run of taskagentA and taskagentB visible (excluding historical session messages)
+  llmagent.WithMessageFilterMode(llmagent.RequestContext),
+  // Only makes messages generated during the current runner.Run of taskagentB visible (excluding its own historical session messages)
+  llmagent.WithMessageFilterMode(llmagent.IsolatedRequest),
+  // Agent execution order: taskagentA-invocation1 -> taskagentB-invocation2 -> taskagentA-invocation3 -> taskagentB-invocation4 (current execution phase)
+  // Only makes messages generated during the current taskagentB-invocation4 phase visible (excluding its own historical session messages and messages generated during taskagentB-invocation2)
+  llmagent.WithMessageFilterMode(llmagent.IsolatedInvocation),
+)
+
+// Cyclically execute taskagentA and taskagentB
+cycleAgent := cycleagent.New(
+  "coordinator",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithSubAgents([]agent.Agent{taskagentA, taskagentB}),
+  llmagent.WithMessageFilterMode(llmagent.FullContext)
+)
+
+sg.AddAgentNode("taskagentA")
+// Execute multiple tasks in parallel at the same time
+sg.AddNode("fanout", func(ctx context.Context, state graph.State) (any, error) {
+    return []*graph.Command{
+        {
+            GoTo: "taskB",
+            Update: graph.State{
+                "task": "task 1"
+            },
+        },
+        {
+            GoTo: "taskB",
+            Update: graph.State{
+                "task": "task 2"
+            },
+        },
+    }, nil
+})
+// You can set the message filter mode of taskagentB to llmagent.IsolatedInvocation to isolate contextual conversation information between multiple tasks.
+sg.AddNode("taskB", func(ctx context.Context, state graph.State) (any, error){
+    task := state["task-id"]
+    inv, _ := agent.InvocationFromContext(ctx)
+    inv.Message = model.NewUserMessage(task)
+    chan, err := taskagentB.Run(ctx, inv)
+    // do any thing
+})
+```
+
+Advanced Usage Examples:
+You can independently control the visibility of historical messages and messages generated by other Agents for the current agent using WithMessageTimelineFilterModeand WithMessageBranchFilterMode.
+When the current agent interacts with the model, only messages satisfying both conditions are input to the model. (invocation.Messageis always visible in any scenario.)
+- `WithMessageTimelineFilterMode`: Controls visibility from a temporal dimension
+  - `TimelineFilterAll`: Includes historical messages and messages generated in the current request.
+  - `TimelineFilterCurrentRequest`: Only includes messages generated in the current request (one runner.Runcounts as one request).
+  - `TimelineFilterCurrentInvocation`: Only includes messages generated in the current invocation context.
+- `WithMessageBranchFilterMode`: Controls visibility from a branch dimension (used to manage visibility of messages generated by other agents).
+  - `BranchFilterModePrefix`: Uses prefix matching between Event.FilterKeyand Invocation.eventFilterKey.
+  - `BranchFilterModeAll`: Includes messages from all agents.
+  - `BranchFilterModeExact`: Only includes messages generated by the current agent.
+
+```go
+llmAgent := llmagent.New(
+    "demo-agent",                      // Agent name
+    llmagent.WithModel(modelInstance), // Set the model
+    llmagent.WithDescription("A helpful AI assistant for demonstrations"),              // Set description
+    llmagent.WithInstruction("Be helpful, concise, and informative in your responses"), // Set instruction
+    llmagent.WithGenerationConfig(genConfig),                                           // Set generation parameters
+
+    // Set the message filtering mode for input to the model. The final messages passed to the model must satisfy both WithMessageTimelineFilterMode and WithMessageBranchFilterMode conditions.
+    // Temporal dimension filtering condition
+    // Default: llmagent.TimelineFilterAll
+    // Options:
+    //  - llmagent.TimelineFilterAll: Includes historical messages and messages generated in the current request.
+    //  - llmagent.TimelineFilterCurrentRequest: Only includes messages generated in the current request.
+    //  - llmagent.TimelineFilterCurrentInvocation: Only includes messages generated in the current invocation context.
+    llmagent.WithMessageTimelineFilterMode(llmagent.TimelineFilterAll),
+    // Branch dimension filtering condition
+    // Default: llmagent.BranchFilterModePrefix
+    // Options:
+    //  - llmagent.BranchFilterModeAll: Includes messages from all agents. Use this when the current agent needs to sync valid content messages generated by all agents to the model during interaction.
+    //  - llmagent.BranchFilterModePrefix: Filters messages by prefix matching Event.FilterKey with Invocation.eventFilterKey. Use this when you want to pass messages generated by the current agent and related upstream/downstream agents to the model.
+    //  - llmagent.BranchFilterModeExact: Filters messages where Event.FilterKey exactly matches Invocation.eventFilterKey. Use this when the current agent only needs to use messages generated by itself during model interaction.
+    llmagent.WithMessageBranchFilterMode(llmagent.BranchFilterModeAll),
+)
+```
 
 ### Command Mode (Dynamic Routing / Fan‑out)
 
@@ -2848,6 +3228,24 @@ graphAgent, _ := graphagent.New("workflow", g,
   sg.AddToolsConditionalEdges("ask", "tools", "fallback")
   ```
 - **Execution timing**: When `AddToolsConditionalEdges` detects `tool_calls` in the LLM response, it routes to `AddToolsNode`, which executes the actual tool calls.
+
+**Q9: Messages are duplicated in req.Messages when chaining multiple LLM nodes**
+
+- **Symptom**: The same user input appears multiple times in `req.Messages`.
+- **Root cause**: When using `MessagesStateSchema()`, `MessageReducer` accumulates messages. Each LLM node execution appends a new user message if `StateKeyUserInput` is not empty. When there are loops (e.g., tool call loops) or multiple LLM nodes chained together, messages keep accumulating.
+- **Solution**: Use `RemoveAllMessages` to clear previous messages before setting a new `StateKeyUserInput`:
+  ```go
+  // In the prepare prompt node
+  func preparePromptNode(ctx context.Context, state graph.State) (any, error) {
+      userMessage := buildUserMessage(...)
+      return graph.State{
+          // Key: Clear previous messages to avoid accumulation
+          graph.StateKeyMessages:  graph.RemoveAllMessages{},
+          graph.StateKeyUserInput: userMessage,
+      }, nil
+  }
+  ```
+- **Note**: `WithSubgraphIsolatedMessages(true)` only works for `AddSubgraphNode`, not for `AddLLMNode`.
 
 ## Real‑World Example
 

@@ -465,45 +465,46 @@ func (w *customerSupportWorkflow) processStreamingResponse(eventChan <-chan *eve
 	)
 
 	for event := range eventChan {
-		// Handle errors.
-		if event.Error != nil {
-			fmt.Printf("❌ Error: %s\n", event.Error.Message)
-			continue
-		}
-
 		// Track node execution events.
-		if event.Author == graph.AuthorGraphNode {
-			// Try to extract node metadata from StateDelta.
-			if event.StateDelta != nil {
-				if nodeData, exists := event.StateDelta[graph.MetadataKeyNode]; exists {
-					var nodeMetadata graph.NodeExecutionMetadata
-					if err := json.Unmarshal(nodeData, &nodeMetadata); err == nil {
-						switch nodeMetadata.Phase {
-						case graph.ExecutionPhaseStart:
-							fmt.Printf("\n🚀 Entering node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
+		if event.StateDelta != nil {
+			if nodeData, exists := event.StateDelta[graph.MetadataKeyNode]; exists {
+				var nodeMetadata graph.NodeExecutionMetadata
+				if err := json.Unmarshal(nodeData, &nodeMetadata); err == nil {
+					switch nodeMetadata.Phase {
+					case graph.ExecutionPhaseStart:
+						fmt.Printf("\n🚀 Entering node: %s (%s)\n",
+							nodeMetadata.NodeID, nodeMetadata.NodeType)
 
-							// Add model information for LLM nodes.
-							if nodeMetadata.NodeType == graph.NodeTypeLLM {
-								fmt.Printf("   🤖 Using model: %s\n", w.modelName)
+						if nodeMetadata.NodeType == graph.NodeTypeLLM {
+							fmt.Printf("   🤖 Using model: %s\n", w.modelName)
 
-								// Display model input if available.
-								if nodeMetadata.ModelInput != "" {
-									fmt.Printf("   📝 Model Input: %s\n", truncateString(nodeMetadata.ModelInput, 100))
-								}
+							if nodeMetadata.ModelInput != "" {
+								fmt.Printf("   📝 Model Input: %s\n",
+									truncateString(nodeMetadata.ModelInput,
+										100))
 							}
-
-							// Add agent information for agent nodes.
-							if nodeMetadata.NodeType == graph.NodeTypeAgent {
-								fmt.Printf("   🤖 Executing A2A agent: %s\n", nodeMetadata.NodeID)
-							}
-						case graph.ExecutionPhaseComplete:
-							fmt.Printf("✅ Completed node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
-						case graph.ExecutionPhaseError:
-							fmt.Printf("❌ Error in node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
 						}
+
+						if nodeMetadata.NodeType == graph.NodeTypeAgent {
+							fmt.Printf("   🤖 Executing A2A agent: %s\n",
+								nodeMetadata.NodeID)
+						}
+					case graph.ExecutionPhaseComplete:
+						fmt.Printf("✅ Completed node: %s (%s)\n",
+							nodeMetadata.NodeID, nodeMetadata.NodeType)
+					case graph.ExecutionPhaseError:
+						fmt.Printf("❌ Error in node: %s (%s)\n",
+							nodeMetadata.NodeID, nodeMetadata.NodeType)
 					}
 				}
 			}
+		}
+
+		// Handle errors after metadata so node-level error
+		// metadata remains visible.
+		if event.Error != nil {
+			fmt.Printf("❌ Error: %s\n", event.Error.Message)
+			continue
 		}
 
 		// Process streaming content from LLM nodes and A2A agents.

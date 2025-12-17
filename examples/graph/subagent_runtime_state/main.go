@@ -344,12 +344,6 @@ func streamEvents(ch <-chan *event.Event) error {
 		if e == nil {
 			continue
 		}
-		// Errors
-		if e.Error != nil {
-			fmt.Printf("❌ %s\n", e.Error.Message)
-			continue
-		}
-
 		// Print minimal execution metadata from StateDelta (model/tool phases)
 		if e.StateDelta != nil {
 			if md, ok := e.StateDelta[graph.MetadataKeyModel]; ok && len(md) > 0 {
@@ -384,6 +378,12 @@ func streamEvents(ch <-chan *event.Event) error {
 					}
 				}
 			}
+		}
+
+		// Errors
+		if e.Error != nil {
+			fmt.Printf("❌ %s\n", e.Error.Message)
+			continue
 		}
 
 		// Fallback: sub-agent tool.response without graph metadata

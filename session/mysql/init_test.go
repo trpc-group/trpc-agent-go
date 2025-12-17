@@ -123,9 +123,6 @@ func TestInitDB_WithTablePrefix(t *testing.T) {
 	s := &Service{
 		opts:                  serviceOpts,
 		mysqlClient:           &mockMySQLClient{db: db},
-		sessionTTL:            serviceOpts.sessionTTL,
-		appStateTTL:           serviceOpts.appStateTTL,
-		userStateTTL:          serviceOpts.userStateTTL,
 		tableSessionStates:    "trpc_session_states",
 		tableSessionEvents:    "trpc_session_events",
 		tableSessionTracks:    "trpc_session_track_events",

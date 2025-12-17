@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
@@ -38,6 +39,7 @@ type ServiceOpts struct {
 	sessionEventLimit int
 
 	// PostgreSQL connection settings
+	dsn      string
 	host     string
 	port     int
 	user     string
@@ -72,10 +74,24 @@ type ServiceOpts struct {
 	// schema is the PostgreSQL schema name where tables are created.
 	// Default is empty string (uses default schema, typically "public").
 	schema string
+	// hooks for session operations.
+	appendEventHooks []session.AppendEventHook
+	getSessionHooks  []session.GetSessionHook
 }
 
 // ServiceOpt is the option for the postgres session service.
 type ServiceOpt func(*ServiceOpts)
+
+// WithPostgresClientDSN sets the PostgreSQL DSN connection string directly (recommended).
+// Example: "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+//
+// Note: WithPostgresClientDSN has the highest priority.
+// If DSN is specified, other connection settings (WithHost, WithPort, etc.) will be ignored.
+func WithPostgresClientDSN(dsn string) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.dsn = dsn
+	}
+}
 
 var (
 	defaultOptions = ServiceOpts{
@@ -312,5 +328,19 @@ func WithSchema(schema string) ServiceOpt {
 			sqldb.MustValidateTableName(schema)
 		}
 		opts.schema = schema
+	}
+}
+
+// WithAppendEventHook adds AppendEvent hooks.
+func WithAppendEventHook(hooks ...session.AppendEventHook) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.appendEventHooks = append(opts.appendEventHooks, hooks...)
+	}
+}
+
+// WithGetSessionHook adds GetSession hooks.
+func WithGetSessionHook(hooks ...session.GetSessionHook) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.getSessionHooks = append(opts.getSessionHooks, hooks...)
 	}
 }

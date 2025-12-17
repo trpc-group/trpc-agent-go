@@ -55,10 +55,14 @@ func TestCodeExecutionResponseProcessor_EmitsCodeAndResultEvents(t *testing.T) {
 		evts = append(evts, <-ch)
 	}
 	if assert.Len(t, evts, 2) {
+		// Both events have the same Object type (code execution)
 		assert.Equal(t, model.ObjectTypePostprocessingCodeExecution,
 			evts[0].Response.Object)
 		assert.Equal(t, model.ObjectTypePostprocessingCodeExecution,
 			evts[1].Response.Object)
+		// The distinction is made via the Tag field
+		assert.Contains(t, evts[0].Tag, event.CodeExecutionTag)       // code execution event has "code" tag
+		assert.Contains(t, evts[1].Tag, event.CodeExecutionResultTag) // result event has "code_execution_result" tag
 		codeMsg := evts[0].Response.Choices[0].Message.Content
 		assert.Contains(t, codeMsg, "```bash")
 		resultMsg := evts[1].Response.Choices[0].Message.Content

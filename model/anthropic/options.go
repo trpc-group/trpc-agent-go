@@ -89,6 +89,7 @@ type options struct {
 var (
 	defaultOptions = options{
 		channelBufferSize: defaultChannelBufferSize,
+		tokenCounter:      model.NewSimpleTokenCounter(),
 		tokenTailoringConfig: &model.TokenTailoringConfig{
 			ProtocolOverheadTokens: imodel.DefaultProtocolOverheadTokens,
 			ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
@@ -213,6 +214,9 @@ func WithMaxInputTokens(limit int) Option {
 // If not provided and token limit is enabled, a SimpleTokenCounter will be used.
 func WithTokenCounter(counter model.TokenCounter) Option {
 	return func(opts *options) {
+		if counter == nil {
+			return
+		}
 		opts.tokenCounter = counter
 	}
 }
