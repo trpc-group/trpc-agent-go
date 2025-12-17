@@ -41,10 +41,10 @@
                 "description": "Brief reasoning for the decision"
               }
             },
-            "required": ["classification", "text_to_echo", "reasoning"]
+            "required": ["classification", "text_to_echo", "reasoning"],
+            "additionalProperties": false
           }
-        },
-        "temperature": 0.1
+        }
       }
     },
     {

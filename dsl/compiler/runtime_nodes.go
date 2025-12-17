@@ -246,8 +246,9 @@ func newLLMAgentNodeFuncFromConfig(
 		}
 
 		if len(structuredOutput) > 0 {
-			opts = append(opts, llmagent.WithOutputSchema(structuredOutput))
-			opts = append(opts, llmagent.WithOutputKey("output_parsed"))
+			schemaName := structuredOutputSchemaName(nodeID)
+			log.Debugf("builtin.llmagent[%s]: enable structured_output response_format=json_schema name=%q", nodeID, schemaName)
+			opts = append(opts, llmagent.WithStructuredOutputJSONSchema(schemaName, structuredOutput, true, ""))
 		}
 
 		if hasGenConfig {
@@ -291,6 +292,7 @@ func newLLMAgentNodeFuncFromConfig(
 
 		var lastResponse string
 		var messages []model.Message
+		var outputRaw string
 		var outputParsed any
 		hasOutputParsed := false
 
@@ -347,9 +349,13 @@ func newLLMAgentNodeFuncFromConfig(
 				if err := json.Unmarshal([]byte(jsonText), &parsed); err != nil {
 					log.Warnf("builtin.llmagent[%s]: failed to parse structured output JSON: %v", nodeID, err)
 				} else {
+					log.Debugf("builtin.llmagent[%s]: structured_output extracted=%s", nodeID, truncateForLog(jsonText, 240))
+					outputRaw = jsonText
 					outputParsed = parsed
 					hasOutputParsed = true
 				}
+			} else {
+				log.Debugf("builtin.llmagent[%s]: structured_output configured but no JSON found in response=%s", nodeID, truncateForLog(lastResponse, 240))
 			}
 		}
 
@@ -372,6 +378,7 @@ func newLLMAgentNodeFuncFromConfig(
 				}
 			}
 			nodeStructured[nodeID] = map[string]any{
+				"output_raw":    outputRaw,
 				"output_parsed": outputParsed,
 			}
 			result["node_structured"] = nodeStructured
@@ -381,6 +388,54 @@ func newLLMAgentNodeFuncFromConfig(
 		}
 		return result, nil
 	}, nil
+}
+
+func structuredOutputSchemaName(nodeID string) string {
+	const (
+		maxLen = 64
+		prefix = "schema_"
+	)
+
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return prefix + "output"
+	}
+
+	b := strings.Builder{}
+	b.Grow(len(prefix) + len(nodeID))
+	b.WriteString(prefix)
+
+	for i := 0; i < len(nodeID); i++ {
+		c := nodeID[i]
+		if (c >= 'a' && c <= 'z') ||
+			(c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') ||
+			c == '_' || c == '-' {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('_')
+	}
+
+	name := b.String()
+	trimmed := strings.Trim(name[len(prefix):], "_-")
+	if trimmed == "" {
+		name = prefix + "output"
+	} else {
+		name = prefix + trimmed
+	}
+	if len(name) > maxLen {
+		name = name[:maxLen]
+	}
+	return name
+}
+
+func truncateForLog(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 // newUserApprovalNodeFuncFromConfig creates a NodeFunc for a builtin.user_approval
