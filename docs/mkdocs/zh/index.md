@@ -21,11 +21,8 @@ tRPC-Agent-Go 采用模块化架构设计，由多个核心组件组成，组件
 
 以下是各个组件的架构图
 
-![组件架构图](../assets/img/component_architecture.png)
+![组件架构图](../assets/img/component_architecture.svg)
 
-下面展示一个完整的用户和 Agent 对话的完整时序图
-
-![时序图](../assets/img/timing_diagram.png)
 
 ## 3、核心特点
 

@@ -21,11 +21,8 @@ tRPC-Agent-Go adopts a modular architecture design, consisting of multiple core 
 
 Below is the architecture diagram of each component:
 
-![Component Architecture](../assets/img/component_architecture.png)
+![Component Architecture](../assets/img/component_architecture.svg)
 
-Below shows a complete timing diagram of a user and Agent conversation:
-
-![Timing Diagram](../assets/img/timing_diagram.png)
 
 ## 3. Core Features
 
