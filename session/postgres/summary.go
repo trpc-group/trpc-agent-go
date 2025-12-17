@@ -184,13 +184,8 @@ func (s *Service) startAsyncSummaryWorker() {
 				// After branch summary, cascade a full-session summary by
 				// reusing the same processing path to keep logic unified.
 				if job.filterKey != session.SummaryFilterKeyAllContents {
-					fullSessionJob := &summaryJob{
-						ctx:       job.ctx,
-						filterKey: session.SummaryFilterKeyAllContents,
-						force:     job.force,
-						session:   job.session,
-					}
-					s.processSummaryJob(fullSessionJob)
+					job.filterKey = session.SummaryFilterKeyAllContents
+					s.processSummaryJob(job)
 				}
 			}
 		}(summaryJobChan)
