@@ -574,7 +574,13 @@ kb := knowledge.New(
 
 ### Reranker
 
-Reranker is responsible for the precise ranking of search results
+> 📁 **Example Code**: [examples/knowledge/reranker](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/reranker)
+
+Reranker is responsible for the precise ranking of search results. trpc-agent-go supports multiple Reranker implementations:
+
+#### TopK (Simple Truncation)
+
+The most basic Reranker, which simply truncates the Top K results based on retrieval scores:
 
 ```go
 import (
@@ -582,13 +588,48 @@ import (
 )
 
 rerank := topk.New(
-    // Specify the number of results to be returned after precision sorting. 
-    // If not set, all results will be returned by default
-    topk.WithK(1),
+    topk.WithK(3), // Specify the number of results to return after reranking
+)
+```
+
+#### Cohere (SaaS Rerank)
+
+Uses Cohere's official API for reranking, typically providing better results than simple vector retrieval:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/cohere"
 )
 
+// Automatically reads COHERE_API_KEY from environment variable
+rerank := cohere.New(
+    cohere.WithModel("rerank-english-v3.0"), // Specify model
+    cohere.WithTopN(5),                      // Final number of results
+)
+```
+
+#### Infinity / BGE (Self-hosted Rerank Service)
+
+Connects to a self-hosted Infinity or TEI inference service (commonly used to run open-source models like BGE-Reranker):
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/infinity"
+)
+
+// Automatically reads INFINITY_URL from environment variable, defaults to http://localhost:7997/rerank
+rerank := infinity.New(
+    infinity.WithModel("bge-reranker-v2-m3"),
+    infinity.WithTopN(5),
+)
+```
+
+#### Configure to Knowledge
+
+```go
 kb := knowledge.New(
     knowledge.WithReranker(rerank),
+    // ... other configurations
 )
 ```
 

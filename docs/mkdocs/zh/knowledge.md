@@ -575,7 +575,13 @@ kb := knowledge.New(
 
 ### Reranker
 
-Reranker 负责对检索结果的精排：
+> 📁 **示例代码**: [examples/knowledge/reranker](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/reranker)
+
+Reranker 负责对检索结果的精排，trpc-agent-go 支持多种 Reranker 实现：
+
+#### TopK (简单截断)
+
+最基础的 Reranker，仅根据检索分数截取 Top K 结果：
 
 ```go
 import (
@@ -583,12 +589,48 @@ import (
 )
 
 rerank := topk.New(
-    topk.WithK(1), // 指定精排后的返回结果数，不设置的情况下默认返回所有结果
+    topk.WithK(3), // 指定精排后的返回结果数
+)
+```
+
+#### Cohere (SaaS Rerank)
+
+使用 Cohere 官方 API 进行重排序，效果通常优于简单的向量检索：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/cohere"
 )
 
-// 传递给 Knowledge
+// 自动读取环境变量 COHERE_API_KEY
+rerank := cohere.New(
+    cohere.WithModel("rerank-english-v3.0"), // 指定模型
+    cohere.WithTopN(5),                      // 最终返回数
+)
+```
+
+#### Infinity / BGE (自建 Rerank 服务)
+
+连接到自建的 Infinity 或 TEI 推理服务（常用于运行 BGE-Reranker 等开源模型）：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/infinity"
+)
+
+// 自动读取环境变量 INFINITY_URL，默认为 http://localhost:7997/rerank
+rerank := infinity.New(
+    infinity.WithModel("bge-reranker-v2-m3"),
+    infinity.WithTopN(5),
+)
+```
+
+#### 配置到 Knowledge
+
+```go
 kb := knowledge.New(
     knowledge.WithReranker(rerank),
+    // ... 其他配置
 )
 ```
 
