@@ -86,7 +86,10 @@ func (a *ChainAgent) executeChainRun(
 ) {
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
 	itelemetry.TraceBeforeInvokeAgent(span, invocation, "chain-agent", "", nil)
+	var trackerErr error
+	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, false, &trackerErr)
 	defer func() {
+		tracker.RecordMetrics()()
 		span.End()
 	}()
 	// Setup invocation.
@@ -100,7 +103,11 @@ func (a *ChainAgent) executeChainRun(
 	}
 
 	// Execute sub-agents in sequence.
-	e, tokenUsage := a.executeSubAgents(ctx, invocation, eventChan)
+	e, tokenUsage := a.executeSubAgents(ctx, invocation, eventChan, tracker)
+	if e != nil && e.Error != nil {
+		trackerErr = fmt.Errorf("%s: %s", e.Error.Type, e.Error.Message)
+		tracker.SetResponseErrorType(e.Error.Type)
+	}
 	// Handle after agent callbacks.
 	if a.agentCallbacks != nil {
 		e = a.handleAfterAgentCallbacks(ctx, invocation, eventChan, e)
@@ -160,6 +167,7 @@ func (a *ChainAgent) executeSubAgents(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+	tracker *itelemetry.InvokeAgentTracker,
 ) (*event.Event, *itelemetry.TokenUsage) {
 	tokenUsage := &itelemetry.TokenUsage{}
 	var fullRespEvent *event.Event
@@ -187,6 +195,7 @@ func (a *ChainAgent) executeSubAgents(
 		// Forward all events from the sub-agent.
 		for subEvent := range subEventChan {
 			if subEvent != nil && subEvent.Response != nil {
+				tracker.TrackResponse(subEvent.Response)
 				if subEvent.Response.Usage != nil && !subEvent.Response.IsPartial {
 					tokenUsage.PromptTokens += subEvent.Response.Usage.PromptTokens
 					tokenUsage.CompletionTokens += subEvent.Response.Usage.CompletionTokens
