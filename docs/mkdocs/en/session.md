@@ -27,7 +27,7 @@ Within the same conversation, it allows for seamless transitions between multipl
 
 tRPC-Agent-Go's session management integrates with Runner through `runner.WithSessionService`. Runner automatically handles session creation, loading, updates, and persistence.
 
-**Supported Storage Backends:** Memory, Redis, PostgreSQL, MySQL
+**Supported Storage Backends:** Memory, Redis, PostgreSQL, MySQL, ClickHouse
 
 **Default Behavior:** If `runner.WithSessionService` is not configured, Runner defaults to using memory storage (Memory), and data will be lost after process restarts.
 
@@ -346,6 +346,7 @@ tRPC-Agent-Go provides four session storage backends to meet different scenario 
 | Redis        | Production, distributed          | High performance, distributed support, auto-expiration | Requires Redis service                      |
 | PostgreSQL   | Production, complex queries      | Relational database, supports complex queries, JSONB   | Relatively heavy, requires database         |
 | MySQL        | Production, complex queries      | Widely used, supports complex queries, JSON            | Relatively heavy, requires database         |
+| ClickHouse   | Production, massive logs         | Extremely high write throughput, suitable for massive event analysis | High update cost, relies on FINAL |
 
 ## Memory Storage
 
@@ -1080,6 +1081,197 @@ CREATE TABLE user_states (
 - MySQL uses `JSON` type instead of `JSONB` (similar functionality, different storage format)
 - MySQL uses `ON DUPLICATE KEY UPDATE` syntax for UPSERT
 
+## ClickHouse Storage
+
+Suitable for production environments and massive data scenarios, leveraging ClickHouse's powerful write throughput and data compression capabilities.
+
+### Configuration Options
+
+**Connection Configuration:**
+
+- **`WithClickHouseDSN(dsn string)`**: ClickHouse DSN connection string (recommended).
+  - Format: `clickhouse://user:password@host:port/database?dial_timeout=10s`
+- **`WithClickHouseInstance(name string)`**: Use pre-configured ClickHouse instance.
+- **`WithExtraOptions(opts ...any)`**: Set extra options for ClickHouse client.
+
+**Session Configuration:**
+
+- **`WithSessionEventLimit(limit int)`**: Maximum events per session. Default is 1000.
+- **`WithSessionTTL(ttl time.Duration)`**: Session TTL. Default is 0 (no expiration).
+- **`WithAppStateTTL(ttl time.Duration)`**: App state TTL. Default is 0 (no expiration).
+- **`WithUserStateTTL(ttl time.Duration)`**: User state TTL. Default is 0 (no expiration).
+- **`WithDeletedRetention(retention time.Duration)`**: Retention period for soft-deleted data. Default is 0 (disable application-level physical cleanup). When enabled, it will periodically clean up soft-deleted data via `ALTER TABLE DELETE`. **Not recommended** for production environments; prefer ClickHouse table-level TTL.
+- **`WithCleanupInterval(interval time.Duration)`**: Cleanup task interval.
+
+**Async Persistence Configuration:**
+
+- **`WithEnableAsyncPersist(enable bool)`**: Enable async persistence. Default is `false`.
+- **`WithAsyncPersisterNum(num int)`**: Number of async persistence workers. Default is 10.
+- **`WithBatchSize(size int)`**: Batch write size. Default is 100.
+- **`WithBatchTimeout(timeout time.Duration)`**: Batch write timeout. Default is 100ms.
+
+**Summary Configuration:**
+
+- **`WithSummarizer(s summary.SessionSummarizer)`**: Inject session summarizer.
+- **`WithAsyncSummaryNum(num int)`**: Number of summary processing workers. Default is 3.
+- **`WithSummaryQueueSize(size int)`**: Summary task queue size. Default is 100.
+- **`WithSummaryJobTimeout(timeout time.Duration)`**: Timeout for single summary task.
+
+**Schema Configuration:**
+
+- **`WithTablePrefix(prefix string)`**: Table name prefix.
+- **`WithSkipDBInit(skip bool)`**: Skip automatic table creation.
+
+**Hook Configuration:**
+
+- **`WithAppendEventHook(hooks ...session.AppendEventHook)`**: Add hooks for event appending.
+- **`WithGetSessionHook(hooks ...session.GetSessionHook)`**: Add hooks for session retrieval.
+
+### Basic Configuration Example
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
+
+// Default configuration (minimal)
+sessionService, err := clickhouse.NewService(
+    clickhouse.WithClickHouseDSN("clickhouse://default:password@localhost:9000/default"),
+)
+
+// Complete configuration example
+sessionService, err := clickhouse.NewService(
+    clickhouse.WithClickHouseDSN("clickhouse://user:pass@ch-host:9000/sessions?dial_timeout=5s"),
+
+    // Session configuration
+    clickhouse.WithSessionEventLimit(2000),
+    clickhouse.WithSessionTTL(7*24*time.Hour), // Expires in 7 days
+
+    // Enable async persistence (recommended)
+    clickhouse.WithEnableAsyncPersist(true),
+    clickhouse.WithAsyncPersisterNum(20),
+    clickhouse.WithBatchSize(500),
+
+    // Automatic cleanup
+    clickhouse.WithCleanupInterval(1*time.Hour),
+)
+```
+
+### Configuration Reuse
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
+    sessionch "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
+)
+
+// Register ClickHouse instance
+clickhouse.RegisterClickHouseInstance("my-clickhouse",
+    clickhouse.WithClientBuilderDSN("clickhouse://localhost:9000/default"),
+)
+
+// Use in session service
+sessionService, err := sessionch.NewService(
+    sessionch.WithClickHouseInstance("my-clickhouse"),
+)
+```
+
+### Storage Structure
+
+ClickHouse implementation uses `ReplacingMergeTree` engine to handle data updates and deduplication.
+
+**Key Features:**
+
+1.  **ReplacingMergeTree**: Uses `updated_at` column as version for background deduplication, keeping the latest version.
+2.  **FINAL Query**: All read operations use `FINAL` keyword (e.g., `SELECT ... FINAL`) to ensure data consistency by merging parts at query time.
+3.  **Soft Delete**: Deletion is implemented by inserting a new record with `deleted_at` timestamp. Queries filter with `deleted_at IS NULL`.
+
+```sql
+-- Session states table
+CREATE TABLE IF NOT EXISTS session_states (
+    app_name    String,
+    user_id     String,
+    session_id  String,
+    state       JSON COMMENT 'Session state in JSON format',
+    extra_data  JSON COMMENT 'Additional metadata',
+    created_at  DateTime64(6),
+    updated_at  DateTime64(6),
+    expires_at  Nullable(DateTime64(6)) COMMENT 'Expiration time (application-level)',
+    deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+-- CRITICAL: Removed deleted_at from ORDER BY to allow ReplacingMergeTree to collapse deleted records
+ORDER BY (app_name, user_id, session_id)
+SETTINGS allow_nullable_key = 1
+COMMENT 'Session states table';
+
+-- Session events table
+CREATE TABLE IF NOT EXISTS session_events (
+    app_name    String,
+    user_id     String,
+    session_id  String,
+    event_id    String,
+    event       JSON COMMENT 'Event data in JSON format',
+    extra_data  JSON COMMENT 'Additional metadata',
+    created_at  DateTime64(6),
+    updated_at  DateTime64(6),
+    expires_at  Nullable(DateTime64(6)) COMMENT 'Reserved for future use',
+    deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+-- CRITICAL: Removed deleted_at from ORDER BY to allow ReplacingMergeTree to collapse deleted records
+ORDER BY (app_name, user_id, session_id, event_id)
+SETTINGS allow_nullable_key = 1
+COMMENT 'Session events table';
+
+-- Session summaries table
+CREATE TABLE IF NOT EXISTS session_summaries (
+    app_name    String,
+    user_id     String,
+    session_id  String,
+    filter_key  String COMMENT 'Filter key for multiple summaries per session',
+    summary     JSON COMMENT 'Summary data in JSON format',
+    created_at  DateTime64(6),
+    updated_at  DateTime64(6),
+    expires_at  Nullable(DateTime64(6)) COMMENT 'Reserved for future use',
+    deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+-- CRITICAL: Removed deleted_at from ORDER BY to allow ReplacingMergeTree to collapse deleted records
+ORDER BY (app_name, user_id, session_id, filter_key)
+SETTINGS allow_nullable_key = 1
+COMMENT 'Session summaries table';
+
+-- Application states table
+CREATE TABLE IF NOT EXISTS app_states (
+    app_name    String,
+    key         String COMMENT 'State key',
+    value       String COMMENT 'State value',
+    updated_at  DateTime64(6),
+    expires_at  Nullable(DateTime64(6)) COMMENT 'Expiration time (application-level)',
+    deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY app_name
+-- CRITICAL: Removed deleted_at from ORDER BY to allow ReplacingMergeTree to collapse deleted records
+ORDER BY (app_name, key)
+SETTINGS allow_nullable_key = 1
+COMMENT 'Application states table';
+
+-- User states table
+CREATE TABLE IF NOT EXISTS user_states (
+    app_name    String,
+    user_id     String,
+    key         String COMMENT 'State key',
+    value       String COMMENT 'State value',
+    updated_at  DateTime64(6),
+    expires_at  Nullable(DateTime64(6)) COMMENT 'Expiration time (application-level)',
+    deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+-- CRITICAL: Removed deleted_at from ORDER BY to allow ReplacingMergeTree to collapse deleted records
+ORDER BY (app_name, user_id, key)
+SETTINGS allow_nullable_key = 1
+COMMENT 'User states table';
+```
+
 ## Advanced Usage
 
 ### Hook Capabilities (Append/Get)
@@ -1189,6 +1381,7 @@ import (
     "time"
     "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
     "trpc.group/trpc-go/trpc-agent-go/session/redis"
+    "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
 )
 
 // Option 1: In-memory session service with summarizer.
@@ -1205,6 +1398,13 @@ sessionService, err := redis.NewService(
     redis.WithSummarizer(summarizer),
     redis.WithAsyncSummaryNum(4),           // 4 async workers.
     redis.WithSummaryQueueSize(200),        // Queue size 200.
+)
+
+// Option 3: ClickHouse session service with summarizer.
+sessionService, err := clickhouse.NewService(
+    clickhouse.WithClickHouseDSN("clickhouse://default:password@localhost:9000/default"),
+    clickhouse.WithSummarizer(summarizer),
+    clickhouse.WithAsyncSummaryNum(2),
 )
 ```
 
