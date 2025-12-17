@@ -90,7 +90,7 @@ func printSummary(result *evaluation.EvaluationResult, outDir string) {
 				metricResult.MetricName,
 				metricResult.Score,
 				metricResult.Threshold,
-				metricResult.EvalStatus.String(),
+				metricResult.EvalStatus,
 			)
 		}
 		fmt.Println()

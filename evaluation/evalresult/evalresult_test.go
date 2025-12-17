@@ -27,12 +27,12 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
     {
       "evalSetId": "greeting-set",
       "evalId": "case-1",
-      "finalEvalStatus": 1,
+      "finalEvalStatus": "passed",
       "overallEvalMetricResults": [
         {
           "metricName": "tool_trajectory_avg_score",
           "score": 0.9,
-          "evalStatus": 1,
+          "evalStatus": "passed",
           "threshold": 0.8,
           "details": {
             "reason": "trajectory matched"
@@ -58,8 +58,25 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
                   "type": "function",
                   "function": {
                     "name": "calculator",
-                    "arguments": "{\"operation\":\"add\",\"a\":1,\"b\":2}"
+                    "arguments": {
+                      "operation": "add",
+                      "a": 1,
+                      "b": 2
+                    }
                   }
+                }
+              ],
+              "toolResponses": [
+                {
+                  "content": {
+                    "a": 1,
+                    "b": 2,
+                    "operation": "add",
+                    "result": 3
+                  },
+                  "role": "tool",
+                  "toolId": "tool-call-1",
+                  "toolName": "calculator"
                 }
               ],
               "intermediateResponses": [
@@ -88,8 +105,25 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
                   "type": "function",
                   "function": {
                     "name": "calculator",
-                    "arguments": "{\"operation\":\"add\",\"a\":1,\"b\":2}"
+                    "arguments": {
+                      "operation": "add",
+                      "a": 1,
+                      "b": 2
+                    }
                   }
+                }
+              ],
+              "toolResponses": [
+                {
+                  "content": {
+                    "a": 1,
+                    "b": 2,
+                    "operation": "add",
+                    "result": 3
+                  },
+                  "role": "tool",
+                  "toolId": "tool-call-1",
+                  "toolName": "calculator"
                 }
               ],
               "intermediateResponses": [
@@ -105,7 +139,7 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
             {
               "metricName": "tool_trajectory_avg_score",
               "score": 0.9,
-              "evalStatus": 1,
+              "evalStatus": "passed",
               "threshold": 0.8,
               "details": {
                 "reason": "per invocation matched"
