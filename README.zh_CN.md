@@ -121,7 +121,6 @@ runner := runner.NewRunner("app", agent,
   - [Knowledge](#6-knowledge)
   - [Telemetry 与 Tracing](#7-telemetry-与-tracing)
   - [MCP 集成](#8-mcp-集成)
-  - [调试 Web Demo](#9-调试-web-demo)
 - [架构概览](#架构概览)
 - [使用内置 Agents](#使用内置-agents)
 - [未来增强](#未来增强)
@@ -337,12 +336,6 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 - 围绕 **trpc-mcp-go** 的封装工具，这是 **Model Context Protocol (MCP)** 的一个实现。
 - 提供遵循 MCP 规范的 structured prompts、tool 调用、resource 与 session 消息。
 - 使 agent 与 LLM 之间能够进行动态工具执行与上下文丰富的交互。
-
-### 9. 调试 Web Demo（[examples/debugserver](examples/debugserver)）
-
-- 启动一个 **debug Server**，提供与 ADK 兼容的 HTTP endpoint。
-- 前端：[google/adk-web](https://github.com/google/adk-web) 通过 `/run_sse` 连接，并实时流式展示 agent 的响应。
-- 是搭建你自定义聊天 UI 的优秀起点。
 
 其他值得关注的示例：
 
