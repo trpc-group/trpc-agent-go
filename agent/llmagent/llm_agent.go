@@ -404,6 +404,8 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
 	itelemetry.TraceBeforeInvokeAgent(span, invocation, a.description, a.systemPrompt+a.instruction, &a.genConfig)
+	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, a.genConfig.Stream, &err)
+	defer tracker.RecordMetrics()()
 
 	ctx, flowEventChan, err := a.executeAgentFlow(ctx, invocation)
 	if err != nil {
@@ -420,7 +422,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 		return nil, err
 	}
 
-	return a.wrapEventChannel(ctx, invocation, flowEventChan, span), nil
+	return a.wrapEventChannelWithTelemetry(ctx, invocation, flowEventChan, span, tracker), nil
 }
 
 // executeAgentFlow executes the agent flow with before agent callbacks.
@@ -508,11 +510,12 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 }
 
 // wrapEventChannel wraps the event channel to apply after agent callbacks.
-func (a *LLMAgent) wrapEventChannel(
+func (a *LLMAgent) wrapEventChannelWithTelemetry(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	originalChan <-chan *event.Event,
 	span sdktrace.Span,
+	tracker *itelemetry.InvokeAgentTracker,
 ) <-chan *event.Event {
 	// Create a new channel with the same capacity as the original channel
 	wrappedChan := make(chan *event.Event, cap(originalChan))
@@ -520,11 +523,13 @@ func (a *LLMAgent) wrapEventChannel(
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
+		var responseErrorType string
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
 			if fullRespEvent != nil {
 				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage)
 			}
+			tracker.SetResponseErrorType(responseErrorType)
 			span.End()
 			close(wrappedChan)
 		}()
@@ -532,6 +537,7 @@ func (a *LLMAgent) wrapEventChannel(
 		// Forward all events from the original channel
 		for evt := range originalChan {
 			if evt != nil && evt.Response != nil {
+				tracker.TrackResponse(evt.Response)
 				if !evt.Response.IsPartial {
 					if evt.Response.Usage != nil {
 						tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
@@ -550,6 +556,7 @@ func (a *LLMAgent) wrapEventChannel(
 		// Collect error from the final response event.
 		var agentErr error
 		if fullRespEvent != nil && fullRespEvent.Response != nil && fullRespEvent.Response.Error != nil {
+			responseErrorType = fullRespEvent.Response.Error.Type
 			agentErr = fmt.Errorf("%s: %s", fullRespEvent.Response.Error.Type, fullRespEvent.Response.Error.Message)
 		}
 
@@ -573,6 +580,7 @@ func (a *LLMAgent) wrapEventChannel(
 					agent.ErrorTypeAgentCallbackError,
 					err.Error(),
 				)
+				responseErrorType = agent.ErrorTypeAgentCallbackError
 			} else if result != nil && result.CustomResponse != nil {
 				// Create an event from the custom response.
 				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)

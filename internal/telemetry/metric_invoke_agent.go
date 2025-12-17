@@ -8,7 +8,6 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
@@ -81,11 +80,12 @@ type InvokeAgentTracker struct {
 	firstCompleteToken     int
 	totalCompletionTokens  int
 	totalPromptTokens      int
-	lastEvent              *event.Event
 
 	invocation *agent.Invocation
-	stream     bool   // indicates whether the request is streaming
-	err        *error // pointer to capture final error
+	stream     bool // indicates whether the request is streaming
+
+	err               *error // pointer to capture final error
+	responseErrorType string
 }
 
 // NewInvokeAgentTracker creates a new telemetry tracker for agent invocation.
@@ -122,15 +122,15 @@ func (t *InvokeAgentTracker) TrackResponse(response *model.Response) {
 	}
 
 	// Track token usage
-	if response.Usage != nil {
-		t.totalPromptTokens = response.Usage.PromptTokens
-		t.totalCompletionTokens = response.Usage.CompletionTokens
+	if !response.IsPartial && response.Usage != nil {
+		t.totalPromptTokens += response.Usage.PromptTokens
+		t.totalCompletionTokens += response.Usage.CompletionTokens
 	}
 }
 
-// SetLastEvent updates the last event seen (for extracting error info).
-func (t *InvokeAgentTracker) SetLastEvent(evt *event.Event) {
-	t.lastEvent = evt
+// SetResponseError updates the response error seen (for extracting error info).
+func (t *InvokeAgentTracker) SetResponseErrorType(errorType string) {
+	t.responseErrorType = errorType
 }
 
 // RecordMetrics returns a defer function that records all telemetry metrics.
@@ -172,6 +172,9 @@ func (t *InvokeAgentTracker) buildAttributes() invokeAgentAttributes {
 	if t.err != nil && *t.err != nil {
 		attrs.Error = *t.err
 	}
+	if t.responseErrorType != "" {
+		attrs.ErrorType = t.responseErrorType
+	}
 
 	// Extract request attributes
 	attrs.Stream = t.stream
@@ -188,11 +191,6 @@ func (t *InvokeAgentTracker) buildAttributes() invokeAgentAttributes {
 			attrs.UserID = t.invocation.Session.UserID
 			attrs.AppName = t.invocation.Session.AppName
 		}
-	}
-
-	// Extract response attributes from last event
-	if t.lastEvent != nil && t.lastEvent.Error != nil {
-		attrs.ErrorType = t.lastEvent.Error.Type
 	}
 
 	return attrs
