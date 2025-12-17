@@ -253,6 +253,20 @@ func (r *runner) Run(
 	// Run the agent and get the event channel.
 	agentEventCh, err := ag.Run(ctx, invocation)
 	if err != nil {
+		// Attempt to persist the error event so the session reflects the failure.
+		errorEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			r.agent.Info().Name,
+			"agent_run_error",
+			err.Error(),
+		)
+		// Populate content to ensure it is valid for persistence (and viewable by users).
+		ensureErrorEventContent(errorEvent)
+
+		if appendErr := r.sessionService.AppendEvent(ctx, sess, errorEvent); appendErr != nil {
+			log.Errorf("failed to append agent run error event: %v", appendErr)
+		}
+
 		invocation.CleanupNotice(ctx)
 		return nil, err
 	}

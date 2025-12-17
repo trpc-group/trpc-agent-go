@@ -211,7 +211,7 @@ func TestRunner_StreamingSuccessThenError(t *testing.T) {
 	assert.Equal(t, "mixed-agent", errorEvent.Author)
 	assert.Equal(t, model.ObjectTypeError, errorEvent.Response.Object)
 
-	// Crucial assertion: Error event should have populated content
+	// Crucial assertion: Runner should have populated Choices and Content.
 	require.NotEmpty(t, errorEvent.Response.Choices)
 	assert.Equal(t, "An error occurred during execution. Please check the error details.", errorEvent.Response.Choices[0].Message.Content)
 	assert.Equal(t, "error", *errorEvent.Response.Choices[0].FinishReason)
