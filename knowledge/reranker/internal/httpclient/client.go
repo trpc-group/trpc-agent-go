@@ -7,6 +7,7 @@
 //
 //
 
+// Package httpclient provides a common HTTP client for Reranker implementations.
 package httpclient
 
 import (

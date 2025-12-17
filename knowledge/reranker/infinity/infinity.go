@@ -7,6 +7,7 @@
 //
 //
 
+// Package infinity provides a Reranker implementation compatible with Infinity.
 package infinity
 
 import (
