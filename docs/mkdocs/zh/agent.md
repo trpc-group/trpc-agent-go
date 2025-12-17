@@ -239,6 +239,41 @@ llmAgent := llmagent.New(
 )
 ```
 
+### 推理内容模式（DeepSeek 思考模式）
+
+当使用具有思考/推理能力的模型（如 DeepSeek）时，模型会同时输出 `reasoning_content`（思维链）和 `content`（最终回答）。根据 [DeepSeek API 文档](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode)，在多轮对话中，不应将上一轮的 `reasoning_content` 发送给模型。
+
+LLMAgent 提供 `WithReasoningContentMode` 来控制对话历史中 `reasoning_content` 的处理方式：
+
+**可用模式：**
+
+| 模式 | 常量 | 描述 |
+|------|------|------|
+| 丢弃之前轮次 | `ReasoningContentModeDiscardPreviousTurns` | 丢弃之前请求轮次的 `reasoning_content`，保留当前请求的。**（默认，推荐）** |
+| 保留全部 | `ReasoningContentModeKeepAll` | 保留历史中的所有 `reasoning_content`（用于调试）。 |
+| 全部丢弃 | `ReasoningContentModeDiscardAll` | 丢弃历史中的所有 `reasoning_content`，以最大化节省带宽。 |
+
+**使用示例：**
+
+```go
+// DeepSeek 思考模式的推荐配置。
+agent := llmagent.New(
+    "deepseek-agent",
+    llmagent.WithModel(deepseekModel),
+    llmagent.WithInstruction("You are a helpful assistant."),
+    // 丢弃之前轮次的 reasoning_content（推荐用于 DeepSeek）。
+    llmagent.WithReasoningContentMode(llmagent.ReasoningContentModeDiscardPreviousTurns),
+)
+```
+
+**工作原理：**
+
+- **`keep_all`**：所有 `reasoning_content` 都保留在会话历史中。如果需要保留思维链用于调试或分析，请使用此模式。
+- **`discard_previous_turns`**：在构建新请求的消息列表时，属于之前请求的消息的 `reasoning_content` 会被清除。当前请求内的消息（例如在工具调用循环期间）保留其 `reasoning_content`。这遵循 DeepSeek 的建议。
+- **`discard_all`**：在发送给模型之前，所有历史消息的 `reasoning_content` 都会被清除。
+
+**注意：** 此选项仅影响发送给模型之前对历史消息的处理方式。当前响应的 `reasoning_content` 始终会被捕获并存储在会话事件中。
+
 ### 委托可见性选项
 
 在构建多 Agent（智能体）系统（Agent 之间的任务委托）时，LLMAgent 提供“默认占位消息”的统一配置。转移（transfer）事件始终包含提示文本，并统一打上 `transfer` 标签，前端（UI, User Interface）可按标签过滤。
