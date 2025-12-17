@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
 )
 
 type mockSummarizer struct {
@@ -50,6 +51,11 @@ func (m *mockSummarizer) Metadata() map[string]any {
 }
 
 func TestService_AsyncSummary(t *testing.T) {
+	// Register mock client
+	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockClient{}, nil
+	})
+
 	mockCli := &mockClient{}
 	mockSum := &mockSummarizer{}
 
@@ -106,6 +112,11 @@ func TestService_AsyncSummary(t *testing.T) {
 }
 
 func TestService_CreateSessionSummary_Error(t *testing.T) {
+	// Register mock client
+	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockClient{}, nil
+	})
+
 	mockCli := &mockClient{}
 	mockSum := &mockSummarizer{}
 	s, err := NewService(WithSummarizer(mockSum), WithSkipDBInit(true), WithClickHouseDSN("clickhouse://localhost:9000"))

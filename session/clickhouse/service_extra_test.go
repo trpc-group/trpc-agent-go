@@ -115,6 +115,11 @@ func TestService_MergeState(t *testing.T) {
 }
 
 func TestService_EnqueueSummaryJob_Validation(t *testing.T) {
+	// Register mock client to avoid real connection attempt
+	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockClient{}, nil
+	})
+
 	mockSum := &mockSummarizer{}
 	s, err := NewService(WithSummarizer(mockSum), WithSkipDBInit(true), WithClickHouseDSN("clickhouse://localhost:9000"))
 	assert.NoError(t, err)
@@ -132,6 +137,11 @@ func TestService_EnqueueSummaryJob_Validation(t *testing.T) {
 }
 
 func TestService_TryEnqueueJob_Full(t *testing.T) {
+	// Register mock client
+	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockClient{}, nil
+	})
+
 	mockSum := &mockSummarizer{}
 	s, err := NewService(
 		WithSummarizer(mockSum),
@@ -152,6 +162,11 @@ func TestService_TryEnqueueJob_Full(t *testing.T) {
 }
 
 func TestService_TryEnqueueJob_Closed(t *testing.T) {
+	// Register mock client
+	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockClient{}, nil
+	})
+
 	mockSum := &mockSummarizer{}
 	s, err := NewService(
 		WithSummarizer(mockSum),
@@ -322,6 +337,11 @@ func TestService_DeleteAppState_Error(t *testing.T) {
 }
 
 func TestService_Hooks(t *testing.T) {
+	// Register mock client
+	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockClient{}, nil
+	})
+
 	appendCalled := false
 	getCalled := false
 
