@@ -27,7 +27,6 @@ nav:
       - Event: event.md
       - Evaluation: evaluation.md
   - Server:
-    - Debug: debugserver.md
     - AG-UI: agui.md
     - A2A: a2a.md
   - Observability: observability.md
@@ -68,7 +67,6 @@ plugins:
                 - Event: event.md
                 - Evaluation: evaluation.md
             - 服务:
-              - 调试: debugserver.md
               - AG-UI: agui.md
               - A2A: a2a.md
             - 可观测: observability.md

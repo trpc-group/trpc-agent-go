@@ -399,6 +399,7 @@ Example: [examples/mcptool](examples/mcptool)
 - Enables dynamic tool execution and context-rich interactions between agents
   and LLMs.
 
+<<<<<<< HEAD
 ### 9. AG-UI Demo
 
 Example: [examples/agui](examples/agui)
@@ -437,6 +438,8 @@ Example: [examples/a2aadk](examples/a2aadk)
 - Agent-to-Agent (A2A) interop with an ADK Python A2A server.
 - Demonstrates streaming, tool calls, and code execution across runtimes.
 
+=======
+>>>>>>> main
 Other notable examples:
 
 - [examples/humaninloop](examples/humaninloop) – Human in the loop.
