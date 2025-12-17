@@ -472,7 +472,7 @@ func (r *runner) handleEventPersistence(
 	// Use EnqueueSummaryJob for true asynchronous processing.
 	// Prefer filter-specific summarization to avoid scanning all filters.
 	if err := r.sessionService.EnqueueSummaryJob(
-		context.Background(), sess, agentEvent.FilterKey, false,
+		ctx, sess, agentEvent.FilterKey, false,
 	); err != nil {
 		log.Debugf("Auto summarize after append skipped or failed: %v.", err)
 	}
