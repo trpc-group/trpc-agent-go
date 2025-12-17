@@ -128,7 +128,7 @@ func (t *InvokeAgentTracker) TrackResponse(response *model.Response) {
 	}
 }
 
-// SetResponseError updates the response error seen (for extracting error info).
+// SetResponseErrorType updates the response error type seen (for extracting error info).
 func (t *InvokeAgentTracker) SetResponseErrorType(errorType string) {
 	t.responseErrorType = errorType
 }
