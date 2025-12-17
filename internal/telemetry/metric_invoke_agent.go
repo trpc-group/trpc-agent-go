@@ -27,8 +27,8 @@ var (
 
 	// InvokeAgentMetricGenAIRequestCnt records the number of invoke agent requests made.
 	InvokeAgentMetricGenAIRequestCnt metric.Int64Counter = noop.Int64Counter{}
-	// InvokeMetricGenAIClientTokenUsage records the distribution of input and output token usage.
-	InvokeMetricGenAIClientTokenUsage metric.Int64Histogram = noop.Int64Histogram{}
+	// InvokeAgentMetricGenAIClientTokenUsage records the distribution of input and output token usage.
+	InvokeAgentMetricGenAIClientTokenUsage metric.Int64Histogram = noop.Int64Histogram{}
 	// InvokeAgentMetricGenAIClientTimeToFirstToken records the distribution of time to first token latency in seconds.
 	InvokeAgentMetricGenAIClientTimeToFirstToken metric.Float64Histogram = noop.Float64Histogram{}
 	// InvokeAgentMetricGenAIClientOperationDuration records the distribution of total agent invocation durations in seconds.
@@ -151,11 +151,11 @@ func (t *InvokeAgentTracker) RecordMetrics() func() {
 			metric.WithAttributes(otelAttrs...))
 
 		// Record input token usage
-		InvokeMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptTokens),
+		InvokeAgentMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptTokens),
 			metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputTokenType))...))
 
 		// Record output token usage
-		InvokeMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalCompletionTokens),
+		InvokeAgentMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalCompletionTokens),
 			metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoOutputTokenType))...))
 
 	}

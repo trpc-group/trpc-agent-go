@@ -127,7 +127,7 @@ func initInvokeAgentMetrics(mp metric.MeterProvider) error {
 	); err != nil {
 		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricTRPCAgentGoClientRequestCnt, err)
 	}
-	if itelemetry.InvokeMetricGenAIClientTokenUsage, err = itelemetry.InvokeAgentMeter.Int64Histogram(
+	if itelemetry.InvokeAgentMetricGenAIClientTokenUsage, err = itelemetry.InvokeAgentMeter.Int64Histogram(
 		metrics.MetricGenAIClientTokenUsage,
 		metric.WithDescription("Input tokens usage"),
 		metric.WithUnit("{token}"),
@@ -135,11 +135,11 @@ func initInvokeAgentMetrics(mp metric.MeterProvider) error {
 		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIClientTokenUsage, err)
 	}
 	if itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken, err = itelemetry.InvokeAgentMeter.Float64Histogram(
-		metrics.MetricGenAIServerTimeToFirstToken,
-		metric.WithDescription("Time to first token for server"),
+		metrics.MetricTRPCAgentGoClientTimeToFirstToken,
+		metric.WithDescription("Time to first token for client"),
 		metric.WithUnit("s"),
 	); err != nil {
-		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIServerTimeToFirstToken, err)
+		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricTRPCAgentGoClientTimeToFirstToken, err)
 	}
 	if itelemetry.InvokeAgentMetricGenAIClientOperationDuration, err = itelemetry.InvokeAgentMeter.Float64Histogram(
 		metrics.MetricGenAIClientOperationDuration,
