@@ -121,7 +121,6 @@ runner := runner.NewRunner("app", agent,
   - [Knowledge](#6-knowledge)
   - [Telemetry & Tracing](#7-telemetry--tracing)
   - [MCP Integration](#8-mcp-integration)
-  - [Debug Web Demo](#9-debug-web-demo)
 - [Architecture Overview](#architecture-overview)
 - [Using Built-in Agents](#using-built-in-agents)
 - [Future Enhancements](#future-enhancements)
@@ -344,13 +343,6 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
   follow the MCP specification.
 - Enables dynamic tool execution and context-rich interactions between agents
   and LLMs.
-
-### 9. Debug Web Demo ([examples/debugserver](examples/debugserver))
-
-- Launches a **debug Server** that speaks ADK-compatible HTTP endpoints.
-- Front-end: [google/adk-web](https://github.com/google/adk-web) connects via
-  `/run_sse`, streams agent responses in real-time.
-- Great starting point for building your own chat UI.
 
 Other notable examples:
 
