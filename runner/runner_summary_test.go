@@ -142,6 +142,64 @@ func TestRunner_EnqueueSummaryJob_Calls(t *testing.T) {
 	})
 }
 
+// traceIDKey is the context key for trace ID in tests.
+type traceIDKeyType string
+
+const traceIDKey traceIDKeyType = "trace-id"
+
+func TestRunner_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
+	// Create a context-capturing session service
+	contextCapturingService := &contextCapturingSessionService{
+		mockSessionService: &mockSessionService{},
+		done:               make(chan struct{}),
+	}
+
+	// Create a mock agent that generates qualifying events
+	mockAgent := &mockAgent{name: "test-agent"}
+
+	// Create runner with context-capturing session service
+	runner := NewRunner("test-app", mockAgent, WithSessionService(contextCapturingService))
+
+	// Create context with trace ID value
+	ctx := context.WithValue(context.Background(), traceIDKey, "trace-12345")
+
+	userID := "test-user"
+	sessionID := "test-session"
+
+	// Run the runner with qualifying event
+	_, err := RunWithMessages(ctx, runner, userID, sessionID, []model.Message{
+		{Role: model.RoleUser, Content: "Hello"},
+	})
+	require.NoError(t, err)
+
+	// Wait for async processing to complete and context to be captured
+	select {
+	case <-contextCapturingService.done:
+		// Context was captured
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for context to be captured")
+	}
+
+	// Verify the context value was preserved and passed to EnqueueSummaryJob
+	assert.Equal(t, "trace-12345", contextCapturingService.capturedTraceID, "Context value should be preserved and passed to EnqueueSummaryJob")
+}
+
+// contextCapturingSessionService captures the context passed to EnqueueSummaryJob.
+type contextCapturingSessionService struct {
+	*mockSessionService
+	capturedTraceID any
+	done            chan struct{}
+}
+
+func (c *contextCapturingSessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+	// Capture the trace ID from context
+	c.capturedTraceID = ctx.Value(traceIDKey)
+	close(c.done)
+
+	// Call parent to record the call
+	return c.mockSessionService.EnqueueSummaryJob(ctx, sess, filterKey, force)
+}
+
 // nonQualifyingMockAgent generates non-qualifying events (partial responses).
 type nonQualifyingMockAgent struct {
 	name string
