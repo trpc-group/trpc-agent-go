@@ -84,7 +84,7 @@ type InvokeAgentTracker struct {
 	lastEvent              *event.Event
 
 	invocation *agent.Invocation
-	llmRequest *model.Request
+	stream     bool   // indicates whether the request is streaming
 	err        *error // pointer to capture final error
 }
 
@@ -92,7 +92,7 @@ type InvokeAgentTracker struct {
 func NewInvokeAgentTracker(
 	ctx context.Context,
 	invocation *agent.Invocation,
-	llmRequest *model.Request,
+	stream bool,
 	err *error,
 ) *InvokeAgentTracker {
 	return &InvokeAgentTracker{
@@ -100,7 +100,7 @@ func NewInvokeAgentTracker(
 		start:        time.Now(),
 		isFirstToken: true,
 		invocation:   invocation,
-		llmRequest:   llmRequest,
+		stream:       stream,
 		err:          err,
 	}
 }
@@ -174,9 +174,7 @@ func (t *InvokeAgentTracker) buildAttributes() invokeAgentAttributes {
 	}
 
 	// Extract request attributes
-	if t.llmRequest != nil {
-		attrs.Stream = t.llmRequest.GenerationConfig.Stream
-	}
+	attrs.Stream = t.stream
 
 	// Extract invocation attributes (with nil safety)
 	if t.invocation != nil {
