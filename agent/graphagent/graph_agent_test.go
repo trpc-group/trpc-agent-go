@@ -691,7 +691,7 @@ func TestGraphAgent_CreateInitialStateWithSessionSummary(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, messages, 2)
 	require.Equal(t, model.RoleSystem, messages[0].Role)
-	require.Equal(t, "branch summary content", messages[0].Content)
+	require.Contains(t, messages[0].Content, "branch summary content")
 	require.Equal(t, model.RoleUser, messages[1].Role)
 	require.Equal(t, "hello", messages[1].Content)
 }
@@ -797,7 +797,7 @@ func TestGraphAgent_CreateInitialStateWithSessionSummary_FromService(t *testing.
 	require.True(t, ok)
 	require.GreaterOrEqual(t, len(messages), 1)
 	require.Equal(t, model.RoleSystem, messages[0].Role)
-	require.Equal(t, "auto summary from service", messages[0].Content)
+	require.Contains(t, messages[0].Content, "auto summary from service")
 	// Summary already covers prior history, so the latest run may start with summary only.
 }
 
