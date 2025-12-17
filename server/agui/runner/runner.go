@@ -18,6 +18,7 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -60,6 +61,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		runOptionResolver:  opts.RunOptionResolver,
 		tracker:            tracker,
 		runningSessions:    sync.Map{},
+		startSpan:          opts.StartSpan,
 	}
 	return run
 }
@@ -75,6 +77,7 @@ type runner struct {
 	runOptionResolver  RunOptionResolver
 	tracker            track.Tracker
 	runningSessions    sync.Map
+	startSpan          StartSpan
 }
 
 type runInput struct {
@@ -86,6 +89,7 @@ type runInput struct {
 	runOption   []agent.RunOption
 	translator  translator.Translator
 	enableTrack bool
+	span        trace.Span
 }
 
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
@@ -116,6 +120,10 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if err != nil {
 		return nil, fmt.Errorf("resolve run option: %w", err)
 	}
+	ctx, span, err := r.startSpan(ctx, runAgentInput)
+	if err != nil {
+		return nil, fmt.Errorf("start span: %w", err)
+	}
 	input := &runInput{
 		key: session.Key{
 			AppName:   r.appName,
@@ -129,6 +137,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		runOption:   runOption,
 		translator:  r.translatorFactory(ctx, runAgentInput),
 		enableTrack: r.tracker != nil,
+		span:        span,
 	}
 	if _, ok := r.runningSessions.LoadOrStore(input.key, struct{}{}); ok {
 		return nil, fmt.Errorf("session is already running: %v", input.key)
@@ -141,6 +150,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 
 func (r *runner) run(ctx context.Context, input *runInput, events chan<- aguievents.Event) {
 	defer r.runningSessions.Delete(input.key)
+	defer input.span.End()
 	defer close(events)
 	threadID := input.threadID
 	runID := input.runID
