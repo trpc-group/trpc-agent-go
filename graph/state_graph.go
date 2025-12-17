@@ -1366,7 +1366,7 @@ func processAgentEventStream(
 
 		// Forward the event to the parent event channel.
 		if err := event.EmitEvent(ctx, eventChan, agentEvent); err != nil {
-			return "", nil, nil, fullRespEvent, err
+			return "", nil, nil, fullRespEvent, tokenUsage, err
 		}
 
 		// Track the last response for state update.
@@ -1412,7 +1412,7 @@ func processAgentEventStream(
 		}
 	}
 
-	return lastResponse, finalState, rawDelta, fullRespEvent, nil
+	return lastResponse, finalState, rawDelta, fullRespEvent, tokenUsage, nil
 }
 
 // buildAgentInvocationWithStateAndScope builds an invocation for the target agent
