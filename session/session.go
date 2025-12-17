@@ -20,6 +20,7 @@ import (
 	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // StateMap is a map of state key-value pairs.
@@ -250,33 +251,45 @@ func (sess *Session) GetTrackEvents(track Track) (*TrackEvents, error) {
 	return copied, nil
 }
 
-// EnsureEventStartWithUser filters events to ensure they start with RoleUser.
-// It removes events from the beginning until it finds the first event from RoleUser.
+// EnsureEventStartWithUser filters events so the first non-system event is a
+// RoleUser message. Leading system messages are preserved.
 func (sess *Session) EnsureEventStartWithUser() {
 	if sess == nil || len(sess.Events) == 0 {
 		log.Info("session is nil or has no events")
 		return
 	}
-	// Find the first event that starts with RoleUser
-	startIndex := -1
-	for i, event := range sess.Events {
-		if event.Response != nil && event.IsUserMessage() {
-			startIndex = i
+
+	systemPrefix := leadingSystemEvents(sess.Events)
+	firstUserIndex := -1
+	for i := range sess.Events {
+		if sess.Events[i].IsUserMessage() {
+			firstUserIndex = i
 			break
 		}
-		// If event has no response or choices, continue to next event
 	}
 
-	// If no user event found, clear all events
-	if startIndex == -1 {
+	if firstUserIndex == -1 {
+		if len(systemPrefix) > 0 {
+			sess.Events = systemPrefix
+			return
+		}
 		sess.Events = []event.Event{}
 		return
 	}
 
-	// Keep events starting from the first user event
-	if startIndex > 0 {
-		sess.Events = sess.Events[startIndex:]
+	if len(systemPrefix) == 0 {
+		sess.Events = sess.Events[firstUserIndex:]
+		return
 	}
+
+	filtered := make(
+		[]event.Event,
+		0,
+		len(systemPrefix)+len(sess.Events[firstUserIndex:]),
+	)
+	filtered = append(filtered, systemPrefix...)
+	filtered = append(filtered, sess.Events[firstUserIndex:]...)
+	sess.Events = filtered
 }
 
 // UpdateUserSession updates the user session with the given event and options.
@@ -301,14 +314,16 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 	sess.ApplyEventStateDelta(event)
 }
 
-// ApplyEventFiltering applies event number and time filtering to session events
-// It ensures that the filtered events still contain at least one user message.
+// ApplyEventFiltering applies event number and time filtering to session
+// events. It preserves leading system messages and keeps at least one user
+// message when available.
 func (sess *Session) ApplyEventFiltering(opts ...Option) {
 	if sess == nil {
 		log.Info("session is nil")
 		return
 	}
 	originalEvents := sess.Events
+	systemPrefix := leadingSystemEvents(originalEvents)
 	opt := applyOptions(opts...)
 
 	// Apply event time filter - keep events after the specified time
@@ -333,22 +348,111 @@ func (sess *Session) ApplyEventFiltering(opts ...Option) {
 		sess.Events = sess.Events[len(sess.Events)-opt.EventNum:]
 	}
 
-	// check if has user message
-	for i := 0; i < len(sess.Events); i++ {
+	firstUserIndex := -1
+	for i := range sess.Events {
 		if sess.Events[i].IsUserMessage() {
-			sess.Events = sess.Events[i:]
-			return
+			firstUserIndex = i
+			break
 		}
 	}
-	// find the last user message from original events
-	for i := len(originalEvents) - 1; i >= 0; i-- {
-		if originalEvents[i].IsUserMessage() {
-			sess.Events = append([]event.Event{originalEvents[i]}, sess.Events...)
+	if firstUserIndex >= 0 {
+		tail := sess.Events[firstUserIndex:]
+		if len(systemPrefix) == 0 {
+			sess.Events = tail
 			return
 		}
+		filtered := make(
+			[]event.Event,
+			0,
+			len(systemPrefix)+len(tail),
+		)
+		filtered = append(filtered, systemPrefix...)
+		filtered = append(filtered, tail...)
+		sess.Events = filtered
+		return
+	}
+
+	lastUser, ok := findLastUserEvent(originalEvents)
+	if ok {
+		rest := trimLeadingSystemEvents(sess.Events)
+		filtered := make(
+			[]event.Event,
+			0,
+			len(systemPrefix)+len(rest)+1,
+		)
+		filtered = append(filtered, systemPrefix...)
+		filtered = append(filtered, lastUser)
+		filtered = append(filtered, rest...)
+		sess.Events = filtered
+		return
+	}
+
+	if len(systemPrefix) > 0 {
+		sess.Events = systemPrefix
+		return
+	}
+
+	systemOnly := filterSystemEvents(sess.Events)
+	if len(systemOnly) > 0 {
+		sess.Events = systemOnly
+		return
 	}
 
 	sess.Events = []event.Event{}
+}
+
+func leadingSystemEvents(events []event.Event) []event.Event {
+	n := 0
+	for i := range events {
+		if !isSystemEvent(events[i]) {
+			break
+		}
+		n++
+	}
+	return events[:n]
+}
+
+func trimLeadingSystemEvents(events []event.Event) []event.Event {
+	for len(events) > 0 {
+		if !isSystemEvent(events[0]) {
+			break
+		}
+		events = events[1:]
+	}
+	return events
+}
+
+func filterSystemEvents(events []event.Event) []event.Event {
+	result := events[:0]
+	for i := range events {
+		if !isSystemEvent(events[i]) {
+			continue
+		}
+		result = append(result, events[i])
+	}
+	return result
+}
+
+func isSystemEvent(evt event.Event) bool {
+	if evt.Response == nil || len(evt.Choices) == 0 {
+		return false
+	}
+	for _, choice := range evt.Choices {
+		if choice.Message.Role == model.RoleSystem ||
+			choice.Delta.Role == model.RoleSystem {
+			return true
+		}
+	}
+	return false
+}
+
+func findLastUserEvent(events []event.Event) (event.Event, bool) {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].IsUserMessage() {
+			return events[i], true
+		}
+	}
+	return event.Event{}, false
 }
 
 // ApplyEventStateDelta merges the state delta of the event into the session state.

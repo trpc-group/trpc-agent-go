@@ -250,9 +250,9 @@ func TestRunner_SkipAppendingSeedUserMessage(t *testing.T) {
 	sess, err := sessionService.GetSession(ctx, session.Key{AppName: "test-app", UserID: userID, SessionID: sessionID})
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	// Expect: due to EnsureEventStartWithUser filtering, only the first user
-	// event from seed is kept, plus agent response and runner completion = 3
-	require.Len(t, sess.Events, 2)
+	// Expect: leading system message is preserved; seed assistant before the
+	// first user is dropped; no duplicate user is appended.
+	require.Len(t, sess.Events, 3)
 	// Ensure we did not append a duplicate user message beyond the seed.
 	userCount := 0
 	for _, e := range sess.Events {
@@ -291,25 +291,24 @@ func TestRunner_AppendsDifferentUserAfterSeed(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	// Expect: seeded first user retained + appended user + agent response + runner completion = 4
-	require.Len(t, sess.Events, 3)
+	// Expect: system prompt preserved + two user messages + agent response.
+	require.Len(t, sess.Events, 4)
 
-	// Verify the first two events are users with expected contents.
-	if !(len(sess.Events) >= 2) {
-		t.Fatalf("expected at least two events")
+	if !(len(sess.Events) >= 3) {
+		t.Fatalf("expected at least three events")
 	}
-	// Event 0: seeded user
-	if sess.Events[0].Author != authorUser {
-		t.Fatalf("expected first event author user, got %s", sess.Events[0].Author)
-	}
-	if got := sess.Events[0].Response.Choices[0].Message.Content; got != "hello" {
-		t.Fatalf("expected seeded user content 'hello', got %q", got)
-	}
-	// Event 1: appended user
+	// Event 1: seeded user
 	if sess.Events[1].Author != authorUser {
 		t.Fatalf("expected second event author user, got %s", sess.Events[1].Author)
 	}
-	if got := sess.Events[1].Response.Choices[0].Message.Content; got != "hello too" {
+	if got := sess.Events[1].Response.Choices[0].Message.Content; got != "hello" {
+		t.Fatalf("expected seeded user content 'hello', got %q", got)
+	}
+	// Event 2: appended user
+	if sess.Events[2].Author != authorUser {
+		t.Fatalf("expected third event author user, got %s", sess.Events[2].Author)
+	}
+	if got := sess.Events[2].Response.Choices[0].Message.Content; got != "hello too" {
 		t.Fatalf("expected appended user content 'hello too', got %q", got)
 	}
 }

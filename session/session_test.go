@@ -824,6 +824,7 @@ func TestEnsureEventStartWithUser(t *testing.T) {
 				*createTestEvent(model.RoleUser, "user msg", now.Add(2*time.Minute), nil),
 			}, nil),
 			expectedEvents: []event.Event{
+				*createTestEvent(model.RoleSystem, "system msg", now, nil),
 				*createTestEvent(model.RoleUser, "user msg", now.Add(2*time.Minute), nil),
 			},
 			description: "Should keep events from first user event to end",
@@ -959,6 +960,29 @@ func TestApplyEventFiltering(t *testing.T) {
 				*createTestEvent(model.RoleAssistant, "msg 2", baseTime.Add(time.Minute), nil),
 			},
 			description: "Should keep all events when no filters applied",
+		},
+		{
+			name: "system only",
+			inputSession: createTestSession([]event.Event{
+				*createTestEvent(model.RoleSystem, "sys", baseTime, nil),
+			}, nil),
+			options: []Option{},
+			expectedEvents: []event.Event{
+				*createTestEvent(model.RoleSystem, "sys", baseTime, nil),
+			},
+			description: "Should keep system messages without user",
+		},
+		{
+			name: "system and assistant without user",
+			inputSession: createTestSession([]event.Event{
+				*createTestEvent(model.RoleSystem, "sys", baseTime, nil),
+				*createTestEvent(model.RoleAssistant, "asst", baseTime.Add(time.Minute), nil),
+			}, nil),
+			options: []Option{},
+			expectedEvents: []event.Event{
+				*createTestEvent(model.RoleSystem, "sys", baseTime, nil),
+			},
+			description: "Should drop non-system before first user",
 		},
 	}
 
