@@ -1,0 +1,269 @@
+{
+  "version": "1.0",
+  "name": "openai_custom_service",
+  "description": "Replicates OpenAI Agent Builder custom service routing: return_item / cancel_subscription / get_information.",
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "node_type": "builtin.start",
+      "config": {}
+    },
+    {
+      "id": "classifier",
+      "label": "Classification agent",
+      "node_type": "builtin.llmagent",
+      "config": {
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "deepseek-chat",
+          "base_url": "https://api.deepseek.com/v1",
+          "api_key": "env:OPENAI_API_KEY"
+        },
+        "instruction": "Classify the user’s intent into one of the following categories: \"return_item\", \"cancel_subscription\", or \"get_information\".\n\n1. Any device-related return requests should route to return_item.\n2. Any retention or cancellation risk, including any request for discounts should route to cancel_subscription.\n3. Any other requests should go to get_information.",
+        "description": "Intent classification agent",
+        "output_format": {
+          "type": "json",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "classification": {
+                "type": "string",
+                "enum": [
+                  "return_item",
+                  "cancel_subscription",
+                  "get_information"
+                ],
+                "description": "Classification of user intent"
+              }
+            },
+            "required": [
+              "classification"
+            ]
+          }
+        },
+        "temperature": 0.7
+      }
+    },
+    {
+      "id": "return_agent",
+      "label": "Return agent",
+      "node_type": "builtin.llmagent",
+      "config": {
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "deepseek-chat",
+          "base_url": "https://api.deepseek.com/v1",
+          "api_key": "env:OPENAI_API_KEY"
+        },
+        "instruction": "Offer a replacement device with free shipping.",
+        "description": "Handles device return flows",
+        "temperature": 0.7,
+        "max_tokens": 512
+      }
+    },
+    {
+      "id": "retention_agent",
+      "label": "Retention agent",
+      "node_type": "builtin.llmagent",
+      "config": {
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "deepseek-chat",
+          "base_url": "https://api.deepseek.com/v1",
+          "api_key": "env:OPENAI_API_KEY"
+        },
+        "instruction": "You are a customer retention conversational agent whose goal is to prevent subscription cancellations. Ask for their current plan and reason for dissatisfaction. For now, you may simply say there is a 20% offer available for 1 year if that seems appropriate.",
+        "description": "Handles cancellation / retention flows",
+        "temperature": 0.7,
+        "max_tokens": 512
+      }
+    },
+    {
+      "id": "retention_approval",
+      "label": "User approval",
+      "node_type": "builtin.user_approval",
+      "config": {
+        "message": "Does this retention offer work for you?"
+      }
+    },
+    {
+      "id": "information_agent",
+      "label": "Information agent",
+      "node_type": "builtin.llmagent",
+      "config": {
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "deepseek-chat",
+          "base_url": "https://api.deepseek.com/v1",
+          "api_key": "env:OPENAI_API_KEY"
+        },
+        "instruction": "You are an information agent for answering informational queries. Your aim is to provide clear, concise responses to user questions. Use the following policy to assemble your answer.\n\nCompany Name: HorizonTel Communications\nIndustry: Telecommunications\nRegion: North America\n\nPolicy Summary: Mobile Service Plan Adjustments\n- Customers must have an active account in good standing (no outstanding balance > $50).\n- Device upgrades are permitted once every 12 months if the customer is on an eligible plan.\n- Early upgrades incur a $99 early-change fee unless the new plan’s monthly cost is higher by at least $15.\n- Downgrades: Customers can switch to a lower-tier plan at any time; changes take effect at the next billing cycle.\n- Overcharges under $10 are automatically credited to the next bill; above that require supervisor review.\n- Refunds are issued to the original payment method within 7–10 business days.\n- Customers experiencing service interruption exceeding 24 consecutive hours are eligible for a 1-day service credit upon request.\n\nAlways respond in a friendly, concise way and surface the most relevant parts of the policy.",
+        "description": "Handles general informational queries",
+        "temperature": 0.7,
+        "max_tokens": 1024
+      }
+    },
+    {
+      "id": "return_end",
+      "label": "Return end",
+      "node_type": "builtin.end",
+      "config": {}
+    },
+    {
+      "id": "retention_end",
+      "label": "Retention end",
+      "node_type": "builtin.end",
+      "config": {
+        "expr": {
+          "expression": "{\"message\": \"Your retention offer has been accepted. Thank you for staying with us.\"}",
+          "format": "json"
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "Final status message shown to the user"
+            }
+          },
+          "required": [
+            "message"
+          ]
+        }
+      }
+    },
+    {
+      "id": "retention_reject_end",
+      "label": "Retention rejected end",
+      "node_type": "builtin.end",
+      "config": {
+        "expr": {
+          "expression": "{\"message\": \"We understand your decision. If you change your mind, we are always here to help.\"}",
+          "format": "json"
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "Final status message shown to the user"
+            }
+          },
+          "required": [
+            "message"
+          ]
+        }
+      }
+    },
+    {
+      "id": "info_end",
+      "label": "Information end",
+      "node_type": "builtin.end",
+      "config": {}
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_start_classifier",
+      "source": "start",
+      "target": "classifier"
+    },
+    {
+      "id": "edge_return_agent_end",
+      "source": "return_agent",
+      "target": "return_end"
+    },
+    {
+      "id": "edge_retention_agent_approval",
+      "source": "retention_agent",
+      "target": "retention_approval"
+    },
+    {
+      "id": "edge_information_agent_end",
+      "source": "information_agent",
+      "target": "info_end"
+    },
+    {
+      "id": "edge_return_end_final",
+      "source": "return_end",
+      "target": "__end__"
+    },
+    {
+      "id": "edge_retention_end_final",
+      "source": "retention_end",
+      "target": "__end__"
+    },
+    {
+      "id": "edge_retention_reject_end_final",
+      "source": "retention_reject_end",
+      "target": "__end__"
+    },
+    {
+      "id": "edge_info_end_final",
+      "source": "info_end",
+      "target": "__end__"
+    }
+  ],
+  "conditional_edges": [
+    {
+      "id": "route_by_classification",
+      "from": "classifier",
+      "condition": {
+        "type": "builtin",
+        "cases": [
+          {
+            "name": "return_item",
+            "predicate": {
+              "expression": "input.output_parsed.classification == \"return_item\"",
+              "format": "cel"
+            },
+            "target": "return_agent"
+          },
+          {
+            "name": "cancel_subscription",
+            "predicate": {
+              "expression": "input.output_parsed.classification == \"cancel_subscription\"",
+              "format": "cel"
+            },
+            "target": "retention_agent"
+          },
+          {
+            "name": "get_information",
+            "predicate": {
+              "expression": "input.output_parsed.classification == \"get_information\"",
+              "format": "cel"
+            },
+            "target": "information_agent"
+          }
+        ]
+      }
+    },
+    {
+      "id": "route_after_retention_approval",
+      "from": "retention_approval",
+      "condition": {
+        "type": "builtin",
+        "cases": [
+          {
+            "name": "approve_offer",
+            "predicate": {
+              "expression": "state.approval_result == \"approve\"",
+              "format": "cel"
+            },
+            "target": "retention_end"
+          },
+          {
+            "name": "reject_offer",
+            "predicate": {
+              "expression": "state.approval_result == \"reject\"",
+              "format": "cel"
+            },
+            "target": "retention_reject_end"
+          }
+        ]
+      }
+    }
+  ],
+  "start_node_id": "start"
+}

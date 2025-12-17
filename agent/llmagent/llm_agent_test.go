@@ -683,6 +683,23 @@ func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 	})
 }
 
+func TestLLMAgent_New_WithStructuredOutputJSONSchema_AllowsTools(t *testing.T) {
+	schema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
+
+	require.NotPanics(t, func() {
+		simpleTool := dummyTool{decl: &tool.Declaration{Name: "test"}}
+		toolset := dummyToolSet{name: "test-toolset"}
+		_ = New("test",
+			WithStructuredOutputJSONSchema("test_schema", schema, true, ""),
+			WithTools([]tool.Tool{simpleTool}),
+			WithToolSets([]tool.ToolSet{toolset}),
+		)
+	})
+}
+
 // TestLLMAgent_InvocationContextAccess verifies that LLMAgent can access invocation
 // from context when called through runner (after removing duplicate injection).
 func TestLLMAgent_InvocationContextAccess(t *testing.T) {
@@ -865,6 +882,18 @@ func TestLLMAgent_OptionsWithStructuredOutputJSON(t *testing.T) {
 	require.Equal(t, model.StructuredOutputJSONSchema, opts.StructuredOutput.Type)
 	require.NotNil(t, opts.StructuredOutput.JSONSchema)
 	require.Equal(t, "MyStruct", opts.StructuredOutput.JSONSchema.Name)
+	require.True(t, opts.StructuredOutput.JSONSchema.Strict)
+	require.Equal(t, "test description", opts.StructuredOutput.JSONSchema.Description)
+}
+
+func TestLLMAgent_OptionsWithStructuredOutputJSONSchema(t *testing.T) {
+	schema := map[string]any{"type": "object"}
+	opts := &Options{}
+	WithStructuredOutputJSONSchema("", schema, true, "test description")(opts)
+	require.NotNil(t, opts.StructuredOutput)
+	require.Equal(t, model.StructuredOutputJSONSchema, opts.StructuredOutput.Type)
+	require.NotNil(t, opts.StructuredOutput.JSONSchema)
+	require.Equal(t, "output", opts.StructuredOutput.JSONSchema.Name)
 	require.True(t, opts.StructuredOutput.JSONSchema.Strict)
 	require.Equal(t, "test description", opts.StructuredOutput.JSONSchema.Description)
 }

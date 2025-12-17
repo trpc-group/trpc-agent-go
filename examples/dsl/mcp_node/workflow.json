@@ -1,0 +1,179 @@
+{
+  "version": "1.0",
+  "name": "mcp_node_weather",
+  "description": "Demonstrates Start → Agent → Transform → MCP → Transform → End chain.",
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "node_type": "builtin.start",
+      "config": {}
+    },
+    {
+      "id": "planner_agent",
+      "label": "Planner Agent",
+      "node_type": "builtin.llmagent",
+      "config": {
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "deepseek-chat",
+          "base_url": "https://api.deepseek.com/v1",
+          "api_key": "env:OPENAI_API_KEY"
+        },
+        "instruction": "You are a helpful assistant that extracts the city name to query weather for. Rewrite the user input into a concise city name.",
+        "temperature": 0.2,
+        "max_tokens": 128
+      }
+    },
+    {
+      "id": "prepare_request",
+      "label": "Prepare MCP request",
+      "node_type": "builtin.transform",
+      "config": {
+        "expr": {
+          "expression": "{ \"location\": state.last_response, \"units\": \"celsius\" }",
+          "format": "cel"
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "Location to query weather for"
+            },
+            "units": {
+              "type": "string",
+              "description": "Temperature units (celsius/fahrenheit)"
+            }
+          },
+          "required": ["location"],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "id": "mcp_weather",
+      "label": "Call MCP get_weather",
+      "node_type": "builtin.mcp",
+      "config": {
+        "server_url": "http://localhost:3000/mcp",
+        "transport": "streamable_http",
+        "tool": "get_weather",
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "Location that was actually used in the weather query"
+            },
+            "temperature": {
+              "type": "number",
+              "description": "Current temperature at the location"
+            },
+            "units": {
+              "type": "string",
+              "description": "Temperature units (e.g., celsius/fahrenheit)"
+            },
+            "condition": {
+              "type": "string",
+              "description": "High-level weather condition (e.g., sunny, rainy)"
+            }
+          },
+          "required": ["location", "temperature", "units"],
+          "additionalProperties": true
+        },
+        "params": {
+          "location": {
+            "expression": "input.output_parsed.location",
+            "format": "cel"
+          },
+          "units": {
+            "expression": "input.output_parsed.units",
+            "format": "cel"
+          }
+        }
+      }
+    },
+    {
+      "id": "format_summary",
+      "label": "Format weather summary",
+      "node_type": "builtin.transform",
+      "config": {
+        "expr": {
+          "expression": "{ \"summary\": \"Weather in \" + nodes.mcp_weather.output_parsed.location + \" is \" + string(nodes.mcp_weather.output_parsed.temperature) + \"°\" + nodes.mcp_weather.output_parsed.units + \" and \" + nodes.mcp_weather.output_parsed.condition, \"raw\": nodes.mcp_weather.output_parsed }",
+          "format": "cel"
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string",
+              "description": "Human-readable weather summary"
+            },
+            "raw": {
+              "type": "object",
+              "description": "Raw MCP tool result"
+            }
+          },
+          "required": ["summary"],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "id": "end",
+      "label": "End",
+      "node_type": "builtin.end",
+      "config": {
+        "expr": {
+          "expression": "{ \"message\": nodes.format_summary.output_parsed.summary, \"weather\": nodes.format_summary.output_parsed.raw }",
+          "format": "cel"
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "Weather summary message"
+            },
+            "weather": {
+              "type": "object",
+              "description": "Raw structured weather data"
+            }
+          },
+          "required": ["message"],
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_start_agent",
+      "source": "start",
+      "target": "planner_agent"
+    },
+    {
+      "id": "edge_agent_prepare",
+      "source": "planner_agent",
+      "target": "prepare_request"
+    },
+    {
+      "id": "edge_prepare_mcp",
+      "source": "prepare_request",
+      "target": "mcp_weather"
+    },
+    {
+      "id": "edge_mcp_format",
+      "source": "mcp_weather",
+      "target": "format_summary"
+    },
+    {
+      "id": "edge_format_end",
+      "source": "format_summary",
+      "target": "end"
+    }
+  ],
+  "conditional_edges": [],
+  "start_node_id": "start"
+}

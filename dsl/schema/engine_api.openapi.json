@@ -1,0 +1,361 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "trpc-agent-go Engine DSL Core API",
+    "description": "Minimal OpenAPI description of the core engine-level HTTP APIs (compile, variable introspection, and edge inspection). This spec reuses the engine-level Graph schema defined in engine_dsl.schema.json and is intended as the canonical contract for frontend/backend integration.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/v1/graphs/compile": {
+      "post": {
+        "tags": ["engine"],
+        "summary": "Compile a graph",
+        "description": "Compiles an engine-level Graph definition into an executable runtime graph. Editors can call this to surface compile-time diagnostics before running or saving.",
+        "operationId": "compileGraph",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompileGraphRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Compilation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompileGraphResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/graphs/vars": {
+      "post": {
+        "tags": ["introspection"],
+        "summary": "List variables for a graph",
+        "description": "Returns variables available in the graph, optionally scoped to a single node. Used by editors to build variable pickers.",
+        "operationId": "getGraphVars",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GraphVarsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-node variable view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphVarsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/graphs/vars/node": {
+      "post": {
+        "tags": ["introspection"],
+        "summary": "List variables for a single node",
+        "description": "Convenience variant of getGraphVars that returns grouped variables for a single node in the provided graph. Semantics are identical to /api/v1/graphs/vars, but the response is already scoped to the requested node_id.",
+        "operationId": "getGraphNodeVars",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GraphVarsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Grouped variables for the requested node.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphVarsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/graphs/edges/inspect": {
+      "post": {
+        "tags": ["introspection"],
+        "summary": "Inspect a connection between two nodes",
+        "description": "Checks whether a connection between two nodes is type-compatible and returns the source/target schemas and diagnostics. Used by editors to implement connection validation like \"MCP requires input.repoName\".",
+        "operationId": "inspectEdge",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EdgeInspectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Edge inspection result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeInspectionResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Graph": {
+        "$ref": "./engine_dsl.schema.json#/$defs/Graph"
+      },
+      "CompileGraphRequest": {
+        "type": "object",
+        "description": "Request to compile an engine-level graph definition into an executable runtime graph.",
+        "required": ["graph"],
+        "properties": {
+          "graph": {
+            "$ref": "#/components/schemas/Graph"
+          },
+          "options": {
+            "type": "object",
+            "description": "Optional compile-time flags (reserved for future use).",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompileGraphResponse": {
+        "type": "object",
+        "description": "Result of compiling a graph definition.",
+        "required": ["success"],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether compilation succeeded without fatal errors."
+          },
+          "diagnostics": {
+            "type": "array",
+            "description": "Optional list of diagnostics produced during compilation (warnings and errors).",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            }
+          },
+          "graph_summary": {
+            "type": "object",
+            "description": "Optional high-level summary of the compiled graph.",
+            "properties": {
+              "node_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "edge_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "start_node_id": {
+                "type": "string",
+                "description": "Executable entry node ID."
+              },
+              "end_node_ids": {
+                "type": "array",
+                "description": "IDs of nodes that can terminate the graph.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "Diagnostic": {
+        "type": "object",
+        "description": "Generic diagnostic message used by multiple APIs.",
+        "required": ["message"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Short machine-readable diagnostic code (e.g., \"missing_field\")."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable description of the issue."
+          },
+          "path": {
+            "type": "string",
+            "description": "Optional JSON path or field name where the issue occurred."
+          },
+          "severity": {
+            "type": "string",
+            "description": "Optional severity indicator.",
+            "enum": ["info", "warning", "error"],
+            "default": "error"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GraphVarsRequest": {
+        "type": "object",
+        "description": "Request to list variables available when editing a specific node.",
+        "required": ["graph", "node_id"],
+        "properties": {
+          "graph": {
+            "$ref": "#/components/schemas/Graph"
+          },
+          "node_id": {
+            "type": "string",
+            "description": "ID of the node currently being edited."
+          }
+        },
+        "additionalProperties": false
+      },
+      "GraphVarsResponse": {
+        "type": "object",
+        "description": "Response containing grouped variables for the requested node context.",
+        "properties": {
+          "groups": {
+            "type": "array",
+            "description": "Variable groups such as previous node outputs, State, Graph input.",
+            "items": {
+              "$ref": "#/components/schemas/VariableGroup"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "VariableGroup": {
+        "type": "object",
+        "description": "Logical group of variables in the picker (e.g., a previous node, State, Graph input).",
+        "required": ["type", "id", "vars"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Group type used for consistent ordering and display in editors.",
+            "enum": ["node_output", "state", "graph_input"]
+          },
+          "id": {
+            "type": "string",
+            "description": "Group identifier. For node_output this is the node ID; for state/graph_input this can be a fixed value such as \"state\" or \"graph_input\"."
+          },
+          "title": {
+            "type": "string",
+            "description": "Human-readable group title shown in the UI (e.g., \"Agent2\", \"State\", \"Graph input\")."
+          },
+          "vars": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphVar"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "GraphVar": {
+        "type": "object",
+        "description": "Single variable available in a graph context.",
+        "required": ["variable"],
+        "properties": {
+          "variable": {
+            "type": "string",
+            "description": "Expression fragment that can be inserted directly into CEL expressions (e.g., \"state.user_input\")."
+          },
+          "origin": {
+            "type": "string",
+            "description": "Optional origin hint (e.g., \"state\", \"node_output\", \"graph_input\")."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Coarse-grained kind for editor UX.",
+            "enum": ["string", "number", "boolean", "object", "array", "opaque"]
+          },
+          "json_schema": {
+            "type": "object",
+            "description": "Optional JSON Schema describing the variable shape.",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "EdgeInspectionRequest": {
+        "type": "object",
+        "description": "Request to inspect a connection (edge) between two nodes.",
+        "required": ["graph", "edge"],
+        "properties": {
+          "graph": {
+            "$ref": "#/components/schemas/Graph"
+          },
+          "edge": {
+            "type": "object",
+            "required": ["source_node_id", "target_node_id"],
+            "properties": {
+              "source_node_id": {
+                "type": "string",
+                "description": "ID of the source node."
+              },
+              "target_node_id": {
+                "type": "string",
+                "description": "ID of the target node."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "EdgeInspectionResult": {
+        "type": "object",
+        "description": "Result of inspecting an edge between two nodes.",
+        "required": ["valid"],
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "description": "Whether the connection is type-compatible."
+          },
+          "errors": {
+            "type": "array",
+            "description": "Diagnostics explaining why the connection is invalid, if any.",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            }
+          },
+          "source_output_schema": {
+            "type": "object",
+            "description": "JSON Schema describing the source node's output object (if available).",
+            "additionalProperties": true
+          },
+          "target_input_schema": {
+            "type": "object",
+            "description": "JSON Schema describing the target node's expected input object (if available).",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}
