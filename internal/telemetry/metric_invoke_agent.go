@@ -25,9 +25,10 @@ var (
 	InvokeAgentMetricGenAIClientTimeToFirstToken metric.Float64Histogram = noop.Float64Histogram{}
 	// InvokeAgentMetricGenAIClientOperationDuration records the distribution of total agent invocation durations in seconds.
 	InvokeAgentMetricGenAIClientOperationDuration metric.Float64Histogram = noop.Float64Histogram{}
-	// InvokeAgentMetricGenAIServerTimePerOutputToken records the distribution of time per output token in seconds.
+	// InvokeAgentMetricGenAIClientTimePerOutputToken records the distribution of time per output token in seconds.
 	// This metric measures the decode phase performance by calculating (total_duration - time_to_first_token) / (output_tokens - first_token_count).
 	InvokeAgentMetricGenAIClientTimePerOutputToken metric.Float64Histogram = noop.Float64Histogram{}
+	// InvokeAgentMetricGenAIClientOutputTokenPerTime records the distribution of output token per time for client.
 	// 1 / InvokeAgentMetricGenAIClientTimePerOutputToken.
 	InvokeAgentMetricGenAIClientOutputTokenPerTime metric.Float64Histogram = noop.Float64Histogram{}
 )
