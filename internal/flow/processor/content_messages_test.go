@@ -246,8 +246,8 @@ func newSessionEvent(author string, msg model.Message) event.Event {
 	}
 }
 
-// Test that session summary is merged into the last system message.
-func TestProcessRequest_SessionSummary_MergeWithSystemMessages(t *testing.T) {
+// Test that session summary is inserted as a separate system message after the first system message.
+func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.T) {
 	// Create session with summary
 	sess := &session.Session{
 		Summaries: map[string]*session.Summary{
@@ -276,12 +276,16 @@ func TestProcessRequest_SessionSummary_MergeWithSystemMessages(t *testing.T) {
 	p1 := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p1.ProcessRequest(context.Background(), inv1, req1, nil)
 
-	// Should have 2 messages: merged system, user
-	require.Equal(t, 3, len(req1.Messages))
+	// Should have 4 messages: system, summary system, user, current request
+	require.Equal(t, 4, len(req1.Messages))
 	require.Equal(t, model.RoleSystem, req1.Messages[0].Role)
-	require.Equal(t, "existing system prompt\n\nSession summary content", req1.Messages[0].Content)
+	require.Equal(t, "existing system prompt", req1.Messages[0].Content)
+	require.Equal(t, model.RoleSystem, req1.Messages[1].Role)
+	require.Equal(t, "Session summary content", req1.Messages[1].Content)
 	require.Equal(t, model.RoleUser, req1.Messages[2].Role)
-	require.Equal(t, "current request", req1.Messages[2].Content)
+	require.Equal(t, "user question", req1.Messages[2].Content)
+	require.Equal(t, model.RoleUser, req1.Messages[3].Role)
+	require.Equal(t, "current request", req1.Messages[3].Content)
 
 	// Test case 2: Request has only user message (no system message)
 	req2 := &model.Request{
@@ -300,12 +304,14 @@ func TestProcessRequest_SessionSummary_MergeWithSystemMessages(t *testing.T) {
 	p2 := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p2.ProcessRequest(context.Background(), inv2, req2, nil)
 
-	// Should have 2 messages: new system, user
+	// Should have 3 messages: summary system, user, current request
 	require.Equal(t, 3, len(req2.Messages))
 	require.Equal(t, model.RoleSystem, req2.Messages[0].Role)
 	require.Equal(t, "Session summary content", req2.Messages[0].Content)
 	require.Equal(t, model.RoleUser, req2.Messages[1].Role)
 	require.Equal(t, "user question", req2.Messages[1].Content)
+	require.Equal(t, model.RoleUser, req2.Messages[2].Role)
+	require.Equal(t, "current request", req2.Messages[2].Content)
 
 	// Test case 3: Request has multiple system messages
 	req3 := &model.Request{
@@ -326,12 +332,79 @@ func TestProcessRequest_SessionSummary_MergeWithSystemMessages(t *testing.T) {
 	p3 := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p3.ProcessRequest(context.Background(), inv3, req3, nil)
 
-	// Should have 2 messages: merged system (system1 + system2 + summary), user
-	require.Equal(t, 4, len(req3.Messages))
+	// Should have 5 messages: system1, summary system, system2, user, current request
+	require.Equal(t, 5, len(req3.Messages))
 	require.Equal(t, model.RoleSystem, req3.Messages[0].Role)
-	require.Equal(t, "system 1\n\nSession summary content", req3.Messages[0].Content)
-	require.Equal(t, model.RoleUser, req3.Messages[2].Role)
-	require.Equal(t, "user question", req3.Messages[2].Content)
+	require.Equal(t, "system 1", req3.Messages[0].Content)
+	require.Equal(t, model.RoleSystem, req3.Messages[1].Role)
+	require.Equal(t, "Session summary content", req3.Messages[1].Content)
+	require.Equal(t, model.RoleSystem, req3.Messages[2].Role)
+	require.Equal(t, "system 2", req3.Messages[2].Content)
+	require.Equal(t, model.RoleUser, req3.Messages[3].Role)
+	require.Equal(t, "user question", req3.Messages[3].Content)
+	require.Equal(t, model.RoleUser, req3.Messages[4].Role)
+	require.Equal(t, "current request", req3.Messages[4].Content)
+}
+
+// Test additional edge cases for session summary insertion.
+func TestProcessRequest_SessionSummary_EdgeCases(t *testing.T) {
+	// Create session with summary
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			"test-agent": {
+				Summary:   "Session summary content",
+				UpdatedAt: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	// Test case 1: Empty request messages
+	req1 := &model.Request{
+		Messages: []model.Message{},
+	}
+
+	inv1 := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-agent"),
+		agent.WithInvocationMessage(model.NewUserMessage("current request")),
+	)
+	inv1.AgentName = "test-agent"
+
+	p1 := NewContentRequestProcessor(WithAddSessionSummary(true))
+	p1.ProcessRequest(context.Background(), inv1, req1, nil)
+
+	// Should have 2 messages: summary system, current request
+	require.Equal(t, 2, len(req1.Messages))
+	require.Equal(t, model.RoleSystem, req1.Messages[0].Role)
+	require.Equal(t, "Session summary content", req1.Messages[0].Content)
+	require.Equal(t, model.RoleUser, req1.Messages[1].Role)
+	require.Equal(t, "current request", req1.Messages[1].Content)
+
+	// Test case 2: Only system messages
+	req2 := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system prompt"),
+		},
+	}
+
+	inv2 := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-agent"),
+		agent.WithInvocationMessage(model.NewUserMessage("current request")),
+	)
+	inv2.AgentName = "test-agent"
+
+	p2 := NewContentRequestProcessor(WithAddSessionSummary(true))
+	p2.ProcessRequest(context.Background(), inv2, req2, nil)
+
+	// Should have 3 messages: system, summary system, current request
+	require.Equal(t, 3, len(req2.Messages))
+	require.Equal(t, model.RoleSystem, req2.Messages[0].Role)
+	require.Equal(t, "system prompt", req2.Messages[0].Content)
+	require.Equal(t, model.RoleSystem, req2.Messages[1].Role)
+	require.Equal(t, "Session summary content", req2.Messages[1].Content)
+	require.Equal(t, model.RoleUser, req2.Messages[2].Role)
+	require.Equal(t, "current request", req2.Messages[2].Content)
 }
 
 func newSessionEventWithBranch(author, filterKey, branch string, msg model.Message) event.Event {
