@@ -578,13 +578,13 @@ Reranker is responsible for the precise ranking of search results
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/topk"
 )
 
-rerank := reranker.NewTopKReranker(
+rerank := topk.New(
     // Specify the number of results to be returned after precision sorting. 
     // If not set, all results will be returned by default
-    reranker.WithK(1),
+    topk.WithK(1),
 )
 
 kb := knowledge.New(

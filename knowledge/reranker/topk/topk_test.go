@@ -7,22 +7,23 @@
 //
 //
 
-package reranker
+package topk
 
 import (
 	"context"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
 )
 
-func TestTopKReranker(t *testing.T) {
-	results := []*Result{
+func TestReranker(t *testing.T) {
+	results := []*reranker.Result{
 		{Document: &document.Document{ID: "1"}, Score: 0.9},
 		{Document: &document.Document{ID: "2"}, Score: 0.8},
 		{Document: &document.Document{ID: "3"}, Score: 0.7},
 	}
-	rk := NewTopKReranker(WithK(2))
+	rk := New(WithK(2))
 	out, err := rk.Rerank(context.TODO(), nil, results)
 	if err != nil {
 		t.Fatalf("err %v", err)
@@ -35,7 +36,7 @@ func TestTopKReranker(t *testing.T) {
 	}
 
 	// K greater than len.
-	rk2 := NewTopKReranker(WithK(10))
+	rk2 := New(WithK(10))
 	out2, _ := rk2.Rerank(context.TODO(), nil, results)
 	if len(out2) != 3 {
 		t.Fatalf("expected all results")
