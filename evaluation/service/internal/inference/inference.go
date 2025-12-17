@@ -148,21 +148,3 @@ func convertToolResultResponse(event *event.Event) ([]*model.Message, error) {
 	}
 	return toolResponses, nil
 }
-
-// convertToolCallsToFunctionCalls maps model-level tool calls to the evalset ToolCall structure.
-func convertToolCallsToFunctionCalls(toolCalls *model.ToolCall) (*model.ToolCall, error) {
-	if toolCalls == nil {
-		return nil, fmt.Errorf("tool calls is nil")
-	}
-	if toolCalls.Function.Name == "" {
-		return nil, fmt.Errorf("tool call function name is empty")
-	}
-	var args map[string]any
-	if len(toolCalls.Function.Arguments) > 0 {
-		if err := json.Unmarshal(toolCalls.Function.Arguments, &args); err != nil {
-			return nil, fmt.Errorf("unmarshal tool arguments: %w", err)
-		}
-	}
-	callCopy := *toolCalls
-	return &callCopy, nil
-}

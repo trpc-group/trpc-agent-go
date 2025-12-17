@@ -180,40 +180,6 @@ func TestInferencePerInvocationErrors(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestConvertToolCallsToFunctionCalls(t *testing.T) {
-
-	_, err := convertToolCallsToFunctionCalls(nil)
-	assert.Error(t, err)
-
-	_, err = convertToolCallsToFunctionCalls(&model.ToolCall{Function: model.FunctionDefinitionParam{}})
-	assert.Error(t, err)
-
-	invalid := &model.ToolCall{
-		Function: model.FunctionDefinitionParam{
-			Name:      "tool",
-			Arguments: []byte("{"),
-		},
-	}
-	_, err = convertToolCallsToFunctionCalls(invalid)
-	assert.Error(t, err)
-
-	args, err := json.Marshal(map[string]any{"key": "value"})
-	assert.NoError(t, err)
-	call := &model.ToolCall{
-		ID: "call",
-		Function: model.FunctionDefinitionParam{
-			Name:      "tool",
-			Arguments: args,
-		},
-	}
-	result, err := convertToolCallsToFunctionCalls(call)
-	assert.NoError(t, err)
-	assert.Equal(t, "tool", result.Function.Name)
-	var parsed map[string]any
-	assert.NoError(t, json.Unmarshal(result.Function.Arguments, &parsed))
-	assert.Equal(t, "value", parsed["key"])
-}
-
 func TestConvertToolCallResponse(t *testing.T) {
 
 	args, err := json.Marshal(map[string]any{"count": 1})
