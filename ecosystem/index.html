@@ -312,7 +312,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../debugserver/" class="md-tabs__link">
+        <a href="../agui/" class="md-tabs__link">
           
   
   
@@ -958,29 +958,6 @@
             Server
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../debugserver/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Debug
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
             
               
                 
@@ -2914,7 +2891,7 @@
 <li>Configure authentication and rate limiting according to target service guidelines.</li>
 <li>Return values strictly align with <code>memory.Entry</code> and <code>memory.Memory</code>, use UTC for time fields.</li>
 <li>Tool declarations should accurately describe input and output for frontend and model understanding.</li>
-<li>Add README, examples and tests to ensure compatibility with <code>runner</code>, <code>server/debug</code> combinations.</li>
+<li>Add README, examples and tests to ensure compatibility with runner-based integrations.</li>
 </ul>
 <p><strong>Open Source Components That Can Be Integrated:</strong></p>
 <ul>
@@ -3135,22 +3112,6 @@
 <p><strong>Goal:</strong> Provide unified, extensible API service encapsulation for frontend Chat interfaces (such as ADK Web, AG-UI, Agent UI), covering session management, conversation sending, streaming transmission, tool calls, observability and authentication capabilities, and align with various UI protocols for plug-and-play.</p>
 <p><strong>Existing Implementation Reference:</strong></p>
 <ul>
-<li><strong>ADK Web Compatible HTTP Service</strong>: <code>server/debug</code>.<ul>
-<li>Endpoints (implemented):<ul>
-<li><code>GET /list-apps</code>: List available <code>Agent</code> applications.</li>
-<li><code>GET /apps/{appName}/users/{userId}/sessions</code>: List user sessions.</li>
-<li><code>POST /apps/{appName}/users/{userId}/sessions</code>: Create session.</li>
-<li><code>GET /apps/{appName}/users/{userId}/sessions/{sessionId}</code>: Query session.</li>
-<li><code>POST /run</code>: Non-streaming conversation inference, returns aggregated event list.</li>
-<li><code>POST /run_sse</code>: SSE streaming inference, returns token-level event stream.</li>
-<li><code>GET /debug/trace/{event_id}</code>: Query Trace attributes by event.</li>
-<li><code>GET /debug/trace/session/{session_id}</code>: Query Trace list by Session.</li>
-</ul>
-</li>
-<li>Features: Built-in CORS, pluggable session storage (default In-Memory), integrated with <code>runner.Runner</code>, observability instrumentation (exports key Spans).</li>
-<li>Scope note: Designed for debugging with ADK Web. It constructs runners internally from Agents and enforces a single <code>session.Service</code> across its session APIs and runners. Not recommended for production.</li>
-</ul>
-</li>
 <li><strong>A2A Server</strong>: <code>server/a2a</code>.<ul>
 <li>Service encapsulation for A2A protocol, built-in <code>AuthProvider</code> and task orchestration, suitable for platform-to-Agent integration scenarios.</li>
 </ul>
@@ -3158,7 +3119,6 @@
 </ul>
 <p><strong>Alignment with Frontend Protocols:</strong></p>
 <ul>
-<li><strong>ADK Web</strong>: Already aligned with request/response and event Schema, see <code>server/debug/internal/schema</code>.</li>
 <li><strong>AG-UI</strong>: Reference <code>https://github.com/ag-ui-protocol/ag-ui</code>.<ul>
 <li>Required capabilities:<ul>
 <li>Session list/create/query.</li>
@@ -3184,17 +3144,16 @@
 </ul>
 </li>
 <li><strong>Streaming Transmission</strong>:<ul>
-<li>SSE already implemented in <code>server/debug</code>, prioritize reuse; WebSocket can be ecosystem extension.</li>
+<li>Prefer SSE for streaming; WebSocket can be an ecosystem extension.</li>
 <li>Non-streaming endpoints need to aggregate final messages and tool responses according to UI expectations.</li>
 </ul>
 </li>
 <li><strong>Session Storage</strong>:<ul>
 <li>Inject specific implementation through <code>runner.WithSessionService</code>, reuse <code>session</code> module.</li>
-<li>For <code>server/debug</code>, set a single backend via <code>debug.WithSessionService(...)</code>; it overrides any runner‑level session service to ensure consistency.</li>
 </ul>
 </li>
 <li><strong>Observability</strong>:<ul>
-<li>Reuse <code>telemetry/trace</code> and <code>telemetry/metric</code>. <code>server/debug</code> already demonstrates how to export key Spans and event attributes for UI-side debugging and positioning.</li>
+<li>Reuse <code>telemetry/trace</code> and <code>telemetry/metric</code>, export key spans and event attributes for UI-side debugging and positioning.</li>
 </ul>
 </li>
 <li><strong>Authentication and Security</strong>:<ul>
@@ -3206,7 +3165,7 @@
 </ul>
 </li>
 </ul>
-<p><strong>Minimal Example (reuse ADK Web compatible service):</strong></p>
+<p><strong>AG-UI Adaptation Suggestion (skeleton):</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-12-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-12-3"> 3</a></span>
@@ -3224,26 +3183,89 @@
 <span class="normal"><a href="#__codelineno-12-15">15</a></span>
 <span class="normal"><a href="#__codelineno-12-16">16</a></span>
 <span class="normal"><a href="#__codelineno-12-17">17</a></span>
-<span class="normal"><a href="#__codelineno-12-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
+<span class="normal"><a href="#__codelineno-12-18">18</a></span>
+<span class="normal"><a href="#__codelineno-12-19">19</a></span>
+<span class="normal"><a href="#__codelineno-12-20">20</a></span>
+<span class="normal"><a href="#__codelineno-12-21">21</a></span>
+<span class="normal"><a href="#__codelineno-12-22">22</a></span>
+<span class="normal"><a href="#__codelineno-12-23">23</a></span>
+<span class="normal"><a href="#__codelineno-12-24">24</a></span>
+<span class="normal"><a href="#__codelineno-12-25">25</a></span>
+<span class="normal"><a href="#__codelineno-12-26">26</a></span>
+<span class="normal"><a href="#__codelineno-12-27">27</a></span>
+<span class="normal"><a href="#__codelineno-12-28">28</a></span>
+<span class="normal"><a href="#__codelineno-12-29">29</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">agui</span>
 </span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a>
 </span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="w">    </span><span class="s">&quot;net/http&quot;</span>
 </span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5"></a>
-</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
-</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7"></a><span class="w">    </span><span class="nx">debugsrv</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/debug&quot;</span>
-</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8"></a><span class="p">)</span>
-</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9"></a>
-</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11"></a><span class="w">    </span><span class="c1">// 1. Register Agent.</span>
-</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12"></a><span class="w">    </span><span class="nx">ag</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;assistant&quot;</span><span class="p">)</span>
-</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13"></a><span class="w">    </span><span class="nx">s</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">debugsrv</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">{</span>
-</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14"></a><span class="w">        </span><span class="nx">ag</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">:</span><span class="w"> </span><span class="nx">ag</span><span class="p">,</span>
-</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16"></a><span class="w">    </span><span class="c1">// 2. Expose HTTP Handler.</span>
-</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ListenAndServe</span><span class="p">(</span><span class="s">&quot;:8080&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">Handler</span><span class="p">())</span>
-</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18"></a><span class="p">}</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a><span class="w">    </span><span class="s">&quot;github.com/gorilla/mux&quot;</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9"></a><span class="p">)</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10"></a>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Server</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12"></a><span class="w">    </span><span class="nx">router</span><span class="w"> </span><span class="o">*</span><span class="nx">mux</span><span class="p">.</span><span class="nx">Router</span>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13"></a><span class="w">    </span><span class="nx">ag</span><span class="w">     </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span>
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14"></a><span class="w">    </span><span class="nx">run</span><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Runner</span>
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15"></a><span class="p">}</span>
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16"></a>
+</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17"></a><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">ag</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="nx">runner</span><span class="p">.</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">ag</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">ag</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19"></a><span class="w">    </span><span class="nx">s</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Server</span><span class="p">{</span><span class="nx">router</span><span class="p">:</span><span class="w"> </span><span class="nx">mux</span><span class="p">.</span><span class="nx">NewRouter</span><span class="p">(),</span><span class="w"> </span><span class="nx">ag</span><span class="p">:</span><span class="w"> </span><span class="nx">ag</span><span class="p">,</span><span class="w"> </span><span class="nx">run</span><span class="p">:</span><span class="w"> </span><span class="nx">r</span><span class="p">}</span>
+</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20"></a><span class="w">    </span><span class="nx">s</span><span class="p">.</span><span class="nx">routes</span><span class="p">()</span>
+</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">s</span>
+</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22"></a><span class="p">}</span>
+</span><span id="__span-12-23"><a id="__codelineno-12-23" name="__codelineno-12-23"></a>
+</span><span id="__span-12-24"><a id="__codelineno-12-24" name="__codelineno-12-24"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Handler</span><span class="p">()</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">router</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-12-25"><a id="__codelineno-12-25" name="__codelineno-12-25"></a>
+</span><span id="__span-12-26"><a id="__codelineno-12-26" name="__codelineno-12-26"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">routes</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-12-27"><a id="__codelineno-12-27" name="__codelineno-12-27"></a><span class="w">    </span><span class="c1">// GET /sessions, POST /sessions, GET /sessions/{id}</span>
+</span><span id="__span-12-28"><a id="__codelineno-12-28" name="__codelineno-12-28"></a><span class="w">    </span><span class="c1">// POST /chat (non-stream), POST /chat/stream (SSE)</span>
+</span><span id="__span-12-29"><a id="__codelineno-12-29" name="__codelineno-12-29"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>AG-UI Adaptation Suggestion (skeleton):</strong></p>
+<p><strong>Ecosystem Directions and Contribution Standards:</strong></p>
+<ul>
+<li><strong>Target UI/Protocols</strong>:<ul>
+<li><strong>AG-UI</strong>: Provide HTTP + SSE adaptation in <code>server/agui/</code>, with examples and <code>openapi.json</code>.</li>
+</ul>
+</li>
+<li><strong>Agent UI (agno)</strong>: Provide HTTP + SSE / WebSocket adaptation in <code>server/agentui/</code>.<ul>
+<li><strong>WebSocket/Bidi Streaming</strong>: Align with ADK <code>run_live</code>, provide real-time audio/video channels (depends on model-side support).</li>
+</ul>
+</li>
+<li><strong>Implementation Requirements</strong>:<ul>
+<li>Clear event Schema, complete mapping, ensure tool calls/responses have good experience in UI.</li>
+<li>Support pluggable session storage, default In-Memory, recommend supporting Redis/MySQL etc.</li>
+<li>Built-in CORS, authentication middleware (API Key/JWT), expose health check endpoints.</li>
+<li>Observability: integrate <code>telemetry</code>, provide minimal Trace and Metric examples.</li>
+<li>Documentation: README, OpenAPI, end-to-end examples (include simple frontend or curl scripts).</li>
+</ul>
+</li>
+</ul>
+<p>Link references:</p>
+<ul>
+<li><code>server/a2a</code> (A2A protocol encapsulation). </li>
+</ul>
+<h3 id="9-planner-ecosystem">9. Planner Ecosystem</h3>
+<p><strong>Goal:</strong> Provide diverse planners to adapt to different models and workflows, including built-in thinking capability adaptation and explicit planning (ReAct/Reflection, etc.).</p>
+<p><strong>Interface Definition:</strong> <code>planner.Planner</code>.</p>
+<ul>
+<li><code>BuildPlanningInstruction(ctx, invocation, llmRequest) string</code>: Build or inject system prompts and request configurations for planning.</li>
+<li><code>ProcessPlanningResponse(ctx, invocation, response) *model.Response</code>: Post-process model responses for planning (optional).</li>
+</ul>
+<p><strong>Existing Implementation Reference:</strong></p>
+<ul>
+<li><code>planner/builtin</code>: Adapt O series, Claude, Gemini and other models with reasoning parameters, through configuring <code>ReasoningEffort</code>, <code>ThinkingEnabled</code>, <code>ThinkingTokens</code>.</li>
+<li><code>planner/react</code>: Provide explicit planning instructions and response post-processing, agree on <code>/*PLANNING*/</code>, <code>/*ACTION*/</code>, <code>/*REASONING*/</code>, <code>/*FINAL_ANSWER*/</code> and other tags.</li>
+</ul>
+<p><strong>Ecosystem Directions:</strong></p>
+<ul>
+<li>Reflection Planner: Self-reflective correction and multi-round re-planning.</li>
+<li>LangGraph style Planner: Align with Pregel parallel and checkpoint mechanisms.</li>
+<li>Tool-first Planner: Selection and constraints for Tool-First processes.</li>
+</ul>
+<p><strong>Integration Example (skeleton):</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-13-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-13-3"> 3</a></span>
@@ -3272,142 +3294,41 @@
 <span class="normal"><a href="#__codelineno-13-26">26</a></span>
 <span class="normal"><a href="#__codelineno-13-27">27</a></span>
 <span class="normal"><a href="#__codelineno-13-28">28</a></span>
-<span class="normal"><a href="#__codelineno-13-29">29</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">agui</span>
+<span class="normal"><a href="#__codelineno-13-29">29</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">myplanner</span>
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a>
 </span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="w">    </span><span class="s">&quot;net/http&quot;</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
 </span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5"></a>
-</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6"></a><span class="w">    </span><span class="s">&quot;github.com/gorilla/mux&quot;</span>
-</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
-</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/planner&quot;</span>
 </span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9"></a><span class="p">)</span>
 </span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10"></a>
-</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Server</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12"></a><span class="w">    </span><span class="nx">router</span><span class="w"> </span><span class="o">*</span><span class="nx">mux</span><span class="p">.</span><span class="nx">Router</span>
-</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13"></a><span class="w">    </span><span class="nx">ag</span><span class="w">     </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span>
-</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14"></a><span class="w">    </span><span class="nx">run</span><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Runner</span>
-</span><span id="__span-13-15"><a id="__codelineno-13-15" name="__codelineno-13-15"></a><span class="p">}</span>
+</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Planner</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
+</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12"></a>
+</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13"></a><span class="kd">var</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nx">planner</span><span class="p">.</span><span class="nx">Planner</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">Planner</span><span class="p">)(</span><span class="kc">nil</span><span class="p">)</span>
+</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14"></a>
+</span><span id="__span-13-15"><a id="__codelineno-13-15" name="__codelineno-13-15"></a><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="nx">Planner</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Planner</span><span class="p">{}</span><span class="w"> </span><span class="p">}</span>
 </span><span id="__span-13-16"><a id="__codelineno-13-16" name="__codelineno-13-16"></a>
-</span><span id="__span-13-17"><a id="__codelineno-13-17" name="__codelineno-13-17"></a><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">ag</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="nx">runner</span><span class="p">.</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-13-18"><a id="__codelineno-13-18" name="__codelineno-13-18"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">ag</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">ag</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="o">...</span><span class="p">)</span>
-</span><span id="__span-13-19"><a id="__codelineno-13-19" name="__codelineno-13-19"></a><span class="w">    </span><span class="nx">s</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Server</span><span class="p">{</span><span class="nx">router</span><span class="p">:</span><span class="w"> </span><span class="nx">mux</span><span class="p">.</span><span class="nx">NewRouter</span><span class="p">(),</span><span class="w"> </span><span class="nx">ag</span><span class="p">:</span><span class="w"> </span><span class="nx">ag</span><span class="p">,</span><span class="w"> </span><span class="nx">run</span><span class="p">:</span><span class="w"> </span><span class="nx">r</span><span class="p">}</span>
-</span><span id="__span-13-20"><a id="__codelineno-13-20" name="__codelineno-13-20"></a><span class="w">    </span><span class="nx">s</span><span class="p">.</span><span class="nx">routes</span><span class="p">()</span>
-</span><span id="__span-13-21"><a id="__codelineno-13-21" name="__codelineno-13-21"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">s</span>
-</span><span id="__span-13-22"><a id="__codelineno-13-22" name="__codelineno-13-22"></a><span class="p">}</span>
-</span><span id="__span-13-23"><a id="__codelineno-13-23" name="__codelineno-13-23"></a>
-</span><span id="__span-13-24"><a id="__codelineno-13-24" name="__codelineno-13-24"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Handler</span><span class="p">()</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">router</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-13-25"><a id="__codelineno-13-25" name="__codelineno-13-25"></a>
-</span><span id="__span-13-26"><a id="__codelineno-13-26" name="__codelineno-13-26"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">routes</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-13-27"><a id="__codelineno-13-27" name="__codelineno-13-27"></a><span class="w">    </span><span class="c1">// GET /sessions, POST /sessions, GET /sessions/{id}</span>
-</span><span id="__span-13-28"><a id="__codelineno-13-28" name="__codelineno-13-28"></a><span class="w">    </span><span class="c1">// POST /chat (non-stream), POST /chat/stream (SSE)</span>
+</span><span id="__span-13-17"><a id="__codelineno-13-17" name="__codelineno-13-17"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">Planner</span><span class="p">)</span><span class="w"> </span><span class="nx">BuildPlanningInstruction</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-13-18"><a id="__codelineno-13-18" name="__codelineno-13-18"></a><span class="w">    </span><span class="c1">// Can inject custom parameters into req, and return system prompt string.</span>
+</span><span id="__span-13-19"><a id="__codelineno-13-19" name="__codelineno-13-19"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;You must plan before action.&quot;</span>
+</span><span id="__span-13-20"><a id="__codelineno-13-20" name="__codelineno-13-20"></a><span class="p">}</span>
+</span><span id="__span-13-21"><a id="__codelineno-13-21" name="__codelineno-13-21"></a>
+</span><span id="__span-13-22"><a id="__codelineno-13-22" name="__codelineno-13-22"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">Planner</span><span class="p">)</span><span class="w"> </span><span class="nx">ProcessPlanningResponse</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span><span class="w"> </span>
+</span><span id="__span-13-23"><a id="__codelineno-13-23" name="__codelineno-13-23"></a><span class="w">    </span><span class="nx">rsp</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-13-24"><a id="__codelineno-13-24" name="__codelineno-13-24"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">rsp</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-13-25"><a id="__codelineno-13-25" name="__codelineno-13-25"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-13-26"><a id="__codelineno-13-26" name="__codelineno-13-26"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-13-27"><a id="__codelineno-13-27" name="__codelineno-13-27"></a><span class="w">    </span><span class="c1">// Can do structured segmentation or tool call correction on rsp.</span>
+</span><span id="__span-13-28"><a id="__codelineno-13-28" name="__codelineno-13-28"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
 </span><span id="__span-13-29"><a id="__codelineno-13-29" name="__codelineno-13-29"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<p><strong>Ecosystem Directions and Contribution Standards:</strong></p>
-<ul>
-<li><strong>Target UI/Protocols</strong>:<ul>
-<li><strong>AG-UI</strong>: Provide HTTP + SSE adaptation in <code>server/agui/</code>, with examples and <code>openapi.json</code>.</li>
-</ul>
-</li>
-<li><strong>Agent UI (agno)</strong>: Provide HTTP + SSE / WebSocket adaptation in <code>server/agentui/</code>.<ul>
-<li><strong>WebSocket/Bidi Streaming</strong>: Align with ADK <code>run_live</code>, provide real-time audio/video channels (depends on model-side support).</li>
-</ul>
-</li>
-<li><strong>Implementation Requirements</strong>:<ul>
-<li>Clear event Schema, complete mapping, ensure tool calls/responses have good experience in UI.</li>
-<li>Support pluggable session storage, default In-Memory, recommend supporting Redis/MySQL etc.</li>
-<li>Built-in CORS, authentication middleware (API Key/JWT), expose health check endpoints.</li>
-<li>Observability: integrate <code>telemetry</code>, provide minimal Trace and Metric examples.</li>
-<li>Documentation: README, OpenAPI, end-to-end examples (include simple frontend or curl scripts).</li>
-</ul>
-</li>
-</ul>
-<p>Link references:</p>
-<ul>
-<li><code>server/debug</code> (ADK Web compatible) and its <code>openapi.json</code>. </li>
-<li><code>server/a2a</code> (A2A protocol encapsulation). </li>
-</ul>
-<h3 id="9-planner-ecosystem">9. Planner Ecosystem</h3>
-<p><strong>Goal:</strong> Provide diverse planners to adapt to different models and workflows, including built-in thinking capability adaptation and explicit planning (ReAct/Reflection, etc.).</p>
-<p><strong>Interface Definition:</strong> <code>planner.Planner</code>.</p>
-<ul>
-<li><code>BuildPlanningInstruction(ctx, invocation, llmRequest) string</code>: Build or inject system prompts and request configurations for planning.</li>
-<li><code>ProcessPlanningResponse(ctx, invocation, response) *model.Response</code>: Post-process model responses for planning (optional).</li>
-</ul>
-<p><strong>Existing Implementation Reference:</strong></p>
-<ul>
-<li><code>planner/builtin</code>: Adapt O series, Claude, Gemini and other models with reasoning parameters, through configuring <code>ReasoningEffort</code>, <code>ThinkingEnabled</code>, <code>ThinkingTokens</code>.</li>
-<li><code>planner/react</code>: Provide explicit planning instructions and response post-processing, agree on <code>/*PLANNING*/</code>, <code>/*ACTION*/</code>, <code>/*REASONING*/</code>, <code>/*FINAL_ANSWER*/</code> and other tags.</li>
-</ul>
-<p><strong>Ecosystem Directions:</strong></p>
-<ul>
-<li>Reflection Planner: Self-reflective correction and multi-round re-planning.</li>
-<li>LangGraph style Planner: Align with Pregel parallel and checkpoint mechanisms.</li>
-<li>Tool-first Planner: Selection and constraints for Tool-First processes.</li>
-</ul>
-<p><strong>Integration Example (skeleton):</strong></p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-14-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-14-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-14-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-14-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-14-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-14-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-14-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-14-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-14-10">10</a></span>
-<span class="normal"><a href="#__codelineno-14-11">11</a></span>
-<span class="normal"><a href="#__codelineno-14-12">12</a></span>
-<span class="normal"><a href="#__codelineno-14-13">13</a></span>
-<span class="normal"><a href="#__codelineno-14-14">14</a></span>
-<span class="normal"><a href="#__codelineno-14-15">15</a></span>
-<span class="normal"><a href="#__codelineno-14-16">16</a></span>
-<span class="normal"><a href="#__codelineno-14-17">17</a></span>
-<span class="normal"><a href="#__codelineno-14-18">18</a></span>
-<span class="normal"><a href="#__codelineno-14-19">19</a></span>
-<span class="normal"><a href="#__codelineno-14-20">20</a></span>
-<span class="normal"><a href="#__codelineno-14-21">21</a></span>
-<span class="normal"><a href="#__codelineno-14-22">22</a></span>
-<span class="normal"><a href="#__codelineno-14-23">23</a></span>
-<span class="normal"><a href="#__codelineno-14-24">24</a></span>
-<span class="normal"><a href="#__codelineno-14-25">25</a></span>
-<span class="normal"><a href="#__codelineno-14-26">26</a></span>
-<span class="normal"><a href="#__codelineno-14-27">27</a></span>
-<span class="normal"><a href="#__codelineno-14-28">28</a></span>
-<span class="normal"><a href="#__codelineno-14-29">29</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">myplanner</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2"></a>
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5"></a>
-</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
-</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/planner&quot;</span>
-</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9"></a><span class="p">)</span>
-</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10"></a>
-</span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Planner</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
-</span><span id="__span-14-12"><a id="__codelineno-14-12" name="__codelineno-14-12"></a>
-</span><span id="__span-14-13"><a id="__codelineno-14-13" name="__codelineno-14-13"></a><span class="kd">var</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nx">planner</span><span class="p">.</span><span class="nx">Planner</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">Planner</span><span class="p">)(</span><span class="kc">nil</span><span class="p">)</span>
-</span><span id="__span-14-14"><a id="__codelineno-14-14" name="__codelineno-14-14"></a>
-</span><span id="__span-14-15"><a id="__codelineno-14-15" name="__codelineno-14-15"></a><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="nx">Planner</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Planner</span><span class="p">{}</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-14-16"><a id="__codelineno-14-16" name="__codelineno-14-16"></a>
-</span><span id="__span-14-17"><a id="__codelineno-14-17" name="__codelineno-14-17"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">Planner</span><span class="p">)</span><span class="w"> </span><span class="nx">BuildPlanningInstruction</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-14-18"><a id="__codelineno-14-18" name="__codelineno-14-18"></a><span class="w">    </span><span class="c1">// Can inject custom parameters into req, and return system prompt string.</span>
-</span><span id="__span-14-19"><a id="__codelineno-14-19" name="__codelineno-14-19"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;You must plan before action.&quot;</span>
-</span><span id="__span-14-20"><a id="__codelineno-14-20" name="__codelineno-14-20"></a><span class="p">}</span>
-</span><span id="__span-14-21"><a id="__codelineno-14-21" name="__codelineno-14-21"></a>
-</span><span id="__span-14-22"><a id="__codelineno-14-22" name="__codelineno-14-22"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">Planner</span><span class="p">)</span><span class="w"> </span><span class="nx">ProcessPlanningResponse</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span><span class="w"> </span>
-</span><span id="__span-14-23"><a id="__codelineno-14-23" name="__codelineno-14-23"></a><span class="w">    </span><span class="nx">rsp</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-14-24"><a id="__codelineno-14-24" name="__codelineno-14-24"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">rsp</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-14-25"><a id="__codelineno-14-25" name="__codelineno-14-25"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-14-26"><a id="__codelineno-14-26" name="__codelineno-14-26"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-14-27"><a id="__codelineno-14-27" name="__codelineno-14-27"></a><span class="w">    </span><span class="c1">// Can do structured segmentation or tool call correction on rsp.</span>
-</span><span id="__span-14-28"><a id="__codelineno-14-28" name="__codelineno-14-28"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-14-29"><a id="__codelineno-14-29" name="__codelineno-14-29"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Combination and Usage:</strong> Inject Planner when creating <code>agent/llmagent</code>, or select different Planner strategies at <code>runner</code> layer as needed, combine with <code>Tool</code> and <code>Session</code> management for end-to-end implementation.</p>
 <p><strong>Contribution Suggestions:</strong></p>
 <ul>
 <li>Provide implementation and README, test cases, examples in <code>planner/&lt;name&gt;/</code>.</li>
-<li>Combine with <code>docs/overall-introduction.md</code>'s Observability and <code>server/debug</code> endpoints to provide end-to-end examples for frontend UI demonstration.</li>
+<li>Combine with <code>docs/overall-introduction.md</code>'s Observability to provide end-to-end examples for frontend UI demonstration.</li>
 <li>Follow goimports and error message style, add periods at end of comments, code line breaks around 80 columns.</li>
 </ul>
 <h2 id="component-relationship-description">Component Relationship Description</h2>
@@ -3434,7 +3355,52 @@
 <li><strong>Data Characteristics:</strong> Persistent data, maintained across sessions</li>
 </ul>
 <p><strong>Relationship Diagram:</strong></p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1"> 1</a></span>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-14-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-14-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-14-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-14-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-14-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-14-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-14-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-14-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-14-10">10</a></span>
+<span class="normal"><a href="#__codelineno-14-11">11</a></span>
+<span class="normal"><a href="#__codelineno-14-12">12</a></span>
+<span class="normal"><a href="#__codelineno-14-13">13</a></span>
+<span class="normal"><a href="#__codelineno-14-14">14</a></span>
+<span class="normal"><a href="#__codelineno-14-15">15</a></span>
+<span class="normal"><a href="#__codelineno-14-16">16</a></span>
+<span class="normal"><a href="#__codelineno-14-17">17</a></span>
+<span class="normal"><a href="#__codelineno-14-18">18</a></span>
+<span class="normal"><a href="#__codelineno-14-19">19</a></span>
+<span class="normal"><a href="#__codelineno-14-20">20</a></span>
+<span class="normal"><a href="#__codelineno-14-21">21</a></span>
+<span class="normal"><a href="#__codelineno-14-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a>┌─────────────────┐
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2"></a>│   Application   │
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3"></a>└─────────┬───────┘
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4"></a>          │
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5"></a>┌─────────▼───────┐    ┌─────────────────┐
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6"></a>│   Session       │    │   Memory        │
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7"></a>│   Service       │    │   Service       │
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8"></a>└─────────┬───────┘    └─────────┬───────┘
+</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9"></a>          │                      │
+</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10"></a>          └──────────┬───────────┘
+</span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11"></a>                     │
+</span><span id="__span-14-12"><a id="__codelineno-14-12" name="__codelineno-14-12"></a>          ┌─────────▼───────┐
+</span><span id="__span-14-13"><a id="__codelineno-14-13" name="__codelineno-14-13"></a>          │   Storage       │
+</span><span id="__span-14-14"><a id="__codelineno-14-14" name="__codelineno-14-14"></a>          │   Client        │
+</span><span id="__span-14-15"><a id="__codelineno-14-15" name="__codelineno-14-15"></a>          │   Management    │
+</span><span id="__span-14-16"><a id="__codelineno-14-16" name="__codelineno-14-16"></a>          └─────────┬───────┘
+</span><span id="__span-14-17"><a id="__codelineno-14-17" name="__codelineno-14-17"></a>                     │
+</span><span id="__span-14-18"><a id="__codelineno-14-18" name="__codelineno-14-18"></a>          ┌─────────▼───────┐
+</span><span id="__span-14-19"><a id="__codelineno-14-19" name="__codelineno-14-19"></a>          │   Storage       │
+</span><span id="__span-14-20"><a id="__codelineno-14-20" name="__codelineno-14-20"></a>          │   Backends      │
+</span><span id="__span-14-21"><a id="__codelineno-14-21" name="__codelineno-14-21"></a>          │   (Redis, DB)   │
+</span><span id="__span-14-22"><a id="__codelineno-14-22" name="__codelineno-14-22"></a>          └─────────────────┘
+</span></code></pre></div></td></tr></table></div>
+<p><strong>Usage Example:</strong></p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-15-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-15-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-15-4"> 4</a></span>
@@ -3449,67 +3415,22 @@
 <span class="normal"><a href="#__codelineno-15-13">13</a></span>
 <span class="normal"><a href="#__codelineno-15-14">14</a></span>
 <span class="normal"><a href="#__codelineno-15-15">15</a></span>
-<span class="normal"><a href="#__codelineno-15-16">16</a></span>
-<span class="normal"><a href="#__codelineno-15-17">17</a></span>
-<span class="normal"><a href="#__codelineno-15-18">18</a></span>
-<span class="normal"><a href="#__codelineno-15-19">19</a></span>
-<span class="normal"><a href="#__codelineno-15-20">20</a></span>
-<span class="normal"><a href="#__codelineno-15-21">21</a></span>
-<span class="normal"><a href="#__codelineno-15-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a>┌─────────────────┐
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a>│   Application   │
-</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a>└─────────┬───────┘
-</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a>          │
-</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5"></a>┌─────────▼───────┐    ┌─────────────────┐
-</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6"></a>│   Session       │    │   Memory        │
-</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7"></a>│   Service       │    │   Service       │
-</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8"></a>└─────────┬───────┘    └─────────┬───────┘
-</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9"></a>          │                      │
-</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10"></a>          └──────────┬───────────┘
-</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11"></a>                     │
-</span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12"></a>          ┌─────────▼───────┐
-</span><span id="__span-15-13"><a id="__codelineno-15-13" name="__codelineno-15-13"></a>          │   Storage       │
-</span><span id="__span-15-14"><a id="__codelineno-15-14" name="__codelineno-15-14"></a>          │   Client        │
-</span><span id="__span-15-15"><a id="__codelineno-15-15" name="__codelineno-15-15"></a>          │   Management    │
-</span><span id="__span-15-16"><a id="__codelineno-15-16" name="__codelineno-15-16"></a>          └─────────┬───────┘
-</span><span id="__span-15-17"><a id="__codelineno-15-17" name="__codelineno-15-17"></a>                     │
-</span><span id="__span-15-18"><a id="__codelineno-15-18" name="__codelineno-15-18"></a>          ┌─────────▼───────┐
-</span><span id="__span-15-19"><a id="__codelineno-15-19" name="__codelineno-15-19"></a>          │   Storage       │
-</span><span id="__span-15-20"><a id="__codelineno-15-20" name="__codelineno-15-20"></a>          │   Backends      │
-</span><span id="__span-15-21"><a id="__codelineno-15-21" name="__codelineno-15-21"></a>          │   (Redis, DB)   │
-</span><span id="__span-15-22"><a id="__codelineno-15-22" name="__codelineno-15-22"></a>          └─────────────────┘
-</span></code></pre></div></td></tr></table></div>
-<p><strong>Usage Example:</strong></p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-16-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-16-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-16-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-16-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-16-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-16-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-16-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-16-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-16-10">10</a></span>
-<span class="normal"><a href="#__codelineno-16-11">11</a></span>
-<span class="normal"><a href="#__codelineno-16-12">12</a></span>
-<span class="normal"><a href="#__codelineno-16-13">13</a></span>
-<span class="normal"><a href="#__codelineno-16-14">14</a></span>
-<span class="normal"><a href="#__codelineno-16-15">15</a></span>
-<span class="normal"><a href="#__codelineno-16-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a><span class="c1">// 1. Register storage client.</span>
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2"></a><span class="nx">storage</span><span class="p">.</span><span class="nx">RegisterRedisInstance</span><span class="p">(</span><span class="s">&quot;default&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">storage</span><span class="p">.</span><span class="nx">WithClientBuilderURL</span><span class="p">(</span><span class="s">&quot;redis://localhost:6379&quot;</span><span class="p">))</span>
-</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a>
-</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4"></a><span class="c1">// 2. Session service uses storage client.</span>
-</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">NewRedisService</span><span class="p">(</span>
-</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6"></a><span class="w">    </span><span class="nx">session</span><span class="p">.</span><span class="nx">WithRedisInstance</span><span class="p">(</span><span class="s">&quot;default&quot;</span><span class="p">),</span>
-</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7"></a><span class="p">)</span>
-</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8"></a>
-</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9"></a><span class="c1">// 3. Memory service uses storage client.</span>
-</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10"></a><span class="nx">memoryService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memory</span><span class="p">.</span><span class="nx">NewRedisService</span><span class="p">(</span>
-</span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11"></a><span class="w">    </span><span class="nx">memory</span><span class="p">.</span><span class="nx">WithRedisInstance</span><span class="p">(</span><span class="s">&quot;default&quot;</span><span class="p">),</span>
-</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12"></a><span class="p">)</span>
-</span><span id="__span-16-13"><a id="__codelineno-16-13" name="__codelineno-16-13"></a>
-</span><span id="__span-16-14"><a id="__codelineno-16-14" name="__codelineno-16-14"></a><span class="c1">// 4. Use in application.</span>
-</span><span id="__span-16-15"><a id="__codelineno-16-15" name="__codelineno-16-15"></a><span class="nx">session</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">CreateSession</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionKey</span><span class="p">,</span><span class="w"> </span><span class="nx">state</span><span class="p">)</span>
-</span><span id="__span-16-16"><a id="__codelineno-16-16" name="__codelineno-16-16"></a><span class="nx">memory</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memoryService</span><span class="p">.</span><span class="nx">AddMemory</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userKey</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;User likes coffee&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;preferences&quot;</span><span class="p">})</span>
+<span class="normal"><a href="#__codelineno-15-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a><span class="c1">// 1. Register storage client.</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a><span class="nx">storage</span><span class="p">.</span><span class="nx">RegisterRedisInstance</span><span class="p">(</span><span class="s">&quot;default&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">storage</span><span class="p">.</span><span class="nx">WithClientBuilderURL</span><span class="p">(</span><span class="s">&quot;redis://localhost:6379&quot;</span><span class="p">))</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a><span class="c1">// 2. Session service uses storage client.</span>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">NewRedisService</span><span class="p">(</span>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6"></a><span class="w">    </span><span class="nx">session</span><span class="p">.</span><span class="nx">WithRedisInstance</span><span class="p">(</span><span class="s">&quot;default&quot;</span><span class="p">),</span>
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7"></a><span class="p">)</span>
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8"></a>
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9"></a><span class="c1">// 3. Memory service uses storage client.</span>
+</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10"></a><span class="nx">memoryService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memory</span><span class="p">.</span><span class="nx">NewRedisService</span><span class="p">(</span>
+</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11"></a><span class="w">    </span><span class="nx">memory</span><span class="p">.</span><span class="nx">WithRedisInstance</span><span class="p">(</span><span class="s">&quot;default&quot;</span><span class="p">),</span>
+</span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12"></a><span class="p">)</span>
+</span><span id="__span-15-13"><a id="__codelineno-15-13" name="__codelineno-15-13"></a>
+</span><span id="__span-15-14"><a id="__codelineno-15-14" name="__codelineno-15-14"></a><span class="c1">// 4. Use in application.</span>
+</span><span id="__span-15-15"><a id="__codelineno-15-15" name="__codelineno-15-15"></a><span class="nx">session</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">CreateSession</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionKey</span><span class="p">,</span><span class="w"> </span><span class="nx">state</span><span class="p">)</span>
+</span><span id="__span-15-16"><a id="__codelineno-15-16" name="__codelineno-15-16"></a><span class="nx">memory</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memoryService</span><span class="p">.</span><span class="nx">AddMemory</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userKey</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;User likes coffee&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;preferences&quot;</span><span class="p">})</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="contribution-guidance">Contribution Guidance</h2>
 <h2 id="contribution-guidance_1">Contribution Guidance</h2>
@@ -3529,17 +3450,17 @@
 <li>Submit Pull Request</li>
 </ol>
 <p><strong>Directory Structure Example:</strong></p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
-<span class="normal"><a href="#__codelineno-17-2">2</a></span>
-<span class="normal"><a href="#__codelineno-17-3">3</a></span>
-<span class="normal"><a href="#__codelineno-17-4">4</a></span>
-<span class="normal"><a href="#__codelineno-17-5">5</a></span>
-<span class="normal"><a href="#__codelineno-17-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a>model/gemini/
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a>├── model.go
-</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a>├── config.go
-</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a>├── examples/
-</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5"></a>├── README.md
-</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6"></a>└── gemini_test.go
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1">1</a></span>
+<span class="normal"><a href="#__codelineno-16-2">2</a></span>
+<span class="normal"><a href="#__codelineno-16-3">3</a></span>
+<span class="normal"><a href="#__codelineno-16-4">4</a></span>
+<span class="normal"><a href="#__codelineno-16-5">5</a></span>
+<span class="normal"><a href="#__codelineno-16-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a>model/gemini/
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2"></a>├── model.go
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a>├── config.go
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4"></a>├── examples/
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5"></a>├── README.md
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6"></a>└── gemini_test.go
 </span></code></pre></div></td></tr></table></div>
 <h2 id="summary">Summary</h2>
 <p>Ecosystem development is an important direction for tRPC-Agent-Go development. By implementing standard interfaces, various third-party services and tools can be easily integrated to expand the framework's capabilities.</p>
@@ -3583,7 +3504,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 12, 2025 02:44:05 UTC">2025-11-12 02:44:05</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 17, 2025 02:13:29 UTC">2025-12-17 02:13:29</span>
   </span>
 
     
