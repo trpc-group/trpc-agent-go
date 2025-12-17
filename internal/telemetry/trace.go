@@ -193,7 +193,7 @@ const ToolNameMergedTools = "(merged tools)"
 
 // TraceMergedToolCalls traces the invocation of a merged tool call.
 // Calling this function is not needed for telemetry purposes. This is provided
-// for preventing /debug/trace requests (typically sent by web UI).
+// for preventing trace-query requests typically sent by web UIs.
 func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	span.SetAttributes(
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
