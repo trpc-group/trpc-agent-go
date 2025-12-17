@@ -443,10 +443,11 @@ func (r *A2AAgent) wrapEventChannelWithTelemetry(
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
+		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
 			if fullRespEvent != nil {
 				log.Debug("fullRespEvent is not ni")
-				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, nil)
+				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage)
 			}
 			span.End()
 			close(wrappedChan)
@@ -454,6 +455,11 @@ func (r *A2AAgent) wrapEventChannelWithTelemetry(
 
 		for evt := range originalChan {
 			if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
+				if evt.Response.Usage != nil {
+					tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
+					tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
+					tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
+				}
 				fullRespEvent = evt
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
