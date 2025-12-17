@@ -631,6 +631,142 @@ func TestRedisService_EnqueueSummaryJob_ChannelClosed_AllChannelsClosed(t *testi
 	// This simulates a scenario where the service is being shut down
 }
 
+// traceCtxKey is a context key type for trace ID in tests.
+type traceCtxKey string
+
+// traceIDKey is the context key for trace ID.
+const traceIDKey traceCtxKey = "trace-id"
+
+// ctxCaptureSummarizer captures context value during Summarize call.
+type ctxCaptureSummarizer struct {
+	capturedVal any
+	done        chan struct{}
+}
+
+func (c *ctxCaptureSummarizer) ShouldSummarize(sess *session.Session) bool { return true }
+func (c *ctxCaptureSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	c.capturedVal = ctx.Value(traceIDKey)
+	close(c.done)
+	return "captured-summary", nil
+}
+func (c *ctxCaptureSummarizer) SetPrompt(prompt string)  {}
+func (c *ctxCaptureSummarizer) SetModel(m model.Model)   {}
+func (c *ctxCaptureSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+func TestRedisService_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	captureSummarizer := &ctxCaptureSummarizer{done: make(chan struct{})}
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(10),
+		WithSummarizer(captureSummarizer),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Create a session first.
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-ctx"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append an event to make delta non-empty.
+	e := event.New("inv", "user")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Create context with trace ID value.
+	ctx := context.WithValue(context.Background(), traceIDKey, "trace-12345")
+
+	// Enqueue summary job with context containing trace ID.
+	err = s.EnqueueSummaryJob(ctx, sess, "", false)
+	require.NoError(t, err)
+
+	// Wait for async processing to complete.
+	select {
+	case <-captureSummarizer.done:
+		// Summarizer was called.
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for summarizer to be called")
+	}
+
+	// Verify the context value was preserved in async worker.
+	assert.Equal(t, "trace-12345", captureSummarizer.capturedVal)
+}
+
+func TestRedisService_EnqueueSummaryJob_JobPointerIsolation(t *testing.T) {
+	// Test that the fix for job pointer modification works correctly
+	// This test verifies that when a branch summary is processed, it correctly
+	// cascades to create a full-session summary, and both are stored properly
+
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	var callCount int
+	summarizer := &isolationTestSummarizer{
+		onSummarize: func() {
+			callCount++
+		},
+	}
+
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(10),
+		WithSummarizer(summarizer),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Create a session
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session-isolation"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append an event
+	e := event.New("inv", "user")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Enqueue a branch summary job - this should trigger both branch and full-session processing
+	err = s.EnqueueSummaryJob(context.Background(), sess, "test-branch", false)
+	require.NoError(t, err)
+
+	// Wait for processing to complete
+	time.Sleep(200 * time.Millisecond)
+
+	// Should have 2 calls: 1 branch summary + 1 cascaded full-session summary
+	assert.Equal(t, 2, callCount, "Should have processed 2 summaries (branch + cascaded full session)")
+
+	// Verify that summaries were created for both filter keys
+	_, exists1 := s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey("test-branch"))
+	assert.True(t, exists1, "Branch summary should exist")
+
+	_, exists2 := s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey(""))
+	assert.True(t, exists2, "Full session summary should exist")
+
+	// The key verification is that both summaries exist, proving the cascade worked
+	// and that job pointer modification didn't break the processing
+}
+
+// isolationTestSummarizer helps test job pointer isolation
+type isolationTestSummarizer struct {
+	onSummarize func()
+}
+
+func (s *isolationTestSummarizer) ShouldSummarize(sess *session.Session) bool { return true }
+func (s *isolationTestSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	s.onSummarize()
+	return "test-summary", nil
+}
+func (s *isolationTestSummarizer) SetPrompt(prompt string)  {}
+func (s *isolationTestSummarizer) SetModel(m model.Model)   {}
+func (s *isolationTestSummarizer) Metadata() map[string]any { return map[string]any{} }
+
 func TestRedisService_GetSessionSummaryText_NilSession(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
