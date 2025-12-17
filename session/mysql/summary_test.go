@@ -21,9 +21,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	isummary "trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
 
 // mockSummarizerImpl is a mock summarizer for testing
@@ -702,14 +702,14 @@ func TestEnqueueSummaryJob_QueueFull(t *testing.T) {
 		WithAsyncSummaryNum(1),
 		WithSummaryQueueSize(1),
 	)
-	// Manually initialize summary workers
+	// Manually initialize summary workers.
 	s.summaryJobChans = []chan *summaryJob{make(chan *summaryJob, 1)}
 	defer s.Close()
 
 	ctx := context.Background()
 	sess := session.NewSession("test-app", "user-456", "session-123")
 
-	// Fill the queue first
+	// Fill the queue first.
 	job1 := &summaryJob{
 		filterKey: "",
 		force:     false,
@@ -718,7 +718,7 @@ func TestEnqueueSummaryJob_QueueFull(t *testing.T) {
 	index := sess.Hash % len(s.summaryJobChans)
 	s.summaryJobChans[index] <- job1
 
-	// Mock sync fallback processing
+	// Mock sync fallback processing.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary, updated_at FROM session_summaries")).
 		WithArgs(sess.AppName, sess.UserID, sess.ID, "", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}))
@@ -735,9 +735,170 @@ func TestEnqueueSummaryJob_QueueFull(t *testing.T) {
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// Try to enqueue when queue is full - should fallback to sync
+	// Try to enqueue when queue is full - should fallback to sync.
 	err = s.EnqueueSummaryJob(ctx, sess, "", false)
 	assert.NoError(t, err)
+}
+
+func TestEnqueueSummaryJob_QueueFull_FallbackToSyncWithCascade(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &fakeSummarizer{allow: true, out: "fallback-summary"}
+
+	s := createTestService(t, db,
+		WithSummarizer(summarizer),
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(1),
+	)
+	// Manually initialize summary workers.
+	s.summaryJobChans = []chan *summaryJob{make(chan *summaryJob, 1)}
+	defer s.Close()
+
+	ctx := context.Background()
+	sess := session.NewSession("test-app", "user-456", "session-123")
+
+	// Add an event to make delta non-empty.
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{
+		Message: model.Message{Role: model.RoleUser, Content: "hello"},
+	}}}
+	sess.Events = append(sess.Events, *e)
+
+	// Fill the queue first.
+	job1 := &summaryJob{
+		filterKey: "blocking",
+		force:     false,
+		session:   sess,
+	}
+	index := sess.Hash % len(s.summaryJobChans)
+	s.summaryJobChans[index] <- job1
+
+	// Mock sync fallback processing for branch summary.
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"user-messages",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Mock sync fallback processing for full-session summary (cascade).
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Try to enqueue when queue is full - should fallback to sync with cascade.
+	err = s.EnqueueSummaryJob(ctx, sess, "user-messages", false)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestEnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &fakeSummarizer{allow: true, out: "sync-summary"}
+
+	// Create service without async workers (summaryJobChans is nil).
+	s := createTestService(t, db, WithSummarizer(summarizer))
+
+	ctx := context.Background()
+	sess := session.NewSession("test-app", "user-456", "session-123")
+
+	// Add an event to make delta non-empty.
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{
+		Message: model.Message{Role: model.RoleUser, Content: "hello"},
+	}}}
+	sess.Events = append(sess.Events, *e)
+
+	// Mock sync processing for branch summary.
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"tool-usage",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Mock sync processing for full-session summary (cascade).
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// EnqueueSummaryJob should fall back to sync processing with cascade.
+	err = s.EnqueueSummaryJob(ctx, sess, "tool-usage", false)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestEnqueueSummaryJob_FullSessionKey_NoCascade(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &fakeSummarizer{allow: true, out: "full-summary"}
+
+	// Create service without async workers.
+	s := createTestService(t, db, WithSummarizer(summarizer))
+
+	ctx := context.Background()
+	sess := session.NewSession("test-app", "user-456", "session-123")
+
+	// Add an event to make delta non-empty.
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{
+		Message: model.Message{Role: model.RoleUser, Content: "hello"},
+	}}}
+	sess.Events = append(sess.Events, *e)
+
+	// Mock sync processing for full-session summary only (no cascade needed).
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// EnqueueSummaryJob with empty filterKey should not cascade.
+	err = s.EnqueueSummaryJob(ctx, sess, "", false)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestCreateSessionSummary_WithFilterKey(t *testing.T) {

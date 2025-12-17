@@ -19,9 +19,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	isummary "trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
 
 type fakeSummarizer struct {
@@ -404,16 +404,23 @@ func TestRedisService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) {
 	}
 
 	// Now try to enqueue another job - should fall back to sync
-	err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	err = s.EnqueueSummaryJob(context.Background(), sess, "user-messages", false)
 	require.NoError(t, err)
 
-	// Verify summary was created immediately in Redis (sync fallback)
+	// Verify both branch summary and full summary were created immediately in Redis (sync fallback with cascade)
 	client := buildRedisClient(t, redisURL)
 	raw, err := client.HGet(context.Background(), getSessionSummaryKey(key), key.SessionID).Bytes()
 	require.NoError(t, err)
 	var m map[string]*session.Summary
 	require.NoError(t, json.Unmarshal(raw, &m))
-	sum, ok := m[""]
+
+	// Check branch summary
+	sum, ok := m["user-messages"]
+	require.True(t, ok)
+	require.Equal(t, "fallback-summary", sum.Summary)
+
+	// Check full summary (should be created by cascade)
+	sum, ok = m[""]
 	require.True(t, ok)
 	require.Equal(t, "fallback-summary", sum.Summary)
 }
@@ -623,12 +630,122 @@ func TestRedisService_EnqueueSummaryJob_ChannelClosed_AllChannelsClosed(t *testi
 	require.NoError(t, err)
 	require.NotNil(t, summaries)
 
+	// Check branch summary
 	sum, ok := summaries["all-closed-test"]
 	require.True(t, ok)
 	require.Equal(t, "all-channels-closed-summary", sum.Summary)
 
-	// Don't call s.Close() since we manually closed the channels
-	// This simulates a scenario where the service is being shut down
+	// Check full summary (should be created by cascade)
+	sum, ok = summaries[""]
+	require.True(t, ok)
+	require.Equal(t, "all-channels-closed-summary", sum.Summary)
+
+	// Don't call s.Close() since we manually closed the channels.
+	// This simulates a scenario where the service is being shut down.
+}
+
+func TestRedisService_EnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with async workers.
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(1),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "sync-summary"}),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Create a session first.
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append an event to make delta non-empty.
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Close channels and set to nil to simulate no async workers scenario.
+	for _, ch := range s.summaryJobChans {
+		close(ch)
+	}
+	s.summaryWg.Wait()
+	s.summaryJobChans = nil
+
+	// EnqueueSummaryJob should fall back to sync processing with cascade.
+	err = s.EnqueueSummaryJob(context.Background(), sess, "tool-usage", false)
+	require.NoError(t, err)
+
+	// Verify both branch summary and full summary were created.
+	client := buildRedisClient(t, redisURL)
+	raw, err := client.HGet(context.Background(), getSessionSummaryKey(key), key.SessionID).Bytes()
+	require.NoError(t, err)
+	var m map[string]*session.Summary
+	require.NoError(t, json.Unmarshal(raw, &m))
+
+	// Check branch summary.
+	sum, ok := m["tool-usage"]
+	require.True(t, ok)
+	require.Equal(t, "sync-summary", sum.Summary)
+
+	// Check full summary (should be created by cascade).
+	sum, ok = m[""]
+	require.True(t, ok)
+	require.Equal(t, "sync-summary", sum.Summary)
+}
+
+func TestRedisService_EnqueueSummaryJob_FullSessionKey_NoCascade(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with async workers.
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(1),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "full-summary"}),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Create a session first.
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append an event to make delta non-empty.
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Close channels and set to nil to simulate no async workers scenario.
+	for _, ch := range s.summaryJobChans {
+		close(ch)
+	}
+	s.summaryWg.Wait()
+	s.summaryJobChans = nil
+
+	// EnqueueSummaryJob with empty filterKey should not cascade.
+	err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	require.NoError(t, err)
+
+	// Verify only full summary was created.
+	client := buildRedisClient(t, redisURL)
+	raw, err := client.HGet(context.Background(), getSessionSummaryKey(key), key.SessionID).Bytes()
+	require.NoError(t, err)
+	var m map[string]*session.Summary
+	require.NoError(t, json.Unmarshal(raw, &m))
+
+	// Check full summary exists.
+	sum, ok := m[""]
+	require.True(t, ok)
+	require.Equal(t, "full-summary", sum.Summary)
+
+	// There should be only one summary (no extra cascade).
+	require.Len(t, m, 1)
 }
 
 func TestRedisService_GetSessionSummaryText_NilSession(t *testing.T) {
