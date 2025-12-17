@@ -9,14 +9,12 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/model/gemini => ../../model/gemini
 	trpc.group/trpc-go/trpc-agent-go/model/ollama => ../../model/ollama
 	trpc.group/trpc-go/trpc-agent-go/model/provider => ../../model/provider
-	trpc.group/trpc-go/trpc-agent-go/server/debug => ../../server/debug
 )
 
 require (
 	google.golang.org/genai v1.36.0
 	trpc.group/trpc-go/trpc-agent-go v0.7.0
 	trpc.group/trpc-go/trpc-agent-go/evaluation v0.0.0-20251126064502-c8c2594d2519
-	trpc.group/trpc-go/trpc-agent-go/server/debug v0.0.0-20251126064502-c8c2594d2519
 )
 
 require (
@@ -34,13 +32,11 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.7 // indirect
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
-	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	github.com/ollama/ollama v0.13.1 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
-	github.com/rs/cors v1.11.1 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect

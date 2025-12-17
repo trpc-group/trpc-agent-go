@@ -966,39 +966,6 @@ agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithNumRuns(nu
 
 ## 使用指南
 
-### Debug Server 集成
-
-Debug Server 集成了 Evaluation 管理与运行接口，提供了可视化评估能力。
-
-```go
-import (
-	"net/http"
-
-	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
-	evalresultlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
-	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
-	debugserver "trpc.group/trpc-go/trpc-agent-go/server/debug"
-)
-
-agents := map[string]agent.Agent{
-	"math-app": myAgent,
-}
-srv := debugserver.New(
-	agents,
-	debugserver.WithEvalSetManager(evalsetlocal.New(evalset.WithBaseDir("./evaldata"))),
-	debugserver.WithEvalResultManager(evalresultlocal.New(evalresult.WithBaseDir("./evaldata"))),
-	debugserver.WithMetricManager(metriclocal.New(metric.WithBaseDir("./evaldata"))),
-)
-// Debug Server returns an http.Handler; register it to your HTTP server.
-_ = http.ListenAndServe(":8000", srv.Handler())
-```
-
-完整代码参见 [examples/evaluation/debug](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/debug)。
-
 ### 本地文件路径
 
 本地文件有三种：
