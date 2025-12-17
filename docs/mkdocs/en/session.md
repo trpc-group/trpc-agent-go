@@ -689,10 +689,10 @@ sessionService, err := postgres.NewService(
 
 **Delete Behavior Comparison:**
 
-| Configuration      | Delete Operation                | Query Behavior              | Data Recovery   |
-| ------------------ | ------------------------------- | --------------------------- | --------------- |
+| Configuration      | Delete Operation                | Query Behavior                                                                   | Data Recovery   |
+| ------------------ | ------------------------------- | -------------------------------------------------------------------------------- | --------------- |
 | `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | Queries include `WHERE deleted_at IS NULL`, returning only non-soft-deleted rows | Recoverable     |
-| `softDelete=false` | `DELETE FROM ...`               | Query all records           | Not recoverable |
+| `softDelete=false` | `DELETE FROM ...`               | Query all records                                                                | Not recoverable |
 
 **TTL Auto Cleanup:**
 
@@ -947,10 +947,10 @@ sessionService, err := mysql.NewService(
 
 **Delete Behavior Comparison:**
 
-| Configuration      | Delete Operation                | Query Behavior              | Data Recovery   |
-| ------------------ | ------------------------------- | --------------------------- | --------------- |
+| Configuration      | Delete Operation                | Query Behavior                                                                   | Data Recovery   |
+| ------------------ | ------------------------------- | -------------------------------------------------------------------------------- | --------------- |
 | `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | Queries include `WHERE deleted_at IS NULL`, returning only non-soft-deleted rows | Recoverable     |
-| `softDelete=false` | `DELETE FROM ...`               | Query all records           | Not recoverable |
+| `softDelete=false` | `DELETE FROM ...`               | Query all records                                                                | Not recoverable |
 
 **TTL Auto Cleanup:**
 
@@ -1228,7 +1228,7 @@ The framework provides two distinct modes for managing conversation context sent
 
 **Mode 1: With Summary (`WithAddSessionSummary(true)`)**
 
-- The session summary is prepended as a system message.
+- The session summary is inserted as a separate system message after the first existing system message (or prepended if no system message exists).
 - **All incremental events** after the summary timestamp are included (no truncation).
 - This ensures complete context: condensed history (summary) + all new conversations since summarization.
 - `WithMaxHistoryRuns` is **ignored** in this mode.
@@ -1245,9 +1245,9 @@ The framework provides two distinct modes for managing conversation context sent
 ```
 When AddSessionSummary = true:
 ┌─────────────────────────────────────┐
-│ System Prompt                       │
+│ Existing System Message (optional)  │ ← If present
 ├─────────────────────────────────────┤
-│ Session Summary (system message)    │ ← Condensed history
+│ Session Summary (system message)    │ ← Inserted after first system message
 ├─────────────────────────────────────┤
 │ Event 1 (after summary timestamp)   │ ┐
 │ Event 2                             │ │ All incremental
