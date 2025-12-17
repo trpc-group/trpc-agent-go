@@ -1,0 +1,89 @@
+# Team Example
+
+This example demonstrates the top-level `team` package.
+
+It supports two modes:
+
+- `team`: a coordinator agent calls member agents as tools and then replies.
+- `swarm`: member agents hand off to each other via `transfer_to_agent`.
+
+## What is a Team?
+
+A Team is an `agent.Agent` that helps you run multiple Agents together.
+
+- In `team` mode, the coordinator is in charge and can call members as tools.
+- In `swarm` mode, there is no coordinator loop; the current member can decide
+  to hand off to another member.
+
+## Prerequisites
+
+- Go 1.21 or later
+- A valid OpenAI-compatible Application Programming Interface (API) key
+
+## Terminology
+
+- Application Programming Interface (API): the interface your code calls to
+  talk to a model service.
+- Uniform Resource Locator (URL): a web address, like `https://...`.
+
+## Environment Variables
+
+| Variable          | Description                              | Default Value               |
+| ----------------- | ---------------------------------------- | --------------------------- |
+| `OPENAI_API_KEY`  | API key for the model service (required) | ``                          |
+| `OPENAI_BASE_URL` | Base URL for the model API endpoint      | `https://api.openai.com/v1` |
+
+## Command Line Arguments
+
+| Argument      | Description                           | Default Value   |
+| ------------- | ------------------------------------- | --------------- |
+| `-mode`       | `team` or `swarm`                     | `team`          |
+| `-model`      | Name of the model to use              | `deepseek-chat` |
+| `-variant`    | Variant passed to the OpenAI provider | `openai`        |
+| `-streaming`  | Enable streaming output               | `true`          |
+
+## Usage
+
+### Coordinator Team Mode
+
+```bash
+cd examples/team
+export OPENAI_API_KEY="your-api-key"
+go run . -mode team
+```
+
+### Swarm Mode
+
+```bash
+cd examples/team
+export OPENAI_API_KEY="your-api-key"
+go run . -mode swarm
+```
+
+## How It Works
+
+### Team Mode (Coordinator calls members as tools)
+
+```mermaid
+flowchart LR
+    U[User] --> T[team (coordinator)]
+    T -->|tool call| C[coder]
+    T -->|tool call| R[researcher]
+    T -->|tool call| V[reviewer]
+    T --> U
+```
+
+### Swarm Mode (Members hand off)
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant R as researcher
+    participant C as coder
+    participant V as reviewer
+
+    U->>R: prompt
+    R->>C: transfer_to_agent
+    C->>V: transfer_to_agent
+    V->>U: final answer
+```
