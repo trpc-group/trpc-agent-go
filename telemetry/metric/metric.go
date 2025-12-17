@@ -148,20 +148,6 @@ func initInvokeAgentMetrics(mp metric.MeterProvider) error {
 	); err != nil {
 		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIClientOperationDuration, err)
 	}
-	if itelemetry.InvokeAgentMetricGenAIClientTimePerOutputToken, err = itelemetry.InvokeAgentMeter.Float64Histogram(
-		metrics.MetricGenAIServerTimePerOutputToken,
-		metric.WithDescription("Time per output token for server"),
-		metric.WithUnit("s"),
-	); err != nil {
-		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIServerTimePerOutputToken, err)
-	}
-	if itelemetry.InvokeAgentMetricGenAIClientOutputTokenPerTime, err = itelemetry.InvokeAgentMeter.Float64Histogram(
-		metrics.MetricTRPCAgentGoClientOutputTokenPerTime,
-		metric.WithDescription("Output tokens per second for server"),
-		metric.WithUnit("{token}/s"),
-	); err != nil {
-		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricTRPCAgentGoClientOutputTokenPerTime, err)
-	}
 
 	return nil
 }

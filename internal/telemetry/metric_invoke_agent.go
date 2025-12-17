@@ -33,12 +33,6 @@ var (
 	InvokeAgentMetricGenAIClientTimeToFirstToken metric.Float64Histogram = noop.Float64Histogram{}
 	// InvokeAgentMetricGenAIClientOperationDuration records the distribution of total agent invocation durations in seconds.
 	InvokeAgentMetricGenAIClientOperationDuration metric.Float64Histogram = noop.Float64Histogram{}
-	// InvokeAgentMetricGenAIClientTimePerOutputToken records the distribution of time per output token in seconds.
-	// This metric measures the decode phase performance by calculating (total_duration - time_to_first_token) / (output_tokens - first_token_count).
-	InvokeAgentMetricGenAIClientTimePerOutputToken metric.Float64Histogram = noop.Float64Histogram{}
-	// InvokeAgentMetricGenAIClientOutputTokenPerTime records the distribution of output token per time for client.
-	// 1 / InvokeAgentMetricGenAIClientTimePerOutputToken.
-	InvokeAgentMetricGenAIClientOutputTokenPerTime metric.Float64Histogram = noop.Float64Histogram{}
 )
 
 // invokeAgentAttributes is the attributes for invoke agent metrics.
@@ -86,7 +80,6 @@ type InvokeAgentTracker struct {
 	start                  time.Time
 	isFirstToken           bool
 	firstTokenTimeDuration time.Duration
-	firstCompleteToken     int
 	totalCompletionTokens  int
 	totalPromptTokens      int
 
@@ -125,9 +118,6 @@ func (t *InvokeAgentTracker) TrackResponse(response *model.Response) {
 		t.firstTokenTimeDuration = time.Since(t.start)
 		t.isFirstToken = false
 
-		if response.Usage != nil {
-			t.firstCompleteToken = response.Usage.CompletionTokens
-		}
 	}
 
 	// Track token usage
@@ -168,8 +158,6 @@ func (t *InvokeAgentTracker) RecordMetrics() func() {
 		InvokeMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalCompletionTokens),
 			metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoOutputTokenType))...))
 
-		// Calculate and record derived metrics
-		t.recordDerivedMetrics(otelAttrs, requestDuration)
 	}
 }
 
@@ -203,26 +191,4 @@ func (t *InvokeAgentTracker) buildAttributes() invokeAgentAttributes {
 	}
 
 	return attrs
-}
-
-// recordDerivedMetrics calculates and records time-per-token and token-per-time metrics.
-func (t *InvokeAgentTracker) recordDerivedMetrics(otelAttrs []attribute.KeyValue, requestDuration time.Duration) {
-	tokens := t.totalCompletionTokens - t.firstCompleteToken
-	duration := requestDuration - t.firstTokenTimeDuration
-
-	if tokens > 0 && duration > 0 {
-		// Record time per output token
-		InvokeAgentMetricGenAIClientTimePerOutputToken.Record(t.ctx, (duration / time.Duration(tokens)).Seconds(),
-			metric.WithAttributes(otelAttrs...))
-		// Record output token per time
-		InvokeAgentMetricGenAIClientOutputTokenPerTime.Record(t.ctx, float64(tokens)/duration.Seconds(),
-			metric.WithAttributes(otelAttrs...))
-	} else if tokens == 0 && t.totalCompletionTokens > 0 && requestDuration > 0 {
-		// Record time per output token
-		InvokeAgentMetricGenAIClientTimePerOutputToken.Record(t.ctx, (requestDuration / time.Duration(t.totalCompletionTokens)).Seconds(),
-			metric.WithAttributes(otelAttrs...))
-		// Record output token per time
-		InvokeAgentMetricGenAIClientOutputTokenPerTime.Record(t.ctx, float64(t.totalCompletionTokens)/requestDuration.Seconds(),
-			metric.WithAttributes(otelAttrs...))
-	}
 }
