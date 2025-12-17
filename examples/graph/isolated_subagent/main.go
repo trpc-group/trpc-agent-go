@@ -11,10 +11,10 @@
 // when the subagent uses tools with the builtin planner (default LLMAgent behavior).
 //
 // This example shows:
-// - A parent graph that delegates to a child LLMAgent via AddAgentNode
-// - The child LLMAgent has tools and uses the default builtin planner
-// - WithSubgraphIsolatedMessages(true) isolates the child from parent's history
-//   while preserving the child's own tool call history within the current invocation
+//   - A parent graph that delegates to a child LLMAgent via AddAgentNode
+//   - The child LLMAgent has tools and uses the default builtin planner
+//   - WithSubgraphIsolatedMessages(true) isolates the child from parent's history
+//     while preserving the child's own tool call history within the current invocation
 //
 // Run with:
 //

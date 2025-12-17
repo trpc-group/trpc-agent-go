@@ -325,7 +325,7 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 			includeContents: BranchFilterModePrefix,
 			expectedMsg: &model.Message{
 				Role:    model.RoleSystem,
-				Content: formatSummaryContent("Test summary content"),
+				Content: "Test summary content",
 			},
 			expectedTime: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
 		},
@@ -346,7 +346,7 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 			includeContents: BranchFilterModeAll,
 			expectedMsg: &model.Message{
 				Role:    model.RoleSystem,
-				Content: formatSummaryContent("Full session summary"),
+				Content: "Full session summary",
 			},
 			expectedTime: time.Date(2023, 1, 1, 13, 0, 0, 0, time.UTC),
 		},
@@ -566,7 +566,7 @@ func TestContentRequestProcessor_ConcurrentSummariesAccess(t *testing.T) {
 	// Test single read
 	msg, updatedAt := p.getSessionSummaryMessage(inv)
 	assert.NotNil(t, msg, "Should get summary message")
-	assert.Equal(t, formatSummaryContent("Initial summary"), msg.Content)
+	assert.Equal(t, "Initial summary", msg.Content)
 	assert.Equal(t, baseTime, updatedAt)
 
 	// Test single write
@@ -580,7 +580,7 @@ func TestContentRequestProcessor_ConcurrentSummariesAccess(t *testing.T) {
 	// Test read after write
 	msg, updatedAt = p.getSessionSummaryMessage(inv)
 	assert.NotNil(t, msg, "Should get updated summary message")
-	assert.Equal(t, formatSummaryContent("Updated summary"), msg.Content)
+	assert.Equal(t, "Updated summary", msg.Content)
 	assert.Equal(t, baseTime.Add(time.Second), updatedAt)
 
 	// Test with minimal concurrency (2 goroutines only)
@@ -2702,6 +2702,363 @@ func TestInsertInvocationMessage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestContentRequestProcessor_getCurrentInvocationMessages(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Helper to create tool call event
+	createToolCallEvent := func(invocationID, author, toolCallID string, ts time.Time) event.Event {
+		return event.Event{
+			Author:       author,
+			InvocationID: invocationID,
+			Timestamp:    ts,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role: model.RoleAssistant,
+							ToolCalls: []model.ToolCall{
+								{
+									ID: toolCallID,
+									Function: model.FunctionDefinitionParam{
+										Name:      "test_tool",
+										Arguments: []byte(`{"arg":"value"}`),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	// Helper to create tool result event
+	createToolResultEvent := func(invocationID, author, toolID, content string, ts time.Time) event.Event {
+		return event.Event{
+			Author:       author,
+			InvocationID: invocationID,
+			Timestamp:    ts,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Object: model.ObjectTypeToolResponse,
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:    model.RoleTool,
+							ToolID:  toolID,
+							Content: content,
+						},
+					},
+				},
+			},
+		}
+	}
+
+	// Helper to create assistant event
+	createAssistantEvent := func(invocationID, author, content string, ts time.Time) event.Event {
+		return event.Event{
+			Author:       author,
+			InvocationID: invocationID,
+			Timestamp:    ts,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: content,
+						},
+					},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name            string
+		sessionEvents   []event.Event
+		invocationID    string
+		agentName       string
+		invMessage      string
+		expectedCount   int
+		expectedContent []string
+	}{
+		{
+			name:          "nil session returns nil",
+			sessionEvents: nil,
+			invocationID:  "inv1",
+			expectedCount: 0,
+		},
+		{
+			name: "filters events by invocation ID",
+			sessionEvents: []event.Event{
+				createAssistantEvent("inv1", "agent1", "message from inv1", baseTime),
+				createAssistantEvent("inv2", "agent1", "message from inv2", baseTime.Add(time.Second)),
+				createAssistantEvent("inv1", "agent1", "another from inv1", baseTime.Add(2*time.Second)),
+			},
+			invocationID:    "inv1",
+			agentName:       "agent1",
+			expectedCount:   2,
+			expectedContent: []string{"message from inv1", "another from inv1"},
+		},
+		{
+			name: "includes tool call and tool result from current invocation",
+			sessionEvents: []event.Event{
+				createToolCallEvent("inv1", "agent1", "call1", baseTime),
+				createToolResultEvent("inv1", "agent1", "call1", "tool result", baseTime.Add(time.Second)),
+			},
+			invocationID:  "inv1",
+			agentName:     "agent1",
+			expectedCount: 2,
+		},
+		{
+			name: "excludes partial events",
+			sessionEvents: []event.Event{
+				createAssistantEvent("inv1", "agent1", "complete message", baseTime),
+				{
+					Author:       "agent1",
+					InvocationID: "inv1",
+					Timestamp:    baseTime.Add(time.Second),
+					Version:      event.CurrentVersion,
+					Response: &model.Response{
+						IsPartial: true,
+						Choices: []model.Choice{
+							{
+								Delta: model.Message{
+									Role:    model.RoleAssistant,
+									Content: "partial",
+								},
+							},
+						},
+					},
+				},
+			},
+			invocationID:    "inv1",
+			agentName:       "agent1",
+			expectedCount:   1,
+			expectedContent: []string{"complete message"},
+		},
+		{
+			name: "excludes events with nil response",
+			sessionEvents: []event.Event{
+				createAssistantEvent("inv1", "agent1", "valid message", baseTime),
+				{
+					Author:       "agent1",
+					InvocationID: "inv1",
+					Timestamp:    baseTime.Add(time.Second),
+					Version:      event.CurrentVersion,
+					Response:     nil,
+				},
+			},
+			invocationID:    "inv1",
+			agentName:       "agent1",
+			expectedCount:   1,
+			expectedContent: []string{"valid message"},
+		},
+		{
+			name: "inserts invocation message when not present",
+			sessionEvents: []event.Event{
+				createAssistantEvent("inv1", "agent1", "assistant reply", baseTime),
+			},
+			invocationID:    "inv1",
+			agentName:       "agent1",
+			invMessage:      "user query",
+			expectedCount:   2,
+			expectedContent: []string{"user query", "assistant reply"},
+		},
+		{
+			name: "does not duplicate invocation message if already present",
+			sessionEvents: []event.Event{
+				{
+					Author:       "user",
+					InvocationID: "inv1",
+					Timestamp:    baseTime,
+					Version:      event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Role:    model.RoleUser,
+									Content: "user query",
+								},
+							},
+						},
+					},
+				},
+				createAssistantEvent("inv1", "agent1", "assistant reply", baseTime.Add(time.Second)),
+			},
+			invocationID:    "inv1",
+			agentName:       "agent1",
+			invMessage:      "user query",
+			expectedCount:   2,
+			expectedContent: []string{"user query", "assistant reply"},
+		},
+		{
+			name: "full ReAct loop scenario - tool calls visible",
+			sessionEvents: []event.Event{
+				createToolCallEvent("inv1", "subagent", "tc1", baseTime),
+				createToolResultEvent("inv1", "subagent", "tc1", "result1", baseTime.Add(time.Second)),
+				createAssistantEvent("inv1", "subagent", "thinking...", baseTime.Add(2*time.Second)),
+				createToolCallEvent("inv1", "subagent", "tc2", baseTime.Add(3*time.Second)),
+				createToolResultEvent("inv1", "subagent", "tc2", "result2", baseTime.Add(4*time.Second)),
+			},
+			invocationID:  "inv1",
+			agentName:     "subagent",
+			expectedCount: 5,
+		},
+		{
+			name: "converts foreign agent events",
+			sessionEvents: []event.Event{
+				createAssistantEvent("inv1", "other_agent", "foreign message", baseTime),
+				createAssistantEvent("inv1", "my_agent", "my message", baseTime.Add(time.Second)),
+			},
+			invocationID:  "inv1",
+			agentName:     "my_agent",
+			expectedCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewContentRequestProcessor()
+
+			var sess *session.Session
+			if tt.sessionEvents != nil {
+				sess = &session.Session{
+					Events:  tt.sessionEvents,
+					EventMu: sync.RWMutex{},
+				}
+			}
+
+			inv := &agent.Invocation{
+				InvocationID: tt.invocationID,
+				AgentName:    tt.agentName,
+				Session:      sess,
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: tt.invMessage,
+				},
+			}
+
+			messages := p.getCurrentInvocationMessages(inv)
+
+			assert.Len(t, messages, tt.expectedCount, "unexpected message count")
+
+			if len(tt.expectedContent) > 0 {
+				for i, expected := range tt.expectedContent {
+					if i < len(messages) {
+						assert.Equal(t, expected, messages[i].Content,
+							"message %d content mismatch", i)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestContentRequestProcessor_getCurrentInvocationMessages_IsolatedSubagent(t *testing.T) {
+	// This test specifically validates the fix for isolated subagent tool history.
+	// When a subagent runs with include_contents=none (isolated mode), it should
+	// still see its own tool calls and results within the current invocation.
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Simulate a session with events from both parent and subagent invocations
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			// Parent invocation events (should be excluded)
+			{
+				Author:       "parent_agent",
+				InvocationID: "parent_inv",
+				Timestamp:    baseTime,
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{Message: model.Message{Role: model.RoleAssistant, Content: "parent message"}},
+					},
+				},
+			},
+			// Subagent's first tool call
+			{
+				Author:       "subagent",
+				InvocationID: "subagent_inv",
+				Timestamp:    baseTime.Add(time.Second),
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role: model.RoleAssistant,
+								ToolCalls: []model.ToolCall{
+									{
+										ID: "tool_call_1",
+										Function: model.FunctionDefinitionParam{
+											Name:      "search",
+											Arguments: []byte(`{"query":"test"}`),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			// Subagent's first tool result
+			{
+				Author:       "subagent",
+				InvocationID: "subagent_inv",
+				Timestamp:    baseTime.Add(2 * time.Second),
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Object: model.ObjectTypeToolResponse,
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:    model.RoleTool,
+								ToolID:  "tool_call_1",
+								Content: "search result",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	p := NewContentRequestProcessor()
+	inv := &agent.Invocation{
+		InvocationID: "subagent_inv",
+		AgentName:    "subagent",
+		Session:      sess,
+		Message: model.Message{
+			Role:    model.RoleUser,
+			Content: "do something",
+		},
+	}
+
+	messages := p.getCurrentInvocationMessages(inv)
+
+	// Should have: user message + tool call + tool result = 3 messages
+	// (or 2 if user message is inserted differently)
+	assert.GreaterOrEqual(t, len(messages), 2, "should include tool call and result")
+
+	// Verify tool call is present
+	hasToolCall := false
+	hasToolResult := false
+	for _, msg := range messages {
+		if len(msg.ToolCalls) > 0 {
+			hasToolCall = true
+		}
+		if msg.Role == model.RoleTool && msg.ToolID != "" {
+			hasToolResult = true
+		}
+	}
+
+	assert.True(t, hasToolCall, "should include tool call message")
+	assert.True(t, hasToolResult, "should include tool result message")
 }
 
 func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {
