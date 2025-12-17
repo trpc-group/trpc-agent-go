@@ -532,7 +532,7 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
 			if fullRespEvent != nil {
-				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage)
+				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
 			}
 			tracker.SetResponseErrorType(responseErrorType)
 			span.End()

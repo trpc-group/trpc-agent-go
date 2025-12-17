@@ -112,7 +112,7 @@ func (a *ChainAgent) executeChainRun(
 	if a.agentCallbacks != nil {
 		e = a.handleAfterAgentCallbacks(ctx, invocation, eventChan, e)
 	}
-	itelemetry.TraceAfterInvokeAgent(span, e, tokenUsage)
+	itelemetry.TraceAfterInvokeAgent(span, e, tokenUsage, tracker.FirstTokenTimeDuration())
 }
 
 // setupInvocation prepares the invocation for execution.

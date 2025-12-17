@@ -71,9 +71,6 @@ func (a invokeAgentAttributes) toAttributes() []attribute.KeyValue {
 	return attrs
 }
 
-// keep compile-time reference to avoid unused warning until wired.
-var _ = invokeAgentAttributes{}
-
 // InvokeAgentTracker tracks metrics for a single agent invocation lifecycle.
 type InvokeAgentTracker struct {
 	ctx                    context.Context
@@ -159,6 +156,11 @@ func (t *InvokeAgentTracker) RecordMetrics() func() {
 			metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoOutputTokenType))...))
 
 	}
+}
+
+// FirstTokenTimeDuration returns the time to first token duration.
+func (t *InvokeAgentTracker) FirstTokenTimeDuration() time.Duration {
+	return t.firstTokenTimeDuration
 }
 
 // buildAttributes constructs invokeAgentAttributes from tracked state.

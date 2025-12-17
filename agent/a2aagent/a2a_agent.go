@@ -451,7 +451,7 @@ func (r *A2AAgent) wrapEventChannelWithTelemetry(
 		defer func() {
 			if fullRespEvent != nil {
 				log.Debug("fullRespEvent is not ni")
-				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage)
+				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
 			}
 
 			tracker.SetResponseErrorType(responseErrorType)

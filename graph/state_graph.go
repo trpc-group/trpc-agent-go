@@ -1323,7 +1323,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			return nil, fmt.Errorf("failed to process agent event stream: %w", err)
 		}
 
-		itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage)
+		itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
 		// Emit agent execution complete event.
 		endTime := time.Now()
 		emitAgentCompleteEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime)
