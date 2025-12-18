@@ -4,6 +4,7 @@
 !*.*
 
 .vscode/
+.codebuddy/
 .idea/
 node_modules/
 .next/
@@ -12,6 +13,7 @@ node_modules/
 coverage.out
 coverage.html
 cover.html
+*.md
 PR*.md
 pr*.md
 claude3.7.sh
