@@ -257,7 +257,7 @@ func (r *runner) Run(
 		errorEvent := event.NewErrorEvent(
 			invocation.InvocationID,
 			r.agent.Info().Name,
-			"agent_run_error",
+			model.ErrorTypeRunError,
 			err.Error(),
 		)
 		// Populate content to ensure it is valid for persistence (and viewable by users).
@@ -642,7 +642,7 @@ func ensureErrorEventContent(e *event.Event) {
 
 	// Populate content if empty
 	if e.Response.Choices[0].Message.Content == "" {
-		e.Response.Choices[0].Message.Content = "An error occurred during execution. Please check the error details."
+		e.Response.Choices[0].Message.Content = "An error occurred during execution. Please contact the service provider."
 	}
 
 	// Ensure FinishReason is set
