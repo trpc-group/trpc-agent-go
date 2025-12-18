@@ -63,6 +63,7 @@ const (
 			deleted_at TIMESTAMP(6) NULL DEFAULT NULL
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
 
+	// Note: no created_at column because summaries are upsert (overwrite on duplicate key).
 	sqlCreateSessionSummariesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -105,9 +106,9 @@ const (
 	// Note: MySQL doesn't support IF NOT EXISTS for indexes until MySQL 8.0.13+
 	// We'll handle duplicate index errors in the creation logic
 
-	// session_states: lookup index on (app_name, user_id, session_id, deleted_at)
-	sqlCreateSessionStatesLookupIndex = `
-		CREATE INDEX {{INDEX_NAME}}
+	// session_states: unique index on (app_name, user_id, session_id, deleted_at)
+	sqlCreateSessionStatesUniqueIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name, user_id, session_id, deleted_at)`
 
 	// session_states: TTL index on (expires_at)
@@ -145,9 +146,9 @@ const (
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
-	// app_states: lookup index on (app_name, key, deleted_at)
-	sqlCreateAppStatesLookupIndex = `
-		CREATE INDEX {{INDEX_NAME}}
+	// app_states: unique index on (app_name, key, deleted_at)
+	sqlCreateAppStatesUniqueIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name, ` + "`key`" + `, deleted_at)`
 
 	// app_states: TTL index on (expires_at)
@@ -155,9 +156,9 @@ const (
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
-	// user_states: lookup index on (app_name, user_id, key, deleted_at)
-	sqlCreateUserStatesLookupIndex = `
-		CREATE INDEX {{INDEX_NAME}}
+	// user_states: unique index on (app_name, user_id, key, deleted_at)
+	sqlCreateUserStatesUniqueIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name, user_id, ` + "`key`" + `, deleted_at)`
 
 	// user_states: TTL index on (expires_at)
@@ -211,7 +212,7 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp", true},
 		},
 		indexes: []tableIndex{
-			{sqldb.TableNameSessionStates, sqldb.IndexSuffixLookup, []string{"app_name", "user_id", "session_id", "deleted_at"}},
+			{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, []string{"app_name", "user_id", "session_id", "deleted_at"}},
 			{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, []string{"expires_at"}},
 		},
 	},
@@ -261,7 +262,7 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp", true},
 		},
 		indexes: []tableIndex{
-			{sqldb.TableNameAppStates, sqldb.IndexSuffixLookup, []string{"app_name", "key", "deleted_at"}},
+			{sqldb.TableNameAppStates, sqldb.IndexSuffixUniqueActive, []string{"app_name", "key", "deleted_at"}},
 			{sqldb.TableNameAppStates, sqldb.IndexSuffixExpires, []string{"expires_at"}},
 		},
 	},
@@ -278,7 +279,7 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp", true},
 		},
 		indexes: []tableIndex{
-			{sqldb.TableNameUserStates, sqldb.IndexSuffixLookup, []string{"app_name", "user_id", "key", "deleted_at"}},
+			{sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive, []string{"app_name", "user_id", "key", "deleted_at"}},
 			{sqldb.TableNameUserStates, sqldb.IndexSuffixExpires, []string{"expires_at"}},
 		},
 	},
@@ -296,13 +297,16 @@ var tableDefs = []tableDefinition{
 
 // Global index definitions
 var indexDefs = []indexDefinition{
+	// Unique indexes
+	{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, sqlCreateSessionStatesUniqueIndex},
+	{sqldb.TableNameAppStates, sqldb.IndexSuffixUniqueActive, sqlCreateAppStatesUniqueIndex},
+	{sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive, sqlCreateUserStatesUniqueIndex},
+
 	// Lookup indexes
-	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixLookup, sqlCreateSessionTracksIndex},
-	{sqldb.TableNameSessionStates, sqldb.IndexSuffixLookup, sqlCreateSessionStatesLookupIndex},
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookup, sqlCreateSessionEventsLookupIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixLookup, sqlCreateSessionSummariesLookupIndex},
-	{sqldb.TableNameAppStates, sqldb.IndexSuffixLookup, sqlCreateAppStatesLookupIndex},
-	{sqldb.TableNameUserStates, sqldb.IndexSuffixLookup, sqlCreateUserStatesLookupIndex},
+	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixLookup, sqlCreateSessionTracksIndex},
+
 	// TTL indexes
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, sqlCreateSessionStatesExpiresIndex},
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, sqlCreateSessionEventsExpiresIndex},
