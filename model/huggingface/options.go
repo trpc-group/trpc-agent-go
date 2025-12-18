@@ -21,7 +21,7 @@ const (
 	// defaultChannelBufferSize is the default channel buffer size.
 	defaultChannelBufferSize = 256
 	// defaultBaseURL is the default HuggingFace API base URL.
-	defaultBaseURL = "https://api-inference.huggingface.co"
+	defaultBaseURL = "https://router.huggingface.co"
 	// defaultAPIKeyEnvVar is the default environment variable for HuggingFace API key.
 	defaultAPIKeyEnvVar = "HUGGINGFACE_API_KEY"
 )

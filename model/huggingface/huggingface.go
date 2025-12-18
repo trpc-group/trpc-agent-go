@@ -24,6 +24,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 )
 
 // Model implements the model.Model interface for HuggingFace API.
@@ -128,6 +129,7 @@ func (m *Model) GenerateContent(ctx context.Context, request *model.Request) (<-
 	}
 
 	// Apply token tailoring if enabled
+	m.applyTokenTailoring(ctx, request)
 
 	// Create response channel
 	responseChan := make(chan *model.Response, m.channelBufferSize)
@@ -279,7 +281,8 @@ func (m *Model) makeRequest(ctx context.Context, hfRequest *ChatCompletionReques
 	}
 
 	// Create HTTP request
-	url := fmt.Sprintf("%s/models/%s/v1/chat/completions", m.baseURL, m.name)
+	url := fmt.Sprintf("%s/v1/chat/completions", m.baseURL)
+	log.Infof("making request to %s", url)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -333,7 +336,7 @@ func (m *Model) makeStreamingRequest(ctx context.Context, hfRequest *ChatComplet
 	}
 
 	// Create HTTP request
-	url := fmt.Sprintf("%s/models/%s/v1/chat/completions", m.baseURL, m.name)
+	url := fmt.Sprintf("%s/v1/chat/completions", m.baseURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -407,4 +410,79 @@ func (m *Model) marshalRequest(hfRequest *ChatCompletionRequest) ([]byte, error)
 	return json.Marshal(requestMap)
 }
 
-// applyTokenTailoring applies token tailoring to the request.
+// applyTokenTailoring performs best-effort token tailoring if configured.
+// It uses the token tailoring strategy defined in imodel package.
+func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request) {
+	// Early return if token tailoring is disabled or no messages to process.
+	if !m.enableTokenTailoring || len(request.Messages) == 0 {
+		return
+	}
+
+	// Determine max input tokens using priority: user config > auto calculation > default.
+	maxInputTokens := m.maxInputTokens
+	if maxInputTokens <= 0 {
+		// Auto-calculate based on model context window with custom or default parameters.
+		contextWindow := imodel.ResolveContextWindow(m.name)
+		if m.tokenTailoringConfig != nil &&
+			(m.tokenTailoringConfig.ProtocolOverheadTokens > 0 ||
+				m.tokenTailoringConfig.ReserveOutputTokens > 0) {
+			// Use custom parameters if any are set.
+			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
+				contextWindow,
+				m.tokenTailoringConfig.ProtocolOverheadTokens,
+				m.tokenTailoringConfig.ReserveOutputTokens,
+				m.tokenTailoringConfig.InputTokensFloor,
+				m.tokenTailoringConfig.SafetyMarginRatio,
+				m.tokenTailoringConfig.MaxInputTokensRatio,
+			)
+		} else {
+			// Use default parameters.
+			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
+		}
+		log.Debugf("auto-calculated max input tokens: model=%s, contextWindow=%d, maxInputTokens=%d",
+			m.name, contextWindow, maxInputTokens)
+	}
+
+	// Apply token tailoring.
+	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
+	if err != nil {
+		log.Warn("token tailoring failed in huggingface.Model", err)
+		return
+	}
+
+	request.Messages = tailored
+
+	// Calculate remaining tokens for output based on context window.
+	usedTokens, err := m.tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
+	if err != nil {
+		log.Warn("failed to count tokens after tailoring", err)
+		return
+	}
+
+	// Set max output tokens only if user hasn't specified it.
+	// This respects user's explicit configuration while providing a safe default.
+	if request.GenerationConfig.MaxTokens == nil {
+		contextWindow := imodel.ResolveContextWindow(m.name)
+		var maxOutputTokens int
+		if m.tokenTailoringConfig != nil &&
+			(m.tokenTailoringConfig.ProtocolOverheadTokens > 0 ||
+				m.tokenTailoringConfig.OutputTokensFloor > 0) {
+			// Use custom parameters if any are set.
+			maxOutputTokens = imodel.CalculateMaxOutputTokensWithParams(
+				contextWindow,
+				usedTokens,
+				m.tokenTailoringConfig.ProtocolOverheadTokens,
+				m.tokenTailoringConfig.OutputTokensFloor,
+				m.tokenTailoringConfig.SafetyMarginRatio,
+			)
+		} else {
+			// Use default parameters.
+			maxOutputTokens = imodel.CalculateMaxOutputTokens(contextWindow, usedTokens)
+		}
+		if maxOutputTokens > 0 {
+			request.GenerationConfig.MaxTokens = &maxOutputTokens
+			log.Debugf("token tailoring: contextWindow=%d, usedTokens=%d, maxOutputTokens=%d",
+				contextWindow, usedTokens, maxOutputTokens)
+		}
+	}
+}
