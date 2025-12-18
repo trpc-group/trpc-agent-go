@@ -246,7 +246,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	}
 
 	// 7. Content processor - appends conversation/context history.
-	contentProcessor := processor.NewContentRequestProcessor(
+	contentOpts := []processor.ContentOption{
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
 		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),
@@ -254,7 +254,12 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
 		processor.WithBranchFilterMode(options.messageBranchFilterMode),
 		processor.WithPreloadMemory(options.PreloadMemory),
-	)
+	}
+	if options.ReasoningContentMode != "" {
+		contentOpts = append(contentOpts,
+			processor.WithReasoningContentMode(options.ReasoningContentMode))
+	}
+	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
 	return requestProcessors

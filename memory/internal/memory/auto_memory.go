@@ -38,10 +38,10 @@ type MemoryJob struct {
 
 // AutoMemoryConfig contains configuration for auto memory extraction.
 type AutoMemoryConfig struct {
-	Extractor          extractor.MemoryExtractor
-	AsyncMemoryNum     int
-	MemoryQueueSize    int
-	MemoryJobTimeout   time.Duration
+	Extractor           extractor.MemoryExtractor
+	AsyncMemoryNum      int
+	MemoryQueueSize     int
+	MemoryJobTimeout    time.Duration
 	MaxExistingMemories int
 }
 
