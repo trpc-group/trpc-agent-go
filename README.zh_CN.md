@@ -18,6 +18,11 @@
 - 🧰 **丰富的 Tool 生态系统**：与外部 API、数据库和服务的无缝集成
 - 💾 **持久化 Memory**：长期状态管理和上下文感知
 - 🔗 **多 Agent 协作**：Chain、Parallel 和基于 Graph 的 agent 工作流
+- 🧩 **Agent Skills**：可复用的 `SKILL.md` 工作流，支持安全执行
+- 📦 **Artifacts**：对 agent/tool 产出的文件进行版本化存储
+- ✅ **评测与基准**：EvalSet + Metric 用于长期质量度量
+- 🖥️ **UI 与服务集成**：AG-UI（Agent-User Interaction），
+  以及 Agent-to-Agent（A2A）互通
 - 📊 **生产就绪**：内置 telemetry、tracing 和企业级可靠性
 - ⚡ **高性能**：针对可扩展性和低延迟进行优化
 
@@ -104,6 +109,36 @@ runner := runner.NewRunner("app", agent,
 
 </td>
 </tr>
+<tr>
+<td>
+
+### 🧩 **Agent Skills**
+
+```go
+// Skills 是一个包含 SKILL.md 的文件夹。
+repo, _ := skill.NewFSRepository("./skills")
+
+// 让 agent 按需加载并执行 skills。
+tools := []tool.Tool{
+    skilltool.NewLoadTool(repo),
+    skilltool.NewRunTool(repo, localexec.New()),
+}
+```
+
+</td>
+<td>
+
+### ✅ **评测与基准**
+
+```go
+evaluator, _ := evaluation.New("app", runner,
+    evaluation.WithNumRuns(3))
+result, _ := evaluator.Evaluate(ctx, "math-basic")
+_ = result.OverallStatus
+```
+
+</td>
+</tr>
 </table>
 
 ## 目录
@@ -122,6 +157,11 @@ runner := runner.NewRunner("app", agent,
   - [Telemetry 与 Tracing](#7-telemetry-与-tracing)
   - [MCP 集成](#8-mcp-集成)
   - [调试 Web Demo](#9-调试-web-demo)
+  - [AG-UI Demo](#10-ag-ui-demo)
+  - [评测（Evaluation）](#11-评测evaluation)
+  - [Agent Skills](#12-agent-skills)
+  - [Artifacts](#13-artifacts)
+  - [A2A 互通](#14-a2a-互通)
 - [架构概览](#架构概览)
 - [使用内置 Agents](#使用内置-agents)
 - [未来增强](#未来增强)
@@ -276,19 +316,25 @@ type calculatorRsp struct {
 - [examples/fileinput](examples/fileinput) – 以文件作为输入。
 - [examples/agenttool](examples/agenttool) 展示了流式与非流式模式。
 
-### 2. 仅 LLM 的 Agent（[examples/llmagent](examples/llmagent)）
+### 2. 仅 LLM 的 Agent
+
+示例：[examples/llmagent](examples/llmagent)
 
 - 将任意 chat-completion 模型封装为 `LLMAgent`。
 - 配置 system 指令、temperature、max tokens 等。
 - 在模型流式输出时接收增量 `event.Event` 更新。
 
-### 3. 多 Agent Runner（[examples/multiagent](examples/multiagent)）
+### 3. 多 Agent Runner
+
+示例：[examples/multiagent](examples/multiagent)
 
 - **ChainAgent** – 子 agent 的线性流水线。
 - **ParallelAgent** – 并发执行子 agent 并合并结果。
 - **CycleAgent** – 迭代执行直到满足终止条件。
 
-### 4. Graph Agent（[examples/graph](examples/graph)）
+### 4. Graph Agent
+
+示例：[examples/graph](examples/graph)
 
 - **GraphAgent** – 展示如何使用 `graph` 与 `agent/graph` 包来构建并执行复杂的、带条件的工作流。展示了如何构建基于图的 agent、安全管理状态、实现条件路由，并通过 Runner 进行编排执行。
 
@@ -317,33 +363,73 @@ sg.AddMultiConditionalEdges(
 sg.SetFinishPoint("A").SetFinishPoint("B")
 ```
 
-### 5. Memory（[examples/memory](examples/memory)）
+### 5. Memory
+
+示例：[examples/memory](examples/memory)
 
 - 提供内存与 Redis memory 服务，包含 CRUD、搜索与 tool 集成。
 - 如何进行配置、调用工具以及自定义 prompts。
 
-### 6. Knowledge（[examples/knowledge](examples/knowledge)）
+### 6. Knowledge
+
+示例：[examples/knowledge](examples/knowledge)
 
 - 基础 RAG 示例：加载数据源、向量化到 vector store，并进行搜索。
 - 如何使用对话上下文以及调节加载/并发选项。
 
-### 7. Telemetry 与 Tracing（[examples/telemetry](examples/telemetry)）
+### 7. Telemetry 与 Tracing
+
+示例：[examples/telemetry](examples/telemetry)
 
 - 在 model、tool 与 runner 层面的 OpenTelemetry hooks。
 - 将 traces 导出到 OTLP endpoint 进行实时分析。
 
-### 8. MCP 集成（[examples/mcptool](examples/mcptool)）
+### 8. MCP 集成
+
+示例：[examples/mcptool](examples/mcptool)
 
 - 围绕 **trpc-mcp-go** 的封装工具，这是 **Model Context Protocol (MCP)** 的一个实现。
 - 提供遵循 MCP 规范的 structured prompts、tool 调用、resource 与 session 消息。
 - 使 agent 与 LLM 之间能够进行动态工具执行与上下文丰富的交互。
 
-### 9. 调试 Web Demo（[examples/debugserver](examples/debugserver)）
+<<<<<<< HEAD
+### 9. AG-UI Demo
 
-- 启动一个 **debug Server**，提供与 ADK 兼容的 HTTP endpoint。
-- 前端：[google/adk-web](https://github.com/google/adk-web) 通过 `/run_sse` 连接，并实时流式展示 agent 的响应。
-- 是搭建你自定义聊天 UI 的优秀起点。
+示例：[examples/agui](examples/agui)
 
+- 通过 AG-UI（Agent-User Interaction）协议对外暴露 Runner。
+- 默认提供 Server-Sent Events（SSE）服务端实现，并提供客户端示例（例如 CopilotKit）。
+
+### 10. 评测（Evaluation）
+
+示例：[examples/evaluation](examples/evaluation)
+
+- 通过可复用的 EvalSet 与可插拔的 Metric 对 agent 进行评测。
+- 包含本地文件（local）与内存（inmemory）两种模式，并提供 Debug + 评测服务端示例。
+
+### 11. Agent Skills
+
+示例：[examples/skillrun](examples/skillrun)
+
+- Skill 是一个包含 `SKILL.md` 规范的文件夹，可附带 docs/scripts。
+- 内置工具：`skill_load`、`skill_list_docs`、`skill_select_docs`、`skill_run`（在隔离工作空间里执行命令）。
+
+### 12. Artifacts
+
+示例：[examples/artifact](examples/artifact)
+
+- 保存并读取工具产出的版本化文件（图片、文本、报告等）。
+- 支持多种后端（in-memory、S3、COS）。
+
+### 13. A2A 互通
+
+示例：[examples/a2aadk](examples/a2aadk)
+
+- Agent-to-Agent（A2A）与 ADK Python A2A Server 的互通示例。
+- 演示跨运行时的流式输出、工具调用与代码执行。
+
+=======
+>>>>>>> main
 其他值得关注的示例：
 
 - [examples/humaninloop](examples/humaninloop) – Human-in-the-loop。
@@ -355,7 +441,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 
 架构图
 
-![architecture](docs/mkdocs/assets/img/component_architecture.png)
+![architecture](docs/mkdocs/assets/img/component_architecture.svg)
 
 ### 🔄 **执行流程**
 
@@ -378,10 +464,12 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 | `memory`    | 记录用户长期记忆与个性化信息。                                     |
 | `knowledge` | 实现 RAG 知识检索能力。                                            |
 | `planner`   | 提供 agent 的规划与推理能力。                                      |
-
-- 时序图
-
-![execution](docs/mkdocs/assets/img/timing_diagram.png)
+| `artifact`  | 存储并读取工具/agent 产出的版本化文件（图片、报告等）。            |
+| `skill`     | 管理并执行以 `SKILL.md` 定义的可复用 Agent Skills。                 |
+| `event`     | 定义 Runner 与各类服务使用的事件结构与流式载荷。                   |
+| `evaluation`| 提供 EvalSet/Metric 驱动的评测框架并管理评测结果。                 |
+| `server`    | 提供 Debug、AG-UI、A2A 等 HTTP 服务端能力。                        |
+| `telemetry` | OpenTelemetry 的 tracing/metrics 采集与接入。                      |
 
 ## 使用内置 Agents
 

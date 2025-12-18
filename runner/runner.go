@@ -63,6 +63,13 @@ func WithArtifactService(service artifact.Service) Option {
 	}
 }
 
+// WithAgent adds an agent to the runner registry for name-based lookup.
+func WithAgent(name string, ag agent.Agent) Option {
+	return func(opts *Options) {
+		opts.agents[name] = ag
+	}
+}
+
 // Runner is the interface for running agents.
 type Runner interface {
 	Run(
@@ -81,11 +88,12 @@ type Runner interface {
 
 // runner runs agents.
 type runner struct {
-	appName         string
-	agent           agent.Agent
-	sessionService  session.Service
-	memoryService   memory.Service
-	artifactService artifact.Service
+	appName          string
+	defaultAgentName string
+	agents           map[string]agent.Agent
+	sessionService   session.Service
+	memoryService    memory.Service
+	artifactService  artifact.Service
 
 	// Resource management fields.
 	ownedSessionService bool      // Indicates if sessionService was created by this runner.
@@ -97,29 +105,41 @@ type Options struct {
 	sessionService  session.Service
 	memoryService   memory.Service
 	artifactService artifact.Service
+	agents          map[string]agent.Agent
+}
+
+// newOptions creates a new Options.
+func newOptions(opt ...Option) Options {
+	opts := Options{
+		agents: make(map[string]agent.Agent),
+	}
+	for _, o := range opt {
+		o(&opts)
+	}
+	return opts
 }
 
 // NewRunner creates a new Runner.
-func NewRunner(appName string, agent agent.Agent, opts ...Option) Runner {
-	var options Options
-
-	// Apply function options.
-	for _, opt := range opts {
-		opt(&options)
-	}
-
+func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
+	options := newOptions(opts...)
 	// Track if we created the session service.
 	var ownedSessionService bool
 	if options.sessionService == nil {
 		options.sessionService = inmemory.NewSessionService()
 		ownedSessionService = true
 	}
-	// Register this runner's identity for observability fallback.
-	appid.RegisterRunner(appName, agent.Info().Name)
-
+	agents := options.agents
+	agents[ag.Info().Name] = ag
+	// Register the default agent for observability defaults.
+	appid.RegisterRunner(appName, ag.Info().Name)
+	// Register all runner identities for observability fallback.
+	for _, a := range agents {
+		appid.RegisterRunner(appName, a.Info().Name)
+	}
 	return &runner{
 		appName:             appName,
-		agent:               agent,
+		defaultAgentName:    ag.Info().Name,
+		agents:              agents,
 		sessionService:      options.sessionService,
 		memoryService:       options.memoryService,
 		artifactService:     options.artifactService,
@@ -169,10 +189,16 @@ func (r *runner) Run(
 	for _, opt := range runOpts {
 		opt(&ro)
 	}
+
+	ag, err := r.selectAgent(ctx, ro)
+	if err != nil {
+		return nil, fmt.Errorf("select agent: %w", err)
+	}
+
 	invocation := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationMessage(message),
-		agent.WithInvocationAgent(r.agent),
+		agent.WithInvocationAgent(ag),
 		agent.WithInvocationRunOptions(ro),
 		agent.WithInvocationMemoryService(r.memoryService),
 		agent.WithInvocationArtifactService(r.artifactService),
@@ -184,7 +210,7 @@ func (r *runner) Run(
 	// and tool calls build on the same canonical transcript.
 	if len(ro.Messages) > 0 && sess.GetEventCount() == 0 {
 		for _, msg := range ro.Messages {
-			author := r.agent.Info().Name
+			author := ag.Info().Name
 			if msg.Role == model.RoleUser {
 				author = authorUser
 			}
@@ -225,7 +251,7 @@ func (r *runner) Run(
 	barrier.Enable(invocation)
 
 	// Run the agent and get the event channel.
-	agentEventCh, err := r.agent.Run(ctx, invocation)
+	agentEventCh, err := ag.Run(ctx, invocation)
 	if err != nil {
 		invocation.CleanupNotice(ctx)
 		return nil, err
@@ -233,6 +259,25 @@ func (r *runner) Run(
 
 	// Process the agent events and emit them to the output channel.
 	return r.processAgentEvents(ctx, sess, invocation, agentEventCh, flushChan), nil
+}
+
+// resolveAgent decides which agent to use for this run.
+func (r *runner) selectAgent(
+	_ context.Context,
+	ro agent.RunOptions,
+) (agent.Agent, error) {
+	if ro.Agent != nil {
+		appid.RegisterRunner(r.appName, ro.Agent.Info().Name)
+		return ro.Agent, nil
+	}
+	agentName := r.defaultAgentName
+	if ro.AgentByName != "" {
+		agentName = ro.AgentByName
+	}
+	if ag, ok := r.agents[agentName]; ok && ag != nil {
+		return ag, nil
+	}
+	return nil, fmt.Errorf("runner: agent %q not found", agentName)
 }
 
 // getOrCreateSession returns an existing session or creates a new one.
@@ -276,7 +321,8 @@ func (r *runner) processAgentEvents(
 		flushChan:        flushChan,
 		processedEventCh: processedEventCh,
 	}
-	go r.runEventLoop(ctx, loop)
+	runCtx := agent.CloneContext(ctx)
+	go r.runEventLoop(runCtx, loop)
 	return processedEventCh
 }
 
@@ -426,7 +472,7 @@ func (r *runner) handleEventPersistence(
 	// Use EnqueueSummaryJob for true asynchronous processing.
 	// Prefer filter-specific summarization to avoid scanning all filters.
 	if err := r.sessionService.EnqueueSummaryJob(
-		context.Background(), sess, agentEvent.FilterKey, false,
+		ctx, sess, agentEvent.FilterKey, false,
 	); err != nil {
 		log.Debugf("Auto summarize after append skipped or failed: %v.", err)
 	}

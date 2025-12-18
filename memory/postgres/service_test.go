@@ -1015,7 +1015,6 @@ func TestNewService_WithHost(t *testing.T) {
 	service.Close()
 }
 
-
 func TestNewService_InitDBError(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
@@ -1592,7 +1591,6 @@ func TestNewService_ConnectionSettingsPriority(t *testing.T) {
 	service.Close()
 }
 
-
 func TestNewService_DSNPriority(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
@@ -1672,7 +1670,6 @@ func TestNewService_DSNPriority(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 	service.Close()
 }
-
 
 func TestService_AddMemory_CountQueryError(t *testing.T) {
 	db, mock := setupMockDB(t)
@@ -2058,7 +2055,6 @@ func TestNewService_WithSkipDBInit(t *testing.T) {
 	service.Close()
 }
 
-
 // Test NewService with schema
 func TestNewService_WithSchema(t *testing.T) {
 	db, mock := setupMockDB(t)
@@ -2136,7 +2132,6 @@ func TestNewService_WithSchema(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 	service.Close()
 }
-
 
 // Test initDB with index creation error
 func TestInitDB_IndexCreationError(t *testing.T) {
@@ -2895,7 +2890,6 @@ func TestNewService_FallbackToDefaultConnString(t *testing.T) {
 	service.Close()
 }
 
-
 // TestNewService_WithCustomTableName tests schema verification with custom
 // table name.
 func TestNewService_WithCustomTableName(t *testing.T) {
@@ -2975,4 +2969,3 @@ func TestNewService_WithCustomTableName(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 	service.Close()
 }
-

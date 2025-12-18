@@ -11,6 +11,7 @@ package summary
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -601,4 +602,117 @@ func TestGetFilterKeyFromOptions(t *testing.T) {
 			require.Equal(t, tt.wantKey, gotKey)
 		})
 	}
+}
+
+func TestCreateSessionSummaryWithCascade(t *testing.T) {
+	tests := []struct {
+		name              string
+		filterKey         string
+		force             bool
+		expectCalls       []string
+		expectError       bool
+		createSummaryFunc func(context.Context, *session.Session, string, bool) error
+	}{
+		{
+			name:        "filterKey is empty, only call once",
+			filterKey:   "",
+			force:       false,
+			expectCalls: []string{""},
+			expectError: false,
+			createSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+				return nil
+			},
+		},
+		{
+			name:        "filterKey is user-messages, call twice",
+			filterKey:   "user-messages",
+			force:       false,
+			expectCalls: []string{"user-messages", ""},
+			expectError: false,
+			createSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+				return nil
+			},
+		},
+		{
+			name:        "first call fails, return error",
+			filterKey:   "user-messages",
+			force:       false,
+			expectCalls: []string{"user-messages"},
+			expectError: true,
+			createSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+				if filterKey == "user-messages" {
+					return errors.New("first call failed")
+				}
+				return nil
+			},
+		},
+		{
+			name:        "second call fails, return error",
+			filterKey:   "user-messages",
+			force:       false,
+			expectCalls: []string{"user-messages", ""},
+			expectError: true,
+			createSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+				if filterKey == "" {
+					return errors.New("second call failed")
+				}
+				return nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls []string
+			sess := &session.Session{
+				ID:      "test-session",
+				AppName: "test-app",
+				UserID:  "test-user",
+			}
+
+			mockFunc := func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+				calls = append(calls, filterKey)
+				return tt.createSummaryFunc(ctx, sess, filterKey, force)
+			}
+
+			err := CreateSessionSummaryWithCascade(context.Background(), sess, tt.filterKey, tt.force, mockFunc)
+
+			if tt.expectError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tt.expectCalls, calls)
+		})
+	}
+}
+
+func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
+	// Test using method value (like s.CreateSessionSummary)
+	type mockService struct {
+		summaries map[string]string
+	}
+
+	mockSvc := &mockService{}
+
+	createFunc := func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+		if mockSvc.summaries == nil {
+			mockSvc.summaries = make(map[string]string)
+		}
+		mockSvc.summaries[filterKey] = "summary-" + filterKey
+		return nil
+	}
+
+	sess := &session.Session{
+		ID:      "test-session",
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	err := CreateSessionSummaryWithCascade(context.Background(), sess, "user-messages", false, createFunc)
+	require.NoError(t, err)
+
+	// Should have created both summaries
+	require.Equal(t, "summary-user-messages", mockSvc.summaries["user-messages"])
+	require.Equal(t, "summary-", mockSvc.summaries[""])
 }

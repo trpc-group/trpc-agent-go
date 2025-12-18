@@ -315,6 +315,106 @@ func TestModel_convertMessages(t *testing.T) {
 	require.NotEmpty(t, assistantUnion.GetToolCalls(), "assistant message should contain tool calls")
 }
 
+// TestModel_convertMessages_ReasoningContent verifies that reasoning_content
+// is passed to the OpenAI API via SetExtraFields for assistant messages.
+func TestModel_convertMessages_ReasoningContent(t *testing.T) {
+	m := New("dummy-model")
+
+	const testReasoningContent = "This is my step-by-step reasoning process."
+
+	t.Run("assistant message with reasoning_content", func(t *testing.T) {
+		msgs := []model.Message{
+			{
+				Role:             model.RoleAssistant,
+				Content:          "The answer is 42.",
+				ReasoningContent: testReasoningContent,
+			},
+		}
+
+		converted := m.convertMessages(msgs)
+		require.Len(t, converted, 1)
+		require.NotNil(t, converted[0].OfAssistant)
+
+		// Verify reasoning_content is included by marshaling to JSON.
+		data, err := json.Marshal(converted[0].OfAssistant)
+		require.NoError(t, err)
+
+		var parsed map[string]any
+		err = json.Unmarshal(data, &parsed)
+		require.NoError(t, err)
+
+		reasoningValue, ok := parsed[model.ReasoningContentKey]
+		require.True(t, ok, "reasoning_content should be present in serialized JSON")
+		assert.Equal(t, testReasoningContent, reasoningValue)
+	})
+
+	t.Run("assistant message without reasoning_content", func(t *testing.T) {
+		msgs := []model.Message{
+			{
+				Role:    model.RoleAssistant,
+				Content: "Simple response without reasoning.",
+			},
+		}
+
+		converted := m.convertMessages(msgs)
+		require.Len(t, converted, 1)
+		require.NotNil(t, converted[0].OfAssistant)
+
+		// Verify reasoning_content is NOT included when empty.
+		data, err := json.Marshal(converted[0].OfAssistant)
+		require.NoError(t, err)
+
+		var parsed map[string]any
+		err = json.Unmarshal(data, &parsed)
+		require.NoError(t, err)
+
+		_, ok := parsed[model.ReasoningContentKey]
+		assert.False(t, ok, "reasoning_content should NOT be present when empty")
+	})
+
+	t.Run("assistant message with tool calls and reasoning_content", func(t *testing.T) {
+		msgs := []model.Message{
+			{
+				Role:             model.RoleAssistant,
+				Content:          "",
+				ReasoningContent: "I need to call the calculator tool.",
+				ToolCalls: []model.ToolCall{
+					{
+						ID:   "call-123",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "calculator",
+							Arguments: []byte(`{"expression":"2+2"}`),
+						},
+					},
+				},
+			},
+		}
+
+		converted := m.convertMessages(msgs)
+		require.Len(t, converted, 1)
+		require.NotNil(t, converted[0].OfAssistant)
+
+		// Verify both reasoning_content and tool_calls are present.
+		data, err := json.Marshal(converted[0].OfAssistant)
+		require.NoError(t, err)
+
+		var parsed map[string]any
+		err = json.Unmarshal(data, &parsed)
+		require.NoError(t, err)
+
+		// Check reasoning_content.
+		reasoningValue, ok := parsed[model.ReasoningContentKey]
+		require.True(t, ok, "reasoning_content should be present")
+		assert.Equal(t, "I need to call the calculator tool.", reasoningValue)
+
+		// Check tool_calls.
+		toolCalls, ok := parsed["tool_calls"]
+		require.True(t, ok, "tool_calls should be present")
+		require.NotNil(t, toolCalls)
+	})
+}
+
 // TestModel_convertTools ensures that tool declarations are mapped to the
 // expected OpenAI function definitions.
 func TestModel_convertTools(t *testing.T) {

@@ -176,6 +176,20 @@ func WithRuntimeState(state map[string]any) RunOption {
 	}
 }
 
+// WithAgent sets the agent instance for this run only.
+func WithAgent(a Agent) RunOption {
+	return func(opts *RunOptions) {
+		opts.Agent = a
+	}
+}
+
+// WithAgentByName sets the agent name that should be resolved for this run.
+func WithAgentByName(name string) RunOption {
+	return func(opts *RunOptions) {
+		opts.AgentByName = name
+	}
+}
+
 // GetRuntimeStateValue retrieves a typed value from the runtime state.
 //
 // Returns the typed value and true if the key exists and the type matches,
@@ -424,6 +438,12 @@ type RunOptions struct {
 	// CustomAgentConfigs stores configurations for custom agents.
 	// Key: agent type, Value: agent-specific config.
 	CustomAgentConfigs map[string]any
+
+	// Agent overrides the runner's default agent for this run.
+	Agent Agent
+
+	// AgentByName instructs the runner to resolve an agent by name for this run.
+	AgentByName string
 
 	// Model is the model to use for this specific run.
 	// If set, it temporarily overrides the agent's default model for this request only.

@@ -325,7 +325,7 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 			includeContents: BranchFilterModePrefix,
 			expectedMsg: &model.Message{
 				Role:    model.RoleSystem,
-				Content: "Test summary content",
+				Content: formatSummaryContent("Test summary content"),
 			},
 			expectedTime: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
 		},
@@ -346,7 +346,7 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 			includeContents: BranchFilterModeAll,
 			expectedMsg: &model.Message{
 				Role:    model.RoleSystem,
-				Content: "Full session summary",
+				Content: formatSummaryContent("Full session summary"),
 			},
 			expectedTime: time.Date(2023, 1, 1, 13, 0, 0, 0, time.UTC),
 		},
@@ -566,7 +566,7 @@ func TestContentRequestProcessor_ConcurrentSummariesAccess(t *testing.T) {
 	// Test single read
 	msg, updatedAt := p.getSessionSummaryMessage(inv)
 	assert.NotNil(t, msg, "Should get summary message")
-	assert.Equal(t, "Initial summary", msg.Content)
+	assert.Equal(t, formatSummaryContent("Initial summary"), msg.Content)
 	assert.Equal(t, baseTime, updatedAt)
 
 	// Test single write
@@ -580,7 +580,7 @@ func TestContentRequestProcessor_ConcurrentSummariesAccess(t *testing.T) {
 	// Test read after write
 	msg, updatedAt = p.getSessionSummaryMessage(inv)
 	assert.NotNil(t, msg, "Should get updated summary message")
-	assert.Equal(t, "Updated summary", msg.Content)
+	assert.Equal(t, formatSummaryContent("Updated summary"), msg.Content)
 	assert.Equal(t, baseTime.Add(time.Second), updatedAt)
 
 	// Test with minimal concurrency (2 goroutines only)
@@ -2698,6 +2698,266 @@ func TestInsertInvocationMessage(t *testing.T) {
 							t.Errorf("event at index %d mismatch", i)
 						}
 					}
+				}
+			}
+		})
+	}
+}
+
+func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {
+	tests := []struct {
+		name             string
+		mode             string
+		msg              model.Message
+		messageRequestID string
+		currentRequestID string
+		wantReasoning    string
+	}{
+		{
+			name: "keep_all mode preserves reasoning content",
+			mode: ReasoningContentModeKeepAll,
+			msg: model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "final answer",
+				ReasoningContent: "thinking process",
+			},
+			messageRequestID: "req-1",
+			currentRequestID: "req-2",
+			wantReasoning:    "thinking process",
+		},
+		{
+			name: "default mode (empty) uses discard_previous_turns behavior",
+			mode: "",
+			msg: model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "final answer",
+				ReasoningContent: "thinking process",
+			},
+			messageRequestID: "req-1",
+			currentRequestID: "req-2",
+			wantReasoning:    "", // Previous request's reasoning is discarded.
+		},
+		{
+			name: "default mode (empty) keeps current request reasoning",
+			mode: "",
+			msg: model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "final answer",
+				ReasoningContent: "thinking process",
+			},
+			messageRequestID: "req-1",
+			currentRequestID: "req-1",
+			wantReasoning:    "thinking process", // Current request's reasoning is kept.
+		},
+		{
+			name: "discard_all mode removes all reasoning content",
+			mode: ReasoningContentModeDiscardAll,
+			msg: model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "final answer",
+				ReasoningContent: "thinking process",
+			},
+			messageRequestID: "req-1",
+			currentRequestID: "req-1",
+			wantReasoning:    "",
+		},
+		{
+			name: "discard_previous_turns keeps current request reasoning",
+			mode: ReasoningContentModeDiscardPreviousTurns,
+			msg: model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "final answer",
+				ReasoningContent: "current thinking",
+			},
+			messageRequestID: "req-1",
+			currentRequestID: "req-1",
+			wantReasoning:    "current thinking",
+		},
+		{
+			name: "discard_previous_turns removes previous request reasoning",
+			mode: ReasoningContentModeDiscardPreviousTurns,
+			msg: model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "final answer",
+				ReasoningContent: "old thinking",
+			},
+			messageRequestID: "req-1",
+			currentRequestID: "req-2",
+			wantReasoning:    "",
+		},
+		{
+			name: "user message is not processed",
+			mode: ReasoningContentModeDiscardAll,
+			msg: model.Message{
+				Role:             model.RoleUser,
+				Content:          "user message",
+				ReasoningContent: "should not be touched",
+			},
+			messageRequestID: "req-1",
+			currentRequestID: "req-2",
+			wantReasoning:    "should not be touched",
+		},
+		{
+			name: "empty reasoning content is unchanged",
+			mode: ReasoningContentModeDiscardAll,
+			msg: model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "final answer",
+				ReasoningContent: "",
+			},
+			messageRequestID: "req-1",
+			currentRequestID: "req-2",
+			wantReasoning:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &ContentRequestProcessor{
+				ReasoningContentMode: tt.mode,
+			}
+			result := p.processReasoningContent(tt.msg, tt.messageRequestID, tt.currentRequestID)
+			assert.Equal(t, tt.wantReasoning, result.ReasoningContent,
+				"processReasoningContent() reasoning = %v, want %v",
+				result.ReasoningContent, tt.wantReasoning)
+		})
+	}
+}
+
+func TestContentRequestProcessor_WithReasoningContentMode(t *testing.T) {
+	tests := []struct {
+		name         string
+		mode         string
+		expectedMode string
+	}{
+		{
+			name:         "set keep_all mode",
+			mode:         ReasoningContentModeKeepAll,
+			expectedMode: ReasoningContentModeKeepAll,
+		},
+		{
+			name:         "set discard_previous_turns mode",
+			mode:         ReasoningContentModeDiscardPreviousTurns,
+			expectedMode: ReasoningContentModeDiscardPreviousTurns,
+		},
+		{
+			name:         "set discard_all mode",
+			mode:         ReasoningContentModeDiscardAll,
+			expectedMode: ReasoningContentModeDiscardAll,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewContentRequestProcessor(
+				WithReasoningContentMode(tt.mode),
+			)
+			assert.Equal(t, tt.expectedMode, p.ReasoningContentMode,
+				"WithReasoningContentMode() mode = %v, want %v",
+				p.ReasoningContentMode, tt.expectedMode)
+		})
+	}
+}
+
+func TestContentRequestProcessor_GetIncrementMessagesWithReasoningContent(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Helper to create an assistant event with reasoning content.
+	createAssistantEvent := func(
+		requestID, content, reasoning string,
+		timestamp time.Time,
+	) event.Event {
+		return event.Event{
+			Author:    "assistant",
+			RequestID: requestID,
+			FilterKey: "test-filter",
+			Timestamp: timestamp,
+			Version:   event.CurrentVersion,
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:             model.RoleAssistant,
+							Content:          content,
+							ReasoningContent: reasoning,
+						},
+					},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name                 string
+		mode                 string
+		events               []event.Event
+		currentRequestID     string
+		expectedReasonings   []string
+		expectedMessageCount int
+	}{
+		{
+			name: "keep_all preserves all reasoning",
+			mode: ReasoningContentModeKeepAll,
+			events: []event.Event{
+				createAssistantEvent("req-1", "answer1", "thinking1", baseTime.Add(time.Second)),
+				createAssistantEvent("req-2", "answer2", "thinking2", baseTime.Add(2*time.Second)),
+			},
+			currentRequestID:     "req-2",
+			expectedReasonings:   []string{"thinking1", "thinking2"},
+			expectedMessageCount: 2,
+		},
+		{
+			name: "discard_previous_turns keeps only current request reasoning",
+			mode: ReasoningContentModeDiscardPreviousTurns,
+			events: []event.Event{
+				createAssistantEvent("req-1", "answer1", "thinking1", baseTime.Add(time.Second)),
+				createAssistantEvent("req-2", "answer2", "thinking2", baseTime.Add(2*time.Second)),
+			},
+			currentRequestID:     "req-2",
+			expectedReasonings:   []string{"", "thinking2"},
+			expectedMessageCount: 2,
+		},
+		{
+			name: "discard_all removes all reasoning",
+			mode: ReasoningContentModeDiscardAll,
+			events: []event.Event{
+				createAssistantEvent("req-1", "answer1", "thinking1", baseTime.Add(time.Second)),
+				createAssistantEvent("req-2", "answer2", "thinking2", baseTime.Add(2*time.Second)),
+			},
+			currentRequestID:     "req-2",
+			expectedReasonings:   []string{"", ""},
+			expectedMessageCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := &session.Session{
+				Events: tt.events,
+			}
+
+			inv := agent.NewInvocation(
+				agent.WithInvocationEventFilterKey("test-filter"),
+				agent.WithInvocationSession(sess),
+				agent.WithInvocationRunOptions(agent.RunOptions{
+					RequestID: tt.currentRequestID,
+				}),
+			)
+
+			p := NewContentRequestProcessor(
+				WithReasoningContentMode(tt.mode),
+			)
+
+			messages := p.getIncrementMessages(inv, time.Time{})
+
+			assert.Equal(t, tt.expectedMessageCount, len(messages),
+				"expected %d messages, got %d", tt.expectedMessageCount, len(messages))
+
+			for i, msg := range messages {
+				if i < len(tt.expectedReasonings) {
+					assert.Equal(t, tt.expectedReasonings[i], msg.ReasoningContent,
+						"message %d: expected reasoning %q, got %q",
+						i, tt.expectedReasonings[i], msg.ReasoningContent)
 				}
 			}
 		})

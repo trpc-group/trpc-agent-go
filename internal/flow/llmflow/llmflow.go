@@ -75,7 +75,8 @@ func New(
 func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, f.channelBufferSize) // Configurable buffered channel for events.
 
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		defer close(eventChan)
 
 		// Optionally resume from pending tool calls before starting a new
@@ -144,7 +145,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 				break
 			}
 		}
-	}()
+	}(runCtx)
 
 	return eventChan, nil
 }

@@ -80,7 +80,8 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	// Setup invocation.
 	ga.setupInvocation(invocation)
 	out := make(chan *event.Event, ga.channelBufferSize)
-	go ga.runWithBarrier(ctx, invocation, out)
+	runCtx := agent.CloneContext(ctx)
+	go ga.runWithBarrier(runCtx, invocation, out)
 	return out, nil
 }
 
@@ -212,6 +213,7 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 			processor.WithMaxHistoryRuns(ga.options.MaxHistoryRuns),
 			processor.WithPreserveSameBranch(true),
 			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
+			processor.WithReasoningContentMode(ga.options.ReasoningContentMode),
 		)
 		// We only need messages side effect; no output channel needed.
 		p.ProcessRequest(ctx, invocation, req, nil)
@@ -289,7 +291,8 @@ func (ga *GraphAgent) wrapEventChannel(
 	originalChan <-chan *event.Event,
 ) <-chan *event.Event {
 	wrappedChan := make(chan *event.Event, ga.channelBufferSize)
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		defer close(wrappedChan)
 		var fullRespEvent *event.Event
 		// Forward all events from the original channel
@@ -345,7 +348,7 @@ func (ga *GraphAgent) wrapEventChannel(
 		}
 
 		agent.EmitEvent(ctx, invocation, wrappedChan, evt)
-	}()
+	}(runCtx)
 	return wrappedChan
 }
 

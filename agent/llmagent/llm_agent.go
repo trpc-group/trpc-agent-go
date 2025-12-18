@@ -246,14 +246,19 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	}
 
 	// 7. Content processor - appends conversation/context history.
-	contentProcessor := processor.NewContentRequestProcessor(
+	contentOpts := []processor.ContentOption{
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
 		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),
 		processor.WithPreserveSameBranch(options.PreserveSameBranch),
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
 		processor.WithBranchFilterMode(options.messageBranchFilterMode),
-	)
+	}
+	if options.ReasoningContentMode != "" {
+		contentOpts = append(contentOpts,
+			processor.WithReasoningContentMode(options.ReasoningContentMode))
+	}
+	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
 	return requestProcessors
@@ -517,7 +522,8 @@ func (a *LLMAgent) wrapEventChannel(
 	// Create a new channel with the same capacity as the original channel
 	wrappedChan := make(chan *event.Event, cap(originalChan))
 
-	go func() {
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
@@ -531,13 +537,12 @@ func (a *LLMAgent) wrapEventChannel(
 		// Forward all events from the original channel
 		for evt := range originalChan {
 			if evt != nil && evt.Response != nil {
-
-				if evt.Response.Usage != nil {
-					tokenUsage.PromptTokens = evt.Response.Usage.PromptTokens
-					tokenUsage.CompletionTokens = evt.Response.Usage.CompletionTokens
-					tokenUsage.TotalTokens = evt.Response.Usage.TotalTokens
-				}
 				if !evt.Response.IsPartial {
+					if evt.Response.Usage != nil {
+						tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
+						tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
+						tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
+					}
 					fullRespEvent = evt
 				}
 
@@ -583,7 +588,7 @@ func (a *LLMAgent) wrapEventChannel(
 
 			agent.EmitEvent(ctx, invocation, wrappedChan, evt)
 		}
-	}()
+	}(runCtx)
 
 	return wrappedChan
 }

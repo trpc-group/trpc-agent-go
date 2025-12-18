@@ -32,6 +32,7 @@ import (
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
+	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -69,10 +70,10 @@ func main() {
 	callbacks := translator.NewCallbacks().RegisterAfterTranslate(langfuseCallback())
 	server, err := agui.New(runner,
 		agui.WithPath(*path),
-		agui.WithServiceFactory(NewSSE),
 		agui.WithAGUIRunnerOptions(
 			aguirunner.WithUserIDResolver(userIDResolver),
 			aguirunner.WithTranslateCallbacks(callbacks),
+			aguirunner.WithStartSpan(startSpan),
 		),
 	)
 	if err != nil {
@@ -83,6 +84,24 @@ func main() {
 	if err := http.ListenAndServe(*address, server.Handler()); err != nil {
 		log.Fatalf("server stopped with error: %v", err)
 	}
+}
+
+// startSpan starts a span for the agent.
+func startSpan(ctx context.Context, input *adapter.RunAgentInput) (context.Context, trace.Span, error) {
+	userID, err := userIDResolver(ctx, input)
+	if err != nil {
+		return nil, nil, fmt.Errorf("userIDResolver: %w", err)
+	}
+	commonAttrs := []attribute.KeyValue{
+		attribute.String("agentName", agentName),
+		attribute.String("modelName", *modelName),
+		attribute.String("langfuse.environment", "development"),
+		attribute.String("langfuse.session.id", input.ThreadID),
+		attribute.String("langfuse.user.id", userID),
+		attribute.String("langfuse.trace.input", input.Messages[len(input.Messages)-1].Content),
+	}
+	ctx, span := atrace.Tracer.Start(ctx, agentName, trace.WithAttributes(commonAttrs...))
+	return ctx, span, nil
 }
 
 // langfuseCallback is a callback that sends the output to Langfuse.

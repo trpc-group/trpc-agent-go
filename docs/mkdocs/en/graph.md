@@ -15,6 +15,7 @@ Highlights:
 - Built‑in node types wrap LLM, Tools, and Agent to reduce boilerplate.
 - Streaming events, checkpoints, and interrupts for observability and recovery.
 - Node‑level retry/backoff with exponential delay and jitter, plus executor‑level defaults and rich retry metadata in events.
+- Node event emitter (EventEmitter) for emitting custom events, progress updates, and streaming text from within NodeFunc.
 
 ## Quick Start
 
@@ -302,6 +303,133 @@ if b, ok := event.StateDelta[graph.MetadataKeyModel]; ok {
 }
 ```
 
+#### Node Event Emitter (EventEmitter)
+
+During NodeFunc execution, nodes can proactively emit custom events to the outside through `EventEmitter`, for real-time delivery of progress, intermediate results, or custom business data.
+
+**Getting EventEmitter**
+
+```go
+func myNode(ctx context.Context, state graph.State) (any, error) {
+    // Get EventEmitter from State
+    emitter := graph.GetEventEmitterWithContext(ctx, state)
+    // Or use a custom context
+    // emitter := graph.GetEventEmitter(state)
+    
+    // Use emitter to emit events...
+    return state, nil
+}
+```
+
+**EventEmitter Interface**
+
+```go
+type EventEmitter interface {
+    // Emit sends any event
+    Emit(evt *event.Event) error
+    // EmitCustom emits a custom event
+    EmitCustom(eventType string, payload any) error
+    // EmitProgress emits a progress event (progress: 0-100)
+    EmitProgress(progress float64, message string) error
+    // EmitText emits a streaming text event
+    EmitText(text string) error
+    // Context returns the associated context
+    Context() context.Context
+}
+```
+
+**Usage Examples**
+
+```go
+func dataProcessNode(ctx context.Context, state graph.State) (any, error) {
+    emitter := graph.GetEventEmitter(state)
+    
+    // 1. Emit custom event
+    emitter.EmitCustom("data.loaded", map[string]any{
+        "recordCount": 1000,
+        "source":      "database",
+    })
+    
+    // 2. Emit progress events
+    total := 100
+    for i := 0; i < total; i++ {
+        processItem(i)
+        progress := float64(i+1) / float64(total) * 100
+        emitter.EmitProgress(progress, fmt.Sprintf("Processing %d/%d", i+1, total))
+    }
+    
+    // 3. Emit streaming text
+    emitter.EmitText("Processing complete.\n")
+    emitter.EmitText("Results: 100 items processed successfully.")
+    
+    return state, nil
+}
+```
+
+**Event Flow Diagram**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant NF as NodeFunc
+    participant EE as EventEmitter
+    participant EC as EventChan
+    participant EX as Executor
+    participant TR as AGUI Translator
+    participant FE as Frontend Client
+
+    Note over NF,FE: Event Emission Phase
+    NF->>EE: GetEventEmitter(state)
+    EE-->>NF: Return EventEmitter instance
+    
+    alt Emit Custom Event
+        NF->>EE: EmitCustom(eventType, payload)
+    else Emit Progress Event
+        NF->>EE: EmitProgress(progress, message)
+    else Emit Text Event
+        NF->>EE: EmitText(text)
+    end
+    
+    Note over EE: Build NodeCustomEventMetadata
+    EE->>EE: Inject NodeID, InvocationID, Timestamp
+    EE->>EC: Send Event to channel
+    
+    Note over EC,FE: Event Consumption Phase
+    EC->>EX: Executor receives event
+    EX->>TR: Pass event to Translator
+    
+    alt Custom Event
+        TR->>TR: Convert to AG-UI CustomEvent
+    else Progress Event
+        TR->>TR: Convert to AG-UI CustomEvent (with progress info)
+    else Text Event (in message context)
+        TR->>TR: Convert to TextMessageContentEvent
+    else Text Event (not in message context)
+        TR->>TR: Convert to AG-UI CustomEvent
+    end
+    
+    TR->>FE: SSE push AG-UI event
+    FE->>FE: Process and update UI
+```
+
+**AGUI Event Conversion**
+
+When using AGUI Server, events emitted by nodes are automatically converted to AG-UI protocol events:
+
+| Node Event Type | AG-UI Event Type | Description |
+|-----------------|------------------|-------------|
+| Custom | CustomEvent | Custom event, payload in `value` field |
+| Progress | CustomEvent | Progress event with `progress` and `message` |
+| Text (in message context) | TextMessageContentEvent | Streaming text appended to current message |
+| Text (not in message context) | CustomEvent | Contains `nodeId` and `content` fields |
+
+**Notes**
+
+- **Thread Safety**: EventEmitter is thread-safe and can be used in concurrent environments
+- **Graceful Degradation**: If State has no valid ExecutionContext or EventChan, `GetEventEmitter` returns a no-op emitter that silently succeeds for all operations
+- **Error Handling**: Event emission failures do not interrupt node execution; it's recommended to only log warnings
+- **Custom Event Metadata**: `_node_custom_metadata` → `graph.MetadataKeyNodeCustom` (struct `graph.NodeCustomEventMetadata`)
+
 ### 1. Creating GraphAgent and Runner
 
 Users mainly use the Graph package by creating GraphAgent and then using it through Runner. This is the recommended usage pattern:
@@ -575,6 +703,14 @@ graphAgent, err := graphagent.New(
     //  - graphagent.BranchFilterModePrefix: Filters messages by prefix matching Event.FilterKey with Invocation.eventFilterKey. Use this when you want to pass messages generated by the current agent and related upstream/downstream agents to the model.
     //  - graphagent.BranchFilterModeExact: Filters messages where Event.FilterKey == Invocation.eventFilterKey. Use this when the current agent interacts with the model and only needs to use messages generated by the current agent.
     graphagent.WithMessageBranchFilterMode(graphagent.BranchFilterModeAll),
+    // Reasoning content mode (for DeepSeek thinking mode)
+    // Default: graphagent.ReasoningContentModeDiscardPreviousTurns
+    // Options:
+    //  - graphagent.ReasoningContentModeDiscardPreviousTurns: Discard reasoning_content
+    //    from previous request turns (default, recommended).
+    //  - graphagent.ReasoningContentModeKeepAll: Keep all reasoning_content in history.
+    //  - graphagent.ReasoningContentModeDiscardAll: Discard all reasoning_content.
+    graphagent.WithReasoningContentMode(graphagent.ReasoningContentModeDiscardPreviousTurns),
     graphagent.WithAgentCallbacks(&agent.Callbacks{
         // Agent-level callbacks.
     }),
