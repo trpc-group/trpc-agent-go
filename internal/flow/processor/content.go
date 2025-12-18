@@ -46,6 +46,28 @@ const (
 	TimelineFilterCurrentInvocation = "invocation"
 )
 
+// Reasoning content mode constants control how reasoning_content is handled in
+// multi-turn conversations. This is particularly important for models like
+// DeepSeek that output reasoning_content (thinking chain) alongside the final
+// content.
+const (
+	// ReasoningContentModeKeepAll keeps all reasoning_content in history.
+	// Use this for debugging or when you need to retain thinking chains.
+	ReasoningContentModeKeepAll = "keep_all"
+
+	// ReasoningContentModeDiscardPreviousTurns discards reasoning_content from
+	// messages that belong to previous request turns. Messages within the current
+	// request retain their reasoning_content (for tool call scenarios where the
+	// model needs to reference its previous reasoning). This is the default mode
+	// and recommended for DeepSeek models according to their API documentation.
+	// Reference: https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
+	ReasoningContentModeDiscardPreviousTurns = "discard_previous_turns"
+
+	// ReasoningContentModeDiscardAll discards all reasoning_content from history.
+	// Use this for maximum bandwidth savings when reasoning history is not needed.
+	ReasoningContentModeDiscardAll = "discard_all"
+)
+
 // ContentRequestProcessor implements content processing logic for agent requests.
 type ContentRequestProcessor struct {
 	// BranchFilterMode determines how to include content from session events.
@@ -67,6 +89,10 @@ type ContentRequestProcessor struct {
 	PreserveSameBranch bool
 	// TimelineFilterMode controls whether to append history messages to the request.
 	TimelineFilterMode string
+	// ReasoningContentMode controls how reasoning_content is handled in multi-turn
+	// conversations. Default is ReasoningContentModeDiscardPreviousTurns, which is
+	// recommended for DeepSeek thinking mode.
+	ReasoningContentMode string
 }
 
 // ContentOption is a functional option for configuring the ContentRequestProcessor.
@@ -122,6 +148,21 @@ func WithMaxHistoryRuns(maxRuns int) ContentOption {
 func WithPreserveSameBranch(preserve bool) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.PreserveSameBranch = preserve
+	}
+}
+
+// WithReasoningContentMode sets how reasoning_content is handled in multi-turn
+// conversations. This is particularly important for DeepSeek models where
+// reasoning_content should be discarded from previous request turns.
+//
+// Available modes:
+//   - ReasoningContentModeDiscardPreviousTurns: Discard reasoning_content from
+//     previous requests, keep for current request (default, recommended).
+//   - ReasoningContentModeKeepAll: Keep all reasoning_content.
+//   - ReasoningContentModeDiscardAll: Discard all reasoning_content from history.
+func WithReasoningContentMode(mode string) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.ReasoningContentMode = mode
 	}
 }
 
@@ -254,7 +295,16 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 	if sum == nil || sum.Summary == "" {
 		return nil, time.Time{}
 	}
-	return &model.Message{Role: model.RoleSystem, Content: sum.Summary}, sum.UpdatedAt
+	content := formatSummaryContent(sum.Summary)
+	return &model.Message{Role: model.RoleSystem, Content: content}, sum.UpdatedAt
+}
+
+// formatSummaryContent formats summary content with tags and notes.
+func formatSummaryContent(summary string) string {
+	return fmt.Sprintf("Here is a brief summary of your previous interactions:\n\n"+
+		"<summary_of_previous_interactions>\n%s\n</summary_of_previous_interactions>\n\n"+
+		"Note: this information is from previous interactions and may be outdated. "+
+		"You should ALWAYS prefer information from this conversation over the past summary.\n", summary)
 }
 
 // getHistoryMessages gets history messages for the current filter, potentially truncated by MaxHistoryRuns.
@@ -288,7 +338,14 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
-	// Convert events to messages.
+
+	// Get current request ID for reasoning content filtering.
+	currentRequestID := ""
+	if inv != nil && inv.RunOptions.RequestID != "" {
+		currentRequestID = inv.RunOptions.RequestID
+	}
+
+	// Convert events to messages with reasoning content handling.
 	var messages []model.Message
 	for _, evt := range resultEvents {
 		// Convert foreign events or keep as-is.
@@ -298,7 +355,10 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 		}
 		if len(ev.Choices) > 0 {
 			for _, choice := range ev.Choices {
-				messages = append(messages, choice.Message)
+				msg := choice.Message
+				// Apply reasoning content stripping based on mode.
+				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+				messages = append(messages, msg)
 			}
 		}
 	}
@@ -313,6 +373,35 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 		messages = messages[startIdx:]
 	}
 	return messages
+}
+
+// processReasoningContent applies reasoning content stripping based on the
+// configured mode and request boundaries.
+func (p *ContentRequestProcessor) processReasoningContent(
+	msg model.Message,
+	messageRequestID string,
+	currentRequestID string,
+) model.Message {
+	// Only process assistant messages with reasoning content.
+	if msg.Role != model.RoleAssistant || msg.ReasoningContent == "" {
+		return msg
+	}
+
+	switch p.ReasoningContentMode {
+	case ReasoningContentModeDiscardAll:
+		// Discard all reasoning_content.
+		msg.ReasoningContent = ""
+	case ReasoningContentModeKeepAll:
+		// Keep all reasoning_content: do nothing.
+	default:
+		// ReasoningContentModeDiscardPreviousTurns or empty (default):
+		// Discard reasoning_content from previous requests only.
+		// Current request messages retain their reasoning_content.
+		if messageRequestID != currentRequestID {
+			msg.ReasoningContent = ""
+		}
+	}
+	return msg
 }
 
 func (p *ContentRequestProcessor) insertInvocationMessage(

@@ -230,3 +230,24 @@ func GetFilterKeyFromOptions(opts ...session.SummaryOption) string {
 	}
 	return options.FilterKey
 }
+
+// CreateSessionSummaryWithCascade creates a session summary for the specified filterKey
+// and cascades to create a full-session summary if the filterKey is not already the full session.
+// The createSummaryFunc should create a summary for the given filterKey and return an error if failed.
+func CreateSessionSummaryWithCascade(
+	ctx context.Context,
+	sess *session.Session,
+	filterKey string,
+	force bool,
+	createSummaryFunc func(context.Context, *session.Session, string, bool) error,
+) error {
+	if err := createSummaryFunc(ctx, sess, filterKey, force); err != nil {
+		return err
+	}
+	// After branch summary, cascade a full-session summary by
+	// reusing the same processing path to keep logic unified.
+	if filterKey != session.SummaryFilterKeyAllContents {
+		return createSummaryFunc(ctx, sess, session.SummaryFilterKeyAllContents, force)
+	}
+	return nil
+}
