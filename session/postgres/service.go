@@ -176,8 +176,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if opts.enableAsyncPersist {
 		s.startAsyncPersistWorker()
 	}
-	// Always start async summary workers by default.
-	s.startAsyncSummaryWorker()
+	if opts.summarizer != nil {
+		s.startAsyncSummaryWorker()
+	}
 
 	// Start automatic cleanup if cleanup interval is configured
 	if opts.cleanupInterval > 0 {
