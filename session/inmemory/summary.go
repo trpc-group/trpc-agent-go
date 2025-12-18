@@ -52,7 +52,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 
 	app := s.getOrCreateAppSessions(key.AppName)
 	if err := s.writeSummaryUnderLock(
-		app, key, filterKey, sum.Summary,
+		app, key, filterKey, sum.Summary, sum.UpdatedAt
 	); err != nil {
 		return fmt.Errorf("write summary under lock failed: %w", err)
 	}
@@ -61,7 +61,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 
 // writeSummaryUnderLock writes a summary for a filterKey under app lock and refreshes TTL.
 // When filterKey is "", it represents the full-session summary.
-func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key, filterKey string, text string) error {
+func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key, filterKey string, text string, updateAt time.Time) error {
 	app.mu.Lock()
 	defer app.mu.Unlock()
 	swt, ok := app.sessions[key.UserID][key.SessionID]
@@ -79,7 +79,7 @@ func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key
 	if cur.Summaries == nil {
 		cur.Summaries = make(map[string]*session.Summary)
 	}
-	cur.Summaries[filterKey] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
+	cur.Summaries[filterKey] = &session.Summary{Summary: text, UpdatedAt: updateAt}
 	cur.UpdatedAt = time.Now()
 	swt.session = cur
 	swt.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
