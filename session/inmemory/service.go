@@ -132,8 +132,9 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 		s.startCleanupRoutine()
 	}
 
-	// Always start async summary workers by default
-	s.startAsyncSummaryWorker()
+	if opts.summarizer != nil {
+		s.startAsyncSummaryWorker()
+	}
 
 	return s
 }
