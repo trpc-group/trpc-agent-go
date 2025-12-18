@@ -86,7 +86,7 @@ func printSummary(ctx context.Context, result *evaluation.EvaluationResult, eval
 	fmt.Println("✅ Evaluation completed")
 	fmt.Printf("App: %s\n", result.AppName)
 	fmt.Printf("Eval Set: %s\n", result.EvalSetID)
-	fmt.Printf("Overall Status: %s\n", result.OverallStatus.String())
+	fmt.Printf("Overall Status: %s\n", result.OverallStatus)
 	runs := 0
 	if len(result.EvalCases) > 0 {
 		runs = len(result.EvalCases[0].EvalCaseResults)
@@ -94,7 +94,7 @@ func printSummary(ctx context.Context, result *evaluation.EvaluationResult, eval
 	fmt.Printf("Runs: %d\n", runs)
 
 	for _, caseResult := range result.EvalCases {
-		fmt.Printf("Case %s -> %s\n", caseResult.EvalCaseID, caseResult.OverallStatus.String())
+		fmt.Printf("Case %s -> %s\n", caseResult.EvalCaseID, caseResult.OverallStatus)
 		for _, metricResult := range caseResult.MetricResults {
 			fmt.Printf("  Metric %s: score %.2f (threshold %.2f) => %s\n",
 				metricResult.MetricName,
