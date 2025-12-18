@@ -344,7 +344,7 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 	}
 	close(agentEvents)
 
-	last, final, raw, err := processAgentEventStream(
+	last, final, raw, structOut, err := processAgentEventStream(
 		ctx,
 		agentEvents,
 		nil,
@@ -357,6 +357,7 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 	require.Equal(t, "", last)
 	require.NotNil(t, final)
 	require.Len(t, raw, 1)
+	require.Nil(t, structOut)
 }
 
 func TestProcessToolCalls_ParallelCancelOnFirstError(t *testing.T) {
