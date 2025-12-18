@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -67,6 +68,11 @@ type ContentRequestProcessor struct {
 	PreserveSameBranch bool
 	// TimelineFilterMode controls whether to append history messages to the request.
 	TimelineFilterMode string
+	// PreloadMemory sets the number of memories to preload into system prompt.
+	// When > 0, the specified number of most recent memories are loaded.
+	// When 0, no memories are preloaded (use tools instead).
+	// When < 0 (default), all memories are loaded.
+	PreloadMemory int
 }
 
 // ContentOption is a functional option for configuring the ContentRequestProcessor.
@@ -125,6 +131,16 @@ func WithPreserveSameBranch(preserve bool) ContentOption {
 	}
 }
 
+// WithPreloadMemory sets the number of memories to preload into system prompt.
+// Set to 0 to disable preloading (use tools instead).
+// Set to -1 (default) to load all memories.
+// Set to N (N > 0) to load the most recent N memories.
+func WithPreloadMemory(limit int) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.PreloadMemory = limit
+	}
+}
+
 const (
 	mergedUserSeparator = "\n\n"
 	contextPrefix       = "For context:"
@@ -132,6 +148,10 @@ const (
 
 // NewContentRequestProcessor creates a new content request processor.
 func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor {
+	// preloadMemoryDefault is the default value for PreloadMemory.
+	// -1 means load all memories.
+	const preloadMemoryDefault = -1
+
 	processor := &ContentRequestProcessor{
 		BranchFilterMode: BranchFilterModePrefix, // Default only to include
 		// filtered contents.
@@ -142,6 +162,8 @@ func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor 
 		PreserveSameBranch: false,
 		// Default to append history message.
 		TimelineFilterMode: TimelineFilterAll,
+		// Default to preload all memories.
+		PreloadMemory: preloadMemoryDefault,
 	}
 
 	// Apply options.
@@ -208,6 +230,22 @@ func (p *ContentRequestProcessor) ProcessRequest(
 				summaryUpdatedAt = updatedAt
 			}
 		}
+
+		// Preload memories into system prompt if configured.
+		// PreloadMemory: 0 = disabled, -1 = all, N > 0 = most recent N.
+		if p.PreloadMemory != 0 && invocation.MemoryService != nil {
+			if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
+				// Insert memory as a system message after the first system message.
+				systemMsgIndex := findSystemMessageIndex(req.Messages)
+				if systemMsgIndex >= 0 {
+					req.Messages = append(req.Messages[:systemMsgIndex+1],
+						append([]model.Message{*memMsg}, req.Messages[systemMsgIndex+1:]...)...)
+				} else {
+					req.Messages = append([]model.Message{*memMsg}, req.Messages...)
+				}
+			}
+		}
+
 		messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
 		req.Messages = append(req.Messages, messages...)
 		needToAddInvocationMessage = len(messages) == 0
@@ -713,4 +751,52 @@ func toMap(ids []string) map[string]bool {
 		m[id] = true
 	}
 	return m
+}
+
+// getPreloadMemoryMessage returns preloaded memories as a system message if available.
+func (p *ContentRequestProcessor) getPreloadMemoryMessage(
+	ctx context.Context,
+	inv *agent.Invocation,
+) *model.Message {
+	if inv.MemoryService == nil || inv.Session == nil {
+		return nil
+	}
+	userKey := memory.UserKey{
+		AppName: inv.Session.AppName,
+		UserID:  inv.Session.UserID,
+	}
+	// Validate user key.
+	if userKey.AppName == "" || userKey.UserID == "" {
+		return nil
+	}
+	// Convert PreloadMemory to limit: -1 means all (use 0 for ReadMemories).
+	limit := p.PreloadMemory
+	if limit < 0 {
+		limit = 0 // ReadMemories with 0 means no limit.
+	}
+	memories, err := inv.MemoryService.ReadMemories(ctx, userKey, limit)
+	if err != nil {
+		log.WarnfContext(ctx, "Failed to preload memories: %v", err)
+		return nil
+	}
+	if len(memories) == 0 {
+		return nil
+	}
+	return &model.Message{
+		Role:    model.RoleSystem,
+		Content: formatMemoriesForPrompt(memories),
+	}
+}
+
+// formatMemoriesForPrompt formats memories for system prompt injection.
+// Format aligns with Agno's memory format.
+func formatMemoriesForPrompt(memories []*memory.Entry) string {
+	var sb strings.Builder
+	sb.WriteString("## User Memories\n\n")
+	sb.WriteString("The following are memories about the user:\n\n")
+	for _, mem := range memories {
+		fmt.Fprintf(&sb, "ID: %s\n", mem.ID)
+		fmt.Fprintf(&sb, "Memory: %s\n\n", mem.Memory.Memory)
+	}
+	return sb.String()
 }

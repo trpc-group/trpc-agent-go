@@ -11,6 +11,8 @@
 package memory
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -24,6 +26,17 @@ const (
 	// DefaultMemoryLimit is the default limit of memories per user.
 	DefaultMemoryLimit = 1000
 )
+
+// GenerateMemoryID generates a unique ID for memory based on content.
+// Uses SHA256 hash of memory content and topics for consistent ID generation.
+func GenerateMemoryID(mem *memory.Memory) string {
+	content := fmt.Sprintf("memory:%s", mem.Memory)
+	if len(mem.Topics) > 0 {
+		content += fmt.Sprintf("|topics:%s", strings.Join(mem.Topics, ","))
+	}
+	hash := sha256.Sum256([]byte(content))
+	return fmt.Sprintf("%x", hash)
+}
 
 // AllToolCreators contains creators for all valid memory tools.
 // This is shared between different memory service implementations.
@@ -55,9 +68,23 @@ var validToolNames = map[string]struct{}{
 	memory.LoadToolName:   {},
 }
 
+// writeToolNames contains memory tool names that modify data.
+var writeToolNames = map[string]struct{}{
+	memory.AddToolName:    {},
+	memory.UpdateToolName: {},
+	memory.DeleteToolName: {},
+	memory.ClearToolName:  {},
+}
+
 // IsValidToolName checks if the given tool name is valid.
 func IsValidToolName(toolName string) bool {
 	_, ok := validToolNames[toolName]
+	return ok
+}
+
+// IsWriteTool returns true if the tool is a write tool (add/update/delete/clear).
+func IsWriteTool(toolName string) bool {
+	_, ok := writeToolNames[toolName]
 	return ok
 }
 

@@ -11,15 +11,19 @@
 package inmemory
 
 import (
+	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 )
 
 var (
 	defaultOptions = serviceOpts{
-		memoryLimit:  imemory.DefaultMemoryLimit,
-		toolCreators: imemory.AllToolCreators,
-		enabledTools: imemory.DefaultEnabledTools,
+		memoryLimit:    imemory.DefaultMemoryLimit,
+		toolCreators:   imemory.AllToolCreators,
+		enabledTools:   imemory.DefaultEnabledTools,
+		asyncMemoryNum: imemory.DefaultAsyncMemoryNum,
 	}
 )
 
@@ -31,6 +35,16 @@ type serviceOpts struct {
 	toolCreators map[string]memory.ToolCreator
 	// enabledTools are the names of tools to enable.
 	enabledTools map[string]bool
+
+	// Memory extractor for auto memory mode.
+	// When set, write tools (add/update/delete) are not exposed to agent.
+	extractor extractor.MemoryExtractor
+
+	// Async memory worker configuration.
+	asyncMemoryNum      int           // Number of async workers, default 3.
+	memoryQueueSize     int           // Queue size per worker, default 100.
+	memoryJobTimeout    time.Duration // Timeout per job, default 30s.
+	maxExistingMemories int           // Max existing memories to read, default 50.
 }
 
 func (o serviceOpts) clone() serviceOpts {
@@ -82,5 +96,55 @@ func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 			return
 		}
 		opts.enabledTools[toolName] = enabled
+	}
+}
+
+// WithExtractor sets the memory extractor for auto memory mode.
+// When enabled, write tools (add/update/delete) are not exposed to the agent.
+// Read tools (load/search) are always exposed to the agent.
+func WithExtractor(e extractor.MemoryExtractor) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.extractor = e
+	}
+}
+
+// WithAsyncMemoryNum sets the number of async memory workers.
+func WithAsyncMemoryNum(num int) ServiceOpt {
+	return func(opts *serviceOpts) {
+		if num < 1 {
+			num = imemory.DefaultAsyncMemoryNum
+		}
+		opts.asyncMemoryNum = num
+	}
+}
+
+// WithMemoryQueueSize sets the queue size for memory jobs.
+func WithMemoryQueueSize(size int) ServiceOpt {
+	return func(opts *serviceOpts) {
+		if size < 1 {
+			size = imemory.DefaultMemoryQueueSize
+		}
+		opts.memoryQueueSize = size
+	}
+}
+
+// WithMemoryJobTimeout sets the timeout for each memory job.
+func WithMemoryJobTimeout(timeout time.Duration) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.memoryJobTimeout = timeout
+	}
+}
+
+// WithMaxExistingMemories sets the maximum number of existing memories to read
+// when performing auto memory extraction for deduplication.
+// This is different from WithPreloadMemory (Agent layer) which controls
+// how many memories are injected into the system prompt for the LLM.
+// Default is 50.
+func WithMaxExistingMemories(max int) ServiceOpt {
+	return func(opts *serviceOpts) {
+		if max < 1 {
+			max = imemory.DefaultMaxExistingMemories
+		}
+		opts.maxExistingMemories = max
 	}
 }

@@ -12,16 +12,16 @@ package redis
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -41,7 +41,9 @@ type Service struct {
 	opts        ServiceOpts
 	redisClient redis.UniversalClient
 
-	cachedTools map[string]tool.Tool
+	mu               sync.Mutex
+	cachedTools      map[string]tool.Tool
+	autoMemoryWorker *imemory.AutoMemoryWorker
 }
 
 // NewService creates a new redis memory service.
@@ -76,11 +78,26 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		return nil, fmt.Errorf("redis connection test failed: %w", err)
 	}
 
-	return &Service{
+	svc := &Service{
 		opts:        opts,
 		redisClient: redisClient,
 		cachedTools: make(map[string]tool.Tool),
-	}, nil
+	}
+
+	// Initialize auto memory worker if extractor is configured.
+	if opts.extractor != nil {
+		config := imemory.AutoMemoryConfig{
+			Extractor:           opts.extractor,
+			AsyncMemoryNum:      opts.asyncMemoryNum,
+			MemoryQueueSize:     opts.memoryQueueSize,
+			MemoryJobTimeout:    opts.memoryJobTimeout,
+			MaxExistingMemories: opts.maxExistingMemories,
+		}
+		svc.autoMemoryWorker = imemory.NewAutoMemoryWorker(config, svc)
+		svc.autoMemoryWorker.Start()
+	}
+
+	return svc, nil
 }
 
 // AddMemory adds a new memory for a user.
@@ -252,16 +269,23 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 }
 
 // Tools returns the list of available memory tools.
+// In auto memory mode (extractor is set), only search tool is returned.
+// In agentic mode, all enabled tools are returned.
 func (s *Service) Tools() []tool.Tool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// Concurrency-safe and stable order by name.
-	// Protect tool creators/enabled flags and cache with a single lock at
-	// call-site by converting to a local snapshot first (no struct-level
-	// mutex exists). We assume opts are immutable after construction.
 	names := make([]string, 0, len(s.opts.toolCreators))
 	for name := range s.opts.toolCreators {
-		if s.opts.enabledTools[name] {
-			names = append(names, name)
+		if !s.opts.enabledTools[name] {
+			continue
 		}
+		// In auto memory mode, only keep search tool.
+		if s.opts.extractor != nil && name != memory.SearchToolName {
+			continue
+		}
+		names = append(names, name)
 	}
 	sort.Strings(names)
 
@@ -275,16 +299,34 @@ func (s *Service) Tools() []tool.Tool {
 	return tools
 }
 
-// generateMemoryID generates a memory ID from memory content.
-// Uses SHA256 to match the in-memory implementation for consistency.
-func generateMemoryID(mem *memory.Memory) string {
-	content := fmt.Sprintf("memory:%s", mem.Memory)
-	if len(mem.Topics) > 0 {
-		content += fmt.Sprintf("|topics:%s", strings.Join(mem.Topics, ","))
+// EnqueueAutoMemoryJob enqueues an auto memory extraction job for async
+// processing. The messages parameter contains conversation messages to analyze.
+// Returns nil if extractor is not configured or job is enqueued.
+func (s *Service) EnqueueAutoMemoryJob(
+	ctx context.Context,
+	userKey memory.UserKey,
+	messages []model.Message,
+) error {
+	if s.autoMemoryWorker == nil {
+		return nil
 	}
-	// Use SHA256 to match in-memory implementation for consistency.
-	hash := sha256.Sum256([]byte(content))
-	return fmt.Sprintf("%x", hash)
+	return s.autoMemoryWorker.EnqueueJob(ctx, userKey, messages)
+}
+
+// Close closes the redis client connection and stops async workers.
+func (s *Service) Close() error {
+	if s.autoMemoryWorker != nil {
+		s.autoMemoryWorker.Stop()
+	}
+	if s.redisClient != nil {
+		return s.redisClient.Close()
+	}
+	return nil
+}
+
+// generateMemoryID generates a memory ID from memory content.
+func generateMemoryID(mem *memory.Memory) string {
+	return imemory.GenerateMemoryID(mem)
 }
 
 // getUserMemKey builds the Redis key for a user's memories.

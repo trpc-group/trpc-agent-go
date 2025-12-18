@@ -253,6 +253,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithPreserveSameBranch(options.PreserveSameBranch),
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
 		processor.WithBranchFilterMode(options.messageBranchFilterMode),
+		processor.WithPreloadMemory(options.PreloadMemory),
 	)
 	requestProcessors = append(requestProcessors, contentProcessor)
 

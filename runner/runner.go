@@ -478,6 +478,9 @@ func (r *runner) handleEventPersistence(
 	}
 	// Do not enqueue full-session summary here. The worker will cascade
 	// a full-session summarization after a branch update when appropriate.
+
+	// Note: Auto memory extraction is triggered once at runner completion,
+	// not here, to avoid redundant extraction calls.
 }
 
 // shouldPersistEvent determines if an event should be persisted to the session.
@@ -522,6 +525,11 @@ func (r *runner) captureGraphCompletion(
 // emitRunnerCompletion creates and emits the final runner completion event,
 // optionally propagating graph-level completion data.
 func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContext) {
+	// Trigger async memory extraction once at runner completion.
+	// This ensures memory extraction happens exactly once per conversation turn,
+	// rather than on every assistant response event.
+	r.enqueueAutoMemoryJob(ctx, loop.sess)
+
 	// Create runner completion event.
 	runnerCompletionEvent := event.NewResponseEvent(
 		loop.invocation.InvocationID,
@@ -584,7 +592,92 @@ func (r *runner) propagateGraphCompletion(
 	}
 }
 
-// shouldAppendUserMessage checks if the incoming user message should be appended to the session.
+// enqueueAutoMemoryJob triggers async memory extraction if memory service is
+// configured. It extracts recent user and assistant messages from the session
+// and enqueues them for memory extraction.
+func (r *runner) enqueueAutoMemoryJob(
+	ctx context.Context,
+	sess *session.Session,
+) {
+	if r.memoryService == nil {
+		return
+	}
+	// Extract current turn messages from session for memory extraction.
+	messages := extractMessagesFromSession(sess)
+	if len(messages) == 0 {
+		return
+	}
+	userKey := memory.UserKey{
+		AppName: sess.AppName,
+		UserID:  sess.UserID,
+	}
+	if err := r.memoryService.EnqueueAutoMemoryJob(ctx, userKey, messages); err != nil {
+		log.Debugf("Auto memory extraction skipped or failed: %v.", err)
+	}
+}
+
+// extractMessagesFromSession extracts messages from the current conversation
+// turn for memory extraction. It starts from the last user message and includes
+// all subsequent assistant responses.
+// Only extracts messages without tool calls to avoid incomplete tool sequences.
+func extractMessagesFromSession(sess *session.Session) []model.Message {
+	if sess == nil {
+		return nil
+	}
+	events := sess.GetEvents()
+	if len(events) == 0 {
+		return nil
+	}
+
+	// Find the last user message index to determine current turn start.
+	lastUserIdx := -1
+	for i := len(events) - 1; i >= 0; i-- {
+		evt := &events[i]
+		if evt.Response == nil {
+			continue
+		}
+		for _, choice := range evt.Response.Choices {
+			if choice.Message.Role == model.RoleUser && choice.Message.Content != "" {
+				lastUserIdx = i
+				break
+			}
+		}
+		if lastUserIdx >= 0 {
+			break
+		}
+	}
+	// No user message found, nothing to extract.
+	if lastUserIdx < 0 {
+		return nil
+	}
+
+	// Extract messages from the last user message onwards (current turn only).
+	var messages []model.Message
+	for i := lastUserIdx; i < len(events); i++ {
+		evt := &events[i]
+		if evt.Response == nil {
+			continue
+		}
+		for _, choice := range evt.Response.Choices {
+			msg := choice.Message
+			// Skip messages with tool calls to avoid incomplete tool sequences.
+			// The extractor model expects tool_calls to be followed by tool
+			// responses, but we only extract user/assistant messages.
+			if len(msg.ToolCalls) > 0 {
+				continue
+			}
+			// Only include user and assistant messages with content.
+			if (msg.Role == model.RoleUser || msg.Role == model.RoleAssistant) &&
+				msg.Content != "" {
+				messages = append(messages, msg)
+			}
+		}
+	}
+	return messages
+}
+
+// shouldAppendUserMessage checks if the incoming user message should be
+// appended to the session.
 func shouldAppendUserMessage(message model.Message, seed []model.Message) bool {
 	if len(seed) == 0 {
 		return true

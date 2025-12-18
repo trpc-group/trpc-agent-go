@@ -67,6 +67,12 @@ const (
 	IsolatedInvocation
 )
 
+const (
+	// preloadMemoryDefault is the default value for PreloadMemory.
+	// -1 means load all memories.
+	preloadMemoryDefault = -1
+)
+
 var (
 	defaultOptions = Options{
 		ChannelBufferSize:          defaultChannelBufferSize,
@@ -75,6 +81,8 @@ var (
 		// that downstream agents see a consolidated user message stream unless
 		// explicitly opted into preserving assistant/tool roles.
 		PreserveSameBranch: false,
+		// Default to preload all memories.
+		PreloadMemory: preloadMemoryDefault,
 	}
 )
 
@@ -211,6 +219,12 @@ type Options struct {
 	messageBranchFilterMode   string
 
 	toolFilter tool.FilterFunc
+
+	// PreloadMemory sets the number of memories to preload into system prompt.
+	// When > 0, the specified number of most recent memories are loaded.
+	// When 0, no memories are preloaded (use tools instead).
+	// When < 0 (default), all memories are loaded.
+	PreloadMemory int
 }
 
 // WithModel sets the model to use.
@@ -588,5 +602,15 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 		default:
 			panic("invalid option value")
 		}
+	}
+}
+
+// WithPreloadMemory sets the number of memories to preload into system prompt.
+// Set to 0 to disable preloading (use tools instead).
+// Set to -1 (default) to load all memories.
+// Set to N (N > 0) to load the most recent N memories.
+func WithPreloadMemory(limit int) Option {
+	return func(opts *Options) {
+		opts.PreloadMemory = limit
 	}
 }

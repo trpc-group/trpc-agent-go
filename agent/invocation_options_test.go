@@ -384,6 +384,14 @@ func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.U
 	return nil, nil
 }
 
+func (m *mockMemoryService) EnqueueAutoMemoryJob(ctx context.Context, userKey memory.UserKey, messages []model.Message) error {
+	return nil
+}
+
+func (m *mockMemoryService) Close() error {
+	return nil
+}
+
 func (m *mockMemoryService) Tools() []tool.Tool {
 	return nil
 }

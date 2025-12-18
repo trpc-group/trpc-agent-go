@@ -15,6 +15,7 @@ import (
 	"errors"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -59,6 +60,15 @@ type Service interface {
 
 	// Tools returns the list of available memory tools.
 	Tools() []tool.Tool
+
+	// EnqueueAutoMemoryJob enqueues an auto memory extraction job for async
+	// processing. The messages parameter contains conversation messages to
+	// analyze. Returns nil if extractor is not configured or job is enqueued.
+	EnqueueAutoMemoryJob(ctx context.Context, userKey UserKey, messages []model.Message) error
+
+	// Close closes the service and releases resources.
+	// This includes stopping async memory workers if configured.
+	Close() error
 }
 
 // ToolCreator creates a tool.
