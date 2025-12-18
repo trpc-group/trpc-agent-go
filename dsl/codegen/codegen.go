@@ -6,12 +6,16 @@ import (
 	"fmt"
 	"go/format"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/mcpconfig"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/modelspec"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/outputformat"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/toolconfig"
 )
 
 // Options controls how Go code is generated from a DSL graph.
@@ -28,17 +32,23 @@ type Output struct {
 	Files map[string][]byte
 }
 
-// GenerateNativeGo generates Go source code (main.go) from a DSL Graph,
-// following an "AgentNode style" blueprint:
+// GenerateNativeGo generates Go source code (main.go) from a DSL Graph.
 //
-//   - builtin.start         -> no-op Node
-//   - builtin.llmagent      -> AgentNode(id) + one llmagent.Agent per node
-//   - builtin.user_approval -> Interrupt-based NodeFunc
-//   - builtin.end           -> End NodeFunc that writes end_structured_output
-//   - conditional_edges     -> Go routing functions (only simple == supported)
+// Supported nodes are generated as graph NodeFuncs:
+//   - builtin.start         -> no-op
+//   - builtin.llmagent      -> runs llmagent with model_spec, mcp_tools,
+//     output_format (native structured output) and
+//     generation config
+//   - builtin.transform     -> evaluates CEL-lite and writes node_structured[<id>].output_parsed
+//   - builtin.set_state     -> evaluates CEL-lite assignments and updates graph state
+//   - builtin.mcp           -> calls an MCP server tool and writes node_structured[<id>]
+//   - builtin.user_approval -> graph.Interrupt
+//   - builtin.end           -> optional CEL-lite/json expr into end_structured_output
+//   - conditional_edges     -> routing functions compiled from CEL-lite
 //
-// The generated code does not import the dsl package or CEL; it only depends on
-// low-level packages like graph/agent/llmagent/model.
+// The generated code does not import the dsl package and does not depend on
+// cel-go; CEL-lite expressions are compiled into plain Go code plus a few small
+// helper functions.
 func GenerateNativeGo(g *dsl.Graph, opts Options) (*Output, error) {
 	if g == nil {
 		return nil, fmt.Errorf("graph is nil")
@@ -62,19 +72,29 @@ func GenerateNativeGo(g *dsl.Graph, opts Options) (*Output, error) {
 	}
 
 	src, err := renderTemplate(singleFileTemplate, singleFileTemplateData{
-		PackageName:   pkg,
-		AppName:       appName,
-		HasAgentNodes: len(ir.AgentNodes) > 0,
-		EnvVars:       ir.EnvVars,
-		NeedsApproval: ir.NeedsApproval,
-		NeedsEnd:      ir.NeedsEnd,
-		StartNodes:    ir.StartNodes,
-		AgentNodes:    ir.AgentNodes,
-		ApprovalNodes: ir.ApprovalNodes,
-		EndNodes:      ir.EndNodes,
-		Edges:         ir.Edges,
-		Conditions:    ir.Conditions,
-		EntryPoint:    ir.EntryPoint,
+		PackageName:    pkg,
+		AppName:        appName,
+		HasAgentNodes:  len(ir.AgentNodes) > 0,
+		EnvVarInfos:    ir.EnvVarInfos,
+		NeedsApproval:  ir.NeedsApproval,
+		NeedsEnd:       ir.NeedsEnd,
+		NeedsMCP:       ir.NeedsMCP,
+		NeedsReflect:   ir.NeedsApproval || ir.NeedsEnd || len(ir.StateVars) > 0,
+		NeedsExtractFirstJSONObjectFromText: len(ir.MCPNodes) > 0,
+		StateVars:      ir.StateVars,
+		StartNodes:     ir.StartNodes,
+		AgentNodes:     ir.AgentNodes,
+		TransformNodes: ir.TransformNodes,
+		SetStateNodes:  ir.SetStateNodes,
+		MCPNodes:       ir.MCPNodes,
+		ApprovalNodes:  ir.ApprovalNodes,
+		EndNodes:       ir.EndNodes,
+		Edges:          ir.Edges,
+		Conditions:     ir.Conditions,
+		EntryPoint:     ir.EntryPoint,
+		// Helper function usage flags.
+		NeedsMustParseJSONAny:       ir.NeedsMustParseJSONAny,
+		NeedsStructuredOutputMapper: ir.NeedsStructuredOutputMapper,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render main.go: %w", err)
@@ -93,10 +113,53 @@ type agentNode struct {
 	FuncSuffix  string // CamelCase identifier based on ID, e.g. "Classifier"
 	Instruction string
 	ModelSpec   agentModelSpec
+	GenConfig   agentGenerationConfig
+	MCPTools    []agentMCPToolSet
 	// StructuredOutputSchemaJSON is the output_format.schema serialized as JSON
 	// when output_format.type == "json".
-	StructuredOutputSchemaJSON  string
+	StructuredOutputSchemaJSON string
 	StructuredOutputSchemaName string
+}
+
+type agentGenerationConfig struct {
+	HasTemperature bool
+	Temperature    string // float literal
+
+	HasMaxTokens bool
+	MaxTokens    string // int literal
+
+	HasTopP bool
+	TopP    string // float literal
+
+	HasStop bool
+	Stop    []string
+
+	HasPresencePenalty bool
+	PresencePenalty    string // float literal
+
+	HasFrequencyPenalty bool
+	FrequencyPenalty    string // float literal
+
+	HasReasoningEffort bool
+	ReasoningEffort    string // string literal (already trimmed, not quoted)
+
+	HasThinkingEnabled bool
+	ThinkingEnabled    bool
+
+	HasThinkingTokens bool
+	ThinkingTokens    string // int literal
+
+	HasStream bool
+	Stream    bool
+
+	HasAny bool
+}
+
+type agentMCPToolSet struct {
+	Transport    string
+	ServerURL    string
+	AllowedTools []string
+	Headers      []kvPair
 }
 
 type kvPair struct {
@@ -106,31 +169,183 @@ type kvPair struct {
 
 type agentModelSpec struct {
 	ModelName string
-	APIKey    string
-	BaseURL   string
-	Headers   []kvPair
+	// APIKeyEnvVar is the environment variable name for the API key (e.g., "DEEPSEEK_API_KEY").
+	APIKeyEnvVar string
+	BaseURL      string
+	Headers      []kvPair
 	// ExtraFieldsJSON is an optional JSON object (serialized) passed to the model constructor.
 	ExtraFieldsJSON string
+}
+
+// envVarInfo holds metadata about an environment variable for documentation.
+type envVarInfo struct {
+	Name    string   // e.g., "OPENAI_API_KEY"
+	BaseURL string   // e.g., "https://api.deepseek.com/v1"
+	Agents  []string // e.g., ["classifier", "flight_agent"]
+}
+
+// apiKeyAllocator assigns environment variable names based on provider and api_key.
+// Environment variable names are derived from provider (e.g., OPENAI_API_KEY, OPENAI_API_KEY_2).
+type apiKeyAllocator struct {
+	// providerCount tracks how many unique API keys we've seen per provider.
+	providerCount map[string]int
+	// mapping maps (provider, api_key) -> env var name.
+	mapping map[string]string
+	// envVarInfos collects info for documentation.
+	envVarInfos map[string]*envVarInfo
+}
+
+func newAPIKeyAllocator() *apiKeyAllocator {
+	return &apiKeyAllocator{
+		providerCount: make(map[string]int),
+		mapping:       make(map[string]string),
+		envVarInfos:   make(map[string]*envVarInfo),
+	}
+}
+
+// allocate returns the environment variable name for a given (provider, api_key, base_url, agent_id) tuple.
+// If the api_key already starts with "env:", it uses that directly.
+// Environment variable names are based on provider (e.g., OPENAI_API_KEY, OPENAI_API_KEY_2).
+func (a *apiKeyAllocator) allocate(provider, apiKey, baseURL, agentID string) string {
+	apiKey = strings.TrimSpace(apiKey)
+	baseURL = strings.TrimSpace(baseURL)
+	provider = strings.TrimSpace(provider)
+
+	// If user explicitly specified env:VAR, use it directly.
+	if strings.HasPrefix(apiKey, "env:") {
+		envVar := strings.TrimSpace(strings.TrimPrefix(apiKey, "env:"))
+		if envVar != "" {
+			// Track for documentation.
+			if info, ok := a.envVarInfos[envVar]; ok {
+				info.Agents = append(info.Agents, agentID)
+			} else {
+				a.envVarInfos[envVar] = &envVarInfo{
+					Name:    envVar,
+					BaseURL: baseURL,
+					Agents:  []string{agentID},
+				}
+			}
+			return envVar
+		}
+	}
+
+	// Normalize provider to uppercase for env var naming.
+	providerUpper := strings.ToUpper(provider)
+	if providerUpper == "" {
+		providerUpper = "MODEL"
+	}
+
+	// Create a key for deduplication: (provider, api_key).
+	// We use the actual api_key value to detect same vs different keys.
+	dedupeKey := providerUpper + "\x00" + apiKey
+
+	// Check if we've already assigned an env var for this combination.
+	if envVar, ok := a.mapping[dedupeKey]; ok {
+		// Same (provider, api_key) pair, reuse the env var.
+		if info := a.envVarInfos[envVar]; info != nil {
+			info.Agents = append(info.Agents, agentID)
+		}
+		return envVar
+	}
+
+	// Increment count for this provider.
+	a.providerCount[providerUpper]++
+	count := a.providerCount[providerUpper]
+
+	// Generate env var name based on provider.
+	var envVar string
+	if count == 1 {
+		envVar = providerUpper + "_API_KEY"
+	} else {
+		envVar = fmt.Sprintf("%s_API_KEY_%d", providerUpper, count)
+	}
+
+	// Store mapping.
+	a.mapping[dedupeKey] = envVar
+	a.envVarInfos[envVar] = &envVarInfo{
+		Name:    envVar,
+		BaseURL: baseURL,
+		Agents:  []string{agentID},
+	}
+
+	return envVar
+}
+
+// getEnvVarInfos returns sorted environment variable info for documentation.
+func (a *apiKeyAllocator) getEnvVarInfos() []envVarInfo {
+	result := make([]envVarInfo, 0, len(a.envVarInfos))
+	for _, info := range a.envVarInfos {
+		result = append(result, *info)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+	return result
 }
 
 type startNode struct {
 	ID string
 }
 
+type stateVar struct {
+	Name      string
+	TypeGo    string
+	ReducerGo string
+	// HasDefault indicates whether Default* fields are populated.
+	HasDefault bool
+	// DefaultLiteral is a Go literal expression (e.g. `"x"`, `true`, `123`).
+	DefaultLiteral string
+	// DefaultJSON is a JSON literal (serialized) parsed via mustParseJSONAny in generated code.
+	DefaultJSON string
+}
+
 type approvalNode struct {
-	ID       string
-	FuncName string
-	Message  string
+	ID          string
+	FuncName    string
+	Message     string
+	AutoApprove bool
 }
 
 type endNode struct {
 	ID       string
 	FuncName string
-	// For now we only distinguish "hasExpr" vs no expr; expr JSON can be
-	// inlined later if more complex logic is needed.
-	HasExpr bool
-	// Optional fixed message extracted from expr (when it can be parsed in simple cases).
-	FixedMessage string
+	ExprKind string // "", "cel", "json"
+	ExprGo   string // CEL-lite compiled Go expression returning a native Go value
+	ExprJSON string // raw JSON string (when ExprKind=="json")
+}
+
+type transformNode struct {
+	ID       string
+	FuncName string
+	ExprGo   string // CEL-lite compiled Go expression returning a native Go value; empty means no-op
+}
+
+type setStateAssignment struct {
+	Field  string
+	ExprGo string // CEL-lite compiled Go expression returning a native Go value
+}
+
+type setStateNode struct {
+	ID          string
+	FuncName    string
+	Assignments []setStateAssignment
+}
+
+type mcpParam struct {
+	Name   string
+	ExprGo string // CEL-lite compiled Go expression returning a native Go value
+}
+
+type mcpNode struct {
+	ID         string
+	FuncName   string
+	FromNodeID string
+
+	Transport string
+	ServerURL string
+	Headers   []kvPair
+	ToolName  string
+	Params    []mcpParam
 }
 
 type edge struct {
@@ -139,46 +354,74 @@ type edge struct {
 }
 
 type condCase struct {
-	Value  string
-	Target string
+	Name string
+	// PredicateGo is a Go expression that evaluates to a bool (when SwitchExprGo is empty).
+	PredicateGo string
+	// MatchValue is used when the condition can be compiled into a switch:
+	// it is the string literal for the case match.
+	MatchValue string
+	Target     string
 }
 
 type condition struct {
 	ID       string
 	From     string
 	FuncName string
-	Kind     string // "node_output_parsed" or "state_field"
-	// For Kind == "node_output_parsed"
-	OutputParsedField string
-	// For Kind == "state_field"
-	StateField string
-	Cases      []condCase
+	Cases    []condCase
+	// SwitchExprGo is a Go string expression used to generate a switch statement.
+	// When empty, the condition falls back to sequential if/else predicates.
+	SwitchExprGo string
+	// SwitchFieldName is the field name to switch on (e.g., "classification").
+	// Used to generate cleaner code like: classification, _ := parsedOutput["classification"].(string)
+	SwitchFieldName string
 	// DefaultTarget corresponds to Condition.Default in DSL.
 	DefaultTarget string
 }
 
 type irGraph struct {
-	StartNodes   []startNode
-	AgentNodes    []agentNode
-	ApprovalNodes []approvalNode
-	EndNodes      []endNode
-	Edges         []edge
-	Conditions    []condition
-	EntryPoint    string
-	EnvVars       []string
-	NeedsApproval bool
-	NeedsEnd      bool
-	NeedsJSON     bool
-	NeedsStrings  bool
+	StateVars      []stateVar
+	StartNodes     []startNode
+	AgentNodes     []agentNode
+	TransformNodes []transformNode
+	SetStateNodes  []setStateNode
+	MCPNodes       []mcpNode
+	ApprovalNodes  []approvalNode
+	EndNodes       []endNode
+	Edges          []edge
+	Conditions     []condition
+	EntryPoint     string
+	EnvVarInfos    []envVarInfo // Detailed env var info for documentation
+	NeedsApproval  bool
+	NeedsEnd       bool
+	NeedsJSON      bool
+	NeedsStrings   bool
+	NeedsMCP       bool
 	// HasErrorConditions indicates whether any condition omits a default
 	// target and thus needs fmt.Errorf in the generated code.
 	HasErrorConditions bool
+
+	NeedsMustParseJSONAny bool
+	// NeedsStructuredOutputMapper is true when any agent node has structured output.
+	NeedsStructuredOutputMapper bool
 }
 
 func buildIR(g *dsl.Graph) (*irGraph, error) {
-	ir := &irGraph{
-		EntryPoint: g.StartNodeID,
+	if g == nil {
+		return nil, fmt.Errorf("graph is nil")
 	}
+
+	expanded, _, err := expandWhileNodes(g)
+	if err != nil {
+		return nil, fmt.Errorf("while expansion failed: %w", err)
+	}
+	g = expanded
+
+	ir := &irGraph{EntryPoint: g.StartNodeID}
+
+	// API key allocator for smart environment variable naming.
+	apiKeyAlloc := newAPIKeyAllocator()
+
+	// envVars collects other env vars (not API keys) like base_url, headers, etc.
 	envVars := map[string]struct{}{}
 	collectEnvVarsFromString := func(raw string) {
 		raw = strings.TrimSpace(raw)
@@ -190,6 +433,146 @@ func buildIR(g *dsl.Graph) (*irGraph, error) {
 			return
 		}
 		envVars[name] = struct{}{}
+	}
+
+	// Graph-level state variables.
+	reservedStateKeys := map[string]struct{}{
+		// MessagesStateSchema built-ins.
+		"messages":          {},
+		"user_input":        {},
+		"one_shot_messages": {},
+		"last_response":     {},
+		"last_response_id":  {},
+		"node_responses":    {},
+		"metadata":          {},
+		// Framework/runtime keys (should not be authored as state variables).
+		"session":         {},
+		"exec_context":    {},
+		"current_node_id": {},
+		"parent_agent":    {},
+		"tool_callbacks":  {},
+		"model_callbacks": {},
+		"agent_callbacks": {},
+		// Codegen/system keys.
+		"node_structured":       {},
+		"approval_result":       {},
+		"end_structured_output": {},
+	}
+	for _, sv := range g.StateVariables {
+		name := strings.TrimSpace(sv.Name)
+		if name == "" {
+			continue
+		}
+		if _, isReserved := reservedStateKeys[name]; isReserved {
+			// Skip keys owned by the framework/runtime.
+			continue
+		}
+
+		reducerName := strings.TrimSpace(sv.Reducer)
+		if reducerName == "" {
+			reducerName = "default"
+		}
+
+		var reducerGo string
+		switch reducerName {
+		case "default":
+			reducerGo = "graph.DefaultReducer"
+		case "append":
+			reducerGo = "graph.AppendReducer"
+		case "merge":
+			reducerGo = "graph.MergeReducer"
+		case "message":
+			reducerGo = "graph.MessageReducer"
+		case "string_slice":
+			reducerGo = "graph.StringSliceReducer"
+		default:
+			return nil, fmt.Errorf("state_variables[%s]: unknown reducer %q", name, reducerName)
+		}
+
+		kind := strings.TrimSpace(sv.Kind)
+		if kind == "" {
+			kind = "opaque"
+		}
+
+		// Choose a Go reflect.Type expression. Prefer reducer-specific types.
+		typeGo := "reflect.TypeOf((*any)(nil)).Elem()"
+		switch reducerName {
+		case "message":
+			typeGo = "reflect.TypeOf([]model.Message{})"
+		case "string_slice":
+			typeGo = "reflect.TypeOf([]string{})"
+		case "merge":
+			typeGo = "reflect.TypeOf(map[string]any{})"
+		case "append":
+			typeGo = "reflect.TypeOf([]any{})"
+		default:
+			switch kind {
+			case "string":
+				typeGo = "reflect.TypeOf(\"\")"
+			case "number":
+				typeGo = "reflect.TypeOf(float64(0))"
+			case "boolean":
+				typeGo = "reflect.TypeOf(false)"
+			case "object":
+				typeGo = "reflect.TypeOf(map[string]any{})"
+			case "array":
+				typeGo = "reflect.TypeOf([]any{})"
+			case "opaque":
+				typeGo = "reflect.TypeOf((*any)(nil)).Elem()"
+			default:
+				return nil, fmt.Errorf("state_variables[%s]: unknown kind %q", name, kind)
+			}
+		}
+
+		outVar := stateVar{
+			Name:      name,
+			TypeGo:    typeGo,
+			ReducerGo: reducerGo,
+		}
+		if sv.Default != nil {
+			outVar.HasDefault = true
+			switch v := sv.Default.(type) {
+			case string:
+				outVar.DefaultLiteral = fmt.Sprintf("%q", v)
+			case bool:
+				if v {
+					outVar.DefaultLiteral = "true"
+				} else {
+					outVar.DefaultLiteral = "false"
+				}
+			case float64:
+				outVar.DefaultLiteral = strconv.FormatFloat(v, 'f', -1, 64)
+			default:
+				b, err := json.Marshal(v)
+				if err != nil {
+					return nil, fmt.Errorf("state_variables[%s]: failed to marshal default: %w", name, err)
+				}
+				outVar.DefaultJSON = string(b)
+			}
+		}
+
+		ir.StateVars = append(ir.StateVars, outVar)
+	}
+
+	// Build node index for lookups and compute MCP input sources.
+	nodeByID := make(map[string]dsl.Node, len(g.Nodes))
+	for _, n := range g.Nodes {
+		nodeByID[n.ID] = n
+	}
+
+	mcpInputSource := make(map[string]string)
+	for _, e := range g.Edges {
+		targetNode, ok := nodeByID[e.Target]
+		if !ok {
+			continue
+		}
+		if targetNode.EngineNode.NodeType != "builtin.mcp" {
+			continue
+		}
+		if existing, exists := mcpInputSource[e.Target]; exists && existing != e.Source {
+			return nil, fmt.Errorf("builtin.mcp node %s has multiple incoming edges (%s, %s); it must have a single upstream node for input.* semantics", e.Target, existing, e.Source)
+		}
+		mcpInputSource[e.Target] = e.Source
 	}
 
 	for _, n := range g.Nodes {
@@ -205,13 +588,15 @@ func buildIR(g *dsl.Graph) (*irGraph, error) {
 			if err != nil {
 				return nil, fmt.Errorf("builtin.llmagent[%s]: %w", n.ID, err)
 			}
-			// Security: never embed plaintext api_key into generated code.
-			// If the DSL already uses env:VAR, keep it; otherwise default to env:OPENAI_API_KEY.
-			spec.APIKey = strings.TrimSpace(spec.APIKey)
-			if !strings.HasPrefix(spec.APIKey, "env:") {
-				spec.APIKey = "env:OPENAI_API_KEY"
+			if strings.TrimSpace(spec.Provider) != "openai" {
+				return nil, fmt.Errorf("builtin.llmagent[%s]: unsupported model_spec.provider %q for codegen (only \"openai\" is supported)", n.ID, spec.Provider)
 			}
-			collectEnvVarsFromString(spec.APIKey)
+
+			// Allocate environment variable name for API key.
+			// This handles deduplication by (provider, api_key) and generates friendly names.
+			apiKeyEnvVar := apiKeyAlloc.allocate(spec.Provider, spec.APIKey, spec.BaseURL, n.ID)
+
+			// Collect other env vars (base_url, model_name may use env: prefix).
 			collectEnvVarsFromString(spec.BaseURL)
 			collectEnvVarsFromString(spec.ModelName)
 
@@ -231,6 +616,148 @@ func buildIR(g *dsl.Graph) (*irGraph, error) {
 				extraFieldsJSON = string(b)
 			}
 
+			gen := agentGenerationConfig{}
+			if temperatureRaw, ok := n.EngineNode.Config["temperature"]; ok {
+				temperature, err := numconv.Float64(temperatureRaw, "temperature")
+				if err != nil {
+					return nil, fmt.Errorf("builtin.llmagent[%s]: %w", n.ID, err)
+				}
+				gen.HasTemperature = true
+				gen.Temperature = strconv.FormatFloat(temperature, 'f', -1, 64)
+				gen.HasAny = true
+			}
+			if maxTokensRaw, ok := n.EngineNode.Config["max_tokens"]; ok {
+				tokens, err := numconv.Int(maxTokensRaw, "max_tokens")
+				if err != nil {
+					return nil, fmt.Errorf("builtin.llmagent[%s]: %w", n.ID, err)
+				}
+				if tokens <= 0 {
+					return nil, fmt.Errorf("builtin.llmagent[%s]: max_tokens must be positive", n.ID)
+				}
+				gen.HasMaxTokens = true
+				gen.MaxTokens = fmt.Sprintf("%d", tokens)
+				gen.HasAny = true
+			}
+			if topPRaw, ok := n.EngineNode.Config["top_p"]; ok {
+				topP, err := numconv.Float64(topPRaw, "top_p")
+				if err != nil {
+					return nil, fmt.Errorf("builtin.llmagent[%s]: %w", n.ID, err)
+				}
+				gen.HasTopP = true
+				gen.TopP = strconv.FormatFloat(topP, 'f', -1, 64)
+				gen.HasAny = true
+			}
+
+			if stopRaw, ok := n.EngineNode.Config["stop"]; ok && stopRaw != nil {
+				var stops []string
+				switch v := stopRaw.(type) {
+				case []any:
+					for _, item := range v {
+						s, ok := item.(string)
+						if !ok {
+							continue
+						}
+						s = strings.TrimSpace(s)
+						if s != "" {
+							stops = append(stops, s)
+						}
+					}
+				case []string:
+					for _, s := range v {
+						s = strings.TrimSpace(s)
+						if s != "" {
+							stops = append(stops, s)
+						}
+					}
+				}
+				if len(stops) > 0 {
+					gen.HasStop = true
+					gen.Stop = stops
+					gen.HasAny = true
+				}
+			}
+
+			if presenceRaw, ok := n.EngineNode.Config["presence_penalty"]; ok {
+				presence, err := numconv.Float64(presenceRaw, "presence_penalty")
+				if err != nil {
+					return nil, fmt.Errorf("builtin.llmagent[%s]: %w", n.ID, err)
+				}
+				gen.HasPresencePenalty = true
+				gen.PresencePenalty = strconv.FormatFloat(presence, 'f', -1, 64)
+				gen.HasAny = true
+			}
+
+			if freqRaw, ok := n.EngineNode.Config["frequency_penalty"]; ok {
+				freq, err := numconv.Float64(freqRaw, "frequency_penalty")
+				if err != nil {
+					return nil, fmt.Errorf("builtin.llmagent[%s]: %w", n.ID, err)
+				}
+				gen.HasFrequencyPenalty = true
+				gen.FrequencyPenalty = strconv.FormatFloat(freq, 'f', -1, 64)
+				gen.HasAny = true
+			}
+
+			if re, ok := n.EngineNode.Config["reasoning_effort"].(string); ok && strings.TrimSpace(re) != "" {
+				gen.HasReasoningEffort = true
+				gen.ReasoningEffort = strings.TrimSpace(re)
+				gen.HasAny = true
+			}
+
+			if thinkingEnabled, ok := n.EngineNode.Config["thinking_enabled"].(bool); ok {
+				gen.HasThinkingEnabled = true
+				gen.ThinkingEnabled = thinkingEnabled
+				gen.HasAny = true
+			}
+
+			if thinkingTokensRaw, ok := n.EngineNode.Config["thinking_tokens"]; ok {
+				tokens, err := numconv.Int(thinkingTokensRaw, "thinking_tokens")
+				if err != nil {
+					return nil, fmt.Errorf("builtin.llmagent[%s]: %w", n.ID, err)
+				}
+				if tokens <= 0 {
+					return nil, fmt.Errorf("builtin.llmagent[%s]: thinking_tokens must be positive", n.ID)
+				}
+				gen.HasThinkingTokens = true
+				gen.ThinkingTokens = fmt.Sprintf("%d", tokens)
+				gen.HasAny = true
+			}
+
+			if stream, ok := n.EngineNode.Config["stream"].(bool); ok {
+				gen.HasStream = true
+				gen.Stream = stream
+				gen.HasAny = true
+			}
+
+			var mcpToolSets []agentMCPToolSet
+			if raw, ok := n.EngineNode.Config["mcp_tools"]; ok && raw != nil {
+				specs, err := toolconfig.ParseMCPTools(raw)
+				if err != nil {
+					return nil, fmt.Errorf("builtin.llmagent[%s]: %w", n.ID, err)
+				}
+				for _, spec := range specs {
+					collectEnvVarsFromString(spec.ServerURL)
+					headers := make([]kvPair, 0, len(spec.Headers))
+					for k, v := range spec.Headers {
+						headers = append(headers, kvPair{Key: k, Value: v})
+						collectEnvVarsFromString(v)
+					}
+					sort.Slice(headers, func(i, j int) bool { return headers[i].Key < headers[j].Key })
+
+					allowed := append([]string(nil), spec.AllowedTools...)
+					sort.Strings(allowed)
+
+					mcpToolSets = append(mcpToolSets, agentMCPToolSet{
+						Transport:    spec.Transport,
+						ServerURL:    spec.ServerURL,
+						AllowedTools: allowed,
+						Headers:      headers,
+					})
+				}
+				if len(mcpToolSets) > 0 {
+					ir.NeedsMCP = true
+				}
+			}
+
 			structuredSchema := outputformat.StructuredSchema(n.EngineNode.Config["output_format"])
 			var structuredOutputSchemaJSON string
 			var structuredOutputSchemaName string
@@ -242,6 +769,7 @@ func buildIR(g *dsl.Graph) (*irGraph, error) {
 				structuredOutputSchemaJSON = string(b)
 				structuredOutputSchemaName = structuredSchemaName(n.ID)
 				ir.NeedsJSON = true
+				ir.NeedsStructuredOutputMapper = true
 			}
 
 			ir.AgentNodes = append(ir.AgentNodes, agentNode{
@@ -250,25 +778,59 @@ func buildIR(g *dsl.Graph) (*irGraph, error) {
 				Instruction: inst,
 				ModelSpec: agentModelSpec{
 					ModelName:       spec.ModelName,
-					APIKey:          spec.APIKey,
+					APIKeyEnvVar:    apiKeyEnvVar,
 					BaseURL:         spec.BaseURL,
 					Headers:         headers,
 					ExtraFieldsJSON: extraFieldsJSON,
 				},
-				StructuredOutputSchemaJSON:  structuredOutputSchemaJSON,
+				GenConfig:                  gen,
+				MCPTools:                   mcpToolSets,
+				StructuredOutputSchemaJSON: structuredOutputSchemaJSON,
 				StructuredOutputSchemaName: structuredOutputSchemaName,
 			})
 		case "builtin.start":
 			ir.StartNodes = append(ir.StartNodes, startNode{ID: n.ID})
+		case "builtin.transform":
+			exprGo, err := parseAndCompileCELExpr(n.EngineNode.Config, "expr", fmt.Sprintf("builtin.transform[%s].expr", n.ID))
+			if err != nil {
+				return nil, err
+			}
+			ir.TransformNodes = append(ir.TransformNodes, transformNode{
+				ID:       n.ID,
+				FuncName: "node" + toCamel(n.ID),
+				ExprGo:   exprGo,
+			})
+		case "builtin.set_state":
+			assignments, err := parseSetStateAssignments(n.ID, n.EngineNode.Config)
+			if err != nil {
+				return nil, err
+			}
+			ir.SetStateNodes = append(ir.SetStateNodes, setStateNode{
+				ID:          n.ID,
+				FuncName:    "node" + toCamel(n.ID),
+				Assignments: assignments,
+			})
+		case "builtin.mcp":
+			mcpIR, err := buildMCPNodeIR(n, mcpInputSource[n.ID], collectEnvVarsFromString)
+			if err != nil {
+				return nil, err
+			}
+			ir.MCPNodes = append(ir.MCPNodes, mcpIR)
+			ir.NeedsMCP = true
 		case "builtin.user_approval":
 			msg, _ := stringField(n.EngineNode.Config, "message")
 			if msg == "" {
 				msg = "Please approve this action (yes/no):"
 			}
+			autoApprove := false
+			if v, ok := n.EngineNode.Config["auto_approve"].(bool); ok {
+				autoApprove = v
+			}
 			ir.ApprovalNodes = append(ir.ApprovalNodes, approvalNode{
-				ID:       n.ID,
-				FuncName: "node" + toCamel(n.ID),
-				Message:  msg,
+				ID:          n.ID,
+				FuncName:    "node" + toCamel(n.ID),
+				Message:     msg,
+				AutoApprove: autoApprove,
 			})
 			ir.NeedsApproval = true
 		case "builtin.end":
@@ -276,16 +838,35 @@ func buildIR(g *dsl.Graph) (*irGraph, error) {
 				ID:       n.ID,
 				FuncName: "node" + toCamel(n.ID),
 			}
-			if exprAny, ok := n.EngineNode.Config["expr"]; ok {
-				if exprMap, ok2 := exprAny.(map[string]any); ok2 {
-					if format, _ := stringField(exprMap, "format"); format == "json" {
-							if raw, _ := stringField(exprMap, "expression"); raw != "" {
-								e.HasExpr = true
-								// Non-strict JSON parsing: only try to extract {"message": "..."}.
-								e.FixedMessage = extractMessageField(raw)
-							}
-						}
+			if rawExpr, ok := n.EngineNode.Config["expr"]; ok && rawExpr != nil {
+				exprMap, ok := rawExpr.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("builtin.end[%s]: expr must be an object when present", n.ID)
+				}
+				exprStr, _ := stringField(exprMap, "expression")
+				exprStr = strings.TrimSpace(exprStr)
+				if exprStr != "" {
+					format, _ := stringField(exprMap, "format")
+					format = strings.TrimSpace(format)
+					if format == "" {
+						format = "cel"
 					}
+					switch format {
+					case "cel":
+						goExpr, err := compileCELLiteToGoValue(exprStr)
+						if err != nil {
+							return nil, fmt.Errorf("builtin.end[%s]: invalid CEL expression: %w", n.ID, err)
+						}
+						e.ExprKind = "cel"
+						e.ExprGo = goExpr
+					case "json":
+						e.ExprKind = "json"
+						e.ExprJSON = exprStr
+						ir.NeedsJSON = true
+					default:
+						return nil, fmt.Errorf("builtin.end[%s]: unsupported expr.format %q (expected \"cel\" or \"json\")", n.ID, format)
+					}
+				}
 			}
 			ir.EndNodes = append(ir.EndNodes, e)
 			ir.NeedsEnd = true
@@ -311,31 +892,15 @@ func buildIR(g *dsl.Graph) (*irGraph, error) {
 		}
 	}
 
-	// Validate that node_output_parsed conditions reference nodes that
-	// actually produce structured output.
-	hasStructuredByID := make(map[string]bool, len(ir.AgentNodes))
-	for _, n := range ir.AgentNodes {
-		hasStructuredByID[n.ID] = strings.TrimSpace(n.StructuredOutputSchemaJSON) != ""
-	}
-	needsOutputParsed := false
-	for _, c := range ir.Conditions {
-		if c.Kind != "node_output_parsed" {
-			continue
-		}
-		needsOutputParsed = true
-		if strings.TrimSpace(c.OutputParsedField) == "" {
-			return nil, fmt.Errorf("conditional_edge %q from %q: input.output_parsed field is empty", c.ID, c.From)
-		}
-		if !hasStructuredByID[c.From] {
-			return nil, fmt.Errorf("conditional_edge %q from %q: uses input.output_parsed but the node has no output_format.type=json schema configured", c.ID, c.From)
-		}
-	}
-
-	ir.NeedsStrings = ir.NeedsApproval || ir.NeedsEnd || ir.NeedsJSON || needsOutputParsed
+	ir.NeedsStrings = true
 
 	// Stabilize output ordering for deterministic output and readability.
+	sort.Slice(ir.StateVars, func(i, j int) bool { return ir.StateVars[i].Name < ir.StateVars[j].Name })
 	sort.Slice(ir.StartNodes, func(i, j int) bool { return ir.StartNodes[i].ID < ir.StartNodes[j].ID })
 	sort.Slice(ir.AgentNodes, func(i, j int) bool { return ir.AgentNodes[i].ID < ir.AgentNodes[j].ID })
+	sort.Slice(ir.TransformNodes, func(i, j int) bool { return ir.TransformNodes[i].ID < ir.TransformNodes[j].ID })
+	sort.Slice(ir.SetStateNodes, func(i, j int) bool { return ir.SetStateNodes[i].ID < ir.SetStateNodes[j].ID })
+	sort.Slice(ir.MCPNodes, func(i, j int) bool { return ir.MCPNodes[i].ID < ir.MCPNodes[j].ID })
 	sort.Slice(ir.ApprovalNodes, func(i, j int) bool { return ir.ApprovalNodes[i].ID < ir.ApprovalNodes[j].ID })
 	sort.Slice(ir.EndNodes, func(i, j int) bool { return ir.EndNodes[i].ID < ir.EndNodes[j].ID })
 	sort.Slice(ir.Edges, func(i, j int) bool {
@@ -344,20 +909,24 @@ func buildIR(g *dsl.Graph) (*irGraph, error) {
 		}
 		return ir.Edges[i].From < ir.Edges[j].From
 	})
-	sort.Slice(ir.Conditions, func(i, j int) bool {
-		if ir.Conditions[i].From == ir.Conditions[j].From {
-			return ir.Conditions[i].FuncName < ir.Conditions[j].FuncName
-		}
-		return ir.Conditions[i].From < ir.Conditions[j].From
-	})
 
 	if len(envVars) > 0 {
-		ir.EnvVars = make([]string, 0, len(envVars))
+		// Merge other env vars (base_url, headers, etc.) into apiKeyAlloc's info.
+		// These are displayed without agent association since they're not API keys.
 		for k := range envVars {
-			ir.EnvVars = append(ir.EnvVars, k)
+			if _, exists := apiKeyAlloc.envVarInfos[k]; !exists {
+				apiKeyAlloc.envVarInfos[k] = &envVarInfo{
+					Name:    k,
+					BaseURL: "",
+					Agents:  nil,
+				}
+			}
 		}
-		sort.Strings(ir.EnvVars)
 	}
+	ir.EnvVarInfos = apiKeyAlloc.getEnvVarInfos()
+
+	// Detect which helper functions are needed by scanning generated Go expressions.
+	detectHelperUsage(ir)
 
 	return ir, nil
 }
@@ -369,9 +938,9 @@ func buildCondition(ce dsl.ConditionalEdge) (*condition, error) {
 
 	funcName := ""
 	if strings.TrimSpace(ce.ID) != "" {
-		funcName = "route" + toCamel("edge_" + ce.ID)
+		funcName = "route" + toCamel("edge_"+ce.ID)
 	} else if strings.TrimSpace(ce.From) != "" {
-		funcName = "route" + toCamel("from_" + ce.From)
+		funcName = "route" + toCamel("from_"+ce.From)
 	} else {
 		funcName = "routeNode"
 	}
@@ -383,72 +952,302 @@ func buildCondition(ce dsl.ConditionalEdge) (*condition, error) {
 		DefaultTarget: ce.Condition.Default,
 	}
 
-	// Infer Kind from the first predicate expression.
-	firstExpr := strings.TrimSpace(ce.Condition.Cases[0].Predicate.Expression)
-	switch {
-	case strings.HasPrefix(firstExpr, "input.output_parsed."):
-		c.Kind = "node_output_parsed"
-	case strings.HasPrefix(firstExpr, "state."):
-		c.Kind = "state_field"
-	default:
-		return nil, fmt.Errorf("unsupported predicate %q (only input.output_parsed.* or state.* == \"value\" are supported)", firstExpr)
+	// First pass: validate and try to recognize a switchable pattern:
+	//   input.output_parsed.<field> == "literal"
+	var (
+		canSwitch   = true
+		switchRoot  string
+		switchSteps []celPathStep
+		switchVals  []string
+	)
+
+	for idx, kase := range ce.Condition.Cases {
+		expr := strings.TrimSpace(kase.Predicate.Expression)
+		if expr == "" {
+			return nil, fmt.Errorf("builtin case %d predicate.expression is required", idx)
+		}
+		format := strings.TrimSpace(kase.Predicate.Format)
+		if format == "" {
+			format = "cel"
+		}
+		if format != "cel" {
+			return nil, fmt.Errorf("unsupported predicate.format %q (expected \"cel\")", format)
+		}
+		if strings.TrimSpace(kase.Target) == "" {
+			return nil, fmt.Errorf("builtin case %d has empty target", idx)
+		}
+
+		root, steps, lit, ok, err := extractStringEqualityPredicate(expr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid predicate %q: %w", expr, err)
+		}
+		if !ok {
+			canSwitch = false
+			continue
+		}
+		if idx == 0 {
+			switchRoot = root
+			switchSteps = steps
+		} else if switchRoot != root || !equalCelPathSteps(switchSteps, steps) {
+			canSwitch = false
+		}
+		switchVals = append(switchVals, lit)
 	}
 
+	if canSwitch && switchRoot != "" && len(switchVals) == len(ce.Condition.Cases) {
+		// Extract the field name for cleaner code generation.
+		// For input.output_parsed.classification, we want "classification".
+		var fieldName string
+		if switchRoot == "input" && len(switchSteps) >= 2 && switchSteps[0].key == "output_parsed" {
+			fieldName = switchSteps[len(switchSteps)-1].key
+		}
+
+		if fieldName != "" {
+			// Generate clean code: classification, _ := parsedOutput["classification"].(string)
+			c.SwitchFieldName = fieldName
+		} else {
+			// Fallback to expression-based switch
+			pathExpr, err := compileNativePath(switchRoot, switchSteps)
+			if err == nil {
+				c.SwitchExprGo = ensureString(pathExpr)
+			}
+		}
+
+		for idx, kase := range ce.Condition.Cases {
+			c.Cases = append(c.Cases, condCase{
+				Name:       kase.Name,
+				MatchValue: switchVals[idx],
+				Target:     kase.Target,
+			})
+		}
+		return &c, nil
+	}
+
+	// Fallback: sequential predicates.
 	for _, kase := range ce.Condition.Cases {
 		expr := strings.TrimSpace(kase.Predicate.Expression)
-		value, field, err := parseEqualityExpr(expr)
+		goExpr, err := compileCELLiteToGoPredicate(expr)
 		if err != nil {
-			return nil, err
-		}
-		switch c.Kind {
-		case "state_field":
-			if c.StateField == "" {
-				c.StateField = field
-			} else if c.StateField != field {
-				return nil, fmt.Errorf("mixed state fields in cases: %q vs %q", c.StateField, field)
-			}
-		case "node_output_parsed":
-			if c.OutputParsedField == "" {
-				c.OutputParsedField = field
-			} else if c.OutputParsedField != field {
-				return nil, fmt.Errorf("mixed output_parsed fields in cases: %q vs %q", c.OutputParsedField, field)
-			}
+			return nil, fmt.Errorf("invalid predicate %q: %w", expr, err)
 		}
 		c.Cases = append(c.Cases, condCase{
-			Value:  value,
-			Target: kase.Target,
+			Name:        kase.Name,
+			PredicateGo: goExpr,
+			Target:      kase.Target,
 		})
 	}
 
 	return &c, nil
 }
 
-// parseEqualityExpr only supports expressions like:
-//
-//	input.output_parsed.xxx == "value"
-//	state.xxx == "value"
-func parseEqualityExpr(expr string) (value string, field string, err error) {
-	parts := strings.Split(expr, "==")
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("unsupported predicate %q (expected ==)", expr)
+func parseAndCompileCELExpr(cfg map[string]any, key string, path string) (exprGo string, err error) {
+	if cfg == nil {
+		return "", nil
 	}
-	left := strings.TrimSpace(parts[0])
-	right := strings.TrimSpace(parts[1])
-
-	if strings.HasPrefix(left, "input.output_parsed.") {
-		field = strings.TrimPrefix(left, "input.output_parsed.")
-	} else if strings.HasPrefix(left, "state.") {
-		field = strings.TrimPrefix(left, "state.")
-	} else {
-		return "", "", fmt.Errorf("unsupported left side %q (expected input.output_parsed.* or state.*)", left)
+	raw, ok := cfg[key]
+	if !ok || raw == nil {
+		return "", nil
+	}
+	exprMap, ok := raw.(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("%s must be an object", path)
 	}
 
-	// Right side must be a quoted string literal.
-	if len(right) < 2 || right[0] != '"' || right[len(right)-1] != '"' {
-		return "", "", fmt.Errorf("unsupported right side %q (expected quoted string)", right)
+	exprStr, _ := stringField(exprMap, "expression")
+	exprStr = strings.TrimSpace(exprStr)
+	if exprStr == "" {
+		return "", nil
 	}
-	value = right[1 : len(right)-1]
-	return value, field, nil
+
+	format, _ := stringField(exprMap, "format")
+	format = strings.TrimSpace(format)
+	if format == "" {
+		format = "cel"
+	}
+	if format != "cel" {
+		return "", fmt.Errorf("%s.format must be %q", path, "cel")
+	}
+
+	goExpr, err := compileCELLiteToGoValue(exprStr)
+	if err != nil {
+		return "", fmt.Errorf("%s: invalid CEL expression: %w", path, err)
+	}
+	return goExpr, nil
+}
+
+func parseSetStateAssignments(nodeID string, cfg map[string]any) ([]setStateAssignment, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	raw := cfg["assignments"]
+	if raw == nil {
+		return nil, nil
+	}
+
+	var list []any
+	switch v := raw.(type) {
+	case []any:
+		list = v
+	case []map[string]any:
+		list = make([]any, 0, len(v))
+		for _, item := range v {
+			list = append(list, item)
+		}
+	default:
+		return nil, fmt.Errorf("builtin.set_state[%s]: assignments must be an array", nodeID)
+	}
+
+	out := make([]setStateAssignment, 0, len(list))
+
+	for i, item := range list {
+		assignMap, ok := item.(map[string]any)
+		if !ok || assignMap == nil {
+			return nil, fmt.Errorf("builtin.set_state[%s]: assignments[%d] must be an object", nodeID, i)
+		}
+
+		field, _ := assignMap["field"].(string)
+		if field == "" {
+			// Allow legacy naming.
+			field, _ = assignMap["name"].(string)
+		}
+		field = strings.TrimSpace(field)
+		if field == "" {
+			return nil, fmt.Errorf("builtin.set_state[%s]: assignments[%d].field is required", nodeID, i)
+		}
+
+		exprMap, ok := assignMap["expr"].(map[string]any)
+		if !ok || exprMap == nil {
+			return nil, fmt.Errorf("builtin.set_state[%s]: assignments[%d].expr must be an object", nodeID, i)
+		}
+
+		exprStr, _ := stringField(exprMap, "expression")
+		exprStr = strings.TrimSpace(exprStr)
+		if exprStr == "" {
+			return nil, fmt.Errorf("builtin.set_state[%s]: assignments[%d].expr.expression is required", nodeID, i)
+		}
+
+		format, _ := stringField(exprMap, "format")
+		format = strings.TrimSpace(format)
+		if format == "" {
+			format = "cel"
+		}
+		if format != "cel" {
+			return nil, fmt.Errorf("builtin.set_state[%s]: assignments[%d].expr.format must be %q", nodeID, i, "cel")
+		}
+
+		goExpr, err := compileCELLiteToGoValue(exprStr)
+		if err != nil {
+			return nil, fmt.Errorf("builtin.set_state[%s]: invalid CEL expression for field %q: %w", nodeID, field, err)
+		}
+
+		out = append(out, setStateAssignment{
+			Field:  field,
+			ExprGo: goExpr,
+		})
+	}
+
+	return out, nil
+}
+
+func buildMCPNodeIR(node dsl.Node, fromNodeID string, collectEnv func(string)) (mcpNode, error) {
+	engine := node.EngineNode
+
+	parsed, err := mcpconfig.ParseNodeConfig(engine.Config)
+	if err != nil {
+		return mcpNode{}, fmt.Errorf("builtin.mcp[%s]: %w", node.ID, err)
+	}
+
+	collectEnv(strings.TrimSpace(parsed.ServerURL))
+	headers := make([]kvPair, 0, len(parsed.Headers))
+	for k, v := range parsed.Headers {
+		headers = append(headers, kvPair{Key: k, Value: v})
+		collectEnv(v)
+	}
+	sort.Slice(headers, func(i, j int) bool { return headers[i].Key < headers[j].Key })
+
+	var params []mcpParam
+	if len(parsed.Params) > 0 {
+		names := make([]string, 0, len(parsed.Params))
+		for name := range parsed.Params {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		for _, name := range names {
+			raw := parsed.Params[name]
+			exprMap, ok := raw.(map[string]any)
+			if !ok || exprMap == nil {
+				return mcpNode{}, fmt.Errorf("builtin.mcp[%s]: params[%q] must be an object", node.ID, name)
+			}
+			exprStr, _ := stringField(exprMap, "expression")
+			exprStr = strings.TrimSpace(exprStr)
+			if exprStr == "" {
+				continue
+			}
+			format, _ := stringField(exprMap, "format")
+			format = strings.TrimSpace(format)
+			if format == "" {
+				format = "cel"
+			}
+			if format != "cel" {
+				return mcpNode{}, fmt.Errorf("builtin.mcp[%s]: params[%q].format must be %q", node.ID, name, "cel")
+			}
+			goExpr, err := compileCELLiteToGoValue(exprStr)
+			if err != nil {
+				return mcpNode{}, fmt.Errorf("builtin.mcp[%s]: invalid CEL expression for param %q: %w", node.ID, name, err)
+			}
+			params = append(params, mcpParam{Name: name, ExprGo: goExpr})
+		}
+	}
+
+	return mcpNode{
+		ID:         node.ID,
+		FuncName:   "node" + toCamel(node.ID),
+		FromNodeID: fromNodeID,
+		Transport:  parsed.Transport,
+		ServerURL:  parsed.ServerURL,
+		Headers:    headers,
+		ToolName:   parsed.ToolName,
+		Params:     params,
+	}, nil
+}
+
+func equalCelPathSteps(a, b []celPathStep) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].isIndex != b[i].isIndex {
+			return false
+		}
+		if a[i].isIndex {
+			if a[i].index != b[i].index {
+				return false
+			}
+			continue
+		}
+		if a[i].key != b[i].key {
+			return false
+		}
+	}
+	return true
+}
+
+// detectHelperUsage scans the IR and sets NeedsXxx flags.
+func detectHelperUsage(ir *irGraph) {
+	// Check state variables for mustParseJSONAny usage.
+	for _, sv := range ir.StateVars {
+		if sv.DefaultJSON != "" {
+			ir.NeedsMustParseJSONAny = true
+		}
+	}
+
+	// Check end nodes with JSON expressions for mustParseJSONAny usage.
+	for _, e := range ir.EndNodes {
+		if e.ExprKind == "json" && e.ExprJSON != "" {
+			ir.NeedsMustParseJSONAny = true
+		}
+	}
 }
 
 func stringField(m map[string]any, key string) (string, bool) {
@@ -588,61 +1387,73 @@ func renderTemplate(tmpl string, data any) ([]byte, error) {
 // ---- Template ----
 
 type singleFileTemplateData struct {
-	PackageName   string
-	AppName       string
-	HasAgentNodes bool
-	EnvVars       []string
-	NeedsApproval bool
-	NeedsEnd      bool
-	StartNodes    []startNode
-	AgentNodes    []agentNode
-	ApprovalNodes []approvalNode
-	EndNodes      []endNode
-	Edges         []edge
-	Conditions    []condition
-	EntryPoint    string
+	PackageName    string
+	AppName        string
+	HasAgentNodes  bool
+	EnvVarInfos    []envVarInfo // Detailed env var info for documentation
+	NeedsApproval  bool
+	NeedsEnd       bool
+	NeedsMCP       bool
+	NeedsReflect   bool
+	NeedsExtractFirstJSONObjectFromText bool
+	StateVars      []stateVar
+	StartNodes     []startNode
+	AgentNodes     []agentNode
+	TransformNodes []transformNode
+	SetStateNodes  []setStateNode
+	MCPNodes       []mcpNode
+	ApprovalNodes  []approvalNode
+	EndNodes       []endNode
+	Edges          []edge
+	Conditions     []condition
+	EntryPoint     string
+
+	// Helper function usage flags.
+	NeedsMustParseJSONAny       bool
+	NeedsStructuredOutputMapper bool
 }
 
 const singleFileTemplate = `
 // Generated from DSL workflow "{{ .AppName }}".
 //
-// How to run this example (recommended: standalone folder + go.mod):
-//   1) Put this file in an empty folder as main.go
-//   2) Init a module and add deps:
-//        go mod init example.com/mydslapp
-//        go get trpc.group/trpc-go/trpc-agent-go@latest
-//        go mod tidy
-//   3) Configure env vars (only needed if you kept env:VAR placeholders):
-//      NOTE: api_key is always read from env; plaintext keys in the DSL are ignored.
-{{- if .EnvVars }}
-{{- range .EnvVars }}
-//        export {{ . }}="..."
+// How to run:
+//   1. Put this file in an empty folder as main.go
+//   2. go mod init example.com/mydslapp && go get trpc.group/trpc-go/trpc-agent-go@latest && go mod tidy
+//   3. Set environment variables:
+{{- if .EnvVarInfos }}
+{{- range .EnvVarInfos }}
+{{- if .Agents }}
+//      export {{ .Name }}="..."  # {{ .BaseURL }}{{ if gt (len .Agents) 0 }} (used by: {{ range $i, $a := .Agents }}{{ if $i }}, {{ end }}{{ $a }}{{ end }}){{ end }}
+{{- else }}
+//      export {{ .Name }}="..."
+{{- end }}
 {{- end }}
 {{- else }}
-//        (none)
+//      (none required)
 {{- end }}
-//   4) Run:
-//        go run .
-//
+//   4. go run .
 package {{ .PackageName }}
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	{{- if .HasAgentNodes }}
 	"os"
-	{{- if or .NeedsApproval .NeedsEnd }}
+	{{- end }}
+	{{- if .NeedsReflect }}
 	"reflect"
 	{{- end }}
 	"strings"
+	{{- if .NeedsMCP }}
+	"time"
+	{{- end }}
 
 	{{- if .HasAgentNodes }}
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	{{- end }}
-	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
-	{{- if .HasAgentNodes }}
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	{{- end }}
+	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	{{- if .HasAgentNodes }}
@@ -650,20 +1461,26 @@ import (
 	{{- end }}
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	{{- if .NeedsMCP }}
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+	{{- end }}
 )
 
-// ---- User Editable Section --------------------------------------------------
+// =============================================================================
+// Configuration
+// =============================================================================
 
 const appName = {{ printf "%q" .AppName }}
 
-// demoInput is the example user prompt used by main(). Feel free to edit any
-// part of this file; this is just a convenient starting point.
 var demoInput = {{ goString "I'm thinking about cancelling my mobile plan, can you offer me a better deal?" }}
 
-// ---- Entry Point ------------------------------------------------------------
+// =============================================================================
+// Entry Point
+// =============================================================================
 
 func main() {
-	fmt.Println("Starting graph (generated from DSL, AgentNode style):", appName)
+	fmt.Println("Starting graph:", appName)
 
 	g, err := BuildGraph()
 	if err != nil {
@@ -671,15 +1488,7 @@ func main() {
 	}
 
 	{{- if .HasAgentNodes }}
-	var subAgents []agent.Agent
-	{{- range .AgentNodes }}
-	subAgents = append(subAgents, new{{ .FuncSuffix }}SubAgent())
-	{{- end }}
-	ga, err := graphagent.New(
-		appName,
-		g,
-		graphagent.WithSubAgents(subAgents),
-	)
+	ga, err := graphagent.New(appName, g, graphagent.WithSubAgents(createSubAgents()))
 	{{- else }}
 	ga, err := graphagent.New(appName, g)
 	{{- end }}
@@ -687,55 +1496,47 @@ func main() {
 		panic(err)
 	}
 
-	sessSvc := inmemory.NewSessionService()
-	r := runner.NewRunner(appName, ga, runner.WithSessionService(sessSvc))
+	r := runner.NewRunner(appName, ga, runner.WithSessionService(inmemory.NewSessionService()))
 	defer r.Close()
 
-	ctx := context.Background()
-	msg := model.NewUserMessage(demoInput)
-
-	events, err := r.Run(ctx, "demo-user", "demo-session", msg)
+	events, err := r.Run(context.Background(), "demo-user", "demo-session", model.NewUserMessage(demoInput))
 	if err != nil {
 		panic(err)
 	}
 
-	var (
-		lastText       string
-		streamedText   strings.Builder
-		didStream      bool
-		interruptNode  string
-		interruptValue any
-	)
+	var lastText string
+	var streamedText strings.Builder
+	var didStream bool
+	var interruptNode string
+	var interruptValue any
+
 	for ev := range events {
-		if ev == nil || ev.Response == nil {
+		if ev == nil {
 			continue
 		}
-		if ev.Error != nil {
+		if ev.Response != nil && ev.Error != nil {
 			fmt.Printf("Event error: %s\n", ev.Error.Message)
 			continue
 		}
-
-		// Interrupts are emitted as graph.pregel.step events with _pregel_metadata.
 		if ev.StateDelta != nil {
 			if raw, ok := ev.StateDelta[graph.MetadataKeyPregel]; ok && raw != nil {
 				var meta graph.PregelStepMetadata
-				if err := json.Unmarshal(raw, &meta); err == nil {
-					if meta.NodeID != "" && meta.InterruptValue != nil {
-						interruptNode = meta.NodeID
-						interruptValue = meta.InterruptValue
-					}
+				if err := json.Unmarshal(raw, &meta); err == nil && meta.NodeID != "" && meta.InterruptValue != nil {
+					interruptNode = meta.NodeID
+					interruptValue = meta.InterruptValue
 				}
 			}
 		}
-
-		for _, ch := range ev.Choices {
-			if ch.Delta.Content != "" {
-				fmt.Print(ch.Delta.Content)
-				streamedText.WriteString(ch.Delta.Content)
-				didStream = true
-			}
-			if ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" {
-				lastText = ch.Message.Content
+		if ev.Response != nil {
+			for _, ch := range ev.Choices {
+				if ch.Delta.Content != "" {
+					fmt.Print(ch.Delta.Content)
+					streamedText.WriteString(ch.Delta.Content)
+					didStream = true
+				}
+				if ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" {
+					lastText = ch.Message.Content
+				}
 			}
 		}
 	}
@@ -743,28 +1544,45 @@ func main() {
 	if didStream {
 		fmt.Println()
 	}
-
 	if interruptNode != "" {
 		b, _ := json.MarshalIndent(interruptValue, "", "  ")
 		fmt.Printf("\n[interrupt] node=%q value=%s\n", interruptNode, string(b))
-		fmt.Println("This graph contains user-approval. Add a resume flow or rerun with a resume value to continue.")
+		fmt.Println("Graph interrupted. Resume with approval value to continue.")
 		return
 	}
-
 	if !didStream && lastText != "" {
 		fmt.Println("Final response:", lastText)
-		return
-	}
-	if streamedText.Len() == 0 && strings.TrimSpace(lastText) == "" {
-		fmt.Println("Graph completed but produced no assistant text.")
-		return
+	} else if streamedText.Len() == 0 && strings.TrimSpace(lastText) == "" {
+		fmt.Println("Graph completed with no output.")
 	}
 }
 
-// ---- Graph Definition -------------------------------------------------------
+// =============================================================================
+// Graph Definition
+// =============================================================================
 
 func BuildGraph() (*graph.Graph, error) {
 	schema := graph.MessagesStateSchema()
+
+	{{- if .StateVars }}
+	// User-defined state variables.
+	{{- range .StateVars }}
+	schema.AddField({{ printf "%q" .Name }}, graph.StateField{
+		Type:    {{ .TypeGo }},
+		Reducer: {{ .ReducerGo }},
+		{{- if .HasDefault }}
+		Default: func() any {
+			{{- if .DefaultJSON }}
+			return mustParseJSONAny({{ goString .DefaultJSON }})
+			{{- else }}
+			return {{ .DefaultLiteral }}
+			{{- end }}
+		},
+		{{- end }}
+	})
+	{{- end }}
+	{{- end }}
+
 	{{- if .NeedsApproval }}
 	schema.AddField("approval_result", graph.StateField{
 		Type:    reflect.TypeOf(""),
@@ -780,14 +1598,10 @@ func BuildGraph() (*graph.Graph, error) {
 
 	sg := graph.NewStateGraph(schema)
 
-	// start nodes: runtime no-op
+	// Nodes.
 	{{- range .StartNodes }}
-	sg.AddNode({{ printf "%q" .ID }}, func(ctx context.Context, state graph.State) (any, error) {
-		return nil, nil
-	})
+	sg.AddNode({{ printf "%q" .ID }}, func(ctx context.Context, state graph.State) (any, error) { return nil, nil })
 	{{- end }}
-
-	// Agent nodes backed by sub-agents.
 	{{- range .AgentNodes }}
 	{{- if .StructuredOutputSchemaJSON }}
 	sg.AddAgentNode({{ printf "%q" .ID }}, graph.WithSubgraphOutputMapper(agentStructuredOutputMapper({{ printf "%q" .ID }})))
@@ -795,23 +1609,26 @@ func BuildGraph() (*graph.Graph, error) {
 	sg.AddAgentNode({{ printf "%q" .ID }})
 	{{- end }}
 	{{- end }}
-
-	// Approval nodes.
-	{{- range .ApprovalNodes }}
-	sg.AddNode({{ printf "%q" .ID }}, {{ .FuncName }})
+	{{- range .TransformNodes }}
+	sg.AddNode({{ printf "%q" .ID }}, {{ .FuncName }}, graph.WithNodeType(graph.NodeTypeFunction))
 	{{- end }}
-
-	// End nodes.
+	{{- range .SetStateNodes }}
+	sg.AddNode({{ printf "%q" .ID }}, {{ .FuncName }}, graph.WithNodeType(graph.NodeTypeFunction))
+	{{- end }}
+	{{- range .MCPNodes }}
+	sg.AddNode({{ printf "%q" .ID }}, {{ .FuncName }}, graph.WithNodeType(graph.NodeTypeTool))
+	{{- end }}
+	{{- range .ApprovalNodes }}
+	sg.AddNode({{ printf "%q" .ID }}, {{ .FuncName }}, graph.WithNodeType(graph.NodeTypeRouter))
+	{{- end }}
 	{{- range .EndNodes }}
-	sg.AddNode({{ printf "%q" .ID }}, {{ .FuncName }})
+	sg.AddNode({{ printf "%q" .ID }}, {{ .FuncName }}, graph.WithNodeType(graph.NodeTypeFunction))
 	{{- end }}
 
 	// Edges.
 	{{- range .Edges }}
 	sg.AddEdge({{ printf "%q" .From }}, {{ printf "%q" .To }})
 	{{- end }}
-
-	// Conditional edges.
 	{{- range .Conditions }}
 	sg.AddConditionalEdges({{ printf "%q" .From }}, {{ .FuncName }}, nil)
 	{{- end }}
@@ -820,169 +1637,374 @@ func BuildGraph() (*graph.Graph, error) {
 	return sg.Compile()
 }
 
-{{- range .Conditions }}
-// {{ .FuncName }} routes based on {{ if eq .Kind "node_output_parsed" }}input.output_parsed.{{ .OutputParsedField }}{{ else }}state field{{ end }}.
-func {{ .FuncName }}(ctx context.Context, state graph.State) (string, error) {
-	{{- if eq .Kind "node_output_parsed" }}
-	if v, ok := getNodeStructuredFieldString(state, {{ printf "%q" .From }}, {{ printf "%q" .OutputParsedField }}); ok {
-		switch v {
-		{{- range .Cases }}
-		case {{ printf "%q" .Value }}:
-			return {{ printf "%q" .Target }}, nil
-		{{- end }}
-		}
-	}
-	{{- if .DefaultTarget }}
-	return {{ printf "%q" .DefaultTarget }}, nil
-	{{- else }}
-	return "", fmt.Errorf("no matching case for conditional from %s (field=%s)", {{ printf "%q" .From }}, {{ printf "%q" .OutputParsedField }})
-	{{- end }}
-	{{- else if eq .Kind "state_field" }}
-	v, _ := state[{{ printf "%q" .StateField }}].(string)
-	switch v {
-	{{- range .Cases }}
-	case {{ printf "%q" .Value }}:
+// =============================================================================
+// Routing Functions
+// =============================================================================
+{{- range $c := .Conditions }}
+
+func {{ $c.FuncName }}(ctx context.Context, state graph.State) (string, error) {
+	_ = ctx
+	parsedOutput, _ := state["{{ $c.From }}_parsed"].(map[string]any)
+	{{- if $c.SwitchFieldName }}
+	{{ $c.SwitchFieldName }}, _ := parsedOutput["{{ $c.SwitchFieldName }}"].(string)
+	switch {{ $c.SwitchFieldName }} {
+	{{- range $c.Cases }}
+	case {{ printf "%q" .MatchValue }}:
 		return {{ printf "%q" .Target }}, nil
 	{{- end }}
 	default:
-		{{- if .DefaultTarget }}
-		return {{ printf "%q" .DefaultTarget }}, nil
+		{{- if $c.DefaultTarget }}
+		return {{ printf "%q" $c.DefaultTarget }}, nil
 		{{- else }}
-		return "", fmt.Errorf("invalid value %q for state field {{ .StateField }}", v)
+		return "", fmt.Errorf("no matching case for {{ $c.SwitchFieldName }}=%q", {{ $c.SwitchFieldName }})
+		{{- end }}
+	}
+	{{- else if $c.SwitchExprGo }}
+	rawOutput, _ := state["{{ $c.From }}_output"].(string)
+	_, _ = parsedOutput, rawOutput
+	v := {{ $c.SwitchExprGo }}
+	switch v {
+	{{- range $c.Cases }}
+	case {{ printf "%q" .MatchValue }}:
+		return {{ printf "%q" .Target }}, nil
+	{{- end }}
+	default:
+		{{- if $c.DefaultTarget }}
+		return {{ printf "%q" $c.DefaultTarget }}, nil
+		{{- else }}
+		return "", fmt.Errorf("no matching case")
 		{{- end }}
 	}
 	{{- else }}
-	_ = ctx
-	_ = state
-	return "", fmt.Errorf("unsupported condition kind: {{ .Kind }}")
+	rawOutput, _ := state["{{ $c.From }}_output"].(string)
+	_, _ = parsedOutput, rawOutput
+	{{- range $c.Cases }}
+	if {{ .PredicateGo }} {
+		return {{ printf "%q" .Target }}, nil
+	}
+	{{- end }}
+	{{- if $c.DefaultTarget }}
+	return {{ printf "%q" $c.DefaultTarget }}, nil
+	{{- else }}
+	return "", fmt.Errorf("no matching case")
+	{{- end }}
 	{{- end }}
 }
 {{- end }}
 
-{{- range .ApprovalNodes }}
-// {{ .FuncName }} is a user-approval node that interrupts execution
-// and waits for a resume value, normalizing it into "approve" / "reject".
+// =============================================================================
+// Node Functions
+// =============================================================================
+{{- range .EndNodes }}
+
 func {{ .FuncName }}(ctx context.Context, state graph.State) (any, error) {
-	const nodeID = {{ printf "%q" .ID }}
-
-	payload := map[string]any{
-		"message": {{ printf "%q" .Message }},
-		"node_id": nodeID,
+	_ = ctx
+	{{- if eq .ExprKind "cel" }}
+	var input any
+	_ = input
+	value := {{ .ExprGo }}
+	stateDelta := graph.State{"end_structured_output": value}
+	if b, err := json.Marshal(value); err == nil && strings.TrimSpace(string(b)) != "" {
+		stateDelta[graph.StateKeyLastResponse] = string(b)
 	}
+	return stateDelta, nil
+	{{- else if eq .ExprKind "json" }}
+	value := mustParseJSONAny({{ goString .ExprJSON }})
+	stateDelta := graph.State{"end_structured_output": value}
+	if b, err := json.Marshal(value); err == nil && strings.TrimSpace(string(b)) != "" {
+		stateDelta[graph.StateKeyLastResponse] = string(b)
+	}
+	return stateDelta, nil
+	{{- else }}
+	return graph.State{}, nil
+	{{- end }}
+}
+{{- end }}
+{{- range .TransformNodes }}
 
-	resumeValue, err := graph.Interrupt(ctx, state, nodeID, payload)
+func {{ .FuncName }}(ctx context.Context, state graph.State) (any, error) {
+	_ = ctx
+	{{- if .ExprGo }}
+	var input any
+	_ = input
+	value := {{ .ExprGo }}
+	return graph.State{"{{ .ID }}_parsed": value}, nil
+	{{- else }}
+	return graph.State{}, nil
+	{{- end }}
+}
+{{- end }}
+{{- range .SetStateNodes }}
+
+func {{ .FuncName }}(ctx context.Context, state graph.State) (any, error) {
+	_ = ctx
+	{{- if .Assignments }}
+	var input any
+	_ = input
+	stateDelta := graph.State{}
+	{{- range $i, $a := .Assignments }}
+	stateDelta[{{ printf "%q" $a.Field }}] = {{ $a.ExprGo }}
+	{{- end }}
+	return stateDelta, nil
+	{{- else }}
+	return graph.State{}, nil
+	{{- end }}
+}
+{{- end }}
+{{- range .ApprovalNodes }}
+
+func {{ .FuncName }}(ctx context.Context, state graph.State) (any, error) {
+	{{- if .AutoApprove }}
+	return graph.State{"approval_result": "approve"}, nil
+	{{- else }}
+	resumeValue, err := graph.Interrupt(ctx, state, {{ printf "%q" .ID }}, map[string]any{
+		"message": {{ printf "%q" .Message }},
+		"node_id": {{ printf "%q" .ID }},
+	})
 	if err != nil {
 		return nil, err
 	}
-
 	raw, _ := resumeValue.(string)
 	decision := strings.ToLower(strings.TrimSpace(raw))
-
 	normalized := "reject"
 	if decision == "approve" || decision == "yes" || decision == "y" {
 		normalized = "approve"
 	}
-
-	return graph.State{
-		"approval_result": normalized,
-	}, nil
+	return graph.State{"approval_result": normalized}, nil
+	{{- end }}
 }
 {{- end }}
+{{- range .MCPNodes }}
 
-{{- range .EndNodes }}
-// {{ .FuncName }} writes the final structured output for {{ .ID }}.
 func {{ .FuncName }}(ctx context.Context, state graph.State) (any, error) {
-	{{- if .HasExpr }}
-	{{- if .FixedMessage }}
-	return graph.State{
-		"end_structured_output": map[string]any{
-			"message": {{ printf "%q" .FixedMessage }},
-		},
-	}, nil
+	{{- if .Headers }}
+	toolSet, err := newMCPToolSet({{ printf "%q" .Transport }}, {{ printf "%q" .ServerURL }}, map[string]string{
+		{{- range .Headers }}
+		{{ printf "%q" .Key }}: {{ printf "%q" .Value }},
+		{{- end }}
+	}, nil)
 	{{- else }}
-	// No simple message could be extracted from expr; keep empty map.
-	return graph.State{
-		"end_structured_output": map[string]any{},
-	}, nil
+	toolSet, err := newMCPToolSet({{ printf "%q" .Transport }}, {{ printf "%q" .ServerURL }}, nil, nil)
 	{{- end }}
-	{{- else }}
-	last, _ := state[graph.StateKeyLastResponse].(string)
-	if strings.TrimSpace(last) == "" {
+	if err != nil {
+		return nil, err
+	}
+
+	var selected tool.Tool
+	for _, t := range toolSet.Tools(ctx) {
+		if decl := t.Declaration(); decl != nil && decl.Name == {{ printf "%q" .ToolName }} {
+			selected = t
+			break
+		}
+	}
+	if selected == nil {
+		return nil, fmt.Errorf("MCP tool %q not found", {{ printf "%q" .ToolName }})
+	}
+	callable, ok := selected.(tool.CallableTool)
+	if !ok {
+		return nil, fmt.Errorf("MCP tool %q is not callable", {{ printf "%q" .ToolName }})
+	}
+
+	{{- if .FromNodeID }}
+	parsedOutput, _ := state["{{ .FromNodeID }}_parsed"].(map[string]any)
+	_ = parsedOutput
+	{{- end }}
+	args := make(map[string]any)
+	{{- range $i, $p := .Params }}
+	args[{{ printf "%q" $p.Name }}] = {{ $p.ExprGo }}
+	{{- end }}
+
+	payload, err := json.Marshal(args)
+	if err != nil {
+		return nil, fmt.Errorf("marshal args: %w", err)
+	}
+	result, err := callable.Call(ctx, payload)
+	if err != nil {
+		return nil, fmt.Errorf("MCP call failed: %w", err)
+	}
+	if result == nil {
 		return nil, nil
 	}
+
+	// Extract text from MCP response.
+	var textBuf []string
+	if b, err := json.Marshal(result); err == nil {
+		var items []map[string]any
+		if json.Unmarshal(b, &items) == nil {
+			for _, item := range items {
+				if t, _ := item["type"].(string); t == "text" {
+					if txt, _ := item["text"].(string); strings.TrimSpace(txt) != "" {
+						textBuf = append(textBuf, txt)
+					}
+				}
+			}
+		}
+	}
+	resultsText := strings.Join(textBuf, "\n")
+
+	// Try to parse JSON from response.
+	var parsed any
+	if strings.TrimSpace(resultsText) != "" {
+		if jsonText, ok := extractFirstJSONObjectFromText(resultsText); ok {
+			json.Unmarshal([]byte(jsonText), &parsed)
+		}
+	}
+
 	return graph.State{
-		"end_structured_output": map[string]any{
-			"message": last,
-		},
+		"{{ .ID }}_output": resultsText,
+		"{{ .ID }}_parsed": parsed,
 	}, nil
-	{{- end }}
 }
 {{- end }}
 
+// =============================================================================
+// Agent Constructors
+// =============================================================================
+{{- if .HasAgentNodes }}
+
+func createSubAgents() []agent.Agent {
+	return []agent.Agent{
+		{{- range .AgentNodes }}
+		new{{ .FuncSuffix }}SubAgent(),
+		{{- end }}
+	}
+}
 {{- range .AgentNodes }}
-// new{{ .FuncSuffix }}SubAgent constructs the LLMAgent backing the "{{ .ID }}" AgentNode.
+
 func new{{ .FuncSuffix }}SubAgent() agent.Agent {
-	apiKey, err := resolveEnvString({{ printf "%q" .ModelSpec.APIKey }}, "{{ .ID }}.model_spec.api_key")
-	if err != nil {
-		panic(err)
+	apiKey := os.Getenv({{ printf "%q" .ModelSpec.APIKeyEnvVar }})
+	if apiKey == "" {
+		panic("environment variable {{ .ModelSpec.APIKeyEnvVar }} is not set")
 	}
 
-	var opts []openai.Option
-	opts = append(opts, openai.WithAPIKey(apiKey))
-
-	baseURL, err := resolveEnvString({{ printf "%q" .ModelSpec.BaseURL }}, "{{ .ID }}.model_spec.base_url")
-	if err != nil {
-		panic(err)
-	}
-	if strings.TrimSpace(baseURL) != "" {
-		opts = append(opts, openai.WithBaseURL(baseURL))
-	}
-
-	headers := map[string]string{
+	modelOpts := []openai.Option{openai.WithAPIKey(apiKey)}
+	{{- if .ModelSpec.BaseURL }}
+	modelOpts = append(modelOpts, openai.WithBaseURL({{ printf "%q" .ModelSpec.BaseURL }}))
+	{{- end }}
+	{{- if .ModelSpec.Headers }}
+	modelOpts = append(modelOpts, openai.WithHeaders(map[string]string{
 		{{- range .ModelSpec.Headers }}
 		{{ printf "%q" .Key }}: {{ printf "%q" .Value }},
 		{{- end }}
-	}
-	resolved := make(map[string]string, len(headers))
-	for k, v := range headers {
-		rv, err := resolveEnvString(v, fmt.Sprintf("{{ .ID }}.model_spec.headers[%q]", k))
+	}))
+	{{- end }}
+	{{- if .ModelSpec.ExtraFieldsJSON }}
+	modelOpts = append(modelOpts, openai.WithExtraFields(mustParseJSONMap({{ goString .ModelSpec.ExtraFieldsJSON }})))
+	{{- end }}
+	llmModel := openai.New({{ printf "%q" .ModelSpec.ModelName }}, modelOpts...)
+
+	opts := []llmagent.Option{llmagent.WithModel(llmModel)}
+	{{- if .Instruction }}
+	opts = append(opts, llmagent.WithInstruction({{ goString .Instruction }}))
+	{{- end }}
+	{{- if .StructuredOutputSchemaJSON }}
+	opts = append(opts, llmagent.WithStructuredOutputJSONSchema({{ printf "%q" .StructuredOutputSchemaName }}, mustParseJSONMap({{ goString .StructuredOutputSchemaJSON }}), true, ""))
+	{{- end }}
+
+	{{- if .MCPTools }}
+	{{- $agentID := .ID }}
+	var mcpToolSets []tool.ToolSet
+	{{- range $i, $ts := .MCPTools }}
+	{
+		{{- if $ts.Headers }}
+		ts, err := newMCPToolSet({{ printf "%q" $ts.Transport }}, {{ printf "%q" $ts.ServerURL }}, map[string]string{
+			{{- range $ts.Headers }}
+			{{ printf "%q" .Key }}: {{ printf "%q" .Value }},
+			{{- end }}
+		}, []string{
+			{{- range $ts.AllowedTools }}
+			{{ printf "%q" . }},
+			{{- end }}
+		})
+		{{- else }}
+		ts, err := newMCPToolSet({{ printf "%q" $ts.Transport }}, {{ printf "%q" $ts.ServerURL }}, nil, []string{
+			{{- range $ts.AllowedTools }}
+			{{ printf "%q" . }},
+			{{- end }}
+		})
+		{{- end }}
 		if err != nil {
 			panic(err)
 		}
-		if strings.TrimSpace(rv) != "" {
-			resolved[k] = rv
-		}
+		mcpToolSets = append(mcpToolSets, ts)
 	}
-	if len(resolved) > 0 {
-		opts = append(opts, openai.WithHeaders(resolved))
-	}
+	{{- end }}
+	opts = append(opts, llmagent.WithToolSets(mcpToolSets))
+	{{- end }}
 
-	extraFieldsJSON := {{ goString .ModelSpec.ExtraFieldsJSON }}
-	if strings.TrimSpace(extraFieldsJSON) != "" {
-		opts = append(opts, openai.WithExtraFields(mustParseJSONMap(extraFieldsJSON)))
+	{{- if .GenConfig.HasAny }}
+	var genConfig model.GenerationConfig
+	{{- if .GenConfig.HasTemperature }}
+	{
+		t := {{ .GenConfig.Temperature }}
+		genConfig.Temperature = &t
 	}
-
-	modelName, err := resolveEnvString({{ printf "%q" .ModelSpec.ModelName }}, "{{ .ID }}.model_spec.model_name")
-	if err != nil {
-		panic(err)
+	{{- end }}
+	{{- if .GenConfig.HasMaxTokens }}
+	{
+		mt := {{ .GenConfig.MaxTokens }}
+		genConfig.MaxTokens = &mt
 	}
-	llmModel := openai.New(modelName, opts...)
-
-	instruction := {{ goString .Instruction }}
-	return llmagent.New(
-		"{{ .ID }}",
-		llmagent.WithModel(llmModel),
-		llmagent.WithInstruction(instruction),
-		{{- if .StructuredOutputSchemaJSON }}
-		llmagent.WithStructuredOutputJSONSchema({{ printf "%q" .StructuredOutputSchemaName }}, mustParseJSONMap({{ goString .StructuredOutputSchemaJSON }}), true, ""),
+	{{- end }}
+	{{- if .GenConfig.HasTopP }}
+	{
+		tp := {{ .GenConfig.TopP }}
+		genConfig.TopP = &tp
+	}
+	{{- end }}
+	{{- if .GenConfig.HasStop }}
+	genConfig.Stop = []string{
+		{{- range .GenConfig.Stop }}
+		{{ printf "%q" . }},
 		{{- end }}
-		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
-	)
+	}
+	{{- end }}
+	{{- if .GenConfig.HasPresencePenalty }}
+	{
+		pp := {{ .GenConfig.PresencePenalty }}
+		genConfig.PresencePenalty = &pp
+	}
+	{{- end }}
+	{{- if .GenConfig.HasFrequencyPenalty }}
+	{
+		fp := {{ .GenConfig.FrequencyPenalty }}
+		genConfig.FrequencyPenalty = &fp
+	}
+	{{- end }}
+	{{- if .GenConfig.HasReasoningEffort }}
+	{
+		re := {{ printf "%q" .GenConfig.ReasoningEffort }}
+		genConfig.ReasoningEffort = &re
+	}
+	{{- end }}
+	{{- if .GenConfig.HasThinkingEnabled }}
+	{
+		te := {{ if .GenConfig.ThinkingEnabled }}true{{ else }}false{{ end }}
+		genConfig.ThinkingEnabled = &te
+	}
+	{{- end }}
+	{{- if .GenConfig.HasThinkingTokens }}
+	{
+		tt := {{ .GenConfig.ThinkingTokens }}
+		genConfig.ThinkingTokens = &tt
+	}
+	{{- end }}
+	{{- if .GenConfig.HasStream }}
+	genConfig.Stream = {{ if .GenConfig.Stream }}true{{ else }}false{{ end }}
+	{{- end }}
+	opts = append(opts, llmagent.WithGenerationConfig(genConfig))
+	{{- end }}
+
+	return llmagent.New({{ printf "%q" .ID }}, opts...)
 }
 {{- end }}
+{{- end }}
 
-// ---- Helpers ---------------------------------------------------------------
+// =============================================================================
+// Infrastructure (do not edit below this line)
+// =============================================================================
 
+{{- if .NeedsStructuredOutputMapper }}
 func agentStructuredOutputMapper(nodeID string) graph.SubgraphOutputMapper {
 	return func(parent graph.State, result graph.SubgraphResult) graph.State {
 		last := result.LastResponse
@@ -990,69 +2012,88 @@ func agentStructuredOutputMapper(nodeID string) graph.SubgraphOutputMapper {
 			graph.StateKeyLastResponse:  last,
 			graph.StateKeyNodeResponses: map[string]any{nodeID: last},
 			graph.StateKeyUserInput:     "",
+			nodeID + "_output":          last,
 		}
-
-		if strings.TrimSpace(last) == "" {
-			return upd
+		if result.StructuredOutput != nil {
+			upd[nodeID+"_parsed"] = result.StructuredOutput
 		}
-		jsonText, ok := extractFirstJSONObjectFromText(last)
-		if !ok {
-			return upd
-		}
-		var parsed any
-		if err := json.Unmarshal([]byte(jsonText), &parsed); err != nil {
-			return upd
-		}
-
-		nodeStructured := map[string]any{}
-		if existingRaw, ok := parent["node_structured"]; ok {
-			if existingMap, ok := existingRaw.(map[string]any); ok && existingMap != nil {
-				for k, v := range existingMap {
-					nodeStructured[k] = v
-				}
-			}
-		}
-		nodeStructured[nodeID] = map[string]any{
-			"output_raw":    jsonText,
-			"output_parsed": parsed,
-		}
-		upd["node_structured"] = nodeStructured
 		return upd
 	}
 }
+{{- end }}
 
-// extractFirstJSONObjectFromText tries to extract the first balanced top-level
-// JSON object or array from the given text.
+{{- if .NeedsMCP }}
+func newMCPToolSet(transport, serverURL string, headers map[string]string, allowedTools []string) (tool.ToolSet, error) {
+	if transport == "" {
+		return nil, fmt.Errorf("transport is required")
+	}
+	connConfig := mcp.ConnectionConfig{Transport: transport, Timeout: 10 * time.Second}
+	switch transport {
+	case "streamable_http", "sse":
+		if serverURL == "" {
+			return nil, fmt.Errorf("server_url is required for %s", transport)
+		}
+		connConfig.ServerURL = serverURL
+		if len(headers) > 0 {
+			connConfig.Headers = headers
+		}
+	default:
+		return nil, fmt.Errorf("unsupported transport: %s", transport)
+	}
+	var opts []mcp.ToolSetOption
+	if len(allowedTools) > 0 {
+		opts = append(opts, mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter(allowedTools...)))
+	}
+	return mcp.NewMCPToolSet(connConfig, opts...), nil
+}
+{{- end }}
+
+{{- if .NeedsMustParseJSONAny }}
+func mustParseJSONAny(raw string) any {
+	if raw = strings.TrimSpace(raw); raw == "" {
+		return nil
+	}
+	var v any
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		panic(err)
+	}
+	return v
+}
+{{- end }}
+
+{{- if .HasAgentNodes }}
+func mustParseJSONMap(raw string) map[string]any {
+	if raw = strings.TrimSpace(raw); raw == "" {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		panic(err)
+	}
+	return m
+}
+{{- end }}
+
+{{- if .NeedsExtractFirstJSONObjectFromText }}
 func extractFirstJSONObjectFromText(s string) (string, bool) {
-	start := findJSONStartInText(s)
+	start := -1
+	for i := 0; i < len(s); i++ {
+		if s[i] == '{' || s[i] == '[' {
+			start = i
+			break
+		}
+	}
 	if start == -1 {
 		return "", false
 	}
-	return scanBalancedJSONInText(s, start)
-}
-
-func findJSONStartInText(s string) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '{' || s[i] == '[' {
-			return i
-		}
-	}
-	return -1
-}
-
-func scanBalancedJSONInText(s string, start int) (string, bool) {
 	stack := make([]byte, 0, 8)
-	inString := false
-	escaped := false
-
+	inString, escaped := false, false
 	for i := start; i < len(s); i++ {
 		c := s[i]
-
 		if escaped {
 			escaped = false
 			continue
 		}
-
 		if inString {
 			switch c {
 			case '\\':
@@ -1062,7 +2103,6 @@ func scanBalancedJSONInText(s string, start int) (string, bool) {
 			}
 			continue
 		}
-
 		switch c {
 		case '"':
 			inString = true
@@ -1085,74 +2125,5 @@ func scanBalancedJSONInText(s string, start int) (string, bool) {
 	}
 	return "", false
 }
-
-func getNodeStructuredFieldString(state graph.State, nodeID string, fieldPath string) (string, bool) {
-	root, ok := state["node_structured"].(map[string]any)
-	if !ok || root == nil {
-		return "", false
-	}
-	nodeAny, ok := root[nodeID]
-	if !ok {
-		return "", false
-	}
-	nodeMap, ok := nodeAny.(map[string]any)
-	if !ok || nodeMap == nil {
-		return "", false
-	}
-	parsed, ok := nodeMap["output_parsed"]
-	if !ok || parsed == nil {
-		return "", false
-	}
-	return extractStringByPath(parsed, fieldPath)
-}
-
-func extractStringByPath(v any, fieldPath string) (string, bool) {
-	fieldPath = strings.TrimSpace(fieldPath)
-	if fieldPath == "" {
-		s, ok := v.(string)
-		return s, ok
-	}
-	cur := v
-	for _, key := range strings.Split(fieldPath, ".") {
-		m, ok := cur.(map[string]any)
-		if !ok || m == nil {
-			return "", false
-		}
-		next, ok := m[key]
-		if !ok {
-			return "", false
-		}
-		cur = next
-	}
-	s, ok := cur.(string)
-	return s, ok
-}
-
-func resolveEnvString(value string, fieldPath string) (string, error) {
-	value = strings.TrimSpace(value)
-	if !strings.HasPrefix(value, "env:") {
-		return value, nil
-	}
-	varName := strings.TrimSpace(strings.TrimPrefix(value, "env:"))
-	if varName == "" {
-		return "", fmt.Errorf("%s env placeholder is invalid (expected env:VAR)", fieldPath)
-	}
-	envVal, ok := os.LookupEnv(varName)
-	if !ok || strings.TrimSpace(envVal) == "" {
-		return "", fmt.Errorf("environment variable %q is not set (required by %s)", varName, fieldPath)
-	}
-	return envVal, nil
-}
-
-func mustParseJSONMap(raw string) map[string]any {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	var m map[string]any
-	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		panic(err)
-	}
-	return m
-}
+{{- end }}
 `

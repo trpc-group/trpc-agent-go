@@ -1,16 +1,11 @@
 // Generated from DSL workflow "openai_custom_service".
 //
-// How to run this example (recommended: standalone folder + go.mod):
+// How to run:
 //  1. Put this file in an empty folder as main.go
-//  2. Init a module and add deps:
-//     go mod init example.com/mydslapp
-//     go get trpc.group/trpc-go/trpc-agent-go@latest
-//     go mod tidy
-//  3. Configure env vars (only needed if you kept env:VAR placeholders):
-//     NOTE: api_key is always read from env; plaintext keys in the DSL are ignored.
-//     export OPENAI_API_KEY="..."
-//  4. Run:
-//     go run .
+//  2. go mod init example.com/mydslapp && go get trpc.group/trpc-go/trpc-agent-go@latest && go mod tidy
+//  3. Set environment variables:
+//     export OPENAI_API_KEY="..."  # https://api.deepseek.com/v1 (used by: classifier, return_agent, retention_agent, information_agent)
+//  4. go run .
 package main
 
 import (
@@ -30,86 +25,71 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
-// ---- User Editable Section --------------------------------------------------
+// =============================================================================
+// Configuration
+// =============================================================================
 
 const appName = "openai_custom_service"
 
-// demoInput is the example user prompt used by main(). Feel free to edit any
-// part of this file; this is just a convenient starting point.
 var demoInput = `I'm thinking about cancelling my mobile plan, can you offer me a better deal?`
 
-// ---- Entry Point ------------------------------------------------------------
+// =============================================================================
+// Entry Point
+// =============================================================================
 
 func main() {
-	fmt.Println("Starting graph (generated from DSL, AgentNode style):", appName)
+	fmt.Println("Starting graph:", appName)
 
 	g, err := BuildGraph()
 	if err != nil {
 		panic(err)
 	}
-	var subAgents []agent.Agent
-	subAgents = append(subAgents, newClassifierSubAgent())
-	subAgents = append(subAgents, newInformationAgentSubAgent())
-	subAgents = append(subAgents, newRetentionAgentSubAgent())
-	subAgents = append(subAgents, newReturnAgentSubAgent())
-	ga, err := graphagent.New(
-		appName,
-		g,
-		graphagent.WithSubAgents(subAgents),
-	)
+	ga, err := graphagent.New(appName, g, graphagent.WithSubAgents(createSubAgents()))
 	if err != nil {
 		panic(err)
 	}
 
-	sessSvc := inmemory.NewSessionService()
-	r := runner.NewRunner(appName, ga, runner.WithSessionService(sessSvc))
+	r := runner.NewRunner(appName, ga, runner.WithSessionService(inmemory.NewSessionService()))
 	defer r.Close()
 
-	ctx := context.Background()
-	msg := model.NewUserMessage(demoInput)
-
-	events, err := r.Run(ctx, "demo-user", "demo-session", msg)
+	events, err := r.Run(context.Background(), "demo-user", "demo-session", model.NewUserMessage(demoInput))
 	if err != nil {
 		panic(err)
 	}
 
-	var (
-		lastText       string
-		streamedText   strings.Builder
-		didStream      bool
-		interruptNode  string
-		interruptValue any
-	)
+	var lastText string
+	var streamedText strings.Builder
+	var didStream bool
+	var interruptNode string
+	var interruptValue any
+
 	for ev := range events {
-		if ev == nil || ev.Response == nil {
+		if ev == nil {
 			continue
 		}
-		if ev.Error != nil {
+		if ev.Response != nil && ev.Error != nil {
 			fmt.Printf("Event error: %s\n", ev.Error.Message)
 			continue
 		}
-
-		// Interrupts are emitted as graph.pregel.step events with _pregel_metadata.
 		if ev.StateDelta != nil {
 			if raw, ok := ev.StateDelta[graph.MetadataKeyPregel]; ok && raw != nil {
 				var meta graph.PregelStepMetadata
-				if err := json.Unmarshal(raw, &meta); err == nil {
-					if meta.NodeID != "" && meta.InterruptValue != nil {
-						interruptNode = meta.NodeID
-						interruptValue = meta.InterruptValue
-					}
+				if err := json.Unmarshal(raw, &meta); err == nil && meta.NodeID != "" && meta.InterruptValue != nil {
+					interruptNode = meta.NodeID
+					interruptValue = meta.InterruptValue
 				}
 			}
 		}
-
-		for _, ch := range ev.Choices {
-			if ch.Delta.Content != "" {
-				fmt.Print(ch.Delta.Content)
-				streamedText.WriteString(ch.Delta.Content)
-				didStream = true
-			}
-			if ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" {
-				lastText = ch.Message.Content
+		if ev.Response != nil {
+			for _, ch := range ev.Choices {
+				if ch.Delta.Content != "" {
+					fmt.Print(ch.Delta.Content)
+					streamedText.WriteString(ch.Delta.Content)
+					didStream = true
+				}
+				if ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" {
+					lastText = ch.Message.Content
+				}
 			}
 		}
 	}
@@ -117,25 +97,22 @@ func main() {
 	if didStream {
 		fmt.Println()
 	}
-
 	if interruptNode != "" {
 		b, _ := json.MarshalIndent(interruptValue, "", "  ")
 		fmt.Printf("\n[interrupt] node=%q value=%s\n", interruptNode, string(b))
-		fmt.Println("This graph contains user-approval. Add a resume flow or rerun with a resume value to continue.")
+		fmt.Println("Graph interrupted. Resume with approval value to continue.")
 		return
 	}
-
 	if !didStream && lastText != "" {
 		fmt.Println("Final response:", lastText)
-		return
-	}
-	if streamedText.Len() == 0 && strings.TrimSpace(lastText) == "" {
-		fmt.Println("Graph completed but produced no assistant text.")
-		return
+	} else if streamedText.Len() == 0 && strings.TrimSpace(lastText) == "" {
+		fmt.Println("Graph completed with no output.")
 	}
 }
 
-// ---- Graph Definition -------------------------------------------------------
+// =============================================================================
+// Graph Definition
+// =============================================================================
 
 func BuildGraph() (*graph.Graph, error) {
 	schema := graph.MessagesStateSchema()
@@ -150,25 +127,17 @@ func BuildGraph() (*graph.Graph, error) {
 
 	sg := graph.NewStateGraph(schema)
 
-	// start nodes: runtime no-op
-	sg.AddNode("start", func(ctx context.Context, state graph.State) (any, error) {
-		return nil, nil
-	})
-
-	// Agent nodes backed by sub-agents.
+	// Nodes.
+	sg.AddNode("start", func(ctx context.Context, state graph.State) (any, error) { return nil, nil })
 	sg.AddAgentNode("classifier", graph.WithSubgraphOutputMapper(agentStructuredOutputMapper("classifier")))
 	sg.AddAgentNode("information_agent")
 	sg.AddAgentNode("retention_agent")
 	sg.AddAgentNode("return_agent")
-
-	// Approval nodes.
-	sg.AddNode("retention_approval", nodeRetentionApproval)
-
-	// End nodes.
-	sg.AddNode("info_end", nodeInfoEnd)
-	sg.AddNode("retention_end", nodeRetentionEnd)
-	sg.AddNode("retention_reject_end", nodeRetentionRejectEnd)
-	sg.AddNode("return_end", nodeReturnEnd)
+	sg.AddNode("retention_approval", nodeRetentionApproval, graph.WithNodeType(graph.NodeTypeRouter))
+	sg.AddNode("info_end", nodeInfoEnd, graph.WithNodeType(graph.NodeTypeFunction))
+	sg.AddNode("retention_end", nodeRetentionEnd, graph.WithNodeType(graph.NodeTypeFunction))
+	sg.AddNode("retention_reject_end", nodeRetentionRejectEnd, graph.WithNodeType(graph.NodeTypeFunction))
+	sg.AddNode("return_end", nodeReturnEnd, graph.WithNodeType(graph.NodeTypeFunction))
 
 	// Edges.
 	sg.AddEdge("info_end", "__end__")
@@ -179,8 +148,6 @@ func BuildGraph() (*graph.Graph, error) {
 	sg.AddEdge("return_agent", "return_end")
 	sg.AddEdge("return_end", "__end__")
 	sg.AddEdge("start", "classifier")
-
-	// Conditional edges.
 	sg.AddConditionalEdges("classifier", routeEdgeRouteByClassification, nil)
 	sg.AddConditionalEdges("retention_approval", routeEdgeRouteAfterRetentionApproval, nil)
 
@@ -188,209 +155,145 @@ func BuildGraph() (*graph.Graph, error) {
 	return sg.Compile()
 }
 
-// routeEdgeRouteByClassification routes based on input.output_parsed.classification.
+// =============================================================================
+// Routing Functions
+// =============================================================================
+
 func routeEdgeRouteByClassification(ctx context.Context, state graph.State) (string, error) {
-	if v, ok := getNodeStructuredFieldString(state, "classifier", "classification"); ok {
-		switch v {
-		case "return_item":
-			return "return_agent", nil
-		case "cancel_subscription":
-			return "retention_agent", nil
-		case "get_information":
-			return "information_agent", nil
-		}
+	_ = ctx
+	parsedOutput, _ := state["classifier_parsed"].(map[string]any)
+	classification, _ := parsedOutput["classification"].(string)
+	switch classification {
+	case "return_item":
+		return "return_agent", nil
+	case "cancel_subscription":
+		return "retention_agent", nil
+	case "get_information":
+		return "information_agent", nil
+	default:
+		return "", fmt.Errorf("no matching case for classification=%q", classification)
 	}
-	return "", fmt.Errorf("no matching case for conditional from %s (field=%s)", "classifier", "classification")
 }
 
-// routeEdgeRouteAfterRetentionApproval routes based on state field.
 func routeEdgeRouteAfterRetentionApproval(ctx context.Context, state graph.State) (string, error) {
-	v, _ := state["approval_result"].(string)
+	_ = ctx
+	parsedOutput, _ := state["retention_approval_parsed"].(map[string]any)
+	rawOutput, _ := state["retention_approval_output"].(string)
+	_, _ = parsedOutput, rawOutput
+	v := func() string { s, _ := state["approval_result"].(string); return s }()
 	switch v {
 	case "approve":
 		return "retention_end", nil
 	case "reject":
 		return "retention_reject_end", nil
 	default:
-		return "", fmt.Errorf("invalid value %q for state field approval_result", v)
+		return "", fmt.Errorf("no matching case")
 	}
 }
 
-// nodeRetentionApproval is a user-approval node that interrupts execution
-// and waits for a resume value, normalizing it into "approve" / "reject".
-func nodeRetentionApproval(ctx context.Context, state graph.State) (any, error) {
-	const nodeID = "retention_approval"
+// =============================================================================
+// Node Functions
+// =============================================================================
 
-	payload := map[string]any{
-		"message": "Does this retention offer work for you?",
-		"node_id": nodeID,
+func nodeInfoEnd(ctx context.Context, state graph.State) (any, error) {
+	_ = ctx
+	return graph.State{}, nil
+}
+
+func nodeRetentionEnd(ctx context.Context, state graph.State) (any, error) {
+	_ = ctx
+	value := mustParseJSONAny(`{"message": "Your retention offer has been accepted. Thank you for staying with us."}`)
+	stateDelta := graph.State{"end_structured_output": value}
+	if b, err := json.Marshal(value); err == nil && strings.TrimSpace(string(b)) != "" {
+		stateDelta[graph.StateKeyLastResponse] = string(b)
 	}
+	return stateDelta, nil
+}
 
-	resumeValue, err := graph.Interrupt(ctx, state, nodeID, payload)
+func nodeRetentionRejectEnd(ctx context.Context, state graph.State) (any, error) {
+	_ = ctx
+	value := mustParseJSONAny(`{"message": "We understand your decision. If you change your mind, we are always here to help."}`)
+	stateDelta := graph.State{"end_structured_output": value}
+	if b, err := json.Marshal(value); err == nil && strings.TrimSpace(string(b)) != "" {
+		stateDelta[graph.StateKeyLastResponse] = string(b)
+	}
+	return stateDelta, nil
+}
+
+func nodeReturnEnd(ctx context.Context, state graph.State) (any, error) {
+	_ = ctx
+	return graph.State{}, nil
+}
+
+func nodeRetentionApproval(ctx context.Context, state graph.State) (any, error) {
+	resumeValue, err := graph.Interrupt(ctx, state, "retention_approval", map[string]any{
+		"message": "Does this retention offer work for you?",
+		"node_id": "retention_approval",
+	})
 	if err != nil {
 		return nil, err
 	}
-
 	raw, _ := resumeValue.(string)
 	decision := strings.ToLower(strings.TrimSpace(raw))
-
 	normalized := "reject"
 	if decision == "approve" || decision == "yes" || decision == "y" {
 		normalized = "approve"
 	}
-
-	return graph.State{
-		"approval_result": normalized,
-	}, nil
+	return graph.State{"approval_result": normalized}, nil
 }
 
-// nodeInfoEnd writes the final structured output for info_end.
-func nodeInfoEnd(ctx context.Context, state graph.State) (any, error) {
-	last, _ := state[graph.StateKeyLastResponse].(string)
-	if strings.TrimSpace(last) == "" {
-		return nil, nil
+// =============================================================================
+// Agent Constructors
+// =============================================================================
+
+func createSubAgents() []agent.Agent {
+	return []agent.Agent{
+		newClassifierSubAgent(),
+		newInformationAgentSubAgent(),
+		newRetentionAgentSubAgent(),
+		newReturnAgentSubAgent(),
 	}
-	return graph.State{
-		"end_structured_output": map[string]any{
-			"message": last,
-		},
-	}, nil
 }
 
-// nodeRetentionEnd writes the final structured output for retention_end.
-func nodeRetentionEnd(ctx context.Context, state graph.State) (any, error) {
-	return graph.State{
-		"end_structured_output": map[string]any{
-			"message": "Your retention offer has been accepted. Thank you for staying with us.",
-		},
-	}, nil
-}
-
-// nodeRetentionRejectEnd writes the final structured output for retention_reject_end.
-func nodeRetentionRejectEnd(ctx context.Context, state graph.State) (any, error) {
-	return graph.State{
-		"end_structured_output": map[string]any{
-			"message": "We understand your decision. If you change your mind, we are always here to help.",
-		},
-	}, nil
-}
-
-// nodeReturnEnd writes the final structured output for return_end.
-func nodeReturnEnd(ctx context.Context, state graph.State) (any, error) {
-	last, _ := state[graph.StateKeyLastResponse].(string)
-	if strings.TrimSpace(last) == "" {
-		return nil, nil
-	}
-	return graph.State{
-		"end_structured_output": map[string]any{
-			"message": last,
-		},
-	}, nil
-}
-
-// newClassifierSubAgent constructs the LLMAgent backing the "classifier" AgentNode.
 func newClassifierSubAgent() agent.Agent {
-	apiKey, err := resolveEnvString("env:OPENAI_API_KEY", "classifier.model_spec.api_key")
-	if err != nil {
-		panic(err)
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		panic("environment variable OPENAI_API_KEY is not set")
 	}
 
-	var opts []openai.Option
-	opts = append(opts, openai.WithAPIKey(apiKey))
+	modelOpts := []openai.Option{openai.WithAPIKey(apiKey)}
+	modelOpts = append(modelOpts, openai.WithBaseURL("https://api.deepseek.com/v1"))
+	llmModel := openai.New("deepseek-chat", modelOpts...)
 
-	baseURL, err := resolveEnvString("https://api.deepseek.com/v1", "classifier.model_spec.base_url")
-	if err != nil {
-		panic(err)
-	}
-	if strings.TrimSpace(baseURL) != "" {
-		opts = append(opts, openai.WithBaseURL(baseURL))
-	}
-
-	headers := map[string]string{}
-	resolved := make(map[string]string, len(headers))
-	for k, v := range headers {
-		rv, err := resolveEnvString(v, fmt.Sprintf("classifier.model_spec.headers[%q]", k))
-		if err != nil {
-			panic(err)
-		}
-		if strings.TrimSpace(rv) != "" {
-			resolved[k] = rv
-		}
-	}
-	if len(resolved) > 0 {
-		opts = append(opts, openai.WithHeaders(resolved))
-	}
-
-	extraFieldsJSON := ""
-	if strings.TrimSpace(extraFieldsJSON) != "" {
-		opts = append(opts, openai.WithExtraFields(mustParseJSONMap(extraFieldsJSON)))
-	}
-
-	modelName, err := resolveEnvString("deepseek-chat", "classifier.model_spec.model_name")
-	if err != nil {
-		panic(err)
-	}
-	llmModel := openai.New(modelName, opts...)
-
-	instruction := `Classify the user’s intent into one of the following categories: "return_item", "cancel_subscription", or "get_information".
+	opts := []llmagent.Option{llmagent.WithModel(llmModel)}
+	opts = append(opts, llmagent.WithInstruction(`Classify the user’s intent into one of the following categories: "return_item", "cancel_subscription", or "get_information".
 
 1. Any device-related return requests should route to return_item.
 2. Any retention or cancellation risk, including any request for discounts should route to cancel_subscription.
-3. Any other requests should go to get_information.`
-	return llmagent.New(
-		"classifier",
-		llmagent.WithModel(llmModel),
-		llmagent.WithInstruction(instruction),
-		llmagent.WithStructuredOutputJSONSchema("schema_classifier", mustParseJSONMap(`{"properties":{"classification":{"description":"Classification of user intent","enum":["return_item","cancel_subscription","get_information"],"type":"string"}},"required":["classification"],"type":"object"}`), true, ""),
-		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
-	)
+3. Any other requests should go to get_information.`))
+	opts = append(opts, llmagent.WithStructuredOutputJSONSchema("schema_classifier", mustParseJSONMap(`{"properties":{"classification":{"description":"Classification of user intent","enum":["return_item","cancel_subscription","get_information"],"type":"string"}},"required":["classification"],"type":"object"}`), true, ""))
+	var genConfig model.GenerationConfig
+	{
+		t := 0.7
+		genConfig.Temperature = &t
+	}
+	opts = append(opts, llmagent.WithGenerationConfig(genConfig))
+
+	return llmagent.New("classifier", opts...)
 }
 
-// newInformationAgentSubAgent constructs the LLMAgent backing the "information_agent" AgentNode.
 func newInformationAgentSubAgent() agent.Agent {
-	apiKey, err := resolveEnvString("env:OPENAI_API_KEY", "information_agent.model_spec.api_key")
-	if err != nil {
-		panic(err)
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		panic("environment variable OPENAI_API_KEY is not set")
 	}
 
-	var opts []openai.Option
-	opts = append(opts, openai.WithAPIKey(apiKey))
+	modelOpts := []openai.Option{openai.WithAPIKey(apiKey)}
+	modelOpts = append(modelOpts, openai.WithBaseURL("https://api.deepseek.com/v1"))
+	llmModel := openai.New("deepseek-chat", modelOpts...)
 
-	baseURL, err := resolveEnvString("https://api.deepseek.com/v1", "information_agent.model_spec.base_url")
-	if err != nil {
-		panic(err)
-	}
-	if strings.TrimSpace(baseURL) != "" {
-		opts = append(opts, openai.WithBaseURL(baseURL))
-	}
-
-	headers := map[string]string{}
-	resolved := make(map[string]string, len(headers))
-	for k, v := range headers {
-		rv, err := resolveEnvString(v, fmt.Sprintf("information_agent.model_spec.headers[%q]", k))
-		if err != nil {
-			panic(err)
-		}
-		if strings.TrimSpace(rv) != "" {
-			resolved[k] = rv
-		}
-	}
-	if len(resolved) > 0 {
-		opts = append(opts, openai.WithHeaders(resolved))
-	}
-
-	extraFieldsJSON := ""
-	if strings.TrimSpace(extraFieldsJSON) != "" {
-		opts = append(opts, openai.WithExtraFields(mustParseJSONMap(extraFieldsJSON)))
-	}
-
-	modelName, err := resolveEnvString("deepseek-chat", "information_agent.model_spec.model_name")
-	if err != nil {
-		panic(err)
-	}
-	llmModel := openai.New(modelName, opts...)
-
-	instruction := `You are an information agent for answering informational queries. Your aim is to provide clear, concise responses to user questions. Use the following policy to assemble your answer.
+	opts := []llmagent.Option{llmagent.WithModel(llmModel)}
+	opts = append(opts, llmagent.WithInstruction(`You are an information agent for answering informational queries. Your aim is to provide clear, concise responses to user questions. Use the following policy to assemble your answer.
 
 Company Name: HorizonTel Communications
 Industry: Telecommunications
@@ -405,123 +308,76 @@ Policy Summary: Mobile Service Plan Adjustments
 - Refunds are issued to the original payment method within 7–10 business days.
 - Customers experiencing service interruption exceeding 24 consecutive hours are eligible for a 1-day service credit upon request.
 
-Always respond in a friendly, concise way and surface the most relevant parts of the policy.`
-	return llmagent.New(
-		"information_agent",
-		llmagent.WithModel(llmModel),
-		llmagent.WithInstruction(instruction),
-		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
-	)
+Always respond in a friendly, concise way and surface the most relevant parts of the policy.`))
+	var genConfig model.GenerationConfig
+	{
+		t := 0.7
+		genConfig.Temperature = &t
+	}
+	{
+		mt := 1024
+		genConfig.MaxTokens = &mt
+	}
+	opts = append(opts, llmagent.WithGenerationConfig(genConfig))
+
+	return llmagent.New("information_agent", opts...)
 }
 
-// newRetentionAgentSubAgent constructs the LLMAgent backing the "retention_agent" AgentNode.
 func newRetentionAgentSubAgent() agent.Agent {
-	apiKey, err := resolveEnvString("env:OPENAI_API_KEY", "retention_agent.model_spec.api_key")
-	if err != nil {
-		panic(err)
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		panic("environment variable OPENAI_API_KEY is not set")
 	}
 
-	var opts []openai.Option
-	opts = append(opts, openai.WithAPIKey(apiKey))
+	modelOpts := []openai.Option{openai.WithAPIKey(apiKey)}
+	modelOpts = append(modelOpts, openai.WithBaseURL("https://api.deepseek.com/v1"))
+	llmModel := openai.New("deepseek-chat", modelOpts...)
 
-	baseURL, err := resolveEnvString("https://api.deepseek.com/v1", "retention_agent.model_spec.base_url")
-	if err != nil {
-		panic(err)
+	opts := []llmagent.Option{llmagent.WithModel(llmModel)}
+	opts = append(opts, llmagent.WithInstruction(`You are a customer retention conversational agent whose goal is to prevent subscription cancellations. Ask for their current plan and reason for dissatisfaction. For now, you may simply say there is a 20% offer available for 1 year if that seems appropriate.`))
+	var genConfig model.GenerationConfig
+	{
+		t := 0.7
+		genConfig.Temperature = &t
 	}
-	if strings.TrimSpace(baseURL) != "" {
-		opts = append(opts, openai.WithBaseURL(baseURL))
+	{
+		mt := 512
+		genConfig.MaxTokens = &mt
 	}
+	opts = append(opts, llmagent.WithGenerationConfig(genConfig))
 
-	headers := map[string]string{}
-	resolved := make(map[string]string, len(headers))
-	for k, v := range headers {
-		rv, err := resolveEnvString(v, fmt.Sprintf("retention_agent.model_spec.headers[%q]", k))
-		if err != nil {
-			panic(err)
-		}
-		if strings.TrimSpace(rv) != "" {
-			resolved[k] = rv
-		}
-	}
-	if len(resolved) > 0 {
-		opts = append(opts, openai.WithHeaders(resolved))
-	}
-
-	extraFieldsJSON := ""
-	if strings.TrimSpace(extraFieldsJSON) != "" {
-		opts = append(opts, openai.WithExtraFields(mustParseJSONMap(extraFieldsJSON)))
-	}
-
-	modelName, err := resolveEnvString("deepseek-chat", "retention_agent.model_spec.model_name")
-	if err != nil {
-		panic(err)
-	}
-	llmModel := openai.New(modelName, opts...)
-
-	instruction := `You are a customer retention conversational agent whose goal is to prevent subscription cancellations. Ask for their current plan and reason for dissatisfaction. For now, you may simply say there is a 20% offer available for 1 year if that seems appropriate.`
-	return llmagent.New(
-		"retention_agent",
-		llmagent.WithModel(llmModel),
-		llmagent.WithInstruction(instruction),
-		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
-	)
+	return llmagent.New("retention_agent", opts...)
 }
 
-// newReturnAgentSubAgent constructs the LLMAgent backing the "return_agent" AgentNode.
 func newReturnAgentSubAgent() agent.Agent {
-	apiKey, err := resolveEnvString("env:OPENAI_API_KEY", "return_agent.model_spec.api_key")
-	if err != nil {
-		panic(err)
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		panic("environment variable OPENAI_API_KEY is not set")
 	}
 
-	var opts []openai.Option
-	opts = append(opts, openai.WithAPIKey(apiKey))
+	modelOpts := []openai.Option{openai.WithAPIKey(apiKey)}
+	modelOpts = append(modelOpts, openai.WithBaseURL("https://api.deepseek.com/v1"))
+	llmModel := openai.New("deepseek-chat", modelOpts...)
 
-	baseURL, err := resolveEnvString("https://api.deepseek.com/v1", "return_agent.model_spec.base_url")
-	if err != nil {
-		panic(err)
+	opts := []llmagent.Option{llmagent.WithModel(llmModel)}
+	opts = append(opts, llmagent.WithInstruction(`Offer a replacement device with free shipping.`))
+	var genConfig model.GenerationConfig
+	{
+		t := 0.7
+		genConfig.Temperature = &t
 	}
-	if strings.TrimSpace(baseURL) != "" {
-		opts = append(opts, openai.WithBaseURL(baseURL))
+	{
+		mt := 512
+		genConfig.MaxTokens = &mt
 	}
+	opts = append(opts, llmagent.WithGenerationConfig(genConfig))
 
-	headers := map[string]string{}
-	resolved := make(map[string]string, len(headers))
-	for k, v := range headers {
-		rv, err := resolveEnvString(v, fmt.Sprintf("return_agent.model_spec.headers[%q]", k))
-		if err != nil {
-			panic(err)
-		}
-		if strings.TrimSpace(rv) != "" {
-			resolved[k] = rv
-		}
-	}
-	if len(resolved) > 0 {
-		opts = append(opts, openai.WithHeaders(resolved))
-	}
-
-	extraFieldsJSON := ""
-	if strings.TrimSpace(extraFieldsJSON) != "" {
-		opts = append(opts, openai.WithExtraFields(mustParseJSONMap(extraFieldsJSON)))
-	}
-
-	modelName, err := resolveEnvString("deepseek-chat", "return_agent.model_spec.model_name")
-	if err != nil {
-		panic(err)
-	}
-	llmModel := openai.New(modelName, opts...)
-
-	instruction := `Offer a replacement device with free shipping.`
-	return llmagent.New(
-		"return_agent",
-		llmagent.WithModel(llmModel),
-		llmagent.WithInstruction(instruction),
-		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
-	)
+	return llmagent.New("return_agent", opts...)
 }
 
-// ---- Helpers ---------------------------------------------------------------
-
+// =============================================================================
+// Infrastructure (do not edit below this line)
+// =============================================================================
 func agentStructuredOutputMapper(nodeID string) graph.SubgraphOutputMapper {
 	return func(parent graph.State, result graph.SubgraphResult) graph.State {
 		last := result.LastResponse
@@ -529,163 +385,26 @@ func agentStructuredOutputMapper(nodeID string) graph.SubgraphOutputMapper {
 			graph.StateKeyLastResponse:  last,
 			graph.StateKeyNodeResponses: map[string]any{nodeID: last},
 			graph.StateKeyUserInput:     "",
+			nodeID + "_output":          last,
 		}
-
-		if strings.TrimSpace(last) == "" {
-			return upd
+		if result.StructuredOutput != nil {
+			upd[nodeID+"_parsed"] = result.StructuredOutput
 		}
-		jsonText, ok := extractFirstJSONObjectFromText(last)
-		if !ok {
-			return upd
-		}
-		var parsed any
-		if err := json.Unmarshal([]byte(jsonText), &parsed); err != nil {
-			return upd
-		}
-
-		nodeStructured := map[string]any{}
-		if existingRaw, ok := parent["node_structured"]; ok {
-			if existingMap, ok := existingRaw.(map[string]any); ok && existingMap != nil {
-				for k, v := range existingMap {
-					nodeStructured[k] = v
-				}
-			}
-		}
-		nodeStructured[nodeID] = map[string]any{
-			"output_raw":    jsonText,
-			"output_parsed": parsed,
-		}
-		upd["node_structured"] = nodeStructured
 		return upd
 	}
 }
-
-// extractFirstJSONObjectFromText tries to extract the first balanced top-level
-// JSON object or array from the given text.
-func extractFirstJSONObjectFromText(s string) (string, bool) {
-	start := findJSONStartInText(s)
-	if start == -1 {
-		return "", false
+func mustParseJSONAny(raw string) any {
+	if raw = strings.TrimSpace(raw); raw == "" {
+		return nil
 	}
-	return scanBalancedJSONInText(s, start)
+	var v any
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		panic(err)
+	}
+	return v
 }
-
-func findJSONStartInText(s string) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '{' || s[i] == '[' {
-			return i
-		}
-	}
-	return -1
-}
-
-func scanBalancedJSONInText(s string, start int) (string, bool) {
-	stack := make([]byte, 0, 8)
-	inString := false
-	escaped := false
-
-	for i := start; i < len(s); i++ {
-		c := s[i]
-
-		if escaped {
-			escaped = false
-			continue
-		}
-
-		if inString {
-			switch c {
-			case '\\':
-				escaped = true
-			case '"':
-				inString = false
-			}
-			continue
-		}
-
-		switch c {
-		case '"':
-			inString = true
-		case '{', '[':
-			stack = append(stack, c)
-		case '}', ']':
-			if len(stack) == 0 {
-				return "", false
-			}
-			top := stack[len(stack)-1]
-			if (top == '{' && c == '}') || (top == '[' && c == ']') {
-				stack = stack[:len(stack)-1]
-				if len(stack) == 0 {
-					return s[start : i+1], true
-				}
-			} else {
-				return "", false
-			}
-		}
-	}
-	return "", false
-}
-
-func getNodeStructuredFieldString(state graph.State, nodeID string, fieldPath string) (string, bool) {
-	root, ok := state["node_structured"].(map[string]any)
-	if !ok || root == nil {
-		return "", false
-	}
-	nodeAny, ok := root[nodeID]
-	if !ok {
-		return "", false
-	}
-	nodeMap, ok := nodeAny.(map[string]any)
-	if !ok || nodeMap == nil {
-		return "", false
-	}
-	parsed, ok := nodeMap["output_parsed"]
-	if !ok || parsed == nil {
-		return "", false
-	}
-	return extractStringByPath(parsed, fieldPath)
-}
-
-func extractStringByPath(v any, fieldPath string) (string, bool) {
-	fieldPath = strings.TrimSpace(fieldPath)
-	if fieldPath == "" {
-		s, ok := v.(string)
-		return s, ok
-	}
-	cur := v
-	for _, key := range strings.Split(fieldPath, ".") {
-		m, ok := cur.(map[string]any)
-		if !ok || m == nil {
-			return "", false
-		}
-		next, ok := m[key]
-		if !ok {
-			return "", false
-		}
-		cur = next
-	}
-	s, ok := cur.(string)
-	return s, ok
-}
-
-func resolveEnvString(value string, fieldPath string) (string, error) {
-	value = strings.TrimSpace(value)
-	if !strings.HasPrefix(value, "env:") {
-		return value, nil
-	}
-	varName := strings.TrimSpace(strings.TrimPrefix(value, "env:"))
-	if varName == "" {
-		return "", fmt.Errorf("%s env placeholder is invalid (expected env:VAR)", fieldPath)
-	}
-	envVal, ok := os.LookupEnv(varName)
-	if !ok || strings.TrimSpace(envVal) == "" {
-		return "", fmt.Errorf("environment variable %q is not set (required by %s)", varName, fieldPath)
-	}
-	return envVal, nil
-}
-
 func mustParseJSONMap(raw string) map[string]any {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	if raw = strings.TrimSpace(raw); raw == "" {
 		return nil
 	}
 	var m map[string]any
