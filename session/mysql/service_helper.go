@@ -383,7 +383,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		return fmt.Errorf("marshal track event failed: %w", err)
 	}
 
-	expiresAt := calculateExpiresAt(s.sessionTTL)
+	expiresAt := calculateExpiresAt(s.opts.sessionTTL)
 
 	// Use transaction to update session state and insert track event.
 	err = s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
