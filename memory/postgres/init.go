@@ -55,9 +55,10 @@ type tableColumn struct {
 
 // tableIndex represents a table index definition.
 type tableIndex struct {
-	table   string // Base table name (without prefix/schema) like "memories"
-	suffix  string // Index suffix like "app_user", "updated_at", "deleted_at"
-	columns []string
+	table    string   // Base table name (without prefix/schema) like "memories"
+	suffix   string   // Index suffix like "app_user", "updated_at", "deleted_at"
+	columns  []string // Column names in order
+	template string   // SQL template for index creation
 }
 
 const tableNameMemories = "memories"
@@ -78,9 +79,24 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp without time zone", true},
 		},
 		indexes: []tableIndex{
-			{"memories", "app_user", []string{"app_name", "user_id"}},
-			{"memories", "updated_at", []string{"updated_at"}},
-			{"memories", "deleted_at", []string{"deleted_at"}},
+			{
+				table:    "memories",
+				suffix:   "app_user",
+				columns:  []string{"app_name", "user_id"},
+				template: sqlCreateMemoriesAppUserIndex,
+			},
+			{
+				table:    "memories",
+				suffix:   "updated_at",
+				columns:  []string{"updated_at"},
+				template: sqlCreateMemoriesUpdatedAtIndex,
+			},
+			{
+				table:    "memories",
+				suffix:   "deleted_at",
+				columns:  []string{"deleted_at"},
+				template: sqlCreateMemoriesDeletedAtIndex,
+			},
 		},
 	},
 }
@@ -227,9 +243,10 @@ func (s *Service) verifySchema(ctx context.Context) error {
 	actualIndexes := make([]tableIndex, len(schema.indexes))
 	for i, idx := range schema.indexes {
 		actualIndexes[i] = tableIndex{
-			table:   baseTableName, // Use actual table name instead of "memories".
-			suffix:  idx.suffix,
-			columns: idx.columns,
+			table:    baseTableName, // Use actual table name instead of "memories".
+			suffix:   idx.suffix,
+			columns:  idx.columns,
+			template: idx.template,
 		}
 	}
 	if err := s.verifyIndexes(ctx, fullTableName, actualIndexes); err != nil {
@@ -314,24 +331,53 @@ func (s *Service) verifyColumns(ctx context.Context, fullTableName string, expec
 	return nil
 }
 
-// verifyIndexes verifies that table indexes exist.
-func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expectedIndexes []tableIndex) error {
+// indexDetail represents database index details.
+type indexDetail struct {
+	name    string
+	columns []string
+}
+
+// verifyIndexes verifies that table indexes exist and match expectations.
+func (s *Service) verifyIndexes(
+	ctx context.Context,
+	fullTableName string,
+	expectedIndexes []tableIndex,
+) error {
 	schema, tableName := parseTableName(fullTableName)
-	// Get actual indexes from database.
-	actualIndexes := make(map[string]bool)
+
+	// Get actual indexes from database with column information.
+	actualIndexes := make(map[string]indexDetail)
 	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
-			var indexName string
-			if err := rows.Scan(&indexName); err != nil {
+			var indexName, columnName string
+			var ordinalPosition int
+			if err := rows.Scan(&indexName, &columnName, &ordinalPosition); err != nil {
 				return err
 			}
-			actualIndexes[indexName] = true
+
+			idx, exists := actualIndexes[indexName]
+			if !exists {
+				idx = indexDetail{
+					name:    indexName,
+					columns: make([]string, 0),
+				}
+			}
+			idx.columns = append(idx.columns, columnName)
+			actualIndexes[indexName] = idx
 		}
 		return nil
-	}, `SELECT indexname
-		FROM pg_indexes
-		WHERE schemaname = $1
-		AND tablename = $2`, schema, tableName)
+	}, `SELECT
+			i.indexname,
+			a.attname AS column_name,
+			a.attnum AS ordinal_position
+		FROM pg_indexes i
+		JOIN pg_class c ON c.relname = i.indexname
+		JOIN pg_index ix ON ix.indexrelid = c.oid
+		JOIN pg_attribute a ON a.attrelid = ix.indrelid
+			AND a.attnum = ANY(ix.indkey)
+		WHERE i.schemaname = $1
+			AND i.tablename = $2
+		ORDER BY i.indexname, a.attnum`, schema, tableName)
 
 	if err != nil {
 		return fmt.Errorf("query indexes failed: %w", err)
@@ -339,20 +385,71 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 
 	// Check each expected index.
 	for _, expected := range expectedIndexes {
-		// Use sqldb.BuildIndexName to construct the expected index name.
 		expectedIndexName := sqldb.BuildIndexName("", expected.table, expected.suffix)
 
-		if !actualIndexes[expectedIndexName] {
+		actual, exists := actualIndexes[expectedIndexName]
+		if !exists {
+			// Generate the CREATE INDEX SQL for this missing index.
+			createSQL := buildCreateIndexSQL(
+				s.opts.schema,
+				expected.table,
+				expected.suffix,
+				expected.template,
+			)
 			log.WarnfContext(
 				ctx,
-				"index %s on table %s is missing",
+				"index %s on table %s is missing, create it with: %s",
 				expectedIndexName,
 				fullTableName,
+				createSQL,
+			)
+			continue
+		}
+
+		// Verify index column order.
+		if !equalStringSlices(actual.columns, expected.columns) {
+			log.WarnfContext(
+				ctx,
+				"index %s on table %s has incorrect columns: got %v, expected %v",
+				expectedIndexName,
+				fullTableName,
+				actual.columns,
+				expected.columns,
 			)
 		}
+
+		// Mark as verified.
+		delete(actualIndexes, expectedIndexName)
+	}
+
+	// Report unexpected indexes (excluding primary key and unique constraints).
+	for indexName := range actualIndexes {
+		// Skip primary key indexes (usually named <tablename>_pkey).
+		if strings.HasSuffix(indexName, "_pkey") {
+			continue
+		}
+		log.WarnfContext(
+			ctx,
+			"unexpected index %s found on table %s",
+			indexName,
+			fullTableName,
+		)
 	}
 
 	return nil
+}
+
+// equalStringSlices compares two string slices for equality.
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // parseTableName parses a full table name into schema and table components.

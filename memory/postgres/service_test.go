@@ -880,14 +880,24 @@ func setupMockService(t *testing.T, db *sql.DB, mock sqlmock.Sqlmock, opts ...Se
 			AddRow("updated_at", "timestamp without time zone", "NO").
 			AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-		// Mock indexes query - match expected indexes with actual table name.
-		mock.ExpectQuery(`SELECT indexname
-			FROM pg_indexes
-			WHERE schemaname = \$1
-			AND tablename = \$2`).WithArgs(schema, tableName).WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-			AddRow("idx_" + tableName + "_app_user").
-			AddRow("idx_" + tableName + "_updated_at").
-			AddRow("idx_" + tableName + "_deleted_at"))
+		// Mock indexes query - match expected indexes with actual table name and column info.
+		mock.ExpectQuery(`SELECT
+			i\.indexname,
+			a\.attname AS column_name,
+			a\.attnum AS ordinal_position
+		FROM pg_indexes i
+		JOIN pg_class c ON c\.relname = i\.indexname
+		JOIN pg_index ix ON ix\.indexrelid = c\.oid
+		JOIN pg_attribute a ON a\.attrelid = ix\.indrelid
+			AND a\.attnum = ANY\(ix\.indkey\)
+		WHERE i\.schemaname = \$1
+			AND i\.tablename = \$2
+		ORDER BY i\.indexname, a\.attnum`).WithArgs(schema, tableName).WillReturnRows(
+			sqlmock.NewRows([]string{"indexname", "column_name", "ordinal_position"}).
+				AddRow("idx_"+tableName+"_app_user", "app_name", 1).
+				AddRow("idx_"+tableName+"_app_user", "user_id", 2).
+				AddRow("idx_"+tableName+"_deleted_at", "deleted_at", 1).
+				AddRow("idx_"+tableName+"_updated_at", "updated_at", 1))
 	}
 
 	// Ensure host is set if not already set.
@@ -978,14 +988,24 @@ func TestNewService_WithHost(t *testing.T) {
 		AddRow("updated_at", "timestamp without time zone", "NO").
 		AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-	// Mock indexes query - match expected indexes.
-	mock.ExpectQuery(`SELECT indexname
-		FROM pg_indexes
-		WHERE schemaname = \$1
-		AND tablename = \$2`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-		AddRow("idx_memories_app_user").
-		AddRow("idx_memories_updated_at").
-		AddRow("idx_memories_deleted_at"))
+	// Mock indexes query - match expected indexes with column info.
+	mock.ExpectQuery(`SELECT
+		i\.indexname,
+		a\.attname AS column_name,
+		a\.attnum AS ordinal_position
+	FROM pg_indexes i
+	JOIN pg_class c ON c\.relname = i\.indexname
+	JOIN pg_index ix ON ix\.indexrelid = c\.oid
+	JOIN pg_attribute a ON a\.attrelid = ix\.indrelid
+		AND a\.attnum = ANY\(ix\.indkey\)
+	WHERE i\.schemaname = \$1
+		AND i\.tablename = \$2
+	ORDER BY i\.indexname, a\.attnum`).WithArgs("public", "memories").WillReturnRows(
+		sqlmock.NewRows([]string{"indexname", "column_name", "ordinal_position"}).
+			AddRow("idx_memories_app_user", "app_name", 1).
+			AddRow("idx_memories_app_user", "user_id", 2).
+			AddRow("idx_memories_deleted_at", "deleted_at", 1).
+			AddRow("idx_memories_updated_at", "updated_at", 1))
 
 	service, err := NewService(WithHost("localhost"), WithPort(5432), WithDatabase("testdb"))
 	require.NoError(t, err)
@@ -994,6 +1014,7 @@ func TestNewService_WithHost(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 	service.Close()
 }
+
 
 func TestNewService_InitDBError(t *testing.T) {
 	db, mock := setupMockDB(t)
@@ -1537,14 +1558,24 @@ func TestNewService_ConnectionSettingsPriority(t *testing.T) {
 		AddRow("updated_at", "timestamp without time zone", "NO").
 		AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-	// Mock indexes query - match expected indexes
-	mock.ExpectQuery(`SELECT indexname
-		FROM pg_indexes
-		WHERE schemaname = \$1
-		AND tablename = \$2`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-		AddRow("idx_memories_app_user").
-		AddRow("idx_memories_updated_at").
-		AddRow("idx_memories_deleted_at"))
+	// Mock indexes query - match expected indexes with column info.
+	mock.ExpectQuery(`SELECT
+		i\.indexname,
+		a\.attname AS column_name,
+		a\.attnum AS ordinal_position
+	FROM pg_indexes i
+	JOIN pg_class c ON c\.relname = i\.indexname
+	JOIN pg_index ix ON ix\.indexrelid = c\.oid
+	JOIN pg_attribute a ON a\.attrelid = ix\.indrelid
+		AND a\.attnum = ANY\(ix\.indkey\)
+	WHERE i\.schemaname = \$1
+		AND i\.tablename = \$2
+	ORDER BY i\.indexname, a\.attnum`).WithArgs("public", "memories").WillReturnRows(
+		sqlmock.NewRows([]string{"indexname", "column_name", "ordinal_position"}).
+			AddRow("idx_memories_app_user", "app_name", 1).
+			AddRow("idx_memories_app_user", "user_id", 2).
+			AddRow("idx_memories_deleted_at", "deleted_at", 1).
+			AddRow("idx_memories_updated_at", "updated_at", 1))
 
 	service, err := NewService(
 		WithHost("customhost"),
@@ -1560,6 +1591,7 @@ func TestNewService_ConnectionSettingsPriority(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 	service.Close()
 }
+
 
 func TestNewService_DSNPriority(t *testing.T) {
 	db, mock := setupMockDB(t)
@@ -1608,13 +1640,23 @@ func TestNewService_DSNPriority(t *testing.T) {
 		AddRow("updated_at", "timestamp without time zone", "NO").
 		AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-	mock.ExpectQuery(`SELECT indexname
-		FROM pg_indexes
-		WHERE schemaname = \$1
-		AND tablename = \$2`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-		AddRow("idx_memories_app_user").
-		AddRow("idx_memories_updated_at").
-		AddRow("idx_memories_deleted_at"))
+	mock.ExpectQuery(`SELECT
+		i\.indexname,
+		a\.attname AS column_name,
+		a\.attnum AS ordinal_position
+	FROM pg_indexes i
+	JOIN pg_class c ON c\.relname = i\.indexname
+	JOIN pg_index ix ON ix\.indexrelid = c\.oid
+	JOIN pg_attribute a ON a\.attrelid = ix\.indrelid
+		AND a\.attnum = ANY\(ix\.indkey\)
+	WHERE i\.schemaname = \$1
+		AND i\.tablename = \$2
+	ORDER BY i\.indexname, a\.attnum`).WithArgs("public", "memories").WillReturnRows(
+		sqlmock.NewRows([]string{"indexname", "column_name", "ordinal_position"}).
+			AddRow("idx_memories_app_user", "app_name", 1).
+			AddRow("idx_memories_app_user", "user_id", 2).
+			AddRow("idx_memories_deleted_at", "deleted_at", 1).
+			AddRow("idx_memories_updated_at", "updated_at", 1))
 
 	dsn := "postgres://dsn-user:password@dsn-host:5432/dsndb?sslmode=disable"
 	service, err := NewService(
@@ -1630,6 +1672,7 @@ func TestNewService_DSNPriority(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 	service.Close()
 }
+
 
 func TestService_AddMemory_CountQueryError(t *testing.T) {
 	db, mock := setupMockDB(t)
@@ -2015,6 +2058,7 @@ func TestNewService_WithSkipDBInit(t *testing.T) {
 	service.Close()
 }
 
+
 // Test NewService with schema
 func TestNewService_WithSchema(t *testing.T) {
 	db, mock := setupMockDB(t)
@@ -2060,14 +2104,24 @@ func TestNewService_WithSchema(t *testing.T) {
 		AddRow("updated_at", "timestamp without time zone", "NO").
 		AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-	// Mock indexes query - match expected indexes.
-	mock.ExpectQuery(`SELECT indexname
-		FROM pg_indexes
-		WHERE schemaname = \$1
-		AND tablename = \$2`).WithArgs("test_schema", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-		AddRow("idx_memories_app_user").
-		AddRow("idx_memories_updated_at").
-		AddRow("idx_memories_deleted_at"))
+	// Mock indexes query - match expected indexes with column info.
+	mock.ExpectQuery(`SELECT
+		i\.indexname,
+		a\.attname AS column_name,
+		a\.attnum AS ordinal_position
+	FROM pg_indexes i
+	JOIN pg_class c ON c\.relname = i\.indexname
+	JOIN pg_index ix ON ix\.indexrelid = c\.oid
+	JOIN pg_attribute a ON a\.attrelid = ix\.indrelid
+		AND a\.attnum = ANY\(ix\.indkey\)
+	WHERE i\.schemaname = \$1
+		AND i\.tablename = \$2
+	ORDER BY i\.indexname, a\.attnum`).WithArgs("test_schema", "memories").WillReturnRows(
+		sqlmock.NewRows([]string{"indexname", "column_name", "ordinal_position"}).
+			AddRow("idx_memories_app_user", "app_name", 1).
+			AddRow("idx_memories_app_user", "user_id", 2).
+			AddRow("idx_memories_deleted_at", "deleted_at", 1).
+			AddRow("idx_memories_updated_at", "updated_at", 1))
 
 	service, err := NewService(
 		WithHost("localhost"),
@@ -2082,6 +2136,7 @@ func TestNewService_WithSchema(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 	service.Close()
 }
+
 
 // Test initDB with index creation error
 func TestInitDB_IndexCreationError(t *testing.T) {
@@ -2161,14 +2216,24 @@ func TestService_WithSchema(t *testing.T) {
 		AddRow("updated_at", "timestamp without time zone", "NO").
 		AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-	// Mock indexes query - match expected indexes.
-	mock.ExpectQuery(`SELECT indexname
-		FROM pg_indexes
-		WHERE schemaname = \$1
-		AND tablename = \$2`).WithArgs("test_schema", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-		AddRow("idx_memories_app_user").
-		AddRow("idx_memories_updated_at").
-		AddRow("idx_memories_deleted_at"))
+	// Mock indexes query - match expected indexes with column info.
+	mock.ExpectQuery(`SELECT
+		i\.indexname,
+		a\.attname AS column_name,
+		a\.attnum AS ordinal_position
+	FROM pg_indexes i
+	JOIN pg_class c ON c\.relname = i\.indexname
+	JOIN pg_index ix ON ix\.indexrelid = c\.oid
+	JOIN pg_attribute a ON a\.attrelid = ix\.indrelid
+		AND a\.attnum = ANY\(ix\.indkey\)
+	WHERE i\.schemaname = \$1
+		AND i\.tablename = \$2
+	ORDER BY i\.indexname, a\.attnum`).WithArgs("test_schema", "memories").WillReturnRows(
+		sqlmock.NewRows([]string{"indexname", "column_name", "ordinal_position"}).
+			AddRow("idx_memories_app_user", "app_name", 1).
+			AddRow("idx_memories_app_user", "user_id", 2).
+			AddRow("idx_memories_deleted_at", "deleted_at", 1).
+			AddRow("idx_memories_updated_at", "updated_at", 1))
 
 	service, err := NewService(
 		WithHost("localhost"),
@@ -2515,7 +2580,11 @@ func TestSchemaVerificationErrors(t *testing.T) {
 			AddRow("updated_at", "timestamp without time zone", "NO").
 			AddRow("deleted_at", "timestamp without time zone", "YES"))
 		// Mock indexes query to fail.
-		mock.ExpectQuery(`SELECT indexname`).WillReturnError(fmt.Errorf("indexes query failed"))
+		mock.ExpectQuery(`SELECT
+		i\.indexname,
+		a\.attname AS column_name,
+		a\.attnum AS ordinal_position
+	FROM pg_indexes i`).WillReturnError(fmt.Errorf("indexes query failed"))
 
 		err = service.verifySchema(context.Background())
 		require.NoError(t, err) // verifyIndexes failure is logged but not fatal.
@@ -2551,7 +2620,11 @@ func TestSchemaVerificationErrors(t *testing.T) {
 			AddRow("deleted_at", "timestamp without time zone", "YES"))
 		// Mock indexes query with wrong column type to cause Scan failure.
 		rows := sqlmock.NewRows([]string{"wrong_column"}).AddRow("some_value")
-		mock.ExpectQuery(`SELECT indexname`).WillReturnRows(rows)
+		mock.ExpectQuery(`SELECT
+		i\.indexname,
+		a\.attname AS column_name,
+		a\.attnum AS ordinal_position
+	FROM pg_indexes i`).WillReturnRows(rows)
 
 		err = service.verifySchema(context.Background())
 		require.NoError(t, err) // verifyIndexes failure is logged but not fatal.
@@ -2788,13 +2861,23 @@ func TestNewService_FallbackToDefaultConnString(t *testing.T) {
 		AddRow("updated_at", "timestamp without time zone", "NO").
 		AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-	mock.ExpectQuery(`SELECT indexname
-		FROM pg_indexes
-		WHERE schemaname = \$1
-		AND tablename = \$2`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-		AddRow("idx_memories_app_user").
-		AddRow("idx_memories_updated_at").
-		AddRow("idx_memories_deleted_at"))
+	mock.ExpectQuery(`SELECT
+		i\.indexname,
+		a\.attname AS column_name,
+		a\.attnum AS ordinal_position
+	FROM pg_indexes i
+	JOIN pg_class c ON c\.relname = i\.indexname
+	JOIN pg_index ix ON ix\.indexrelid = c\.oid
+	JOIN pg_attribute a ON a\.attrelid = ix\.indrelid
+		AND a\.attnum = ANY\(ix\.indkey\)
+	WHERE i\.schemaname = \$1
+		AND i\.tablename = \$2
+	ORDER BY i\.indexname, a\.attnum`).WithArgs("public", "memories").WillReturnRows(
+		sqlmock.NewRows([]string{"indexname", "column_name", "ordinal_position"}).
+			AddRow("idx_memories_app_user", "app_name", 1).
+			AddRow("idx_memories_app_user", "user_id", 2).
+			AddRow("idx_memories_deleted_at", "deleted_at", 1).
+			AddRow("idx_memories_updated_at", "updated_at", 1))
 
 	// Create service without DSN, host, or instanceName - should use default
 	// connection string.
@@ -2811,6 +2894,7 @@ func TestNewService_FallbackToDefaultConnString(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 	service.Close()
 }
+
 
 // TestNewService_WithCustomTableName tests schema verification with custom
 // table name.
@@ -2859,15 +2943,24 @@ func TestNewService_WithCustomTableName(t *testing.T) {
 		AddRow("updated_at", "timestamp without time zone", "NO").
 		AddRow("deleted_at", "timestamp without time zone", "YES"))
 
-	// Mock indexes query with custom table name - indexes should use custom
-	// table name as prefix with idx_ prefix.
-	mock.ExpectQuery(`SELECT indexname
-		FROM pg_indexes
-		WHERE schemaname = \$1
-		AND tablename = \$2`).WithArgs("public", customTableName).WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
-		AddRow("idx_" + customTableName + "_app_user").
-		AddRow("idx_" + customTableName + "_updated_at").
-		AddRow("idx_" + customTableName + "_deleted_at"))
+	// Mock indexes query with custom table name and column info.
+	mock.ExpectQuery(`SELECT
+		i\.indexname,
+		a\.attname AS column_name,
+		a\.attnum AS ordinal_position
+	FROM pg_indexes i
+	JOIN pg_class c ON c\.relname = i\.indexname
+	JOIN pg_index ix ON ix\.indexrelid = c\.oid
+	JOIN pg_attribute a ON a\.attrelid = ix\.indrelid
+		AND a\.attnum = ANY\(ix\.indkey\)
+	WHERE i\.schemaname = \$1
+		AND i\.tablename = \$2
+	ORDER BY i\.indexname, a\.attnum`).WithArgs("public", customTableName).WillReturnRows(
+		sqlmock.NewRows([]string{"indexname", "column_name", "ordinal_position"}).
+			AddRow("idx_"+customTableName+"_app_user", "app_name", 1).
+			AddRow("idx_"+customTableName+"_app_user", "user_id", 2).
+			AddRow("idx_"+customTableName+"_deleted_at", "deleted_at", 1).
+			AddRow("idx_"+customTableName+"_updated_at", "updated_at", 1))
 
 	service, err := NewService(
 		WithHost("localhost"),
@@ -2882,3 +2975,4 @@ func TestNewService_WithCustomTableName(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 	service.Close()
 }
+
