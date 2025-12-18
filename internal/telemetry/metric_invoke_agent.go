@@ -110,11 +110,9 @@ func (t *InvokeAgentTracker) TrackResponse(response *model.Response) {
 		return
 	}
 
-	// Track first token timing
-	if t.isFirstToken {
+	if t.isFirstToken && response.IsValidContent() {
 		t.firstTokenTimeDuration = time.Since(t.start)
 		t.isFirstToken = false
-
 	}
 
 	// Track token usage
