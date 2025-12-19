@@ -37,6 +37,7 @@ var (
 	modelName = flag.String("model", "deepseek-chat", "Model for chat responses")
 	extModel  = flag.String("ext-model", "", "Model for memory extraction (defaults to chat model)")
 	streaming = flag.Bool("streaming", true, "Enable streaming mode for responses")
+	debug     = flag.Bool("debug", false, "Enable debug mode to print messages sent to model")
 )
 
 func main() {
@@ -61,6 +62,7 @@ func main() {
 		modelName:      *modelName,
 		extractorModel: extractorModel,
 		streaming:      *streaming,
+		debug:          *debug,
 	}
 
 	if err := chat.run(); err != nil {
@@ -73,6 +75,7 @@ type autoMemoryChat struct {
 	modelName      string
 	extractorModel string
 	streaming      bool
+	debug          bool
 	runner         runner.Runner
 	memoryService  memory.Service
 	userID         string
@@ -103,8 +106,8 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 	memExtractor := extractor.NewExtractor(extractModel)
 
 	// Create memory service with auto extraction enabled.
-	// When extractor is set, write tools (add/update/delete) are hidden.
-	// Only read tools (load/search) are exposed to the agent.
+	// When extractor is set, write tools (add/update/delete/clear) and load are hidden.
+	// Only search tool is exposed to the agent.
 	c.memoryService = memoryinmemory.NewMemoryService(
 		memoryinmemory.WithExtractor(memExtractor),
 		// Optional: configure async worker settings.
@@ -118,7 +121,7 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 	c.sessionID = fmt.Sprintf("auto-memory-session-%d", time.Now().Unix())
 
 	// Create LLM agent with memory tools.
-	// Only read tools (load/search) are available since extractor is set.
+	// Only search tool is available since extractor is set.
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
@@ -130,6 +133,20 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 		agentName = "auto-memory-assistant"
 	)
 
+	// Create model callbacks for debug mode.
+	var modelCallbacks *model.Callbacks
+	if c.debug {
+		modelCallbacks = model.NewCallbacks()
+		modelCallbacks.RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			fmt.Println("🔍 Debug: Messages sent to model:")
+			for i, msg := range args.Request.Messages {
+				fmt.Printf("   [%d] %s: %s\n", i+1, msg.Role, msg.Content)
+			}
+			fmt.Println()
+			return nil, nil
+		})
+	}
+
 	llmAgent := llmagent.New(
 		agentName,
 		llmagent.WithModel(chatModel),
@@ -137,6 +154,7 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 			"I learn about you from our conversations automatically."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools(c.memoryService.Tools()),
+		llmagent.WithModelCallbacks(modelCallbacks),
 		// Memory preloading is enabled by default (all memories).
 		// Use WithPreloadMemory(0) to disable preloading.
 		// Use WithPreloadMemory(N) to load only the most recent N memories.

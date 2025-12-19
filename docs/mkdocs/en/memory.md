@@ -23,6 +23,24 @@ John", "occupation is backend engineer", "prefers concise answers", "commonly
 used language is English", and directly using this information in subsequent
 interactions.
 
+### Two Memory Modes
+
+Memory supports two modes for creating and managing memories. Choose based on your scenario:
+
+| Aspect | Agentic Mode (Tools) | Auto Mode (Extractor) |
+|--------|---------------------|----------------------|
+| **How it works** | Agent decides when to call memory tools | System extracts memories automatically from conversations |
+| **User experience** | Explicit - user sees tool calls | Transparent - memories created silently in background |
+| **Control** | Agent has full control over what to remember | Extractor decides based on conversation analysis |
+| **Available tools** | All 6 tools | Read-only tool (search) |
+| **Processing** | Synchronous - during response generation | Asynchronous - background workers after response |
+| **Best for** | Precise control, user-driven memory management | Natural conversations, hands-off memory building |
+
+**Selection Guide**:
+
+- **Agentic Mode**: User wants explicit control ("Remember that I..."), need precise decisions on what to store, interactive memory management
+- **Auto Mode**: Natural conversation flow, system passively learns about users, simplified UX
+
 ## Core Values
 
 - **Context Continuity**: Maintain user history across sessions, avoiding
@@ -94,7 +112,10 @@ export OPENAI_API_KEY="your-openai-api-key"
 export OPENAI_BASE_URL="your-openai-base-url"
 ```
 
-### Minimal Example
+### Agentic Mode Configuration (Default)
+
+In Agentic mode, the Agent uses memory tools to explicitly manage memories.
+Configuration involves three steps:
 
 ```go
 package main
@@ -103,7 +124,6 @@ import (
     "context"
     "log"
 
-    // Core components.
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
     "trpc.group/trpc-go/trpc-agent-go/model"
@@ -115,13 +135,11 @@ import (
 func main() {
     ctx := context.Background()
 
-    // 1. Create the memory service.
+    // Step 1: Create memory service.
     memoryService := memoryinmemory.NewMemoryService()
 
-    // 2. Create the LLM model.
+    // Step 2: Create Agent and register memory tools.
     modelInstance := openai.New("deepseek-chat")
-
-    // 3. Create the Agent and register memory tools.
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(modelInstance),
@@ -129,10 +147,10 @@ func main() {
         llmagent.WithInstruction(
             "Remember important user info and recall it when needed.",
         ),
-        llmagent.WithTools(memoryService.Tools()), // Register memory tools.
+        llmagent.WithTools(memoryService.Tools()), // Register all 6 memory tools.
     )
 
-    // 4. Create the Runner with memory service.
+    // Step 3: Create Runner with memory service.
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
         "memory-chat",
@@ -140,8 +158,9 @@ func main() {
         runner.WithSessionService(sessionService),
         runner.WithMemoryService(memoryService), // Set memory service.
     )
+    defer appRunner.Close()
 
-    // 5. Run a dialog (the Agent uses memory tools automatically).
+    // Run a dialog (the Agent uses memory tools automatically).
     log.Println("🧠 Starting memory-enabled chat...")
     message := model.NewUserMessage(
         "Hi, my name is John, and I like programming",
@@ -150,11 +169,117 @@ func main() {
     if err != nil {
         log.Fatalf("Failed to run agent: %v", err)
     }
-
-    // 6. Handle responses ...
+    // Handle responses ...
     _ = eventChan
 }
 ```
+
+**Conversation example**:
+
+```
+User: My name is Alice and I work at TechCorp.
+
+Agent: Nice to meet you, Alice! I'll remember that you work at TechCorp.
+
+🔧 Tool call: memory_add
+   Args: {"memory": "User's name is Alice, works at TechCorp", "topics": ["name", "work"]}
+✅ Memory added successfully.
+
+Agent: I've saved that information. How can I help you today?
+```
+
+### Auto Mode Configuration
+
+In Auto mode, an LLM-based extractor analyzes conversations and automatically
+creates memories. **The only difference from Agentic mode is in Step 1: add an Extractor**.
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+    memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // Step 1: Create memory service (configure Extractor to enable auto mode).
+    extractorModel := openai.New("deepseek-chat")
+    memExtractor := extractor.NewExtractor(extractorModel)
+    memoryService := memoryinmemory.NewMemoryService(
+        memoryinmemory.WithExtractor(memExtractor), // Key: configure extractor.
+        // Optional: configure async workers.
+        memoryinmemory.WithAsyncMemoryNum(3),
+        memoryinmemory.WithMemoryQueueSize(100),
+        memoryinmemory.WithMemoryJobTimeout(30*time.Second),
+    )
+    defer memoryService.Close()
+
+    // Step 2: Create Agent and register memory tools.
+    // Note: With Extractor configured, only search tool is available.
+    chatModel := openai.New("deepseek-chat")
+    llmAgent := llmagent.New(
+        "memory-assistant",
+        llmagent.WithModel(chatModel),
+        llmagent.WithDescription("An assistant with automatic memory."),
+        llmagent.WithTools(memoryService.Tools()), // Only search tool.
+    )
+
+    // Step 3: Create Runner with memory service.
+    // Runner triggers auto extraction after responses.
+    sessionService := inmemory.NewSessionService()
+    appRunner := runner.NewRunner(
+        "memory-chat",
+        llmAgent,
+        runner.WithSessionService(sessionService),
+        runner.WithMemoryService(memoryService),
+    )
+    defer appRunner.Close()
+
+    // Run a dialog (system extracts memories automatically in background).
+    log.Println("🧠 Starting auto memory chat...")
+    message := model.NewUserMessage(
+        "Hi, my name is John, and I like programming",
+    )
+    eventChan, err := appRunner.Run(ctx, "user123", "session456", message)
+    if err != nil {
+        log.Fatalf("Failed to run agent: %v", err)
+    }
+    // Handle responses ...
+    _ = eventChan
+}
+```
+
+**Conversation example**:
+
+```
+User: My name is Alice and I work at TechCorp.
+
+Agent: Nice to meet you, Alice! It's great to connect with someone from TechCorp.
+       How can I help you today?
+
+(Background: Extractor analyzes conversation and creates memory automatically)
+```
+
+### Configuration Comparison
+
+| Step | Agentic Mode | Auto Mode |
+|------|-------------|-----------|
+| **Step 1** | `NewMemoryService()` | `NewMemoryService(WithExtractor(ext))` |
+| **Step 2** | `WithTools(memoryService.Tools())` | `WithTools(memoryService.Tools())` |
+| **Step 3** | `WithMemoryService(memoryService)` | `WithMemoryService(memoryService)` |
+| **Available tools** | add/update/delete/clear/search/load | search |
+| **Memory creation** | Agent explicitly calls tools | Background auto extraction |
 
 ## Core Concepts
 
@@ -979,8 +1104,73 @@ adminService := memoryinmemory.NewMemoryService(
 )
 ```
 
+## Advanced Configuration
+
+### Auto Mode Configuration Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `WithExtractor(extractor)` | Enable auto mode with LLM extractor | nil (disabled) |
+| `WithAsyncMemoryNum(n)` | Number of background worker goroutines | 3 |
+| `WithMemoryQueueSize(n)` | Size of memory job queue | 100 |
+| `WithMemoryJobTimeout(d)` | Timeout for each extraction job | 30s |
+
+### Tool Availability by Mode
+
+| Tool | Agentic Mode | Auto Mode |
+|------|-------------|-----------|
+| `memory_add` | ✅ Available | ❌ Hidden |
+| `memory_update` | ✅ Available | ❌ Hidden |
+| `memory_delete` | ⚙️ Configurable | ❌ Hidden |
+| `memory_clear` | ⚙️ Configurable | ❌ Hidden |
+| `memory_search` | ✅ Available | ✅ Available |
+| `memory_load` | ✅ Available | ❌ Hidden |
+
+### Memory Preloading
+
+Both modes support preloading memories into the system prompt:
+
+```go
+llmAgent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(model),
+    llmagent.WithTools(memoryService.Tools()),
+    // Preload options:
+    // llmagent.WithPreloadMemory(-1),  // Load all (default).
+    // llmagent.WithPreloadMemory(0),   // Disable preloading.
+    // llmagent.WithPreloadMemory(10),  // Load 10 most recent.
+)
+```
+
+When preloading is enabled, memories are automatically injected into the
+system prompt, giving the Agent context about the user without explicit
+tool calls.
+
+### Hybrid Approach
+
+You can combine both approaches:
+
+1. Use Auto mode for passive learning (background extraction)
+2. Enable search tool for explicit memory queries
+3. Preload memories for immediate context
+
+```go
+// Auto extraction + search tool + preloading.
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithExtractor(extractor),
+)
+
+llmAgent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(model),
+    llmagent.WithTools(memoryService.Tools()),  // search only.
+    llmagent.WithPreloadMemory(10),             // Preload recent memories.
+)
+```
+
 ## References
 
 - [Memory Module Source](https://github.com/trpc-group/trpc-agent-go/tree/main/memory)
-- [Complete Examples](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory)
+- [Agentic Mode Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory)
+- [Auto Mode Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto)
 - [API Documentation](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go/memory)

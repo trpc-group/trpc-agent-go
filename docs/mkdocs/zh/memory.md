@@ -6,11 +6,29 @@ Memory 是 tRPC-Agent-Go 框架中的记忆管理系统，为 Agent 提供持久
 
 ### 定位
 
-Memory 用于管理与用户相关的长期信息，隔离维度为 `<appName, userID>`，可以理解为围绕单个用户逐步积累的“个人档案”。
+Memory 用于管理与用户相关的长期信息，隔离维度为 `<appName, userID>`，可以理解为围绕单个用户逐步积累的"个人档案"。
 
 在跨会话场景中，Memory 使系统依然能够保留当前用户的关键信息，避免每个会话都从零开始重复获取用户信息。
 
-它适合记录稳定、可复用的事实，例如“用户姓名是张三”、“职业是后端工程师”、“偏好简短回答”、“常用语言是英文”等用户信息，并在后续多次交互中直接使用这些信息。
+它适合记录稳定、可复用的事实，例如"用户姓名是张三"、"职业是后端工程师"、"偏好简短回答"、"常用语言是英文"等用户信息，并在后续多次交互中直接使用这些信息。
+
+### 两种记忆模式
+
+Memory 支持两种模式来创建和管理记忆，根据你的场景选择合适的模式：
+
+| 维度 | 工具驱动模式（Agentic） | 自动提取模式（Auto） |
+|------|------------------------|----------------------|
+| **工作方式** | Agent 决定何时调用记忆工具 | 系统自动从对话中提取记忆 |
+| **用户体验** | 显式 - 用户可见工具调用过程 | 透明 - 后台静默创建记忆 |
+| **控制权** | Agent 完全控制记什么 | 提取器根据对话分析决定 |
+| **可用工具** | 全部 6 个工具 | 只读工具（search） |
+| **处理方式** | 同步 - 响应生成过程中 | 异步 - 响应后由后台 worker 处理 |
+| **适用场景** | 精确控制、用户主导的记忆管理 | 自然对话、无感知的记忆积累 |
+
+**选择建议**：
+
+- **工具驱动模式**：用户需要显式控制（"帮我记住..."）、需要精确决定存什么、需要交互式管理记忆
+- **自动提取模式**：希望自然对话流、系统被动学习用户信息、简化用户体验
 
 ## 核心价值
 
@@ -88,7 +106,9 @@ export PG_PASSWORD="password"
 export PG_DATABASE="memory_db"
 ```
 
-### 最简示例
+### 工具驱动模式配置（Agentic Mode，默认）
+
+工具驱动模式下，Agent 使用记忆工具显式管理记忆。配置分为三步：
 
 ```go
 package main
@@ -97,7 +117,6 @@ import (
     "context"
     "log"
 
-    // 核心组件
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
     "trpc.group/trpc-go/trpc-agent-go/model"
@@ -109,41 +128,143 @@ import (
 func main() {
     ctx := context.Background()
 
-    // 1. 创建记忆服务
+    // 步骤 1：创建记忆服务。
     memoryService := memoryinmemory.NewMemoryService()
 
-    // 2. 创建 LLM 模型
+    // 步骤 2：创建 Agent 并注册记忆工具。
     modelInstance := openai.New("deepseek-chat")
-
-    // 3. 创建 Agent 并注册记忆工具
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(modelInstance),
         llmagent.WithDescription("具有记忆能力的智能助手"),
         llmagent.WithInstruction("记住用户的重要信息，并在需要时回忆起来。"),
-        llmagent.WithTools(memoryService.Tools()), // 注册记忆工具
+        llmagent.WithTools(memoryService.Tools()), // 注册全部 6 个记忆工具。
     )
 
-    // 4. 创建 Runner 并设置记忆服务
+    // 步骤 3：创建 Runner 并设置记忆服务。
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
         "memory-chat",
         llmAgent,
         runner.WithSessionService(sessionService),
-        runner.WithMemoryService(memoryService), // 设置记忆服务
+        runner.WithMemoryService(memoryService), // 设置记忆服务。
     )
+    defer appRunner.Close()
 
-    // 5. 执行对话（Agent 会自动使用记忆工具）
+    // 执行对话（Agent 会自动使用记忆工具）。
     log.Println("🧠 开始记忆对话...")
     message := model.NewUserMessage("你好，我的名字是张三，我喜欢编程")
     eventChan, err := appRunner.Run(ctx, "user123", "session456", message)
     if err != nil {
         log.Fatalf("Failed to run agent: %v", err)
     }
-
-    // 6. 处理响应 ...
+    // 处理响应 ...
+    _ = eventChan
 }
 ```
+
+**对话示例**：
+
+```
+用户：我叫张三，在腾讯工作。
+
+Agent：你好张三！很高兴认识你。我会记住你在腾讯工作。
+
+🔧 工具调用：memory_add
+   参数：{"memory": "用户叫张三，在腾讯工作", "topics": ["姓名", "工作"]}
+✅ 记忆添加成功。
+
+Agent：我已经保存了这些信息。今天有什么可以帮你的？
+```
+
+### 自动提取模式配置（Auto Mode）
+
+自动提取模式下，基于 LLM 的提取器分析对话并自动创建记忆。**与工具驱动模式的区别仅在步骤 1：多配置一个 Extractor**。
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+    memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // 步骤 1：创建记忆服务（配置 Extractor 启用自动提取模式）。
+    extractorModel := openai.New("deepseek-chat")
+    memExtractor := extractor.NewExtractor(extractorModel)
+    memoryService := memoryinmemory.NewMemoryService(
+        memoryinmemory.WithExtractor(memExtractor), // 关键：配置提取器。
+        // 可选：配置异步 worker。
+        memoryinmemory.WithAsyncMemoryNum(3),
+        memoryinmemory.WithMemoryQueueSize(100),
+        memoryinmemory.WithMemoryJobTimeout(30*time.Second),
+    )
+    defer memoryService.Close()
+
+    // 步骤 2：创建 Agent 并注册记忆工具。
+    // 注意：配置了 Extractor 后，只有 search 工具可用。
+    chatModel := openai.New("deepseek-chat")
+    llmAgent := llmagent.New(
+        "memory-assistant",
+        llmagent.WithModel(chatModel),
+        llmagent.WithDescription("具有自动记忆能力的智能助手"),
+        llmagent.WithTools(memoryService.Tools()), // 只有 search 工具。
+    )
+
+    // 步骤 3：创建 Runner 并设置记忆服务。
+    // Runner 会在响应后自动触发记忆提取。
+    sessionService := inmemory.NewSessionService()
+    appRunner := runner.NewRunner(
+        "memory-chat",
+        llmAgent,
+        runner.WithSessionService(sessionService),
+        runner.WithMemoryService(memoryService),
+    )
+    defer appRunner.Close()
+
+    // 执行对话（系统自动在后台提取记忆）。
+    log.Println("🧠 开始自动记忆对话...")
+    message := model.NewUserMessage("你好，我的名字是张三，我喜欢编程")
+    eventChan, err := appRunner.Run(ctx, "user123", "session456", message)
+    if err != nil {
+        log.Fatalf("Failed to run agent: %v", err)
+    }
+    // 处理响应 ...
+    _ = eventChan
+}
+```
+
+**对话示例**：
+
+```
+用户：我叫张三，在腾讯工作。
+
+Agent：你好张三！很高兴认识腾讯的朋友。今天有什么可以帮你的？
+
+（后台：提取器分析对话并自动创建记忆，用户无感知）
+```
+
+### 两种模式配置对比
+
+| 步骤 | 工具驱动模式（Agentic） | 自动提取模式（Auto） |
+|------|------------------------|----------------------|
+| **步骤 1** | `NewMemoryService()` | `NewMemoryService(WithExtractor(ext))` |
+| **步骤 2** | `WithTools(memoryService.Tools())` | `WithTools(memoryService.Tools())` |
+| **步骤 3** | `WithMemoryService(memoryService)` | `WithMemoryService(memoryService)` |
+| **可用工具** | add/update/delete/clear/search/load | search |
+| **记忆创建** | Agent 显式调用工具 | 后台自动提取 |
 
 ## 核心概念
 
@@ -1028,9 +1149,72 @@ adminService := memoryinmemory.NewMemoryService(
 )
 ```
 
+## 高级配置
+
+### 自动提取模式配置选项
+
+| 选项 | 说明 | 默认值 |
+|------|------|--------|
+| `WithExtractor(extractor)` | 使用 LLM 提取器启用自动提取模式 | nil（禁用） |
+| `WithAsyncMemoryNum(n)` | 后台 worker goroutine 数量 | 3 |
+| `WithMemoryQueueSize(n)` | 记忆任务队列大小 | 100 |
+| `WithMemoryJobTimeout(d)` | 每个提取任务的超时时间 | 30s |
+
+### 各模式工具可用性
+
+| 工具 | 工具驱动模式 | 自动提取模式 |
+|------|-------------|--------------|
+| `memory_add` | ✅ 可用 | ❌ 隐藏 |
+| `memory_update` | ✅ 可用 | ❌ 隐藏 |
+| `memory_delete` | ⚙️ 可配置 | ❌ 隐藏 |
+| `memory_clear` | ⚙️ 可配置 | ❌ 隐藏 |
+| `memory_search` | ✅ 可用 | ✅ 可用 |
+| `memory_load` | ✅ 可用 | ❌ 隐藏 |
+
+### 记忆预加载
+
+两种模式都支持将记忆预加载到系统提示词中：
+
+```go
+llmAgent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(model),
+    llmagent.WithTools(memoryService.Tools()),
+    // 预加载选项：
+    // llmagent.WithPreloadMemory(-1),  // 加载全部（默认）。
+    // llmagent.WithPreloadMemory(0),   // 禁用预加载。
+    // llmagent.WithPreloadMemory(10),  // 加载最近 10 条。
+)
+```
+
+启用预加载后，记忆会自动注入到系统提示词中，让 Agent 无需显式工具调用就能获得用户上下文。
+
+### 混合方案
+
+你可以结合两种方式：
+
+1. 使用自动提取模式进行被动学习（后台提取）
+2. 启用搜索工具进行显式记忆查询
+3. 预加载记忆获得即时上下文
+
+```go
+// 自动提取 + 搜索工具 + 预加载。
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithExtractor(extractor),
+)
+
+llmAgent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(model),
+    llmagent.WithTools(memoryService.Tools()),  // 只有 search。
+    llmagent.WithPreloadMemory(10),             // 预加载最近记忆。
+)
+```
+
 ## 参考链接
 
 - [Memory 模块源码](https://github.com/trpc-group/trpc-agent-go/tree/main/memory)
-- [完整示例代码](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory)
+- [工具驱动模式示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory)
+- [自动提取模式示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto)
 - [API 文档](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go/memory)
 
