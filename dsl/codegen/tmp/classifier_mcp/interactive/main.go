@@ -97,10 +97,11 @@ func main() {
 
 func processStreamingResponse(eventChan <-chan *event.Event) error {
 	var (
-		didStream      bool
-		lastText       string
-		interruptNode  string
-		interruptValue any
+		didStream           bool
+		lastText            string
+		interruptNode       string
+		interruptValue      any
+		endStructuredOutput any
 	)
 
 	for ev := range eventChan {
@@ -120,6 +121,10 @@ func processStreamingResponse(eventChan <-chan *event.Event) error {
 					interruptNode = meta.NodeID
 					interruptValue = meta.InterruptValue
 				}
+			}
+			// Capture end_structured_output from state delta.
+			if v, ok := ev.StateDelta["end_structured_output"]; ok && v != nil {
+				endStructuredOutput = v
 			}
 		}
 
@@ -152,12 +157,36 @@ func processStreamingResponse(eventChan <-chan *event.Event) error {
 		fmt.Println(lastText)
 	}
 
+	// If no streaming output and no lastText, but we have end_structured_output, display it.
+	if !didStream && lastText == "" && endStructuredOutput != nil {
+		b, _ := json.MarshalIndent(endStructuredOutput, "", "  ")
+		fmt.Printf("%s\n", string(b))
+	}
+
 	return nil
 }
 
 // =============================================================================
 // Graph Definition
 // =============================================================================
+//
+// Workflow Overview:
+// This graph implements a state machine where nodes process data and edges
+// define transitions. The execution flow is:
+//   1. Entry point node receives user input
+//   2. Each node processes state and may update it
+//   3. Edges (or conditional edges) determine the next node
+//   4. Execution ends when reaching __end__ or a terminal node
+//
+// Node Types:
+//   - Agent nodes: LLM-powered nodes that generate responses
+//   - Function nodes: Pure Go functions for data transformation
+//   - Router nodes: Nodes that can interrupt execution for user input
+//
+// State Management:
+//   - state["messages"]: Conversation history ([]model.Message)
+//   - state["<node_id>_output"]: Raw output from a node
+//   - state["<node_id>_parsed"]: Parsed/structured output from a node
 
 func BuildGraph() (*graph.Graph, error) {
 	schema := graph.MessagesStateSchema()
@@ -191,7 +220,20 @@ func BuildGraph() (*graph.Graph, error) {
 // =============================================================================
 // Routing Functions
 // =============================================================================
+//
+// Routing functions determine the next node based on the current state.
+// They are called after a node completes and return the name of the next node.
+//
+// Input variables available in routing functions:
+//   - state: The full graph state (map[string]any)
+//   - parsedOutput: Structured output from the source node (state["<from>_parsed"])
+//   - rawOutput: Raw string output from the source node (state["<from>_output"])
 
+// routeEdgeRouteByClassification routes from "classifier" to the next node.
+// Input: state["classifier_parsed"] - the structured output from classifier
+// Routes:
+//   - "math_simple" (math_simple) -> "simple_math_agent"
+//   - "math_complex" (math_complex) -> "complex_math_agent"
 func routeEdgeRouteByClassification(ctx context.Context, state graph.State) (string, error) {
 	_ = ctx
 	parsedOutput, _ := state["classifier_parsed"].(map[string]any)
@@ -223,6 +265,15 @@ func nodeSimpleEnd(ctx context.Context, state graph.State) (any, error) {
 // =============================================================================
 // Agent Constructors
 // =============================================================================
+//
+// Each agent is an LLM-powered node that can:
+//   - Follow instructions (system prompt)
+//   - Use tools via MCP (Model Context Protocol)
+//   - Return structured output (JSON schema)
+//
+// Agent outputs are stored in state:
+//   - state["<agent_id>_output"]: Raw LLM response text
+//   - state["<agent_id>_parsed"]: Parsed structured output (if schema defined)
 
 func createSubAgents() []agent.Agent {
 	return []agent.Agent{
@@ -232,6 +283,9 @@ func createSubAgents() []agent.Agent {
 	}
 }
 
+// newClassifierSubAgent creates the "classifier" agent.
+// Role: You are a task classifier. Classify the user's request into one of two catego...
+// Output: Structured JSON (see schema below)
 func newClassifierSubAgent() agent.Agent {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -260,6 +314,10 @@ Analyze the user's request and output the classification.`))
 	return llmagent.New("classifier", opts...)
 }
 
+// newComplexMathAgentSubAgent creates the "complex_math_agent" agent.
+// Role: You are an advanced math assistant specializing in multiplication, division, ...
+// Output: Free-form text response
+// Tools: MCP tools enabled
 func newComplexMathAgentSubAgent() agent.Agent {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -295,6 +353,10 @@ func newComplexMathAgentSubAgent() agent.Agent {
 	return llmagent.New("complex_math_agent", opts...)
 }
 
+// newSimpleMathAgentSubAgent creates the "simple_math_agent" agent.
+// Role: You are a simple math assistant specializing in addition and subtraction. Use...
+// Output: Free-form text response
+// Tools: MCP tools enabled
 func newSimpleMathAgentSubAgent() agent.Agent {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {

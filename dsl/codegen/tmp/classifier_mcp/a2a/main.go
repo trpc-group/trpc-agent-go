@@ -108,6 +108,8 @@ func BuildGraph() (*graph.Graph, error) {
 // Routing Functions
 // =============================================================================
 
+// routeEdgeRouteByClassification routes from "classifier" based on classification.
+// Routes: "math_simple" -> simple_math_agent, "math_complex" -> complex_math_agent
 func routeEdgeRouteByClassification(ctx context.Context, state graph.State) (string, error) {
 	_ = ctx
 	parsedOutput, _ := state["classifier_parsed"].(map[string]any)
@@ -139,6 +141,15 @@ func nodeSimpleEnd(ctx context.Context, state graph.State) (any, error) {
 // =============================================================================
 // Agent Constructors
 // =============================================================================
+//
+// Each agent is an LLM-powered node that can:
+//   - Follow instructions (system prompt)
+//   - Use tools via MCP (Model Context Protocol)
+//   - Return structured output (JSON schema)
+//
+// Agent outputs are stored in state:
+//   - state["<agent_id>_output"]: Raw LLM response text
+//   - state["<agent_id>_parsed"]: Parsed structured output (if schema defined)
 
 func createSubAgents() []agent.Agent {
 	return []agent.Agent{
@@ -148,6 +159,9 @@ func createSubAgents() []agent.Agent {
 	}
 }
 
+// newClassifierSubAgent creates the "classifier" agent.
+// Role: You are a task classifier. Classify the user's request into one of two catego...
+// Output: Structured JSON (see schema below)
 func newClassifierSubAgent() agent.Agent {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -176,6 +190,10 @@ Analyze the user's request and output the classification.`))
 	return llmagent.New("classifier", opts...)
 }
 
+// newComplexMathAgentSubAgent creates the "complex_math_agent" agent.
+// Role: You are an advanced math assistant specializing in multiplication, division, ...
+// Output: Free-form text response
+// Tools: MCP tools enabled
 func newComplexMathAgentSubAgent() agent.Agent {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -211,6 +229,10 @@ func newComplexMathAgentSubAgent() agent.Agent {
 	return llmagent.New("complex_math_agent", opts...)
 }
 
+// newSimpleMathAgentSubAgent creates the "simple_math_agent" agent.
+// Role: You are a simple math assistant specializing in addition and subtraction. Use...
+// Output: Free-form text response
+// Tools: MCP tools enabled
 func newSimpleMathAgentSubAgent() agent.Agent {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -249,6 +271,8 @@ func newSimpleMathAgentSubAgent() agent.Agent {
 // =============================================================================
 // Infrastructure (do not edit below this line)
 // =============================================================================
+// agentStructuredOutputMapper creates a function that extracts agent output into state.
+// It stores raw response in state["<nodeID>_output"] and parsed JSON in state["<nodeID>_parsed"].
 func agentStructuredOutputMapper(nodeID string) graph.SubgraphOutputMapper {
 	return func(parent graph.State, result graph.SubgraphResult) graph.State {
 		last := result.LastResponse
@@ -264,6 +288,11 @@ func agentStructuredOutputMapper(nodeID string) graph.SubgraphOutputMapper {
 		return upd
 	}
 }
+
+// newMCPToolSet creates a connection to an MCP (Model Context Protocol) server.
+// MCP allows agents to call external tools (APIs, databases, etc.) via a standardized protocol.
+// transport: "streamable_http" or "sse" - the communication method
+// serverURL: the MCP server endpoint URL
 func newMCPToolSet(transport, serverURL string, headers map[string]string, allowedTools []string) (tool.ToolSet, error) {
 	if transport == "" {
 		return nil, fmt.Errorf("transport is required")
@@ -287,6 +316,9 @@ func newMCPToolSet(transport, serverURL string, headers map[string]string, allow
 	}
 	return mcp.NewMCPToolSet(connConfig, opts...), nil
 }
+
+// mustParseJSONMap parses a JSON string into map[string]any. Panics on invalid JSON.
+// Used to parse structured output schemas defined in the workflow.
 func mustParseJSONMap(raw string) map[string]any {
 	if raw = strings.TrimSpace(raw); raw == "" {
 		return nil
