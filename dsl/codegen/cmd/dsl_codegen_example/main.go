@@ -66,11 +66,11 @@ func main() {
 		panic(fmt.Errorf("unknown mode %q: must be 'interactive', 'agui', 'a2a', or 'openai'", *modeFlag))
 	}
 
-	out, err := codegen.GenerateNativeGo(&g, codegen.Options{
-		PackageName: "main",
-		AppName:     g.Name,
-		RunMode:     runMode,
-	})
+	out, err := codegen.GenerateNativeGo(&g,
+		codegen.WithPackageName("main"),
+		codegen.WithAppName(g.Name),
+		codegen.WithRunMode(runMode),
+	)
 	if err != nil {
 		panic(fmt.Errorf("GenerateNativeGo: %w", err))
 	}

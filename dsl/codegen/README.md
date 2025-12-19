@@ -4,6 +4,17 @@
 
 后端服务层通常会直接依赖并调用这个包（`codegen.GenerateNativeGo`），而不是使用 `dsl/codegen/cmd/dsl_codegen_example`（该目录只是本仓库的本地演示/调试工具）。
 
+## 运行模式
+
+codegen 支持四种运行模式，通过 `WithRunMode` 选项指定：
+
+| 模式 | 值 | 说明 |
+|------|-----|------|
+| Interactive | `interactive` | 默认模式，生成终端交互式 CLI 应用 |
+| AG-UI | `agui` | 生成 AG-UI 协议 HTTP 服务器 |
+| A2A | `a2a` | 生成 A2A (Agent-to-Agent) 协议服务器 |
+| OpenAI | `openai` | 生成 OpenAI 兼容 API 服务器（`/v1/chat/completions`） |
+
 ## 快速使用（服务层）
 
 下面示例演示：从 `workflow.json`（DSL）生成 `main.go`，并可选把源 DSL 一并写入输出目录用于溯源。
@@ -36,11 +47,11 @@ func main() {
 		panic(fmt.Errorf("validate workflow.json: %w", err))
 	}
 
-	// 2) Codegen
-	out, err := codegen.GenerateNativeGo(g, codegen.Options{
-		PackageName: "main",
-		AppName:     g.Name, // 可覆盖显示名称
-	})
+	// 2) Codegen - 使用 functional options 模式
+	out, err := codegen.GenerateNativeGo(g,
+		codegen.WithAppName(g.Name),              // 可选：覆盖显示名称
+		codegen.WithRunMode(codegen.RunModeA2A), // 可选：interactive(默认), agui, a2a, openai
+	)
 	if err != nil {
 		panic(fmt.Errorf("codegen: %w", err))
 	}
@@ -55,10 +66,18 @@ func main() {
 			panic(err)
 		}
 	}
-	// 可选：把源 DSL 一起写入，方便定位“这份 main.go 是由哪个 DSL 生成的”
+	// 可选：把源 DSL 一起写入，方便定位"这份 main.go 是由哪个 DSL 生成的"
 	_ = os.WriteFile(filepath.Join(outDir, "workflow.json"), workflowJSON, 0o644)
 }
 ```
+
+### 可用选项
+
+| 选项函数 | 说明 | 默认值 |
+|---------|------|-------|
+| `WithPackageName(name)` | 生成代码的包名 | `"main"` |
+| `WithAppName(name)` | 应用名称（用于日志） | `graph.Name` 或 `"dsl_app"` |
+| `WithRunMode(mode)` | 运行模式 | `RunModeInteractive` |
 
 生成的 `main.go` 顶部会包含运行说明（`go mod init/go get/...` + `export OPENAI_API_KEY=...` + `go run .`）。
 

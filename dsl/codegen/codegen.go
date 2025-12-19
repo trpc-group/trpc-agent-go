@@ -43,6 +43,30 @@ type Options struct {
 	RunMode RunMode
 }
 
+// Option is a functional option for GenerateNativeGo.
+type Option func(*Options)
+
+// WithPackageName sets the package name for generated files.
+func WithPackageName(name string) Option {
+	return func(o *Options) {
+		o.PackageName = name
+	}
+}
+
+// WithAppName sets the application name used in logging.
+func WithAppName(name string) Option {
+	return func(o *Options) {
+		o.AppName = name
+	}
+}
+
+// WithRunMode sets the execution mode for generated code.
+func WithRunMode(mode RunMode) Option {
+	return func(o *Options) {
+		o.RunMode = mode
+	}
+}
+
 // Output contains the generated Go source files keyed by filename.
 type Output struct {
 	Files map[string][]byte
@@ -65,25 +89,26 @@ type Output struct {
 // The generated code does not import the dsl package and does not depend on
 // cel-go; CEL-lite expressions are compiled into plain Go code plus a few small
 // helper functions.
-func GenerateNativeGo(g *dsl.Graph, opts Options) (*Output, error) {
+func GenerateNativeGo(g *dsl.Graph, opts ...Option) (*Output, error) {
 	if g == nil {
 		return nil, fmt.Errorf("graph is nil")
 	}
 
-	pkg := opts.PackageName
-	if pkg == "" {
-		pkg = "main"
+	// Apply options with defaults.
+	o := &Options{
+		PackageName: "main",
+		RunMode:     RunModeInteractive,
 	}
-	appName := opts.AppName
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	appName := o.AppName
 	if appName == "" {
 		appName = g.Name
 		if appName == "" {
 			appName = "dsl_app"
 		}
-	}
-	runMode := opts.RunMode
-	if runMode == "" {
-		runMode = RunModeInteractive
 	}
 
 	ir, err := buildIR(g)
@@ -92,9 +117,9 @@ func GenerateNativeGo(g *dsl.Graph, opts Options) (*Output, error) {
 	}
 
 	src, err := renderTemplate(singleFileTemplate, singleFileTemplateData{
-		PackageName:    pkg,
+		PackageName:    o.PackageName,
 		AppName:        appName,
-		RunMode:        string(runMode),
+		RunMode:        string(o.RunMode),
 		HasAgentNodes:  len(ir.AgentNodes) > 0,
 		EnvVarInfos:    ir.EnvVarInfos,
 		NeedsApproval:  ir.NeedsApproval,
