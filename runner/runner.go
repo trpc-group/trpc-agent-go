@@ -256,7 +256,7 @@ func (r *runner) Run(
 		// Attempt to persist the error event so the session reflects the failure.
 		errorEvent := event.NewErrorEvent(
 			invocation.InvocationID,
-			r.agent.Info().Name,
+			ag.Info().Name,
 			model.ErrorTypeRunError,
 			err.Error(),
 		)
