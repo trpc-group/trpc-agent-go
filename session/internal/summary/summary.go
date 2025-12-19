@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
@@ -261,8 +262,5 @@ func CreateSessionSummaryWithCascade(
 	}
 	summaryWg.Wait()
 
-	if result[0] != nil {
-		return result[0]
-	}
-	return result[1]
+	return util.If(result[0] != nil, result[0], result[1])
 }
