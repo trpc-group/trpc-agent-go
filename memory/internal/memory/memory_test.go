@@ -592,3 +592,97 @@ func TestMatchMemoryEntry_WhitespaceQuery(t *testing.T) {
 	result := MatchMemoryEntry(entry, "   \t\n  ")
 	assert.False(t, result)
 }
+
+func TestGenerateMemoryID(t *testing.T) {
+	tests := []struct {
+		name     string
+		memory   *memory.Memory
+		expected string
+	}{
+		{
+			name: "simple memory without topics",
+			memory: &memory.Memory{
+				Memory: "User likes coffee",
+				Topics: nil,
+			},
+			expected: "", // Will verify it's not empty and consistent.
+		},
+		{
+			name: "memory with empty topics",
+			memory: &memory.Memory{
+				Memory: "User works in tech",
+				Topics: []string{},
+			},
+			expected: "", // Will verify it's not empty and consistent.
+		},
+		{
+			name: "memory with topics",
+			memory: &memory.Memory{
+				Memory: "User prefers dark mode",
+				Topics: []string{"preferences", "ui"},
+			},
+			expected: "", // Will verify it's not empty and consistent.
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id := GenerateMemoryID(tt.memory)
+			assert.NotEmpty(t, id)
+			// Verify consistency: same input should produce same output.
+			id2 := GenerateMemoryID(tt.memory)
+			assert.Equal(t, id, id2)
+			// Verify length: SHA256 produces 64 hex characters.
+			assert.Len(t, id, 64)
+		})
+	}
+
+	t.Run("different memories produce different IDs", func(t *testing.T) {
+		mem1 := &memory.Memory{Memory: "User likes coffee"}
+		mem2 := &memory.Memory{Memory: "User likes tea"}
+		id1 := GenerateMemoryID(mem1)
+		id2 := GenerateMemoryID(mem2)
+		assert.NotEqual(t, id1, id2)
+	})
+
+	t.Run("same content different topics produce different IDs", func(t *testing.T) {
+		mem1 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"food"}}
+		mem2 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"drink"}}
+		id1 := GenerateMemoryID(mem1)
+		id2 := GenerateMemoryID(mem2)
+		assert.NotEqual(t, id1, id2)
+	})
+
+	t.Run("topics order affects ID", func(t *testing.T) {
+		mem1 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"a", "b"}}
+		mem2 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"b", "a"}}
+		id1 := GenerateMemoryID(mem1)
+		id2 := GenerateMemoryID(mem2)
+		// Different order produces different IDs.
+		assert.NotEqual(t, id1, id2)
+	})
+}
+
+func TestIsWriteTool(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		expected bool
+	}{
+		{"add tool is write", memory.AddToolName, true},
+		{"update tool is write", memory.UpdateToolName, true},
+		{"delete tool is write", memory.DeleteToolName, true},
+		{"clear tool is write", memory.ClearToolName, true},
+		{"search tool is not write", memory.SearchToolName, false},
+		{"load tool is not write", memory.LoadToolName, false},
+		{"invalid tool is not write", "invalid_tool", false},
+		{"empty tool is not write", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsWriteTool(tt.toolName)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
