@@ -796,10 +796,10 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 	return nil
 }
 
-// AddNoticeChannel add a new notice channel.
+// AddNoticeChannel add a new notice channel
 func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan any {
 	if inv == nil || inv.noticeMu == nil {
-		log.DebugContext(
+		log.ErrorContext(
 			ctx,
 			"noticeMu is uninitialized, please use agent.NewInvocation or "+
 				"Clone method to create Invocation",
@@ -822,10 +822,10 @@ func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan an
 	return ch
 }
 
-// NotifyCompletion notify completion signal to waiting task.
+// NotifyCompletion notify completion signal to waiting task
 func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 	if inv == nil || inv.noticeMu == nil {
-		log.DebugContext(
+		log.ErrorContext(
 			ctx,
 			"noticeMu is uninitialized, please use agent.NewInvocation or "+
 				"Clone method to create Invocation",
@@ -865,12 +865,12 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 	return nil
 }
 
-// CleanupNotice cleanup all notice channel.
-// The 'Invocation' instance created via the NewInvocation method should be disposed
+// CleanupNotice cleanup all notice channel
+// The 'Invocation' instance created via the NewInvocation method ​​should be disposed​​
 // upon completion to prevent resource leaks.
 func (inv *Invocation) CleanupNotice(ctx context.Context) {
 	if inv == nil || inv.noticeMu == nil {
-		log.DebugContext(
+		log.ErrorContext(
 			ctx,
 			"noticeMu is uninitialized, please use agent.NewInvocation or "+
 				"Clone method to create Invocation",
