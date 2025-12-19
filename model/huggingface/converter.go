@@ -245,10 +245,10 @@ func (m *Model) convertChunk(chunk *ChatCompletionChunk) *model.Response {
 
 	// Convert choices.
 	for _, choice := range chunk.Choices {
-		choice := choice // Create a local copy to avoid taking address of loop variable.
 		var finishReason *string
 		if choice.FinishReason != "" {
-			finishReason = &choice.FinishReason
+			fr := choice.FinishReason
+			finishReason = &fr
 		}
 		resp.Choices = append(resp.Choices, model.Choice{
 			Index:        choice.Index,
