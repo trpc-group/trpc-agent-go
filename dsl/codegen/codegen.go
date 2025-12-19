@@ -26,6 +26,10 @@ const (
 	RunModeInteractive RunMode = "interactive"
 	// RunModeAGUI generates an AG-UI HTTP server.
 	RunModeAGUI RunMode = "agui"
+	// RunModeA2A generates an A2A (Agent-to-Agent) protocol server.
+	RunModeA2A RunMode = "a2a"
+	// RunModeOpenAI generates an OpenAI-compatible API server.
+	RunModeOpenAI RunMode = "openai"
 )
 
 // Options controls how Go code is generated from a DSL graph.

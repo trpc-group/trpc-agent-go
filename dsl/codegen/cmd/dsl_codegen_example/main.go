@@ -36,7 +36,7 @@ func main() {
 	modeFlag := flag.String(
 		"mode",
 		"interactive",
-		"Run mode: 'interactive' (terminal CLI) or 'agui' (AG-UI HTTP server)",
+		"Run mode: 'interactive' (terminal CLI), 'agui' (AG-UI HTTP server), 'a2a' (A2A protocol server), or 'openai' (OpenAI-compatible API server)",
 	)
 	flag.Parse()
 
@@ -52,9 +52,18 @@ func main() {
 		panic(fmt.Errorf("unmarshal workflow.json %s: %w", workflowPath, err))
 	}
 
-	runMode := codegen.RunModeInteractive
-	if *modeFlag == "agui" {
+	var runMode codegen.RunMode
+	switch *modeFlag {
+	case "interactive":
+		runMode = codegen.RunModeInteractive
+	case "agui":
 		runMode = codegen.RunModeAGUI
+	case "a2a":
+		runMode = codegen.RunModeA2A
+	case "openai":
+		runMode = codegen.RunModeOpenAI
+	default:
+		panic(fmt.Errorf("unknown mode %q: must be 'interactive', 'agui', 'a2a', or 'openai'", *modeFlag))
 	}
 
 	out, err := codegen.GenerateNativeGo(&g, codegen.Options{

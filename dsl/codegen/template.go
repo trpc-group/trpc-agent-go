@@ -4,7 +4,7 @@ package codegen
 type singleFileTemplateData struct {
 	PackageName                         string
 	AppName                             string
-	RunMode                             string // "interactive" or "agui"
+	RunMode                             string // "interactive", "agui", "a2a", or "openai"
 	HasAgentNodes                       bool
 	EnvVarInfos                         []envVarInfo // Detailed env var info for documentation
 	NeedsApproval                       bool
@@ -56,11 +56,11 @@ import (
 	{{- end }}
 	"context"
 	"encoding/json"
-	{{- if eq .RunMode "agui" }}
+	{{- if or (eq .RunMode "agui") (eq .RunMode "a2a") (eq .RunMode "openai") }}
 	"flag"
 	{{- end }}
 	"fmt"
-	{{- if eq .RunMode "agui" }}
+	{{- if or (eq .RunMode "agui") (eq .RunMode "openai") }}
 	"net/http"
 	{{- end }}
 	{{- if .HasAgentNodes }}
@@ -83,18 +83,28 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	{{- end }}
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	{{- if eq .RunMode "agui" }}
+	{{- if or (eq .RunMode "agui") (eq .RunMode "a2a") (eq .RunMode "openai") }}
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	{{- end }}
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	{{- if .HasAgentNodes }}
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	{{- end }}
+	{{- if or (eq .RunMode "interactive") (eq .RunMode "agui") }}
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	{{- end }}
 	{{- if eq .RunMode "agui" }}
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	{{- end }}
+	{{- if eq .RunMode "a2a" }}
+	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
+	{{- end }}
+	{{- if eq .RunMode "openai" }}
+	openaiserver "trpc.group/trpc-go/trpc-agent-go/server/openai"
+	{{- end }}
+	{{- if or (eq .RunMode "interactive") (eq .RunMode "agui") (eq .RunMode "a2a") }}
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	{{- end }}
 	{{- if .NeedsMCP }}
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
@@ -107,11 +117,17 @@ import (
 
 const appName = {{ printf "%q" .AppName }}
 
-{{- if eq .RunMode "agui" }}
+{{- if or (eq .RunMode "agui") (eq .RunMode "a2a") (eq .RunMode "openai") }}
 
 var (
+	{{- if eq .RunMode "agui" }}
 	address = flag.String("address", "127.0.0.1:8080", "Listen address")
 	path    = flag.String("path", "/agui", "HTTP path")
+	{{- else if eq .RunMode "a2a" }}
+	address = flag.String("address", "0.0.0.0:8080", "Listen address")
+	{{- else if eq .RunMode "openai" }}
+	address = flag.String("address", "127.0.0.1:8080", "Listen address")
+	{{- end }}
 )
 {{- end }}
 
@@ -146,6 +162,67 @@ func main() {
 	}
 
 	log.Infof("AG-UI: serving agent %q on http://%s%s", appName, *address, *path)
+	if err := http.ListenAndServe(*address, server.Handler()); err != nil {
+		log.Fatalf("Server stopped with error: %v", err)
+	}
+{{- else if eq .RunMode "a2a" }}
+	flag.Parse()
+
+	g, err := BuildGraph()
+	if err != nil {
+		log.Fatalf("Failed to build graph: %v", err)
+	}
+
+	{{- if .HasAgentNodes }}
+	ga, err := graphagent.New(appName, g, graphagent.WithSubAgents(createSubAgents()))
+	{{- else }}
+	ga, err := graphagent.New(appName, g)
+	{{- end }}
+	if err != nil {
+		log.Fatalf("Failed to create graph agent: %v", err)
+	}
+
+	server, err := a2aserver.New(
+		a2aserver.WithHost(*address),
+		a2aserver.WithAgent(ga, true),
+		a2aserver.WithSessionService(inmemory.NewSessionService()),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create A2A server: %v", err)
+	}
+
+	log.Infof("A2A: serving agent %q on http://%s", appName, *address)
+	if err := server.Start(*address); err != nil {
+		log.Fatalf("Server stopped with error: %v", err)
+	}
+{{- else if eq .RunMode "openai" }}
+	flag.Parse()
+
+	g, err := BuildGraph()
+	if err != nil {
+		log.Fatalf("Failed to build graph: %v", err)
+	}
+
+	{{- if .HasAgentNodes }}
+	ga, err := graphagent.New(appName, g, graphagent.WithSubAgents(createSubAgents()))
+	{{- else }}
+	ga, err := graphagent.New(appName, g)
+	{{- end }}
+	if err != nil {
+		log.Fatalf("Failed to create graph agent: %v", err)
+	}
+
+	server, err := openaiserver.New(
+		openaiserver.WithAgent(ga),
+		openaiserver.WithBasePath("/v1"),
+		openaiserver.WithModelName(appName),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create OpenAI server: %v", err)
+	}
+	defer server.Close()
+
+	log.Infof("OpenAI: serving agent %q on http://%s/v1/chat/completions", appName, *address)
 	if err := http.ListenAndServe(*address, server.Handler()); err != nil {
 		log.Fatalf("Server stopped with error: %v", err)
 	}
