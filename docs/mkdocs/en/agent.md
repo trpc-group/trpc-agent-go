@@ -205,7 +205,7 @@ cycleAgent := cycleagent.New(
 )
 
 // Create Runner
-runner := runner.NewRunner("demo-app", chainagent)
+runner := runner.NewRunner("demo-app", cycleAgent)
 
 // Send message directly without creating complex Invocation
 message := model.NewUserMessage("Hello! Can you tell me about yourself?")
