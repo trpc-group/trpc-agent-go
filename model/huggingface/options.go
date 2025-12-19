@@ -1,11 +1,11 @@
-//
+//.
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
+//.
 // Copyright (C) 2025 Tencent.  All rights reserved.
-//
+//.
 // trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-//
+//.
+//.
 
 // Package huggingface provides HuggingFace-compatible model implementations.
 package huggingface
@@ -58,9 +58,9 @@ type ChatStreamCompleteCallbackFunc func(
 type options struct {
 	// API key for the HuggingFace client.
 	APIKey string
-	// Base URL for the HuggingFace API. Default is https://api-inference.huggingface.co
+	// Base URL for the HuggingFace API. Default is https://api-inference.huggingface.co.
 	BaseURL string
-	// Buffer size for response channels (default: 256)
+	// Buffer size for response channels (default: 256).
 	ChannelBufferSize int
 	// HTTP client for making requests.
 	HTTPClient *http.Client
@@ -210,7 +210,7 @@ func WithTRPC(serviceName string, timeout int) Option {
 }
 
 // WithEnableTokenTailoring enables automatic token tailoring based on model context window.
-// When enabled, the system will automatically calculate max input tokens using the model's
+// When enabled, the system will automatically calculate max input tokens using the model's.
 // context window minus reserved tokens and protocol overhead.
 func WithEnableTokenTailoring(enabled bool) Option {
 	return func(opts *options) {

@@ -1,11 +1,11 @@
-//
+//.
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
+//.
 // Copyright (C) 2025 Tencent.  All rights reserved.
-//
+//.
 // trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-//
+//.
+//.
 
 package huggingface
 
@@ -32,7 +32,7 @@ func (m *Model) convertRequest(req *model.Request) (*ChatCompletionRequest, erro
 		ExtraFields:      make(map[string]interface{}),
 	}
 
-	// Convert messages
+	// Convert messages.
 	for _, msg := range req.Messages {
 		hfMsg, err := convertMessage(msg)
 		if err != nil {
@@ -41,7 +41,7 @@ func (m *Model) convertRequest(req *model.Request) (*ChatCompletionRequest, erro
 		hfReq.Messages = append(hfReq.Messages, hfMsg)
 	}
 
-	// Convert tools
+	// Convert tools.
 	if len(req.Tools) > 0 {
 		hfReq.Tools = make([]Tool, 0, len(req.Tools))
 		for _, t := range req.Tools {
@@ -53,7 +53,7 @@ func (m *Model) convertRequest(req *model.Request) (*ChatCompletionRequest, erro
 		}
 	}
 
-	// Convert structured output to response format
+	// Convert structured output to response format.
 	if req.StructuredOutput != nil && req.StructuredOutput.Type == model.StructuredOutputJSONSchema {
 		hfReq.ResponseFormat = &ResponseFormat{
 			Type: "json_object",
@@ -69,17 +69,17 @@ func convertMessage(msg model.Message) (ChatMessage, error) {
 		Role: string(msg.Role),
 	}
 
-	// Handle tool message fields
+	// Handle tool message fields.
 	if msg.Role == model.RoleTool {
 		hfMsg.ToolCallID = msg.ToolID
 		hfMsg.Name = msg.ToolName
 	}
 
-	// Convert content - prioritize Content string field
+	// Convert content - prioritize Content string field.
 	if msg.Content != "" {
 		hfMsg.Content = msg.Content
 	} else if len(msg.ContentParts) > 0 {
-		// Check if all content parts are text
+		// Check if all content parts are text.
 		allText := true
 		for _, part := range msg.ContentParts {
 			if part.Type != model.ContentTypeText {
@@ -89,10 +89,10 @@ func convertMessage(msg model.Message) (ChatMessage, error) {
 		}
 
 		if allText && len(msg.ContentParts) == 1 && msg.ContentParts[0].Text != nil {
-			// Single text content - use string format
+			// Single text content - use string format.
 			hfMsg.Content = *msg.ContentParts[0].Text
 		} else {
-			// Multiple parts or non-text content - use array format
+			// Multiple parts or non-text content - use array format.
 			contentParts := make([]ContentPart, 0, len(msg.ContentParts))
 			for _, part := range msg.ContentParts {
 				hfPart, err := convertContentPart(part)
@@ -105,7 +105,7 @@ func convertMessage(msg model.Message) (ChatMessage, error) {
 		}
 	}
 
-	// Convert tool calls
+	// Convert tool calls.
 	if len(msg.ToolCalls) > 0 {
 		hfMsg.ToolCalls = make([]ToolCall, 0, len(msg.ToolCalls))
 		for _, tc := range msg.ToolCalls {
@@ -136,10 +136,10 @@ func convertContentPart(part model.ContentPart) (ContentPart, error) {
 		if part.Image == nil {
 			return ContentPart{}, fmt.Errorf("image is nil for image content type")
 		}
-		// Convert image to image_url format
+		// Convert image to image_url format.
 		url := part.Image.URL
 		if url == "" && len(part.Image.Data) > 0 {
-			// If data is provided, create a data URL
+			// If data is provided, create a data URL.
 			url = fmt.Sprintf("data:image/%s;base64,%s", part.Image.Format, part.Image.Data)
 		}
 		return ContentPart{
@@ -156,10 +156,10 @@ func convertContentPart(part model.ContentPart) (ContentPart, error) {
 
 // convertTool converts a tool.Tool to a HuggingFace Tool.
 func convertTool(t tool.Tool) (Tool, error) {
-	// Get tool declaration
+	// Get tool declaration.
 	decl := t.Declaration()
 
-	// Convert parameters to map
+	// Convert parameters to map.
 	var params map[string]any
 	if decl.InputSchema != nil {
 		paramsJSON, err := json.Marshal(decl.InputSchema)
@@ -203,12 +203,12 @@ func (m *Model) convertResponse(hfResp *ChatCompletionResponse) *model.Response 
 		Choices: make([]model.Choice, 0, len(hfResp.Choices)),
 	}
 
-	// Convert choices
+	// Convert choices.
 	for _, choice := range hfResp.Choices {
 		resp.Choices = append(resp.Choices, convertChoice(choice))
 	}
 
-	// Convert usage
+	// Convert usage.
 	if hfResp.Usage != nil {
 		resp.Usage = &model.Usage{
 			PromptTokens:     hfResp.Usage.PromptTokens,
@@ -243,7 +243,7 @@ func (m *Model) convertChunk(chunk *ChatCompletionChunk) *model.Response {
 		Choices: make([]model.Choice, 0, len(chunk.Choices)),
 	}
 
-	// Convert choices
+	// Convert choices.
 	for _, choice := range chunk.Choices {
 		var finishReason *string
 		if choice.FinishReason != "" {
@@ -256,7 +256,7 @@ func (m *Model) convertChunk(chunk *ChatCompletionChunk) *model.Response {
 		})
 	}
 
-	// Convert usage
+	// Convert usage.
 	if chunk.Usage != nil {
 		resp.Usage = &model.Usage{
 			PromptTokens:     chunk.Usage.PromptTokens,
@@ -274,21 +274,21 @@ func convertMessageToModel(hfMsg ChatMessage) model.Message {
 		Role: model.Role(hfMsg.Role),
 	}
 
-	// Handle tool message fields
+	// Handle tool message fields.
 	if hfMsg.ToolCallID != "" {
 		msg.ToolID = hfMsg.ToolCallID
 		msg.ToolName = hfMsg.Name
 	}
 
-	// Convert content
+	// Convert content.
 	switch content := hfMsg.Content.(type) {
 	case string:
-		// String content
+		// String content.
 		if content != "" {
 			msg.Content = content
 		}
 	case []interface{}:
-		// Array content
+		// Array content.
 		msg.ContentParts = make([]model.ContentPart, 0, len(content))
 		for _, part := range content {
 			if partMap, ok := part.(map[string]interface{}); ok {
@@ -297,14 +297,14 @@ func convertMessageToModel(hfMsg ChatMessage) model.Message {
 			}
 		}
 	case []ContentPart:
-		// Typed array content
+		// Typed array content.
 		msg.ContentParts = make([]model.ContentPart, 0, len(content))
 		for _, part := range content {
 			msg.ContentParts = append(msg.ContentParts, convertContentPartStructToModel(part))
 		}
 	}
 
-	// Convert tool calls
+	// Convert tool calls.
 	if len(hfMsg.ToolCalls) > 0 {
 		msg.ToolCalls = make([]model.ToolCall, 0, len(hfMsg.ToolCalls))
 		for _, tc := range hfMsg.ToolCalls {

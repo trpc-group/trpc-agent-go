@@ -23,11 +23,10 @@ const modelName = "meta-llama/Llama-3.1-8B-Instruct:ovhcloud"
 
 //const modelName = "Tongyi-MAI/Z-Image-Turbo"
 
-// todo chat model和非chat model的支持，都需要
-// TestIntegration_RealAPI_NonStreaming 测试真实的 HuggingFace API（非流式）
+// TestIntegration_RealAPI_NonStreaming tests real HuggingFace API (non-streaming).
 func TestIntegration_RealAPI_NonStreaming(t *testing.T) {
 	t.Log("Running real HuggingFace API integration test (non-streaming)...")
-	// 创建模型实例
+	// Create model instance.
 	m, err := New(
 		modelName,
 		WithAPIKey(ApiKey),
@@ -40,23 +39,21 @@ func TestIntegration_RealAPI_NonStreaming(t *testing.T) {
 		}),
 	)
 	require.NoError(t, err)
-	//require.NotNil(t, m)
+	require.NotNil(t, m)
 
-	// 辅助函数：创建指针
-	//intPtr := func(i int) *int { return &i }
-	//float64Ptr := func(f float64) *float64 { return &f }
+	// Helper function: create pointer.
 
-	// 创建请求
+	// Create request.
 	request := &model.Request{
 		Messages: []model.Message{
-			{Role: model.RoleUser, Content: "一个人应该有怎样的特别的梦想？"},
+			{Role: model.RoleUser, Content: "What kind of special dreams should a person have?"},
 		},
 		GenerationConfig: model.GenerationConfig{
 			Stream: false,
 		},
 	}
 
-	// 执行请求
+	// Execute request.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -65,31 +62,31 @@ func TestIntegration_RealAPI_NonStreaming(t *testing.T) {
 	//require.NoError(t, err)
 	//require.NotNil(t, responseChan)
 
-	// 收集响应
+	// Collect responses.
 	var responses []*model.Response
 	for response := range responseChan {
 		responses = append(responses, response)
 
-		// 如果有错误，记录详细信息
+		// If there is an error, log detailed information.
 		if response.Error != nil {
 			t.Logf("Response error: %v", response.Error)
 		}
 	}
 
-	// 验证响应
+	// Verify response.
 	require.NotEmpty(t, responses, "Should receive at least one response")
 
 	lastResp := responses[len(responses)-1]
 
-	// 如果有错误，打印详细信息但不失败（可能是模型不可用）
+	// If there is an error, print detailed information but do not fail (model may be unavailable).
 	if lastResp.Error != nil {
 		t.Logf("API returned error (this may be expected if model is not available): %v", lastResp.Error)
 		t.Logf("Error details: %+v", lastResp.Error)
-		// 不标记为失败，因为可能是模型暂时不可用
+		// Do not mark as failed, as the model may be temporarily unavailable.
 		return
 	}
 
-	// 验证成功响应
+	// Verify successful response.
 	assert.NotNil(t, lastResp)
 	require.NotEmpty(t, lastResp.Choices, "Should have at least one choice")
 
@@ -101,7 +98,7 @@ func TestIntegration_RealAPI_NonStreaming(t *testing.T) {
 	t.Logf("   Model: %s", modelName)
 	t.Logf("   Content: %s", choice.Message.Content)
 
-	// 验证 Usage 信息（如果有）
+	// Verify Usage information (if available).
 	if lastResp.Usage != nil {
 		t.Logf("   Token usage - Prompt: %d, Completion: %d, Total: %d",
 			lastResp.Usage.PromptTokens,
@@ -111,10 +108,10 @@ func TestIntegration_RealAPI_NonStreaming(t *testing.T) {
 	}
 }
 
-// TestIntegration_RealAPI_Streaming 测试真实的 HuggingFace API（流式）
+// TestIntegration_RealAPI_Streaming tests real HuggingFace API (streaming).
 func TestIntegration_RealAPI_Streaming(t *testing.T) {
 	t.Log("Running real HuggingFace API integration test (streaming)...")
-	// 创建模型实例
+	// Create model instance.
 	m, err := New(
 		modelName,
 		WithAPIKey(ApiKey),
@@ -122,14 +119,14 @@ func TestIntegration_RealAPI_Streaming(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, m)
 
-	// 辅助函数：创建指针
+	// Helper function: create pointer.
 	//intPtr := func(i int) *int { return &i }
 	//float64Ptr := func(f float64) *float64 { return &f }
 
-	// 创建流式请求
+	// Create streaming request.
 	request := &model.Request{
 		Messages: []model.Message{
-			{Role: model.RoleUser, Content: "给我讲一个短笑话."},
+			{Role: model.RoleUser, Content: "Tell me a short joke."},
 		},
 		GenerationConfig: model.GenerationConfig{
 			Stream: true,
@@ -138,7 +135,7 @@ func TestIntegration_RealAPI_Streaming(t *testing.T) {
 		},
 	}
 
-	// 执行请求
+	// Execute request.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -147,7 +144,7 @@ func TestIntegration_RealAPI_Streaming(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, responseChan)
 
-	// 收集所有流式响应
+	// Collect all streaming responses.
 	var responses []*model.Response
 	var fullContent string
 	chunkCount := 0
@@ -156,13 +153,13 @@ func TestIntegration_RealAPI_Streaming(t *testing.T) {
 		responses = append(responses, response)
 		chunkCount++
 
-		// 如果有错误，记录详细信息
+		// If there is an error, log detailed information.
 		if response.Error != nil {
 			t.Logf("Chunk %d error: %v", chunkCount, response.Error)
 			continue
 		}
 
-		// 累积内容
+		// Accumulate content.
 		if len(response.Choices) > 0 {
 			content := response.Choices[0].Delta.Content
 			if content != "" {
@@ -172,18 +169,18 @@ func TestIntegration_RealAPI_Streaming(t *testing.T) {
 		}
 	}
 
-	// 验证响应
+	// Verify response.
 	require.NotEmpty(t, responses, "Should receive at least one response")
 
 	lastResp := responses[len(responses)-1]
 
-	// 如果有错误，打印详细信息但不失败
+	// If there is an error, print detailed information but do not fail.
 	if lastResp.Error != nil {
 		t.Logf("API returned error (this may be expected if model is not available): %v", lastResp.Error)
 		return
 	}
 
-	// 验证流式响应
+	// Verify streaming response.
 	assert.Greater(t, chunkCount, 0, "Should receive at least one chunk")
 
 	t.Logf("✅ Received streaming response from real API:")
@@ -191,21 +188,21 @@ func TestIntegration_RealAPI_Streaming(t *testing.T) {
 	t.Logf("   Total chunks: %d", chunkCount)
 	t.Logf("   Full content: %s", fullContent)
 
-	// 验证至少收到了一些内容
+	// Verify that at least some content was received.
 	if fullContent != "" {
 		assert.NotEmpty(t, fullContent, "Should receive some content from streaming")
 	}
 }
 
-// TestIntegration_RealAPI_WithCallbacks 测试真实 API 的回调机制
+// TestIntegration_RealAPI_WithCallbacks tests real API callback mechanism.
 func TestIntegration_RealAPI_WithCallbacks(t *testing.T) {
 
-	// 回调计数器
+	// Callback counters.
 	var requestCallbackCalled bool
 	var chunkCallbackCount int
 	var streamCompleteCallbackCalled bool
 
-	// 创建带回调的模型实例
+	// Create model instance with callbacks.
 	m, err := New(
 		modelName,
 		WithAPIKey(ApiKey),
@@ -230,13 +227,13 @@ func TestIntegration_RealAPI_WithCallbacks(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// 辅助函数：创建指针
+	// Helper function: create pointer.
 	//intPtr := func(i int) *int { return &i }
 
-	// 创建流式请求
+	// Create streaming request.
 	request := &model.Request{
 		Messages: []model.Message{
-			{Role: model.RoleUser, Content: "一个人可以怎样躺平"},
+			{Role: model.RoleUser, Content: "How can a person lie flat?"},
 		},
 		GenerationConfig: model.GenerationConfig{
 			Stream: true,
@@ -244,24 +241,24 @@ func TestIntegration_RealAPI_WithCallbacks(t *testing.T) {
 		},
 	}
 
-	// 执行请求
+	// Execute request.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	responseChan, err := m.GenerateContent(ctx, request)
 	require.NoError(t, err)
 
-	// 消费所有响应
+	// Consume all responses.
 	for response := range responseChan {
 		if response.Error != nil {
 			t.Logf("Response error: %v", response.Error)
 		}
 	}
 
-	// 等待回调完成
+	// Wait for callbacks to complete.
 	time.Sleep(100 * time.Millisecond)
 
-	// 验证回调被调用
+	// Verify callbacks were called.
 	t.Logf("\n📊 Callback Statistics:")
 	t.Logf("   Request callback called: %v", requestCallbackCalled)
 	t.Logf("   Chunk callbacks count: %d", chunkCallbackCount)
@@ -269,5 +266,5 @@ func TestIntegration_RealAPI_WithCallbacks(t *testing.T) {
 
 	assert.True(t, requestCallbackCalled, "Request callback should be called")
 	assert.True(t, streamCompleteCallbackCalled, "Stream complete callback should be called")
-	// Chunk callback 可能不会被调用（如果模型不可用或返回错误）
+	// Chunk callback may not be called (if model is unavailable or returns error).
 }

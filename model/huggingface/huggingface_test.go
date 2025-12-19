@@ -1,11 +1,11 @@
-//
+//.
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
+//.
 // Copyright (C) 2025 Tencent.  All rights reserved.
-//
+//.
 // trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-//
+//.
+//.
 
 package huggingface
 
@@ -213,20 +213,20 @@ func TestModel_GenerateContent_NonStreaming(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create mock HTTP server
+			// Create mock HTTP server.
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
 					http.Error(w, "not found", http.StatusNotFound)
 					return
 				}
 
-				// Verify request headers
+				// Verify request headers.
 				assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 				assert.Contains(t, r.Header.Get("Authorization"), "Bearer")
 
 				w.Header().Set("Content-Type", "application/json")
 
-				// Return error status for empty messages test
+				// Return error status for empty messages test.
 				if tt.name == "empty_messages" {
 					w.WriteHeader(http.StatusBadRequest)
 				}
@@ -235,7 +235,7 @@ func TestModel_GenerateContent_NonStreaming(t *testing.T) {
 			}))
 			defer server.Close()
 
-			// Create model with mock server
+			// Create model with mock server.
 			m, err := New(
 				"mistralai/Mistral-7B-Instruct-v0.2",
 				WithAPIKey("test-api-key"),
@@ -243,13 +243,13 @@ func TestModel_GenerateContent_NonStreaming(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			// Execute GenerateContent
+			// Execute GenerateContent.
 			ctx := context.Background()
 			responseChan, err := m.GenerateContent(ctx, tt.request)
 
 			if tt.expectedError {
 				if err == nil {
-					// Error might come through channel
+					// Error might come through channel.
 					resp := <-responseChan
 					assert.NotNil(t, resp.Error)
 				} else {
@@ -261,13 +261,13 @@ func TestModel_GenerateContent_NonStreaming(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, responseChan)
 
-			// Collect all responses
+			// Collect all responses.
 			var responses []*model.Response
 			for response := range responseChan {
 				responses = append(responses, response)
 			}
 
-			// Validate results
+			// Validate results.
 			if tt.validateResult != nil {
 				tt.validateResult(t, responses)
 			}
@@ -304,15 +304,15 @@ func TestModel_GenerateContent_Streaming(t *testing.T) {
 			validateResult: func(t *testing.T, responses []*model.Response) {
 				assert.GreaterOrEqual(t, len(responses), 4, "Expected at least 4 streaming chunks")
 
-				// Verify first chunk has role (in Delta field for streaming)
+				// Verify first chunk has role (in Delta field for streaming).
 				assert.Equal(t, model.RoleAssistant, responses[0].Choices[0].Delta.Role)
 				assert.Equal(t, "Once", responses[0].Choices[0].Delta.Content)
 
-				// Verify intermediate chunks
+				// Verify intermediate chunks.
 				assert.Equal(t, " upon", responses[1].Choices[0].Delta.Content)
 				assert.Equal(t, " a time", responses[2].Choices[0].Delta.Content)
 
-				// Verify last chunk has finish reason
+				// Verify last chunk has finish reason.
 				lastResp := responses[len(responses)-1]
 				assert.Equal(t, "...", lastResp.Choices[0].Delta.Content)
 				require.NotNil(t, lastResp.Choices[0].FinishReason)
@@ -337,7 +337,7 @@ func TestModel_GenerateContent_Streaming(t *testing.T) {
 			expectedError: false,
 			validateResult: func(t *testing.T, responses []*model.Response) {
 				assert.GreaterOrEqual(t, len(responses), 1)
-				// Find non-empty content response (use Delta for streaming)
+				// Find non-empty content response (use Delta for streaming).
 				var foundContent bool
 				for _, resp := range responses {
 					if len(resp.Choices) > 0 && resp.Choices[0].Delta.Content == "Hello" {
@@ -352,14 +352,14 @@ func TestModel_GenerateContent_Streaming(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create mock HTTP server for streaming
+			// Create mock HTTP server for streaming.
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
 					http.Error(w, "not found", http.StatusNotFound)
 					return
 				}
 
-				// Verify streaming request
+				// Verify streaming request.
 				assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -369,7 +369,7 @@ func TestModel_GenerateContent_Streaming(t *testing.T) {
 				flusher, ok := w.(http.Flusher)
 				require.True(t, ok, "Expected http.ResponseWriter to be an http.Flusher")
 
-				// Send chunks
+				// Send chunks.
 				for _, chunk := range tt.mockChunks {
 					fmt.Fprintf(w, "%s\n\n", chunk)
 					flusher.Flush()
@@ -378,7 +378,7 @@ func TestModel_GenerateContent_Streaming(t *testing.T) {
 			}))
 			defer server.Close()
 
-			// Create model with mock server
+			// Create model with mock server.
 			m, err := New(
 				"mistralai/Mistral-7B-Instruct-v0.2",
 				WithAPIKey("test-api-key"),
@@ -386,7 +386,7 @@ func TestModel_GenerateContent_Streaming(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			// Execute GenerateContent
+			// Execute GenerateContent.
 			ctx := context.Background()
 			responseChan, err := m.GenerateContent(ctx, tt.request)
 
@@ -398,7 +398,7 @@ func TestModel_GenerateContent_Streaming(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, responseChan)
 
-			// Collect all responses
+			// Collect all responses.
 			var responses []*model.Response
 			for response := range responseChan {
 				responses = append(responses, response)
@@ -407,7 +407,7 @@ func TestModel_GenerateContent_Streaming(t *testing.T) {
 				}
 			}
 
-			// Validate results
+			// Validate results.
 			if tt.validateResult != nil {
 				tt.validateResult(t, responses)
 			}
@@ -457,14 +457,14 @@ func TestModel_GenerateContent_WithCallbacks(t *testing.T) {
 	responseChan, err := m.GenerateContent(ctx, request)
 	require.NoError(t, err)
 
-	// Consume all responses
+	// Consume all responses.
 	for range responseChan {
 	}
 
-	// Give callbacks time to execute
+	// Give callbacks time to execute.
 	time.Sleep(50 * time.Millisecond)
 
-	// Verify callbacks were called
+	// Verify callbacks were called.
 	assert.True(t, requestCallbackCalled, "Request callback should be called")
 	assert.True(t, chunkCallbackCalled, "Chunk callback should be called")
 	assert.True(t, streamCompleteCallbackCalled, "Stream complete callback should be called")
@@ -493,9 +493,9 @@ func TestModel_TokenTailoring(t *testing.T) {
 			expectTailoring: true,
 			expectMaxTokens: true,
 			validateRequest: func(t *testing.T, req *model.Request) {
-				// Messages should remain the same for small conversations
+				// Messages should remain the same for small conversations.
 				assert.Len(t, req.Messages, 3)
-				// MaxTokens should be set automatically
+				// MaxTokens should be set automatically.
 				assert.NotNil(t, req.GenerationConfig.MaxTokens)
 				assert.Greater(t, *req.GenerationConfig.MaxTokens, 0)
 			},
@@ -514,9 +514,9 @@ func TestModel_TokenTailoring(t *testing.T) {
 			expectTailoring: true,
 			expectMaxTokens: true,
 			validateRequest: func(t *testing.T, req *model.Request) {
-				// Messages should remain the same for small conversations
+				// Messages should remain the same for small conversations.
 				assert.LessOrEqual(t, len(req.Messages), 3)
-				// MaxTokens should be set
+				// MaxTokens should be set.
 				assert.NotNil(t, req.GenerationConfig.MaxTokens)
 			},
 		},
@@ -532,9 +532,9 @@ func TestModel_TokenTailoring(t *testing.T) {
 			expectTailoring: false,
 			expectMaxTokens: false,
 			validateRequest: func(t *testing.T, req *model.Request) {
-				// Messages should remain unchanged
+				// Messages should remain unchanged.
 				assert.Len(t, req.Messages, 2)
-				// MaxTokens should not be set
+				// MaxTokens should not be set.
 				assert.Nil(t, req.GenerationConfig.MaxTokens)
 			},
 		},
@@ -574,7 +574,7 @@ func TestModel_TokenTailoring(t *testing.T) {
 			expectTailoring: true,
 			expectMaxTokens: false, // User already set it
 			validateRequest: func(t *testing.T, req *model.Request) {
-				// User's MaxTokens should be preserved
+				// User's MaxTokens should be preserved.
 				assert.NotNil(t, req.GenerationConfig.MaxTokens)
 				assert.Equal(t, 500, *req.GenerationConfig.MaxTokens)
 			},
@@ -583,7 +583,7 @@ func TestModel_TokenTailoring(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create mock HTTP server
+			// Create mock HTTP server.
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprint(w, `{
@@ -608,35 +608,35 @@ func TestModel_TokenTailoring(t *testing.T) {
 			}))
 			defer server.Close()
 
-			// Add base URL to options
+			// Add base URL to options.
 			opts := append(tt.opts, WithBaseURL(server.URL))
 
-			// Create model
+			// Create model.
 			m, err := New("meta-llama/Llama-2-7b-chat-hf", opts...)
 			require.NoError(t, err)
 
-			// Create request
+			// Create request.
 			request := &model.Request{
 				Messages:         tt.messages,
 				GenerationConfig: model.GenerationConfig{},
 			}
 
-			// Set user's MaxTokens for the specific test case
+			// Set user's MaxTokens for the specific test case.
 			if tt.name == "token_tailoring_respects_user_max_tokens" {
 				maxTokens := 500
 				request.GenerationConfig.MaxTokens = &maxTokens
 			}
 
-			// Execute GenerateContent
+			// Execute GenerateContent.
 			ctx := context.Background()
 			responseChan, err := m.GenerateContent(ctx, request)
 			require.NoError(t, err)
 
-			// Consume responses
+			// Consume responses.
 			for range responseChan {
 			}
 
-			// Validate request modifications
+			// Validate request modifications.
 			if tt.validateRequest != nil {
 				tt.validateRequest(t, request)
 			}
@@ -646,7 +646,7 @@ func TestModel_TokenTailoring(t *testing.T) {
 
 func TestModel_TokenTailoring_Integration(t *testing.T) {
 
-	// Create a large conversation that exceeds token limit
+	// Create a large conversation that exceeds token limit.
 	var messages []model.Message
 	for i := 0; i < 100; i++ {
 		messages = append(messages,
@@ -678,7 +678,7 @@ func TestModel_TokenTailoring_Integration(t *testing.T) {
 	responseChan, err := m.GenerateContent(ctx, request)
 	require.NoError(t, err)
 
-	// Consume responses
+	// Consume responses.
 	var responses []*model.Response
 	for resp := range responseChan {
 		responses = append(responses, resp)
@@ -686,24 +686,24 @@ func TestModel_TokenTailoring_Integration(t *testing.T) {
 
 	log.Infof("request.Messages: %d", len(request.Messages))
 	log.Infof("request.GenerationConfig MaxTokens: %d", *request.GenerationConfig.MaxTokens)
-	// Verify that messages were tailored (reduced)
+	// Verify that messages were tailored (reduced).
 	assert.Less(t, len(request.Messages), 200, "Messages should be tailored to fit token limit")
 	assert.Greater(t, len(request.Messages), 0, "Should have at least some messages")
-	// Verify that MaxTokens was set
+	// Verify that MaxTokens was set.
 	assert.NotNil(t, request.GenerationConfig.MaxTokens)
 	assert.Greater(t, *request.GenerationConfig.MaxTokens, 0)
 
-	// Verify response was received
+	// Verify response was received.
 	require.NotEmpty(t, responses)
 	log.Info(responses[0].Choices[0].Message.Content)
 	assert.Nil(t, responses[0].Error)
 }
 
 func TestModel_Multimodal_ImageURL(t *testing.T) {
-	// Test sending a message with an image URL
+	// Test sending a message with an image URL.
 	//server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	//	w.Header().Set("Content-Type", "application/json")
-	//	fmt.Fprint(w, `{
+	//	w.Header().Set("Content-Type", "application/json").
+	//	fmt.Fprint(w, `{.
 	//		"id": "test-id",
 	//		"object": "chat.completion",
 	//		"created": 1699200000,
@@ -723,7 +723,7 @@ func TestModel_Multimodal_ImageURL(t *testing.T) {
 	//		}
 	//	}`)
 	//}))
-	//defer server.Close()
+	//defer server.Close().
 
 	m, err := New(
 		"zai-org/GLM-4.6V-Flash",
@@ -732,7 +732,7 @@ func TestModel_Multimodal_ImageURL(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// Create a message with image URL
+	// Create a message with image URL.
 	imageURL := "data:image/jpeg;base64,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"
 	request := &model.Request{
 		Messages: []model.Message{
@@ -760,13 +760,13 @@ func TestModel_Multimodal_ImageURL(t *testing.T) {
 	responseChan, err := m.GenerateContent(ctx, request)
 	require.NoError(t, err)
 
-	// Consume responses
+	// Consume responses.
 	var responses []*model.Response
 	for resp := range responseChan {
 		responses = append(responses, resp)
 	}
 
-	// Verify response
+	// Verify response.
 	require.NotEmpty(t, responses)
 	assert.Nil(t, responses[0].Error)
 	assert.NotEmpty(t, responses[0].Choices)
@@ -775,10 +775,10 @@ func TestModel_Multimodal_ImageURL(t *testing.T) {
 }
 
 func TestModel_Multimodal_Base64Image(t *testing.T) {
-	// Test sending a message with a base64-encoded image
+	// Test sending a message with a base64-encoded image.
 	//server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	//	w.Header().Set("Content-Type", "application/json")
-	//	fmt.Fprint(w, `{
+	//	w.Header().Set("Content-Type", "application/json").
+	//	fmt.Fprint(w, `{.
 	//		"id": "test-id",
 	//		"object": "chat.completion",
 	//		"created": 1699200000,
@@ -793,7 +793,7 @@ func TestModel_Multimodal_Base64Image(t *testing.T) {
 	//		}]
 	//	}`)
 	//}))
-	//defer server.Close()
+	//defer server.Close().
 
 	m, err := New(
 		"zai-org/GLM-4.6V-Flash",
@@ -802,7 +802,7 @@ func TestModel_Multimodal_Base64Image(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// Create a message with base64-encoded image (1x1 red pixel PNG)
+	// Create a message with base64-encoded image (1x1 red pixel PNG).
 	base64Image := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
 	request := &model.Request{
 		Messages: []model.Message{
@@ -831,23 +831,23 @@ func TestModel_Multimodal_Base64Image(t *testing.T) {
 	responseChan, err := m.GenerateContent(ctx, request)
 	require.NoError(t, err)
 
-	// Consume responses
+	// Consume responses.
 	var responses []*model.Response
 	for resp := range responseChan {
 		responses = append(responses, resp)
 	}
 
-	// Verify response
+	// Verify response.
 	require.NotEmpty(t, responses)
 	assert.Nil(t, responses[0].Error)
 	log.Infof("Responses: %v", responses[0].Choices[0].Message.Content)
 }
 
 func TestModel_Multimodal_MultipleImages(t *testing.T) {
-	// Test sending a message with multiple images
+	// Test sending a message with multiple images.
 	//server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	//	w.Header().Set("Content-Type", "application/json")
-	//	fmt.Fprint(w, `{
+	//	w.Header().Set("Content-Type", "application/json").
+	//	fmt.Fprint(w, `{.
 	//		"id": "test-id",
 	//		"object": "chat.completion",
 	//		"created": 1699200000,
@@ -862,7 +862,7 @@ func TestModel_Multimodal_MultipleImages(t *testing.T) {
 	//		}]
 	//	}`)
 	//}))
-	//defer server.Close()
+	//defer server.Close().
 
 	m, err := New(
 		"ServiceNow-AI/Apriel-1.6-15b-Thinker",
@@ -871,7 +871,7 @@ func TestModel_Multimodal_MultipleImages(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// Create a message with multiple images
+	// Create a message with multiple images.
 	request := &model.Request{
 		Messages: []model.Message{
 			{
@@ -905,13 +905,13 @@ func TestModel_Multimodal_MultipleImages(t *testing.T) {
 	responseChan, err := m.GenerateContent(ctx, request)
 	require.NoError(t, err)
 
-	// Consume responses
+	// Consume responses.
 	var responses []*model.Response
 	for resp := range responseChan {
 		responses = append(responses, resp)
 	}
 
-	// Verify response
+	// Verify response.
 	require.NotEmpty(t, responses)
 	assert.Nil(t, responses[0].Error)
 	assert.NotEmpty(t, responses[0].Choices)
@@ -919,29 +919,29 @@ func TestModel_Multimodal_MultipleImages(t *testing.T) {
 }
 
 func TestModel_Multimodal_StreamingWithImage(t *testing.T) {
-	// Test streaming response with image input
+	// Test streaming response with image input.
 	//server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	//	w.Header().Set("Content-Type", "text/event-stream")
-	//	w.Header().Set("Cache-Control", "no-cache")
-	//	w.Header().Set("Connection", "keep-alive")
-	//
-	//	// Send streaming chunks
+	//	w.Header().Set("Content-Type", "text/event-stream").
+	//	w.Header().Set("Cache-Control", "no-cache").
+	//	w.Header().Set("Connection", "keep-alive").
+	//.
+	//	// Send streaming chunks.
 	//	chunks := []string{
-	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"I"},"finish_reason":null}]}`,
-	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"content":" can"},"finish_reason":null}]}`,
-	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"content":" see"},"finish_reason":null}]}`,
-	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"content":" the"},"finish_reason":null}]}`,
-	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"content":" image"},"finish_reason":"stop"}]}`,
-	//		`data: [DONE]`,
+	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"I"},"finish_reason":null}]}`,.
+	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"content":" can"},"finish_reason":null}]}`,.
+	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"content":" see"},"finish_reason":null}]}`,.
+	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"content":" the"},"finish_reason":null}]}`,.
+	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"content":" image"},"finish_reason":"stop"}]}`,.
+	//		`data: [DONE]`,.
 	//	}
-	//
-	//	for _, chunk := range chunks {
-	//		fmt.Fprintf(w, "%s\n\n", chunk)
-	//		w.(http.Flusher).Flush()
-	//		time.Sleep(10 * time.Millisecond)
+	//.
+	//	for _, chunk := range chunks {.
+	//		fmt.Fprintf(w, "%s\n\n", chunk).
+	//		w.(http.Flusher).Flush().
+	//		time.Sleep(10 * time.Millisecond).
 	//	}
 	//}))
-	//defer server.Close()
+	//defer server.Close().
 
 	m, err := New(
 		"ServiceNow-AI/Apriel-1.6-15b-Thinker",
@@ -950,7 +950,7 @@ func TestModel_Multimodal_StreamingWithImage(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// Create a streaming request with image
+	// Create a streaming request with image.
 	request := &model.Request{
 		Messages: []model.Message{
 			{
@@ -979,7 +979,7 @@ func TestModel_Multimodal_StreamingWithImage(t *testing.T) {
 	responseChan, err := m.GenerateContent(ctx, request)
 	require.NoError(t, err)
 
-	// Collect streaming responses
+	// Collect streaming responses.
 	var responses []*model.Response
 	var fullContent strings.Builder
 	for resp := range responseChan {
@@ -989,13 +989,13 @@ func TestModel_Multimodal_StreamingWithImage(t *testing.T) {
 		}
 	}
 
-	// Verify streaming responses
+	// Verify streaming responses.
 	assert.NotEmpty(t, responses)
 	assert.Equal(t, "I can see the image", fullContent.String())
 }
 
 func TestConvertContentPart_Image(t *testing.T) {
-	// Test converting image content part with URL
+	// Test converting image content part with URL.
 	t.Run("image_with_url", func(t *testing.T) {
 		part := model.ContentPart{
 			Type: model.ContentTypeImage,
@@ -1013,7 +1013,7 @@ func TestConvertContentPart_Image(t *testing.T) {
 		assert.Equal(t, "high", hfPart.ImageURL.Detail)
 	})
 
-	// Test converting image content part with base64 data
+	// Test converting image content part with base64 data.
 	t.Run("image_with_base64", func(t *testing.T) {
 		base64Data := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 		part := model.ContentPart{
@@ -1034,7 +1034,7 @@ func TestConvertContentPart_Image(t *testing.T) {
 		assert.Equal(t, "auto", hfPart.ImageURL.Detail)
 	})
 
-	// Test error case: nil image
+	// Test error case: nil image.
 	t.Run("nil_image", func(t *testing.T) {
 		part := model.ContentPart{
 			Type:  model.ContentTypeImage,
@@ -1048,7 +1048,7 @@ func TestConvertContentPart_Image(t *testing.T) {
 }
 
 func TestConvertMessage_Multimodal(t *testing.T) {
-	// Test converting a message with mixed content (text + image)
+	// Test converting a message with mixed content (text + image).
 	t.Run("text_and_image", func(t *testing.T) {
 		msg := model.Message{
 			Role: model.RoleUser,
@@ -1071,22 +1071,22 @@ func TestConvertMessage_Multimodal(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "user", hfMsg.Role)
 
-		// Content should be an array
+		// Content should be an array.
 		contentParts, ok := hfMsg.Content.([]ContentPart)
 		require.True(t, ok, "Content should be []ContentPart")
 		require.Len(t, contentParts, 2)
 
-		// Verify text part
+		// Verify text part.
 		assert.Equal(t, "text", contentParts[0].Type)
 		assert.Equal(t, "Describe this image:", contentParts[0].Text)
 
-		// Verify image part
+		// Verify image part.
 		assert.Equal(t, "image_url", contentParts[1].Type)
 		assert.NotNil(t, contentParts[1].ImageURL)
 		assert.Equal(t, "https://example.com/test.jpg", contentParts[1].ImageURL.URL)
 	})
 
-	// Test converting a message with only text (should use string format)
+	// Test converting a message with only text (should use string format).
 	t.Run("text_only", func(t *testing.T) {
 		msg := model.Message{
 			Role: model.RoleUser,
@@ -1101,13 +1101,13 @@ func TestConvertMessage_Multimodal(t *testing.T) {
 		hfMsg, err := convertMessage(msg)
 		require.NoError(t, err)
 
-		// Single text content should be string
+		// Single text content should be string.
 		content, ok := hfMsg.Content.(string)
 		require.True(t, ok, "Single text content should be string")
 		assert.Equal(t, "Hello", content)
 	})
 
-	// Test converting a message with multiple images
+	// Test converting a message with multiple images.
 	t.Run("multiple_images", func(t *testing.T) {
 		msg := model.Message{
 			Role: model.RoleUser,
@@ -1138,14 +1138,14 @@ func TestConvertMessage_Multimodal(t *testing.T) {
 		require.True(t, ok)
 		require.Len(t, contentParts, 3)
 
-		// Verify all parts
+		// Verify all parts.
 		assert.Equal(t, "text", contentParts[0].Type)
 		assert.Equal(t, "image_url", contentParts[1].Type)
 		assert.Equal(t, "image_url", contentParts[2].Type)
 	})
 }
 
-// Helper function to create string pointer
+// Helper function to create string pointer.
 func stringPtr(s string) *string {
 	return &s
 }

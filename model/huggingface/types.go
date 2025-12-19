@@ -1,11 +1,11 @@
-//
+//.
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
+//.
 // Copyright (C) 2025 Tencent.  All rights reserved.
-//
+//.
 // trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-//
+//.
+//.
 
 package huggingface
 
@@ -30,12 +30,12 @@ type ChatCompletionRequest struct {
 
 // ChatMessage represents a message in the chat completion request.
 type ChatMessage struct {
-	Role       string        `json:"role"`
-	Content    any           `json:"content,omitempty"` // Can be string or []ContentPart
-	Name       string        `json:"name,omitempty"`
-	ToolCalls  []ToolCall    `json:"tool_calls,omitempty"`
-	ToolCallID string        `json:"tool_call_id,omitempty"`
-	Refusal    string        `json:"refusal,omitempty"`
+	Role       string     `json:"role"`
+	Content    any        `json:"content,omitempty"` // Can be string or []ContentPart
+	Name       string     `json:"name,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Refusal    string     `json:"refusal,omitempty"`
 }
 
 // ContentPart represents a part of the message content (text or image).
@@ -84,13 +84,13 @@ type ResponseFormat struct {
 
 // ChatCompletionResponse represents a response from the HuggingFace chat completion API.
 type ChatCompletionResponse struct {
-	ID                string                       `json:"id"`
-	Object            string                       `json:"object"`
-	Created           int64                        `json:"created"`
-	Model             string                       `json:"model"`
-	Choices           []ChatCompletionChoice       `json:"choices"`
-	Usage             *UsageInfo                   `json:"usage,omitempty"`
-	SystemFingerprint string                       `json:"system_fingerprint,omitempty"`
+	ID                string                 `json:"id"`
+	Object            string                 `json:"object"`
+	Created           int64                  `json:"created"`
+	Model             string                 `json:"model"`
+	Choices           []ChatCompletionChoice `json:"choices"`
+	Usage             *UsageInfo             `json:"usage,omitempty"`
+	SystemFingerprint string                 `json:"system_fingerprint,omitempty"`
 }
 
 // ChatCompletionChoice represents a choice in the chat completion response.
@@ -103,21 +103,21 @@ type ChatCompletionChoice struct {
 
 // ChatCompletionChunk represents a chunk in the streaming chat completion response.
 type ChatCompletionChunk struct {
-	ID                string                     `json:"id"`
-	Object            string                     `json:"object"`
-	Created           int64                      `json:"created"`
-	Model             string                     `json:"model"`
+	ID                string                      `json:"id"`
+	Object            string                      `json:"object"`
+	Created           int64                       `json:"created"`
+	Model             string                      `json:"model"`
 	Choices           []ChatCompletionChunkChoice `json:"choices"`
-	Usage             *UsageInfo                 `json:"usage,omitempty"`
-	SystemFingerprint string                     `json:"system_fingerprint,omitempty"`
+	Usage             *UsageInfo                  `json:"usage,omitempty"`
+	SystemFingerprint string                      `json:"system_fingerprint,omitempty"`
 }
 
 // ChatCompletionChunkChoice represents a choice in the streaming chat completion chunk.
 type ChatCompletionChunkChoice struct {
-	Index        int          `json:"index"`
-	Delta        ChatMessage  `json:"delta"`
-	FinishReason string       `json:"finish_reason,omitempty"`
-	Logprobs     *Logprobs    `json:"logprobs,omitempty"`
+	Index        int         `json:"index"`
+	Delta        ChatMessage `json:"delta"`
+	FinishReason string      `json:"finish_reason,omitempty"`
+	Logprobs     *Logprobs   `json:"logprobs,omitempty"`
 }
 
 // UsageInfo represents token usage information.
@@ -134,10 +134,10 @@ type Logprobs struct {
 
 // TokenLogprob represents log probability for a token.
 type TokenLogprob struct {
-	Token       string        `json:"token"`
-	Logprob     float64       `json:"logprob"`
-	Bytes       []int         `json:"bytes,omitempty"`
-	TopLogprobs []TopLogprob  `json:"top_logprobs,omitempty"`
+	Token       string       `json:"token"`
+	Logprob     float64      `json:"logprob"`
+	Bytes       []int        `json:"bytes,omitempty"`
+	TopLogprobs []TopLogprob `json:"top_logprobs,omitempty"`
 }
 
 // TopLogprob represents a top log probability alternative.

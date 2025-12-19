@@ -1,11 +1,11 @@
-//
+//.
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
+//.
 // Copyright (C) 2025 Tencent.  All rights reserved.
-//
+//.
 // trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-//
+//.
+//.
 
 // Package huggingface provides HuggingFace-compatible model implementations.
 package huggingface
@@ -51,22 +51,22 @@ type Model struct {
 }
 
 // New creates a new HuggingFace model instance.
-// modelName: The name of the HuggingFace model to use (e.g., "meta-llama/Llama-2-7b-chat-hf")
-// opts: Optional configuration options
+// modelName: The name of the HuggingFace model to use (e.g., "meta-llama/Llama-2-7b-chat-hf").
+// opts: Optional configuration options.
 func New(modelName string, opts ...Option) (*Model, error) {
 	if modelName == "" {
 		return nil, errors.New("model name cannot be empty")
 	}
 
-	// Apply default options
+	// Apply default options.
 	options := defaultOptions
 
-	// Apply user-provided options
+	// Apply user-provided options.
 	for _, opt := range opts {
 		opt(&options)
 	}
 
-	// Get API key from options or environment variable
+	// Get API key from options or environment variable.
 	apiKey := options.APIKey
 	if apiKey == "" {
 		apiKey = os.Getenv(defaultAPIKeyEnvVar)
@@ -75,13 +75,13 @@ func New(modelName string, opts ...Option) (*Model, error) {
 		return nil, fmt.Errorf("API key is required. Set it via WithAPIKey() or %s environment variable", defaultAPIKeyEnvVar)
 	}
 
-	// Use default HTTP client if not provided
+	// Use default HTTP client if not provided.
 	httpClient := options.HTTPClient
 	if httpClient == nil {
 		httpClient = &http.Client{}
 	}
 
-	// Initialize token tailoring strategy if enabled
+	// Initialize token tailoring strategy if enabled.
 	var tailoringStrategy model.TailoringStrategy
 	if options.EnableTokenTailoring || options.MaxInputTokens > 0 {
 		if options.TailoringStrategy != nil {
@@ -122,19 +122,19 @@ func (m *Model) GenerateContent(ctx context.Context, request *model.Request) (<-
 		return nil, errors.New("request cannot be nil")
 	}
 
-	// Convert model.Request to HuggingFace ChatCompletionRequest
+	// Convert model.Request to HuggingFace ChatCompletionRequest.
 	hfRequest, err := m.convertRequest(request)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert request: %w", err)
 	}
 
-	// Apply token tailoring if enabled
+	// Apply token tailoring if enabled.
 	m.applyTokenTailoring(ctx, request)
 
-	// Create response channel
+	// Create response channel.
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 
-	// Handle streaming vs non-streaming
+	// Handle streaming vs non-streaming.
 	if request.Stream {
 		go m.handleStreamingRequest(ctx, request, hfRequest, responseChan)
 	} else {
@@ -160,12 +160,12 @@ func (m *Model) handleNonStreamingRequest(
 ) {
 	defer close(responseChan)
 
-	// Call request callback if provided
+	// Call request callback if provided.
 	if m.chatRequestCallback != nil {
 		m.chatRequestCallback(ctx, hfRequest)
 	}
 
-	// Make HTTP request
+	// Make HTTP request.
 	hfResponse, err := m.makeRequest(ctx, hfRequest)
 	if err != nil {
 		responseChan <- &model.Response{
@@ -176,12 +176,12 @@ func (m *Model) handleNonStreamingRequest(
 		return
 	}
 
-	// Call response callback if provided
+	// Call response callback if provided.
 	if m.chatResponseCallback != nil {
 		m.chatResponseCallback(ctx, hfRequest, hfResponse)
 	}
 
-	// Convert HuggingFace response to model.Response
+	// Convert HuggingFace response to model.Response.
 	response := m.convertResponse(hfResponse)
 	responseChan <- response
 }
@@ -202,12 +202,12 @@ func (m *Model) handleStreamingRequest(
 		}
 	}()
 
-	// Call request callback if provided
+	// Call request callback if provided.
 	if m.chatRequestCallback != nil {
 		m.chatRequestCallback(ctx, hfRequest)
 	}
 
-	// Make streaming HTTP request
+	// Make streaming HTTP request.
 	hfRequest.Stream = true
 	resp, err := m.makeStreamingRequest(ctx, hfRequest)
 	if err != nil {
@@ -221,38 +221,38 @@ func (m *Model) handleStreamingRequest(
 	}
 	defer resp.Body.Close()
 
-	// Read and process streaming response
+	// Read and process streaming response.
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
 		line = strings.TrimSpace(line)
 
-		// Skip empty lines and comments
+		// Skip empty lines and comments.
 		if line == "" || !strings.HasPrefix(line, "data: ") {
 			continue
 		}
 
-		// Remove "data: " prefix
+		// Remove "data: " prefix.
 		data := strings.TrimPrefix(line, "data: ")
 
-		// Check for stream end
+		// Check for stream end.
 		if data == "[DONE]" {
 			break
 		}
 
-		// Parse chunk
+		// Parse chunk.
 		var chunk ChatCompletionChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			log.Warnf("failed to parse chunk: %v, data: %s", err, data)
 			continue
 		}
 
-		// Call chunk callback if provided
+		// Call chunk callback if provided.
 		if m.chatChunkCallback != nil {
 			m.chatChunkCallback(ctx, hfRequest, &chunk)
 		}
 
-		// Convert chunk to model.Response
+		// Convert chunk to model.Response.
 		response := m.convertChunk(&chunk)
 		responseChan <- response
 	}
@@ -269,18 +269,18 @@ func (m *Model) handleStreamingRequest(
 
 // makeRequest makes a non-streaming HTTP request to the HuggingFace API.
 func (m *Model) makeRequest(ctx context.Context, hfRequest *ChatCompletionRequest) (*ChatCompletionResponse, error) {
-	// TODO: Implement tRPC client support
+	// TODO: Implement tRPC client support.
 	if m.useTRPC {
 		return nil, errors.New("tRPC client support not yet implemented")
 	}
 
-	// Marshal request to JSON
+	// Marshal request to JSON.
 	requestBody, err := m.marshalRequest(hfRequest)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Create HTTP request
+	// Create HTTP request.
 	url := fmt.Sprintf("%s/v1/chat/completions", m.baseURL)
 	log.Infof("making request to %s", url)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(requestBody))
@@ -288,23 +288,23 @@ func (m *Model) makeRequest(ctx context.Context, hfRequest *ChatCompletionReques
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Set headers
+	// Set headers.
 	m.setHeaders(req)
 
-	// Make request
+	// Make request.
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to make request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Read response body
+	// Read response body.
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// Check for error response
+	// Check for error response.
 	if resp.StatusCode != http.StatusOK {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(body, &errResp); err != nil {
@@ -313,7 +313,7 @@ func (m *Model) makeRequest(ctx context.Context, hfRequest *ChatCompletionReques
 		return nil, fmt.Errorf("API error: %s", errResp.Error.Message)
 	}
 
-	// Parse response
+	// Parse response.
 	var hfResponse ChatCompletionResponse
 	if err := json.Unmarshal(body, &hfResponse); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
@@ -324,35 +324,35 @@ func (m *Model) makeRequest(ctx context.Context, hfRequest *ChatCompletionReques
 
 // makeStreamingRequest makes a streaming HTTP request to the HuggingFace API.
 func (m *Model) makeStreamingRequest(ctx context.Context, hfRequest *ChatCompletionRequest) (*http.Response, error) {
-	// TODO: Implement tRPC client support
+	// TODO: Implement tRPC client support.
 	if m.useTRPC {
 		return nil, errors.New("tRPC client support not yet implemented")
 	}
 
-	// Marshal request to JSON
+	// Marshal request to JSON.
 	requestBody, err := m.marshalRequest(hfRequest)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Create HTTP request
+	// Create HTTP request.
 	url := fmt.Sprintf("%s/v1/chat/completions", m.baseURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Set headers
+	// Set headers.
 	m.setHeaders(req)
 	req.Header.Set("Accept", "text/event-stream")
 
-	// Make request
+	// Make request.
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to make request: %w", err)
 	}
 
-	// Check for error response
+	// Check for error response.
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
@@ -371,7 +371,7 @@ func (m *Model) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", m.apiKey))
 
-	// Add extra headers
+	// Add extra headers.
 	for k, v := range m.extraHeaders {
 		req.Header.Set(k, v)
 	}
@@ -379,34 +379,34 @@ func (m *Model) setHeaders(req *http.Request) {
 
 // marshalRequest marshals the request to JSON, including extra fields.
 func (m *Model) marshalRequest(hfRequest *ChatCompletionRequest) ([]byte, error) {
-	// Marshal the base request
+	// Marshal the base request.
 	baseJSON, err := json.Marshal(hfRequest)
 	if err != nil {
 		return nil, err
 	}
 
-	// If no extra fields, return base JSON
+	// If no extra fields, return base JSON.
 	if len(m.extraFields) == 0 && len(hfRequest.ExtraFields) == 0 {
 		return baseJSON, nil
 	}
 
-	// Unmarshal to map to merge extra fields
+	// Unmarshal to map to merge extra fields.
 	var requestMap map[string]interface{}
 	if err := json.Unmarshal(baseJSON, &requestMap); err != nil {
 		return nil, err
 	}
 
-	// Merge model-level extra fields
+	// Merge model-level extra fields.
 	for k, v := range m.extraFields {
 		requestMap[k] = v
 	}
 
-	// Merge request-level extra fields (takes precedence)
+	// Merge request-level extra fields (takes precedence).
 	for k, v := range hfRequest.ExtraFields {
 		requestMap[k] = v
 	}
 
-	// Marshal back to JSON
+	// Marshal back to JSON.
 	return json.Marshal(requestMap)
 }
 
