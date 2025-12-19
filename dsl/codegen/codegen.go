@@ -18,6 +18,23 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/toolconfig"
 )
 
+// Known limitations of the code generator:
+//
+// 1. Runtime type assumptions: Generated code uses type assertions like
+//    .(map[string]any) and .([]any) for nested data access. If the actual
+//    runtime data doesn't match this structure (e.g., []string instead of
+//    []any), the generated code will panic. This assumes data comes from
+//    JSON unmarshal which produces map[string]any and []any types.
+//
+// 2. Heuristic variable detection: The check for input.output_parsed/raw
+//    usage relies on strings.Contains(goExpr, "parsedOutput"/"rawOutput").
+//    This may produce false positives if user field names contain these
+//    substrings (e.g., state.parsedOutput). This is a known trade-off for
+//    simplicity over full AST-based variable tracking.
+//
+// 3. MCP single-edge constraint: MCP nodes are limited to at most one
+//    incoming edge to simplify input.* semantics. This is a design choice.
+
 // RunMode specifies how the generated code should be executed.
 type RunMode string
 
@@ -79,9 +96,9 @@ type Output struct {
 //   - builtin.llmagent      -> runs llmagent with model_spec, mcp_tools,
 //     output_format (native structured output) and
 //     generation config
-//   - builtin.transform     -> evaluates CEL-lite and writes node_structured[<id>].output_parsed
+//   - builtin.transform     -> evaluates CEL-lite and writes state[<id>_parsed]
 //   - builtin.set_state     -> evaluates CEL-lite assignments and updates graph state
-//   - builtin.mcp           -> calls an MCP server tool and writes node_structured[<id>]
+//   - builtin.mcp           -> calls an MCP server tool and writes state[<id>_output/<id>_parsed]
 //   - builtin.user_approval -> graph.Interrupt
 //   - builtin.end           -> optional CEL-lite/json expr into end_structured_output
 //   - conditional_edges     -> routing functions compiled from CEL-lite
@@ -868,6 +885,11 @@ func buildIR(g *dsl.Graph) (*irGraph, error) {
 						if err != nil {
 							return nil, fmt.Errorf("builtin.end[%s]: invalid CEL expression: %w", n.ID, err)
 						}
+						// Reject input.output_parsed/input.output_raw in end nodes.
+						// Note: uses heuristic substring matching; may false-positive on field names containing these substrings.
+						if strings.Contains(goExpr, "parsedOutput") || strings.Contains(goExpr, "rawOutput") {
+							return nil, fmt.Errorf("builtin.end[%s]: input.output_parsed and input.output_raw are only supported in conditional_edges routing functions (if your field name contains 'parsedOutput'/'rawOutput', this is a known limitation)", n.ID)
+						}
 						e.ExprKind = "cel"
 						e.ExprGo = goExpr
 					case "json":
@@ -988,10 +1010,12 @@ func buildCondition(ce dsl.ConditionalEdge) (*condition, error) {
 
 	if canSwitch && switchRoot != "" && len(switchVals) == len(ce.Condition.Cases) {
 		// Extract the field name for cleaner code generation.
-		// For input.output_parsed.classification, we want "classification".
+		// Only use SwitchFieldName optimization for single-level field access:
+		// input.output_parsed.field (exactly 2 steps: output_parsed + field)
+		// For nested fields like input.output_parsed.a.b, fall back to SwitchExprGo.
 		var fieldName string
-		if switchRoot == "input" && len(switchSteps) >= 2 && switchSteps[0].key == "output_parsed" {
-			fieldName = switchSteps[len(switchSteps)-1].key
+		if switchRoot == "input" && len(switchSteps) == 2 && switchSteps[0].key == "output_parsed" {
+			fieldName = switchSteps[1].key
 		}
 
 		if fieldName != "" {
@@ -1064,6 +1088,15 @@ func parseAndCompileCELExpr(cfg map[string]any, key string, path string) (exprGo
 	if err != nil {
 		return "", fmt.Errorf("%s: invalid CEL expression: %w", path, err)
 	}
+
+	// Reject input.output_parsed/input.output_raw in non-routing contexts.
+	// These compile to parsedOutput/rawOutput which are only defined in routing functions.
+	// Note: This uses substring matching which may produce false positives if user field
+	// names contain "parsedOutput" or "rawOutput" (see known limitations in package doc).
+	if strings.Contains(goExpr, "parsedOutput") || strings.Contains(goExpr, "rawOutput") {
+		return "", fmt.Errorf("%s: input.output_parsed and input.output_raw are only supported in conditional_edges routing functions (if your field name contains 'parsedOutput'/'rawOutput', this is a known limitation)", path)
+	}
+
 	return goExpr, nil
 }
 
@@ -1132,6 +1165,12 @@ func parseSetStateAssignments(nodeID string, cfg map[string]any) ([]setStateAssi
 			return nil, fmt.Errorf("builtin.set_state[%s]: invalid CEL expression for field %q: %w", nodeID, field, err)
 		}
 
+		// Reject input.output_parsed/input.output_raw in set_state nodes.
+		// Note: uses heuristic substring matching; may false-positive on field names containing these substrings.
+		if strings.Contains(goExpr, "parsedOutput") || strings.Contains(goExpr, "rawOutput") {
+			return nil, fmt.Errorf("builtin.set_state[%s]: input.output_parsed and input.output_raw are only supported in conditional_edges routing functions (if your field name contains 'parsedOutput'/'rawOutput', this is a known limitation)", nodeID)
+		}
+
 		out = append(out, setStateAssignment{
 			Field:  field,
 			ExprGo: goExpr,
@@ -1181,6 +1220,13 @@ func buildMCPNodeIR(node dsl.Node, fromNodeID string) (mcpNode, error) {
 			goExpr, err := compileCELLiteToGoValue(exprStr)
 			if err != nil {
 				return mcpNode{}, fmt.Errorf("builtin.mcp[%s]: invalid CEL expression for param %q: %w", node.ID, name, err)
+			}
+			// MCP nodes only have parsedOutput defined when there's an incoming edge.
+			if strings.Contains(goExpr, "rawOutput") {
+				return mcpNode{}, fmt.Errorf("builtin.mcp[%s]: input.output_raw is not supported in MCP node params (use input.output_parsed instead)", node.ID)
+			}
+			if strings.Contains(goExpr, "parsedOutput") && fromNodeID == "" {
+				return mcpNode{}, fmt.Errorf("builtin.mcp[%s]: input.output_parsed requires an incoming edge (the node has no upstream node)", node.ID)
 			}
 			params = append(params, mcpParam{Name: name, ExprGo: goExpr})
 		}
@@ -1335,6 +1381,18 @@ func renderTemplate(tmpl string, data any) ([]byte, error) {
 				return fmt.Sprintf("%q", s)
 			}
 			return "`" + s + "`"
+		},
+		"truncateInstruction": func(s string, maxLen int) string {
+			// Extract first line or truncate to maxLen for comment display.
+			s = strings.TrimSpace(s)
+			if idx := strings.Index(s, "\n"); idx >= 0 {
+				s = s[:idx]
+			}
+			s = strings.TrimSpace(s)
+			if len(s) > maxLen {
+				return s[:maxLen-3] + "..."
+			}
+			return s
 		},
 	}).Parse(tmpl)
 	if err != nil {

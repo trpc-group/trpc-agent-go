@@ -80,9 +80,7 @@ func expandWhileNodes(graphDef *dsl.Graph) (*dsl.Graph, []whileExpansion, error)
 	expanded := *graphDef
 	expanded.Nodes = nil
 	expanded.Edges = nil
-	if len(graphDef.ConditionalEdges) > 0 {
-		expanded.ConditionalEdges = append([]dsl.ConditionalEdge(nil), graphDef.ConditionalEdges...)
-	}
+	expanded.ConditionalEdges = nil
 
 	// Copy all non-while nodes.
 	for _, n := range graphDef.Nodes {
@@ -116,6 +114,31 @@ func expandWhileNodes(graphDef *dsl.Graph) (*dsl.Graph, []whileExpansion, error)
 	// Add internal edges from while bodies.
 	for _, exp := range expansions {
 		expanded.Edges = append(expanded.Edges, exp.BodyEdges...)
+	}
+
+	// Rewire conditional edges:
+	//   - conditional edge originating from while node -> omitted (while has its own exit logic)
+	//   - case targets pointing to while node -> rewrite to body entry
+	//   - default pointing to while node -> rewrite to body entry
+	for _, ce := range graphDef.ConditionalEdges {
+		if _, ok := whileByID[ce.From]; ok {
+			// Skip conditional edges originating from while nodes; the while loop's
+			// exit logic is handled by the synthetic conditional edge generated below.
+			continue
+		}
+		newCE := ce
+		newCE.Condition.Cases = nil
+		for _, c := range ce.Condition.Cases {
+			newCase := c
+			if exp, ok := whileByID[c.Target]; ok {
+				newCase.Target = exp.BodyEntry
+			}
+			newCE.Condition.Cases = append(newCE.Condition.Cases, newCase)
+		}
+		if exp, ok := whileByID[ce.Condition.Default]; ok {
+			newCE.Condition.Default = exp.BodyEntry
+		}
+		expanded.ConditionalEdges = append(expanded.ConditionalEdges, newCE)
 	}
 
 	// Append conditional edges from while bodies.

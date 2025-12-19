@@ -14,7 +14,9 @@ import (
 //   - Paths: state.*, input.*, nodes.* with optional [<int>] indexing
 //   - Operators: +, ==, !=, <, <=, >, >=, ||
 //   - Map literals: { "k": <expr>, ... }
-//   - Function calls: string(<expr>), has_tool_calls()
+//   - Function calls: string(<expr>)
+//
+// Note: has_tool_calls() is parsed but not supported in codegen.
 
 // ---- Lexer ----
 

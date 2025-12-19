@@ -10,12 +10,11 @@ import (
 //
 // The generated Go code is intended to be readable: it does not embed a CEL
 // evaluator. Instead, a small, explicit subset used by DSL examples is
-// translated into ordinary Go expressions using a single getField(root, path...)
-// helper plus type conversion functions (asString/asFloat64/asBool).
+// translated into ordinary Go expressions with inline type assertions.
 //
 // Design principles:
-//   - getField(root, path...) handles all path access (supports string keys and int indexes)
-//   - asString/asFloat64/asBool for type conversion when needed
+//   - Direct map/slice access via type assertions (e.g., state["x"].(map[string]any)["y"])
+//   - Inline ensure* wrappers for safe type conversion when needed
 //   - Silent zero-value on missing fields (not errors)
 //   - Codegen-time error for unsupported syntax
 
@@ -148,16 +147,9 @@ func (c *celNativeCompiler) compile(e celExpr) (goExpr, error) {
 
 	switch x := e.(type) {
 	case *celIdent:
-		switch x.name {
-		case "state":
-			return goExpr{code: "state", kind: goKindAny}, nil
-		case "input":
-			return goExpr{code: "input", kind: goKindAny}, nil
-		case "nodes":
-			return goExpr{code: `getField(state, "node_structured")`, kind: goKindMap}, nil
-		default:
-			return goExpr{}, fmt.Errorf("CEL-lite: unsupported identifier %q", x.name)
-		}
+		// Note: "state", "input", "nodes" as standalone identifiers are handled by
+		// flattenCELLitePath fast path above, so they won't reach here.
+		return goExpr{}, fmt.Errorf("CEL-lite: unsupported identifier %q", x.name)
 	case *celStringLit:
 		return goExpr{code: strconv.Quote(x.val), kind: goKindString}, nil
 	case *celNumberLit:
@@ -215,10 +207,9 @@ func (c *celNativeCompiler) compile(e celExpr) (goExpr, error) {
 			}
 			return goExpr{code: fmt.Sprintf("fmt.Sprint(%s)", arg.code), kind: goKindString}, nil
 		case "has_tool_calls":
-			if len(x.args) != 0 {
-				return goExpr{}, fmt.Errorf("CEL-lite: has_tool_calls() does not support arguments in codegen")
-			}
-			return goExpr{code: "hasToolCalls(state)", kind: goKindBool}, nil
+			// has_tool_calls() is not supported in codegen because the generated code
+			// does not include the hasToolCalls helper function.
+			return goExpr{}, fmt.Errorf("CEL-lite: has_tool_calls() is not supported in codegen")
 		default:
 			return goExpr{}, fmt.Errorf("CEL-lite: unsupported function %q", x.name)
 		}
@@ -308,27 +299,37 @@ func compileNativePath(root string, steps []celPathStep) (goExpr, error) {
 }
 
 // compileDirectAccess generates direct type assertion chain for map access.
-// e.g., root["key1"].(map[string]any)["key2"]
+// e.g., root["key1"].(map[string]any)["key2"].(map[string]any)["key3"]
+//
+// Note: The generated code assumes data comes from JSON unmarshal, which produces
+// map[string]any for objects and []any for arrays. If the actual runtime data
+// has different types (e.g., []string), the type assertion will panic.
 func compileDirectAccess(rootVar string, steps []celPathStep) (goExpr, error) {
 	if len(steps) == 0 {
 		return goExpr{code: rootVar, kind: goKindAny}, nil
 	}
 
+	// Validate: negative indexes are not supported in Go slices.
+	for _, step := range steps {
+		if step.isIndex && step.index < 0 {
+			return goExpr{}, fmt.Errorf("CEL-lite: negative index %d is not supported", step.index)
+		}
+	}
+
 	code := rootVar
 	for i, step := range steps {
 		if step.isIndex {
-			// Array index access
+			// Array index access - need type assertion for non-first steps
 			if i > 0 {
 				code = fmt.Sprintf("%s.([]any)[%d]", code, step.index)
 			} else {
 				code = fmt.Sprintf("%s[%d]", code, step.index)
 			}
 		} else {
-			// Map key access - add type assertion for intermediate steps
-			if i > 0 && i < len(steps)-1 {
+			// Map key access - need type assertion for all non-first steps
+			// because map[string]any returns any, which cannot be indexed directly
+			if i > 0 {
 				code = fmt.Sprintf("%s.(map[string]any)[%s]", code, strconv.Quote(step.key))
-			} else if i > 0 {
-				code = fmt.Sprintf("%s[%s]", code, strconv.Quote(step.key))
 			} else {
 				code = fmt.Sprintf("%s[%s]", code, strconv.Quote(step.key))
 			}
