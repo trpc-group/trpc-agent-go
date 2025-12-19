@@ -20,7 +20,8 @@ import (
 //
 //	cd dsl && go run ./codegen/cmd/dsl_codegen_example \
 //	  -workflow ../examples/dsl/travel_assistant/workflow.json \
-//	  -out ./generated/travel_assistant_demo
+//	  -out ./generated/travel_assistant_demo \
+//	  -mode agui
 func main() {
 	workflowPathFlag := flag.String(
 		"workflow",
@@ -31,6 +32,11 @@ func main() {
 		"out",
 		"./generated/customer_service_demo",
 		"Output directory for generated Go package",
+	)
+	modeFlag := flag.String(
+		"mode",
+		"interactive",
+		"Run mode: 'interactive' (terminal CLI) or 'agui' (AG-UI HTTP server)",
 	)
 	flag.Parse()
 
@@ -46,9 +52,15 @@ func main() {
 		panic(fmt.Errorf("unmarshal workflow.json %s: %w", workflowPath, err))
 	}
 
+	runMode := codegen.RunModeInteractive
+	if *modeFlag == "agui" {
+		runMode = codegen.RunModeAGUI
+	}
+
 	out, err := codegen.GenerateNativeGo(&g, codegen.Options{
 		PackageName: "main",
 		AppName:     g.Name,
+		RunMode:     runMode,
 	})
 	if err != nil {
 		panic(fmt.Errorf("GenerateNativeGo: %w", err))
@@ -72,5 +84,5 @@ func main() {
 		}
 	}
 
-	fmt.Printf("✅ Codegen complete. Workflow=%s, files written to %s\n", workflowPath, targetDir)
+	fmt.Printf("✅ Codegen complete. Workflow=%s, mode=%s, files written to %s\n", workflowPath, runMode, targetDir)
 }

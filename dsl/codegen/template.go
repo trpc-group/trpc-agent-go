@@ -4,6 +4,7 @@ package codegen
 type singleFileTemplateData struct {
 	PackageName                         string
 	AppName                             string
+	RunMode                             string // "interactive" or "agui"
 	HasAgentNodes                       bool
 	EnvVarInfos                         []envVarInfo // Detailed env var info for documentation
 	NeedsApproval                       bool
@@ -50,9 +51,18 @@ const singleFileTemplate = `
 package {{ .PackageName }}
 
 import (
+	{{- if eq .RunMode "interactive" }}
+	"bufio"
+	{{- end }}
 	"context"
 	"encoding/json"
+	{{- if eq .RunMode "agui" }}
+	"flag"
+	{{- end }}
 	"fmt"
+	{{- if eq .RunMode "agui" }}
+	"net/http"
+	{{- end }}
 	{{- if .HasAgentNodes }}
 	"os"
 	{{- end }}
@@ -60,7 +70,7 @@ import (
 	"reflect"
 	{{- end }}
 	"strings"
-	{{- if .NeedsMCP }}
+	{{- if or .NeedsMCP (eq .RunMode "interactive") }}
 	"time"
 	{{- end }}
 
@@ -69,12 +79,21 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	{{- end }}
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
+	{{- if eq .RunMode "interactive" }}
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	{{- end }}
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	{{- if eq .RunMode "agui" }}
+	"trpc.group/trpc-go/trpc-agent-go/log"
+	{{- end }}
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	{{- if .HasAgentNodes }}
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	{{- end }}
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	{{- if eq .RunMode "agui" }}
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	{{- end }}
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	{{- if .NeedsMCP }}
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -88,13 +107,49 @@ import (
 
 const appName = {{ printf "%q" .AppName }}
 
-var demoInput = {{ goString "I'm thinking about cancelling my mobile plan, can you offer me a better deal?" }}
+{{- if eq .RunMode "agui" }}
+
+var (
+	address = flag.String("address", "127.0.0.1:8080", "Listen address")
+	path    = flag.String("path", "/agui", "HTTP path")
+)
+{{- end }}
 
 // =============================================================================
 // Entry Point
 // =============================================================================
 
 func main() {
+{{- if eq .RunMode "agui" }}
+	flag.Parse()
+
+	g, err := BuildGraph()
+	if err != nil {
+		log.Fatalf("Failed to build graph: %v", err)
+	}
+
+	{{- if .HasAgentNodes }}
+	ga, err := graphagent.New(appName, g, graphagent.WithSubAgents(createSubAgents()))
+	{{- else }}
+	ga, err := graphagent.New(appName, g)
+	{{- end }}
+	if err != nil {
+		log.Fatalf("Failed to create graph agent: %v", err)
+	}
+
+	r := runner.NewRunner(appName, ga, runner.WithSessionService(inmemory.NewSessionService()))
+	defer r.Close()
+
+	server, err := agui.New(r, agui.WithPath(*path))
+	if err != nil {
+		log.Fatalf("Failed to create AG-UI server: %v", err)
+	}
+
+	log.Infof("AG-UI: serving agent %q on http://%s%s", appName, *address, *path)
+	if err := http.ListenAndServe(*address, server.Handler()); err != nil {
+		log.Fatalf("Server stopped with error: %v", err)
+	}
+{{- else }}
 	fmt.Println("Starting graph:", appName)
 
 	g, err := BuildGraph()
@@ -114,25 +169,67 @@ func main() {
 	r := runner.NewRunner(appName, ga, runner.WithSessionService(inmemory.NewSessionService()))
 	defer r.Close()
 
-	events, err := r.Run(context.Background(), "demo-user", "demo-session", model.NewUserMessage(demoInput))
-	if err != nil {
-		panic(err)
+	userID := "user"
+	sessionID := fmt.Sprintf("session-%d", time.Now().Unix())
+
+	fmt.Println("Interactive mode. Type 'exit' to quit, 'new' for new session.")
+	fmt.Println()
+
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Print("You: ")
+		if !scanner.Scan() {
+			break
+		}
+		input := strings.TrimSpace(scanner.Text())
+		if input == "" {
+			continue
+		}
+		switch strings.ToLower(input) {
+		case "exit", "quit":
+			fmt.Println("Goodbye!")
+			return
+		case "new":
+			sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
+			fmt.Printf("New session: %s\n\n", sessionID)
+			continue
+		}
+
+		events, err := r.Run(context.Background(), userID, sessionID, model.NewUserMessage(input))
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			continue
+		}
+
+		fmt.Print("Assistant: ")
+		if err := processStreamingResponse(events); err != nil {
+			fmt.Printf("Error: %v\n", err)
+		}
+		fmt.Println()
 	}
+{{- end }}
+}
 
-	var lastText string
-	var streamedText strings.Builder
-	var didStream bool
-	var interruptNode string
-	var interruptValue any
+{{- if eq .RunMode "interactive" }}
 
-	for ev := range events {
+func processStreamingResponse(eventChan <-chan *event.Event) error {
+	var (
+		didStream       bool
+		lastText        string
+		interruptNode   string
+		interruptValue  any
+	)
+
+	for ev := range eventChan {
 		if ev == nil {
 			continue
 		}
-		if ev.Response != nil && ev.Error != nil {
-			fmt.Printf("Event error: %s\n", ev.Error.Message)
+		if ev.Error != nil {
+			fmt.Printf("\nError: %s\n", ev.Error.Message)
 			continue
 		}
+
+		// Check for interrupt.
 		if ev.StateDelta != nil {
 			if raw, ok := ev.StateDelta[graph.MetadataKeyPregel]; ok && raw != nil {
 				var meta graph.PregelStepMetadata
@@ -142,11 +239,12 @@ func main() {
 				}
 			}
 		}
-		if ev.Response != nil {
-			for _, ch := range ev.Choices {
+
+		// Process streaming content.
+		if ev.Response != nil && len(ev.Response.Choices) > 0 {
+			for _, ch := range ev.Response.Choices {
 				if ch.Delta.Content != "" {
 					fmt.Print(ch.Delta.Content)
-					streamedText.WriteString(ch.Delta.Content)
 					didStream = true
 				}
 				if ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" {
@@ -159,18 +257,21 @@ func main() {
 	if didStream {
 		fmt.Println()
 	}
+
 	if interruptNode != "" {
 		b, _ := json.MarshalIndent(interruptValue, "", "  ")
 		fmt.Printf("\n[interrupt] node=%q value=%s\n", interruptNode, string(b))
 		fmt.Println("Graph interrupted. Resume with approval value to continue.")
-		return
+		return nil
 	}
+
 	if !didStream && lastText != "" {
-		fmt.Println("Final response:", lastText)
-	} else if streamedText.Len() == 0 && strings.TrimSpace(lastText) == "" {
-		fmt.Println("Graph completed with no output.")
+		fmt.Println(lastText)
 	}
+
+	return nil
 }
+{{- end }}
 
 // =============================================================================
 // Graph Definition

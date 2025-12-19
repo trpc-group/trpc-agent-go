@@ -18,6 +18,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/toolconfig"
 )
 
+// RunMode specifies how the generated code should be executed.
+type RunMode string
+
+const (
+	// RunModeInteractive generates a terminal-interactive CLI application (default).
+	RunModeInteractive RunMode = "interactive"
+	// RunModeAGUI generates an AG-UI HTTP server.
+	RunModeAGUI RunMode = "agui"
+)
+
 // Options controls how Go code is generated from a DSL graph.
 type Options struct {
 	// PackageName is the package name for generated files (defaults to "main").
@@ -25,6 +35,8 @@ type Options struct {
 	// AppName is a human‑readable application name used in main.go logging.
 	// When empty, graph.Name is used.
 	AppName string
+	// RunMode specifies the execution mode (defaults to "interactive").
+	RunMode RunMode
 }
 
 // Output contains the generated Go source files keyed by filename.
@@ -65,6 +77,10 @@ func GenerateNativeGo(g *dsl.Graph, opts Options) (*Output, error) {
 			appName = "dsl_app"
 		}
 	}
+	runMode := opts.RunMode
+	if runMode == "" {
+		runMode = RunModeInteractive
+	}
 
 	ir, err := buildIR(g)
 	if err != nil {
@@ -74,6 +90,7 @@ func GenerateNativeGo(g *dsl.Graph, opts Options) (*Output, error) {
 	src, err := renderTemplate(singleFileTemplate, singleFileTemplateData{
 		PackageName:    pkg,
 		AppName:        appName,
+		RunMode:        string(runMode),
 		HasAgentNodes:  len(ir.AgentNodes) > 0,
 		EnvVarInfos:    ir.EnvVarInfos,
 		NeedsApproval:  ir.NeedsApproval,

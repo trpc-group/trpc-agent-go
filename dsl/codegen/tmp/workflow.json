@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "name": "openai_custom_service",
-  "description": "Replicates OpenAI Agent Builder custom service routing: return_item / cancel_subscription / get_information.",
+  "name": "classifier_mcp_example",
+  "description": "Classifier agent routes to two worker agents with MCP calculator tools (SSE transport)",
   "nodes": [
     {
       "id": "start",
@@ -11,7 +11,7 @@
     },
     {
       "id": "classifier",
-      "label": "Classification agent",
+      "label": "Classifier Agent",
       "node_type": "builtin.llmagent",
       "config": {
         "model_spec": {
@@ -20,8 +20,8 @@
           "base_url": "https://api.deepseek.com/v1",
           "api_key": "env:OPENAI_API_KEY"
         },
-        "instruction": "Classify the user’s intent into one of the following categories: \"return_item\", \"cancel_subscription\", or \"get_information\".\n\n1. Any device-related return requests should route to return_item.\n2. Any retention or cancellation risk, including any request for discounts should route to cancel_subscription.\n3. Any other requests should go to get_information.",
-        "description": "Intent classification agent",
+        "instruction": "You are a task classifier. Classify the user's request into one of two categories:\n\n1. \"math_simple\" - Simple arithmetic operations like addition, subtraction (e.g., \"1+1\", \"5-3\", \"add 2 and 3\")\n2. \"math_complex\" - Complex calculations involving multiplication, division, or multiple operations (e.g., \"5*6\", \"10/2\", \"calculate (3+4)*2\")\n\nAnalyze the user's request and output the classification.",
+        "description": "Classifies user requests into simple or complex math tasks",
         "output_format": {
           "type": "json",
           "schema": {
@@ -29,25 +29,23 @@
             "properties": {
               "classification": {
                 "type": "string",
-                "enum": [
-                  "return_item",
-                  "cancel_subscription",
-                  "get_information"
-                ],
-                "description": "Classification of user intent"
+                "enum": ["math_simple", "math_complex"],
+                "description": "Classification of the math task"
+              },
+              "reason": {
+                "type": "string",
+                "description": "Brief reason for the classification"
               }
             },
-            "required": [
-              "classification"
-            ]
+            "required": ["classification", "reason"]
           }
         },
-        "temperature": 0.7
+        "temperature": 0.3
       }
     },
     {
-      "id": "return_agent",
-      "label": "Return agent",
+      "id": "simple_math_agent",
+      "label": "Simple Math Agent",
       "node_type": "builtin.llmagent",
       "config": {
         "model_spec": {
@@ -56,15 +54,23 @@
           "base_url": "https://api.deepseek.com/v1",
           "api_key": "env:OPENAI_API_KEY"
         },
-        "instruction": "Offer a replacement device with free shipping.",
-        "description": "Handles device return flows",
-        "temperature": 0.7,
-        "max_tokens": 512
+        "instruction": "You are a simple math assistant specializing in addition and subtraction. Use the calculator tools available via MCP to help users with their calculations. Always use the tools to compute results rather than calculating yourself.",
+        "description": "Handles simple arithmetic (addition, subtraction) using MCP calculator",
+        "temperature": 0.5,
+        "max_tokens": 1024,
+        "mcp_tools": [
+          {
+            "name": "calculator_sse",
+            "transport": "sse",
+            "server_url": "http://03.mcp-gateway.woa.com/245oyJGZ7scEkoA0",
+            "timeout": 30
+          }
+        ]
       }
     },
     {
-      "id": "retention_agent",
-      "label": "Retention agent",
+      "id": "complex_math_agent",
+      "label": "Complex Math Agent",
       "node_type": "builtin.llmagent",
       "config": {
         "model_spec": {
@@ -73,92 +79,29 @@
           "base_url": "https://api.deepseek.com/v1",
           "api_key": "env:OPENAI_API_KEY"
         },
-        "instruction": "You are a customer retention conversational agent whose goal is to prevent subscription cancellations. Ask for their current plan and reason for dissatisfaction. For now, you may simply say there is a 20% offer available for 1 year if that seems appropriate.",
-        "description": "Handles cancellation / retention flows",
-        "temperature": 0.7,
-        "max_tokens": 512
+        "instruction": "You are an advanced math assistant specializing in multiplication, division, and complex calculations. Use the calculator tools available via MCP to help users with their calculations. Always use the tools to compute results rather than calculating yourself.",
+        "description": "Handles complex arithmetic (multiplication, division) using MCP calculator",
+        "temperature": 0.5,
+        "max_tokens": 1024,
+        "mcp_tools": [
+          {
+            "name": "calculator_sse",
+            "transport": "sse",
+            "server_url": "http://03.mcp-gateway.woa.com/245oyJGZ7scEkoA0",
+            "timeout": 30
+          }
+        ]
       }
     },
     {
-      "id": "retention_approval",
-      "label": "User approval",
-      "node_type": "builtin.user_approval",
-      "config": {
-        "message": "Does this retention offer work for you?"
-      }
-    },
-    {
-      "id": "information_agent",
-      "label": "Information agent",
-      "node_type": "builtin.llmagent",
-      "config": {
-        "model_spec": {
-          "provider": "openai",
-          "model_name": "deepseek-chat",
-          "base_url": "https://api.deepseek.com/v1",
-          "api_key": "env:OPENAI_API_KEY"
-        },
-        "instruction": "You are an information agent for answering informational queries. Your aim is to provide clear, concise responses to user questions. Use the following policy to assemble your answer.\n\nCompany Name: HorizonTel Communications\nIndustry: Telecommunications\nRegion: North America\n\nPolicy Summary: Mobile Service Plan Adjustments\n- Customers must have an active account in good standing (no outstanding balance > $50).\n- Device upgrades are permitted once every 12 months if the customer is on an eligible plan.\n- Early upgrades incur a $99 early-change fee unless the new plan’s monthly cost is higher by at least $15.\n- Downgrades: Customers can switch to a lower-tier plan at any time; changes take effect at the next billing cycle.\n- Overcharges under $10 are automatically credited to the next bill; above that require supervisor review.\n- Refunds are issued to the original payment method within 7–10 business days.\n- Customers experiencing service interruption exceeding 24 consecutive hours are eligible for a 1-day service credit upon request.\n\nAlways respond in a friendly, concise way and surface the most relevant parts of the policy.",
-        "description": "Handles general informational queries",
-        "temperature": 0.7,
-        "max_tokens": 1024
-      }
-    },
-    {
-      "id": "return_end",
-      "label": "Return end",
+      "id": "simple_end",
+      "label": "Simple Math End",
       "node_type": "builtin.end",
       "config": {}
     },
     {
-      "id": "retention_end",
-      "label": "Retention end",
-      "node_type": "builtin.end",
-      "config": {
-        "expr": {
-          "expression": "{\"message\": \"Your retention offer has been accepted. Thank you for staying with us.\"}",
-          "format": "json"
-        },
-        "output_schema": {
-          "type": "object",
-          "properties": {
-            "message": {
-              "type": "string",
-              "description": "Final status message shown to the user"
-            }
-          },
-          "required": [
-            "message"
-          ]
-        }
-      }
-    },
-    {
-      "id": "retention_reject_end",
-      "label": "Retention rejected end",
-      "node_type": "builtin.end",
-      "config": {
-        "expr": {
-          "expression": "{\"message\": \"We understand your decision. If you change your mind, we are always here to help.\"}",
-          "format": "json"
-        },
-        "output_schema": {
-          "type": "object",
-          "properties": {
-            "message": {
-              "type": "string",
-              "description": "Final status message shown to the user"
-            }
-          },
-          "required": [
-            "message"
-          ]
-        }
-      }
-    },
-    {
-      "id": "info_end",
-      "label": "Information end",
+      "id": "complex_end",
+      "label": "Complex Math End",
       "node_type": "builtin.end",
       "config": {}
     }
@@ -170,38 +113,23 @@
       "target": "classifier"
     },
     {
-      "id": "edge_return_agent_end",
-      "source": "return_agent",
-      "target": "return_end"
+      "id": "edge_simple_agent_end",
+      "source": "simple_math_agent",
+      "target": "simple_end"
     },
     {
-      "id": "edge_retention_agent_approval",
-      "source": "retention_agent",
-      "target": "retention_approval"
+      "id": "edge_complex_agent_end",
+      "source": "complex_math_agent",
+      "target": "complex_end"
     },
     {
-      "id": "edge_information_agent_end",
-      "source": "information_agent",
-      "target": "info_end"
-    },
-    {
-      "id": "edge_return_end_final",
-      "source": "return_end",
+      "id": "edge_simple_end_final",
+      "source": "simple_end",
       "target": "__end__"
     },
     {
-      "id": "edge_retention_end_final",
-      "source": "retention_end",
-      "target": "__end__"
-    },
-    {
-      "id": "edge_retention_reject_end_final",
-      "source": "retention_reject_end",
-      "target": "__end__"
-    },
-    {
-      "id": "edge_info_end_final",
-      "source": "info_end",
+      "id": "edge_complex_end_final",
+      "source": "complex_end",
       "target": "__end__"
     }
   ],
@@ -213,53 +141,20 @@
         "type": "builtin",
         "cases": [
           {
-            "name": "return_item",
+            "name": "math_simple",
             "predicate": {
-              "expression": "input.output_parsed.classification == \"return_item\"",
+              "expression": "input.output_parsed.classification == \"math_simple\"",
               "format": "cel"
             },
-            "target": "return_agent"
+            "target": "simple_math_agent"
           },
           {
-            "name": "cancel_subscription",
+            "name": "math_complex",
             "predicate": {
-              "expression": "input.output_parsed.classification == \"cancel_subscription\"",
+              "expression": "input.output_parsed.classification == \"math_complex\"",
               "format": "cel"
             },
-            "target": "retention_agent"
-          },
-          {
-            "name": "get_information",
-            "predicate": {
-              "expression": "input.output_parsed.classification == \"get_information\"",
-              "format": "cel"
-            },
-            "target": "information_agent"
-          }
-        ]
-      }
-    },
-    {
-      "id": "route_after_retention_approval",
-      "from": "retention_approval",
-      "condition": {
-        "type": "builtin",
-        "cases": [
-          {
-            "name": "approve_offer",
-            "predicate": {
-              "expression": "state.approval_result == \"approve\"",
-              "format": "cel"
-            },
-            "target": "retention_end"
-          },
-          {
-            "name": "reject_offer",
-            "predicate": {
-              "expression": "state.approval_result == \"reject\"",
-              "format": "cel"
-            },
-            "target": "retention_reject_end"
+            "target": "complex_math_agent"
           }
         ]
       }
