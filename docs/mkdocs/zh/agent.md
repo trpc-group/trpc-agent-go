@@ -189,7 +189,7 @@ cycleAgent := cycleagent.New(
 )
 
 // 创建 Runner
-runner := runner.NewRunner("demo-app", chainagent)
+runner := runner.NewRunner("demo-app", cycleAgent)
 
 // 直接发送消息，无需创建复杂的 Invocation
 message := model.NewUserMessage("Hello! Can you tell me about yourself?")
