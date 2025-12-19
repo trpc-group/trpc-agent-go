@@ -291,10 +291,11 @@ func main() {
 
 func processStreamingResponse(eventChan <-chan *event.Event) error {
 	var (
-		didStream       bool
-		lastText        string
-		interruptNode   string
-		interruptValue  any
+		didStream          bool
+		lastText           string
+		interruptNode      string
+		interruptValue     any
+		endStructuredOutput any
 	)
 
 	for ev := range eventChan {
@@ -314,6 +315,10 @@ func processStreamingResponse(eventChan <-chan *event.Event) error {
 					interruptNode = meta.NodeID
 					interruptValue = meta.InterruptValue
 				}
+			}
+			// Capture end_structured_output from state delta.
+			if v, ok := ev.StateDelta["end_structured_output"]; ok && v != nil {
+				endStructuredOutput = v
 			}
 		}
 
@@ -344,6 +349,12 @@ func processStreamingResponse(eventChan <-chan *event.Event) error {
 
 	if !didStream && lastText != "" {
 		fmt.Println(lastText)
+	}
+
+	// If no streaming output and no lastText, but we have end_structured_output, display it.
+	if !didStream && lastText == "" && endStructuredOutput != nil {
+		b, _ := json.MarshalIndent(endStructuredOutput, "", "  ")
+		fmt.Printf("%s\n", string(b))
 	}
 
 	return nil
@@ -435,6 +446,8 @@ func BuildGraph() (*graph.Graph, error) {
 // =============================================================================
 {{- range $c := .Conditions }}
 
+// {{ $c.FuncName }} routes from "{{ $c.From }}" based on {{ if $c.SwitchFieldName }}{{ $c.SwitchFieldName }}{{ else }}state{{ end }}.
+// Routes: {{ range $i, $case := $c.Cases }}{{ if $i }}, {{ end }}{{ printf "%q" $case.MatchValue }} -> {{ $case.Target }}{{ end }}{{ if $c.DefaultTarget }}, default -> {{ $c.DefaultTarget }}{{ end }}
 func {{ $c.FuncName }}(ctx context.Context, state graph.State) (string, error) {
 	_ = ctx
 	parsedOutput, _ := state["{{ $c.From }}_parsed"].(map[string]any)
@@ -653,6 +666,15 @@ func {{ .FuncName }}(ctx context.Context, state graph.State) (any, error) {
 // =============================================================================
 // Agent Constructors
 // =============================================================================
+//
+// Each agent is an LLM-powered node that can:
+//   - Follow instructions (system prompt)
+//   - Use tools via MCP (Model Context Protocol)
+//   - Return structured output (JSON schema)
+//
+// Agent outputs are stored in state:
+//   - state["<agent_id>_output"]: Raw LLM response text
+//   - state["<agent_id>_parsed"]: Parsed structured output (if schema defined)
 {{- if .HasAgentNodes }}
 
 func createSubAgents() []agent.Agent {
@@ -664,6 +686,18 @@ func createSubAgents() []agent.Agent {
 }
 {{- range .AgentNodes }}
 
+// new{{ .FuncSuffix }}SubAgent creates the "{{ .ID }}" agent.
+{{- if .Instruction }}
+// Role: {{ truncateInstruction .Instruction 80 }}
+{{- end }}
+{{- if .StructuredOutputSchemaJSON }}
+// Output: Structured JSON (see schema below)
+{{- else }}
+// Output: Free-form text response
+{{- end }}
+{{- if .MCPTools }}
+// Tools: MCP tools enabled
+{{- end }}
 func new{{ .FuncSuffix }}SubAgent() agent.Agent {
 	apiKey := os.Getenv({{ printf "%q" .ModelSpec.APIKeyEnvVar }})
 	if apiKey == "" {
@@ -798,6 +832,8 @@ func new{{ .FuncSuffix }}SubAgent() agent.Agent {
 // =============================================================================
 
 {{- if .NeedsStructuredOutputMapper }}
+// agentStructuredOutputMapper creates a function that extracts agent output into state.
+// It stores raw response in state["<nodeID>_output"] and parsed JSON in state["<nodeID>_parsed"].
 func agentStructuredOutputMapper(nodeID string) graph.SubgraphOutputMapper {
 	return func(parent graph.State, result graph.SubgraphResult) graph.State {
 		last := result.LastResponse
@@ -816,6 +852,10 @@ func agentStructuredOutputMapper(nodeID string) graph.SubgraphOutputMapper {
 {{- end }}
 
 {{- if .NeedsMCP }}
+// newMCPToolSet creates a connection to an MCP (Model Context Protocol) server.
+// MCP allows agents to call external tools (APIs, databases, etc.) via a standardized protocol.
+// transport: "streamable_http" or "sse" - the communication method
+// serverURL: the MCP server endpoint URL
 func newMCPToolSet(transport, serverURL string, headers map[string]string, allowedTools []string) (tool.ToolSet, error) {
 	if transport == "" {
 		return nil, fmt.Errorf("transport is required")
@@ -855,6 +895,8 @@ func mustParseJSONAny(raw string) any {
 {{- end }}
 
 {{- if .HasAgentNodes }}
+// mustParseJSONMap parses a JSON string into map[string]any. Panics on invalid JSON.
+// Used to parse structured output schemas defined in the workflow.
 func mustParseJSONMap(raw string) map[string]any {
 	if raw = strings.TrimSpace(raw); raw == "" {
 		return nil

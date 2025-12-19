@@ -86,12 +86,17 @@ func main() {
 为了保持生成代码干净、可读，并避免引入 DSL runtime 依赖，当前 codegen 只覆盖一小部分 DSL 能力：
 
 - `builtin.start`
-- `builtin.llmagent`（要求 `config.model_spec`）
+- `builtin.llmagent`（要求 `config.model_spec`，支持 `mcp_tools`、`output_format` 结构化输出、generation config）
+- `builtin.transform`（CEL-lite 表达式求值，结果写入 `state[<id>_parsed]`）
+- `builtin.set_state`（CEL-lite 赋值表达式，更新 graph state）
+- `builtin.mcp`（调用 MCP server tool，结果写入 `state[<id>_output/<id>_parsed]`）
 - `builtin.user_approval`（用 `graph.Interrupt` 表达中断点；生成代码会打印 interrupt 信息，但**不会**自动生成 resume CLI）
-- `builtin.end`
-- `conditional_edges`：仅支持简单的 `==` 条件，且表达式必须形如：
-  - `input.output_parsed.xxx == "value"`（要求该 node 配置了 `output_format.type="json"` 且有 schema）
+- `builtin.while`（循环节点，codegen 时展开为 body 节点 + 合成的 conditional edge）
+- `builtin.end`（可选 CEL-lite/JSON 表达式写入 `end_structured_output`）
+- `conditional_edges`：支持 `==` 条件，表达式形如：
+  - `input.output_parsed.field == "value"`（单层字段，要求该 node 配置了 `output_format.type="json"` 且有 schema）
   - `state.xxx == "value"`
+  - 嵌套字段访问（如 `input.output_parsed.a.b`）通过 fallback 路径支持
 
 ## 关于密钥/环境变量
 
