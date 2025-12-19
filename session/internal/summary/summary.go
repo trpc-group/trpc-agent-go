@@ -12,6 +12,8 @@ package summary
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -241,13 +243,26 @@ func CreateSessionSummaryWithCascade(
 	force bool,
 	createSummaryFunc func(context.Context, *session.Session, string, bool) error,
 ) error {
-	if err := createSummaryFunc(ctx, sess, filterKey, force); err != nil {
-		return err
+	if filterKey == session.SummaryFilterKeyAllContents {
+		return createSummaryFunc(ctx, sess, filterKey, force)
 	}
-	// After branch summary, cascade a full-session summary by
-	// reusing the same processing path to keep logic unified.
-	if filterKey != session.SummaryFilterKeyAllContents {
-		return createSummaryFunc(ctx, sess, session.SummaryFilterKeyAllContents, force)
+
+	var summaryWg sync.WaitGroup
+	result := make([]error, 2)
+	summaryWg.Add(2)
+	for i, fk := range []string{filterKey, session.SummaryFilterKeyAllContents} {
+		go func(i int, fk string) {
+			defer summaryWg.Done()
+			err := createSummaryFunc(ctx, sess, fk, force)
+			if err != nil {
+				result[i] = fmt.Errorf("create session summary for filterKey %q failed: %w", fk, err)
+			}
+		}(i, fk)
 	}
-	return nil
+	summaryWg.Wait()
+
+	if result[0] != nil {
+		return result[0]
+	}
+	return result[1]
 }
