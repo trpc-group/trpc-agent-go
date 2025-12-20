@@ -14,7 +14,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/modelspec"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/outputformat"
-	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/toolconfig"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -78,48 +77,16 @@ func newLLMAgentNodeFuncFromConfig(
 		description = desc
 	}
 
-	// Resolve tools from provider (if provided).
-	var tools []tool.Tool
-	if toolsProvider != nil {
-		if toolsConfig, ok := cfg["tools"]; ok {
-			toolNames, err := toolconfig.ParseStringSlice(toolsConfig, "tools")
-			if err != nil {
-				return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
-			}
-			for _, toolName := range toolNames {
-				if t, err := toolsProvider.Get(toolName); err == nil {
-					tools = append(tools, t)
-				}
-			}
-		}
+	// Compile tools using unified ToolSpec
+	toolResult, err := CompileTools(cfg, toolsProvider)
+	if err != nil {
+		return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
 	}
 
-	// Resolve MCP toolsets from config (if any).
-	var mcpToolSets []tool.ToolSet
-	if mcpToolsConfig, ok := cfg["mcp_tools"]; ok {
-		toolSpecs, err := toolconfig.ParseMCPTools(mcpToolsConfig)
-		if err != nil {
-			return nil, fmt.Errorf("builtin.llmagent[%s]: %w", nodeID, err)
-		}
-		for _, spec := range toolSpecs {
-			cfgMap := map[string]any{
-				"transport":  spec.Transport,
-				"server_url": spec.ServerURL,
-			}
-			if len(spec.Headers) > 0 {
-				cfgMap["headers"] = spec.Headers
-			}
-			if len(spec.AllowedTools) > 0 {
-				cfgMap["tool_filter"] = spec.AllowedTools
-			}
-
-			toolSet, err := createMCPToolSet(cfgMap)
-			if err != nil {
-				return nil, fmt.Errorf("builtin.llmagent[%s]: failed to create MCP toolset for server %q: %w", nodeID, spec.ServerURL, err)
-			}
-			mcpToolSets = append(mcpToolSets, toolSet)
-		}
-	}
+	tools := toolResult.Tools
+	mcpToolSets := toolResult.ToolSets
+	knowledgeTools := toolResult.KnowledgeTools
+	codeExecutor := toolResult.CodeExecutor
 
 	// Structured output configuration via output_format. When
 	// output_format.type == "json", we treat output_format.schema as the
@@ -237,12 +204,21 @@ func newLLMAgentNodeFuncFromConfig(
 			opts = append(opts, llmagent.WithDescription(description))
 		}
 
-		if len(tools) > 0 {
-			opts = append(opts, llmagent.WithTools(tools))
-		}
+	// Merge all tools into a single slice to avoid WithTools overwriting
+	allTools := make([]tool.Tool, 0, len(tools)+len(knowledgeTools))
+	allTools = append(allTools, tools...)
+	allTools = append(allTools, knowledgeTools...)
+	if len(allTools) > 0 {
+		opts = append(opts, llmagent.WithTools(allTools))
+	}
 
 		if len(mcpToolSets) > 0 {
 			opts = append(opts, llmagent.WithToolSets(mcpToolSets))
+		}
+
+		// Add code executor (from code_interpreter tool)
+		if codeExecutor != nil {
+			opts = append(opts, llmagent.WithCodeExecutor(codeExecutor))
 		}
 
 		if len(structuredOutput) > 0 {
@@ -649,6 +625,11 @@ func createMCPToolSet(config map[string]interface{}) (tool.ToolSet, error) {
 	}
 
 	var mcpOpts []mcp.ToolSetOption
+
+	// Use custom name if provided (from server_label) to avoid tool name conflicts
+	if nameVal, ok := config["name"].(string); ok && nameVal != "" {
+		mcpOpts = append(mcpOpts, mcp.WithName(nameVal))
+	}
 
 	if toolFilterVal, ok := config["tool_filter"]; ok {
 		var toolNames []string

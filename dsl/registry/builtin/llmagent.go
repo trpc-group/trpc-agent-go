@@ -17,7 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/modelspec"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/outputformat"
-	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/toolconfig"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/toolspec"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -117,18 +117,7 @@ func (c *LLMAgentComponent) Metadata() registry.ComponentMetadata {
 			{
 				Name:        "tools",
 				DisplayName: "Tools",
-				Description: "List of tool names to make available to the agent (from ToolRegistry or MCP toolsets).",
-				Type:        "[]string",
-				TypeID:      "array.string",
-				Kind:        "array",
-				GoType:      reflect.TypeOf([]string{}),
-				Required:    false,
-				Placeholder: "search, calculator",
-			},
-			{
-				Name:        "mcp_tools",
-				DisplayName: "MCP Tools",
-				Description: "List of MCP server configurations attached to this agent (server_url/allowed_tools/transport/etc.). Each entry corresponds to one MCP server and exposes one or more tools from that server to the agent.",
+				Description: "List of tool specifications available to the agent (unified ToolSpec format).",
 				Type:        "[]map[string]any",
 				TypeID:      "array.object",
 				Kind:        "array",
@@ -293,9 +282,9 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 		}
 	}
 
-	// Validate tools if present
+	// Validate tools if present - use unified toolspec
 	if tools, ok := config["tools"]; ok {
-		if _, err := toolconfig.ParseStringSlice(tools, "tools"); err != nil {
+		if _, err := toolspec.ParseTools(tools); err != nil {
 			return err
 		}
 	}
@@ -337,13 +326,6 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 		}
 		if tp < 0 || tp > 1 {
 			return fmt.Errorf("top_p must be between 0 and 1")
-		}
-	}
-
-	// Validate mcp_tools if present
-	if mcpTools, ok := config["mcp_tools"]; ok {
-		if _, err := toolconfig.ParseMCPTools(mcpTools); err != nil {
-			return err
 		}
 	}
 

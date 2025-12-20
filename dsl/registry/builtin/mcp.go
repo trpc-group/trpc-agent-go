@@ -13,7 +13,6 @@ import (
 	"reflect"
 
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/mcpconfig"
-	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/toolconfig"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
@@ -65,7 +64,7 @@ func (c *MCPComponent) Metadata() registry.ComponentMetadata {
 				Kind:        "string",
 				GoType:      reflect.TypeOf(""),
 				Required:    false,
-				Default:     toolconfig.MCPTransportStreamableHTTP,
+				Default:     mcpconfig.TransportStreamableHTTP,
 			},
 			{
 				Name:        "headers",

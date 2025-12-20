@@ -15,7 +15,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/modelspec"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/numconv"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/outputformat"
-	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/toolconfig"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/toolspec"
 )
 
 // Known limitations of the code generator:
@@ -763,13 +763,14 @@ func buildIR(g *dsl.Graph) (*irGraph, error) {
 				gen.HasAny = true
 			}
 
+			// Parse unified tools config for MCP tools
 			var mcpToolSets []agentMCPToolSet
-			if raw, ok := n.EngineNode.Config["mcp_tools"]; ok && raw != nil {
-				specs, err := toolconfig.ParseMCPTools(raw)
+			if raw, ok := n.EngineNode.Config["tools"]; ok && raw != nil {
+				parsed, err := toolspec.ParseTools(raw)
 				if err != nil {
 					return nil, fmt.Errorf("builtin.llmagent[%s]: %w", n.ID, err)
 				}
-				for _, spec := range specs {
+				for _, spec := range parsed.MCPTools {
 					headers := sortedKVPairs(spec.Headers)
 
 					allowed := append([]string(nil), spec.AllowedTools...)

@@ -13,8 +13,11 @@ package mcpconfig
 import (
 	"fmt"
 	"strings"
+)
 
-	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/toolconfig"
+const (
+	TransportStreamableHTTP = "streamable_http"
+	TransportSSE            = "sse"
 )
 
 type NodeConfig struct {
@@ -45,7 +48,7 @@ func ParseNodeConfig(config map[string]any) (NodeConfig, error) {
 	}
 	out.ToolName = toolName
 
-	transport := toolconfig.MCPTransportStreamableHTTP
+	transport := TransportStreamableHTTP
 	if transportRaw, ok := config["transport"]; ok && transportRaw != nil {
 		t, ok := transportRaw.(string)
 		if !ok {
@@ -56,12 +59,12 @@ func ParseNodeConfig(config map[string]any) (NodeConfig, error) {
 			transport = t
 		}
 	}
-	if transport != toolconfig.MCPTransportStreamableHTTP && transport != toolconfig.MCPTransportSSE {
-		return out, fmt.Errorf("unsupported MCP transport %q; expected %q or %q", transport, toolconfig.MCPTransportStreamableHTTP, toolconfig.MCPTransportSSE)
+	if transport != TransportStreamableHTTP && transport != TransportSSE {
+		return out, fmt.Errorf("unsupported MCP transport %q; expected %q or %q", transport, TransportStreamableHTTP, TransportSSE)
 	}
 	out.Transport = transport
 
-	headers, err := toolconfig.ParseStringMap(config["headers"], "headers")
+	headers, err := ParseStringMap(config["headers"], "headers")
 	if err != nil {
 		return out, err
 	}
@@ -108,4 +111,52 @@ func ParseNodeConfig(config map[string]any) (NodeConfig, error) {
 	}
 
 	return out, nil
+}
+
+// ParseStringMap parses a string map from config.
+func ParseStringMap(value any, path string) (map[string]string, error) {
+	if value == nil {
+		return nil, nil
+	}
+
+	switch m := value.(type) {
+	case map[string]string:
+		if len(m) == 0 {
+			return nil, nil
+		}
+		out := make(map[string]string, len(m))
+		for k, v := range m {
+			v = strings.TrimSpace(v)
+			if v == "" {
+				continue
+			}
+			out[k] = v
+		}
+		if len(out) == 0 {
+			return nil, nil
+		}
+		return out, nil
+	case map[string]any:
+		if len(m) == 0 {
+			return nil, nil
+		}
+		out := make(map[string]string, len(m))
+		for k, raw := range m {
+			s, ok := raw.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s[%q] must be a string", path, k)
+			}
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			out[k] = s
+		}
+		if len(out) == 0 {
+			return nil, nil
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("%s must be an object", path)
+	}
 }

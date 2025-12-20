@@ -207,43 +207,8 @@
         },
         "tools": {
           "type": "array",
-          "description": "List of tool names available to this agent.",
-          "items": { "type": "string" }
-        },
-        "mcp_tools": {
-          "type": "array",
-          "description": "List of MCP server configurations attached to this agent. Each entry corresponds to one MCP server and exposes one or more tools from that server to the agent.",
-          "items": {
-            "type": "object",
-            "required": ["server_url"],
-            "properties": {
-              "server_url": {
-                "type": "string",
-                "description": "MCP server URL (e.g., https://mcp.example.com/mcp)."
-              },
-              "transport": {
-                "type": "string",
-                "enum": ["streamable_http", "sse"],
-                "description": "Transport mechanism for MCP. STDIO is intentionally not exposed at the agent DSL level.",
-                "default": "streamable_http"
-              },
-              "server_label": {
-                "type": "string",
-                "description": "Optional label for this MCP server shown in the UI (e.g., \"deepwiki\")."
-              },
-              "allowed_tools": {
-                "type": "array",
-                "description": "Optional list of tool names from this MCP server that the agent is allowed to call. When omitted, all tools are available.",
-                "items": { "type": "string" }
-              },
-              "headers": {
-                "type": "object",
-                "description": "Optional HTTP headers to include when connecting to the MCP server.",
-                "additionalProperties": { "type": "string" }
-              }
-            },
-            "additionalProperties": false
-          }
+          "description": "List of tool specifications available to this agent.",
+          "items": { "$ref": "#/$defs/ToolSpec" }
         },
         "output_format": {
           "type": "object",
@@ -280,6 +245,290 @@
       },
       "additionalProperties": false
     },
+    "ToolSpec": {
+      "type": "object",
+      "description": "Unified tool specification. Use 'type' field to specify the tool type.",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["mcp", "builtin", "web_search", "knowledge_search", "code_interpreter"],
+          "description": "Tool type identifier."
+        }
+      },
+      "oneOf": [
+        { "$ref": "#/$defs/MCPToolSpec" },
+        { "$ref": "#/$defs/BuiltinToolSpec" },
+        { "$ref": "#/$defs/WebSearchToolSpec" },
+        { "$ref": "#/$defs/KnowledgeSearchToolSpec" },
+        { "$ref": "#/$defs/CodeInterpreterToolSpec" }
+      ]
+    },
+    "MCPToolSpec": {
+      "type": "object",
+      "description": "MCP (Model Context Protocol) tool configuration.",
+      "required": ["type", "server_url"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "mcp",
+          "description": "Tool type identifier."
+        },
+        "server_url": {
+          "type": "string",
+          "description": "MCP server URL (e.g., https://mcp.example.com/mcp)."
+        },
+        "transport": {
+          "type": "string",
+          "enum": ["streamable_http", "sse"],
+          "description": "Transport mechanism for MCP.",
+          "default": "streamable_http"
+        },
+        "server_label": {
+          "type": "string",
+          "description": "Optional label for this MCP server shown in the UI."
+        },
+        "allowed_tools": {
+          "type": "array",
+          "description": "Optional list of tool names from this MCP server that the agent is allowed to call.",
+          "items": { "type": "string" }
+        },
+        "headers": {
+          "type": "object",
+          "description": "Optional HTTP headers to include when connecting to the MCP server.",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "BuiltinToolSpec": {
+      "type": "object",
+      "description": "Built-in tool reference from ToolRegistry.",
+      "required": ["type", "name"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "builtin",
+          "description": "Tool type identifier."
+        },
+        "name": {
+          "type": "string",
+          "description": "Built-in tool name from ToolRegistry."
+        }
+      },
+      "additionalProperties": false
+    },
+    "WebSearchToolSpec": {
+      "type": "object",
+      "description": "Web search tool configuration (DuckDuckGo, Google, etc.).",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "web_search",
+          "description": "Tool type identifier."
+        },
+        "provider": {
+          "type": "string",
+          "enum": ["duckduckgo", "google", "bing"],
+          "description": "Search provider.",
+          "default": "duckduckgo"
+        },
+        "api_key": {
+          "type": "string",
+          "description": "API key for providers that require it. Supports env:VAR_NAME format."
+        },
+        "max_results": {
+          "type": "integer",
+          "description": "Maximum number of results to return.",
+          "minimum": 1,
+          "default": 10
+        }
+      },
+      "additionalProperties": false
+    },
+    "KnowledgeSearchToolSpec": {
+      "type": "object",
+      "description": "Knowledge search (RAG) tool configuration with vector store and embedder.",
+      "required": ["type", "vector_store", "embedder"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "knowledge_search",
+          "description": "Tool type identifier."
+        },
+        "vector_store": {
+          "$ref": "#/$defs/VectorStoreConfig",
+          "description": "Vector store configuration."
+        },
+        "embedder": {
+          "$ref": "#/$defs/EmbedderConfig",
+          "description": "Embedder configuration for generating embeddings."
+        },
+        "max_results": {
+          "type": "integer",
+          "description": "Maximum number of results to return.",
+          "minimum": 1,
+          "default": 10
+        },
+        "min_score": {
+          "type": "number",
+          "description": "Minimum relevance score threshold (0.0 to 1.0).",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "VectorStoreConfig": {
+      "type": "object",
+      "description": "Vector store configuration. Use 'type' to specify the vector store backend.",
+      "required": ["type"],
+      "oneOf": [
+        { "$ref": "#/$defs/PgVectorConfig" },
+        { "$ref": "#/$defs/MilvusConfig" },
+        { "$ref": "#/$defs/ElasticsearchConfig" },
+        { "$ref": "#/$defs/InMemoryConfig" }
+      ]
+    },
+    "PgVectorConfig": {
+      "type": "object",
+      "description": "PostgreSQL pgvector configuration.",
+      "required": ["type", "host", "user", "password", "database"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "pgvector",
+          "description": "Vector store type identifier."
+        },
+        "host": { "type": "string" },
+        "port": { "type": "integer", "default": 5432 },
+        "user": { "type": "string" },
+        "password": { "type": "string", "description": "Supports env:VAR_NAME format." },
+        "database": { "type": "string" },
+        "table": { "type": "string", "default": "documents" },
+        "dimension": { "type": "integer", "default": 1536 },
+        "ssl_mode": { "type": "string", "default": "disable" }
+      },
+      "additionalProperties": false
+    },
+    "MilvusConfig": {
+      "type": "object",
+      "description": "Milvus vector database configuration.",
+      "required": ["type", "address", "collection"],
+      "properties": {
+        "type": { "type": "string", "const": "milvus" },
+        "address": { "type": "string" },
+        "collection": { "type": "string" },
+        "dimension": { "type": "integer", "default": 1536 }
+      },
+      "additionalProperties": false
+    },
+    "ElasticsearchConfig": {
+      "type": "object",
+      "description": "Elasticsearch vector configuration.",
+      "required": ["type", "addresses", "index"],
+      "properties": {
+        "type": { "type": "string", "const": "elasticsearch" },
+        "addresses": { "type": "array", "items": { "type": "string" } },
+        "index": { "type": "string" },
+        "dimension": { "type": "integer", "default": 1536 }
+      },
+      "additionalProperties": false
+    },
+    "InMemoryConfig": {
+      "type": "object",
+      "description": "In-memory vector store configuration (for testing/development).",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "const": "inmemory" },
+        "dimension": { "type": "integer", "default": 1536 }
+      },
+      "additionalProperties": false
+    },
+    "EmbedderConfig": {
+      "type": "object",
+      "description": "Embedder configuration. Use 'type' to specify the embedder provider.",
+      "required": ["type"],
+      "oneOf": [
+        { "$ref": "#/$defs/OpenAIEmbedderConfig" },
+        { "$ref": "#/$defs/OllamaEmbedderConfig" }
+      ]
+    },
+    "OpenAIEmbedderConfig": {
+      "type": "object",
+      "description": "OpenAI embedder configuration.",
+      "required": ["type", "api_key"],
+      "properties": {
+        "type": { "type": "string", "const": "openai" },
+        "api_key": { "type": "string", "description": "Supports env:VAR_NAME format." },
+        "base_url": { "type": "string", "description": "Optional base URL for OpenAI-compatible APIs." },
+        "model": { "type": "string", "default": "text-embedding-3-small" },
+        "dimensions": { "type": "integer", "default": 1536 }
+      },
+      "additionalProperties": false
+    },
+    "OllamaEmbedderConfig": {
+      "type": "object",
+      "description": "Ollama embedder configuration.",
+      "required": ["type", "base_url", "model"],
+      "properties": {
+        "type": { "type": "string", "const": "ollama" },
+        "base_url": { "type": "string" },
+        "model": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "CodeInterpreterToolSpec": {
+      "type": "object",
+      "description": "Code interpreter tool configuration.",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "code_interpreter",
+          "description": "Tool type identifier."
+        },
+        "executor": {
+          "$ref": "#/$defs/ExecutorConfig",
+          "description": "Code executor configuration. Defaults to local executor."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecutorConfig": {
+      "type": "object",
+      "description": "Code executor configuration.",
+      "required": ["type"],
+      "oneOf": [
+        { "$ref": "#/$defs/LocalExecutorConfig" },
+        { "$ref": "#/$defs/ContainerExecutorConfig" }
+      ]
+    },
+    "LocalExecutorConfig": {
+      "type": "object",
+      "description": "Local code executor configuration.",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "const": "local" },
+        "work_dir": { "type": "string" },
+        "timeout_seconds": { "type": "integer", "minimum": 1, "default": 30 },
+        "clean_temp_files": { "type": "boolean", "default": true }
+      },
+      "additionalProperties": false
+    },
+    "ContainerExecutorConfig": {
+      "type": "object",
+      "description": "Container-based code executor configuration.",
+      "required": ["type", "image"],
+      "properties": {
+        "type": { "type": "string", "const": "container" },
+        "image": { "type": "string" },
+        "timeout_seconds": { "type": "integer", "minimum": 1, "default": 60 }
+      },
+      "additionalProperties": false
+    },
     "ModelSpec": {
       "type": "object",
       "required": ["provider", "model_name", "api_key"],
@@ -298,7 +547,7 @@
         },
         "api_key": {
           "type": "string",
-          "description": "Provider API key. For local debugging you may use an explicit env placeholder (e.g., \"env:OPENAI_API_KEY\") when compiler env secret resolution is enabled. Must be redacted in logs/export."
+          "description": "Provider API key. Supports env:VAR_NAME format."
         },
         "headers": {
           "type": "object",
@@ -364,7 +613,7 @@
     },
     "UserApprovalConfig": {
       "type": "object",
-      "description": "Configuration for a human-in-the-loop approval step. At runtime this node raises an interrupt and expects an external system to provide an approval_result string (typically \"approve\" or \"reject\"), which downstream conditions can read from state.approval_result.",
+      "description": "Configuration for a human-in-the-loop approval step.",
       "required": ["message"],
       "properties": {
         "message": {
@@ -373,7 +622,7 @@
         },
         "auto_approve": {
           "type": "boolean",
-          "description": "When true, skip the interrupt and treat the decision as approved (for demos/tests)."
+          "description": "When true, skip the interrupt and treat the decision as approved."
         }
       },
       "additionalProperties": false
@@ -382,26 +631,11 @@
       "type": "object",
       "required": ["nodes", "edges", "start_node_id", "exit_node_id"],
       "properties": {
-        "nodes": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/Node" }
-        },
-        "edges": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/Edge" }
-        },
-        "conditional_edges": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/ConditionalEdge" }
-        },
-        "start_node_id": {
-          "type": "string",
-          "description": "ID of the first node executed when entering the loop body."
-        },
-        "exit_node_id": {
-          "type": "string",
-          "description": "ID of the node whose completion triggers evaluation of the loop condition."
-        }
+        "nodes": { "type": "array", "items": { "$ref": "#/$defs/Node" } },
+        "edges": { "type": "array", "items": { "$ref": "#/$defs/Edge" } },
+        "conditional_edges": { "type": "array", "items": { "$ref": "#/$defs/ConditionalEdge" } },
+        "start_node_id": { "type": "string" },
+        "exit_node_id": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -411,11 +645,7 @@
       "properties": {
         "body": { "$ref": "#/$defs/WhileBody" },
         "condition": { "$ref": "#/$defs/Expression" },
-        "max_iterations": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Optional safety cap on loop iterations."
-        }
+        "max_iterations": { "type": "integer", "minimum": 1 }
       },
       "additionalProperties": false
     },
@@ -424,42 +654,15 @@
       "description": "Configuration for a standalone MCP node that calls a single MCP tool.",
       "required": ["server_url", "tool"],
       "properties": {
-        "server_url": {
-          "type": "string",
-          "description": "MCP server URL (e.g., https://mcp.example.com/mcp)."
-        },
-        "tool": {
-          "type": "string",
-          "description": "MCP tool name to invoke (as declared by the MCP server)."
-        },
-        "transport": {
-          "type": "string",
-          "enum": ["streamable_http", "sse"],
-          "description": "Transport mechanism for MCP. STDIO is intentionally not exposed at the DSL level."
-        },
-        "headers": {
-          "type": "object",
-          "description": "Optional HTTP headers to include when connecting to the MCP server.",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "input_schema": {
-          "type": "object",
-          "description": "JSON Schema snapshot of the MCP tool input, used for edge validation and editor hints. Typically populated by the backend when the tool is selected.",
-          "additionalProperties": true
-        },
-        "output_schema": {
-          "type": "object",
-          "description": "JSON Schema for the normalized MCP tool result exposed via node_structured[<id>].output_parsed. Typically derived from the MCP tool's output schema (when available).",
-          "additionalProperties": true
-        },
+        "server_url": { "type": "string" },
+        "tool": { "type": "string" },
+        "transport": { "type": "string", "enum": ["streamable_http", "sse"] },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "input_schema": { "type": "object", "additionalProperties": true },
+        "output_schema": { "type": "object", "additionalProperties": true },
         "params": {
           "type": "object",
-          "description": "Optional per-parameter expressions mapping from the node input object to MCP tool arguments. Keys are parameter names; values are CEL expressions evaluated in the MCP node input context (e.g., input.repoName).",
-          "additionalProperties": {
-            "$ref": "#/$defs/Expression"
-          }
+          "additionalProperties": { "$ref": "#/$defs/Expression" }
         }
       },
       "additionalProperties": false
@@ -468,22 +671,10 @@
       "type": "object",
       "required": ["source", "target"],
       "properties": {
-        "id": {
-          "type": "string",
-          "description": "Optional edge identifier (used for tooling)."
-        },
-        "source": {
-          "type": "string",
-          "description": "Source node ID (or \"__start__\" for virtual start)."
-        },
-        "target": {
-          "type": "string",
-          "description": "Target node ID (or \"__end__\" for virtual end)."
-        },
-        "label": {
-          "type": "string",
-          "description": "Optional UI label for this edge."
-        }
+        "id": { "type": "string" },
+        "source": { "type": "string" },
+        "target": { "type": "string" },
+        "label": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -491,17 +682,9 @@
       "type": "object",
       "required": ["from", "condition"],
       "properties": {
-        "id": {
-          "type": "string",
-          "description": "Optional identifier for this conditional edge."
-        },
-        "from": {
-          "type": "string",
-          "description": "Node ID where this condition is evaluated."
-        },
-        "condition": {
-          "$ref": "#/$defs/Condition"
-        }
+        "id": { "type": "string" },
+        "from": { "type": "string" },
+        "condition": { "$ref": "#/$defs/Condition" }
       },
       "additionalProperties": false
     },
@@ -512,13 +695,9 @@
         "cases": {
           "type": "array",
           "minItems": 1,
-          "description": "Ordered list of cases; the first predicate that evaluates to true wins.",
           "items": { "$ref": "#/$defs/Case" }
         },
-        "default": {
-          "type": "string",
-          "description": "Optional default target node ID when no case matches."
-        }
+        "default": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -526,17 +705,9 @@
       "type": "object",
       "required": ["predicate", "target"],
       "properties": {
-        "name": {
-          "type": "string",
-          "description": "Optional label for this case (for debugging/UI)."
-        },
-        "predicate": {
-          "$ref": "#/$defs/Expression"
-        },
-        "target": {
-          "type": "string",
-          "description": "Target node ID when this predicate evaluates to true."
-        }
+        "name": { "type": "string" },
+        "predicate": { "$ref": "#/$defs/Expression" },
+        "target": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -544,16 +715,8 @@
       "type": "object",
       "required": ["expression"],
       "properties": {
-        "expression": {
-          "type": "string",
-          "description": "Expression source code string."
-        },
-        "format": {
-          "type": "string",
-          "description": "Expression format; currently only \"cel\" is supported.",
-          "enum": ["cel"],
-          "default": "cel"
-        }
+        "expression": { "type": "string" },
+        "format": { "type": "string", "enum": ["cel"], "default": "cel" }
       },
       "additionalProperties": false
     },
@@ -561,28 +724,12 @@
       "type": "object",
       "required": ["name"],
       "properties": {
-        "name": {
-          "type": "string",
-          "description": "State field name (e.g., \"counter\", \"greeting\")."
-        },
-        "kind": {
-          "type": "string",
-          "description": "Coarse-grained type kind used by editors.",
-          "enum": ["string", "number", "boolean", "object", "array", "opaque"]
-        },
-        "json_schema": {
-          "type": "object",
-          "description": "Optional JSON Schema for structured variables.",
-          "additionalProperties": true
-        },
+        "name": { "type": "string" },
+        "kind": { "type": "string", "enum": ["string", "number", "boolean", "object", "array", "opaque"] },
+        "json_schema": { "type": "object", "additionalProperties": true },
         "description": { "type": "string" },
-        "default": {
-          "description": "Default value applied when the graph starts."
-        },
-        "reducer": {
-          "type": "string",
-          "description": "Reducer name used to merge concurrent writes (e.g., \"default\", \"append\", \"message\")."
-        }
+        "default": {},
+        "reducer": { "type": "string" }
       },
       "additionalProperties": false
     }
