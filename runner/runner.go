@@ -253,6 +253,20 @@ func (r *runner) Run(
 	// Run the agent and get the event channel.
 	agentEventCh, err := ag.Run(ctx, invocation)
 	if err != nil {
+		// Attempt to persist the error event so the session reflects the failure.
+		errorEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			ag.Info().Name,
+			model.ErrorTypeRunError,
+			err.Error(),
+		)
+		// Populate content to ensure it is valid for persistence (and viewable by users).
+		ensureErrorEventContent(errorEvent)
+
+		if appendErr := r.sessionService.AppendEvent(ctx, sess, errorEvent); appendErr != nil {
+			log.Errorf("failed to append agent run error event: %v", appendErr)
+		}
+
 		invocation.CleanupNotice(ctx)
 		return nil, err
 	}
@@ -437,6 +451,9 @@ func (r *runner) handleEventPersistence(
 	sess *session.Session,
 	agentEvent *event.Event,
 ) {
+	// Ensure error events have content so they are valid for persistence.
+	ensureErrorEventContent(agentEvent)
+
 	// Append event to session if it's complete (not partial).
 	if !r.shouldPersistEvent(agentEvent) {
 		return
@@ -599,6 +616,40 @@ func shouldAppendUserMessage(message model.Message, seed []model.Message) bool {
 		return !model.MessagesEqual(seed[i], message)
 	}
 	return true
+}
+
+// ensureErrorEventContent ensures that error events have valid content.
+// This is necessary because some models return error responses without content,
+// which would otherwise be discarded by the session service.
+func ensureErrorEventContent(e *event.Event) {
+	if e == nil || e.Response == nil || e.Response.Error == nil {
+		return
+	}
+	// If content is valid (non-empty), do nothing.
+	if e.IsValidContent() {
+		return
+	}
+
+	// Ensure Choices slice exists
+	if len(e.Response.Choices) == 0 {
+		e.Response.Choices = []model.Choice{{
+			Index: 0,
+			Message: model.Message{
+				Role: model.RoleAssistant,
+			},
+		}}
+	}
+
+	// Populate content if empty
+	if e.Response.Choices[0].Message.Content == "" {
+		e.Response.Choices[0].Message.Content = "An error occurred during execution. Please contact the service provider."
+	}
+
+	// Ensure FinishReason is set
+	if e.Response.Choices[0].FinishReason == nil {
+		reason := "error"
+		e.Response.Choices[0].FinishReason = &reason
+	}
 }
 
 // RunWithMessages is a convenience helper that lets callers pass a full
