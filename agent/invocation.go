@@ -46,6 +46,9 @@ const (
 	flusherStateKey = "__flush_session__"
 	// barrierStateKey is the invocation state key used by internal barrier flag.
 	barrierStateKey = "__graph_barrier__"
+	// appenderStateKey is the invocation state key used by internal appender
+	// attachment (see internal/state/appender).
+	appenderStateKey = "__append_event__"
 )
 
 // TransferInfo contains information about a pending agent transfer.
@@ -552,6 +555,9 @@ func (inv *Invocation) cloneState() map[string]any {
 	}
 	if barrier, ok := inv.state[barrierStateKey]; ok {
 		copied[barrierStateKey] = barrier
+	}
+	if holder, ok := inv.state[appenderStateKey]; ok {
+		copied[appenderStateKey] = holder
 	}
 	return copied
 }
