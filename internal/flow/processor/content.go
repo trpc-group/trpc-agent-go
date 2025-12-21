@@ -229,10 +229,12 @@ func (p *ContentRequestProcessor) ProcessRequest(
 
 	// Append per-filter messages from session events when allowed.
 	needToAddInvocationMessage := true
-	if !skipHistory && invocation.Session != nil {
+	if invocation.Session != nil {
 		var messages []model.Message
 		var summaryUpdatedAt time.Time
-		if p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
+		// Skip session summary when include_contents=none, but still get current
+		// invocation's events (tool calls/results) to maintain ReAct loop context.
+		if !skipHistory && p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
 			// Add session summary as a system message if enabled and available.
 			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
 			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
@@ -249,7 +251,15 @@ func (p *ContentRequestProcessor) ProcessRequest(
 				summaryUpdatedAt = updatedAt
 			}
 		}
-		messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
+		if skipHistory {
+			// When include_contents=none, only get events from current invocation
+			// to preserve tool call history within the current ReAct loop.
+			// This fixes the infinite loop issue where the agent doesn't see its
+			// own tool calls when running as an isolated subgraph.
+			messages = p.getCurrentInvocationMessages(invocation)
+		} else {
+			messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
+		}
 		req.Messages = append(req.Messages, messages...)
 		needToAddInvocationMessage = len(messages) == 0
 	}
@@ -402,6 +412,63 @@ func (p *ContentRequestProcessor) processReasoningContent(
 		}
 	}
 	return msg
+}
+
+// getCurrentInvocationMessages gets messages only from the current invocation.
+// This is used when include_contents=none to preserve tool call history within
+// the current ReAct loop while isolating from parent/other branch history.
+func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invocation) []model.Message {
+	if inv.Session == nil {
+		return nil
+	}
+
+	var events []event.Event
+	inv.Session.EventMu.RLock()
+	for _, evt := range inv.Session.Events {
+		// Only include events from current invocation
+		if evt.InvocationID != inv.InvocationID {
+			continue
+		}
+		// Skip invalid events
+		if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
+			continue
+		}
+		events = append(events, evt)
+	}
+	inv.Session.EventMu.RUnlock()
+
+	// insert invocation message if not already included
+	var hasUserMessage bool
+	for _, evt := range events {
+		if evt.IsUserMessage() && len(evt.Choices) > 0 && evt.Choices[0].Message.Content == inv.Message.Content {
+			hasUserMessage = true
+			break
+		}
+	}
+	if !hasUserMessage && inv.Message.Content != "" {
+		events = p.insertInvocationMessage(events, inv)
+	}
+
+	resultEvents := p.rearrangeLatestFuncResp(events)
+	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
+
+	// Convert events to messages.
+	var messages []model.Message
+	for _, evt := range resultEvents {
+		// Convert foreign events or keep as-is (consistent with getIncrementMessages).
+		ev := evt
+		if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
+			ev = p.convertForeignEvent(&ev)
+		}
+		if len(ev.Choices) > 0 {
+			for _, choice := range ev.Choices {
+				messages = append(messages, choice.Message)
+			}
+		}
+	}
+
+	messages = p.mergeUserMessages(messages)
+	return messages
 }
 
 func (p *ContentRequestProcessor) insertInvocationMessage(
