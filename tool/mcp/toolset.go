@@ -396,14 +396,12 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 
 		log.Debug("Tool call completed", "name", name, "content_count", len(callResp.Content))
 		result = callResp.Content
-		if len(result) == 0 {
-			if callResp.StructuredContent != nil {
-				structuredBytes, err := json.Marshal(callResp.StructuredContent)
-				if err != nil {
-					return fmt.Errorf("marshal structured content: %w", err)
-				}
-				result = append(result, mcp.NewTextContent(string(structuredBytes)))
+		if len(result) == 0 && callResp.StructuredContent != nil {
+			structuredBytes, err := json.Marshal(callResp.StructuredContent)
+			if err != nil {
+				return fmt.Errorf("marshal structured content: %w", err)
 			}
+			result = append(result, mcp.NewTextContent(string(structuredBytes)))
 		}
 		return nil
 	})
