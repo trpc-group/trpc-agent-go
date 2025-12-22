@@ -256,7 +256,7 @@ mcpToolSet := mcp.NewMCPToolSet(
         Args:      []string{"run", "./stdio_server/main.go"},
         Timeout:   10 * time.Second,
     },
-    mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")), // Optional: tool filter.
+    mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("echo", "add")), // Optional: tool filter.
 )
 
 // (Optional but recommended) Explicitly initialize MCP: connect + initialize + list tools.
