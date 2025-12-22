@@ -29,10 +29,9 @@ const (
 	testEntryName       = testMemberNameOne
 	testUserMessage     = "hi"
 
-	testCoordinatorNameMismatch = "mismatch"
-	testDescription             = "desc"
-	testToolSetName             = "custom_toolset"
-	testToolName                = "tool"
+	testDescription = "desc"
+	testToolSetName = "custom_toolset"
+	testToolName    = "tool"
 )
 
 type testAgent struct {
@@ -149,34 +148,26 @@ func (t testTool) Call(_ context.Context, _ []byte) (any, error) {
 }
 
 func TestNew_Validation(t *testing.T) {
-	coordinator := &testCoordinator{name: testCoordinatorName}
 	members := []agent.Agent{testAgent{name: testMemberNameOne}}
 
-	_, err := New("", coordinator, members)
+	_, err := New(nil, members)
 	require.Error(t, err)
 
-	_, err = New(testTeamName, nil, members)
+	_, err = New(&testCoordinator{}, members)
 	require.Error(t, err)
 
-	_, err = New(
-		testTeamName,
-		&testCoordinator{name: testCoordinatorNameMismatch},
-		members,
-	)
-	require.Error(t, err)
+	coordinator := &testCoordinator{name: testCoordinatorName}
 
-	_, err = New(testTeamName, coordinator, nil)
+	_, err = New(coordinator, nil)
 	require.Error(t, err)
 
 	_, err = New(
-		testTeamName,
 		testAgent{name: testTeamName},
 		members,
 	)
 	require.Error(t, err)
 
 	_, err = New(
-		testTeamName,
 		coordinator,
 		[]agent.Agent{
 			testAgent{name: testMemberNameOne},
@@ -186,14 +177,12 @@ func TestNew_Validation(t *testing.T) {
 	require.Error(t, err)
 
 	_, err = New(
-		testTeamName,
 		coordinator,
 		[]agent.Agent{nil},
 	)
 	require.Error(t, err)
 
 	_, err = New(
-		testTeamName,
 		coordinator,
 		[]agent.Agent{testAgent{name: ""}},
 	)
@@ -207,7 +196,7 @@ func TestNew_AddsMemberToolSet(t *testing.T) {
 		testAgent{name: testMemberNameTwo},
 	}
 
-	tm, err := New(testTeamName, coordinator, members)
+	tm, err := New(coordinator, members)
 	require.NoError(t, err)
 	require.NotNil(t, tm)
 
@@ -229,7 +218,6 @@ func TestNew_AppliesOptions(t *testing.T) {
 	members := []agent.Agent{testAgent{name: testMemberNameOne}}
 
 	tm, err := New(
-		testTeamName,
 		coordinator,
 		members,
 		WithDescription(testDescription),
@@ -245,7 +233,7 @@ func TestTeam_Run_Coordinator(t *testing.T) {
 	coordinator := &testCoordinator{name: testCoordinatorName}
 	members := []agent.Agent{testAgent{name: testMemberNameOne}}
 
-	tm, err := New(testTeamName, coordinator, members)
+	tm, err := New(coordinator, members)
 	require.NoError(t, err)
 
 	inv := agent.NewInvocation(
@@ -274,7 +262,7 @@ func TestTeam_Tools(t *testing.T) {
 		tools: []tool.Tool{tl},
 	}
 	members := []agent.Agent{testAgent{name: testMemberNameOne}}
-	tm, err := New(testTeamName, coordinator, members)
+	tm, err := New(coordinator, members)
 	require.NoError(t, err)
 
 	got := tm.Tools()
@@ -301,7 +289,7 @@ func TestTeam_Tools(t *testing.T) {
 func TestTeam_FindSubAgent(t *testing.T) {
 	coordinator := &testCoordinator{name: testCoordinatorName}
 	members := []agent.Agent{testAgent{name: testMemberNameOne}}
-	tm, err := New(testTeamName, coordinator, members)
+	tm, err := New(coordinator, members)
 	require.NoError(t, err)
 
 	require.NotNil(t, tm.FindSubAgent(testMemberNameOne))

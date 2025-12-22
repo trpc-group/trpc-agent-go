@@ -54,32 +54,28 @@ const (
 )
 
 var (
-	errEmptyTeamName = errors.New("team name is empty")
+	errEmptyTeamName  = errors.New("team name is empty")
+	errNilCoordinator = errors.New("coordinator is nil")
 )
 
 // New creates a coordinator team.
 //
 // The coordinator must support dynamic tool sets (LLMAgent does) so Team can
 // expose members as AgentTools.
+//
+// The created Team uses coordinator.Info().Name as its own name.
 func New(
-	name string,
 	coordinator agent.Agent,
 	members []agent.Agent,
 	opts ...Option,
 ) (*Team, error) {
-	if name == "" {
-		return nil, errEmptyTeamName
-	}
 	if coordinator == nil {
-		return nil, errors.New("coordinator is nil")
+		return nil, errNilCoordinator
 	}
 
-	if coordinator.Info().Name != name {
-		return nil, fmt.Errorf(
-			"coordinator name %q must match team name %q",
-			coordinator.Info().Name,
-			name,
-		)
+	name := coordinator.Info().Name
+	if name == "" {
+		return nil, errEmptyTeamName
 	}
 
 	cfg := defaultOptions(name)

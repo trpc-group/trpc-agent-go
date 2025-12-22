@@ -97,7 +97,6 @@ coordinator := llmagent.New(
 )
 
 tm, err := team.New(
-    "team",
     coordinator,
     []agent.Agent{coder, reviewer},
     team.WithDescription("A tiny coordinator team"),
@@ -112,7 +111,9 @@ _ = r
 
 Notes:
 
-- The coordinator name must match the team name (here both are `"team"`).
+- The Team name is derived from the coordinator name (here both are `"team"`;
+  `team.New` reuses `coordinator.Info().Name`), so the same session history
+  and events don't end up with two different Agent author names.
 - The coordinator must support dynamic ToolSets (LLMAgent does).
 
 ## Quickstart: Swarm

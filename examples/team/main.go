@@ -173,7 +173,7 @@ func buildRunner(
 					"then synthesize a final answer for the user.",
 			),
 		)
-		tm, err := team.New(teamName, coordinator, members)
+		tm, err := team.New(coordinator, members)
 		if err != nil {
 			return nil, err
 		}

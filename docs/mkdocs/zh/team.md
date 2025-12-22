@@ -21,7 +21,7 @@
 - 编写代码
 - 审查和纠错
 
-Team 的目标是用一个小而清晰的 Application Programming Interface（API，应用程序编程接口）
+Team 的目标是用一个小而清晰的 API
 把这些角色组合起来，且不引入难用的“多层抽象”。
 
 ## 协调者团队 vs Swarm
@@ -95,7 +95,6 @@ coordinator := llmagent.New(
 )
 
 tm, err := team.New(
-    "team",
     coordinator,
     []agent.Agent{coder, reviewer},
     team.WithDescription("A tiny coordinator team"),
@@ -110,7 +109,9 @@ _ = r
 
 注意：
 
-- 协调者的名字必须与 Team 名字一致（这里都是 `"team"`），这样事件流里看起来更直观。
+- Team 的名字来自协调者的名字（这里都是 `"team"`，`team.New` 会直接复用
+  `coordinator.Info().Name`），这样同一次会话（session）的事件（event）里不会出现
+  两套作者名。
 - 协调者需要支持动态 ToolSet（工具集，ToolSet）（LLMAgent 支持）。
 
 ## 快速上手：Swarm
@@ -131,7 +132,7 @@ if err != nil {
 - 成员需要支持 `SetSubAgents`（LLMAgent 支持）。Swarm 需要成员之间能“发现彼此”，
   才能正确 transfer。
 
-## Swarm 的安全限制（Guardrails）
+## Swarm 的安全限制
 
 Swarm 的 handoff（交接）如果不加限制，可能会出现来回 transfer 的循环。
 `team.SwarmConfig` 提供了一组可选的限制：
@@ -160,7 +161,7 @@ tm, err := team.NewSwarm(
 
 可以直接参考 `examples/team`，它包含两个模式的可运行示例。
 
-## 设计说明（简要）
+## 设计说明
 
 - 协调者团队会把成员通过 AgentTool 包装成工具，并安装到协调者上。
 - Swarm 会通过 `SetSubAgents` 把成员互相“连起来”，handoff（交接）走
