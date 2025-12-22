@@ -169,7 +169,7 @@ require (
 	sigs.k8s.io/yaml v1.4.0 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.2.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/milvus v0.0.4 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/milvus v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.0.0-20251126064502-c8c2594d2519 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.4 // indirect
 )
