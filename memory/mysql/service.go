@@ -42,6 +42,7 @@ type Service struct {
 
 	mu               sync.Mutex
 	cachedTools      map[string]tool.Tool
+	precomputedTools []tool.Tool
 	autoMemoryWorker *imemory.AutoMemoryWorker
 }
 
@@ -97,6 +98,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		s.autoMemoryWorker = imemory.NewAutoMemoryWorker(config, s)
 		s.autoMemoryWorker.Start()
 	}
+
+	// Pre-compute tools list to avoid lock contention in Tools() method.
+	s.precomputedTools = s.buildToolsList()
 
 	return s, nil
 }
@@ -360,10 +364,14 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 // Tools returns the list of available memory tools.
 // In auto memory mode (extractor is set), only search tool is returned.
 // In agentic mode, all enabled tools are returned.
+// The tools list is pre-computed at service creation time.
 func (s *Service) Tools() []tool.Tool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.precomputedTools
+}
 
+// buildToolsList builds the tools list based on configuration.
+// This is called once at service creation time.
+func (s *Service) buildToolsList() []tool.Tool {
 	// Concurrency-safe and stable order by name.
 	names := make([]string, 0, len(s.opts.toolCreators))
 	for name := range s.opts.toolCreators {

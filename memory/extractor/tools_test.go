@@ -84,7 +84,7 @@ func TestParseToolCallArgs_Add(t *testing.T) {
 			expected: &Operation{
 				Type:   OperationAdd,
 				Memory: "User likes tea.",
-				Topics: nil,
+				Topics: []string{},
 			},
 		},
 		{
@@ -224,7 +224,7 @@ func TestToStringSlice(t *testing.T) {
 		{
 			name:     "nil input",
 			input:    nil,
-			expected: nil,
+			expected: []string{},
 		},
 		{
 			name:     "empty slice",
@@ -244,7 +244,7 @@ func TestToStringSlice(t *testing.T) {
 		{
 			name:     "non-slice input",
 			input:    "not a slice",
-			expected: nil,
+			expected: []string{},
 		},
 		{
 			name:     "int slice",

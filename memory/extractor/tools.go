@@ -102,13 +102,14 @@ func parseToolCallArgs(toolName string, args map[string]any) *Operation {
 }
 
 // toStringSlice converts an any value to []string.
+// Always returns an empty slice instead of nil for consistent downstream handling.
 func toStringSlice(v any) []string {
 	if v == nil {
-		return nil
+		return []string{}
 	}
 	arr, ok := v.([]any)
 	if !ok {
-		return nil
+		return []string{}
 	}
 	result := make([]string, 0, len(arr))
 	for _, item := range arr {

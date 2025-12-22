@@ -48,7 +48,8 @@ type MemoryService struct {
 	opts serviceOpts
 	// cachedTools caches created tools to avoid recreating them.
 	cachedTools map[string]tool.Tool
-
+	// precomputedTools is the pre-computed tool list for Tools() method.
+	precomputedTools []tool.Tool
 	// autoMemoryWorker handles async memory extraction.
 	autoMemoryWorker *imemory.AutoMemoryWorker
 }
@@ -66,6 +67,9 @@ func NewMemoryService(options ...ServiceOpt) *MemoryService {
 		opts:        opts,
 		cachedTools: make(map[string]tool.Tool),
 	}
+
+	// Pre-compute tools list to avoid lock contention in Tools() method.
+	svc.precomputedTools = svc.buildToolsList()
 
 	// Initialize auto memory worker if extractor is configured.
 	if opts.extractor != nil {
@@ -305,11 +309,14 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 // Tools returns the list of available memory tools.
 // In auto memory mode (extractor is set), only search tool is returned.
 // In agentic mode, all enabled tools are returned.
+// The tools list is pre-computed at service creation time.
 func (s *MemoryService) Tools() []tool.Tool {
-	// Ensure concurrency-safety and stable ordering.
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.precomputedTools
+}
 
+// buildToolsList builds the tools list based on configuration.
+// This is called once at service creation time.
+func (s *MemoryService) buildToolsList() []tool.Tool {
 	// Collect enabled tool names and sort for stable order.
 	var names []string
 	for toolName := range s.opts.toolCreators {
