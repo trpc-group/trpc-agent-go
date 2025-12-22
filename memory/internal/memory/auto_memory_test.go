@@ -435,7 +435,7 @@ func TestAutoMemoryWorker_CreateAutoMemory_ExtractError(t *testing.T) {
 
 	worker := NewAutoMemoryWorker(config, op)
 
-	// Should not return error even if extract fails.
+	// Should return error when extract fails.
 	err := worker.createAutoMemory(context.Background(), memory.UserKey{
 		AppName: "test-app",
 		UserID:  "user-1",
@@ -443,7 +443,8 @@ func TestAutoMemoryWorker_CreateAutoMemory_ExtractError(t *testing.T) {
 		model.NewUserMessage("hello"),
 	})
 
-	assert.NoError(t, err)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "extract failed")
 }
 
 func TestAutoMemoryWorker_CreateAutoMemory_ReadError(t *testing.T) {

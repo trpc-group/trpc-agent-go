@@ -11,6 +11,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"hash/fnv"
 	"sync"
 	"time"
@@ -175,10 +176,15 @@ func (w *AutoMemoryWorker) tryEnqueueJob(
 	// Use hash distribution for consistent routing.
 	hash := HashUserKey(userKey)
 	index := hash % len(w.jobChans)
+	// Use a defer-recover pattern to handle potential panic from sending to
+	// closed channel.
 	defer func() {
 		if r := recover(); r != nil {
-			log.WarnfContext(ctx,
-				"memory job channel closed, fallback to sync: %v", r)
+			log.WarnfContext(
+				ctx,
+				"memory job channel may be closed, falling back to synchronous processing: %v",
+				r,
+			)
 		}
 	}()
 	select {
@@ -214,8 +220,6 @@ func (w *AutoMemoryWorker) processJob(job *MemoryJob) {
 }
 
 // createAutoMemory performs memory extraction and persists operations.
-// Returns nil even on error because memory extraction failure should not
-// block the main conversation flow.
 func (w *AutoMemoryWorker) createAutoMemory(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -237,8 +241,7 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	// Extract memory operations.
 	ops, err := w.config.Extractor.Extract(ctx, messages, existing)
 	if err != nil {
-		log.Warnf("auto_memory: extract failed: %v", err)
-		return nil
+		return fmt.Errorf("auto_memory: extract failed: %w", err)
 	}
 	// Execute operations.
 	for _, op := range ops {

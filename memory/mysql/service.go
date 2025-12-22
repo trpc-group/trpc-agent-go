@@ -86,6 +86,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		}
 	}
 
+	// Pre-compute tools list to avoid lock contention in Tools() method.
+	s.precomputedTools = s.buildToolsList()
+
 	// Initialize auto memory worker if extractor is configured.
 	if opts.extractor != nil {
 		config := imemory.AutoMemoryConfig{
@@ -98,9 +101,6 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		s.autoMemoryWorker = imemory.NewAutoMemoryWorker(config, s)
 		s.autoMemoryWorker.Start()
 	}
-
-	// Pre-compute tools list to avoid lock contention in Tools() method.
-	s.precomputedTools = s.buildToolsList()
 
 	return s, nil
 }

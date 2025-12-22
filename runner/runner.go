@@ -696,6 +696,7 @@ func extractMessagesFromSession(sess *session.Session) []model.Message {
 
 	// Find the last user message index to determine current turn start.
 	lastUserIdx := -1
+findLastUser:
 	for i := len(events) - 1; i >= 0; i-- {
 		evt := &events[i]
 		if evt.Response == nil {
@@ -704,11 +705,8 @@ func extractMessagesFromSession(sess *session.Session) []model.Message {
 		for _, choice := range evt.Response.Choices {
 			if choice.Message.Role == model.RoleUser && choice.Message.Content != "" {
 				lastUserIdx = i
-				break
+				break findLastUser
 			}
-		}
-		if lastUserIdx >= 0 {
-			break
 		}
 	}
 	// No user message found, nothing to extract.
