@@ -62,43 +62,39 @@ if err != nil {
   "name": "math-basic",
   "evalCases": [
     {
-        "evalId": "calc_add",
-        "conversation": [
-          {
-            "invocationId": "calc_add-1",
-            "userContent": {
-              "parts": [
-                {
-                  "text": "calc add 2 3"
-                }
-              ],
-              "role": "user"
-            },
-            "finalResponse": {
-              "parts": [
-                {
-                  "text": "calc result: 5"
-                }
-              ],
-              "role": "assistant"
-            },
+      "evalId": "calc_add",
+      "conversation": [
+        {
+          "invocationId": "calc_add-1",
+          "userContent": {
+            "role": "user",
+            "content": "calc add 2 3"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "calc result: 5"
+          },
             "intermediateData": {
-              "toolUses": [
+              "toolCalls": [
                 {
                   "id": "tool_use_1",
-                  "args": {
-                    "a": 2,
-                    "b": 3,
-                    "operation": "add"
-                  },
-                  "name": "calculator"
+                  "type": "function",
+                  "function": {
+                    "name": "calculator",
+                    "arguments": {
+                      "operation": "add",
+                      "a": 2,
+                      "b": 3
+                    }
+                  }
                 }
               ],
               "toolResponses": [
                 {
-                  "id": "tool_use_1",
-                  "name": "calculator",
-                  "response": {
+                  "role": "tool",
+                  "toolId": "tool_use_1",
+                  "toolName": "calculator",
+                  "content": {
                     "a": 2,
                     "b": 3,
                     "operation": "add",
@@ -108,12 +104,12 @@ if err != nil {
               ]
             }
           }
-        ],
-        "sessionInput": {
-          "appName": "math-eval-app",
-          "userId": "user"
-        }
+      ],
+      "sessionInput": {
+        "appName": "math-eval-app",
+        "userId": "user"
       }
+    }
   ],
   "creationTimestamp": 1761134484.9804401
 }
@@ -149,24 +145,24 @@ if err != nil {
 
 ```json
 {
-  "evalSetResultId": "math-eval-app_math-basic_d545562e-f2fa-4dcf-816e-3474e85b3494",
-  "evalSetResultName": "math-eval-app_math-basic_d545562e-f2fa-4dcf-816e-3474e85b3494",
+  "evalSetResultId": "math-eval-app_math-basic_64377112-1403-4e7d-ab90-8fce26f5aeb0",
+  "evalSetResultName": "math-eval-app_math-basic_64377112-1403-4e7d-ab90-8fce26f5aeb0",
   "evalSetId": "math-basic",
-  "evalCaseResults": [
-    {
-      "evalSetId": "math-basic",
-      "evalId": "calc_add",
-      "finalEvalStatus": 1,
-      "overallEvalMetricResults": [
+      "evalCaseResults": [
         {
-          "metricName": "tool_trajectory_avg_score",
-          "score": 1,
-          "evalStatus": 1,
-          "threshold": 1,
-          "criterion": {
-            "toolTrajectory": {
-              "defaultStrategy": {
-                "name": {
+          "evalSetId": "math-basic",
+          "evalId": "calc_add",
+          "finalEvalStatus": "passed",
+          "overallEvalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
                   "matchStrategy": "exact"
                 },
                 "arguments": {
@@ -177,46 +173,45 @@ if err != nil {
                 }
               }
             }
+          },
+          "details": {
+            "score": 1
           }
         }
       ],
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "53845847-16e0-4960-9d00-d3abf0ab1807",
+            "invocationId": "74ca1b65-e143-4c98-b42e-3239f3b91ea0",
             "userContent": {
-              "parts": [
-                {
-                  "text": "calc add 2 3"
-                }
-              ],
-              "role": "user"
+              "role": "user",
+              "content": "calc add 2 3"
             },
             "finalResponse": {
-              "parts": [
-                {
-                  "text": "The result of 2 + 3 is **5**."
-                }
-              ],
-              "role": "assistant"
+              "role": "assistant",
+              "content": "2 + 3 = 5"
             },
             "intermediateData": {
-              "toolUses": [
+              "toolCalls": [
                 {
-                  "id": "call_00_J7WhW8PJurYtWji3J5H7ITN9",
-                  "args": {
-                    "a": 2,
-                    "b": 3,
-                    "operation": "add"
-                  },
-                  "name": "calculator"
+                  "id": "call_00_YFh5dH5naCL8SDmdPGx23lbT",
+                  "type": "function",
+                  "function": {
+                    "name": "calculator",
+                    "arguments": {
+                      "a": 2,
+                      "b": 3,
+                      "operation": "add"
+                    }
+                  }
                 }
               ],
               "toolResponses": [
                 {
-                  "id": "call_00_J7WhW8PJurYtWji3J5H7ITN9",
-                  "name": "calculator",
-                  "response": {
+                  "role": "tool",
+                  "toolId": "call_00_YFh5dH5naCL8SDmdPGx23lbT",
+                  "toolName": "calculator",
+                  "content": {
                     "a": 2,
                     "b": 3,
                     "operation": "add",
@@ -229,38 +224,34 @@ if err != nil {
           "expectedInvocation": {
             "invocationId": "calc_add-1",
             "userContent": {
-              "parts": [
-                {
-                  "text": "calc add 2 3"
-                }
-              ],
-              "role": "user"
+              "role": "user",
+              "content": "calc add 2 3"
             },
             "finalResponse": {
-              "parts": [
-                {
-                  "text": "calc result: 5"
-                }
-              ],
-              "role": "assistant"
+              "role": "assistant",
+              "content": "calc result: 5"
             },
             "intermediateData": {
-              "toolUses": [
+              "toolCalls": [
                 {
                   "id": "tool_use_1",
-                  "args": {
-                    "a": 2,
-                    "b": 3,
-                    "operation": "add"
-                  },
-                  "name": "calculator"
+                  "type": "function",
+                  "function": {
+                    "name": "calculator",
+                    "arguments": {
+                      "a": 2,
+                      "b": 3,
+                      "operation": "add"
+                    }
+                  }
                 }
               ],
               "toolResponses": [
                 {
-                  "id": "tool_use_1",
-                  "name": "calculator",
-                  "response": {
+                  "role": "tool",
+                  "toolId": "tool_use_1",
+                  "toolName": "calculator",
+                  "content": {
                     "a": 2,
                     "b": 3,
                     "operation": "add",
@@ -274,7 +265,7 @@ if err != nil {
             {
               "metricName": "tool_trajectory_avg_score",
               "score": 1,
-              "evalStatus": 1,
+              "evalStatus": "passed",
               "threshold": 1,
               "criterion": {
                 "toolTrajectory": {
@@ -290,16 +281,19 @@ if err != nil {
                     }
                   }
                 }
+              },
+              "details": {
+                "score": 1
               }
             }
           ]
         }
       ],
-      "sessionId": "e9cc851f-8c89-45f4-b430-7c54991c7dda",
+      "sessionId": "154015e2-2126-4ff5-9da0-d70012b819f5",
       "userId": "user"
     }
   ],
-  "creationTimestamp": 1763997862.5581782
+  "creationTimestamp": 1765982990.106037
 }
 ```
 
@@ -363,7 +357,7 @@ if err != nil {
 
 ```go
 import (
-	"google.golang.org/genai"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 )
 
@@ -376,44 +370,31 @@ cases := []*evalset.EvalCase{
 		Conversation: []*evalset.Invocation{
 			{
 				InvocationID: "calc_add-1",
-				UserContent: &genai.Content{
-					Role: "user",
-					Parts: []*genai.Part{
-						{
-							Text: "calc add 2 3",
-						},
-					},
+				UserContent: &model.Message{
+					Role:    model.RoleUser,
+					Content: "calc add 2 3",
 				},
-				FinalResponse: &genai.Content{
-					Role: "assistant",
-					Parts: []*genai.Part{
-						{
-							Text: "calc result: 5",
-						},
-					},
+				FinalResponse: &model.Message{
+					Role:    model.RoleAssistant,
+					Content: "calc result: 5",
 				},
 				IntermediateData: &evalset.IntermediateData{
-					ToolUses: []*genai.FunctionCall{
+					ToolCalls: []*model.ToolCall{
 						{
 							ID:   "tool_use_1",
-							Name: "calculator",
-							Args: map[string]interface{}{
-								"operation": "add",
-								"a":         2.0,
-								"b":         3.0,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "calculator",
+								Arguments: []byte(`{"operation":"add","a":2,"b":3}`),
 							},
 						},
 					},
-					ToolResponses: []*genai.FunctionResponse{
+					ToolResponses: []*model.Message{
 						{
-							ID:   "tool_use_1",
-							Name: "calculator",
-							Response: map[string]interface{}{
-								"a":         2.0,
-								"b":         3.0,
-								"operation": "add",
-								"result":    5.0,
-							},
+							Role:     model.RoleTool,
+							ToolID:   "tool_use_1",
+							ToolName: "calculator",
+							Content:  `{"a":2,"b":3,"operation":"add","result":5}`,
 						},
 					},
 				},
@@ -466,7 +447,7 @@ metricManager.Add(ctx, appName, evalSetID, evalMetric)
 ## 核心概念
 
 ![evaluation](../assets/img/evaluation/evaluation.png)
-                                                                                                                           
+
 - 评估集 EvalSet 提供评估所需的数据集，包含用户输入及其对应的预期 Agent 输出。
 - 评估指标 Metric 定义用于衡量模型表现的指标信息，包括指标名称及对应的分数阈值。
 - 评估器 Evaluator 负责对比实际会话结果与预期会话结果，计算具体得分，并依据评估指标阈值判断评估状态。
@@ -493,8 +474,8 @@ EvalSet 是一组 EvalCase 的集合，通过唯一的 EvalSetID 进行标识，
 
 ```go
 import (
-	"google.golang.org/genai"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // EvalSet 表示一个评估集
@@ -517,24 +498,24 @@ type EvalCase struct {
 // Invocation 表示一次用户与 Agent 的交互
 type Invocation struct {
 	InvocationID      string
-	UserContent       *genai.Content       // 用户输入
-	FinalResponse     *genai.Content       // Agent 最终响应
+	UserContent       *model.Message       // 用户输入
+	FinalResponse     *model.Message       // Agent 最终响应
 	IntermediateData  *IntermediateData    // Agent 中间响应数据
 	CreationTimestamp *epochtime.EpochTime // 创建时间
 }
 
 // IntermediateData 表示执行过程中的中间数据
 type IntermediateData struct {
-	ToolUses              []*genai.FunctionCall     // 工具调用
-	ToolResponses         []*genai.FunctionResponse // 工具响应
-	IntermediateResponses [][]any                   // 中间响应，包含来源与内容
+	ToolCalls             []*model.ToolCall   // 工具调用
+	ToolResponses         []*model.Message    // 工具响应
+	IntermediateResponses []*model.Message    // 中间响应
 }
 
 // SessionInput 表示 Session 初始化输入
 type SessionInput struct {
 	AppName string                 // 应用名
 	UserID  string                 // 用户 ID
-	State   map[string]interface{} // 初始状态
+	State   map[string]any         // 初始状态
 }
 ```
 

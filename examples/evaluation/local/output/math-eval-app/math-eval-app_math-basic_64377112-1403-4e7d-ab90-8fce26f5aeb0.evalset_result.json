@@ -1,17 +1,17 @@
 {
-  "evalSetResultId": "math-eval-app_math-basic_d545562e-f2fa-4dcf-816e-3474e85b3494",
-  "evalSetResultName": "math-eval-app_math-basic_d545562e-f2fa-4dcf-816e-3474e85b3494",
+  "evalSetResultId": "math-eval-app_math-basic_64377112-1403-4e7d-ab90-8fce26f5aeb0",
+  "evalSetResultName": "math-eval-app_math-basic_64377112-1403-4e7d-ab90-8fce26f5aeb0",
   "evalSetId": "math-basic",
   "evalCaseResults": [
     {
       "evalSetId": "math-basic",
       "evalId": "calc_add",
-      "finalEvalStatus": 1,
+      "finalEvalStatus": "passed",
       "overallEvalMetricResults": [
         {
           "metricName": "tool_trajectory_avg_score",
           "score": 1,
-          "evalStatus": 1,
+          "evalStatus": "passed",
           "threshold": 1,
           "criterion": {
             "toolTrajectory": {
@@ -27,46 +27,45 @@
                 }
               }
             }
+          },
+          "details": {
+            "score": 1
           }
         }
       ],
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "53845847-16e0-4960-9d00-d3abf0ab1807",
+            "invocationId": "74ca1b65-e143-4c98-b42e-3239f3b91ea0",
             "userContent": {
-              "parts": [
-                {
-                  "text": "calc add 2 3"
-                }
-              ],
-              "role": "user"
+              "role": "user",
+              "content": "calc add 2 3"
             },
             "finalResponse": {
-              "parts": [
-                {
-                  "text": "The result of 2 + 3 is **5**."
-                }
-              ],
-              "role": "assistant"
+              "role": "assistant",
+              "content": "2 + 3 = 5"
             },
             "intermediateData": {
-              "toolUses": [
+              "toolCalls": [
                 {
-                  "id": "call_00_J7WhW8PJurYtWji3J5H7ITN9",
-                  "args": {
-                    "a": 2,
-                    "b": 3,
-                    "operation": "add"
-                  },
-                  "name": "calculator"
+                  "id": "call_00_YFh5dH5naCL8SDmdPGx23lbT",
+                  "type": "function",
+                  "function": {
+                    "name": "calculator",
+                    "arguments": {
+                      "a": 2,
+                      "b": 3,
+                      "operation": "add"
+                    }
+                  }
                 }
               ],
               "toolResponses": [
                 {
-                  "id": "call_00_J7WhW8PJurYtWji3J5H7ITN9",
-                  "name": "calculator",
-                  "response": {
+                  "role": "tool",
+                  "toolId": "call_00_YFh5dH5naCL8SDmdPGx23lbT",
+                  "toolName": "calculator",
+                  "content": {
                     "a": 2,
                     "b": 3,
                     "operation": "add",
@@ -79,38 +78,34 @@
           "expectedInvocation": {
             "invocationId": "calc_add-1",
             "userContent": {
-              "parts": [
-                {
-                  "text": "calc add 2 3"
-                }
-              ],
-              "role": "user"
+              "role": "user",
+              "content": "calc add 2 3"
             },
             "finalResponse": {
-              "parts": [
-                {
-                  "text": "calc result: 5"
-                }
-              ],
-              "role": "assistant"
+              "role": "assistant",
+              "content": "calc result: 5"
             },
             "intermediateData": {
-              "toolUses": [
+              "toolCalls": [
                 {
                   "id": "tool_use_1",
-                  "args": {
-                    "a": 2,
-                    "b": 3,
-                    "operation": "add"
-                  },
-                  "name": "calculator"
+                  "type": "function",
+                  "function": {
+                    "name": "calculator",
+                    "arguments": {
+                      "a": 2,
+                      "b": 3,
+                      "operation": "add"
+                    }
+                  }
                 }
               ],
               "toolResponses": [
                 {
-                  "id": "tool_use_1",
-                  "name": "calculator",
-                  "response": {
+                  "role": "tool",
+                  "toolId": "tool_use_1",
+                  "toolName": "calculator",
+                  "content": {
                     "a": 2,
                     "b": 3,
                     "operation": "add",
@@ -124,7 +119,7 @@
             {
               "metricName": "tool_trajectory_avg_score",
               "score": 1,
-              "evalStatus": 1,
+              "evalStatus": "passed",
               "threshold": 1,
               "criterion": {
                 "toolTrajectory": {
@@ -140,23 +135,26 @@
                     }
                   }
                 }
+              },
+              "details": {
+                "score": 1
               }
             }
           ]
         }
       ],
-      "sessionId": "e9cc851f-8c89-45f4-b430-7c54991c7dda",
+      "sessionId": "154015e2-2126-4ff5-9da0-d70012b819f5",
       "userId": "user"
     },
     {
       "evalSetId": "math-basic",
       "evalId": "calc_multiply",
-      "finalEvalStatus": 1,
+      "finalEvalStatus": "passed",
       "overallEvalMetricResults": [
         {
           "metricName": "tool_trajectory_avg_score",
           "score": 1,
-          "evalStatus": 1,
+          "evalStatus": "passed",
           "threshold": 1,
           "criterion": {
             "toolTrajectory": {
@@ -172,46 +170,45 @@
                 }
               }
             }
+          },
+          "details": {
+            "score": 1
           }
         }
       ],
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "bfc1f3ef-7b7c-4d36-ac50-6fa3a9991abb",
+            "invocationId": "fca17634-3cd0-45e8-83e0-a485b4d93f8b",
             "userContent": {
-              "parts": [
-                {
-                  "text": "calc multiply 6 7"
-                }
-              ],
-              "role": "user"
+              "role": "user",
+              "content": "calc multiply 6 7"
             },
             "finalResponse": {
-              "parts": [
-                {
-                  "text": "6 multiplied by 7 equals 42."
-                }
-              ],
-              "role": "assistant"
+              "role": "assistant",
+              "content": "6 × 7 = 42"
             },
             "intermediateData": {
-              "toolUses": [
+              "toolCalls": [
                 {
-                  "id": "call_00_xcGeTAsvZJxhKMA8oT478nMP",
-                  "args": {
-                    "a": 6,
-                    "b": 7,
-                    "operation": "multiply"
-                  },
-                  "name": "calculator"
+                  "id": "call_00_z4ogMRynX8e5ZRtg8AsGj25c",
+                  "type": "function",
+                  "function": {
+                    "name": "calculator",
+                    "arguments": {
+                      "a": 6,
+                      "b": 7,
+                      "operation": "multiply"
+                    }
+                  }
                 }
               ],
               "toolResponses": [
                 {
-                  "id": "call_00_xcGeTAsvZJxhKMA8oT478nMP",
-                  "name": "calculator",
-                  "response": {
+                  "role": "tool",
+                  "toolId": "call_00_z4ogMRynX8e5ZRtg8AsGj25c",
+                  "toolName": "calculator",
+                  "content": {
                     "a": 6,
                     "b": 7,
                     "operation": "multiply",
@@ -224,38 +221,34 @@
           "expectedInvocation": {
             "invocationId": "calc_multiply-1",
             "userContent": {
-              "parts": [
-                {
-                  "text": "calc multiply 6 7"
-                }
-              ],
-              "role": "user"
+              "role": "user",
+              "content": "calc multiply 6 7"
             },
             "finalResponse": {
-              "parts": [
-                {
-                  "text": "calc result: 42"
-                }
-              ],
-              "role": "assistant"
+              "role": "assistant",
+              "content": "calc result: 42"
             },
             "intermediateData": {
-              "toolUses": [
+              "toolCalls": [
                 {
                   "id": "tool_use_2",
-                  "args": {
-                    "a": 6,
-                    "b": 7,
-                    "operation": "multiply"
-                  },
-                  "name": "calculator"
+                  "type": "function",
+                  "function": {
+                    "name": "calculator",
+                    "arguments": {
+                      "a": 6,
+                      "b": 7,
+                      "operation": "multiply"
+                    }
+                  }
                 }
               ],
               "toolResponses": [
                 {
-                  "id": "tool_use_2",
-                  "name": "calculator",
-                  "response": {
+                  "role": "tool",
+                  "toolId": "tool_use_2",
+                  "toolName": "calculator",
+                  "content": {
                     "a": 6,
                     "b": 7,
                     "operation": "multiply",
@@ -269,7 +262,7 @@
             {
               "metricName": "tool_trajectory_avg_score",
               "score": 1,
-              "evalStatus": 1,
+              "evalStatus": "passed",
               "threshold": 1,
               "criterion": {
                 "toolTrajectory": {
@@ -285,14 +278,17 @@
                     }
                   }
                 }
+              },
+              "details": {
+                "score": 1
               }
             }
           ]
         }
       ],
-      "sessionId": "bd844ee7-066c-43b0-adfa-34e1d8bffeb6",
+      "sessionId": "14e0ac60-dcb3-499c-a935-d818f6ee0960",
       "userId": "user"
     }
   ],
-  "creationTimestamp": 1763997862.5581782
+  "creationTimestamp": 1765982990.106037
 }

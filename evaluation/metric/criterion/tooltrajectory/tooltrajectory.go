@@ -16,10 +16,10 @@ import (
 	"fmt"
 	"sort"
 
-	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	criterionjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // New creates a ToolTrajectoryCriterion with the provided options.
@@ -64,25 +64,25 @@ func (t *ToolTrajectoryCriterion) Match(actual, expected *evalset.Invocation) (b
 		return false, fmt.Errorf("actual or expected intermediate data is nil")
 	}
 	// Ensure one-to-one mapping between tool calls and responses on actual invocation.
-	if len(actual.IntermediateData.ToolUses) != len(actual.IntermediateData.ToolResponses) {
-		return false, fmt.Errorf("tool uses and tool responses count mismatch: %d != %d",
-			len(actual.IntermediateData.ToolUses), len(actual.IntermediateData.ToolResponses))
+	if len(actual.IntermediateData.ToolCalls) != len(actual.IntermediateData.ToolResponses) {
+		return false, fmt.Errorf("tool calls and tool responses count mismatch: %d != %d",
+			len(actual.IntermediateData.ToolCalls), len(actual.IntermediateData.ToolResponses))
 	}
 	// Ensure one-to-one mapping between tool calls and responses on expected invocation.
-	if len(expected.IntermediateData.ToolUses) != len(expected.IntermediateData.ToolResponses) {
-		return false, fmt.Errorf("tool uses and tool responses count mismatch: %d != %d",
-			len(expected.IntermediateData.ToolUses), len(expected.IntermediateData.ToolResponses))
+	if len(expected.IntermediateData.ToolCalls) != len(expected.IntermediateData.ToolResponses) {
+		return false, fmt.Errorf("tool calls and tool responses count mismatch: %d != %d",
+			len(expected.IntermediateData.ToolCalls), len(expected.IntermediateData.ToolResponses))
 	}
-	// Ensure the same number of tool uses before detailed comparison.
-	if len(actual.IntermediateData.ToolUses) != len(expected.IntermediateData.ToolUses) {
-		return false, fmt.Errorf("tool uses count mismatch: %d != %d",
-			len(actual.IntermediateData.ToolUses), len(expected.IntermediateData.ToolUses))
+	// Ensure the same number of tool calls before detailed comparison.
+	if len(actual.IntermediateData.ToolCalls) != len(expected.IntermediateData.ToolCalls) {
+		return false, fmt.Errorf("tool calls count mismatch: %d != %d",
+			len(actual.IntermediateData.ToolCalls), len(expected.IntermediateData.ToolCalls))
 	}
-	if len(actual.IntermediateData.ToolUses) == 0 {
+	if len(actual.IntermediateData.ToolCalls) == 0 {
 		return true, nil
 	}
 	actualTools, err := getToolComparers(
-		actual.IntermediateData.ToolUses,
+		actual.IntermediateData.ToolCalls,
 		actual.IntermediateData.ToolResponses,
 		t.OrderInsensitive,
 	)
@@ -90,7 +90,7 @@ func (t *ToolTrajectoryCriterion) Match(actual, expected *evalset.Invocation) (b
 		return false, fmt.Errorf("get actual tools: %w", err)
 	}
 	expectedTools, err := getToolComparers(
-		expected.IntermediateData.ToolUses,
+		expected.IntermediateData.ToolCalls,
 		expected.IntermediateData.ToolResponses,
 		t.OrderInsensitive,
 	)
@@ -173,43 +173,49 @@ func (t *toolComparer) lessThan(other *toolComparer) bool {
 	return false
 }
 
-// getToolComparers aligns tool uses with their responses and builds toolComparer.
-func getToolComparers(toolUses []*genai.FunctionCall, toolResponses []*genai.FunctionResponse,
+// getToolComparers aligns tool calls with their responses and builds toolComparer.
+func getToolComparers(toolCalls []*model.ToolCall, toolResponses []*model.Message,
 	orderInsensitive bool) ([]*toolComparer, error) {
 	// toolCallIDs ensures every tool use can be matched by ID.
 	// Map from tool call id to index.
 	toolCallIDs := make(map[string]int)
-	for i := range len(toolUses) {
-		if toolUses[i].ID == "" {
+	for i := range len(toolCalls) {
+		if toolCalls[i] == nil {
+			return nil, fmt.Errorf("tool use is nil")
+		}
+		if toolCalls[i].ID == "" {
 			return nil, fmt.Errorf("tool use id is empty")
 		}
-		if _, ok := toolCallIDs[toolUses[i].ID]; ok {
-			return nil, fmt.Errorf("tool use id %s is duplicated", toolUses[i].ID)
+		if _, ok := toolCallIDs[toolCalls[i].ID]; ok {
+			return nil, fmt.Errorf("tool use id %s is duplicated", toolCalls[i].ID)
 		}
-		toolCallIDs[toolUses[i].ID] = i
+		toolCallIDs[toolCalls[i].ID] = i
 	}
 	// toolResponseIDs ensures every tool response can be matched by ID.
 	// Map from tool response id to index.
 	toolResponseIDs := make(map[string]int)
 	for i := range len(toolResponses) {
-		if toolResponses[i].ID == "" {
+		if toolResponses[i] == nil {
+			return nil, fmt.Errorf("tool response is nil")
+		}
+		if toolResponses[i].ToolID == "" {
 			return nil, fmt.Errorf("tool response id is empty")
 		}
-		if _, ok := toolResponseIDs[toolResponses[i].ID]; ok {
-			return nil, fmt.Errorf("tool response id %s is duplicated", toolResponses[i].ID)
+		if _, ok := toolResponseIDs[toolResponses[i].ToolID]; ok {
+			return nil, fmt.Errorf("tool response id %s is duplicated", toolResponses[i].ToolID)
 		}
-		toolResponseIDs[toolResponses[i].ID] = i
+		toolResponseIDs[toolResponses[i].ToolID] = i
 	}
 	for toolID := range toolCallIDs {
 		if _, ok := toolResponseIDs[toolID]; !ok {
 			return nil, fmt.Errorf("tool id %s is missing response", toolID)
 		}
 	}
-	toolComparers := make([]*toolComparer, 0, len(toolUses))
-	for i := range len(toolUses) {
+	toolComparers := make([]*toolComparer, 0, len(toolCalls))
+	for i := range len(toolCalls) {
 		toolComparer, err := getToolComparer(
-			toolUses[i],
-			toolResponses[toolResponseIDs[toolUses[i].ID]],
+			toolCalls[i],
+			toolResponses[toolResponseIDs[toolCalls[i].ID]],
 			orderInsensitive,
 		)
 		if err != nil {
@@ -220,23 +226,31 @@ func getToolComparers(toolUses []*genai.FunctionCall, toolResponses []*genai.Fun
 	return toolComparers, nil
 }
 
-// getToolComparer pairs a tool use with its response and precomputes ordering hints.
-func getToolComparer(toolUse *genai.FunctionCall, toolResponse *genai.FunctionResponse,
+// getToolComparer pairs a tool call with its response and precomputes ordering hints.
+func getToolComparer(toolCall *model.ToolCall, toolResponse *model.Message,
 	orderInsensitive bool) (*toolComparer, error) {
-	if toolUse == nil || toolResponse == nil {
-		return nil, errors.New("tool use or tool response is nil")
+	if toolCall == nil || toolResponse == nil {
+		return nil, errors.New("tool call or tool response is nil")
 	}
 	tool := &toolComparer{
-		name:     toolUse.Name,
-		args:     toolUse.Args,
-		response: toolResponse.Response,
+		name: toolCall.Function.Name,
+	}
+	if len(toolCall.Function.Arguments) > 0 {
+		if err := json.Unmarshal(toolCall.Function.Arguments, &tool.args); err != nil {
+			return nil, fmt.Errorf("unmarshal arguments: %w", err)
+		}
+	}
+	if toolResponse.Content != "" {
+		if err := json.Unmarshal([]byte(toolResponse.Content), &tool.response); err != nil {
+			return nil, fmt.Errorf("unmarshal response: %w", err)
+		}
 	}
 	if orderInsensitive {
-		args, err := json.Marshal(toolUse.Args)
+		args, err := json.Marshal(tool.args)
 		if err != nil {
 			return nil, fmt.Errorf("marshal arguments: %w", err)
 		}
-		response, err := json.Marshal(toolResponse.Response)
+		response, err := json.Marshal(tool.response)
 		if err != nil {
 			return nil, fmt.Errorf("marshal response: %w", err)
 		}

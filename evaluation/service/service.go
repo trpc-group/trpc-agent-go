@@ -30,7 +30,6 @@ type Service interface {
 }
 
 // InferenceRequest represents a request for running the agent inference on an eval set.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type InferenceRequest struct {
 	// AppName is the name of the app.
 	AppName string `json:"appName,omitempty"`
@@ -42,7 +41,6 @@ type InferenceRequest struct {
 }
 
 // InferenceResult contains the inference results for a single eval case.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type InferenceResult struct {
 	// AppName is the name of the app.
 	AppName string `json:"appName,omitempty"`
@@ -61,7 +59,6 @@ type InferenceResult struct {
 }
 
 // EvaluateRequest represents a request for running the evaluation on the inference results.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvaluateRequest struct {
 	// AppName is the name of the app.
 	AppName string `json:"appName,omitempty"`
@@ -74,7 +71,6 @@ type EvaluateRequest struct {
 }
 
 // EvaluateConfig contains evaluation configuration used during evaluation.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvaluateConfig struct {
 	// EvalMetrics contains the metrics to be evaluated.
 	EvalMetrics []*metric.EvalMetric `json:"evalMetrics,omitempty"`

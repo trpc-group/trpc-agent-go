@@ -14,9 +14,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 
-	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
@@ -25,10 +23,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
-	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
-	ctooltrajectory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -89,7 +86,7 @@ func printSummary(ctx context.Context, result *evaluation.EvaluationResult, eval
 	fmt.Println("✅ Evaluation completed")
 	fmt.Printf("App: %s\n", result.AppName)
 	fmt.Printf("Eval Set: %s\n", result.EvalSetID)
-	fmt.Printf("Overall Status: %s\n", result.OverallStatus.String())
+	fmt.Printf("Overall Status: %s\n", result.OverallStatus)
 	runs := 0
 	if len(result.EvalCases) > 0 {
 		runs = len(result.EvalCases[0].EvalCaseResults)
@@ -97,13 +94,13 @@ func printSummary(ctx context.Context, result *evaluation.EvaluationResult, eval
 	fmt.Printf("Runs: %d\n", runs)
 
 	for _, caseResult := range result.EvalCases {
-		fmt.Printf("Case %s -> %s\n", caseResult.EvalCaseID, caseResult.OverallStatus.String())
+		fmt.Printf("Case %s -> %s\n", caseResult.EvalCaseID, caseResult.OverallStatus)
 		for _, metricResult := range caseResult.MetricResults {
 			fmt.Printf("  Metric %s: score %.2f (threshold %.2f) => %s\n",
 				metricResult.MetricName,
 				metricResult.Score,
 				metricResult.Threshold,
-				metricResult.EvalStatus.String(),
+				metricResult.EvalStatus,
 			)
 		}
 		fmt.Println()
@@ -140,44 +137,40 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 			Conversation: []*evalset.Invocation{
 				{
 					InvocationID: "calc_add-1",
-					UserContent: &genai.Content{
-						Role: "user",
-						Parts: []*genai.Part{
-							{
-								Text: "calc add 2 3",
-							},
-						},
+					UserContent: &model.Message{
+						Role:    model.RoleUser,
+						Content: "calc add 2 3",
 					},
-					FinalResponse: &genai.Content{
-						Role: "assistant",
-						Parts: []*genai.Part{
-							{
-								Text: "calc result: 5",
-							},
-						},
+					FinalResponse: &model.Message{
+						Role:    model.RoleAssistant,
+						Content: "calc result: 5",
 					},
 					IntermediateData: &evalset.IntermediateData{
-						ToolUses: []*genai.FunctionCall{
+						ToolCalls: []*model.ToolCall{
 							{
+								Type: "function",
 								ID:   "tool_use_1",
-								Name: "calculator",
-								Args: map[string]any{
-									"operation": "add",
-									"a":         2.0,
-									"b":         3.0,
+								Function: model.FunctionDefinitionParam{
+									Name: "calculator",
+									Arguments: mustJSON(map[string]any{
+										"operation": "add",
+										"a":         2.0,
+										"b":         3.0,
+									}),
 								},
 							},
 						},
-						ToolResponses: []*genai.FunctionResponse{
+						ToolResponses: []*model.Message{
 							{
-								ID:   "tool_use_1",
-								Name: "calculator",
-								Response: map[string]any{
+								Role:     model.RoleTool,
+								ToolID:   "tool_use_1",
+								ToolName: "calculator",
+								Content: string(mustJSON(map[string]any{
 									"a":         2.0,
 									"b":         3.0,
 									"operation": "add",
 									"result":    5.0,
-								},
+								})),
 							},
 						},
 					},
@@ -193,44 +186,40 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 			Conversation: []*evalset.Invocation{
 				{
 					InvocationID: "calc_multiply-1",
-					UserContent: &genai.Content{
-						Role: "user",
-						Parts: []*genai.Part{
-							{
-								Text: "calc multiply 6 7",
-							},
-						},
+					UserContent: &model.Message{
+						Role:    model.RoleUser,
+						Content: "calc multiply 6 7",
 					},
-					FinalResponse: &genai.Content{
-						Role: "assistant",
-						Parts: []*genai.Part{
-							{
-								Text: "calc result: 42",
-							},
-						},
+					FinalResponse: &model.Message{
+						Role:    model.RoleAssistant,
+						Content: "calc result: 42",
 					},
 					IntermediateData: &evalset.IntermediateData{
-						ToolUses: []*genai.FunctionCall{
+						ToolCalls: []*model.ToolCall{
 							{
+								Type: "function",
 								ID:   "tool_use_2",
-								Name: "calculator",
-								Args: map[string]any{
-									"operation": "multiply",
-									"a":         6.0,
-									"b":         7.0,
+								Function: model.FunctionDefinitionParam{
+									Name: "calculator",
+									Arguments: mustJSON(map[string]any{
+										"operation": "multiply",
+										"a":         6.0,
+										"b":         7.0,
+									}),
 								},
 							},
 						},
-						ToolResponses: []*genai.FunctionResponse{
+						ToolResponses: []*model.Message{
 							{
-								ID:   "tool_use_2",
-								Name: "calculator",
-								Response: map[string]any{
+								Role:     model.RoleTool,
+								ToolID:   "tool_use_2",
+								ToolName: "calculator",
+								Content: string(mustJSON(map[string]any{
 									"a":         6.0,
 									"b":         7.0,
 									"operation": "multiply",
 									"result":    42.0,
-								},
+								})),
 							},
 						},
 					},
@@ -250,29 +239,20 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 	return nil
 }
 
+func mustJSON(v any) []byte {
+	data, err := json.Marshal(v)
+	if err != nil {
+		log.Errorf("mustJSON: %v", err)
+		return nil
+	}
+	return data
+}
+
 func prepareMetric(ctx context.Context, metricManager metric.Manager) error {
 	evalMetric := &metric.EvalMetric{
 		MetricName: "tool_trajectory_avg_score",
 		Threshold:  1.0,
-		Criterion: criterion.New(
-			criterion.WithToolTrajectory(
-				ctooltrajectory.New(
-					ctooltrajectory.WithDefault(
-						&ctooltrajectory.ToolTrajectoryStrategy{
-							Name: &text.TextCriterion{
-								MatchStrategy: text.TextMatchStrategyExact,
-							},
-							Arguments: &cjson.JSONCriterion{
-								MatchStrategy: cjson.JSONMatchStrategyExact,
-							},
-							Response: &cjson.JSONCriterion{
-								MatchStrategy: cjson.JSONMatchStrategyExact,
-							},
-						},
-					),
-				),
-			),
-		),
+		Criterion:  criterion.New(),
 	}
 	return metricManager.Add(ctx, appName, evalSetID, evalMetric)
 }
