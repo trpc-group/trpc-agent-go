@@ -46,6 +46,9 @@ const (
 	flusherStateKey = "__flush_session__"
 	// barrierStateKey is the invocation state key used by internal barrier flag.
 	barrierStateKey = "__graph_barrier__"
+	// appenderStateKey is the invocation state key used by internal appender
+	// attachment (see internal/state/appender).
+	appenderStateKey = "__append_event__"
 )
 
 // TransferInfo contains information about a pending agent transfer.
@@ -173,6 +176,20 @@ type RunOption func(*RunOptions)
 func WithRuntimeState(state map[string]any) RunOption {
 	return func(opts *RunOptions) {
 		opts.RuntimeState = state
+	}
+}
+
+// WithAgent sets the agent instance for this run only.
+func WithAgent(a Agent) RunOption {
+	return func(opts *RunOptions) {
+		opts.Agent = a
+	}
+}
+
+// WithAgentByName sets the agent name that should be resolved for this run.
+func WithAgentByName(name string) RunOption {
+	return func(opts *RunOptions) {
+		opts.AgentByName = name
 	}
 }
 
@@ -425,6 +442,12 @@ type RunOptions struct {
 	// Key: agent type, Value: agent-specific config.
 	CustomAgentConfigs map[string]any
 
+	// Agent overrides the runner's default agent for this run.
+	Agent Agent
+
+	// AgentByName instructs the runner to resolve an agent by name for this run.
+	AgentByName string
+
 	// Model is the model to use for this specific run.
 	// If set, it temporarily overrides the agent's default model for this request only.
 	// This allows per-request model switching without affecting other concurrent requests.
@@ -532,6 +555,9 @@ func (inv *Invocation) cloneState() map[string]any {
 	}
 	if barrier, ok := inv.state[barrierStateKey]; ok {
 		copied[barrierStateKey] = barrier
+	}
+	if holder, ok := inv.state[appenderStateKey]; ok {
+		copied[appenderStateKey] = holder
 	}
 	return copied
 }

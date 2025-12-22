@@ -260,11 +260,18 @@ func TestMemoryService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) 
 	require.NoError(t, err)
 	time.Sleep(time.Millisecond * 100)
 
-	// Verify summary was created immediately (sync fallback)
+	// Verify both branch summary and full summary were created immediately (sync fallback with cascade)
 	got, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
 	require.NotNil(t, got)
+
+	// Check branch summary
 	sum, ok := got.Summaries["branch"]
+	require.True(t, ok)
+	require.Equal(t, "fallback-summary", sum.Summary)
+
+	// Check full summary (should be created by cascade)
+	sum, ok = got.Summaries[""]
 	require.True(t, ok)
 	require.Equal(t, "fallback-summary", sum.Summary)
 }
@@ -626,6 +633,7 @@ func TestMemoryService_TryEnqueueJob_ClosedChannel(t *testing.T) {
 	service := NewSessionService(
 		WithAsyncSummaryNum(1),
 		WithSummaryQueueSize(1),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
 	)
 
 	ctx := context.Background()

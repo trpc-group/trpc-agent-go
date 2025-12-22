@@ -12,9 +12,12 @@ package summary
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
@@ -229,4 +232,35 @@ func GetFilterKeyFromOptions(opts ...session.SummaryOption) string {
 		opt(options)
 	}
 	return options.FilterKey
+}
+
+// CreateSessionSummaryWithCascade creates a session summary for the specified filterKey
+// and cascades to create a full-session summary if the filterKey is not already the full session.
+// The createSummaryFunc should create a summary for the given filterKey and return an error if failed.
+func CreateSessionSummaryWithCascade(
+	ctx context.Context,
+	sess *session.Session,
+	filterKey string,
+	force bool,
+	createSummaryFunc func(context.Context, *session.Session, string, bool) error,
+) error {
+	if filterKey == session.SummaryFilterKeyAllContents {
+		return createSummaryFunc(ctx, sess, filterKey, force)
+	}
+
+	var summaryWg sync.WaitGroup
+	result := make([]error, 2)
+	summaryWg.Add(2)
+	for i, fk := range []string{filterKey, session.SummaryFilterKeyAllContents} {
+		go func(i int, fk string) {
+			defer summaryWg.Done()
+			err := createSummaryFunc(ctx, sess, fk, force)
+			if err != nil {
+				result[i] = fmt.Errorf("create session summary for filterKey %q failed: %w", fk, err)
+			}
+		}(i, fk)
+	}
+	summaryWg.Wait()
+
+	return util.If(result[0] != nil, result[0], result[1])
 }

@@ -920,16 +920,18 @@ func (f *fakeErrorSummarizer) SetModel(m model.Model)   {}
 func (f *fakeErrorSummarizer) Metadata() map[string]any { return map[string]any{} }
 
 func TestEnqueueSummaryJob_NoAsyncWorkers(t *testing.T) {
-	// Create service without async workers initialized
+	// Create service without async workers initialized.
 	summarizer := &mockSummarizerImpl{
 		summaryText:     "sync summary",
 		shouldSummarize: true,
 	}
 	s, mock, db := setupMockService(t, &TestServiceOpts{
-		summarizer:      summarizer,
-		asyncSummaryNum: 0, // No async workers
+		summarizer: summarizer,
 	})
 	defer db.Close()
+
+	// Clear summary job channels to simulate no async workers.
+	s.summaryJobChans = nil
 
 	sess := &session.Session{
 		ID:        "test-session",
@@ -938,21 +940,47 @@ func TestEnqueueSummaryJob_NoAsyncWorkers(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 
-	// Mock the database query/insert for sync processing
-	mock.ExpectExec(fmt.Sprintf(
-		`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
-	 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
-	 ON CONFLICT (app_name, user_id, session_id, filter_key) WHERE deleted_at IS NULL
-	 DO UPDATE SET
-	   summary = EXCLUDED.summary,
-	   updated_at = EXCLUDED.updated_at,
-	   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries)).
-		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+	// Add an event to make delta non-empty so summarization actually runs.
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}},
+	}
+	sess.Events = append(sess.Events, *e)
+
+	// Mock the database insert for sync processing.
+	// CreateSessionSummaryWithCascade calls CreateSessionSummary twice when
+	// filterKey != SummaryFilterKeyAllContents: once for the filterKey and once
+	// for SummaryFilterKeyAllContents.
+	mock.ExpectExec(regexp.QuoteMeta(fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
+		 ON CONFLICT (app_name, user_id, session_id, filter_key) WHERE deleted_at IS NULL
+		 DO UPDATE SET
+		   summary = EXCLUDED.summary,
+		   updated_at = EXCLUDED.updated_at,
+		   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries))).
+		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// Should fall back to sync processing when no async workers
-	err := s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	// Cascade to full-session summary.
+	mock.ExpectExec(regexp.QuoteMeta(fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
+		 ON CONFLICT (app_name, user_id, session_id, filter_key) WHERE deleted_at IS NULL
+		 DO UPDATE SET
+		   summary = EXCLUDED.summary,
+		   updated_at = EXCLUDED.updated_at,
+		   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries))).
+		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Should fall back to sync processing when no async workers.
+	err := s.EnqueueSummaryJob(context.Background(), sess, "branch1", false)
 	assert.NoError(t, err)
+
+	// Verify all expectations were met.
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTryEnqueueJob_ContextCancelled(t *testing.T) {

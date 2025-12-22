@@ -1309,13 +1309,14 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		}
 
 		// Process agent event stream and capture completion state.
-		lastResponse, finalState, rawDelta, fullRespEvent, err := processAgentEventStream(
+		lastResponse, finalState, rawDelta, fullRespEvent, tokenUsage, err := processAgentEventStream(
 			ctx, agentEventChan, nodeCallbacks, nodeID, state, eventChan, agentName,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process agent event stream: %w", err)
 		}
-		itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, nil)
+
+		itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage)
 		// Emit agent execution complete event.
 		endTime := time.Now()
 		emitAgentCompleteEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime)
@@ -1345,11 +1346,12 @@ func processAgentEventStream(
 	state State,
 	eventChan chan<- *event.Event,
 	agentName string,
-) (string, State, map[string][]byte, *event.Event, error) {
+) (string, State, map[string][]byte, *event.Event, *itelemetry.TokenUsage, error) {
 	var lastResponse string
 	var finalState State
 	var rawDelta map[string][]byte
 	var fullRespEvent *event.Event
+	tokenUsage := &itelemetry.TokenUsage{}
 
 	for agentEvent := range agentEventChan {
 		// Run node callbacks for this event.
@@ -1364,7 +1366,7 @@ func processAgentEventStream(
 
 		// Forward the event to the parent event channel.
 		if err := event.EmitEvent(ctx, eventChan, agentEvent); err != nil {
-			return "", nil, nil, fullRespEvent, err
+			return "", nil, nil, fullRespEvent, tokenUsage, err
 		}
 
 		// Track the last response for state update.
@@ -1375,6 +1377,11 @@ func processAgentEventStream(
 
 		if agentEvent.Response != nil {
 			if !agentEvent.Response.IsPartial {
+				if agentEvent.Response.Usage != nil {
+					tokenUsage.PromptTokens += agentEvent.Response.Usage.PromptTokens
+					tokenUsage.CompletionTokens += agentEvent.Response.Usage.CompletionTokens
+					tokenUsage.TotalTokens += agentEvent.Response.Usage.TotalTokens
+				}
 				fullRespEvent = agentEvent
 			}
 		}
@@ -1405,7 +1412,7 @@ func processAgentEventStream(
 		}
 	}
 
-	return lastResponse, finalState, rawDelta, fullRespEvent, nil
+	return lastResponse, finalState, rawDelta, fullRespEvent, tokenUsage, nil
 }
 
 // buildAgentInvocationWithStateAndScope builds an invocation for the target agent
