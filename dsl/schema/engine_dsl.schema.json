@@ -73,125 +73,131 @@
           "type": "string",
           "description": "Human-readable description of what this node does."
         }
-      },
-      "additionalProperties": false
+      }
     },
     "Node": {
-      "allOf": [
-        { "$ref": "#/$defs/BaseNode" },
-        {
-          "oneOf": [
-            {
-              "type": "object",
-              "required": ["node_type"],
-              "properties": {
-                "node_type": {
-                  "type": "string",
-                  "const": "builtin.start",
-                  "description": "Start node; marks the visual entry of the graph."
-                },
-                "config": {
-                  "type": "object",
-                  "description": "Start node has no configurable fields.",
-                  "additionalProperties": false
-                }
-              },
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "required": ["node_type", "config"],
-              "properties": {
-                "node_type": {
-                  "type": "string",
-                  "const": "builtin.llmagent",
-                  "description": "LLM-backed agent node."
-                },
-                "config": { "$ref": "#/$defs/AgentConfig" }
-              },
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "required": ["node_type", "config"],
-              "properties": {
-                "node_type": {
-                  "type": "string",
-                  "const": "builtin.end",
-                  "description": "End node; chooses the final graph output."
-                },
-                "config": { "$ref": "#/$defs/EndConfig" }
-              },
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "required": ["node_type", "config"],
-              "properties": {
-                "node_type": {
-                  "type": "string",
-                  "const": "builtin.mcp",
-                  "description": "MCP node; calls a Model Context Protocol server/tool."
-                },
-                "config": { "$ref": "#/$defs/MCPConfig" }
-              },
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "required": ["node_type", "config"],
-              "properties": {
-                "node_type": {
-                  "type": "string",
-                  "const": "builtin.while",
-                  "description": "While control node with an embedded loop body."
-                },
-                "config": { "$ref": "#/$defs/WhileConfig" }
-              },
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "required": ["node_type", "config"],
-              "properties": {
-                "node_type": {
-                  "type": "string",
-                  "const": "builtin.user_approval",
-                  "description": "User approval node; pauses execution until a decision is provided."
-                },
-                "config": { "$ref": "#/$defs/UserApprovalConfig" }
-              },
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "required": ["node_type", "config"],
-              "properties": {
-                "node_type": {
-                  "type": "string",
-                  "const": "builtin.transform",
-                  "description": "Transform node; reshapes structured data via an expression."
-                },
-                "config": { "$ref": "#/$defs/TransformConfig" }
-              },
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "required": ["node_type", "config"],
-              "properties": {
-                "node_type": {
-                  "type": "string",
-                  "const": "builtin.set_state",
-                  "description": "Set State node; assigns to graph state variables."
-                },
-                "config": { "$ref": "#/$defs/SetStateConfig" }
-              },
-              "additionalProperties": false
-            }
-          ]
+      "type": "object",
+      "required": ["id", "node_type"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique node identifier within the graph."
+        },
+        "label": {
+          "type": "string",
+          "description": "Optional UI label for this node."
+        },
+        "node_version": {
+          "type": "string",
+          "description": "Optional component version."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what this node does."
+        },
+        "node_type": {
+          "type": "string",
+          "enum": ["builtin.start", "builtin.llmagent", "builtin.end", "builtin.mcp", "builtin.while", "builtin.user_approval", "builtin.transform", "builtin.set_state"],
+          "description": "Node type identifier."
+        },
+        "config": {
+          "description": "Node-specific configuration. Required for all node types except builtin.start."
         }
-      ]
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "node_type": { "const": "builtin.start" } }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "type": "object",
+                "description": "Start node has no configurable fields.",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "node_type": { "const": "builtin.llmagent" } }
+          },
+          "then": {
+            "required": ["config"],
+            "properties": {
+              "config": { "$ref": "#/$defs/AgentConfig" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "node_type": { "const": "builtin.end" } }
+          },
+          "then": {
+            "required": ["config"],
+            "properties": {
+              "config": { "$ref": "#/$defs/EndConfig" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "node_type": { "const": "builtin.mcp" } }
+          },
+          "then": {
+            "required": ["config"],
+            "properties": {
+              "config": { "$ref": "#/$defs/MCPConfig" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "node_type": { "const": "builtin.while" } }
+          },
+          "then": {
+            "required": ["config"],
+            "properties": {
+              "config": { "$ref": "#/$defs/WhileConfig" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "node_type": { "const": "builtin.user_approval" } }
+          },
+          "then": {
+            "required": ["config"],
+            "properties": {
+              "config": { "$ref": "#/$defs/UserApprovalConfig" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "node_type": { "const": "builtin.transform" } }
+          },
+          "then": {
+            "required": ["config"],
+            "properties": {
+              "config": { "$ref": "#/$defs/TransformConfig" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "node_type": { "const": "builtin.set_state" } }
+          },
+          "then": {
+            "required": ["config"],
+            "properties": {
+              "config": { "$ref": "#/$defs/SetStateConfig" }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
     },
     "AgentConfig": {
       "type": "object",
@@ -285,7 +291,7 @@
         },
         "server_label": {
           "type": "string",
-          "description": "Optional label for this MCP server. Used as a prefix for tool names (e.g., 'deepwiki__read_wiki') to avoid naming conflicts when multiple MCP servers are configured."
+          "description": "Optional label for this MCP server. Used as a prefix for tool names (e.g., 'deepwiki_read_wiki') to avoid naming conflicts when multiple MCP servers are configured. Note: The prefix is joined with a single underscore."
         },
         "allowed_tools": {
           "type": "array",
@@ -359,6 +365,153 @@
           "minimum": 0.0,
           "maximum": 1.0,
           "default": 0.0
+        },
+        "conditioned_filter": {
+          "$ref": "#/$defs/FilterCondition",
+          "description": "Static complex condition filter always applied to searches."
+        },
+        "agentic_filter": {
+          "$ref": "#/$defs/AgenticFilterConfig",
+          "description": "Enable LLM-driven dynamic filtering based on user queries."
+        }
+      },
+      "additionalProperties": false
+    },
+    "FilterCondition": {
+      "type": "object",
+      "description": "Universal filter condition for knowledge search. Supports comparison operators (eq, ne, gt, gte, lt, lte, in, not in, like, not like, between) and logical operators (and, or).",
+      "required": ["operator"],
+      "oneOf": [
+        { "$ref": "#/$defs/LogicalFilterCondition" },
+        { "$ref": "#/$defs/ComparisonFilterCondition" },
+        { "$ref": "#/$defs/BetweenFilterCondition" },
+        { "$ref": "#/$defs/ArrayFilterCondition" }
+      ]
+    },
+    "LogicalFilterCondition": {
+      "type": "object",
+      "description": "Logical operator condition (and/or) that combines multiple sub-conditions.",
+      "required": ["operator", "value"],
+      "properties": {
+        "operator": {
+          "type": "string",
+          "enum": ["and", "or"],
+          "description": "Logical operator."
+        },
+        "value": {
+          "type": "array",
+          "description": "Array of sub-conditions to combine.",
+          "items": { "$ref": "#/$defs/FilterCondition" },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComparisonFilterCondition": {
+      "type": "object",
+      "description": "Comparison operator condition for single value comparisons.",
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "The metadata field to filter on."
+        },
+        "operator": {
+          "type": "string",
+          "enum": ["eq", "ne", "gt", "gte", "lt", "lte", "like", "not like"],
+          "description": "Comparison operator."
+        },
+        "value": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" }
+          ],
+          "description": "The value to compare against."
+        }
+      },
+      "additionalProperties": false
+    },
+    "BetweenFilterCondition": {
+      "type": "object",
+      "description": "Between operator condition for range comparisons.",
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "The metadata field to filter on."
+        },
+        "operator": {
+          "type": "string",
+          "const": "between",
+          "description": "Between operator."
+        },
+        "value": {
+          "type": "array",
+          "description": "Array of exactly 2 values representing [min, max] range.",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "number" }
+            ]
+          },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "additionalProperties": false
+    },
+    "ArrayFilterCondition": {
+      "type": "object",
+      "description": "Array operator condition (in/not in) for matching against multiple values.",
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "The metadata field to filter on."
+        },
+        "operator": {
+          "type": "string",
+          "enum": ["in", "not in"],
+          "description": "Array operator."
+        },
+        "value": {
+          "type": "array",
+          "description": "Array of values to match against.",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "number" },
+              { "type": "boolean" }
+            ]
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+     "AgenticFilterConfig": {
+      "type": "object",
+      "description": "Configuration for LLM-driven dynamic metadata filtering.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether to enable agentic filtering.",
+          "default": true
+        },
+        "info": {
+          "type": "object",
+          "description": "Available metadata fields and their possible values for LLM to construct filters. Keys are field names, values are arrays of possible values.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                { "type": "string" },
+                { "type": "number" },
+                { "type": "boolean" }
+              ]
+            }
+          }
         }
       },
       "additionalProperties": false

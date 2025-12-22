@@ -408,3 +408,166 @@ func TestParseTools_EmptyArray(t *testing.T) {
 		t.Error("expected empty result for empty array")
 	}
 }
+
+func TestParseTools_KnowledgeSearchWithConditionedFilter(t *testing.T) {
+	input := []any{
+		map[string]any{
+			"type": "knowledge_search",
+			"vector_store": map[string]any{
+				"type":       "tcvector",
+				"url":        "http://localhost:8080",
+				"user":       "test",
+				"password":   "test",
+				"database":   "test",
+				"collection": "test",
+			},
+			"embedder": map[string]any{
+				"type":    "openai",
+				"api_key": "test-key",
+			},
+			"conditioned_filter": map[string]any{
+				"operator": "and",
+				"value": []any{
+					map[string]any{
+						"field":    "category",
+						"operator": "eq",
+						"value":    "tech",
+					},
+					map[string]any{
+						"field":    "status",
+						"operator": "eq",
+						"value":    "published",
+					},
+				},
+			},
+		},
+	}
+	result, err := ParseTools(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.KnowledgeSearchTools) != 1 {
+		t.Fatalf("expected 1 knowledge_search tool, got %d", len(result.KnowledgeSearchTools))
+	}
+	ks := result.KnowledgeSearchTools[0]
+	if ks.ConditionedFilter == nil {
+		t.Fatal("expected conditioned_filter to be set")
+	}
+	if ks.ConditionedFilter.Operator != "and" {
+		t.Errorf("expected operator 'and', got %s", ks.ConditionedFilter.Operator)
+	}
+	// Check nested conditions
+	conditions, ok := ks.ConditionedFilter.Value.([]any)
+	if !ok {
+		t.Fatalf("expected value to be []any, got %T", ks.ConditionedFilter.Value)
+	}
+	if len(conditions) != 2 {
+		t.Errorf("expected 2 conditions, got %d", len(conditions))
+	}
+}
+
+func TestParseTools_KnowledgeSearchWithAgenticFilter(t *testing.T) {
+	input := []any{
+		map[string]any{
+			"type": "knowledge_search",
+			"vector_store": map[string]any{
+				"type":       "tcvector",
+				"url":        "http://localhost:8080",
+				"user":       "test",
+				"password":   "test",
+				"database":   "test",
+				"collection": "test",
+			},
+			"embedder": map[string]any{
+				"type":    "openai",
+				"api_key": "test-key",
+			},
+			"agentic_filter": map[string]any{
+				"enabled": true,
+				"info": map[string]any{
+					"category": []any{"tech", "science", "news"},
+					"status":   []any{"published", "draft"},
+				},
+			},
+		},
+	}
+	result, err := ParseTools(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.KnowledgeSearchTools) != 1 {
+		t.Fatalf("expected 1 knowledge_search tool, got %d", len(result.KnowledgeSearchTools))
+	}
+	ks := result.KnowledgeSearchTools[0]
+	if ks.AgenticFilter == nil {
+		t.Fatal("expected agentic_filter to be set")
+	}
+	if !ks.AgenticFilter.Enabled {
+		t.Error("expected agentic_filter.enabled to be true")
+	}
+	if ks.AgenticFilter.Info == nil {
+		t.Fatal("expected agentic_filter.info to be set")
+	}
+	categories, ok := ks.AgenticFilter.Info["category"]
+	if !ok {
+		t.Fatal("expected 'category' key in info")
+	}
+	if len(categories) != 3 {
+		t.Errorf("expected 3 category values, got %d", len(categories))
+	}
+}
+
+func TestParseTools_KnowledgeSearchWithBothFilters(t *testing.T) {
+	input := []any{
+		map[string]any{
+			"type": "knowledge_search",
+			"vector_store": map[string]any{
+				"type":       "tcvector",
+				"url":        "http://localhost:8080",
+				"user":       "test",
+				"password":   "test",
+				"database":   "test",
+				"collection": "test",
+			},
+			"embedder": map[string]any{
+				"type":    "openai",
+				"api_key": "test-key",
+			},
+			"conditioned_filter": map[string]any{
+				"field":    "status",
+				"operator": "eq",
+				"value":    "published",
+			},
+			"agentic_filter": map[string]any{
+				"enabled": true,
+				"info": map[string]any{
+					"category": []any{"tech", "science"},
+				},
+			},
+		},
+	}
+	result, err := ParseTools(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ks := result.KnowledgeSearchTools[0]
+
+	// Verify conditioned_filter
+	if ks.ConditionedFilter == nil {
+		t.Fatal("expected conditioned_filter to be set")
+	}
+	if ks.ConditionedFilter.Field != "status" {
+		t.Errorf("expected field 'status', got %s", ks.ConditionedFilter.Field)
+	}
+	if ks.ConditionedFilter.Operator != "eq" {
+		t.Errorf("expected operator 'eq', got %s", ks.ConditionedFilter.Operator)
+	}
+
+	// Verify agentic_filter
+	if ks.AgenticFilter == nil {
+		t.Fatal("expected agentic_filter to be set")
+	}
+	if !ks.AgenticFilter.Enabled {
+		t.Error("expected agentic_filter.enabled to be true")
+	}
+}

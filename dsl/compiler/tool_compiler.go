@@ -23,6 +23,7 @@ import (
 	geminiemb "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini"
 	huggingfaceemb "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/huggingface"
 	openaiemb "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -238,7 +239,7 @@ func compileKnowledgeSearchTool(spec *toolspec.KnowledgeSearchToolSpec) (knowled
 
 	kb := knowledge.New(opts...)
 
-	// Create knowledge search tool with max_results and min_score
+	// Create knowledge search tool with options
 	var toolOpts []knowledgetool.Option
 	if spec.MaxResults > 0 {
 		toolOpts = append(toolOpts, knowledgetool.WithMaxResults(spec.MaxResults))
@@ -246,9 +247,72 @@ func compileKnowledgeSearchTool(spec *toolspec.KnowledgeSearchToolSpec) (knowled
 	if spec.MinScore > 0 {
 		toolOpts = append(toolOpts, knowledgetool.WithMinScore(spec.MinScore))
 	}
-	kbTool := knowledgetool.NewKnowledgeSearchTool(kb, toolOpts...)
+
+	// Add conditioned filter if specified
+	if spec.ConditionedFilter != nil {
+		filterCondition := convertFilterCondition(spec.ConditionedFilter)
+		if filterCondition != nil {
+			toolOpts = append(toolOpts, knowledgetool.WithConditionedFilter(filterCondition))
+		}
+	}
+
+	// Decide which tool to create based on agentic_filter config
+	var kbTool tool.Tool
+	if spec.AgenticFilter != nil && spec.AgenticFilter.Enabled {
+		// Use NewAgenticFilterSearchTool for LLM-driven dynamic filtering
+		kbTool = knowledgetool.NewAgenticFilterSearchTool(kb, spec.AgenticFilter.Info, toolOpts...)
+	} else {
+		// Use standard NewKnowledgeSearchTool
+		kbTool = knowledgetool.NewKnowledgeSearchTool(kb, toolOpts...)
+	}
 
 	return kb, kbTool, nil
+}
+
+// convertFilterCondition converts toolspec.FilterCondition to searchfilter.UniversalFilterCondition.
+func convertFilterCondition(fc *toolspec.FilterCondition) *searchfilter.UniversalFilterCondition {
+	if fc == nil {
+		return nil
+	}
+
+	result := &searchfilter.UniversalFilterCondition{
+		Field:    fc.Field,
+		Operator: fc.Operator,
+	}
+
+	// Handle logical operators (and/or) - Value should be array of FilterCondition
+	if fc.Operator == "and" || fc.Operator == "or" {
+		if conditions, ok := fc.Value.([]any); ok {
+			subConditions := make([]*searchfilter.UniversalFilterCondition, 0, len(conditions))
+			for _, c := range conditions {
+				if condMap, ok := c.(map[string]any); ok {
+					subFC := mapToFilterCondition(condMap)
+					if subFC != nil {
+						subConditions = append(subConditions, convertFilterCondition(subFC))
+					}
+				}
+			}
+			result.Value = subConditions
+		}
+	} else {
+		// For comparison operators, keep the value as-is
+		result.Value = fc.Value
+	}
+
+	return result
+}
+
+// mapToFilterCondition converts a map[string]any to *toolspec.FilterCondition.
+func mapToFilterCondition(m map[string]any) *toolspec.FilterCondition {
+	fc := &toolspec.FilterCondition{}
+	if field, ok := m["field"].(string); ok {
+		fc.Field = field
+	}
+	if op, ok := m["operator"].(string); ok {
+		fc.Operator = op
+	}
+	fc.Value = m["value"]
+	return fc
 }
 
 // createVectorStore creates a vector store instance based on the config type.

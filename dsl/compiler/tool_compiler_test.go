@@ -203,6 +203,8 @@ func TestCompileTools_ValidationErrors(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		// Note: conditioned_filter and agentic_filter parsing tests are in toolspec_test.go
+		// because CompileTools attempts to connect to external services (vector stores).
 	}
 
 	for _, tt := range tests {

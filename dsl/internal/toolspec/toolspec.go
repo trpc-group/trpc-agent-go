@@ -62,13 +62,30 @@ func (w *WebSearchToolSpec) Type() ToolType { return ToolTypeWebSearch }
 
 // KnowledgeSearchToolSpec represents a knowledge search tool configuration.
 type KnowledgeSearchToolSpec struct {
-	VectorStore *VectorStoreConfig `json:"vector_store"`
-	Embedder    *EmbedderConfig    `json:"embedder"`
-	MaxResults  int                `json:"max_results,omitempty"`
-	MinScore    float64            `json:"min_score,omitempty"`
+	VectorStore       *VectorStoreConfig    `json:"vector_store"`
+	Embedder          *EmbedderConfig       `json:"embedder"`
+	MaxResults        int                   `json:"max_results,omitempty"`
+	MinScore          float64               `json:"min_score,omitempty"`
+	ConditionedFilter *FilterCondition      `json:"conditioned_filter,omitempty"`
+	AgenticFilter     *AgenticFilterConfig  `json:"agentic_filter,omitempty"`
 }
 
 func (k *KnowledgeSearchToolSpec) Type() ToolType { return ToolTypeKnowledgeSearch }
+
+// FilterCondition represents a universal filter condition for knowledge search.
+// Supports comparison operators (eq, ne, gt, gte, lt, lte, in, not in, like, not like, between)
+// and logical operators (and, or).
+type FilterCondition struct {
+	Field    string `json:"field,omitempty"`
+	Operator string `json:"operator"`
+	Value    any    `json:"value,omitempty"`
+}
+
+// AgenticFilterConfig represents the configuration for LLM-driven dynamic filtering.
+type AgenticFilterConfig struct {
+	Enabled bool              `json:"enabled,omitempty"`
+	Info    map[string][]any  `json:"info,omitempty"`
+}
 
 // VectorStoreType represents the type of vector store.
 type VectorStoreType string
