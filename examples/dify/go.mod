@@ -5,7 +5,7 @@ go 1.21
 require (
 	github.com/cloudernative/dify-sdk-go v1.0.0
 	trpc.group/trpc-go/trpc-agent-go v0.5.0
-	trpc.group/trpc-go/trpc-agent-go/agent/dify v0.1.0
+	trpc.group/trpc-go/trpc-agent-go/agent/dify v0.8.0
 )
 
 require (
