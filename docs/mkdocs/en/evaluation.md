@@ -1218,6 +1218,7 @@ type ToolTrajectoryCriterion struct {
 	DefaultStrategy  *ToolTrajectoryStrategy            // Default strategy.
 	ToolStrategy     map[string]*ToolTrajectoryStrategy // Customized strategies by tool name.
 	OrderInsensitive bool                               // Whether to ignore invocation order.
+	SubsetMatching   bool                               // Whether expected calls can be a subset of actual.
 	Compare          func(actual, expected *evalset.Invocation) (bool, error) // Custom comparison.
 }
 
@@ -1288,6 +1289,33 @@ criterion := criterion.New(
 	criterion.WithToolTrajectory(
 		ctooltrajectory.New(
 			ctooltrajectory.WithOrderInsensitive(true),
+		),
+	),
+)
+```
+
+SubsetMatching controls whether the expected tool sequence can be just a subset of the actual tool sequence. It is off by default.
+
+- Off: the expected and actual tool call counts must be the same.
+- On: the actual sequence may be longer; matching follows the expected order, or the sorted order if OrderInsensitive is enabled.
+
+Assume `A`, `B`, `C`, and `D` each denote one tool call. Matching examples:
+
+| SubsetMatching | OrderInsensitive | Expected | Actual | Result | Note |
+| --- | --- | --- | --- | --- | --- |
+| Off | Off | `[A]` | `[A, B]` | Fail | Count differs |
+| On | Off | `[A]` | `[A, B]` | Pass | Expected is subset |
+| On | Off | `[A, C]` | `[A, B, C]` | Pass | Order matches |
+| On | Off | `[C, A]` | `[A, B, C]` | Fail | Order mismatch |
+| On | On | `[C, A]` | `[A, B, C]` | Pass | Matches after sort |
+| On | On | `[C, D]` | `[A, B, C]` | Fail | Missing D |
+
+```go
+criterion := criterion.New(
+	criterion.WithToolTrajectory(
+		ctooltrajectory.New(
+			ctooltrajectory.WithSubsetMatching(true),
+			ctooltrajectory.WithOrderInsensitive(true), // optional
 		),
 	),
 )
