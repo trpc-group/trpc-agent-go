@@ -27,12 +27,12 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
     {
       "evalSetId": "greeting-set",
       "evalId": "case-1",
-      "finalEvalStatus": 1,
+      "finalEvalStatus": "passed",
       "overallEvalMetricResults": [
         {
           "metricName": "tool_trajectory_avg_score",
           "score": 0.9,
-          "evalStatus": 1,
+          "evalStatus": "passed",
           "threshold": 0.8,
           "details": {
             "reason": "trajectory matched"
@@ -45,41 +45,45 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
             "invocationId": "invocation-actual",
             "userContent": {
               "role": "user",
-              "parts": [
-                {
-                  "text": "calculate 1 + 2."
-                }
-              ]
+              "content": "calculate 1 + 2."
             },
             "finalResponse": {
               "role": "assistant",
-              "parts": [
-                {
-                  "text": "final: 1+2=3."
-                }
-              ]
+              "content": "final: 1+2=3."
             },
             "intermediateData": {
-              "toolUses": [
+              "toolCalls": [
                 {
                   "id": "tool-call-1",
-                  "name": "calculator",
-                  "args": {
-                    "operation": "add",
-                    "a": 1,
-                    "b": 2
+                  "type": "function",
+                  "function": {
+                    "name": "calculator",
+                    "arguments": {
+                      "operation": "add",
+                      "a": 1,
+                      "b": 2
+                    }
                   }
                 }
               ],
+              "toolResponses": [
+                {
+                  "content": {
+                    "a": 1,
+                    "b": 2,
+                    "operation": "add",
+                    "result": 3
+                  },
+                  "role": "tool",
+                  "toolId": "tool-call-1",
+                  "toolName": "calculator"
+                }
+              ],
               "intermediateResponses": [
-                [
-                  "assistant",
-                  [
-                    {
-                      "text": "thinking..."
-                    }
-                  ]
-                ]
+                {
+                  "role": "assistant",
+                  "content": "thinking..."
+                }
               ]
             },
             "creationTimestamp": 1700000000
@@ -88,40 +92,45 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
             "invocationId": "invocation-expected",
             "userContent": {
               "role": "user",
-              "parts": [
-                {
-                  "text": "calculate 1 + 2."
-                }
-              ]
+              "content": "calculate 1 + 2."
             },
             "finalResponse": {
               "role": "assistant",
-              "parts": [
-                {
-                  "text": "final: 1+2=3."
-                }
-              ]
+              "content": "final: 1+2=3."
             },
             "intermediateData": {
-              "toolUses": [
+              "toolCalls": [
                 {
-                  "name": "calculator",
-                  "args": {
-                    "operation": "add",
-                    "a": 1,
-                    "b": 2
+                  "id": "tool-call-1",
+                  "type": "function",
+                  "function": {
+                    "name": "calculator",
+                    "arguments": {
+                      "operation": "add",
+                      "a": 1,
+                      "b": 2
+                    }
                   }
                 }
               ],
+              "toolResponses": [
+                {
+                  "content": {
+                    "a": 1,
+                    "b": 2,
+                    "operation": "add",
+                    "result": 3
+                  },
+                  "role": "tool",
+                  "toolId": "tool-call-1",
+                  "toolName": "calculator"
+                }
+              ],
               "intermediateResponses": [
-                [
-                  "assistant",
-                  [
-                    {
-                      "text": "thinking..."
-                    }
-                  ]
-                ]
+                {
+                  "role": "assistant",
+                  "content": "thinking..."
+                }
               ]
             },
             "creationTimestamp": 1700000000
@@ -130,7 +139,7 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
             {
               "metricName": "tool_trajectory_avg_score",
               "score": 0.9,
-              "evalStatus": 1,
+              "evalStatus": "passed",
               "threshold": 0.8,
               "details": {
                 "reason": "per invocation matched"

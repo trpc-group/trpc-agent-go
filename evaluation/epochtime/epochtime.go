@@ -7,8 +7,7 @@
 //
 //
 
-// package
-// Package epochtime provides EpochTime type to be compatible with ADK Web.
+// Package epochtime provides EpochTime type.
 package epochtime
 
 import (
@@ -23,7 +22,7 @@ const (
 	nanosecondsPerSecond = float64(time.Second)
 )
 
-// EpochTime wraps time.Time to (un)marshal as unix seconds (float) like ADK.
+// EpochTime wraps time.Time to (un)marshal as unix seconds (float).
 type EpochTime struct{ time.Time }
 
 // MarshalJSON implements json.Marshaler to encode time as unix seconds (float).
