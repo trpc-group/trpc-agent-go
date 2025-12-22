@@ -67,6 +67,21 @@ func InspectEdge(graphDef *Graph, sourceNodeID, targetNodeID string) (*EdgeInspe
 		return nil, fmt.Errorf("target node %q not found in graph", targetNodeID)
 	}
 
+	// Validate: end nodes cannot have outgoing edges.
+	if sourceNode.EngineNode.NodeType == "builtin.end" {
+		return &EdgeInspectionResult{
+			Valid: false,
+			Errors: []Diagnostic{
+				{
+					Code:     "invalid_source",
+					Message:  fmt.Sprintf("end node %q cannot have outgoing edges", sourceNodeID),
+					Path:     sourceNodeID,
+					Severity: "error",
+				},
+			},
+		}, nil
+	}
+
 	res := &EdgeInspectionResult{}
 
 	res.SourceOutputSchema = inferNodeOutputSchema(sourceNode)
