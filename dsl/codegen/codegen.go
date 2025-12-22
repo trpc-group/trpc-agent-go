@@ -142,6 +142,7 @@ func GenerateNativeGo(g *dsl.Graph, opts ...Option) (*Output, error) {
 		NeedsApproval:  ir.NeedsApproval,
 		NeedsEnd:       ir.NeedsEnd,
 		NeedsMCP:       ir.NeedsMCP,
+		NeedsPlanner:   ir.NeedsPlanner,
 		NeedsReflect:   ir.NeedsApproval || ir.NeedsEnd || len(ir.StateVars) > 0,
 		NeedsExtractFirstJSONObjectFromText: len(ir.MCPNodes) > 0,
 		StateVars:      ir.StateVars,
@@ -182,6 +183,20 @@ type agentNode struct {
 	// when output_format.type == "json".
 	StructuredOutputSchemaJSON string
 	StructuredOutputSchemaName string
+	// Planner configuration
+	Planner agentPlannerConfig
+}
+
+type agentPlannerConfig struct {
+	HasPlanner bool
+	Type       string // "react" or "builtin"
+	// Builtin planner config
+	HasReasoningEffort bool
+	ReasoningEffort    string
+	HasThinkingEnabled bool
+	ThinkingEnabled    bool
+	HasThinkingTokens  bool
+	ThinkingTokens     string
 }
 
 type agentGenerationConfig struct {
@@ -457,6 +472,7 @@ type irGraph struct {
 	NeedsApproval  bool
 	NeedsEnd       bool
 	NeedsMCP       bool
+	NeedsPlanner   bool
 
 	NeedsMustParseJSONAny bool
 	// NeedsStructuredOutputMapper is true when any agent node has structured output.
@@ -801,6 +817,39 @@ func buildIR(g *dsl.Graph) (*irGraph, error) {
 				ir.NeedsStructuredOutputMapper = true
 			}
 
+			// Parse planner configuration
+			var plannerCfg agentPlannerConfig
+			if plannerRaw, ok := n.EngineNode.Config["planner"].(map[string]any); ok {
+				plannerType, _ := plannerRaw["type"].(string)
+				if plannerType != "" {
+					// Validate: react planner conflicts with structured output
+					if plannerType == "react" && len(structuredSchema) > 0 {
+						return nil, fmt.Errorf("builtin.llmagent[%s]: react planner is incompatible with structured output (output_format.type='json'). Use 'builtin' planner instead", n.ID)
+					}
+					plannerCfg.HasPlanner = true
+					plannerCfg.Type = plannerType
+					ir.NeedsPlanner = true
+					if plannerType == "builtin" {
+						if config, ok := plannerRaw["config"].(map[string]any); ok {
+							if re, ok := config["reasoning_effort"].(string); ok && re != "" {
+								plannerCfg.HasReasoningEffort = true
+								plannerCfg.ReasoningEffort = re
+							}
+							if te, ok := config["thinking_enabled"].(bool); ok {
+								plannerCfg.HasThinkingEnabled = true
+								plannerCfg.ThinkingEnabled = te
+							}
+							if ttRaw, ok := config["thinking_tokens"]; ok {
+								if tt, err := numconv.Int(ttRaw, "thinking_tokens"); err == nil && tt > 0 {
+									plannerCfg.HasThinkingTokens = true
+									plannerCfg.ThinkingTokens = fmt.Sprintf("%d", tt)
+								}
+							}
+						}
+					}
+				}
+			}
+
 			ir.AgentNodes = append(ir.AgentNodes, agentNode{
 				ID:          n.ID,
 				FuncSuffix:  toCamel(n.ID),
@@ -816,6 +865,7 @@ func buildIR(g *dsl.Graph) (*irGraph, error) {
 				MCPTools:                   mcpToolSets,
 				StructuredOutputSchemaJSON: structuredOutputSchemaJSON,
 				StructuredOutputSchemaName: structuredOutputSchemaName,
+				Planner:                    plannerCfg,
 			})
 		case "builtin.start":
 			ir.StartNodes = append(ir.StartNodes, startNode{ID: n.ID})

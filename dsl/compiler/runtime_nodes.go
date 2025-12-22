@@ -18,6 +18,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/planner"
+	"trpc.group/trpc-go/trpc-agent-go/planner/builtin"
+	"trpc.group/trpc-go/trpc-agent-go/planner/react"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
 )
@@ -191,6 +194,40 @@ func newLLMAgentNodeFuncFromConfig(
 		hasGenConfig = true
 	}
 
+	// Parse planner configuration
+	var agentPlanner planner.Planner
+	if plannerCfg, ok := cfg["planner"].(map[string]any); ok {
+		plannerType, _ := plannerCfg["type"].(string)
+		switch plannerType {
+		case "react":
+			// Validate: react planner conflicts with structured output
+			if len(structuredOutput) > 0 {
+				return nil, fmt.Errorf("builtin.llmagent[%s]: react planner is incompatible with structured output (output_format.type='json'). Use 'builtin' planner instead", nodeID)
+			}
+			agentPlanner = react.New()
+		case "builtin":
+			var opts builtin.Options
+			if plannerConfig, ok := plannerCfg["config"].(map[string]any); ok {
+				if re, ok := plannerConfig["reasoning_effort"].(string); ok && re != "" {
+					opts.ReasoningEffort = &re
+				}
+				if te, ok := plannerConfig["thinking_enabled"].(bool); ok {
+					opts.ThinkingEnabled = &te
+				}
+				if ttRaw, ok := plannerConfig["thinking_tokens"]; ok {
+					if tt, err := numconv.Int(ttRaw, "thinking_tokens"); err == nil && tt > 0 {
+						opts.ThinkingTokens = &tt
+					}
+				}
+			}
+			agentPlanner = builtin.New(opts)
+		default:
+			if plannerType != "" {
+				return nil, fmt.Errorf("builtin.llmagent[%s]: unsupported planner type %q", nodeID, plannerType)
+			}
+		}
+	}
+
 	return func(ctx context.Context, state graph.State) (interface{}, error) {
 		var opts []llmagent.Option
 
@@ -229,6 +266,11 @@ func newLLMAgentNodeFuncFromConfig(
 
 		if hasGenConfig {
 			opts = append(opts, llmagent.WithGenerationConfig(genConfig))
+		}
+
+		// Add planner if configured
+		if agentPlanner != nil {
+			opts = append(opts, llmagent.WithPlanner(agentPlanner))
 		}
 
 		agentName := fmt.Sprintf("llmagent_%s_%s", nodeID, modelName)

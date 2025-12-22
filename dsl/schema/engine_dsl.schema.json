@@ -234,6 +234,10 @@
           },
           "additionalProperties": false
         },
+        "planner": {
+          "$ref": "#/$defs/PlannerConfig",
+          "description": "Optional planner configuration. When specified, enables planning capabilities for this agent."
+        },
         "temperature": {
           "type": "number",
           "minimum": 0.0,
@@ -247,6 +251,44 @@
           "type": "number",
           "minimum": 0.0,
           "maximum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "PlannerConfig": {
+      "type": "object",
+      "description": "Planner configuration for the agent. WARNING: 'react' planner uses tag-based output which conflicts with structured output (output_format.type='json'). Do not use 'react' planner with structured output.",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["react", "builtin"],
+          "description": "Planner type. 'react' uses explicit planning tags (incompatible with structured output). 'builtin' uses model's native thinking capabilities."
+        },
+        "config": {
+          "$ref": "#/$defs/BuiltinPlannerConfig",
+          "description": "Planner-specific configuration. Only used when type is 'builtin'."
+        }
+      },
+      "additionalProperties": false
+    },
+    "BuiltinPlannerConfig": {
+      "type": "object",
+      "description": "Configuration for builtin planner that uses model's native thinking capabilities.",
+      "properties": {
+        "reasoning_effort": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "description": "Reasoning effort for OpenAI o-series models."
+        },
+        "thinking_enabled": {
+          "type": "boolean",
+          "description": "Enable thinking mode for Claude/Gemini models."
+        },
+        "thinking_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Max tokens for thinking mode."
         }
       },
       "additionalProperties": false

@@ -246,6 +246,16 @@ func (c *LLMAgentComponent) Metadata() registry.ComponentMetadata {
 				Default:     false,
 			},
 			{
+				Name:        "planner",
+				DisplayName: "Planner",
+				Description: "Optional planner configuration. When specified, enables planning capabilities for this agent. Type can be 'react' (explicit planning tags) or 'builtin' (model's native thinking).",
+				Type:        "map[string]any",
+				TypeID:      "object",
+				Kind:        "object",
+				GoType:      reflect.TypeOf(map[string]any{}),
+				Required:    false,
+			},
+			{
 				Name:        "description",
 				DisplayName: "Description",
 				Description: "Description of the agent",

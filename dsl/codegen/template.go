@@ -10,6 +10,7 @@ type singleFileTemplateData struct {
 	NeedsApproval                       bool
 	NeedsEnd                            bool
 	NeedsMCP                            bool
+	NeedsPlanner                        bool
 	NeedsReflect                        bool
 	NeedsExtractFirstJSONObjectFromText bool
 	StateVars                           []stateVar
@@ -108,6 +109,10 @@ import (
 	{{- if .NeedsMCP }}
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+	{{- end }}
+	{{- if .NeedsPlanner }}
+	"trpc.group/trpc-go/trpc-agent-go/planner/builtin"
+	"trpc.group/trpc-go/trpc-agent-go/planner/react"
 	{{- end }}
 )
 
@@ -820,6 +825,35 @@ func new{{ .FuncSuffix }}SubAgent() agent.Agent {
 	genConfig.Stream = {{ if .GenConfig.Stream }}true{{ else }}false{{ end }}
 	{{- end }}
 	opts = append(opts, llmagent.WithGenerationConfig(genConfig))
+	{{- end }}
+
+	{{- if .Planner.HasPlanner }}
+	{{- if eq .Planner.Type "react" }}
+	opts = append(opts, llmagent.WithPlanner(react.New()))
+	{{- else if eq .Planner.Type "builtin" }}
+	{
+		plannerOpts := builtin.Options{}
+		{{- if .Planner.HasReasoningEffort }}
+		{
+			re := {{ printf "%q" .Planner.ReasoningEffort }}
+			plannerOpts.ReasoningEffort = &re
+		}
+		{{- end }}
+		{{- if .Planner.HasThinkingEnabled }}
+		{
+			te := {{ if .Planner.ThinkingEnabled }}true{{ else }}false{{ end }}
+			plannerOpts.ThinkingEnabled = &te
+		}
+		{{- end }}
+		{{- if .Planner.HasThinkingTokens }}
+		{
+			tt := {{ .Planner.ThinkingTokens }}
+			plannerOpts.ThinkingTokens = &tt
+		}
+		{{- end }}
+		opts = append(opts, llmagent.WithPlanner(builtin.New(plannerOpts)))
+	}
+	{{- end }}
 	{{- end }}
 
 	return llmagent.New({{ printf "%q" .ID }}, opts...)

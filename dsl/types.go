@@ -254,3 +254,30 @@ type IOTarget struct {
 	// Field is the state field name (when Type="state")
 	Field string `json:"field,omitempty"`
 }
+
+// PlannerConfig represents the planner configuration for an agent.
+// When specified, enables planning capabilities for the agent.
+type PlannerConfig struct {
+	// Type is the planner type: "react" or "builtin".
+	// "react" uses explicit planning tags (/*PLANNING*/, /*REASONING*/, etc.).
+	// "builtin" uses model's native thinking capabilities.
+	Type string `json:"type"`
+
+	// Config contains planner-specific configuration.
+	// For "react": no additional config needed.
+	// For "builtin": contains BuiltinPlannerConfig fields.
+	Config map[string]any `json:"config,omitempty"`
+}
+
+// BuiltinPlannerConfig contains configuration for the builtin planner.
+type BuiltinPlannerConfig struct {
+	// ReasoningEffort limits reasoning effort for OpenAI o-series models.
+	// Supported values: "low", "medium", "high".
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+
+	// ThinkingEnabled enables thinking mode for Claude/Gemini models.
+	ThinkingEnabled *bool `json:"thinking_enabled,omitempty"`
+
+	// ThinkingTokens controls max tokens for thinking mode.
+	ThinkingTokens *int `json:"thinking_tokens,omitempty"`
+}
