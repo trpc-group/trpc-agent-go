@@ -63,3 +63,4 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
 )
+ 
