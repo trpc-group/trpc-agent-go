@@ -13,7 +13,7 @@ require (
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/stretchr/testify v1.10.0
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.0.1
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.8.0
 )
 
 require (

@@ -324,6 +324,7 @@ type eventLoopContext struct {
 	processedEventCh chan *event.Event
 	finalStateDelta  map[string][]byte
 	finalChoices     []model.Choice
+	assistantContent map[string]struct{}
 }
 
 // processAgentEvents consumes agent events, persists to session, and emits.
@@ -341,6 +342,7 @@ func (r *runner) processAgentEvents(
 		agentEventCh:     agentEventCh,
 		flushChan:        flushChan,
 		processedEventCh: processedEventCh,
+		assistantContent: make(map[string]struct{}),
 	}
 	runCtx := agent.CloneContext(ctx)
 	go r.runEventLoop(runCtx, loop)
@@ -399,6 +401,8 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		return nil
 	}
 
+	r.recordAssistantContent(loop, agentEvent)
+
 	// Append qualifying events to session and trigger summarization.
 	r.handleEventPersistence(ctx, loop.sess, agentEvent)
 
@@ -419,6 +423,34 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	}
 
 	return nil
+}
+
+func (r *runner) recordAssistantContent(loop *eventLoopContext, e *event.Event) {
+	if loop == nil || e == nil || e.Response == nil {
+		return
+	}
+	if loop.invocation == nil {
+		return
+	}
+	if loop.assistantContent == nil {
+		loop.assistantContent = make(map[string]struct{})
+	}
+	if isGraphCompletionEvent(e) {
+		return
+	}
+	if e.IsPartial || !e.IsValidContent() {
+		return
+	}
+	for _, choice := range e.Response.Choices {
+		msg := choice.Message
+		if msg.Role != model.RoleAssistant {
+			continue
+		}
+		if msg.Content == "" {
+			continue
+		}
+		loop.assistantContent[msg.Content] = struct{}{}
+	}
 }
 
 // safeEmitRunnerCompletion guards emitRunnerCompletion against panics from session services.
@@ -570,7 +602,13 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 
 	// Propagate graph-level completion data if available.
 	if len(loop.finalStateDelta) > 0 {
-		r.propagateGraphCompletion(runnerCompletionEvent, loop.finalStateDelta, loop.finalChoices)
+		includeChoices := r.shouldIncludeFinalChoices(loop)
+		r.propagateGraphCompletion(
+			runnerCompletionEvent,
+			loop.finalStateDelta,
+			loop.finalChoices,
+			includeChoices,
+		)
 	}
 
 	// Append runner completion event to session.
@@ -588,6 +626,7 @@ func (r *runner) propagateGraphCompletion(
 	runnerCompletionEvent *event.Event,
 	finalStateDelta map[string][]byte,
 	finalChoices []model.Choice,
+	includeChoices bool,
 ) {
 	// Initialize state delta map if needed.
 	if runnerCompletionEvent.StateDelta == nil {
@@ -607,7 +646,8 @@ func (r *runner) propagateGraphCompletion(
 
 	// Optionally echo the final text as a non-streaming assistant message
 	// if graph provided it in its completion.
-	if runnerCompletionEvent.Response != nil &&
+	if includeChoices &&
+		runnerCompletionEvent.Response != nil &&
 		len(runnerCompletionEvent.Response.Choices) == 0 &&
 		len(finalChoices) > 0 {
 		// Keep only content to avoid carrying tool deltas etc.
@@ -699,6 +739,31 @@ func extractMessagesFromSession(sess *session.Session) []model.Message {
 		}
 	}
 	return messages
+}
+
+func (r *runner) shouldIncludeFinalChoices(loop *eventLoopContext) bool {
+	if loop == nil {
+		return true
+	}
+	if len(loop.finalChoices) == 0 {
+		return false
+	}
+	if len(loop.assistantContent) == 0 {
+		return true
+	}
+	for _, choice := range loop.finalChoices {
+		msg := choice.Message
+		if msg.Role != model.RoleAssistant {
+			continue
+		}
+		if msg.Content == "" {
+			continue
+		}
+		if _, ok := loop.assistantContent[msg.Content]; ok {
+			return false
+		}
+	}
+	return true
 }
 
 // shouldAppendUserMessage checks if the incoming user message should be

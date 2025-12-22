@@ -255,7 +255,7 @@ mcpToolSet := mcp.NewMCPToolSet(
         Args:      []string{"run", "./stdio_server/main.go"},
         Timeout:   10 * time.Second,
     },
-    mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")), // 可选：工具过滤
+    mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("echo", "add")), // 可选：工具过滤
 )
 
 // （可选但推荐）显式初始化 MCP：建立连接 + 初始化会话 + 列工具

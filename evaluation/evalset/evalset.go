@@ -17,7 +17,6 @@ import (
 )
 
 // EvalSet represents a collection of evaluation cases.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvalSet struct {
 	// EvalSetID uniquely identifies this evaluation set.
 	EvalSetID string `json:"evalSetId,omitempty"`
