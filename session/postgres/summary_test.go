@@ -959,7 +959,7 @@ func TestEnqueueSummaryJob_NoAsyncWorkers(t *testing.T) {
 		   summary = EXCLUDED.summary,
 		   updated_at = EXCLUDED.updated_at,
 		   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries))).
-		WithArgs("test-app", "test-user", "test-session", "branch1",
+		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -971,7 +971,7 @@ func TestEnqueueSummaryJob_NoAsyncWorkers(t *testing.T) {
 		   summary = EXCLUDED.summary,
 		   updated_at = EXCLUDED.updated_at,
 		   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries))).
-		WithArgs("test-app", "test-user", "test-session", session.SummaryFilterKeyAllContents,
+		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 

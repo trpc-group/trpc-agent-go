@@ -19,8 +19,8 @@ require (
 	github.com/stretchr/testify v1.11.1
 	trpc.group/trpc-go/trpc-agent-go v0.6.0
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-20251126064502-c8c2594d2519
-	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/model/ollama v0.0.0-20251201063627-880416fa9808
+	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.8.1-0.20251222024650-ea147adf3d21
+	trpc.group/trpc-go/trpc-agent-go/model/ollama v0.8.0
 )
 
 require (
@@ -58,5 +58,5 @@ require (
 	google.golang.org/grpc v1.77.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 )

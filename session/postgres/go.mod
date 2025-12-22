@@ -13,7 +13,7 @@ require (
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/stretchr/testify v1.10.0
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.0.1
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.8.0
 )
 
 require (
@@ -29,5 +29,5 @@ require (
 	golang.org/x/sync v0.10.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 )

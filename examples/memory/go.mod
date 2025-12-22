@@ -13,9 +13,9 @@ replace (
 
 require (
 	trpc.group/trpc-go/trpc-agent-go v0.6.0
-	trpc.group/trpc-go/trpc-agent-go/memory/mysql v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/memory/postgres v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.2.0
+	trpc.group/trpc-go/trpc-agent-go/memory/mysql v0.8.0
+	trpc.group/trpc-go/trpc-agent-go/memory/postgres v0.8.0
+	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.8.0
 )
 
 require (
@@ -60,7 +60,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240822170219-fc7c04adadcd // indirect
 	google.golang.org/grpc v1.65.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
-	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.6.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.0.0-20251126064502-c8c2594d2519 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0 // indirect

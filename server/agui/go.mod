@@ -8,6 +8,7 @@ require (
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20251202144511-d0e095fddefd
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.10.0
+	go.opentelemetry.io/otel/trace v1.29.0
 	go.uber.org/multierr v1.10.0
 	trpc.group/trpc-go/trpc-agent-go v0.0.0-20251126064502-c8c2594d2519
 )
@@ -27,7 +28,6 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.29.0 // indirect
 	go.opentelemetry.io/otel/metric v1.29.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.29.0 // indirect
-	go.opentelemetry.io/otel/trace v1.29.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/net v0.34.0 // indirect
@@ -38,5 +38,5 @@ require (
 	google.golang.org/grpc v1.65.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 )
