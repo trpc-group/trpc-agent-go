@@ -76,7 +76,7 @@ func printSummary(result *evaluation.EvaluationResult, outDir string) {
 	fmt.Println("✅ Evaluation completed with local storage")
 	fmt.Printf("App: %s\n", result.AppName)
 	fmt.Printf("Eval Set: %s\n", result.EvalSetID)
-	fmt.Printf("Overall Status: %s\n", result.OverallStatus.String())
+	fmt.Printf("Overall Status: %s\n", result.OverallStatus)
 	runs := 0
 	if len(result.EvalCases) > 0 {
 		runs = len(result.EvalCases[0].EvalCaseResults)
@@ -84,13 +84,13 @@ func printSummary(result *evaluation.EvaluationResult, outDir string) {
 	fmt.Printf("Runs: %d\n", runs)
 
 	for _, caseResult := range result.EvalCases {
-		fmt.Printf("Case %s -> %s\n", caseResult.EvalCaseID, caseResult.OverallStatus.String())
+		fmt.Printf("Case %s -> %s\n", caseResult.EvalCaseID, caseResult.OverallStatus)
 		for _, metricResult := range caseResult.MetricResults {
 			fmt.Printf("  Metric %s: score %.2f (threshold %.2f) => %s\n",
 				metricResult.MetricName,
 				metricResult.Score,
 				metricResult.Threshold,
-				metricResult.EvalStatus.String(),
+				metricResult.EvalStatus,
 			)
 		}
 		fmt.Println()
