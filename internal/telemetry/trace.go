@@ -432,8 +432,6 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 		if len(definitions) > 0 {
 			if bts, err := json.Marshal(definitions); err == nil {
 				attrs = append(attrs, attribute.String(KeyGenAIRequestToolDefinitions, string(bts)))
-			} else {
-				attrs = append(attrs, attribute.String(KeyGenAIRequestToolDefinitions, "<not json serializable>"))
 			}
 		}
 	}
