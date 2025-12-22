@@ -14,8 +14,8 @@ replace (
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v0.7.0
-	trpc.group/trpc-go/trpc-agent-go/evaluation v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go v0.8.0
+	trpc.group/trpc-go/trpc-agent-go/evaluation v0.8.0
 )
 
 require (
