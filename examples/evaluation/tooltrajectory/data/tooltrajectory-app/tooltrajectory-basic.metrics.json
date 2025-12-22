@@ -1,0 +1,44 @@
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderInsensitive": true,
+        "subsetMatching": true,
+        "defaultStrategy": {
+          "name": {
+            "matchStrategy": "exact"
+          },
+          "arguments": {
+            "matchStrategy": "exact"
+          },
+          "response": {
+            "matchStrategy": "exact"
+          }
+        },
+        "toolStrategy": {
+          "get_time": {
+            "response": {
+              "ignore": true
+            }
+          },
+          "get_ticket": {
+            "arguments": {
+              "ignoreTree": {
+                "time": true
+              },
+              "matchStrategy": "exact"
+            },
+            "response": {
+              "ignoreTree": {
+                "time": true
+              },
+              "matchStrategy": "exact"
+            }
+          }
+        }
+      }
+    }
+  }
+]

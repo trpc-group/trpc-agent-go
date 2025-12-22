@@ -1,0 +1,104 @@
+{
+  "evalSetId": "tooltrajectory-basic",
+  "name": "tooltrajectory-basic",
+  "evalCases": [
+    {
+      "evalId": "travel_alerts",
+      "conversation": [
+        {
+          "invocationId": "travel_alerts-1",
+          "userContent": {
+            "role": "user",
+            "content": "I'm traveling to Shanghai; what should I watch out for?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Weather in Shanghai: sunny, 26C. City alert: festival traffic downtown. Tickets available (25 left). Arrive early to pick up tickets and watch traffic."
+          },
+          "intermediateData": {
+            "toolCalls": [
+              {
+                "id": "tool_use_weather",
+                "type": "function",
+                "function": {
+                  "name": "get_weather",
+                  "arguments": {
+                    "city": "Shanghai"
+                  }
+                }
+              },
+              {
+                "id": "tool_use_news",
+                "type": "function",
+                "function": {
+                  "name": "get_news",
+                  "arguments": {
+                    "city": "Shanghai"
+                  }
+                }
+              },
+              {
+                "id": "tool_use_time",
+                "type": "function",
+                "function": {
+                  "name": "get_time",
+                  "arguments": {}
+                }
+              },
+              {
+                "id": "tool_use_ticket",
+                "type": "function",
+                "function": {
+                  "name": "get_ticket",
+                  "arguments": {
+                    "city": "Shanghai"
+                  }
+                }
+              }
+            ],
+            "toolResponses": [
+              {
+                "role": "tool",
+                "toolId": "tool_use_weather",
+                "toolName": "get_weather",
+                "content": {
+                  "city": "Shanghai",
+                  "condition": "sunny",
+                  "tempC": 26
+                }
+              },
+              {
+                "role": "tool",
+                "toolId": "tool_use_news",
+                "toolName": "get_news",
+                "content": {
+                  "city": "Shanghai",
+                  "headline": "Festival downtown, expect traffic."
+                }
+              },
+              {
+                "role": "tool",
+                "toolId": "tool_use_time",
+                "toolName": "get_time",
+                "content": {}
+              },
+              {
+                "role": "tool",
+                "toolId": "tool_use_ticket",
+                "toolName": "get_ticket",
+                "content": {
+                  "city": "Shanghai",
+                  "available": 25
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "tooltrajectory-app",
+        "userId": "traveler"
+      }
+    }
+  ]
+}
