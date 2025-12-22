@@ -67,6 +67,6 @@ require (
 	google.golang.org/protobuf v1.36.10 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-20251126064502-c8c2594d2519 // indirect
-	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.0.0-20251203120347-0b4d62cb115d // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.8.1-0.20251222024650-ea147adf3d21 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/ollama v0.0.0-20251201063627-880416fa9808 // indirect
 )
