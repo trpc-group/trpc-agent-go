@@ -13,9 +13,9 @@ replace (
 
 require (
 	trpc.group/trpc-go/trpc-agent-go v0.6.0
-	trpc.group/trpc-go/trpc-agent-go/memory/mysql v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/memory/postgres v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.2.0
+	trpc.group/trpc-go/trpc-agent-go/memory/mysql v0.8.0
+	trpc.group/trpc-go/trpc-agent-go/memory/postgres v0.8.0
+	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.8.0
 )
 
 require (

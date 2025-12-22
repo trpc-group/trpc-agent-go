@@ -9,7 +9,7 @@ replace trpc.group/trpc-go/trpc-agent-go => ../../../
 require (
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/genai v1.36.0
-	trpc.group/trpc-go/trpc-agent-go v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go v0.8.1-0.20251222024650-ea147adf3d21
 )
 
 require (
