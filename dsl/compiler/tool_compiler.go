@@ -20,6 +20,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/toolspec"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
+	geminiemb "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini"
+	huggingfaceemb "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/huggingface"
 	openaiemb "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
@@ -371,6 +373,10 @@ func createEmbedder(cfg *toolspec.EmbedderConfig) (embedder.Embedder, error) {
 		return createOpenAIEmbedder(cfg)
 	case toolspec.EmbedderOllama:
 		return createOllamaEmbedder(cfg)
+	case toolspec.EmbedderGemini:
+		return createGeminiEmbedder(cfg)
+	case toolspec.EmbedderHuggingFace:
+		return createHuggingFaceEmbedder(cfg)
 	default:
 		return nil, fmt.Errorf("unsupported embedder type: %q", cfg.Type)
 	}
@@ -416,6 +422,54 @@ func createOllamaEmbedder(cfg *toolspec.EmbedderConfig) (embedder.Embedder, erro
 	}
 
 	return ollama.New(opts...), nil
+}
+
+func createGeminiEmbedder(cfg *toolspec.EmbedderConfig) (embedder.Embedder, error) {
+	if cfg.APIKey == "" {
+		return nil, fmt.Errorf("gemini embedder requires api_key")
+	}
+
+	opts := []geminiemb.Option{
+		geminiemb.WithAPIKey(cfg.APIKey),
+	}
+	if cfg.Model != "" {
+		opts = append(opts, geminiemb.WithModel(cfg.Model))
+	}
+	if cfg.Dimensions > 0 {
+		opts = append(opts, geminiemb.WithDimensions(cfg.Dimensions))
+	}
+
+	return geminiemb.New(context.Background(), opts...)
+}
+
+func createHuggingFaceEmbedder(cfg *toolspec.EmbedderConfig) (embedder.Embedder, error) {
+	if cfg.BaseURL == "" {
+		return nil, fmt.Errorf("huggingface embedder requires base_url")
+	}
+
+	opts := []huggingfaceemb.Option{
+		huggingfaceemb.WithBaseURL(cfg.BaseURL),
+	}
+	if cfg.Dimensions > 0 {
+		opts = append(opts, huggingfaceemb.WithDimensions(cfg.Dimensions))
+	}
+	if cfg.Normalize {
+		opts = append(opts, huggingfaceemb.WithNormalize(cfg.Normalize))
+	}
+	if cfg.PromptName != "" {
+		opts = append(opts, huggingfaceemb.WithPromptName(cfg.PromptName))
+	}
+	if cfg.Truncate {
+		opts = append(opts, huggingfaceemb.WithTruncate(cfg.Truncate))
+	}
+	if cfg.TruncationDirection != "" {
+		opts = append(opts, huggingfaceemb.WithTruncationDirection(huggingfaceemb.TruncateDirection(cfg.TruncationDirection)))
+	}
+	if cfg.EmbedRoute != "" {
+		opts = append(opts, huggingfaceemb.WithEmbedRoute(huggingfaceemb.EmbedRoute(cfg.EmbedRoute)))
+	}
+
+	return huggingfaceemb.New(opts...), nil
 }
 
 func compileCodeInterpreterTool(spec *toolspec.CodeInterpreterToolSpec) (codeexecutor.CodeExecutor, error) {

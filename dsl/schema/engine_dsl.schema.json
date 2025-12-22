@@ -285,7 +285,7 @@
         },
         "server_label": {
           "type": "string",
-          "description": "Optional label for this MCP server shown in the UI."
+          "description": "Optional label for this MCP server. Used as a prefix for tool names (e.g., 'deepwiki__read_wiki') to avoid naming conflicts when multiple MCP servers are configured."
         },
         "allowed_tools": {
           "type": "array",
@@ -349,7 +349,7 @@
         },
         "max_results": {
           "type": "integer",
-          "description": "Maximum number of results to return.",
+          "description": "Maximum number of results to return from vector similarity search (top-k).",
           "minimum": 1,
           "default": 10
         },
@@ -447,7 +447,9 @@
       "required": ["type"],
       "oneOf": [
         { "$ref": "#/$defs/OpenAIEmbedderConfig" },
-        { "$ref": "#/$defs/OllamaEmbedderConfig" }
+        { "$ref": "#/$defs/OllamaEmbedderConfig" },
+        { "$ref": "#/$defs/GeminiEmbedderConfig" },
+        { "$ref": "#/$defs/HuggingFaceEmbedderConfig" }
       ]
     },
     "OpenAIEmbedderConfig": {
@@ -471,6 +473,34 @@
         "type": { "type": "string", "const": "ollama" },
         "base_url": { "type": "string" },
         "model": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "GeminiEmbedderConfig": {
+      "type": "object",
+      "description": "Google Gemini embedder configuration.",
+      "required": ["type", "api_key"],
+      "properties": {
+        "type": { "type": "string", "const": "gemini" },
+        "api_key": { "type": "string", "description": "Google API key. Supports env:VAR_NAME format." },
+        "model": { "type": "string", "default": "gemini-embedding-exp-03-07", "description": "Gemini embedding model (e.g., gemini-embedding-exp-03-07, gemini-embedding-001)." },
+        "dimensions": { "type": "integer", "default": 1536, "description": "Output embedding dimensions." }
+      },
+      "additionalProperties": false
+    },
+    "HuggingFaceEmbedderConfig": {
+      "type": "object",
+      "description": "HuggingFace Text-Embeddings-Inference (TEI) embedder configuration.",
+      "required": ["type", "base_url"],
+      "properties": {
+        "type": { "type": "string", "const": "huggingface" },
+        "base_url": { "type": "string", "description": "TEI server URL (e.g., http://localhost:8080)." },
+        "dimensions": { "type": "integer", "default": 1024, "description": "Output embedding dimensions." },
+        "normalize": { "type": "boolean", "default": false, "description": "Whether to normalize embeddings." },
+        "prompt_name": { "type": "string", "description": "Name of the prompt to use." },
+        "truncate": { "type": "boolean", "default": false, "description": "Whether to truncate the text." },
+        "truncation_direction": { "type": "string", "enum": ["Left", "Right"], "default": "Right", "description": "Truncation direction." },
+        "embed_route": { "type": "string", "enum": ["/embed", "/embed_all"], "default": "/embed", "description": "Embedding endpoint route." }
       },
       "additionalProperties": false
     },

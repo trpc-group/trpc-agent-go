@@ -103,8 +103,10 @@ type VectorStoreConfig struct {
 type EmbedderType string
 
 const (
-	EmbedderOpenAI EmbedderType = "openai"
-	EmbedderOllama EmbedderType = "ollama"
+	EmbedderOpenAI      EmbedderType = "openai"
+	EmbedderOllama      EmbedderType = "ollama"
+	EmbedderGemini      EmbedderType = "gemini"
+	EmbedderHuggingFace EmbedderType = "huggingface"
 )
 
 // EmbedderConfig is the embedder configuration.
@@ -114,6 +116,12 @@ type EmbedderConfig struct {
 	BaseURL    string       `json:"base_url,omitempty"`
 	Model      string       `json:"model,omitempty"`
 	Dimensions int          `json:"dimensions,omitempty"`
+	// HuggingFace specific fields
+	Normalize           bool   `json:"normalize,omitempty"`
+	PromptName          string `json:"prompt_name,omitempty"`
+	Truncate            bool   `json:"truncate,omitempty"`
+	TruncationDirection string `json:"truncation_direction,omitempty"` // "Left" or "Right"
+	EmbedRoute          string `json:"embed_route,omitempty"`          // "/embed" or "/embed_all"
 }
 
 // CodeInterpreterToolSpec represents a code interpreter tool configuration.
