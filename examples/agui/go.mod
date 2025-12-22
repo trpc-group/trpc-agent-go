@@ -60,6 +60,6 @@ require (
 	google.golang.org/grpc v1.65.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.0.1 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
 )
