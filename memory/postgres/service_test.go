@@ -2156,6 +2156,8 @@ func TestTools_AutoMemoryMode(t *testing.T) {
 	s.opts.extractor = &mockExtractor{}
 	s.opts.toolCreators = imemory.AllToolCreators
 	s.opts.enabledTools = imemory.DefaultEnabledTools
+	// Re-compute tools list after changing opts to simulate auto memory mode.
+	s.precomputedTools = s.buildToolsList()
 
 	tools := s.Tools()
 

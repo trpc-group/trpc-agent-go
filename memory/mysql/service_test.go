@@ -1228,42 +1228,42 @@ func TestSearchMemories_UnmarshalError(t *testing.T) {
 }
 
 // TestService_Tools tests the Tools method.
-// It verifies that tools are correctly created, cached, and filtered based on enabled status.
+// It verifies that tools are correctly pre-computed and returned consistently.
 func TestService_Tools(t *testing.T) {
 	db, _ := setupMockDB(t)
 	defer db.Close()
 
+	mockTool1 := &mockTool{name: "tool1"}
+	mockTool2 := &mockTool{name: "tool2"}
+
 	s := &Service{
 		opts: ServiceOpts{
-			toolCreators: make(map[string]memory.ToolCreator),
-			enabledTools: make(map[string]bool),
+			toolCreators: map[string]memory.ToolCreator{
+				"tool1": func() tool.Tool { return mockTool1 },
+				"tool2": func() tool.Tool { return mockTool2 },
+			},
+			enabledTools: map[string]bool{
+				"tool1": true,
+				"tool2": true,
+			},
 		},
 		db:          storage.WrapSQLDB(db),
 		tableName:   "memories",
 		cachedTools: make(map[string]tool.Tool),
 	}
-
-	mockTool1 := &mockTool{name: "tool1"}
-	mockTool2 := &mockTool{name: "tool2"}
-
-	s.opts.toolCreators["tool1"] = func() tool.Tool { return mockTool1 }
-	s.opts.toolCreators["tool2"] = func() tool.Tool { return mockTool2 }
-	s.opts.enabledTools["tool1"] = true
-	s.opts.enabledTools["tool2"] = true
+	// Pre-compute tools list as NewService would do.
+	s.precomputedTools = s.buildToolsList()
 
 	tools := s.Tools()
 	assert.Len(t, tools, 2)
 
+	// Verify tools are cached.
 	assert.Len(t, s.cachedTools, 2)
 
+	// Verify Tools() returns the same pre-computed list.
 	tools2 := s.Tools()
 	assert.Len(t, tools2, 2)
 	assert.Equal(t, tools[0], tools2[0])
-
-	s.opts.enabledTools["tool2"] = false
-	s.cachedTools = make(map[string]tool.Tool)
-	tools3 := s.Tools()
-	assert.Len(t, tools3, 1)
 }
 
 // TestService_Close tests the Close method.
@@ -1679,6 +1679,8 @@ func TestTools_AutoMemoryMode(t *testing.T) {
 	s.opts.extractor = &mockExtractor{}
 	s.opts.toolCreators = imemory.AllToolCreators
 	s.opts.enabledTools = imemory.DefaultEnabledTools
+	// Re-compute tools list after changing opts to simulate auto memory mode.
+	s.precomputedTools = s.buildToolsList()
 
 	tools := s.Tools()
 
