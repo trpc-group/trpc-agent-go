@@ -933,6 +933,9 @@ func TestCleanupExpiredForUser_SoftDelete(t *testing.T) {
 	mock.ExpectExec("UPDATE session_states SET deleted_at = ?").
 		WithArgs(sqlmock.AnyArg(), userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE session_track_events SET deleted_at = ?").
+		WithArgs(sqlmock.AnyArg(), userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Should not panic
 	s.cleanupExpiredForUser(context.Background(), userKey)
@@ -953,6 +956,9 @@ func TestCleanupExpiredForUser_HardDelete(t *testing.T) {
 	}
 
 	mock.ExpectExec("DELETE FROM session_states").
+		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DELETE FROM session_track_events").
 		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
