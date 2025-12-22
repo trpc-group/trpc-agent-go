@@ -125,6 +125,7 @@ var (
 	KeyGenAISystemInstructions      = semconvtrace.KeyGenAISystemInstructions
 	KeyGenAITokenType               = semconvtrace.KeyGenAITokenType
 	KeyGenAIRequestThinkingEnabled  = semconvtrace.KeyGenAIRequestThinkingEnabled
+	KeyGenAIRequestToolDefinitions  = "gen_ai.request.tool.definitions"
 
 	KeyGenAIToolName          = semconvtrace.KeyGenAIToolName
 	KeyGenAIToolDescription   = semconvtrace.KeyGenAIToolDescription
@@ -414,6 +415,27 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 		attrs = append(attrs, attribute.String(KeyLLMRequest, string(bts)))
 	} else {
 		attrs = append(attrs, attribute.String(KeyLLMRequest, "<not json serializable>"))
+	}
+
+	// Add tool definitions as best-effort structured array (JSON string fallback)
+	if len(req.Tools) > 0 {
+		definitions := make([]*tool.Declaration, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			if t == nil {
+				continue
+			}
+			if decl := t.Declaration(); decl != nil {
+				definitions = append(definitions, decl)
+			}
+		}
+
+		if len(definitions) > 0 {
+			if bts, err := json.Marshal(definitions); err == nil {
+				attrs = append(attrs, attribute.String(KeyGenAIRequestToolDefinitions, string(bts)))
+			} else {
+				attrs = append(attrs, attribute.String(KeyGenAIRequestToolDefinitions, "<not json serializable>"))
+			}
+		}
 	}
 
 	// Add messages
