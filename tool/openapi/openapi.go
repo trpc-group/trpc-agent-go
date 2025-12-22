@@ -24,6 +24,8 @@ import (
 const (
 	// defaultUserAgent is the default user agent for HTTP requests.
 	defaultUserAgent = "trpc-agent-go-openapi/1.0"
+	// defaultOpenAPIToolSetName is the default name for the OpenAPI tool set.
+	defaultOpenAPIToolSetName = "openapi"
 	// defaultTimeout is the default timeout for HTTP requests.
 	defaultTimeout = 30 * time.Second
 )
@@ -98,6 +100,7 @@ func (ts *openAPIToolSet) Name() string {
 func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	c := &config{
 		userAgent: defaultUserAgent,
+		name:      defaultOpenAPIToolSetName,
 		httpClient: &http.Client{
 			Timeout: defaultTimeout,
 		},

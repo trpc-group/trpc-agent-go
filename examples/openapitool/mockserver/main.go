@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -61,6 +63,23 @@ type MockServerHandler struct {
 	mux *http.ServeMux
 }
 
+// responseCapturer captures the response body for logging
+type responseCapturer struct {
+	http.ResponseWriter
+	body       *bytes.Buffer
+	statusCode int
+}
+
+func (rc *responseCapturer) Write(b []byte) (int, error) {
+	rc.body.Write(b)
+	return rc.ResponseWriter.Write(b)
+}
+
+func (rc *responseCapturer) WriteHeader(statusCode int) {
+	rc.statusCode = statusCode
+	rc.ResponseWriter.WriteHeader(statusCode)
+}
+
 func (h *MockServerHandler) setupRoutes() {
 	h.mux = http.NewServeMux()
 
@@ -75,7 +94,7 @@ func (h *MockServerHandler) setupRoutes() {
 			h.mux.HandleFunc("POST "+absPath, h.createHandler(absPath, pathItem.Post))
 		}
 		if pathItem.Put != nil {
-			h.mux.HandleFunc("PUT "+absPath, h.createHandler(absPath, pathItem.Put))
+			h.mux.HandleFunc("PUT "+absPath, h.createHandler(absPath, pathItem.Post))
 		}
 		if pathItem.Delete != nil {
 			h.mux.HandleFunc("DELETE "+absPath, h.createHandler(absPath, pathItem.Delete))
@@ -90,7 +109,6 @@ func (h *MockServerHandler) setupRoutes() {
 }
 
 func (h *MockServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Handling %s %s", r.Method, r.URL.Path)
 	// Handle CORS
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -101,13 +119,38 @@ func (h *MockServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Create response capturer to log response body
+	rc := &responseCapturer{
+		ResponseWriter: w,
+		body:           &bytes.Buffer{},
+		statusCode:     http.StatusOK,
+	}
+
 	// Handle the request
-	h.mux.ServeHTTP(w, r)
+	h.mux.ServeHTTP(rc, r)
+
+	// Log response body if it exists
+	if rc.body.Len() > 0 {
+		log.Printf("Response Status: %d", rc.statusCode)
+		log.Printf("Response Body: %s", rc.body.String())
+	}
 }
 
 func (h *MockServerHandler) createHandler(path string, operation *openapi3.Operation) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Handling %s %s", r.Method, r.URL.Path)
+
+		// Read and log request body
+		if r.Body != nil {
+			bodyBytes, err := io.ReadAll(r.Body)
+			if err != nil {
+				log.Printf("Error reading request body: %v", err)
+			} else {
+				log.Printf("Request Body: %s", string(bodyBytes))
+				// Restore the body so it can be read again by other handlers
+				r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+			}
+		}
 
 		// Set content type based on Accept header or default to JSON
 		contentType := "application/json"
@@ -177,6 +220,20 @@ func (h *MockServerHandler) createHandler(path string, operation *openapi3.Opera
 func (h *MockServerHandler) generateMockData(response *openapi3.Response, path, operationID string) interface{} {
 	// Simple mock data generation based on operation ID and path
 	switch operationID {
+	case "addPet":
+		return map[string]any{
+			"id":   123,
+			"name": "Mock Pet",
+			"category": map[string]any{
+				"id":   1,
+				"name": "Dogs",
+			},
+			"photoUrls": []string{"http://example.com/photo1.jpg"},
+			"tags": []map[string]any{
+				{"id": 1, "name": "friendly"},
+			},
+			"status": "available",
+		}
 	case "getPetById":
 		return map[string]any{
 			"id":   123,

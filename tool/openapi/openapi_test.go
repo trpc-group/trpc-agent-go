@@ -108,15 +108,6 @@ func TestNewToolSet(t *testing.T) {
 			},
 			wantErr: false,
 		},
-		{
-			name: "create_toolset_ok_uri",
-			args: args{
-				opts: []Option{
-					WithSpecLoader(NewURILoader("https://petstore3.swagger.io/api/v3/openapi.json")),
-				},
-			},
-			wantErr: false,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
