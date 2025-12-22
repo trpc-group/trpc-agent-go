@@ -8,7 +8,7 @@ replace (
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v0.8.1-0.20251222024650-ea147adf3d21
 	trpc.group/trpc-go/trpc-agent-go/tool/webfetch/geminifetch v0.8.1-0.20251222024650-ea147adf3d21
 )
 
