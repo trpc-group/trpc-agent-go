@@ -79,6 +79,7 @@ LLMAgent 会自动在 `Instruction` 和可选的 `SystemPrompt` 中注入会话�
 - `{key}`：替换为 `session.State["key"]` 的字符串值
 - `{key?}`：可选；如果不存在，替换为空字符串
 - `{user:subkey}` / `{app:subkey}` / `{temp:subkey}`：访问用户/应用/临时命名空间（SessionService 会把 app/user 作用域的状态合并进 session，并带上前缀）
+- `{invocation:subkey}` ：替换为fmt.Sprintf("%+v",`invocation.state["subkey"]`)的值，（可以通过invocation.SetState(k,v)来设置）。
 
 注意：
 
@@ -93,9 +94,13 @@ llm := llmagent.New(
   llmagent.WithModel(modelInstance),
   llmagent.WithInstruction(
     "You are a research assistant. Focus: {research_topics}. " +
-    "User interests: {user:topics?}. App banner: {app:banner?}.",
+    "User interests: {user:topics?}. App banner: {app:banner?}." +
+    "Invocation case: {invocation:case}",
   ),
 )
+
+inv := agent.NewInvoction()
+inv.SetState("case", "case-1")
 
 // 通过 SessionService 初始化状态（用户态/应用态 + 会话本地键）
 _ = sessionService.UpdateUserState(ctx, session.UserKey{AppName: app, UserID: user}, session.StateMap{
