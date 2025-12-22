@@ -21,6 +21,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.Equal(t, defaultToolTrajectoryStrategy, opts.defaultStrategy)
 	assert.Nil(t, opts.toolStrategy)
 	assert.False(t, opts.orderInsensitive)
+	assert.False(t, opts.subsetMatching)
 	assert.Nil(t, opts.compare)
 }
 
@@ -41,6 +42,11 @@ func TestWithTool(t *testing.T) {
 func TestWithOrderInsensitive(t *testing.T) {
 	opts := newOptions(WithOrderInsensitive(true))
 	assert.True(t, opts.orderInsensitive)
+}
+
+func TestWithSubsetMatching(t *testing.T) {
+	opts := newOptions(WithSubsetMatching(true))
+	assert.True(t, opts.subsetMatching)
 }
 
 func TestWithCompare(t *testing.T) {

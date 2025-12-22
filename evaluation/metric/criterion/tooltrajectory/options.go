@@ -30,6 +30,8 @@ type options struct {
 	toolStrategy map[string]*ToolTrajectoryStrategy
 	// orderInsensitive toggles order-agnostic comparison for args and responses.
 	orderInsensitive bool
+	// subsetMatching allows expected tool list to be a subset of actual list.
+	subsetMatching bool
 	// compare allows overriding comparison logic entirely.
 	compare func(actual, expected *evalset.Invocation) (bool, error)
 }
@@ -40,6 +42,7 @@ func newOptions(opt ...Option) *options {
 		defaultStrategy:  defaultToolTrajectoryStrategy,
 		toolStrategy:     nil,
 		orderInsensitive: false,
+		subsetMatching:   false,
 		compare:          nil,
 	}
 	for _, o := range opt {
@@ -69,6 +72,13 @@ func WithTool(tool map[string]*ToolTrajectoryStrategy) Option {
 func WithOrderInsensitive(orderInsensitive bool) Option {
 	return func(o *options) {
 		o.orderInsensitive = orderInsensitive
+	}
+}
+
+// WithSubsetMatching allows expected tool list to be a subset of actual list.
+func WithSubsetMatching(subsetMatching bool) Option {
+	return func(o *options) {
+		o.subsetMatching = subsetMatching
 	}
 }
 

@@ -29,6 +29,7 @@ func New(opt ...Option) *ToolTrajectoryCriterion {
 		DefaultStrategy:  opts.defaultStrategy,
 		ToolStrategy:     opts.toolStrategy,
 		OrderInsensitive: opts.orderInsensitive,
+		SubsetMatching:   opts.subsetMatching,
 		Compare:          opts.compare,
 	}
 }
@@ -41,6 +42,8 @@ type ToolTrajectoryCriterion struct {
 	ToolStrategy map[string]*ToolTrajectoryStrategy `json:"toolStrategy,omitempty"`
 	// OrderInsensitive toggles comparison order for args and responses.
 	OrderInsensitive bool `json:"orderInsensitive,omitempty"`
+	// SubsetMatching allows expected tool list to be a subset of actual list.
+	SubsetMatching bool `json:"subsetMatching,omitempty"`
 	// Compare allows custom comparison override.
 	Compare func(actual, expected *evalset.Invocation) (bool, error) `json:"-"`
 }
@@ -63,23 +66,12 @@ func (t *ToolTrajectoryCriterion) Match(actual, expected *evalset.Invocation) (b
 	if actual.IntermediateData == nil || expected.IntermediateData == nil {
 		return false, fmt.Errorf("actual or expected intermediate data is nil")
 	}
-	// Ensure one-to-one mapping between tool calls and responses on actual invocation.
-	if len(actual.IntermediateData.ToolUses) != len(actual.IntermediateData.ToolResponses) {
-		return false, fmt.Errorf("tool uses and tool responses count mismatch: %d != %d",
-			len(actual.IntermediateData.ToolUses), len(actual.IntermediateData.ToolResponses))
+	valid, err := t.validateToolCounts(actual, expected)
+	if err != nil {
+		return false, fmt.Errorf("validate tool counts: %w", err)
 	}
-	// Ensure one-to-one mapping between tool calls and responses on expected invocation.
-	if len(expected.IntermediateData.ToolUses) != len(expected.IntermediateData.ToolResponses) {
-		return false, fmt.Errorf("tool uses and tool responses count mismatch: %d != %d",
-			len(expected.IntermediateData.ToolUses), len(expected.IntermediateData.ToolResponses))
-	}
-	// Ensure the same number of tool uses before detailed comparison.
-	if len(actual.IntermediateData.ToolUses) != len(expected.IntermediateData.ToolUses) {
-		return false, fmt.Errorf("tool uses count mismatch: %d != %d",
-			len(actual.IntermediateData.ToolUses), len(expected.IntermediateData.ToolUses))
-	}
-	if len(actual.IntermediateData.ToolUses) == 0 {
-		return true, nil
+	if !valid {
+		return false, fmt.Errorf("tool counts mismatch")
 	}
 	actualTools, err := getToolComparers(
 		actual.IntermediateData.ToolUses,
@@ -105,14 +97,33 @@ func (t *ToolTrajectoryCriterion) Match(actual, expected *evalset.Invocation) (b
 			return expectedTools[i].lessThan(expectedTools[j])
 		})
 	}
-	for i := range len(actualTools) {
-		strategy := getStrategy(t, actualTools[i], expectedTools[i])
-		ok, err := strategy.match(actualTools[i], expectedTools[i])
-		if err != nil {
-			return false, fmt.Errorf("tool %s mismatch: %w", actualTools[i].name, err)
+	if t.SubsetMatching {
+		return subsetMatch(t, actualTools, expectedTools)
+	}
+	return orderedMatch(t, actualTools, expectedTools)
+}
+
+// validateToolCounts validates the tool counts of actual and expected invocations.
+func (t *ToolTrajectoryCriterion) validateToolCounts(actual, expected *evalset.Invocation) (bool, error) {
+	actualToolCount := len(actual.IntermediateData.ToolUses)
+	actualResponseCount := len(actual.IntermediateData.ToolResponses)
+	expectedToolCount := len(expected.IntermediateData.ToolUses)
+	expectedResponseCount := len(expected.IntermediateData.ToolResponses)
+	if actualToolCount != actualResponseCount {
+		return false, fmt.Errorf("actual tool uses and tool responses count mismatch: %d != %d",
+			actualToolCount, actualResponseCount)
+	}
+	if expectedToolCount != expectedResponseCount {
+		return false, fmt.Errorf("expected tool uses and tool responses count mismatch: %d != %d",
+			expectedToolCount, expectedResponseCount)
+	}
+	if t.SubsetMatching {
+		if actualToolCount < expectedToolCount {
+			return false, fmt.Errorf("tool uses count mismatch: actual(%d) < expected(%d)", actualToolCount, expectedToolCount)
 		}
-		if !ok {
-			return false, fmt.Errorf("tool %s mismatch", actualTools[i].name)
+	} else {
+		if actualToolCount != expectedToolCount {
+			return false, fmt.Errorf("tool uses count mismatch: actual(%d) != expected(%d)", actualToolCount, expectedToolCount)
 		}
 	}
 	return true, nil
@@ -148,6 +159,55 @@ func (t *ToolTrajectoryStrategy) match(actual, expected *toolComparer) (bool, er
 		}
 	}
 	return true, nil
+}
+
+// orderedMatch matches the tool calls and responses in order.
+func orderedMatch(t *ToolTrajectoryCriterion, actualTools, expectedTools []*toolComparer) (bool, error) {
+	for i := range len(actualTools) {
+		if err := matchTool(t, actualTools[i], expectedTools[i]); err != nil {
+			return false, fmt.Errorf("actual tool %s mismatch with expected tool %s: %w",
+				actualTools[i].name, expectedTools[i].name, err)
+		}
+	}
+	return true, nil
+}
+
+// subsetMatch matches the tool calls and responses in subset.
+func subsetMatch(t *ToolTrajectoryCriterion, actualTools, expectedTools []*toolComparer) (bool, error) {
+	if len(expectedTools) == 0 {
+		return true, nil
+	}
+	matched := 0
+	var lastErr error
+	for i, j := 0, 0; i < len(actualTools) && j < len(expectedTools); i++ {
+		if err := matchTool(t, actualTools[i], expectedTools[j]); err != nil {
+			lastErr = fmt.Errorf("actual tool %s mismatch with expected tool %s: %w",
+				actualTools[i].name, expectedTools[j].name, err)
+			continue
+		}
+		matched++
+		j++
+	}
+	if matched != len(expectedTools) {
+		if lastErr != nil {
+			return false, fmt.Errorf("tool subset mismatch: %w", lastErr)
+		}
+		return false, fmt.Errorf("tool subset mismatch: %d of %d matched", matched, len(expectedTools))
+	}
+	return true, nil
+}
+
+// matchTool matches a single tool call and response.
+func matchTool(t *ToolTrajectoryCriterion, actualTool, expectedTool *toolComparer) error {
+	strategy := getStrategy(t, actualTool, expectedTool)
+	ok, err := strategy.match(actualTool, expectedTool)
+	if err != nil {
+		return fmt.Errorf("tool %s mismatch: %w", actualTool.name, err)
+	}
+	if !ok {
+		return fmt.Errorf("tool %s mismatch", actualTool.name)
+	}
+	return nil
 }
 
 // toolComparer normalizes tool call and response data for comparison.

@@ -41,6 +41,7 @@ func TestToolTrajectoryCriterionJSONRoundTrip(t *testing.T) {
 			},
 		},
 		OrderInsensitive: true,
+		SubsetMatching:   true,
 	}
 	data, err := json.Marshal(criterion)
 	assert.NoError(t, err)
@@ -53,12 +54,14 @@ func TestToolTrajectoryCriterionJSONRoundTrip(t *testing.T) {
 		"toolStrategy":{
 			"foo":{"name":{"ignore":true,"caseInsensitive":true,"matchStrategy":"contains"}}
 		},
-		"orderInsensitive":true
+		"orderInsensitive":true,
+		"subsetMatching":true
 	}`, string(data))
 	var decoded ToolTrajectoryCriterion
 	err = json.Unmarshal(data, &decoded)
 	assert.NoError(t, err)
 	assert.True(t, decoded.OrderInsensitive)
+	assert.True(t, decoded.SubsetMatching)
 	assert.NotNil(t, decoded.DefaultStrategy)
 	assert.Equal(t, text.TextMatchStrategyExact, decoded.DefaultStrategy.Name.MatchStrategy)
 	assert.True(t, decoded.DefaultStrategy.Name.Ignore)
@@ -325,12 +328,25 @@ func TestToolTrajectoryCriterionExpectedResponseCountMismatch(t *testing.T) {
 func TestToolTrajectoryCriterionToolUsesCountMismatch(t *testing.T) {
 	actual := makeInvocation([]toolData{
 		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
+		{id: "call-2", name: "tool", args: map[string]any{"a": 2}, response: map[string]any{"r": 2}},
+	})
+	expected := makeInvocation([]toolData{
+		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
+	})
+	ok, err := New().Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+}
+
+func TestToolTrajectoryCriterionToolUsesCountMismatchWithSubset(t *testing.T) {
+	actual := makeInvocation([]toolData{
+		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 	})
 	expected := makeInvocation([]toolData{
 		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 		{id: "call-2", name: "tool", args: map[string]any{"a": 2}, response: map[string]any{"r": 2}},
 	})
-	ok, err := New().Match(actual, expected)
+	ok, err := New(WithSubsetMatching(true)).Match(actual, expected)
 	assert.False(t, ok)
 	assert.Error(t, err)
 }
@@ -339,6 +355,16 @@ func TestToolTrajectoryCriterionZeroTools(t *testing.T) {
 	actual := &evalset.Invocation{IntermediateData: &evalset.IntermediateData{}}
 	expected := &evalset.Invocation{IntermediateData: &evalset.IntermediateData{}}
 	ok, err := New().Match(actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestToolTrajectoryCriterionZeroExpectedSubset(t *testing.T) {
+	actual := makeInvocation([]toolData{
+		{id: "call-1", name: "tool", args: map[string]any{}, response: map[string]any{}},
+	})
+	expected := &evalset.Invocation{IntermediateData: &evalset.IntermediateData{}}
+	ok, err := New(WithSubsetMatching(true)).Match(actual, expected)
 	assert.True(t, ok)
 	assert.NoError(t, err)
 }
@@ -610,6 +636,51 @@ func TestToolTrajectoryCriterionStrategyLookupByExpectedName(t *testing.T) {
 	ok, err := criterion.Match(actual, expected)
 	assert.True(t, ok)
 	assert.NoError(t, err)
+}
+
+func TestToolTrajectoryCriterionSubsetOrderedMatch(t *testing.T) {
+	actual := makeInvocation([]toolData{
+		{id: "call-1", name: "tool", args: map[string]any{"a": 0}, response: map[string]any{"r": 0}},
+		{id: "call-2", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
+		{id: "call-3", name: "tool", args: map[string]any{"a": 2}, response: map[string]any{"r": 2}},
+	})
+	expected := makeInvocation([]toolData{
+		{id: "call-2", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
+		{id: "call-3", name: "tool", args: map[string]any{"a": 2}, response: map[string]any{"r": 2}},
+	})
+	criterion := New(WithSubsetMatching(true))
+	ok, err := criterion.Match(actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestToolTrajectoryCriterionSubsetOrderInsensitiveMatch(t *testing.T) {
+	actual := makeInvocation([]toolData{
+		{id: "call-1", name: "tool", args: map[string]any{"a": 2}, response: map[string]any{"r": 2}},
+		{id: "call-2", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
+		{id: "call-3", name: "tool", args: map[string]any{"a": 0}, response: map[string]any{"r": 0}},
+	})
+	expected := makeInvocation([]toolData{
+		{id: "call-9", name: "tool", args: map[string]any{"a": 0}, response: map[string]any{"r": 0}},
+		{id: "call-8", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
+	})
+	criterion := New(WithOrderInsensitive(true), WithSubsetMatching(true))
+	ok, err := criterion.Match(actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestToolTrajectoryCriterionSubsetNoMatch(t *testing.T) {
+	actual := makeInvocation([]toolData{
+		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
+	})
+	expected := makeInvocation([]toolData{
+		{id: "call-2", name: "tool", args: map[string]any{"a": 2}, response: map[string]any{"r": 2}},
+	})
+	criterion := New(WithSubsetMatching(true))
+	ok, err := criterion.Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
 }
 
 func TestToolTrajectoryStrategyResponseMismatchOnly(t *testing.T) {
