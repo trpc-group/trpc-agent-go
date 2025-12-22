@@ -9,7 +9,7 @@ replace (
 
 require (
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/tool/webfetch/httpfetch v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/tool/webfetch/httpfetch v0.8.1-0.20251222024650-ea147adf3d21
 )
 
 require (

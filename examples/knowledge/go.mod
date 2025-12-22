@@ -20,7 +20,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.5.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract v0.0.0-20251203120347-0b4d62cb115d
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.1
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus v0.8.1-0.20251222024650-ea147adf3d21
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.2.0
 )

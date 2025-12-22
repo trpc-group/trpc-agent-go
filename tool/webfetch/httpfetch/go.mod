@@ -7,7 +7,7 @@ replace trpc.group/trpc-go/trpc-agent-go => ../../../
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.4.0
 	github.com/stretchr/testify v1.10.0
-	trpc.group/trpc-go/trpc-agent-go v0.0.0
+	trpc.group/trpc-go/trpc-agent-go v0.8.1-0.20251222024650-ea147adf3d21
 )
 
 require (
