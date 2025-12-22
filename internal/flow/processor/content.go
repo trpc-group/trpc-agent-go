@@ -273,7 +273,31 @@ func (p *ContentRequestProcessor) ProcessRequest(
 				summaryUpdatedAt = updatedAt
 			}
 		}
-		messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
+
+		// Preload memories into system prompt if configured.
+		// PreloadMemory: 0 = disabled, -1 = all, N > 0 = most recent N.
+		if p.PreloadMemory != 0 && invocation.MemoryService != nil {
+			if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
+				// Insert memory as a system message after the first system message.
+				systemMsgIndex := findSystemMessageIndex(req.Messages)
+				if systemMsgIndex >= 0 {
+					req.Messages = append(req.Messages[:systemMsgIndex+1],
+						append([]model.Message{*memMsg}, req.Messages[systemMsgIndex+1:]...)...)
+				} else {
+					req.Messages = append([]model.Message{*memMsg}, req.Messages...)
+				}
+			}
+		}
+
+		if skipHistory {
+			// When include_contents=none, only get events from current invocation
+			// to preserve tool call history within the current ReAct loop.
+			// This fixes the infinite loop issue where the agent doesn't see its
+			// own tool calls when running as an isolated subgraph.
+			messages = p.getCurrentInvocationMessages(invocation)
+		} else {
+			messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
+		}
 		req.Messages = append(req.Messages, messages...)
 		needToAddInvocationMessage = len(messages) == 0
 	}
