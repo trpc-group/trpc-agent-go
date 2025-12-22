@@ -541,6 +541,44 @@ func TestBuildRequestAttributes(t *testing.T) {
 	}
 }
 
+func TestBuildRequestAttributes_ToolDefinitions(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+		Tools: map[string]tool.Tool{
+			"alpha": testTool{decl: &tool.Declaration{Name: "alpha", Description: "first"}},
+			"beta":  testTool{decl: &tool.Declaration{Name: "beta", Description: "second"}},
+			"skip":  nil, // ensure nil entries are ignored
+		},
+	}
+
+	attrs := buildRequestAttributes(req)
+	require.NotNil(t, attrs)
+
+	var toolAttr *attribute.KeyValue
+	for i := range attrs {
+		if string(attrs[i].Key) == KeyGenAIRequestToolDefinitions {
+			toolAttr = &attrs[i]
+			break
+		}
+	}
+	require.NotNil(t, toolAttr, "expected tool definitions attribute")
+
+	var defs []tool.Declaration
+	require.NoError(t, json.Unmarshal([]byte(toolAttr.Value.AsString()), &defs))
+	require.Len(t, defs, 2)
+
+	names := map[string]struct{}{}
+	for _, d := range defs {
+		names[d.Name] = struct{}{}
+	}
+	require.Contains(t, names, "alpha")
+	require.Contains(t, names, "beta")
+}
+
+type testTool struct{ decl *tool.Declaration }
+
+func (t testTool) Declaration() *tool.Declaration { return t.decl }
+
 func TestBuildResponseAttributes(t *testing.T) {
 	tests := []struct {
 		name string
