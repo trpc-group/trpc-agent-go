@@ -219,7 +219,7 @@ gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C
 gopkg.in/yaml.v3 v3.0.0/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
-trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a h1:dOon6HF2sPRFnhCLEiAeKPc21JHL2eX7UBWjIR8PLaY=
-trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a/go.mod h1:Gtytau9Uoc3oPo/dpHvKit+tQn9Qlk5XFG1RiZTGqfk=
+trpc.group/trpc-go/trpc-a2a-go v0.2.5 h1:X3pAlWD128LaS9TtXsUDZoJWPVuPZDkZKUecKRxmWn4=
+trpc.group/trpc-go/trpc-a2a-go v0.2.5/go.mod h1:Gtytau9Uoc3oPo/dpHvKit+tQn9Qlk5XFG1RiZTGqfk=
 trpc.group/trpc-go/trpc-mcp-go v0.0.10 h1:kKPfevmikMojfOgtUBf5SJQ/v6aDugckodgyH1uDu2Q=
 trpc.group/trpc-go/trpc-mcp-go v0.0.10/go.mod h1:OT6rLglkdaQ17D2T1Y87Y/ckItzdsEldDbw7dHAbGEA=
