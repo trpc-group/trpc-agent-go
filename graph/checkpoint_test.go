@@ -1283,6 +1283,65 @@ func TestProcessModelResponse_DoneWithoutContentSkipsEvent(t *testing.T) {
 	}
 }
 
+func TestShouldEmitModelResponse_Cases(t *testing.T) {
+	const (
+		reasoning = "reasoning"
+		errType   = "test_error"
+		errMsg    = "boom"
+		content   = "content"
+	)
+
+	t.Run("nil response", func(t *testing.T) {
+		require.False(t, shouldEmitModelResponse(nil))
+	})
+
+	t.Run("error response", func(t *testing.T) {
+		rsp := &model.Response{
+			Error: &model.ResponseError{
+				Type:    errType,
+				Message: errMsg,
+			},
+		}
+		require.True(t, shouldEmitModelResponse(rsp))
+	})
+
+	t.Run("valid content", func(t *testing.T) {
+		rsp := &model.Response{
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+		}
+		require.True(t, shouldEmitModelResponse(rsp))
+	})
+
+	t.Run("reasoning content in message", func(t *testing.T) {
+		rsp := &model.Response{
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:             model.RoleAssistant,
+					ReasoningContent: reasoning,
+				},
+			}},
+		}
+		require.True(t, shouldEmitModelResponse(rsp))
+	})
+
+	t.Run("reasoning content in delta", func(t *testing.T) {
+		rsp := &model.Response{
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:             model.RoleAssistant,
+					ReasoningContent: reasoning,
+				},
+			}},
+		}
+		require.True(t, shouldEmitModelResponse(rsp))
+	})
+}
+
 func TestProcessModelResponse_AfterModelCustomResponse(t *testing.T) {
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
 	_, span := tracer.Start(context.Background(), "s")

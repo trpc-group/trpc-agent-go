@@ -601,6 +601,47 @@ func TestRunner_GraphCompletionPropagation(t *testing.T) {
 		"Final message content should match")
 }
 
+func TestRunner_GraphCompletion_DedupFinalChoices(t *testing.T) {
+	const (
+		appName       = "test-app"
+		userID        = "user"
+		sessionID     = "session"
+		agentName     = "dedup-agent"
+		finalMsg      = "final"
+		stateDeltaKey = "k"
+		stateDeltaVal = "v"
+	)
+
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &dedupGraphCompletionAgent{
+		name:          agentName,
+		assistantText: finalMsg,
+		stateKey:      stateDeltaKey,
+		stateVal:      stateDeltaVal,
+	}
+	r := NewRunner(appName, ag, WithSessionService(sessionService))
+
+	ch, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage(""),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for e := range ch {
+		if e.Object == model.ObjectTypeRunnerCompletion {
+			completion = e
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.StateDelta)
+	require.Equal(t, stateDeltaVal,
+		string(completion.StateDelta[stateDeltaKey]))
+	require.Empty(t, completion.Response.Choices)
+}
+
 // graphCompletionMockAgent emits a graph completion event with state delta
 // and choices.
 type graphCompletionMockAgent struct {
@@ -661,6 +702,86 @@ func (m *graphCompletionMockAgent) Run(
 
 func (m *graphCompletionMockAgent) Tools() []tool.Tool {
 	return []tool.Tool{}
+}
+
+// dedupGraphCompletionAgent emits an assistant message followed by a graph
+// completion event with the same assistant content, so runner completion
+// should not echo the final choices.
+type dedupGraphCompletionAgent struct {
+	name          string
+	assistantText string
+	stateKey      string
+	stateVal      string
+}
+
+func (m *dedupGraphCompletionAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent for dedup final choices",
+	}
+}
+
+func (m *dedupGraphCompletionAgent) SubAgents() []agent.Agent { return nil }
+
+func (m *dedupGraphCompletionAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *dedupGraphCompletionAgent) Tools() []tool.Tool { return nil }
+
+func (m *dedupGraphCompletionAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	const (
+		assistantEventID = "assistant-event-id"
+		graphEventID     = "graph-event-id"
+	)
+
+	eventCh := make(chan *event.Event, 2)
+
+	assistantEvent := &event.Event{
+		Response: &model.Response{
+			ID:     assistantEventID,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: m.assistantText,
+				},
+			}},
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           assistantEventID,
+		Timestamp:    time.Now(),
+	}
+
+	graphCompletionEvent := &event.Event{
+		Response: &model.Response{
+			ID:     graphEventID,
+			Object: graph.ObjectTypeGraphExecution,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(m.assistantText),
+			}},
+		},
+		StateDelta: map[string][]byte{
+			m.stateKey: []byte(m.stateVal),
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           graphEventID,
+		Timestamp:    time.Now(),
+	}
+
+	eventCh <- assistantEvent
+	eventCh <- graphCompletionEvent
+	close(eventCh)
+	return eventCh, nil
 }
 
 // failingAgent returns an error from Run to cover error path in Runner.Run.
@@ -990,6 +1111,246 @@ func TestPropagateGraphCompletion_NilStateValue(t *testing.T) {
 	rr.propagateGraphCompletion(ev, delta, nil, false)
 	require.Contains(t, ev.StateDelta, "nil")
 	require.Nil(t, ev.StateDelta["nil"]) // explicit nil copy branch covered
+}
+
+func TestShouldIncludeFinalChoices_Cases(t *testing.T) {
+	const (
+		appName   = "app"
+		agentName = "a"
+		content   = "content"
+	)
+
+	rr := NewRunner(appName, &noOpAgent{name: agentName}).(*runner)
+
+	t.Run("nil loop", func(t *testing.T) {
+		require.True(t, rr.shouldIncludeFinalChoices(nil))
+	})
+
+	t.Run("no final choices", func(t *testing.T) {
+		loop := &eventLoopContext{
+			finalChoices:     nil,
+			assistantContent: map[string]struct{}{content: {}},
+		}
+		require.False(t, rr.shouldIncludeFinalChoices(loop))
+	})
+
+	t.Run("empty assistant content", func(t *testing.T) {
+		loop := &eventLoopContext{
+			finalChoices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+			assistantContent: nil,
+		}
+		require.True(t, rr.shouldIncludeFinalChoices(loop))
+	})
+
+	t.Run("duplicate assistant content", func(t *testing.T) {
+		loop := &eventLoopContext{
+			finalChoices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+			assistantContent: map[string]struct{}{content: {}},
+		}
+		require.False(t, rr.shouldIncludeFinalChoices(loop))
+	})
+
+	t.Run("skips non assistant and empty content", func(t *testing.T) {
+		loop := &eventLoopContext{
+			finalChoices: []model.Choice{
+				{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleUser,
+						Content: content,
+					},
+				},
+				{
+					Index: 1,
+					Message: model.Message{
+						Role: model.RoleAssistant,
+					},
+				},
+			},
+			assistantContent: map[string]struct{}{content: {}},
+		}
+		require.True(t, rr.shouldIncludeFinalChoices(loop))
+	})
+}
+
+func TestRecordAssistantContent_Cases(t *testing.T) {
+	const (
+		appName        = "app"
+		agentName      = "a"
+		invocationID   = "inv"
+		author         = "author"
+		content        = "content"
+		deltaContent   = "delta"
+		stateEventID   = "state-event-id"
+		graphEventID   = "graph-event-id"
+		partialEvent   = "partial-event-id"
+		invalidEvent   = "invalid-event-id"
+		userEvent      = "user-event-id"
+		deltaOnlyEvent = "delta-only-event-id"
+	)
+
+	rr := NewRunner(appName, &noOpAgent{name: agentName}).(*runner)
+
+	t.Run("nil loop", func(t *testing.T) {
+		rsp := &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordAssistantContent(nil, e)
+	})
+
+	t.Run("nil event", func(t *testing.T) {
+		loop := &eventLoopContext{invocation: agent.NewInvocation()}
+		rr.recordAssistantContent(loop, nil)
+	})
+
+	t.Run("nil response", func(t *testing.T) {
+		loop := &eventLoopContext{invocation: agent.NewInvocation()}
+		rr.recordAssistantContent(loop, &event.Event{})
+	})
+
+	t.Run("nil invocation", func(t *testing.T) {
+		loop := &eventLoopContext{}
+		rsp := &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordAssistantContent(loop, e)
+		require.Nil(t, loop.assistantContent)
+	})
+
+	t.Run("records assistant message", func(t *testing.T) {
+		loop := &eventLoopContext{invocation: agent.NewInvocation()}
+		rsp := &model.Response{
+			ID:     stateEventID,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordAssistantContent(loop, e)
+		_, ok := loop.assistantContent[content]
+		require.True(t, ok)
+	})
+
+	t.Run("skips graph completion", func(t *testing.T) {
+		loop := &eventLoopContext{
+			invocation:       agent.NewInvocation(),
+			assistantContent: map[string]struct{}{content: {}},
+		}
+		rsp := &model.Response{
+			ID:     graphEventID,
+			Object: graph.ObjectTypeGraphExecution,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordAssistantContent(loop, e)
+		require.Len(t, loop.assistantContent, 1)
+	})
+
+	t.Run("skips partial response", func(t *testing.T) {
+		loop := &eventLoopContext{invocation: agent.NewInvocation()}
+		rsp := &model.Response{
+			ID:        partialEvent,
+			Object:    model.ObjectTypeChatCompletionChunk,
+			Done:      false,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordAssistantContent(loop, e)
+		require.Empty(t, loop.assistantContent)
+	})
+
+	t.Run("skips invalid content", func(t *testing.T) {
+		loop := &eventLoopContext{invocation: agent.NewInvocation()}
+		rsp := &model.Response{
+			ID:     invalidEvent,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role: model.RoleAssistant,
+				},
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordAssistantContent(loop, e)
+		require.Empty(t, loop.assistantContent)
+	})
+
+	t.Run("skips non assistant role", func(t *testing.T) {
+		loop := &eventLoopContext{
+			invocation:       agent.NewInvocation(),
+			assistantContent: make(map[string]struct{}),
+		}
+		rsp := &model.Response{
+			ID:     userEvent,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: content,
+				},
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordAssistantContent(loop, e)
+		require.Empty(t, loop.assistantContent)
+	})
+
+	t.Run("skips empty message content when delta used", func(t *testing.T) {
+		loop := &eventLoopContext{
+			invocation:       agent.NewInvocation(),
+			assistantContent: make(map[string]struct{}),
+		}
+		rsp := &model.Response{
+			ID:     deltaOnlyEvent,
+			Object: model.ObjectTypeChatCompletionChunk,
+			Done:   false,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role: model.RoleAssistant,
+				},
+				Delta: model.Message{
+					Content: deltaContent,
+				},
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordAssistantContent(loop, e)
+		require.Empty(t, loop.assistantContent)
+	})
 }
 
 func TestProcessAgentEvents_NotifyCompletion(t *testing.T) {
