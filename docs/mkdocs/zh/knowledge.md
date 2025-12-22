@@ -602,8 +602,9 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/cohere"
 )
 
-// 自动读取环境变量 COHERE_API_KEY
+// API key 通过 WithAPIKey 选项提供
 rerank := cohere.New(
+    cohere.WithAPIKey("your-api-key"),       // 必填：API key
     cohere.WithModel("rerank-english-v3.0"), // 指定模型
     cohere.WithTopN(5),                      // 最终返回数
 )

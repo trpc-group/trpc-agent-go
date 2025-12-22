@@ -13,7 +13,6 @@ package cohere
 import (
 	"context"
 	"net/http"
-	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/internal/httpclient"
@@ -22,7 +21,6 @@ import (
 const (
 	defaultCohereEndpoint = "https://api.cohere.ai/v1/rerank"
 	defaultCohereModel    = "rerank-english-v3.0"
-	envCohereAPIKey       = "COHERE_API_KEY"
 )
 
 // Reranker implements Reranker using Cohere's API.
@@ -75,7 +73,6 @@ func WithEndpoint(url string) Option {
 // New creates a new Cohere reranker.
 func New(opts ...Option) *Reranker {
 	r := &Reranker{
-		apiKey:     os.Getenv(envCohereAPIKey),
 		endpoint:   defaultCohereEndpoint,
 		modelName:  defaultCohereModel,
 		httpClient: httpclient.NewClient(nil),

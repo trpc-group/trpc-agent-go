@@ -601,8 +601,9 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/cohere"
 )
 
-// Automatically reads COHERE_API_KEY from environment variable
+// API key provided via WithAPIKey option
 rerank := cohere.New(
+    cohere.WithAPIKey("your-api-key"),       // Required: API key
     cohere.WithModel("rerank-english-v3.0"), // Specify model
     cohere.WithTopN(5),                      // Final number of results
 )
