@@ -28,8 +28,8 @@ func TestInfinityReranker_Success(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&req)
 		assert.Equal(t, "bge-reranker", req.Model)
 
-		resp := map[string]interface{}{
-			"results": []map[string]interface{}{
+		resp := map[string]any{
+			"results": []map[string]any{
 				{"index": 0, "relevance_score": 0.99},
 			},
 		}
@@ -88,8 +88,8 @@ func TestInfinityReranker_InvalidJSON(t *testing.T) {
 
 func TestInfinityReranker_TopN(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := map[string]interface{}{
-			"results": []map[string]interface{}{
+		resp := map[string]any{
+			"results": []map[string]any{
 				{"index": 0, "relevance_score": 0.9},
 				{"index": 1, "relevance_score": 0.8},
 			},

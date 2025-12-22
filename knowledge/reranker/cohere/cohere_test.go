@@ -32,8 +32,8 @@ func TestCohereReranker_Success(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&req)
 		assert.Equal(t, "rerank-english-v3.0", req.Model)
 
-		resp := map[string]interface{}{
-			"results": []map[string]interface{}{
+		resp := map[string]any{
+			"results": []map[string]any{
 				{"index": 1, "relevance_score": 0.9},
 				{"index": 0, "relevance_score": 0.5},
 			},
@@ -97,8 +97,8 @@ func TestCohereReranker_InvalidJSON(t *testing.T) {
 
 func TestCohereReranker_TopN(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := map[string]interface{}{
-			"results": []map[string]interface{}{
+		resp := map[string]any{
+			"results": []map[string]any{
 				{"index": 0, "relevance_score": 0.9},
 				{"index": 1, "relevance_score": 0.8},
 			},
