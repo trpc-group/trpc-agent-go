@@ -1,6 +1,8 @@
 module trpc.group/trpc-go/trpc-agent-go/evaluation
 
-go 1.24.4
+go 1.24.1
+
+toolchain go1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
@@ -65,8 +67,8 @@ require (
 	google.golang.org/grpc v1.77.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-20251126064502-c8c2594d2519 // indirect
-	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.0.0-20251203120347-0b4d62cb115d // indirect
-	trpc.group/trpc-go/trpc-agent-go/model/ollama v0.7.1-0.20251215094804-902d5dace126 // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.8.1-0.20251222024650-ea147adf3d21 // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/ollama v0.8.0 // indirect
 )

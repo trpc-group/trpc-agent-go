@@ -20,7 +20,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.5.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract v0.0.0-20251203120347-0b4d62cb115d
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.1
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus v0.8.1-0.20251222024650-ea147adf3d21
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.2.0
 )
@@ -167,9 +167,9 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apimachinery v0.32.3 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
-	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.2.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/milvus v0.0.4 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/milvus v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.0.0-20251126064502-c8c2594d2519 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.4 // indirect
 )

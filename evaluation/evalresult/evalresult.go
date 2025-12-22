@@ -20,7 +20,6 @@ import (
 )
 
 // EvalSetResult represents the evaluation result for an entire eval set.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvalSetResult struct {
 	// EvalSetResultID uniquely identifies this result.
 	EvalSetResultID string `json:"evalSetResultId,omitempty"`
@@ -35,7 +34,6 @@ type EvalSetResult struct {
 }
 
 // EvalCaseResult represents the result of a single evaluation case.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvalCaseResult struct {
 	// EvalSetID identifies the eval set.
 	EvalSetID string `json:"evalSetId,omitempty"`
@@ -54,7 +52,6 @@ type EvalCaseResult struct {
 }
 
 // EvalMetricResult represents the result of a single metric evaluation.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvalMetricResult struct {
 	// MetricName identifies the metric.
 	MetricName string `json:"metricName,omitempty"`
@@ -81,7 +78,6 @@ type EvalMetricResultDetails struct {
 }
 
 // EvalMetricResultPerInvocation represents metric results for a single invocation.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvalMetricResultPerInvocation struct {
 	// ActualInvocation is the actual invocation, captured from agent run.
 	ActualInvocation *evalset.Invocation `json:"actualInvocation,omitempty"`

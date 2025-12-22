@@ -1,6 +1,8 @@
 module trpc.group/trpc-go/trpc-agent-go/examples/evaluation
 
-go 1.24.4
+go 1.24.1
+
+toolchain go1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
@@ -12,9 +14,8 @@ replace (
 )
 
 require (
-	google.golang.org/genai v1.36.0
 	trpc.group/trpc-go/trpc-agent-go v0.7.0
-	trpc.group/trpc-go/trpc-agent-go/evaluation v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go/evaluation v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -53,20 +54,21 @@ require (
 	go.opentelemetry.io/otel/sdk v1.38.0 // indirect
 	go.opentelemetry.io/otel/trace v1.38.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
-	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/zap v1.27.1 // indirect
+	go.uber.org/multierr v1.10.0 // indirect
+	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sync v0.18.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
+	google.golang.org/genai v1.36.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251022142026-3a174f9686a8 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251124214823-79d6a2a48846 // indirect
 	google.golang.org/grpc v1.77.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-20251126064502-c8c2594d2519 // indirect
-	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.0.0-20251203120347-0b4d62cb115d // indirect
-	trpc.group/trpc-go/trpc-agent-go/model/ollama v0.7.1-0.20251215094804-902d5dace126 // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.8.1-0.20251222024650-ea147adf3d21 // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/ollama v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/provider v0.0.0-20251126064502-c8c2594d2519 // indirect
 )
