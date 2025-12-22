@@ -95,6 +95,7 @@ LLMAgent automatically injects session state into `Instruction` and the optional
 - `{key}`: Replace with the string value of `session.State["key"]`
 - `{key?}`: Optional; if missing, replaced with an empty string
 - `{user:subkey}` / `{app:subkey}` / `{temp:subkey}`: Use user/app/temp scoped keys (session services merge app/user state into session with these prefixes)
+- `{invocation:subkey}:` Replaces with the value of fmt.Sprintf("%+v", `invocation.state["subkey"]`). (The state can be set via invocation.SetState(k, v))
 
 Notes:
 
@@ -112,6 +113,9 @@ llm := llmagent.New(
     "User interests: {user:topics?}. App banner: {app:banner?}.",
   ),
 )
+
+inv := agent.NewInvoction()
+inv.SetState("case", "case-1")
 
 // Initialize session state (Runner + SessionService)
 _ = sessionService.UpdateUserState(ctx, session.UserKey{AppName: app, UserID: user}, session.StateMap{

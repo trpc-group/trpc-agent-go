@@ -24,6 +24,7 @@ func TestInjectSessionState(t *testing.T) {
 		state       map[string]any
 		expected    string
 		expectError bool
+		invState    map[string]any
 	}{
 		{
 			name:        "empty template",
@@ -116,6 +117,13 @@ func TestInjectSessionState(t *testing.T) {
 			expected:    "Enabled: true, Active: false",
 			expectError: false,
 		},
+		{
+			name:        "invocation values",
+			template:    "Enabled: {invocation:enabled}, name: {invocation:name}",
+			invState:    map[string]any{"enabled": true, "name": "name-123"},
+			expected:    "Enabled: true, name: name-123",
+			expectError: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -133,6 +141,11 @@ func TestInjectSessionState(t *testing.T) {
 				Session: &session.Session{
 					State: stateMap,
 				},
+			}
+			if tt.invState != nil {
+				for k, v := range tt.invState {
+					invocation.SetState(k, v)
+				}
 			}
 
 			result, err := InjectSessionState(tt.template, invocation)
