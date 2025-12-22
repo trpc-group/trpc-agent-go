@@ -14,10 +14,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	criterionjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestToolTrajectoryCriterionJSONRoundTrip(t *testing.T) {
@@ -132,19 +132,19 @@ func TestToolTrajectoryCriterionMatchOrderInsensitive(t *testing.T) {
 func TestToolTrajectoryCriterionMissingResponse(t *testing.T) {
 	actual := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "call-1", Name: "tool"},
+			ToolCalls: []*model.ToolCall{
+				{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "tool"}},
 			},
-			ToolResponses: []*genai.FunctionResponse{},
+			ToolResponses: []*model.Message{},
 		},
 	}
 	expected := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "call-1", Name: "tool"},
+			ToolCalls: []*model.ToolCall{
+				{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "tool"}},
 			},
-			ToolResponses: []*genai.FunctionResponse{
-				{ID: "call-1", Name: "tool"},
+			ToolResponses: []*model.Message{
+				{Role: model.RoleTool, ToolID: "call-1", ToolName: "tool", Content: "{}"},
 			},
 		},
 	}
@@ -186,23 +186,28 @@ type toolData struct {
 }
 
 func makeInvocation(tools []toolData) *evalset.Invocation {
-	toolUses := make([]*genai.FunctionCall, 0, len(tools))
-	toolResponses := make([]*genai.FunctionResponse, 0, len(tools))
+	toolCalls := make([]*model.ToolCall, 0, len(tools))
+	toolResponses := make([]*model.Message, 0, len(tools))
 	for _, t := range tools {
-		toolUses = append(toolUses, &genai.FunctionCall{
-			ID:   t.id,
-			Name: t.name,
-			Args: t.args,
+		args, _ := json.Marshal(t.args)
+		resp, _ := json.Marshal(t.response)
+		toolCalls = append(toolCalls, &model.ToolCall{
+			ID: t.id,
+			Function: model.FunctionDefinitionParam{
+				Name:      t.name,
+				Arguments: args,
+			},
 		})
-		toolResponses = append(toolResponses, &genai.FunctionResponse{
-			ID:       t.id,
-			Name:     t.name,
-			Response: t.response,
+		toolResponses = append(toolResponses, &model.Message{
+			Role:     model.RoleTool,
+			ToolID:   t.id,
+			ToolName: t.name,
+			Content:  string(resp),
 		})
 	}
 	return &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses:      toolUses,
+			ToolCalls:     toolCalls,
 			ToolResponses: toolResponses,
 		},
 	}
@@ -211,21 +216,21 @@ func makeInvocation(tools []toolData) *evalset.Invocation {
 func TestToolTrajectoryCriterionIDMismatch(t *testing.T) {
 	actual := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "use-1", Name: "tool"},
+			ToolCalls: []*model.ToolCall{
+				{ID: "use-1", Function: model.FunctionDefinitionParam{Name: "tool"}},
 			},
-			ToolResponses: []*genai.FunctionResponse{
-				{ID: "resp-1", Name: "tool"},
+			ToolResponses: []*model.Message{
+				{Role: model.RoleTool, ToolID: "resp-1", ToolName: "tool", Content: "{}"},
 			},
 		},
 	}
 	expected := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "use-1", Name: "tool"},
+			ToolCalls: []*model.ToolCall{
+				{ID: "use-1", Function: model.FunctionDefinitionParam{Name: "tool"}},
 			},
-			ToolResponses: []*genai.FunctionResponse{
-				{ID: "use-1", Name: "tool"},
+			ToolResponses: []*model.Message{
+				{Role: model.RoleTool, ToolID: "use-1", ToolName: "tool", Content: "{}"},
 			},
 		},
 	}
@@ -252,24 +257,24 @@ func TestToolTrajectoryCriterionNilIntermediate(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestToolTrajectoryCriterionEmptyToolUseID(t *testing.T) {
+func TestToolTrajectoryCriterionEmptyToolCallID(t *testing.T) {
 	actual := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{Name: "tool"},
+			ToolCalls: []*model.ToolCall{
+				{Function: model.FunctionDefinitionParam{Name: "tool"}},
 			},
-			ToolResponses: []*genai.FunctionResponse{
-				{ID: "resp-1", Name: "tool"},
+			ToolResponses: []*model.Message{
+				{Role: model.RoleTool, ToolID: "resp-1", ToolName: "tool", Content: "{}"},
 			},
 		},
 	}
 	expected := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "resp-1", Name: "tool"},
+			ToolCalls: []*model.ToolCall{
+				{ID: "resp-1", Function: model.FunctionDefinitionParam{Name: "tool"}},
 			},
-			ToolResponses: []*genai.FunctionResponse{
-				{ID: "resp-1", Name: "tool"},
+			ToolResponses: []*model.Message{
+				{Role: model.RoleTool, ToolID: "resp-1", ToolName: "tool", Content: "{}"},
 			},
 		},
 	}
@@ -282,10 +287,11 @@ func TestToolTrajectoryCriterionDuplicateResponseID(t *testing.T) {
 	actual := makeInvocation([]toolData{
 		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 	})
-	actual.IntermediateData.ToolResponses = append(actual.IntermediateData.ToolResponses, &genai.FunctionResponse{
-		ID:       "call-1",
-		Name:     "tool",
-		Response: map[string]any{"r": 2},
+	actual.IntermediateData.ToolResponses = append(actual.IntermediateData.ToolResponses, &model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call-1",
+		ToolName: "tool",
+		Content:  `{"r":2}`,
 	})
 	ok, err := New().Match(actual, makeInvocation([]toolData{
 		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
@@ -314,10 +320,10 @@ func TestToolTrajectoryCriterionExpectedResponseCountMismatch(t *testing.T) {
 	})
 	expected := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "call-1", Name: "tool", Args: map[string]any{"a": 1}},
+			ToolCalls: []*model.ToolCall{
+				{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "tool", Arguments: mustJSON(map[string]any{"a": 1})}},
 			},
-			ToolResponses: []*genai.FunctionResponse{},
+			ToolResponses: []*model.Message{},
 		},
 	}
 	ok, err := New().Match(actual, expected)
@@ -325,7 +331,7 @@ func TestToolTrajectoryCriterionExpectedResponseCountMismatch(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestToolTrajectoryCriterionToolUsesCountMismatch(t *testing.T) {
+func TestToolTrajectoryCriterionToolCallsCountMismatch(t *testing.T) {
 	actual := makeInvocation([]toolData{
 		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 		{id: "call-2", name: "tool", args: map[string]any{"a": 2}, response: map[string]any{"r": 2}},
@@ -338,7 +344,7 @@ func TestToolTrajectoryCriterionToolUsesCountMismatch(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestToolTrajectoryCriterionToolUsesCountMismatchWithSubset(t *testing.T) {
+func TestToolTrajectoryCriterionToolCallsCountMismatchWithSubset(t *testing.T) {
 	actual := makeInvocation([]toolData{
 		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 	})
@@ -375,11 +381,11 @@ func TestToolTrajectoryCriterionExpectedInvalidID(t *testing.T) {
 	})
 	expected := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "", Name: "tool", Args: map[string]any{"a": 1}},
+			ToolCalls: []*model.ToolCall{
+				{Function: model.FunctionDefinitionParam{Name: "tool", Arguments: mustJSON(map[string]any{"a": 1})}},
 			},
-			ToolResponses: []*genai.FunctionResponse{
-				{ID: "call-1", Name: "tool", Response: map[string]any{"r": 1}},
+			ToolResponses: []*model.Message{
+				{Role: model.RoleTool, ToolID: "call-1", ToolName: "tool", Content: `{"r":1}`},
 			},
 		},
 	}
@@ -404,16 +410,16 @@ func TestToolTrajectoryCriterionStrategyMismatch(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestToolTrajectoryCriterionDuplicateToolUseID(t *testing.T) {
+func TestToolTrajectoryCriterionDuplicateToolCallID(t *testing.T) {
 	actual := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "dup", Name: "tool"},
-				{ID: "dup", Name: "tool"},
+			ToolCalls: []*model.ToolCall{
+				{ID: "dup", Function: model.FunctionDefinitionParam{Name: "tool"}},
+				{ID: "dup", Function: model.FunctionDefinitionParam{Name: "tool"}},
 			},
-			ToolResponses: []*genai.FunctionResponse{
-				{ID: "dup", Name: "tool"},
-				{ID: "dup2", Name: "tool"},
+			ToolResponses: []*model.Message{
+				{Role: model.RoleTool, ToolID: "dup", ToolName: "tool", Content: "{}"},
+				{Role: model.RoleTool, ToolID: "dup2", ToolName: "tool", Content: "{}"},
 			},
 		},
 	}
@@ -429,13 +435,13 @@ func TestToolTrajectoryCriterionDuplicateToolUseID(t *testing.T) {
 func TestToolTrajectoryCriterionDuplicateToolResponseID(t *testing.T) {
 	actual := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "call-1", Name: "tool"},
-				{ID: "call-2", Name: "tool"},
+			ToolCalls: []*model.ToolCall{
+				{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "tool"}},
+				{ID: "call-2", Function: model.FunctionDefinitionParam{Name: "tool"}},
 			},
-			ToolResponses: []*genai.FunctionResponse{
-				{ID: "call-1", Name: "tool"},
-				{ID: "call-1", Name: "tool"},
+			ToolResponses: []*model.Message{
+				{Role: model.RoleTool, ToolID: "call-1", ToolName: "tool", Content: "{}"},
+				{Role: model.RoleTool, ToolID: "call-1", ToolName: "tool", Content: "{}"},
 			},
 		},
 	}
@@ -451,11 +457,11 @@ func TestToolTrajectoryCriterionDuplicateToolResponseID(t *testing.T) {
 func TestToolTrajectoryCriterionMissingResponseID(t *testing.T) {
 	actual := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "call-1", Name: "tool"},
+			ToolCalls: []*model.ToolCall{
+				{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "tool"}},
 			},
-			ToolResponses: []*genai.FunctionResponse{
-				{ID: "other", Name: "tool"},
+			ToolResponses: []*model.Message{
+				{Role: model.RoleTool, ToolID: "other", ToolName: "tool", Content: "{}"},
 			},
 		},
 	}
@@ -470,11 +476,11 @@ func TestToolTrajectoryCriterionMissingResponseID(t *testing.T) {
 func TestToolComparerOrderInsensitiveMarshalError(t *testing.T) {
 	actual := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "call-1", Name: "tool", Args: map[string]any{"bad": make(chan int)}},
+			ToolCalls: []*model.ToolCall{
+				{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "tool", Arguments: []byte("{")}},
 			},
-			ToolResponses: []*genai.FunctionResponse{
-				{ID: "call-1", Name: "tool", Response: map[string]any{"r": 1}},
+			ToolResponses: []*model.Message{
+				{Role: model.RoleTool, ToolID: "call-1", ToolName: "tool", Content: `{"r":1}`},
 			},
 		},
 	}
@@ -489,11 +495,11 @@ func TestToolComparerOrderInsensitiveMarshalError(t *testing.T) {
 func TestToolComparerOrderInsensitiveMarshalResponseError(t *testing.T) {
 	actual := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "call-1", Name: "tool", Args: map[string]any{"a": 1}},
+			ToolCalls: []*model.ToolCall{
+				{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "tool", Arguments: mustJSON(map[string]any{"a": 1})}},
 			},
-			ToolResponses: []*genai.FunctionResponse{
-				{ID: "call-1", Name: "tool", Response: map[string]any{"bad": make(chan int)}},
+			ToolResponses: []*model.Message{
+				{Role: model.RoleTool, ToolID: "call-1", ToolName: "tool", Content: "{"},
 			},
 		},
 	}
@@ -539,30 +545,30 @@ func TestToolTrajectoryStrategyArgumentAndResponseMismatch(t *testing.T) {
 }
 
 func TestGetToolComparerNilInputs(t *testing.T) {
-	_, err := getToolComparer(nil, &genai.FunctionResponse{}, false)
+	_, err := getToolComparer(nil, &model.Message{}, false)
 	assert.Error(t, err)
-	_, err = getToolComparer(&genai.FunctionCall{}, nil, false)
+	_, err = getToolComparer(&model.ToolCall{}, nil, false)
 	assert.Error(t, err)
 }
 
 func TestToolTrajectoryCriterionMissingResponseSet(t *testing.T) {
 	actual := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "call-1", Name: "tool"},
+			ToolCalls: []*model.ToolCall{
+				{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "tool"}},
 			},
-			ToolResponses: []*genai.FunctionResponse{
-				{ID: "call-1", Name: "tool"},
+			ToolResponses: []*model.Message{
+				{Role: model.RoleTool, ToolID: "call-1", ToolName: "tool", Content: "{}"},
 			},
 		},
 	}
 	expected := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "call-1", Name: "tool"},
+			ToolCalls: []*model.ToolCall{
+				{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "tool"}},
 			},
-			ToolResponses: []*genai.FunctionResponse{
-				{ID: "other", Name: "tool"},
+			ToolResponses: []*model.Message{
+				{Role: model.RoleTool, ToolID: "other", ToolName: "tool", Content: "{}"},
 			},
 		},
 	}
@@ -606,11 +612,11 @@ func TestToolTrajectoryCriterionFallbackDefaultStrategy(t *testing.T) {
 func TestToolTrajectoryCriterionEmptyToolResponseID(t *testing.T) {
 	actual := &evalset.Invocation{
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: []*genai.FunctionCall{
-				{ID: "call-1", Name: "tool"},
+			ToolCalls: []*model.ToolCall{
+				{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "tool"}},
 			},
-			ToolResponses: []*genai.FunctionResponse{
-				{ID: "", Name: "tool"},
+			ToolResponses: []*model.Message{
+				{Role: model.RoleTool, ToolID: "", ToolName: "tool", Content: "{}"},
 			},
 		},
 	}
@@ -718,4 +724,12 @@ func TestInternalTextAndMapWrappers(t *testing.T) {
 	ok, err = crit.Match(map[string]any{"a": 1}, map[string]any{"a": 1})
 	assert.True(t, ok)
 	assert.NoError(t, err)
+}
+
+func mustJSON(v any) []byte {
+	data, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return data
 }

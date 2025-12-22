@@ -11,36 +11,15 @@
 package status
 
 // EvalStatus represents the status of an evaluation.
-type EvalStatus int
+type EvalStatus string
 
 const (
 	// EvalStatusUnknown represents an unknown evaluation status.
-	EvalStatusUnknown EvalStatus = iota
+	EvalStatusUnknown EvalStatus = "unknown"
 	// EvalStatusPassed represents a passed evaluation status.
-	EvalStatusPassed
+	EvalStatusPassed EvalStatus = "passed"
 	// EvalStatusFailed represents a failed evaluation status.
-	EvalStatusFailed
+	EvalStatusFailed EvalStatus = "failed"
 	// EvalStatusNotEvaluated represents a not evaluated evaluation status.
-	EvalStatusNotEvaluated
+	EvalStatusNotEvaluated EvalStatus = "not_evaluated"
 )
-
-const (
-	statusUnknownStr      = "unknown"
-	statusPassedStr       = "passed"
-	statusFailedStr       = "failed"
-	statusNotEvaluatedStr = "not_evaluated"
-)
-
-// String returns the string representation of the evaluation status.
-func (s EvalStatus) String() string {
-	switch s {
-	case EvalStatusPassed:
-		return statusPassedStr
-	case EvalStatusFailed:
-		return statusFailedStr
-	case EvalStatusNotEvaluated:
-		return statusNotEvaluatedStr
-	default:
-		return statusUnknownStr
-	}
-}

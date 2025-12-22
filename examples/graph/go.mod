@@ -12,7 +12,7 @@ require (
 	go.uber.org/zap v1.27.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5
 	trpc.group/trpc-go/trpc-agent-go v0.6.0
-	trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/redis v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/redis v0.8.1-0.20251222024650-ea147adf3d21
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
 
