@@ -5,7 +5,6 @@ go 1.24.4
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/server/agui => ../../server/agui
-	trpc.group/trpc-go/trpc-agent-go/session/mysql => ../../session/mysql
 	trpc.group/trpc-go/trpc-agent-go/session/postgres => ../../session/postgres
 	trpc.group/trpc-go/trpc-agent-go/session/redis => ../../session/redis
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
@@ -17,7 +16,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	go.opentelemetry.io/otel v1.29.0
 	go.opentelemetry.io/otel/trace v1.29.0
-	trpc.group/trpc-go/trpc-agent-go v0.5.0
+	trpc.group/trpc-go/trpc-agent-go v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/server/agui v0.0.0-20251126064502-c8c2594d2519
 	trpc.group/trpc-go/trpc-agent-go/session/postgres v0.0.0-20251126064502-c8c2594d2519
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0-20251126064502-c8c2594d2519
@@ -39,7 +38,6 @@ require (
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/redis/go-redis/v9 v9.11.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
@@ -50,7 +48,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.29.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.29.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
-	go.uber.org/multierr v1.11.0 // indirect
+	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.32.0 // indirect
 	golang.org/x/net v0.34.0 // indirect
