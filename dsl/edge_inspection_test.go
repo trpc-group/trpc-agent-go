@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -169,6 +170,167 @@ func TestInspectEdge(t *testing.T) {
 	}
 }
 
+func TestInspectEdge_FromJSON_EndNodeWithMCPConfig(t *testing.T) {
+	// Test case: end node with mcp_node config (misconfigured node)
+	// The node_type is builtin.end but has mcp_node config - this is a config error
+	// but InspectEdge only checks edge validity based on node_type
+	jsonData := `{
+		"name": "test_end_node_with_mcp_config",
+		"description": "End node incorrectly configured with mcp_node config",
+		"nodes": [
+			{
+				"id": "start",
+				"label": "Start",
+				"node_type": "builtin.start",
+				"node_version": "1.0"
+			},
+			{
+				"id": "agent",
+				"label": "Agent",
+				"node_type": "builtin.llmagent",
+				"node_version": "1.0",
+				"config": {
+					"agent_node": {
+						"model_name": "",
+						"model_source_id": ""
+					}
+				}
+			},
+			{
+				"id": "mcp_tool",
+				"label": "Send Email",
+				"node_type": "builtin.end",
+				"node_version": "1.0",
+				"config": {
+					"mcp_node": {
+						"mcp_server_id": "trpc-demo-mcp",
+						"tool": "send_email"
+					}
+				}
+			}
+		],
+		"edges": [
+			{"source": "start", "target": "agent"},
+			{"source": "agent", "target": "mcp_tool"}
+		],
+		"start_node_id": "start"
+	}`
+
+	var graph Graph
+	err := json.Unmarshal([]byte(jsonData), &graph)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal JSON: %v", err)
+	}
+
+	for _, node := range graph.Nodes {
+		t.Logf("Node ID=%s, NodeType=%s, Config=%v", node.ID, node.NodeType, node.Config)
+	}
+
+	result, err := InspectEdge(&graph, "agent", "mcp_tool")
+	if err != nil {
+		t.Fatalf("InspectEdge() error: %v", err)
+	}
+
+	t.Logf("InspectEdge result: Valid=%v, Errors=%v", result.Valid, result.Errors)
+
+	// Edge is valid because node_type is builtin.end (agent -> end is allowed)
+	// The mcp_node config is ignored - that's a node config validation issue
+	if !result.Valid {
+		t.Errorf("Expected valid=true (agent -> end is valid), got valid=false")
+	}
+}
+
+// TestInspectEdge_AgentToMCP_MissingRequiredFields tests agent -> mcp edge
+// When agent has no output_schema but mcp has input_schema with required fields, should report error
+func TestInspectEdge_AgentToMCP_MissingRequiredFields(t *testing.T) {
+	// Using correct DSL format: input_schema directly under config, not under mcp_node
+	jsonData := `{
+		"version": "1.0",
+		"name": "test_agent_to_mcp_mismatch",
+		"description": "Agent output does not match MCP tool input schema",
+		"nodes": [
+			{
+				"id": "start",
+				"label": "Start",
+				"node_type": "builtin.start",
+				"node_version": "1.0"
+			},
+			{
+				"id": "agent",
+				"label": "Agent",
+				"node_type": "builtin.llmagent",
+				"node_version": "1.0",
+				"config": {
+					"model_spec": {
+						"model_name": "gpt-4o-mini"
+					},
+					"instruction": "Extract user info from the conversation."
+				}
+			},
+			{
+				"id": "mcp_tool",
+				"label": "Send Email",
+				"node_type": "builtin.mcp",
+				"node_version": "1.0",
+				"config": {
+					"server_url": "https://mcp.example.com/email-service",
+					"transport": "sse",
+					"tool": "send_email",
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"to": {"type": "string"},
+							"subject": {"type": "string"},
+							"body": {"type": "string"}
+						},
+						"required": ["to", "subject", "body"]
+					}
+				}
+			}
+		],
+		"edges": [
+			{"source": "start", "target": "agent"},
+			{"source": "agent", "target": "mcp_tool"}
+		],
+		"start_node_id": "start"
+	}`
+
+	var graph Graph
+	err := json.Unmarshal([]byte(jsonData), &graph)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal JSON: %v", err)
+	}
+
+	for _, node := range graph.Nodes {
+		t.Logf("Node ID=%s, NodeType=%s, Config=%v", node.ID, node.NodeType, node.Config)
+	}
+
+	result, err := InspectEdge(&graph, "agent", "mcp_tool")
+	if err != nil {
+		t.Fatalf("InspectEdge() error: %v", err)
+	}
+
+	t.Logf("InspectEdge result: Valid=%v, Errors=%v", result.Valid, result.Errors)
+
+	// Expected: invalid, because agent has no output_schema to satisfy mcp's input_schema
+	if result.Valid {
+		t.Errorf("Expected valid=false (agent without output_schema -> mcp with required input_schema), got valid=true")
+	}
+
+	// Check for missing_field error
+	found := false
+	for _, diag := range result.Errors {
+		if diag.Code == "missing_field" {
+			found = true
+			t.Logf("Found expected error: %s - %s", diag.Code, diag.Message)
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected error code 'missing_field', got %v", result.Errors)
+	}
+}
+
 func TestInspectEdge_SchemaCompatibility(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -320,6 +482,37 @@ func TestInspectEdge_SchemaCompatibility(t *testing.T) {
 			},
 			wantValid:   false,
 			wantErrCode: "missing_field",
+		},
+		{
+			name: "valid: agent to end node with wrong id naming and mcp_node config",
+			graph: &Graph{
+				Nodes: []Node{
+					{
+						ID: "agent",
+						EngineNode: EngineNode{
+							NodeType: "builtin.llmagent",
+							Config: map[string]any{
+								"agent_node": map[string]any{
+									"model_name": "",
+								},
+							},
+						},
+					},
+					{
+						ID: "mcp_tool",
+						EngineNode: EngineNode{
+							NodeType: "builtin.end",
+							Config: map[string]any{
+								"mcp_node": map[string]any{
+									"mcp_server_id": "trpc-demo-mcp",
+									"tool":          "send_email",
+								},
+							},
+						},
+					},
+				},
+			},
+			wantValid: true,
 		},
 	}
 
