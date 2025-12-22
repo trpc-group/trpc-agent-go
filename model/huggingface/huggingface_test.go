@@ -1,11 +1,11 @@
-//.
+//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
-//.
+//
 // Copyright (C) 2025 Tencent.  All rights reserved.
-//.
+//
 // trpc-agent-go is licensed under the Apache License Version 2.0.
-//.
-//.
+//
+//
 
 package huggingface
 
@@ -919,30 +919,6 @@ func TestModel_Multimodal_MultipleImages(t *testing.T) {
 }
 
 func TestModel_Multimodal_StreamingWithImage(t *testing.T) {
-	// Test streaming response with image input.
-	//server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	//	w.Header().Set("Content-Type", "text/event-stream").
-	//	w.Header().Set("Cache-Control", "no-cache").
-	//	w.Header().Set("Connection", "keep-alive").
-	//.
-	//	// Send streaming chunks.
-	//	chunks := []string{
-	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"I"},"finish_reason":null}]}`,.
-	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"content":" can"},"finish_reason":null}]}`,.
-	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"content":" see"},"finish_reason":null}]}`,.
-	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"content":" the"},"finish_reason":null}]}`,.
-	//		`data: {"id":"test-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"content":" image"},"finish_reason":"stop"}]}`,.
-	//		`data: [DONE]`,.
-	//	}
-	//.
-	//	for _, chunk := range chunks {.
-	//		fmt.Fprintf(w, "%s\n\n", chunk).
-	//		w.(http.Flusher).Flush().
-	//		time.Sleep(10 * time.Millisecond).
-	//	}
-	//}))
-	//defer server.Close().
-
 	m, err := New(
 		"ServiceNow-AI/Apriel-1.6-15b-Thinker",
 		WithAPIKey(ApiKey),
