@@ -10,7 +10,7 @@ Evaluation 提供完整的 Agent 评估框架，支持本地文件和内存两�
 
 local 在本地文件系统上维护评估集、评估指标和评估结果。
 
-完整示例参见 [examples/evaluation/local](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/local) 和 [examples/evaluation/tooltrajectory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/tooltrajectory)。
+完整示例参见 [examples/evaluation/local](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/local)。
 
 #### 代码
 
