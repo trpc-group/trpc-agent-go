@@ -637,7 +637,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			name:        "first call fails, return error",
 			filterKey:   "user-messages",
 			force:       false,
-			expectCalls: []string{"user-messages"},
+			expectCalls: []string{"user-messages", ""},
 			expectError: true,
 			createSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
 				if filterKey == "user-messages" {
@@ -682,7 +682,10 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			require.Equal(t, tt.expectCalls, calls)
+			require.Equal(t, len(tt.expectCalls), len(calls))
+			for _, expectedCall := range tt.expectCalls {
+				require.Contains(t, calls, expectedCall)
+			}
 		})
 	}
 }

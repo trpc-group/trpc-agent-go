@@ -16,6 +16,7 @@ import (
 	"fmt"
 
 	"github.com/redis/go-redis/v9"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
@@ -214,12 +215,6 @@ func (s *Service) startAsyncSummaryWorker() {
 			defer s.summaryWg.Done()
 			for job := range summaryJobChan {
 				s.processSummaryJob(job)
-				// After branch summary, cascade a full-session summary by
-				// reusing the same processing path to keep logic unified.
-				if job.filterKey != session.SummaryFilterKeyAllContents {
-					job.filterKey = session.SummaryFilterKeyAllContents
-					s.processSummaryJob(job)
-				}
 			}
 		}(summaryJobChan)
 	}
@@ -238,10 +233,7 @@ func (s *Service) processSummaryJob(job *summaryJob) {
 
 	// Use the detached context from job which preserves values (e.g., trace ID).
 	// Fallback to background context if job.ctx is nil for defensive programming.
-	ctx := job.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := util.If(job.ctx == nil, context.Background(), job.ctx)
 	// Apply timeout if configured.
 	if s.opts.summaryJobTimeout > 0 {
 		var cancel context.CancelFunc
@@ -249,7 +241,8 @@ func (s *Service) processSummaryJob(job *summaryJob) {
 		defer cancel()
 	}
 
-	if err := s.CreateSessionSummary(ctx, job.session, job.filterKey, job.force); err != nil {
+	if err := isummary.CreateSessionSummaryWithCascade(ctx, job.session, job.filterKey,
+		job.force, s.CreateSessionSummary); err != nil {
 		log.WarnfContext(
 			ctx,
 			"summary worker failed to create session summary: %v",
