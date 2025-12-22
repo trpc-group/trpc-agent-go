@@ -11,12 +11,14 @@ package team
 
 import (
 	"context"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -211,6 +213,24 @@ func TestNew_AddsMemberToolSet(t *testing.T) {
 	require.Len(t, got, 2)
 	got[0] = nil
 	require.NotNil(t, tm.SubAgents()[0])
+}
+
+func TestNew_DefaultToolNamesCompatible(t *testing.T) {
+	coordinator := &testCoordinator{name: testCoordinatorName}
+	members := []agent.Agent{testAgent{name: testMemberNameOne}}
+
+	_, err := New(coordinator, members)
+	require.NoError(t, err)
+
+	require.Len(t, coordinator.addedToolSets, 1)
+	ts := coordinator.addedToolSets[0]
+	require.NotContains(t, ts.Name(), ":")
+
+	tools := itool.NewNamedToolSet(ts).Tools(context.Background())
+	require.Len(t, tools, 1)
+
+	pattern := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	require.Regexp(t, pattern, tools[0].Declaration().Name)
 }
 
 func TestNew_AppliesOptions(t *testing.T) {

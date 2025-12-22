@@ -24,6 +24,8 @@
 Team 的目标是用一个小而清晰的 API
 把这些角色组合起来，且不引入难用的“多层抽象”。
 
+这里的 API 指 Application Programming Interface（应用程序编程接口）。
+
 ## 协调者团队 vs Swarm
 
 ### 协调者团队（Coordinator Team）
@@ -119,7 +121,7 @@ _ = r
 ```go
 tm, err := team.NewSwarm(
     "team",
-    "researcher", // entry 成员名称
+    "researcher", // entrypoint（入口）成员名称
     []agent.Agent{coder, researcher, reviewer},
 )
 if err != nil {
@@ -129,17 +131,20 @@ if err != nil {
 
 注意：
 
+- `entryName` 是 Swarm 的 entrypoint（入口）成员：一次运行会从它开始；
+  它必须出现在 `members` 里（必须匹配成员的 `Info().Name`）。
 - 成员需要支持 `SetSubAgents`（LLMAgent 支持）。Swarm 需要成员之间能“发现彼此”，
   才能正确 transfer。
 
 ## Swarm 的安全限制
 
 Swarm 的 handoff（交接）如果不加限制，可能会出现来回 transfer 的循环。
-`team.SwarmConfig` 提供了一组可选的限制：
+`team.SwarmConfig` 提供了一组可选的限制（字段为 0 表示不限制或关闭）：
 
-- `MaxHandoffs`：单次运行最多 transfer 次数
-- `NodeTimeout`：单个成员在一次 transfer 后的最大运行时间
-- `RepetitiveHandoffWindow` + `RepetitiveHandoffMinUnique`：循环检测
+- `MaxHandoffs`：单次运行里最多 transfer 次数（整个 Team 累计；每次
+  `transfer_to_agent` 计 1 次）
+- `NodeTimeout`：每次 transfer 后，目标成员这次运行的最大时长（只对 transfer 的目标成员生效）
+- `RepetitiveHandoffWindow` + `RepetitiveHandoffMinUnique`：循环检测（滑动窗口）
 
 ```go
 import "time"
@@ -156,6 +161,24 @@ tm, err := team.NewSwarm(
     }),
 )
 ```
+
+默认值来自 `team.DefaultSwarmConfig()`：`MaxHandoffs=20`、
+`RepetitiveHandoffWindow=8`、`RepetitiveHandoffMinUnique=3`，
+`NodeTimeout=0`（不限制）。
+
+循环检测的含义：当窗口大小为 N 且最小唯一数为 M 时，如果最近 N 次
+transfer 的目标成员（toAgent）中，不同成员数小于 M，就会拒绝这次
+transfer。它是一种比较粗略但高效的判断：只看最近 N 次的“目标成员名字”，
+不分析完整的 transfer 路径。
+
+举例：如果 `RepetitiveHandoffWindow=8`、`RepetitiveHandoffMinUnique=3`，
+而 transfer 一直在 A 和 B 之间来回（A => B、B => A、A => B……），那么最近
+8 次 transfer 的目标成员只会包含 A 和 B 两个，不同成员数为 2，小于 3，
+因此会被判定为循环并拒绝这次 transfer。
+
+注意：如果把 M 设为 2，那么 A↔B 这种“两人来回”的情况不会被拦截
+（因为不同成员数刚好等于 2，并不小于 2）。想要覆盖这种情况，通常需要
+把 M 设为 3 或更大。
 
 ## 示例
 

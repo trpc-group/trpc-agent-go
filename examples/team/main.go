@@ -23,6 +23,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -56,6 +57,7 @@ var (
 	modelName = flag.String("model", "deepseek-chat", "Model name")
 	variant   = flag.String("variant", "openai", "OpenAI provider variant")
 	streaming = flag.Bool("streaming", true, "Enable streaming")
+	timeout   = flag.Duration("timeout", 5*time.Minute, "Request timeout")
 )
 
 func main() {
@@ -72,6 +74,7 @@ func main() {
 
 	fmt.Printf("Mode: %s\n", *mode)
 	fmt.Printf("Session: %s\n", sessionID)
+	fmt.Printf("Timeout: %s\n", timeout.String())
 	fmt.Printf("Type %q to exit\n", exitCommand)
 	fmt.Println(strings.Repeat("=", 50))
 
@@ -89,18 +92,27 @@ func main() {
 			return
 		}
 
-		evCh, err := r.Run(
+		reqCtx, cancel := context.WithTimeout(
 			context.Background(),
+			*timeout,
+		)
+		evCh, err := r.Run(
+			reqCtx,
 			userID,
 			sessionID,
 			model.NewUserMessage(text),
 		)
 		if err != nil {
+			cancel()
 			fmt.Printf("Error: %v\n", err)
 			continue
 		}
 		printEvents(evCh)
+		if reqCtx.Err() == context.DeadlineExceeded {
+			fmt.Fprintln(os.Stderr, "\n[timeout] error: request timed out")
+		}
 		fmt.Println()
+		cancel()
 	}
 	if err := scanner.Err(); err != nil {
 		log.Fatalf("read input: %v", err)
@@ -169,8 +181,8 @@ func buildRunner(
 			llmagent.WithDescription("Coordinates a small team of agents."),
 			llmagent.WithInstruction(
 				"You are the team coordinator. You can call member agents as "+
-					"tools (tool names match agent names). Ask the right member, "+
-					"then synthesize a final answer for the user.",
+					"tools. Ask the right member, then synthesize a final "+
+					"answer for the user.",
 			),
 		)
 		tm, err := team.New(coordinator, members)
@@ -197,8 +209,25 @@ func buildRunner(
 }
 
 func printEvents(evCh <-chan *event.Event) {
+	printedDelta := make(map[string]bool)
+	printedToolCalls := make(map[string]bool)
+	printedToolResults := make(map[string]bool)
+	toolNameByID := make(map[string]string)
+
 	for ev := range evCh {
-		if ev == nil || ev.Response == nil || len(ev.Response.Choices) == 0 {
+		if ev == nil {
+			continue
+		}
+		if ev.Error != nil {
+			fmt.Fprintf(
+				os.Stderr,
+				"\n[%s] error: %s\n",
+				ev.Author,
+				ev.Error.Message,
+			)
+			continue
+		}
+		if ev.Response == nil || len(ev.Response.Choices) == 0 {
 			continue
 		}
 
@@ -207,13 +236,36 @@ func printEvents(evCh <-chan *event.Event) {
 			continue
 		}
 
-		text := firstDelta(ev)
-		if text != "" {
-			fmt.Print(text)
+		rspID := ev.Response.ID
+		if ev.Response.IsToolCallResponse() && !printedToolCalls[rspID] {
+			printedToolCalls[rspID] = true
+			recordToolIDs(toolNameByID, ev)
+			printToolCalls(ev)
+		}
+
+		if ev.IsToolResultResponse() {
+			printToolResults(toolNameByID, printedToolResults, ev)
 			continue
 		}
 
-		text = firstContent(ev)
+		if ev.Response.IsPartial {
+			text := firstDelta(ev)
+			if text != "" {
+				printedDelta[rspID] = true
+				fmt.Print(text)
+			}
+			continue
+		}
+
+		if printedDelta[rspID] {
+			if ev.IsFinalResponse() {
+				delete(printedDelta, rspID)
+				fmt.Println()
+			}
+			continue
+		}
+
+		text := firstContent(ev)
 		if text != "" {
 			fmt.Print(text)
 		}
@@ -221,6 +273,74 @@ func printEvents(evCh <-chan *event.Event) {
 		if ev.IsFinalResponse() {
 			fmt.Println()
 		}
+	}
+}
+
+func printToolCalls(ev *event.Event) {
+	if ev == nil || ev.Response == nil || len(ev.Response.Choices) == 0 {
+		return
+	}
+
+	choice := ev.Response.Choices[0]
+	toolCalls := choice.Message.ToolCalls
+	if len(toolCalls) == 0 {
+		toolCalls = choice.Delta.ToolCalls
+	}
+	if len(toolCalls) == 0 {
+		return
+	}
+
+	fmt.Print("\n[tools] ")
+	for i, tc := range toolCalls {
+		if i > 0 {
+			fmt.Print(", ")
+		}
+		fmt.Print(tc.Function.Name)
+	}
+	fmt.Println()
+}
+
+func recordToolIDs(toolNameByID map[string]string, ev *event.Event) {
+	if ev == nil || ev.Response == nil || len(ev.Response.Choices) == 0 {
+		return
+	}
+
+	choice := ev.Response.Choices[0]
+	toolCalls := choice.Message.ToolCalls
+	if len(toolCalls) == 0 {
+		toolCalls = choice.Delta.ToolCalls
+	}
+	for _, tc := range toolCalls {
+		if tc.ID == "" {
+			continue
+		}
+		toolNameByID[tc.ID] = tc.Function.Name
+	}
+}
+
+func printToolResults(
+	toolNameByID map[string]string,
+	printed map[string]bool,
+	ev *event.Event,
+) {
+	if ev == nil || ev.Response == nil {
+		return
+	}
+	for _, ch := range ev.Response.Choices {
+		toolID := ch.Message.ToolID
+		if toolID == "" {
+			toolID = ch.Delta.ToolID
+		}
+		if toolID == "" || printed[toolID] {
+			continue
+		}
+		printed[toolID] = true
+
+		name := toolNameByID[toolID]
+		if name == "" {
+			name = toolID
+		}
+		fmt.Printf("[tool.done] %s\n", name)
 	}
 }
 

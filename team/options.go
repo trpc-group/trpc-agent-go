@@ -51,7 +51,7 @@ func WithSwarmConfig(cfg SwarmConfig) Option {
 }
 
 const (
-	defaultMemberToolSetNamePrefix = "team-members:"
+	defaultMemberToolSetNamePrefix = "team-members-"
 )
 
 func defaultOptions(teamName string) options {

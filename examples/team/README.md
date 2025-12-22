@@ -41,6 +41,7 @@ A Team is an `agent.Agent` that helps you run multiple Agents together.
 | `-model`      | Name of the model to use              | `deepseek-chat` |
 | `-variant`    | Variant passed to the OpenAI provider | `openai`        |
 | `-streaming`  | Enable streaming output               | `true`          |
+| `-timeout`    | Request timeout                       | `5m`            |
 
 ## Usage
 
@@ -51,6 +52,13 @@ cd examples/team
 export OPENAI_API_KEY="your-api-key"
 go run . -mode team
 ```
+
+Notes:
+
+- If the output shows a line like `[tools] ...`, the coordinator is calling a
+  member as a tool. Tool results are not printed; the coordinator will use them
+  to produce the final answer.
+- For very long prompts, increase `-timeout` (for example, `-timeout 10m`).
 
 ### Swarm Mode
 

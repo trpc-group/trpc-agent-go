@@ -121,7 +121,7 @@ Notes:
 ```go
 tm, err := team.NewSwarm(
     "team",
-    "researcher", // entry member name
+    "researcher", // entrypoint member name
     []agent.Agent{coder, researcher, reviewer},
 )
 if err != nil {
@@ -131,17 +131,23 @@ if err != nil {
 
 Notes:
 
+- `entryName` is the Swarm entrypoint: a run starts from this member. It must
+  exist in `members` (it must match the member's `Info().Name`).
 - Members must support `SetSubAgents` (LLMAgent does). This is required so
   members can discover and transfer to each other.
 
 ## Swarm Guardrails
 
 Swarm-style handoffs can loop if Agents keep transferring back and forth.
-`team.SwarmConfig` provides optional limits:
+`team.SwarmConfig` provides optional limits (a zero value means "no limit" or
+"disabled"):
 
-- `MaxHandoffs`: maximum transfers in one run
-- `NodeTimeout`: per-Agent timeout after a transfer
+- `MaxHandoffs`: maximum transfers in one run (across the whole Team; each
+  `transfer_to_agent` counts as 1)
+- `NodeTimeout`: maximum runtime for the target Agent after a transfer (only
+  applies to transfer targets)
 - `RepetitiveHandoffWindow` + `RepetitiveHandoffMinUnique`: loop detection
+  (sliding window)
 
 ```go
 import "time"
@@ -158,6 +164,24 @@ tm, err := team.NewSwarm(
     }),
 )
 ```
+
+Defaults come from `team.DefaultSwarmConfig()`: `MaxHandoffs=20`,
+`RepetitiveHandoffWindow=8`, `RepetitiveHandoffMinUnique=3`, and
+`NodeTimeout=0` (no timeout).
+
+Loop detection meaning: with a window size N and a minimum unique count M, if
+the last N transfer targets (toAgent) contain fewer than M unique Agents, the
+transfer is rejected. This is a coarse but efficient heuristic: it only looks
+at recent target Agent names, not the full transfer path.
+
+Example: if `RepetitiveHandoffWindow=8` and `RepetitiveHandoffMinUnique=3`,
+and transfers keep bouncing between A and B (A => B, B => A, ...), then the
+last 8 transfer targets contain only 2 unique Agents, which is less than 3,
+so the transfer is rejected.
+
+Note: if you set M to 2, the A↔B "ping-pong" will NOT be blocked (because the
+unique count is exactly 2, not fewer than 2). To cover this case, set M to 3
+or higher.
 
 ## Example
 
