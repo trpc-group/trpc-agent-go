@@ -252,13 +252,12 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["mcp", "builtin", "web_search", "knowledge_search", "code_interpreter"],
+          "enum": ["mcp", "web_search", "knowledge_search", "code_interpreter"],
           "description": "Tool type identifier."
         }
       },
       "oneOf": [
         { "$ref": "#/$defs/MCPToolSpec" },
-        { "$ref": "#/$defs/BuiltinToolSpec" },
         { "$ref": "#/$defs/WebSearchToolSpec" },
         { "$ref": "#/$defs/KnowledgeSearchToolSpec" },
         { "$ref": "#/$defs/CodeInterpreterToolSpec" }
@@ -297,23 +296,6 @@
           "type": "object",
           "description": "Optional HTTP headers to include when connecting to the MCP server.",
           "additionalProperties": { "type": "string" }
-        }
-      },
-      "additionalProperties": false
-    },
-    "BuiltinToolSpec": {
-      "type": "object",
-      "description": "Built-in tool reference from ToolRegistry.",
-      "required": ["type", "name"],
-      "properties": {
-        "type": {
-          "type": "string",
-          "const": "builtin",
-          "description": "Tool type identifier."
-        },
-        "name": {
-          "type": "string",
-          "description": "Built-in tool name from ToolRegistry."
         }
       },
       "additionalProperties": false
@@ -385,11 +367,18 @@
       "type": "object",
       "description": "Vector store configuration. Use 'type' to specify the vector store backend.",
       "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["pgvector", "milvus", "elasticsearch", "tcvector"],
+          "description": "Vector store type identifier."
+        }
+      },
       "oneOf": [
         { "$ref": "#/$defs/PgVectorConfig" },
         { "$ref": "#/$defs/MilvusConfig" },
         { "$ref": "#/$defs/ElasticsearchConfig" },
-        { "$ref": "#/$defs/InMemoryConfig" }
+        { "$ref": "#/$defs/TCVectorConfig" }
       ]
     },
     "PgVectorConfig": {
@@ -437,12 +426,17 @@
       },
       "additionalProperties": false
     },
-    "InMemoryConfig": {
+    "TCVectorConfig": {
       "type": "object",
-      "description": "In-memory vector store configuration (for testing/development).",
-      "required": ["type"],
+      "description": "Tencent Cloud VectorDB configuration.",
+      "required": ["type", "url", "user", "password", "database", "collection"],
       "properties": {
-        "type": { "type": "string", "const": "inmemory" },
+        "type": { "type": "string", "const": "tcvector" },
+        "url": { "type": "string", "description": "TCVector URL. Supports env:VAR_NAME format." },
+        "user": { "type": "string", "description": "Username. Supports env:VAR_NAME format." },
+        "password": { "type": "string", "description": "Password. Supports env:VAR_NAME format." },
+        "database": { "type": "string" },
+        "collection": { "type": "string" },
         "dimension": { "type": "integer", "default": 1536 }
       },
       "additionalProperties": false

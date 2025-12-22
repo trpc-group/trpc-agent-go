@@ -86,7 +86,12 @@ func TestCompileTools_ValidationErrors(t *testing.T) {
 					map[string]any{
 						"type": "knowledge_search",
 						"vector_store": map[string]any{
-							"type": "inmemory",
+							"type":       "tcvector",
+							"url":        "http://localhost:8080",
+							"user":       "test",
+							"password":   "test",
+							"database":   "test",
+							"collection": "test",
 						},
 						"embedder": map[string]any{
 							"type":    "openai",
@@ -96,7 +101,12 @@ func TestCompileTools_ValidationErrors(t *testing.T) {
 					map[string]any{
 						"type": "knowledge_search",
 						"vector_store": map[string]any{
-							"type": "inmemory",
+							"type":       "tcvector",
+							"url":        "http://localhost:8080",
+							"user":       "test",
+							"password":   "test",
+							"database":   "test",
+							"collection": "test",
 						},
 						"embedder": map[string]any{
 							"type":    "openai",

@@ -77,7 +77,7 @@ const (
 	VectorStorePgVector      VectorStoreType = "pgvector"
 	VectorStoreMilvus        VectorStoreType = "milvus"
 	VectorStoreElasticsearch VectorStoreType = "elasticsearch"
-	VectorStoreInMemory      VectorStoreType = "inmemory"
+	VectorStoreTCVector      VectorStoreType = "tcvector"
 )
 
 // VectorStoreConfig is the vector store configuration.
@@ -95,6 +95,8 @@ type VectorStoreConfig struct {
 	Collection string          `json:"collection,omitempty"`
 	Addresses  []string        `json:"addresses,omitempty"`
 	Index      string          `json:"index,omitempty"`
+	// TCVector specific fields
+	URL string `json:"url,omitempty"`
 }
 
 // EmbedderType represents the type of embedder.

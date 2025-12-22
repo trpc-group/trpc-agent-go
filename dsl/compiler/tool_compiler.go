@@ -23,7 +23,6 @@ import (
 	openaiemb "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/duckduckgo"
 
@@ -32,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
 )
 
 // ToolCompileResult contains the compiled tools from ToolSpec.
@@ -266,8 +266,8 @@ func createVectorStore(cfg *toolspec.VectorStoreConfig) (vectorstore.VectorStore
 		return createMilvusStore(cfg)
 	case toolspec.VectorStoreElasticsearch:
 		return createElasticsearchStore(cfg)
-	case toolspec.VectorStoreInMemory:
-		return createInMemoryStore(cfg)
+	case toolspec.VectorStoreTCVector:
+		return createTCVectorStore(cfg)
 	default:
 		return nil, fmt.Errorf("unsupported vector store type: %q", cfg.Type)
 	}
@@ -336,10 +336,24 @@ func createElasticsearchStore(cfg *toolspec.VectorStoreConfig) (vectorstore.Vect
 	return elasticsearch.New(opts...)
 }
 
-func createInMemoryStore(_ *toolspec.VectorStoreConfig) (vectorstore.VectorStore, error) {
-	// InMemory store doesn't need dimension config - it accepts any embedding dimension
-	// MaxResults is controlled at the search tool level via knowledge_search.max_results
-	return inmemory.New(), nil
+func createTCVectorStore(cfg *toolspec.VectorStoreConfig) (vectorstore.VectorStore, error) {
+	// Resolve URL secret
+	url := toolspec.ResolveSecret(cfg.URL)
+	user := toolspec.ResolveSecret(cfg.User)
+
+	opts := []tcvector.Option{
+		tcvector.WithURL(url),
+		tcvector.WithUsername(user),
+		tcvector.WithPassword(cfg.Password), // Already resolved in createVectorStore
+		tcvector.WithDatabase(cfg.Database),
+		tcvector.WithCollection(cfg.Collection),
+	}
+
+	if cfg.Dimension > 0 {
+		opts = append(opts, tcvector.WithIndexDimension(uint32(cfg.Dimension)))
+	}
+
+	return tcvector.New(opts...)
 }
 
 // createEmbedder creates an embedder instance based on the config type.
