@@ -647,13 +647,21 @@ func TestEnqueueSummaryJob_WithNotChan(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 
-	// Mock: Check if summary exists (no existing summary)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary, updated_at FROM session_summaries")).
-		WithArgs(sess.AppName, sess.UserID, sess.ID, "", sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}))
+	// Mock: Try UPDATE first (returns 0 rows affected, implying new record)
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",
+		).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	// Mock: Insert new summary
-	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+	// Mock: Then INSERT
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,
@@ -743,10 +751,9 @@ func TestEnqueueSummaryJob_QueueFull(t *testing.T) {
 	index := sess.Hash % len(s.summaryJobChans)
 	s.summaryJobChans[index] <- job1
 
-	// Mock sync fallback processing.
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary, updated_at FROM session_summaries")).
-		WithArgs(sess.AppName, sess.UserID, sess.ID, "", sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}))
+	// Add event to trigger summary
+	sess.Events = []event.Event{{Timestamp: time.Now()}}
+
 	// Mock sync fallback processing
 	// Try UPDATE first
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
@@ -775,8 +782,6 @@ func TestEnqueueSummaryJob_QueueFull(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Try to enqueue when queue is full - should fallback to sync
-	// Add event to trigger summary
-	sess.Events = []event.Event{{Timestamp: time.Now()}}
 	err = s.EnqueueSummaryJob(ctx, sess, "", false)
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -819,7 +824,21 @@ func TestEnqueueSummaryJob_QueueFull_FallbackToSyncWithCascade(t *testing.T) {
 	s.summaryJobChans[index] <- job1
 
 	// Mock sync fallback processing for branch summary.
-	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+	// Try UPDATE first
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"user-messages",
+		).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Then INSERT
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,
@@ -832,7 +851,21 @@ func TestEnqueueSummaryJob_QueueFull_FallbackToSyncWithCascade(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock sync fallback processing for full-session summary (cascade).
-	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+	// Try UPDATE first
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",
+		).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Then INSERT
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,
@@ -872,7 +905,21 @@ func TestEnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade(t *testing.T
 	sess.Events = append(sess.Events, *e)
 
 	// Mock sync processing for branch summary.
-	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+	// Try UPDATE first
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"tool-usage",
+		).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Then INSERT
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,
@@ -885,7 +932,21 @@ func TestEnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade(t *testing.T
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock sync processing for full-session summary (cascade).
-	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+	// Try UPDATE first
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",
+		).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Then INSERT
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,
@@ -925,7 +986,21 @@ func TestEnqueueSummaryJob_FullSessionKey_NoCascade(t *testing.T) {
 	sess.Events = append(sess.Events, *e)
 
 	// Mock sync processing for full-session summary only (no cascade needed).
-	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+	// Try UPDATE first
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",
+		).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Then INSERT
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,
@@ -1579,8 +1654,21 @@ func TestEnqueueSummaryJob_AsyncProcessing(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 
-	// Mock: Insert summary via async worker
-	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+	// Mock: Try UPDATE first (returns 0 rows affected)
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",
+		).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock: Then INSERT
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,
