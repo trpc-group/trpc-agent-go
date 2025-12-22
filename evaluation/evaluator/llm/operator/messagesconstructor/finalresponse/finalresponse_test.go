@@ -17,7 +17,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/genai"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
@@ -27,15 +26,11 @@ import (
 func TestConstructMessagesBuildsPrompt(t *testing.T) {
 	constructor := New()
 	actual := &evalset.Invocation{
-		UserContent: &genai.Content{Parts: []*genai.Part{{Text: "user prompt"}}},
-		FinalResponse: &genai.Content{Parts: []*genai.Part{
-			{Text: "actual answer"},
-		}},
+		UserContent:   &model.Message{Content: "user prompt"},
+		FinalResponse: &model.Message{Content: "actual answer"},
 	}
 	expected := &evalset.Invocation{
-		FinalResponse: &genai.Content{Parts: []*genai.Part{
-			{Text: "expected answer"},
-		}},
+		FinalResponse: &model.Message{Content: "expected answer"},
 	}
 	messages, err := constructor.ConstructMessages(context.Background(), []*evalset.Invocation{actual}, []*evalset.Invocation{expected}, &metric.EvalMetric{})
 	require.NoError(t, err)

@@ -13,9 +13,9 @@ import (
 	"fmt"
 	"strings"
 
-	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 var knowledgeTools = map[string]struct{}{
@@ -33,19 +33,19 @@ func ExtractKnowledgeRecall(intermediateData *evalset.IntermediateData) (string,
 		if resp == nil {
 			continue
 		}
-		if _, ok := knowledgeTools[resp.Name]; !ok {
+		if _, ok := knowledgeTools[resp.ToolName]; !ok {
 			continue
 		}
 		kResp, err := parseKnowledgeSearchResponse(resp)
 		if err != nil {
-			return "", fmt.Errorf("parse tool %s response: %w", resp.Name, err)
+			return "", fmt.Errorf("parse tool %s response: %w", resp.ToolName, err)
 		}
 		if kResp == nil {
 			continue
 		}
 		payload, err := json.Marshal(kResp)
 		if err != nil {
-			return "", fmt.Errorf("marshal tool %s response: %w", resp.Name, err)
+			return "", fmt.Errorf("marshal tool %s response: %w", resp.ToolName, err)
 		}
 		builder.Write(payload)
 		builder.WriteString("\n")
@@ -54,16 +54,16 @@ func ExtractKnowledgeRecall(intermediateData *evalset.IntermediateData) (string,
 }
 
 // parseKnowledgeSearchResponse converts a function response payload into a typed knowledge search response.
-func parseKnowledgeSearchResponse(resp *genai.FunctionResponse) (*tool.KnowledgeSearchResponse, error) {
-	if resp == nil || resp.Response == nil {
+func parseKnowledgeSearchResponse(resp *model.Message) (*tool.KnowledgeSearchResponse, error) {
+	if resp == nil {
 		return nil, nil
 	}
-	bytes, err := json.Marshal(resp.Response)
-	if err != nil {
-		return nil, err
+	content := strings.TrimSpace(resp.Content)
+	if content == "" {
+		return nil, fmt.Errorf("empty tool response content")
 	}
 	var res tool.KnowledgeSearchResponse
-	if err := json.Unmarshal(bytes, &res); err != nil {
+	if err := json.Unmarshal([]byte(content), &res); err != nil {
 		return nil, err
 	}
 	return &res, nil

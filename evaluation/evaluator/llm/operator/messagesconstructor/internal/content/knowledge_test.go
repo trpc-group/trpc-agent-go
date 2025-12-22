@@ -9,28 +9,20 @@
 package content
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestExtractKnowledgeRecall(t *testing.T) {
 	intermediate := &evalset.IntermediateData{
-		ToolResponses: []*genai.FunctionResponse{
+		ToolResponses: []*model.Message{
 			{
-				Name: "knowledge_search",
-				Response: map[string]any{
-					"documents": []map[string]any{
-						{
-							"text":     "golang doc",
-							"metadata": map[string]any{"source": "kb", "lang": "en"},
-							"score":    0.9,
-						},
-					},
-				},
+				ToolID:   "1",
+				ToolName: "knowledge_search",
+				Content:  "{\"documents\": [{\"text\": \"golang doc\", \"metadata\": {\"source\": \"kb\", \"lang\": \"en\"}, \"score\": 0.9}]}",
 			},
 		},
 	}
@@ -43,10 +35,11 @@ func TestExtractKnowledgeRecall(t *testing.T) {
 
 func TestExtractKnowledgeRecallIgnoresNonKnowledgeTools(t *testing.T) {
 	intermediate := &evalset.IntermediateData{
-		ToolResponses: []*genai.FunctionResponse{
+		ToolResponses: []*model.Message{
 			{
-				Name:     "other_tool",
-				Response: map[string]any{"documents": []any{}},
+				ToolID:   "1",
+				ToolName: "other_tool",
+				Content:  "{\"documents\": []}",
 			},
 		},
 	}
@@ -58,12 +51,11 @@ func TestExtractKnowledgeRecallIgnoresNonKnowledgeTools(t *testing.T) {
 
 func TestExtractKnowledgeRecallReturnsErrorOnBadPayload(t *testing.T) {
 	intermediate := &evalset.IntermediateData{
-		ToolResponses: []*genai.FunctionResponse{
+		ToolResponses: []*model.Message{
 			{
-				Name: "knowledge_search",
-				Response: map[string]any{
-					"documents": "invalid",
-				},
+				ToolID:   "1",
+				ToolName: "knowledge_search",
+				Content:  "{\"documents\": \"invalid\"}",
 			},
 		},
 	}
@@ -82,40 +74,13 @@ func TestExtractKnowledgeRecallEmptyInput(t *testing.T) {
 	require.Empty(t, result)
 }
 
-func TestExtractKnowledgeRecallSanitizeNonText(t *testing.T) {
-	var ctrl strings.Builder
-	for range 10 {
-		ctrl.WriteRune('\u0001')
-	}
+func TestExtractKnowledgeRecallNilResponses(t *testing.T) {
 	intermediate := &evalset.IntermediateData{
-		ToolResponses: []*genai.FunctionResponse{
-			{
-				Name: "knowledge_search",
-				Response: map[string]any{
-					"documents": []map[string]any{
-						{
-							"text":     ctrl.String(),
-							"metadata": map[string]any{},
-							"score":    0.1,
-						},
-					},
-				},
-			},
+		ToolResponses: []*model.Message{
+			{ToolID: "1", ToolName: "knowledge_search_with_agentic_filter", Content: ""},
 		},
 	}
 	result, err := ExtractKnowledgeRecall(intermediate)
-	require.NoError(t, err)
-	require.NotEmpty(t, result)
-}
-
-func TestExtractKnowledgeRecallIgnoresNilResponses(t *testing.T) {
-	intermediate := &evalset.IntermediateData{
-		ToolResponses: []*genai.FunctionResponse{
-			nil,
-			{Name: "knowledge_search_with_agentic_filter", Response: nil},
-		},
-	}
-	result, err := ExtractKnowledgeRecall(intermediate)
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.Empty(t, result)
 }

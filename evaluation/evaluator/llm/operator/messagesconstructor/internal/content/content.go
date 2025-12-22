@@ -14,21 +14,14 @@ import (
 	"encoding/json"
 	"strings"
 
-	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // ExtractTextFromContent extracts plain text from genai content.
-func ExtractTextFromContent(content *genai.Content) string {
-	if content == nil {
-		return ""
-	}
-	var text strings.Builder
-	for _, part := range content.Parts {
-		text.WriteString(part.Text)
-	}
-	return text.String()
+func ExtractTextFromContent(content *model.Message) string {
+	return content.Content
 }
 
 // ExtractIntermediateData extracts intermediate data from evalset.IntermediateData.

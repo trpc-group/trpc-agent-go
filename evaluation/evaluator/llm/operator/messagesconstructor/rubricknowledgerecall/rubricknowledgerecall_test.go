@@ -15,8 +15,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/genai"
-
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
@@ -27,16 +25,13 @@ import (
 func TestConstructMessagesWithKnowledge(t *testing.T) {
 	constructor := New()
 	actual := &evalset.Invocation{
-		UserContent: &genai.Content{Parts: []*genai.Part{{Text: "who?"}}},
+		UserContent: &model.Message{Content: "who?"},
 		IntermediateData: &evalset.IntermediateData{
-			ToolResponses: []*genai.FunctionResponse{
+			ToolResponses: []*model.Message{
 				{
-					Name: "knowledge_search",
-					Response: map[string]any{
-						"documents": []map[string]any{
-							{"text": "result", "score": 0.9},
-						},
-					},
+					ToolID:   "1",
+					ToolName: "knowledge_search",
+					Content:  "{\"documents\": [{\"text\": \"result\", \"score\": 0.9}]}",
 				},
 			},
 		},
@@ -61,7 +56,7 @@ func TestConstructMessagesWithKnowledge(t *testing.T) {
 func TestConstructMessagesNoKnowledgeFound(t *testing.T) {
 	constructor := New()
 	actual := &evalset.Invocation{
-		UserContent:       &genai.Content{Parts: []*genai.Part{{Text: "question"}}},
+		UserContent:       &model.Message{Content: "question"},
 		IntermediateData:  &evalset.IntermediateData{},
 		FinalResponse:     nil,
 		InvocationID:      "id",
@@ -82,14 +77,13 @@ func TestConstructMessagesNoKnowledgeFound(t *testing.T) {
 func TestConstructMessagesKnowledgeError(t *testing.T) {
 	constructor := New()
 	actual := &evalset.Invocation{
-		UserContent: &genai.Content{Parts: []*genai.Part{{Text: "question"}}},
+		UserContent: &model.Message{Content: "question"},
 		IntermediateData: &evalset.IntermediateData{
-			ToolResponses: []*genai.FunctionResponse{
+			ToolResponses: []*model.Message{
 				{
-					Name: "knowledge_search",
-					Response: map[string]any{
-						"documents": "bad",
-					},
+					ToolID:   "1",
+					ToolName: "knowledge_search",
+					Content:  "{\"documents\": \"bad\"}",
 				},
 			},
 		},
