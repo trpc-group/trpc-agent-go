@@ -19,7 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-// ExtractTextFromContent extracts plain text from genai content.
+// ExtractTextFromContent extracts plain text from model message.
 func ExtractTextFromContent(content *model.Message) string {
 	return content.Content
 }
