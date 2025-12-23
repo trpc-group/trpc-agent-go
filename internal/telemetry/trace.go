@@ -63,20 +63,24 @@ func NewExecuteToolSpanName(toolName string) string {
 }
 
 const (
+	// KeyGenAIWorkflowName is the name of the workflow.
 	KeyGenAIWorkflowName = "gen_ai.workflow.name"
-	KeyGenAIWorkflowID   = "gen_ai.workflow.id"
+	// KeyGenAIWorkflowID is the id of the workflow.
+	KeyGenAIWorkflowID = "gen_ai.workflow.id"
 )
 
+// Workflow is the workflow information.
 type Workflow struct {
-	Name      string
-	ID        string
-	ErrorType string
+	Name string
+	ID   string
 }
 
+// NewWorkflowSpanName creates a new workflow span name.
 func NewWorkflowSpanName(workflowName string) string {
 	return fmt.Sprintf("%s %s", OperationWorkflow, workflowName)
 }
 
+// TraceWorkflow traces the workflow.
 func TraceWorkflow(span trace.Span, workflow *Workflow) {
 	span.SetAttributes(attribute.String(KeyGenAIOperationName, OperationWorkflow))
 	span.SetAttributes(attribute.String(KeyGenAIWorkflowName, workflow.Name))
