@@ -645,6 +645,46 @@ func TestModel_TokenTailoring(t *testing.T) {
 }
 
 func TestModel_TokenTailoring_Integration(t *testing.T) {
+	// 创建 mock HTTP server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		// 验证请求头
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Contains(t, r.Header.Get("Authorization"), "Bearer")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		// 返回模拟的成功响应
+		mockResponse := `{
+			"id": "chatcmpl-test",
+			"object": "chat.completion",
+			"created": 1234567890,
+			"model": "meta-llama/Llama-3.1-8B-Instruct",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "这是一个测试响应，用于验证 token tailoring 功能正常工作。"
+				},
+				"finish_reason": "stop"
+			}],
+			"usage": {
+				"prompt_tokens": 100,
+				"completion_tokens": 20,
+				"total_tokens": 120
+			}
+		}`
+		fmt.Fprint(w, mockResponse)
+	}))
+	defer server.Close()
+
+	// 使用一个测试模型名称
+	testModelName := "meta-llama/Llama-3.1-8B-Instruct"
 
 	// Create a large conversation that exceeds token limit.
 	var messages []model.Message
@@ -662,9 +702,9 @@ func TestModel_TokenTailoring_Integration(t *testing.T) {
 	}
 
 	m, err := New(
-		modelName,
-		WithAPIKey(ApiKey),
-		//WithBaseURL(server.URL),
+		testModelName,
+		WithAPIKey("test-api-key"),
+		WithBaseURL(server.URL),
 		WithMaxInputTokens(500), // Set a low limit to trigger tailoring
 	)
 	require.NoError(t, err)
@@ -682,6 +722,10 @@ func TestModel_TokenTailoring_Integration(t *testing.T) {
 	var responses []*model.Response
 	for resp := range responseChan {
 		responses = append(responses, resp)
+		// 如果有错误，记录下来
+		if resp.Error != nil {
+			log.Errorf("Response error: %v", resp.Error)
+		}
 	}
 
 	log.Infof("request.Messages: %d", len(request.Messages))
@@ -694,9 +738,18 @@ func TestModel_TokenTailoring_Integration(t *testing.T) {
 	assert.Greater(t, *request.GenerationConfig.MaxTokens, 0)
 
 	// Verify response was received.
-	require.NotEmpty(t, responses)
+	require.NotEmpty(t, responses, "Should receive at least one response")
+	
+	// 检查响应是否有错误
+	assert.Nil(t, responses[0].Error, "Response should not have error")
+	
+	// 检查是否有 Choices
+	require.NotEmpty(t, responses[0].Choices, "Response should have choices")
 	log.Info(responses[0].Choices[0].Message.Content)
-	assert.Nil(t, responses[0].Error)
+	
+	// 验证响应内容
+	assert.NotEmpty(t, responses[0].Choices[0].Message.Content)
+	assert.Equal(t, model.RoleAssistant, responses[0].Choices[0].Message.Role)
 }
 
 func TestModel_Multimodal_ImageURL(t *testing.T) {
