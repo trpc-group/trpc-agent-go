@@ -2809,3 +2809,336 @@ func TestModel_StreamingWithToolCalls(t *testing.T) {
 	}
 }
 
+// TestModel_CustomTokenTailoringConfig tests token tailoring with custom configuration.
+func TestModel_CustomTokenTailoringConfig(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ChatCompletionResponse{
+			ID:      "test-id",
+			Object:  "chat.completion",
+			Created: 1234567890,
+			Model:   "test-model",
+Choices: []ChatCompletionChoice{
+				{
+					Index: 0,
+Message: ChatMessage{
+						Role:    "assistant",
+						Content: "Response",
+					},
+					FinishReason: "stop",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	// Create model with custom token tailoring config
+	m, err := New(
+		"test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithEnableTokenTailoring(true),
+WithTokenTailoringConfig(&model.TokenTailoringConfig{
+			ProtocolOverheadTokens: 100,
+			ReserveOutputTokens:    500,
+			InputTokensFloor:       100,
+			OutputTokensFloor:      50,
+			SafetyMarginRatio:      0.1,
+			MaxInputTokensRatio:    0.8,
+		}),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: "user", Content: "Hello"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+}
+
+// TestModel_ChatCallbacks tests request and response callbacks.
+func TestModel_ChatCallbacks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ChatCompletionResponse{
+			ID:      "test-id",
+			Object:  "chat.completion",
+			Created: 1234567890,
+			Model:   "test-model",
+Choices: []ChatCompletionChoice{
+				{
+					Index: 0,
+Message: ChatMessage{
+						Role:    "assistant",
+						Content: "Response",
+					},
+					FinishReason: "stop",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	var requestCallbackCalled bool
+	var responseCallbackCalled bool
+
+	m, err := New(
+		"test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithChatRequestCallback(func(ctx context.Context, req *ChatCompletionRequest) {
+			requestCallbackCalled = true
+			assert.Equal(t, "test-model", req.Model)
+		}),
+		WithChatResponseCallback(func(ctx context.Context, req *ChatCompletionRequest, resp *ChatCompletionResponse) {
+			responseCallbackCalled = true
+			assert.Equal(t, "test-id", resp.ID)
+		}),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: "user", Content: "Hello"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	for range responseChan {
+		// Consume responses
+	}
+
+	assert.True(t, requestCallbackCalled, "Request callback should be called")
+	assert.True(t, responseCallbackCalled, "Response callback should be called")
+}
+
+// TestModel_StreamingErrorResponseWithJSON tests streaming request with JSON error response.
+func TestModel_StreamingErrorResponseWithJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{
+			Error: ErrorDetail{
+				Message: "Invalid request",
+				Type:    "invalid_request_error",
+			},
+		})
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: "user", Content: "Hello"},
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.NotNil(t, responses[0].Error)
+	assert.Contains(t, responses[0].Error.Message, "Invalid request")
+}
+
+// TestModel_StreamingErrorResponseWithoutJSON tests streaming request with non-JSON error response.
+func TestModel_StreamingErrorResponseWithoutJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Internal server error"))
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: "user", Content: "Hello"},
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.NotNil(t, responses[0].Error)
+	assert.Contains(t, responses[0].Error.Message, "500")
+}
+
+// TestModel_TokenTailoringWithMaxTokensSet tests that token tailoring respects user-set MaxTokens.
+func TestModel_TokenTailoringWithMaxTokensSet(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ChatCompletionRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		
+		// Verify that MaxTokens is set to user's value
+		assert.NotNil(t, req.MaxTokens)
+		assert.Equal(t, 100, *req.MaxTokens)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ChatCompletionResponse{
+			ID:      "test-id",
+			Object:  "chat.completion",
+			Created: 1234567890,
+			Model:   "test-model",
+Choices: []ChatCompletionChoice{
+				{
+					Index: 0,
+Message: ChatMessage{
+						Role:    "assistant",
+						Content: "Response",
+					},
+					FinishReason: "stop",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithEnableTokenTailoring(true),
+	)
+	require.NoError(t, err)
+
+	maxTokens := 100
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: "user", Content: "Hello"},
+		},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &maxTokens,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	for range responseChan {
+		// Consume responses
+	}
+}
+
+// TestModel_TokenTailoringCountTokensError tests token tailoring when CountTokens fails.
+func TestModel_TokenTailoringCountTokensError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ChatCompletionResponse{
+			ID:      "test-id",
+			Object:  "chat.completion",
+			Created: 1234567890,
+			Model:   "test-model",
+Choices: []ChatCompletionChoice{
+				{
+					Index: 0,
+Message: ChatMessage{
+						Role:    "assistant",
+						Content: "Response",
+					},
+					FinishReason: "stop",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	// Create a mock token counter that returns an error
+	mockCounter := &mockTokenCounter{
+		countTokensRangeFunc: func(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+return 0, fmt.Errorf("count tokens error")
+		},
+	}
+
+	m, err := New(
+		"test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithEnableTokenTailoring(true),
+		WithTokenCounter(mockCounter),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: "user", Content: "Hello"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	// Should still work even if count tokens fails
+	assert.Nil(t, responses[0].Error)
+}
+
+// mockTokenCounter is a mock implementation of token.Counter for testing.
+type mockTokenCounter struct {
+	countTokensRangeFunc func(ctx context.Context, messages []model.Message, start, end int) (int, error)
+}
+
+func (m *mockTokenCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+	return 0, nil
+}
+
+func (m *mockTokenCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+	if m.countTokensRangeFunc != nil {
+		return m.countTokensRangeFunc(ctx, messages, start, end)
+	}
+	return 0, nil
+}
+
