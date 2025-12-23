@@ -116,8 +116,100 @@ Notes:
   and events don't end up with two different Agent author names.
 - The coordinator must support dynamic ToolSets (LLMAgent does).
 - If you want to stream member output in the parent transcript, enable
-  `team.WithMemberToolStreamInner(true)` and use streaming for both the
-  coordinator and members.
+  streaming for both the coordinator and members, then set member tool
+  configuration (see below).
+
+## Member Tool Configuration (Coordinator Teams)
+
+In a coordinator team, each member is wrapped as an AgentTool and installed on
+the coordinator as a Tool (via a ToolSet). `team.MemberToolConfig` controls
+how that wrapper behaves.
+
+Under the hood, `team.MemberToolConfig` maps directly to AgentTool options:
+`agenttool.WithStreamInner`, `agenttool.WithHistoryScope`, and
+`agenttool.WithSkipSummarization`.
+
+### Quickstart
+
+Start from defaults, then override what you need:
+
+```go
+memberCfg := team.DefaultMemberToolConfig()
+memberCfg.StreamInner = true
+memberCfg.HistoryScope = team.HistoryScopeParentBranch
+memberCfg.SkipSummarization = false
+
+tm, err := team.New(
+    coordinator,
+    members,
+    team.WithMemberToolConfig(memberCfg),
+)
+```
+
+Defaults (from `team.DefaultMemberToolConfig()`):
+
+- `StreamInner=false`
+- `HistoryScope=team.HistoryScopeParentBranch`
+- `SkipSummarization=false`
+
+### Options and When to Use Them
+
+#### `StreamInner`
+
+- **Default**: `false`
+- **What it does**: forwards member streaming events to the parent flow.
+- **Use it when**: you want a “live” transcript showing what each member is
+  producing as it streams.
+- **How to use it**: enable streaming for the coordinator and members (for
+  example, `GenerationConfig{Stream: true}`), then set
+  `MemberToolConfig.StreamInner=true`.
+
+#### `HistoryScope`
+
+`HistoryScope` controls whether a member run can see the coordinator's
+conversation history.
+
+- `team.HistoryScopeParentBranch` (default)
+  - **What it does**: the member inherits the coordinator's history (user
+    input, coordinator messages, prior member tool results), but still writes
+    its own events into a sub-branch.
+  - **Use it when**: members need shared context and handoffs like
+    “research first, then write using research”.
+- `team.HistoryScopeIsolated`
+  - **What it does**: the member is isolated; it primarily sees the tool input
+    for this call, not the coordinator's prior history.
+  - **Use it when**: you want stronger isolation, smaller prompts, or to avoid
+    leaking earlier context into a specialist member.
+
+#### `SkipSummarization`
+
+- **Default**: `false`
+- **What it does**: ends the coordinator invocation right after the member
+  tool returns, skipping the coordinator's post-tool LLM call.
+- **Use it when**: you want “members respond directly” behavior (no coordinator
+  synthesis). This can be useful for router/passthrough-style teams where the
+  coordinator only selects who should answer.
+- **Avoid it when**: you need the coordinator to combine multiple member
+  outputs into one final answer (the default coordinator team pattern).
+
+## Parallel Member Calls (Coordinator Teams)
+
+Because members are exposed as tools, you can enable parallel tool execution on
+the coordinator:
+
+```go
+coordinator := llmagent.New(
+    "team",
+    llmagent.WithEnableParallelTools(true),
+)
+```
+
+This runs multiple tool calls concurrently **only when the model emits multiple
+tool calls in a single response**. Use this when:
+
+- member tasks are independent (for example, “analyze market”, “analyze risk”,
+  “analyze competitors”)
+- you want to reduce end-to-end latency
 
 ## Quickstart: Swarm
 

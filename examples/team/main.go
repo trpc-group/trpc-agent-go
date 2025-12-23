@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -49,6 +50,9 @@ const (
 	agentResearcher = "researcher"
 	agentReviewer   = "reviewer"
 
+	memberHistoryParent   = "parent"
+	memberHistoryIsolated = "isolated"
+
 	exitCommand = "/exit"
 )
 
@@ -63,6 +67,21 @@ var (
 		true,
 		"Show inner member transcript in team mode",
 	)
+	memberHistory = flag.String(
+		"member-history",
+		memberHistoryParent,
+		"Member history scope: parent or isolated",
+	)
+	memberSkipSummarization = flag.Bool(
+		"member-skip-summarization",
+		false,
+		"Skip coordinator summary after member tool",
+	)
+	enableParallelTools = flag.Bool(
+		"parallel-tools",
+		false,
+		"Enable parallel tool execution",
+	)
 )
 
 func main() {
@@ -74,6 +93,9 @@ func main() {
 		*variant,
 		*streaming,
 		*showInner,
+		*memberHistory,
+		*memberSkipSummarization,
+		*enableParallelTools,
 	)
 	if err != nil {
 		log.Fatalf("build runner: %v", err)
@@ -87,6 +109,12 @@ func main() {
 	fmt.Printf("Session: %s\n", sessionID)
 	fmt.Printf("Timeout: %s\n", timeout.String())
 	fmt.Printf("ShowInner: %t\n", *showInner)
+	fmt.Printf("MemberHistory: %s\n", *memberHistory)
+	fmt.Printf(
+		"MemberSkipSummarization: %t\n",
+		*memberSkipSummarization,
+	)
+	fmt.Printf("ParallelTools: %t\n", *enableParallelTools)
 	fmt.Printf("Type %q to exit\n", exitCommand)
 	fmt.Println(strings.Repeat("=", 50))
 
@@ -137,6 +165,9 @@ func buildRunner(
 	variant string,
 	streaming bool,
 	showInner bool,
+	memberHistory string,
+	memberSkipSummarization bool,
+	parallelTools bool,
 ) (runner.Runner, error) {
 	modelInstance := openai.New(
 		modelName,
@@ -187,21 +218,46 @@ func buildRunner(
 	var root agent.Agent
 	switch mode {
 	case modeTeam:
-		coordinator := llmagent.New(
-			teamName,
+		coordinatorOpts := []llmagent.Option{
 			llmagent.WithModel(modelInstance),
 			llmagent.WithGenerationConfig(genConfig),
-			llmagent.WithDescription("Coordinates a small team of agents."),
-			llmagent.WithInstruction(
-				"You are the team coordinator. You can call member agents as "+
-					"tools. Ask the right member, then synthesize a final "+
-					"answer for the user.",
+			llmagent.WithDescription(
+				"Coordinates a small team of agents.",
 			),
+			llmagent.WithInstruction(
+				"You are the team coordinator. You can call member " +
+					"agents as tools. Ask the right member, then " +
+					"synthesize a final answer for the user.",
+			),
+		}
+		if parallelTools {
+			coordinatorOpts = append(
+				coordinatorOpts,
+				llmagent.WithEnableParallelTools(true),
+			)
+		}
+		coordinator := llmagent.New(
+			teamName,
+			coordinatorOpts...,
 		)
+		memberCfg := team.DefaultMemberToolConfig()
+		memberCfg.StreamInner = showInner
+		memberCfg.SkipSummarization = memberSkipSummarization
+		switch memberHistory {
+		case memberHistoryParent:
+			memberCfg.HistoryScope = team.HistoryScopeParentBranch
+		case memberHistoryIsolated:
+			memberCfg.HistoryScope = team.HistoryScopeIsolated
+		default:
+			return nil, fmt.Errorf(
+				"unknown member-history %q",
+				memberHistory,
+			)
+		}
 		tm, err := team.New(
 			coordinator,
 			members,
-			team.WithMemberToolStreamInner(showInner),
+			team.WithMemberToolConfig(memberCfg),
 		)
 		if err != nil {
 			return nil, err

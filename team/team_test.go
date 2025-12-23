@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -12,6 +13,7 @@ package team
 import (
 	"context"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -20,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -278,6 +281,110 @@ func TestNew_MemberToolStreamInner(t *testing.T) {
 	require.True(t, pref.StreamInner())
 }
 
+type filterKeyAgent struct {
+	name string
+
+	seenFilterKey string
+}
+
+func (a *filterKeyAgent) Info() agent.Info { return agent.Info{Name: a.name} }
+
+func (a *filterKeyAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *filterKeyAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func (a *filterKeyAgent) Tools() []tool.Tool { return nil }
+
+func (a *filterKeyAgent) Run(
+	_ context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	if inv != nil {
+		a.seenFilterKey = inv.GetEventFilterKey()
+	}
+
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		if inv == nil {
+			return
+		}
+		ch <- event.New(inv.InvocationID, a.name)
+	}()
+	return ch, nil
+}
+
+func TestNew_MemberToolConfig_SkipSummarization(t *testing.T) {
+	coordinator := &testCoordinator{name: testCoordinatorName}
+	members := []agent.Agent{testAgent{name: testMemberNameOne}}
+
+	_, err := New(
+		coordinator,
+		members,
+		WithMemberToolConfig(MemberToolConfig{
+			SkipSummarization: true,
+		}),
+	)
+	require.NoError(t, err)
+
+	require.Len(t, coordinator.addedToolSets, 1)
+	ts := coordinator.addedToolSets[0]
+
+	tools := itool.NewNamedToolSet(ts).Tools(context.Background())
+	require.Len(t, tools, 1)
+
+	named, ok := tools[0].(*itool.NamedTool)
+	require.True(t, ok)
+
+	original := named.Original()
+	type skipPref interface {
+		SkipSummarization() bool
+	}
+	pref, ok := original.(skipPref)
+	require.True(t, ok)
+	require.True(t, pref.SkipSummarization())
+}
+
+func TestNew_MemberToolConfig_HistoryScope(t *testing.T) {
+	coordinator := &testCoordinator{name: testCoordinatorName}
+	member := &filterKeyAgent{name: testMemberNameOne}
+	members := []agent.Agent{member}
+
+	_, err := New(
+		coordinator,
+		members,
+		WithMemberToolConfig(MemberToolConfig{
+			HistoryScope: HistoryScopeIsolated,
+		}),
+	)
+	require.NoError(t, err)
+
+	require.Len(t, coordinator.addedToolSets, 1)
+	ts := coordinator.addedToolSets[0]
+
+	tools := itool.NewNamedToolSet(ts).Tools(context.Background())
+	require.Len(t, tools, 1)
+	callable, ok := tools[0].(tool.CallableTool)
+	require.True(t, ok)
+
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("parent"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	_, err = callable.Call(ctx, []byte(`{"request":"hi"}`))
+	require.NoError(t, err)
+
+	require.NotEmpty(t, member.seenFilterKey)
+	require.False(t, strings.HasPrefix(member.seenFilterKey, "parent/"))
+	require.True(
+		t,
+		strings.HasPrefix(member.seenFilterKey, member.name+"-"),
+	)
+}
+
 func TestTeam_Run_Coordinator(t *testing.T) {
 	coordinator := &testCoordinator{name: testCoordinatorName}
 	members := []agent.Agent{testAgent{name: testMemberNameOne}}
@@ -348,7 +455,12 @@ func TestTeam_FindSubAgent(t *testing.T) {
 
 func TestStaticToolSet_ToolsAndClose(t *testing.T) {
 	members := []agent.Agent{testAgent{name: testMemberNameOne}}
-	ts := newMemberToolSet(testToolSetName, false, members)
+	ts := newMemberToolSet(
+		memberToolOptions{
+			name: testToolSetName,
+		},
+		members,
+	)
 	tools := ts.Tools(context.Background())
 	require.Len(t, tools, 1)
 

@@ -43,6 +43,9 @@ A Team is an `agent.Agent` that helps you run multiple Agents together.
 | `-streaming`  | Enable streaming output               | `true`          |
 | `-timeout`    | Request timeout                       | `5m`            |
 | `-show-inner` | Show inner member transcript in `team` mode | `true`      |
+| `-member-history` | Member history scope: `parent` or `isolated` | `parent` |
+| `-member-skip-summarization` | Skip coordinator summary after member tool | `false` |
+| `-parallel-tools` | Enable parallel tool execution | `false` |
 
 ## Usage
 
@@ -60,6 +63,15 @@ Notes:
   member as a tool.
 - By default, member tool output is streamed in `team` mode. Pass
   `-show-inner=false` to hide it (you will only see `[tool.done] ...`).
+- Use `-member-history=parent` (default) when members should see the
+  coordinator's conversation history. Use `-member-history=isolated` when you
+  want members to only see the tool input and their own outputs.
+- `-member-skip-summarization=true` is an advanced mode: the coordinator will
+  end the run right after member tools return, so the user sees member tool
+  outputs directly (no coordinator synthesis).
+- `-parallel-tools=true` allows multiple member tool calls in the same model
+  turn to run concurrently. For this to happen, the coordinator must emit
+  multiple tool calls in one response.
 - For very long prompts, increase `-timeout` (for example, `-timeout 10m`).
 
 ### Swarm Mode

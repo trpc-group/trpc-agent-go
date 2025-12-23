@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -17,9 +18,55 @@ type options struct {
 	swarm       SwarmConfig
 }
 
+// HistoryScope controls whether and how member AgentTools inherit parent
+// history.
+//
+// It is intentionally Team-specific instead of aliasing AgentTool directly.
+// This lets Team represent "use the Team default" as a distinct value.
+type HistoryScope int
+
+const (
+	// HistoryScopeDefault uses the Team default. This is the zero value so
+	// a zero-value MemberToolConfig is safe to use.
+	HistoryScopeDefault HistoryScope = iota
+
+	// HistoryScopeIsolated keeps member runs isolated; members only see the
+	// tool input, with no inherited history.
+	HistoryScopeIsolated
+
+	// HistoryScopeParentBranch makes member runs inherit the coordinator's
+	// branch history while still writing member events into a sub-branch.
+	HistoryScopeParentBranch
+)
+
+// MemberToolConfig controls how member Agents are wrapped as tools for the
+// coordinator.
+type MemberToolConfig struct {
+	// StreamInner forwards member streaming events to the parent flow.
+	StreamInner bool
+
+	// SkipSummarization makes the coordinator end the current invocation after
+	// the member tool returns, skipping the coordinator's post-tool LLM call.
+	SkipSummarization bool
+
+	// HistoryScope controls whether member tools inherit the coordinator's
+	// history.
+	HistoryScope HistoryScope
+}
+
+// DefaultMemberToolConfig returns the default member tool configuration used
+// by coordinator teams.
+func DefaultMemberToolConfig() MemberToolConfig {
+	return MemberToolConfig{
+		HistoryScope: defaultMemberToolHistoryScope,
+	}
+}
+
 type memberToolOptions struct {
-	name        string
-	streamInner bool
+	name              string
+	streamInner       bool
+	skipSummarization bool
+	historyScope      HistoryScope
 }
 
 // Option configures a Team.
@@ -52,6 +99,23 @@ func WithMemberToolStreamInner(enabled bool) Option {
 	}
 }
 
+// WithMemberToolConfig configures how the Team exposes member Agents as
+// tools.
+//
+// This only applies to coordinator teams.
+func WithMemberToolConfig(cfg MemberToolConfig) Option {
+	return func(o *options) {
+		o.memberTools.streamInner = cfg.StreamInner
+		o.memberTools.skipSummarization = cfg.SkipSummarization
+
+		if cfg.HistoryScope == HistoryScopeDefault {
+			o.memberTools.historyScope = defaultMemberToolHistoryScope
+			return
+		}
+		o.memberTools.historyScope = cfg.HistoryScope
+	}
+}
+
 // WithSwarmConfig sets swarm-specific limits for a swarm team.
 //
 // This only applies to swarm teams.
@@ -63,12 +127,15 @@ func WithSwarmConfig(cfg SwarmConfig) Option {
 
 const (
 	defaultMemberToolSetNamePrefix = "team-members-"
+
+	defaultMemberToolHistoryScope = HistoryScopeParentBranch
 )
 
 func defaultOptions(teamName string) options {
 	return options{
 		memberTools: memberToolOptions{
-			name: defaultMemberToolSetNamePrefix + teamName,
+			name:         defaultMemberToolSetNamePrefix + teamName,
+			historyScope: defaultMemberToolHistoryScope,
 		},
 		swarm: DefaultSwarmConfig(),
 	}

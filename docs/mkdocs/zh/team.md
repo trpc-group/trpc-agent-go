@@ -115,8 +115,88 @@ _ = r
   `coordinator.Info().Name`），这样同一次会话（session）的事件（event）里不会出现
   两套作者名。
 - 协调者需要支持动态 ToolSet（工具集，ToolSet）（LLMAgent 支持）。
-- 如果你想把成员（以工具调用）的输出流式展示到父流程里，可以启用
-  `team.WithMemberToolStreamInner(true)`，并确保协调者和成员都使用流式输出。
+- 如果你想把成员（以工具调用）的输出流式展示到父流程里，需要确保协调者和成员都
+  使用流式输出，然后通过成员工具配置开启（见下文）。
+
+## 成员工具配置（协调者团队）
+
+在协调者团队里，每个成员都会被包装成 AgentTool（把 Agent 包装成 Tool），并作为
+Tool（通过 ToolSet）安装到协调者上。`team.MemberToolConfig` 用来控制这个包装层的
+行为。
+
+在实现上，`team.MemberToolConfig` 会直接映射到 AgentTool 的选项：
+`agenttool.WithStreamInner`、`agenttool.WithHistoryScope`、
+`agenttool.WithSkipSummarization`。
+
+### 快速上手
+
+建议从默认配置开始，再按需覆盖：
+
+```go
+memberCfg := team.DefaultMemberToolConfig()
+memberCfg.StreamInner = true
+memberCfg.HistoryScope = team.HistoryScopeParentBranch
+memberCfg.SkipSummarization = false
+
+tm, err := team.New(
+    coordinator,
+    members,
+    team.WithMemberToolConfig(memberCfg),
+)
+```
+
+默认值（来自 `team.DefaultMemberToolConfig()`）：
+
+- `StreamInner=false`
+- `HistoryScope=team.HistoryScopeParentBranch`
+- `SkipSummarization=false`
+
+### 选项与使用场景
+
+#### `StreamInner`
+
+- **默认值**：`false`
+- **作用**：把成员的流式事件转发到父流程。
+- **适用场景**：你希望在终端/界面里看到成员的“实时输出过程”。
+- **用法**：先让协调者和成员都启用流式输出（例如
+  `GenerationConfig{Stream: true}`），再设置
+  `MemberToolConfig.StreamInner=true`。
+
+#### `HistoryScope`
+
+`HistoryScope` 控制成员运行时是否能看到协调者的历史对话。
+
+- `team.HistoryScopeParentBranch`（默认）
+  - **作用**：成员会继承协调者的历史（用户输入、协调者消息、之前成员的工具结果），
+    但成员自己的事件仍然写入一个子分支。
+  - **适用场景**：成员需要共享上下文、并且存在“先研究再写作”这类交接链条。
+- `team.HistoryScopeIsolated`
+  - **作用**：成员运行更隔离，主要只看到本次工具输入，而不会看到协调者之前的历史。
+  - **适用场景**：你希望更强隔离、更小的上下文，或避免把早期上下文泄露给某个成员。
+
+#### `SkipSummarization`
+
+- **默认值**：`false`
+- **作用**：成员工具返回后，直接结束协调者本轮运行，跳过协调者的
+  “工具后总结（post-tool）” LLM 调用。
+- **适用场景**：你希望“成员直接回复用户”，而不是由协调者综合（例如纯路由/透传团队）。
+- **不适用场景**：你需要协调者汇总多个成员输出并生成最终答案（这也是协调者团队的默认模式）。
+
+## 成员并行调用（协调者团队）
+
+由于成员是以工具的形式暴露给协调者的，你可以在协调者上开启并行工具执行：
+
+```go
+coordinator := llmagent.New(
+    "team",
+    llmagent.WithEnableParallelTools(true),
+)
+```
+
+并行执行只有在 **模型在同一轮回复里输出了多个 tool call** 时才会生效。适用场景：
+
+- 成员任务彼此独立（例如“市场分析 / 风险分析 / 竞品分析”）
+- 你希望降低整体延迟
 
 ## 快速上手：Swarm
 

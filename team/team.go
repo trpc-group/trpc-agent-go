@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -96,8 +97,7 @@ func New(
 	}
 
 	memberToolSet := newMemberToolSet(
-		cfg.memberTools.name,
-		cfg.memberTools.streamInner,
+		cfg.memberTools,
 		members,
 	)
 	adder.AddToolSet(memberToolSet)
@@ -277,21 +277,31 @@ func buildMemberIndex(
 }
 
 func newMemberToolSet(
-	name string,
-	streamInner bool,
+	cfg memberToolOptions,
 	members []agent.Agent,
 ) tool.ToolSet {
+	scope := agentToolHistoryScope(cfg.historyScope)
 	tools := make([]tool.Tool, 0, len(members))
 	for _, m := range members {
 		tools = append(tools, agenttool.NewTool(
 			m,
-			agenttool.WithStreamInner(streamInner),
-			agenttool.WithHistoryScope(
-				agenttool.HistoryScopeParentBranch,
-			),
+			agenttool.WithSkipSummarization(cfg.skipSummarization),
+			agenttool.WithStreamInner(cfg.streamInner),
+			agenttool.WithHistoryScope(scope),
 		))
 	}
-	return &staticToolSet{name: name, tools: tools}
+	return &staticToolSet{name: cfg.name, tools: tools}
+}
+
+func agentToolHistoryScope(scope HistoryScope) agenttool.HistoryScope {
+	switch scope {
+	case HistoryScopeIsolated:
+		return agenttool.HistoryScopeIsolated
+	case HistoryScopeParentBranch:
+		return agenttool.HistoryScopeParentBranch
+	default:
+		return agenttool.HistoryScopeParentBranch
+	}
 }
 
 type staticToolSet struct {
