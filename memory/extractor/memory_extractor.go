@@ -79,6 +79,7 @@ func (e *memoryExtractor) Extract(
 	// Call model.
 	rspChan, err := e.model.GenerateContent(ctx, req)
 	if err != nil {
+		log.WarnfContext(ctx, "extractor: model call failed: %v", err)
 		return nil, fmt.Errorf("model call failed: %w", err)
 	}
 
@@ -184,14 +185,17 @@ Your task is to analyze the conversation and manage user memories.
    user that should be remembered.
 2. Check if this information is already captured in existing memories.
 3. Determine if any memories need to be added, updated, or deleted.
-4. Use the available tools to make the necessary changes.
+4. You can call multiple tools in parallel to handle all necessary changes at once.
+5. Use the available tools to make the necessary changes.
 </instructions>
 
 <guidelines>
 - Create memories in the third person, e.g., "User enjoys hiking on weekends."
 - Keep each memory focused on a single piece of information.
+- Make multiple tool calls in a single response when you identify multiple distinct pieces of information.
 - Use update when information changes or needs to be appended.
 - Only use delete when the user explicitly asks to forget something.
+- Use the same language for topics as you use for the memory content.
 - Do not create memories for:
   - Transient requests or questions
   - Information already captured in existing memories
