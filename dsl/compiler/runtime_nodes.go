@@ -200,10 +200,6 @@ func newLLMAgentNodeFuncFromConfig(
 		plannerType, _ := plannerCfg["type"].(string)
 		switch plannerType {
 		case "react":
-			// Validate: react planner conflicts with structured output
-			if len(structuredOutput) > 0 {
-				return nil, fmt.Errorf("builtin.llmagent[%s]: react planner is incompatible with structured output (output_format.type='json'). Use 'builtin' planner instead", nodeID)
-			}
 			agentPlanner = react.New()
 		case "builtin":
 			var opts builtin.Options
@@ -241,13 +237,13 @@ func newLLMAgentNodeFuncFromConfig(
 			opts = append(opts, llmagent.WithDescription(description))
 		}
 
-	// Merge all tools into a single slice to avoid WithTools overwriting
-	allTools := make([]tool.Tool, 0, len(tools)+len(knowledgeTools))
-	allTools = append(allTools, tools...)
-	allTools = append(allTools, knowledgeTools...)
-	if len(allTools) > 0 {
-		opts = append(opts, llmagent.WithTools(allTools))
-	}
+		// Merge all tools into a single slice to avoid WithTools overwriting
+		allTools := make([]tool.Tool, 0, len(tools)+len(knowledgeTools))
+		allTools = append(allTools, tools...)
+		allTools = append(allTools, knowledgeTools...)
+		if len(allTools) > 0 {
+			opts = append(opts, llmagent.WithTools(allTools))
+		}
 
 		if len(mcpToolSets) > 0 {
 			opts = append(opts, llmagent.WithToolSets(mcpToolSets))

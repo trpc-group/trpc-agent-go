@@ -1,0 +1,157 @@
+{
+  "name": "react_structured_output_test",
+  "description": "Test: React planner + structured output with conditional routing based on answer",
+  "version": "1.0.0",
+  "start_node_id": "start",
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "node_type": "builtin.start",
+      "config": {}
+    },
+    {
+      "id": "react_agent",
+      "label": "React Agent with Structured Output",
+      "node_type": "builtin.llmagent",
+      "config": {
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "gpt-5",
+          "base_url": "https://api.openai.com/v1",
+          "api_key": "env:OPENAI_API_KEY"
+        },
+        "instruction": "You are a helpful math assistant. Use the calculator tool to solve math problems.",
+        "tools": [
+          {
+            "type": "builtin",
+            "name": "calculator"
+          }
+        ],
+        "planner": {
+          "type": "react"
+        },
+        "output_format": {
+          "type": "json",
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "problem": {
+                "type": "string",
+                "description": "The original math problem"
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Step-by-step solution"
+              },
+              "answer": {
+                "type": "number",
+                "description": "The final numerical answer"
+              }
+            },
+            "required": ["problem", "steps", "answer"]
+          }
+        }
+      }
+    },
+    {
+      "id": "large_result",
+      "label": "Large Result Handler",
+      "node_type": "builtin.transform",
+      "config": {
+        "expr": {
+          "expression": "\"🎉 Big number! The answer \" + string(state.node_structured.react_agent.output_parsed.answer) + \" is >= 100\"",
+          "format": "cel"
+        },
+        "output_schema": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "id": "medium_result",
+      "label": "Medium Result Handler",
+      "node_type": "builtin.transform",
+      "config": {
+        "expr": {
+          "expression": "\"📊 Medium number! The answer \" + string(state.node_structured.react_agent.output_parsed.answer) + \" is between 10 and 100\"",
+          "format": "cel"
+        }
+      }
+    },
+    {
+      "id": "small_result",
+      "label": "Small Result Handler",
+      "node_type": "builtin.transform",
+      "config": {
+        "expr": {
+          "expression": "\"🔢 Small number! The answer \" + string(state.node_structured.react_agent.output_parsed.answer) + \" is < 10\"",
+          "format": "cel"
+        }
+      }
+    },
+    {
+      "id": "end",
+      "label": "End",
+      "node_type": "builtin.end",
+      "config": {}
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "react_agent"
+    },
+    {
+      "source": "large_result",
+      "target": "end"
+    },
+    {
+      "source": "medium_result",
+      "target": "end"
+    },
+    {
+      "source": "small_result",
+      "target": "end"
+    }
+  ],
+  "conditional_edges": [
+    {
+      "id": "route_by_answer_size",
+      "from": "react_agent",
+      "condition": {
+        "type": "builtin",
+        "cases": [
+          {
+            "name": "large",
+            "predicate": {
+              "expression": "input.output_parsed.answer >= 100.0",
+              "format": "cel"
+            },
+            "target": "large_result"
+          },
+          {
+            "name": "medium",
+            "predicate": {
+              "expression": "input.output_parsed.answer >= 10.0 && input.output_parsed.answer < 100.0",
+              "format": "cel"
+            },
+            "target": "medium_result"
+          },
+          {
+            "name": "small",
+            "predicate": {
+              "expression": "input.output_parsed.answer < 10.0",
+              "format": "cel"
+            },
+            "target": "small_result"
+          }
+        ]
+      }
+    }
+  ]
+}

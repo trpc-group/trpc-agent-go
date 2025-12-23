@@ -134,28 +134,28 @@ func GenerateNativeGo(g *dsl.Graph, opts ...Option) (*Output, error) {
 	}
 
 	src, err := renderTemplate(singleFileTemplate, singleFileTemplateData{
-		PackageName:    o.PackageName,
-		AppName:        appName,
-		RunMode:        string(o.RunMode),
-		HasAgentNodes:  len(ir.AgentNodes) > 0,
-		EnvVarInfos:    ir.EnvVarInfos,
-		NeedsApproval:  ir.NeedsApproval,
-		NeedsEnd:       ir.NeedsEnd,
-		NeedsMCP:       ir.NeedsMCP,
-		NeedsPlanner:   ir.NeedsPlanner,
-		NeedsReflect:   ir.NeedsApproval || ir.NeedsEnd || len(ir.StateVars) > 0,
+		PackageName:                         o.PackageName,
+		AppName:                             appName,
+		RunMode:                             string(o.RunMode),
+		HasAgentNodes:                       len(ir.AgentNodes) > 0,
+		EnvVarInfos:                         ir.EnvVarInfos,
+		NeedsApproval:                       ir.NeedsApproval,
+		NeedsEnd:                            ir.NeedsEnd,
+		NeedsMCP:                            ir.NeedsMCP,
+		NeedsPlanner:                        ir.NeedsPlanner,
+		NeedsReflect:                        ir.NeedsApproval || ir.NeedsEnd || len(ir.StateVars) > 0,
 		NeedsExtractFirstJSONObjectFromText: len(ir.MCPNodes) > 0,
-		StateVars:      ir.StateVars,
-		StartNodes:     ir.StartNodes,
-		AgentNodes:     ir.AgentNodes,
-		TransformNodes: ir.TransformNodes,
-		SetStateNodes:  ir.SetStateNodes,
-		MCPNodes:       ir.MCPNodes,
-		ApprovalNodes:  ir.ApprovalNodes,
-		EndNodes:       ir.EndNodes,
-		Edges:          ir.Edges,
-		Conditions:     ir.Conditions,
-		EntryPoint:     ir.EntryPoint,
+		StateVars:                           ir.StateVars,
+		StartNodes:                          ir.StartNodes,
+		AgentNodes:                          ir.AgentNodes,
+		TransformNodes:                      ir.TransformNodes,
+		SetStateNodes:                       ir.SetStateNodes,
+		MCPNodes:                            ir.MCPNodes,
+		ApprovalNodes:                       ir.ApprovalNodes,
+		EndNodes:                            ir.EndNodes,
+		Edges:                               ir.Edges,
+		Conditions:                          ir.Conditions,
+		EntryPoint:                          ir.EntryPoint,
 		// Helper function usage flags.
 		NeedsMustParseJSONAny:       ir.NeedsMustParseJSONAny,
 		NeedsStructuredOutputMapper: ir.NeedsStructuredOutputMapper,
@@ -822,10 +822,6 @@ func buildIR(g *dsl.Graph) (*irGraph, error) {
 			if plannerRaw, ok := n.EngineNode.Config["planner"].(map[string]any); ok {
 				plannerType, _ := plannerRaw["type"].(string)
 				if plannerType != "" {
-					// Validate: react planner conflicts with structured output
-					if plannerType == "react" && len(structuredSchema) > 0 {
-						return nil, fmt.Errorf("builtin.llmagent[%s]: react planner is incompatible with structured output (output_format.type='json'). Use 'builtin' planner instead", n.ID)
-					}
 					plannerCfg.HasPlanner = true
 					plannerCfg.Type = plannerType
 					ir.NeedsPlanner = true
@@ -944,8 +940,8 @@ func buildIR(g *dsl.Graph) (*irGraph, error) {
 						e.ExprKind = "cel"
 						e.ExprGo = goExpr
 					case "json":
-				e.ExprKind = "json"
-					e.ExprJSON = exprStr
+						e.ExprKind = "json"
+						e.ExprJSON = exprStr
 					default:
 						return nil, fmt.Errorf("builtin.end[%s]: unsupported expr.format %q (expected \"cel\" or \"json\")", n.ID, format)
 					}
