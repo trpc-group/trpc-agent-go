@@ -130,7 +130,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		LastUpdated: &now,
 	}
 	entry := &memory.Entry{
-		ID:        generateMemoryID(mem),
+		ID:        imemory.GenerateMemoryID(mem),
 		AppName:   userKey.AppName,
 		Memory:    mem,
 		UserID:    userKey.UserID,
@@ -330,11 +330,6 @@ func (s *Service) Close() error {
 		return s.redisClient.Close()
 	}
 	return nil
-}
-
-// generateMemoryID generates a memory ID from memory content.
-func generateMemoryID(mem *memory.Memory) string {
-	return imemory.GenerateMemoryID(mem)
 }
 
 // getUserMemKey builds the Redis key for a user's memories.

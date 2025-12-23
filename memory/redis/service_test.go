@@ -27,43 +27,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-func TestGenerateMemoryID(t *testing.T) {
-	tests := []struct {
-		name   string
-		memory *memory.Memory
-	}{
-		{
-			name: "memory with content only",
-			memory: &memory.Memory{
-				Memory: "test content",
-			},
-		},
-		{
-			name: "memory with content and topics",
-			memory: &memory.Memory{
-				Memory: "test content",
-				Topics: []string{"topic1", "topic2"},
-			},
-		},
-		{
-			name: "memory with empty topics",
-			memory: &memory.Memory{
-				Memory: "test content",
-				Topics: []string{},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			id := generateMemoryID(tt.memory)
-			assert.NotEmpty(t, id, "Generated memory ID should not be empty")
-			// The ID is a hex encoding, so it should be even length.
-			assert.Equal(t, 0, len(id)%2, "Generated memory ID should have even length")
-		})
-	}
-}
-
 func TestGetUserMemKey(t *testing.T) {
 	tests := []struct {
 		name     string

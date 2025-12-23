@@ -108,11 +108,6 @@ func (s *MemoryService) getAppMemories(appName string) *appMemories {
 	return app
 }
 
-// generateMemoryID generates a unique ID for memory based on content.
-func generateMemoryID(memory *memory.Memory) string {
-	return imemory.GenerateMemoryID(memory)
-}
-
 // createMemoryEntry creates a new MemoryEntry from memory data.
 func createMemoryEntry(appName, userID, memoryStr string, topics []string) *memory.Entry {
 	now := time.Now()
@@ -125,7 +120,7 @@ func createMemoryEntry(appName, userID, memoryStr string, topics []string) *memo
 	}
 
 	return &memory.Entry{
-		ID:        generateMemoryID(memoryObj), // Generate ID.
+		ID:        imemory.GenerateMemoryID(memoryObj), // Generate ID.
 		AppName:   appName,
 		UserID:    userID,
 		Memory:    memoryObj,

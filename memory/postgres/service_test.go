@@ -29,43 +29,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-func TestGenerateMemoryID(t *testing.T) {
-	tests := []struct {
-		name   string
-		memory *memory.Memory
-	}{
-		{
-			name: "memory with content only",
-			memory: &memory.Memory{
-				Memory: "test content",
-			},
-		},
-		{
-			name: "memory with content and topics",
-			memory: &memory.Memory{
-				Memory: "test content",
-				Topics: []string{"topic1", "topic2"},
-			},
-		},
-		{
-			name: "memory with empty topics",
-			memory: &memory.Memory{
-				Memory: "test content",
-				Topics: []string{},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			id := generateMemoryID(tt.memory)
-			assert.NotEmpty(t, id, "Generated memory ID should not be empty")
-			// The ID is a hex encoding, so it should be even length.
-			assert.Equal(t, 0, len(id)%2, "Generated memory ID should have even length")
-		})
-	}
-}
-
 func TestServiceOpts_Defaults(t *testing.T) {
 	opts := ServiceOpts{}
 
@@ -2253,27 +2216,6 @@ func TestService_WithSchema(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-// Test generateMemoryID with different inputs
-func TestGenerateMemoryID_DifferentContent(t *testing.T) {
-	mem1 := &memory.Memory{Memory: "content1"}
-	mem2 := &memory.Memory{Memory: "content2"}
-
-	id1 := generateMemoryID(mem1)
-	id2 := generateMemoryID(mem2)
-
-	assert.NotEqual(t, id1, id2, "Different content should generate different IDs")
-}
-
-func TestGenerateMemoryID_DifferentTopics(t *testing.T) {
-	mem1 := &memory.Memory{Memory: "content", Topics: []string{"topic1"}}
-	mem2 := &memory.Memory{Memory: "content", Topics: []string{"topic2"}}
-
-	id1 := generateMemoryID(mem1)
-	id2 := generateMemoryID(mem2)
-
-	assert.NotEqual(t, id1, id2, "Different topics should generate different IDs")
 }
 
 // Test parseTableName.
