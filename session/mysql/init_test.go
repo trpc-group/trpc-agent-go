@@ -27,6 +27,7 @@ func mockVerifySchemaQueries(mock sqlmock.Sqlmock, tablePrefix string) {
 	tableNames := []string{
 		sqldb.TableNameSessionStates,
 		sqldb.TableNameSessionEvents,
+		sqldb.TableNameSessionTrackEvents,
 		sqldb.TableNameSessionSummaries,
 		sqldb.TableNameAppStates,
 		sqldb.TableNameUserStates,
@@ -82,15 +83,8 @@ func TestInitDB_Success(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS session_events")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-<<<<<<< HEAD
-
-	// Mock: Create session_track_events table
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS session_track_events")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	// Mock: Create session_summaries table
-=======
->>>>>>> 72eb7db0 (add unit test)
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS session_summaries")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS app_states")).
@@ -98,13 +92,8 @@ func TestInitDB_Success(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS user_states")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-<<<<<<< HEAD
-	// Mock: Create indexes (12 indexes total: 4 unique + 2 lookup + 6 TTL)
+	// Mock: Create indexes (12 indexes total: 3 unique + 3 lookup + 6 TTL)
 	for i := 0; i < 12; i++ {
-=======
-	// Mock: Create indexes (10 indexes total)
-	for i := 0; i < 10; i++ {
->>>>>>> 72eb7db0 (add unit test)
 		mock.ExpectExec(regexp.QuoteMeta("CREATE")).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}

@@ -1031,6 +1031,14 @@ func (s *Service) softDeleteSessions(ctx context.Context, tx *sql.Tx, whereClaus
 		append([]any{now}, args...)...); err != nil {
 		return fmt.Errorf("soft delete events: %w", err)
 	}
+
+	// Soft delete track events
+	if _, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionTracks, whereClause),
+		append([]any{now}, args...)...); err != nil {
+		return fmt.Errorf("soft delete track events: %w", err)
+	}
+
 	return nil
 }
 
@@ -1057,6 +1065,14 @@ func (s *Service) hardDeleteSessions(ctx context.Context, tx *sql.Tx, whereClaus
 		args...); err != nil {
 		return fmt.Errorf("hard delete events: %w", err)
 	}
+
+	// Hard delete track events
+	if _, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionTracks, whereClause),
+		args...); err != nil {
+		return fmt.Errorf("hard delete track events: %w", err)
+	}
+
 	return nil
 }
 

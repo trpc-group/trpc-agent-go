@@ -220,9 +220,9 @@ func TestGetSession_WithTrackEvents(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
 	// Mock: Query events (empty).
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event FROM session_events")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at FROM session_events")).
 		WithArgs(key.AppName, key.UserID, key.SessionID).
-		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event"}))
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}))
 
 	// Mock: Query track events.
 	trackEvent := &session.TrackEvent{
@@ -425,12 +425,12 @@ func TestListSessions_WithTrackEvents(t *testing.T) {
 			AddRow("session-1", stateBytes, time.Now(), time.Now()))
 
 	// Mock: Batch load events (empty).
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event FROM session_events")).
-		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at FROM session_events")).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}))
 
 	// Mock: Batch load summaries (empty).
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, filter_key, summary FROM session_summaries")).
-		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "filter_key", "summary"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM session_summaries")).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "filter_key", "summary", "updated_at"}))
 
 	// Mock: Batch load track events.
 	trackEvent := &session.TrackEvent{

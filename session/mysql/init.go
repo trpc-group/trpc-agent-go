@@ -126,7 +126,7 @@ const (
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
-	// session_track_events: lookup index on (app_name, user_id, session_id, track, created_at)
+	// session_track_events: lookup index on (app_name, user_id, session_id, created_at)
 	sqlCreateSessionTracksIndex = `
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name, user_id, session_id, created_at)`
@@ -231,6 +231,24 @@ var expectedSchema = map[string]struct {
 		indexes: []tableIndex{
 			{sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookup, []string{"app_name", "user_id", "session_id", "created_at"}},
 			{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+		},
+	},
+	sqldb.TableNameSessionTrackEvents: {
+		columns: []tableColumn{
+			{"id", "bigint", false},
+			{"app_name", "varchar", false},
+			{"user_id", "varchar", false},
+			{"session_id", "varchar", false},
+			{"track", "varchar", false},
+			{"event", "json", false},
+			{"created_at", "timestamp", false},
+			{"updated_at", "timestamp", false},
+			{"expires_at", "timestamp", true},
+			{"deleted_at", "timestamp", true},
+		},
+		indexes: []tableIndex{
+			{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixLookup, []string{"app_name", "user_id", "session_id", "created_at"}},
+			{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixExpires, []string{"expires_at"}},
 		},
 	},
 	sqldb.TableNameSessionSummaries: {

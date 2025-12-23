@@ -889,26 +889,9 @@ func TestCleanupExpiredSessions(t *testing.T) {
 					WithArgs(sqlmock.AnyArg(), "app-1", "user-1", "session-1").
 					WillReturnResult(sqlmock.NewResult(0, 0))
 				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
-<<<<<<< HEAD
-					WillReturnResult(sqlmock.NewResult(0, 10))
+					WithArgs(sqlmock.AnyArg(), "app-1", "user-1", "session-1").
+					WillReturnResult(sqlmock.NewResult(0, 0))
 				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
-					WillReturnResult(sqlmock.NewResult(0, 5))
-
-				mock.ExpectCommit()
-			} else {
-				mock.ExpectBegin()
-				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states WHERE expires_at IS NOT NULL AND expires_at <= ?")).
-					WithArgs(now).
-					WillReturnResult(sqlmock.NewResult(0, 5))
-				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_summaries WHERE expires_at IS NOT NULL AND expires_at <= ?")).
-					WithArgs(now).
-					WillReturnResult(sqlmock.NewResult(0, 3))
-				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events WHERE")).
-					WillReturnResult(sqlmock.NewResult(0, 10))
-				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_track_events WHERE")).
-					WillReturnResult(sqlmock.NewResult(0, 5))
-				mock.ExpectCommit()
-=======
 					WithArgs(sqlmock.AnyArg(), "app-1", "user-1", "session-1").
 					WillReturnResult(sqlmock.NewResult(0, 0))
 			} else {
@@ -921,7 +904,9 @@ func TestCleanupExpiredSessions(t *testing.T) {
 				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events")).
 					WithArgs("app-1", "user-1", "session-1").
 					WillReturnResult(sqlmock.NewResult(0, 0))
->>>>>>> 0a1cfd64 (optimize sql of mysql session)
+				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_track_events")).
+					WithArgs("app-1", "user-1", "session-1").
+					WillReturnResult(sqlmock.NewResult(0, 0))
 			}
 
 			mock.ExpectCommit()
@@ -1142,118 +1127,6 @@ func TestCleanupExpiredStates(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
-func TestCleanupExpiredForUser(t *testing.T) {
-	tests := []struct {
-		name       string
-		softDelete bool
-	}{
-		{"SoftDelete", true},
-		{"HardDelete", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			db, mock, err := sqlmock.New()
-			require.NoError(t, err)
-			defer db.Close()
-
-			s := createTestService(t, db, WithSoftDelete(tt.softDelete))
-			ctx := context.Background()
-			userKey := session.UserKey{AppName: "test-app", UserID: "user-123"}
-
-			if tt.softDelete {
-				mock.ExpectExec(
-					regexp.QuoteMeta(
-						"UPDATE session_states SET deleted_at = ?",
-					),
-				).
-					WithArgs(
-						sqlmock.AnyArg(),
-						userKey.AppName,
-						userKey.UserID,
-						sqlmock.AnyArg(),
-					).
-					WillReturnResult(sqlmock.NewResult(0, 1))
-				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
-					WithArgs(sqlmock.AnyArg(), userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
-					WillReturnResult(sqlmock.NewResult(0, 1))
-			} else {
-				mock.ExpectExec(
-					regexp.QuoteMeta("DELETE FROM session_states"),
-				).
-					WithArgs(
-						userKey.AppName,
-						userKey.UserID,
-						sqlmock.AnyArg(),
-					).
-					WillReturnResult(sqlmock.NewResult(0, 1))
-				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_track_events")).
-					WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
-					WillReturnResult(sqlmock.NewResult(0, 1))
-			}
-
-			s.cleanupExpiredForUser(ctx, userKey)
-			assert.NoError(t, mock.ExpectationsWereMet())
-		})
-	}
-}
-
-func TestCleanupExpiredForUser_ExecError(t *testing.T) {
-	tests := []struct {
-		name       string
-		softDelete bool
-	}{
-		{"SoftDeleteExecError", true},
-		{"HardDeleteExecError", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			db, mock, err := sqlmock.New()
-			require.NoError(t, err)
-			defer db.Close()
-
-			s := createTestService(t, db, WithSoftDelete(tt.softDelete))
-			ctx := context.Background()
-			userKey := session.UserKey{
-				AppName: "test-app",
-				UserID:  "user-123",
-			}
-
-			if tt.softDelete {
-				mock.ExpectExec(
-					regexp.QuoteMeta(
-						"UPDATE session_states SET deleted_at = ?",
-					),
-				).
-					WithArgs(
-						sqlmock.AnyArg(),
-						userKey.AppName,
-						userKey.UserID,
-						sqlmock.AnyArg(),
-					).
-					WillReturnError(assert.AnError)
-			} else {
-				mock.ExpectExec(
-					regexp.QuoteMeta("DELETE FROM session_states"),
-				).
-					WithArgs(
-						userKey.AppName,
-						userKey.UserID,
-						sqlmock.AnyArg(),
-					).
-					WillReturnError(assert.AnError)
-			}
-
-			s.cleanupExpiredForUser(ctx, userKey)
-			assert.NoError(t, mock.ExpectationsWereMet())
-		})
-	}
-}
-
-=======
->>>>>>> 0a1cfd64 (optimize sql of mysql session)
 func TestAppendEvent_Async(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -2276,16 +2149,6 @@ func TestCleanupExpiredData(t *testing.T) {
 
 	// Mock cleanup sessions in transaction
 	mock.ExpectBegin()
-<<<<<<< HEAD
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
-		WillReturnResult(sqlmock.NewResult(0, 5))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries SET deleted_at = ?")).
-		WillReturnResult(sqlmock.NewResult(0, 3))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
-		WillReturnResult(sqlmock.NewResult(0, 10))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
-		WillReturnResult(sqlmock.NewResult(0, 5))
-=======
 	// 1. Find expired sessions
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states")).
 		WithArgs(sqlmock.AnyArg()). // now
@@ -2293,21 +2156,24 @@ func TestCleanupExpiredData(t *testing.T) {
 			AddRow("app-1", "user-1", "session-1"))
 
 	// 2. Soft delete session states
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ? WHERE (app_name, user_id, session_id) IN ((?, ?, ?))")).
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
 		WithArgs(sqlmock.AnyArg(), "app-1", "user-1", "session-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// 3. Soft delete summaries
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries SET deleted_at = ? WHERE (app_name, user_id, session_id) IN ((?, ?, ?))")).
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries SET deleted_at = ?")).
 		WithArgs(sqlmock.AnyArg(), "app-1", "user-1", "session-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// 4. Soft delete events
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ? WHERE (app_name, user_id, session_id) IN ((?, ?, ?))")).
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
 		WithArgs(sqlmock.AnyArg(), "app-1", "user-1", "session-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
->>>>>>> 0a1cfd64 (optimize sql of mysql session)
+	// 5. Soft delete track events
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), "app-1", "user-1", "session-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	// Mock cleanup app states
@@ -2338,19 +2204,6 @@ func TestCleanupExpiredSessions_HardDelete(t *testing.T) {
 			AddRow("app-1", "user-1", "session-1"))
 
 	// Mock hard delete sessions, events, and summaries in transaction
-<<<<<<< HEAD
-	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states WHERE expires_at IS NOT NULL AND expires_at <= ?")).
-		WithArgs(now).
-		WillReturnResult(sqlmock.NewResult(0, 3))
-	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_summaries WHERE expires_at IS NOT NULL AND expires_at <= ?")).
-		WithArgs(now).
-		WillReturnResult(sqlmock.NewResult(0, 2))
-	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events WHERE")).
-		WillReturnResult(sqlmock.NewResult(0, 5))
-	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_track_events WHERE")).
-		WillReturnResult(sqlmock.NewResult(0, 5))
-=======
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states")).
 		WithArgs("app-1", "user-1", "session-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -2360,7 +2213,9 @@ func TestCleanupExpiredSessions_HardDelete(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events")).
 		WithArgs("app-1", "user-1", "session-1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
->>>>>>> 0a1cfd64 (optimize sql of mysql session)
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_track_events")).
+		WithArgs("app-1", "user-1", "session-1").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
 	s.cleanupExpiredSessions(ctx, now)
@@ -2813,8 +2668,8 @@ func mockDBInit(mock sqlmock.Sqlmock) {
 
 // mockDBInitWithPrefix mocks the database initialization process with table prefix
 func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
-	// Mock: Create 5 tables
-	for i := 0; i < 5; i++ {
+	// Mock: Create 6 tables
+	for i := 0; i < 6; i++ {
 		mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 
@@ -2827,6 +2682,7 @@ func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
 	tableNames := []string{
 		sqldb.TableNameSessionStates,
 		sqldb.TableNameSessionEvents,
+		sqldb.TableNameSessionTrackEvents,
 		sqldb.TableNameSessionSummaries,
 		sqldb.TableNameAppStates,
 		sqldb.TableNameUserStates,

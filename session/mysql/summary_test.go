@@ -792,6 +792,9 @@ func TestEnqueueSummaryJob_QueueFull_FallbackToSyncWithCascade(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
+	// Disable order matching since cascade creates summaries concurrently.
+	mock.MatchExpectationsInOrder(false)
+
 	summarizer := &fakeSummarizer{allow: true, out: "fallback-summary"}
 
 	s := createTestService(t, db,
@@ -843,7 +846,7 @@ func TestEnqueueSummaryJob_QueueFull_FallbackToSyncWithCascade(t *testing.T) {
 			sess.AppName,
 			sess.UserID,
 			sess.ID,
-			sqlmock.AnyArg(),
+			"user-messages",
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
@@ -870,7 +873,7 @@ func TestEnqueueSummaryJob_QueueFull_FallbackToSyncWithCascade(t *testing.T) {
 			sess.AppName,
 			sess.UserID,
 			sess.ID,
-			sqlmock.AnyArg(),
+			"",
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
@@ -887,6 +890,9 @@ func TestEnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade(t *testing.T
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
+
+	// Disable order matching since cascade creates summaries concurrently.
+	mock.MatchExpectationsInOrder(false)
 
 	summarizer := &fakeSummarizer{allow: true, out: "sync-summary"}
 
@@ -924,7 +930,7 @@ func TestEnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade(t *testing.T
 			sess.AppName,
 			sess.UserID,
 			sess.ID,
-			sqlmock.AnyArg(),
+			"tool-usage",
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
@@ -951,7 +957,7 @@ func TestEnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade(t *testing.T
 			sess.AppName,
 			sess.UserID,
 			sess.ID,
-			sqlmock.AnyArg(),
+			"",
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
