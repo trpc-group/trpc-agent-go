@@ -132,6 +132,33 @@ func TestPlanningRequestProcessor_InvocationNil(t *testing.T) {
 	}
 }
 
+func TestPlanningRequestProcessor_EmitEventError(t *testing.T) {
+	// Create a cancelled context to force EmitEvent to return an error
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel the context immediately
+
+	ch := make(chan *event.Event, 4)
+	fp := &fakePlanner{instr: "PLAN: do X"}
+	req := &model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: "ping"}}}
+	inv := &agent.Invocation{AgentName: "agent1", InvocationID: "inv1"}
+
+	// This should trigger the error path in agent.EmitEvent
+	NewPlanningRequestProcessor(fp).ProcessRequest(ctx, inv, req, ch)
+
+	// Should have processed the request but failed to emit event
+	require.NotEmpty(t, req.Messages)
+	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	assert.Contains(t, req.Messages[0].Content, "PLAN: do X")
+
+	// Channel should be empty due to EmitEvent error
+	select {
+	case <-ch:
+		t.Fatal("should not have sent event due to EmitEvent error")
+	default:
+		// Expected - no event sent due to error
+	}
+}
+
 func TestPlanningResponseProcessor_PartialResponse(t *testing.T) {
 	ctx := context.Background()
 	ch := make(chan *event.Event, 4)
