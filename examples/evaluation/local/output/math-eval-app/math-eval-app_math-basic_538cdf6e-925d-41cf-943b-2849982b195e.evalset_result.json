@@ -1,6 +1,6 @@
 {
-  "evalSetResultId": "math-eval-app_math-basic_64377112-1403-4e7d-ab90-8fce26f5aeb0",
-  "evalSetResultName": "math-eval-app_math-basic_64377112-1403-4e7d-ab90-8fce26f5aeb0",
+  "evalSetResultId": "math-eval-app_math-basic_538cdf6e-925d-41cf-943b-2849982b195e",
+  "evalSetResultName": "math-eval-app_math-basic_538cdf6e-925d-41cf-943b-2849982b195e",
   "evalSetId": "math-basic",
   "evalCaseResults": [
     {
@@ -22,7 +22,7 @@
                 "arguments": {
                   "matchStrategy": "exact"
                 },
-                "response": {
+                "result": {
                   "matchStrategy": "exact"
                 }
               }
@@ -36,44 +36,32 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "74ca1b65-e143-4c98-b42e-3239f3b91ea0",
+            "invocationId": "5cc1f162-37e6-4d07-90e9-eb3ec5205b8d",
             "userContent": {
               "role": "user",
               "content": "calc add 2 3"
             },
             "finalResponse": {
               "role": "assistant",
-              "content": "2 + 3 = 5"
+              "content": "The result of 2 + 3 is **5**."
             },
-            "intermediateData": {
-              "toolCalls": [
-                {
-                  "id": "call_00_YFh5dH5naCL8SDmdPGx23lbT",
-                  "type": "function",
-                  "function": {
-                    "name": "calculator",
-                    "arguments": {
-                      "a": 2,
-                      "b": 3,
-                      "operation": "add"
-                    }
-                  }
+            "tools": [
+              {
+                "id": "call_00_etTEEthmCocxvq7r3m2LJRXf",
+                "name": "calculator",
+                "arguments": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add"
+                },
+                "result": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add",
+                  "result": 5
                 }
-              ],
-              "toolResponses": [
-                {
-                  "role": "tool",
-                  "toolId": "call_00_YFh5dH5naCL8SDmdPGx23lbT",
-                  "toolName": "calculator",
-                  "content": {
-                    "a": 2,
-                    "b": 3,
-                    "operation": "add",
-                    "result": 5
-                  }
-                }
-              ]
-            }
+              }
+            ]
           },
           "expectedInvocation": {
             "invocationId": "calc_add-1",
@@ -85,35 +73,23 @@
               "role": "assistant",
               "content": "calc result: 5"
             },
-            "intermediateData": {
-              "toolCalls": [
-                {
-                  "id": "tool_use_1",
-                  "type": "function",
-                  "function": {
-                    "name": "calculator",
-                    "arguments": {
-                      "a": 2,
-                      "b": 3,
-                      "operation": "add"
-                    }
-                  }
+            "tools": [
+              {
+                "id": "tool_use_1",
+                "name": "calculator",
+                "arguments": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add"
+                },
+                "result": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add",
+                  "result": 5
                 }
-              ],
-              "toolResponses": [
-                {
-                  "role": "tool",
-                  "toolId": "tool_use_1",
-                  "toolName": "calculator",
-                  "content": {
-                    "a": 2,
-                    "b": 3,
-                    "operation": "add",
-                    "result": 5
-                  }
-                }
-              ]
-            }
+              }
+            ]
           },
           "evalMetricResults": [
             {
@@ -130,7 +106,7 @@
                     "arguments": {
                       "matchStrategy": "exact"
                     },
-                    "response": {
+                    "result": {
                       "matchStrategy": "exact"
                     }
                   }
@@ -143,7 +119,7 @@
           ]
         }
       ],
-      "sessionId": "154015e2-2126-4ff5-9da0-d70012b819f5",
+      "sessionId": "19877398-9586-4a97-b1d3-f8ce636ea54f",
       "userId": "user"
     },
     {
@@ -165,7 +141,7 @@
                 "arguments": {
                   "matchStrategy": "exact"
                 },
-                "response": {
+                "result": {
                   "matchStrategy": "exact"
                 }
               }
@@ -179,44 +155,32 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "fca17634-3cd0-45e8-83e0-a485b4d93f8b",
+            "invocationId": "1fefd4b0-1cbc-4216-bafa-5eedc2554023",
             "userContent": {
               "role": "user",
               "content": "calc multiply 6 7"
             },
             "finalResponse": {
               "role": "assistant",
-              "content": "6 × 7 = 42"
+              "content": "6 multiplied by 7 equals **42**."
             },
-            "intermediateData": {
-              "toolCalls": [
-                {
-                  "id": "call_00_z4ogMRynX8e5ZRtg8AsGj25c",
-                  "type": "function",
-                  "function": {
-                    "name": "calculator",
-                    "arguments": {
-                      "a": 6,
-                      "b": 7,
-                      "operation": "multiply"
-                    }
-                  }
+            "tools": [
+              {
+                "id": "call_00_fUCPyKvbfKCPSHQUPOZM0gpK",
+                "name": "calculator",
+                "arguments": {
+                  "a": 6,
+                  "b": 7,
+                  "operation": "multiply"
+                },
+                "result": {
+                  "a": 6,
+                  "b": 7,
+                  "operation": "multiply",
+                  "result": 42
                 }
-              ],
-              "toolResponses": [
-                {
-                  "role": "tool",
-                  "toolId": "call_00_z4ogMRynX8e5ZRtg8AsGj25c",
-                  "toolName": "calculator",
-                  "content": {
-                    "a": 6,
-                    "b": 7,
-                    "operation": "multiply",
-                    "result": 42
-                  }
-                }
-              ]
-            }
+              }
+            ]
           },
           "expectedInvocation": {
             "invocationId": "calc_multiply-1",
@@ -228,35 +192,23 @@
               "role": "assistant",
               "content": "calc result: 42"
             },
-            "intermediateData": {
-              "toolCalls": [
-                {
-                  "id": "tool_use_2",
-                  "type": "function",
-                  "function": {
-                    "name": "calculator",
-                    "arguments": {
-                      "a": 6,
-                      "b": 7,
-                      "operation": "multiply"
-                    }
-                  }
+            "tools": [
+              {
+                "id": "tool_use_2",
+                "name": "calculator",
+                "arguments": {
+                  "a": 6,
+                  "b": 7,
+                  "operation": "multiply"
+                },
+                "result": {
+                  "a": 6,
+                  "b": 7,
+                  "operation": "multiply",
+                  "result": 42
                 }
-              ],
-              "toolResponses": [
-                {
-                  "role": "tool",
-                  "toolId": "tool_use_2",
-                  "toolName": "calculator",
-                  "content": {
-                    "a": 6,
-                    "b": 7,
-                    "operation": "multiply",
-                    "result": 42
-                  }
-                }
-              ]
-            }
+              }
+            ]
           },
           "evalMetricResults": [
             {
@@ -273,7 +225,7 @@
                     "arguments": {
                       "matchStrategy": "exact"
                     },
-                    "response": {
+                    "result": {
                       "matchStrategy": "exact"
                     }
                   }
@@ -286,9 +238,9 @@
           ]
         }
       ],
-      "sessionId": "14e0ac60-dcb3-499c-a935-d818f6ee0960",
+      "sessionId": "37cddb59-6fb4-431b-a549-21a987c433da",
       "userId": "user"
     }
   ],
-  "creationTimestamp": 1765982990.106037
+  "creationTimestamp": 1766455261.342534
 }

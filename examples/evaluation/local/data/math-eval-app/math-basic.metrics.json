@@ -4,6 +4,7 @@
     "threshold": 1,
     "criterion": {
       "toolTrajectory": {
+        "orderSensitive": false,
         "defaultStrategy": {
           "name": {
             "matchStrategy": "exact"
@@ -11,7 +12,7 @@
           "arguments": {
             "matchStrategy": "exact"
           },
-          "response": {
+          "result": {
             "matchStrategy": "exact"
           }
         }
