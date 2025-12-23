@@ -1145,11 +1145,11 @@ JSONCriterion is used to compare structured JSON data. You can configure whether
 ```go
 // JSONCriterion defines the matching method for JSON objects.
 type JSONCriterion struct {
-	Ignore        bool                                                // Whether to skip matching.
-	IgnoreTree    map[string]any                                      // Ignore tree; a true leaf skips the key and its subtree.
-	NumberTolerance  *float64                                            // Numeric tolerance; default is 1e-6, 0 means exact; applied to numeric leaf values.
-	MatchStrategy JSONMatchStrategy                                   // Matching strategy.
-	Compare       func(actual, expected map[string]any) (bool, error) // Custom comparison.
+	Ignore          bool                                                // Whether to skip matching.
+	IgnoreTree      map[string]any                                      // Ignore tree; a true leaf skips the key and its subtree.
+	NumberTolerance *float64                                            // Numeric tolerance; default is 1e-6, 0 means exact; applied to numeric leaf values.
+	MatchStrategy   JSONMatchStrategy                                   // Matching strategy.
+	Compare         func(actual, expected map[string]any) (bool, error) // Custom comparison.
 }
 ```
 
@@ -1170,6 +1170,7 @@ criterion := &json.JSONCriterion{
 			"updatedAt": true,
 		},
 	},
+	NumberTolerance: 1e-6,
 }
 ```
 
@@ -1188,7 +1189,8 @@ Configuration file example:
             "matchStrategy": "exact"
           },
           "arguments": {
-            "matchStrategy": "exact"
+            "matchStrategy": "exact",
+            "numberTolerance": 1e-6,
           },
           "result": {
             "matchStrategy": "exact",
