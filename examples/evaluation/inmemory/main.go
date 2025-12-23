@@ -145,35 +145,21 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 						Role:    model.RoleAssistant,
 						Content: "calc result: 5",
 					},
-					IntermediateData: &evalset.IntermediateData{
-						ToolCalls: []*model.ToolCall{
-							{
-								Type: "function",
-								ID:   "tool_use_1",
-								Function: model.FunctionDefinitionParam{
-									Name: "calculator",
-									Arguments: mustJSON(map[string]any{
-										"operation": "add",
-										"a":         2.0,
-										"b":         3.0,
-									}),
-								},
-							},
+					Tools: []*evalset.Tool{{
+						ID:   "tool_use_1",
+						Name: "calculator",
+						Arguments: map[string]any{
+							"operation": "add",
+							"a":         2.0,
+							"b":         3.0,
 						},
-						ToolResponses: []*model.Message{
-							{
-								Role:     model.RoleTool,
-								ToolID:   "tool_use_1",
-								ToolName: "calculator",
-								Content: string(mustJSON(map[string]any{
-									"a":         2.0,
-									"b":         3.0,
-									"operation": "add",
-									"result":    5.0,
-								})),
-							},
+						Result: map[string]any{
+							"a":         2.0,
+							"b":         3.0,
+							"operation": "add",
+							"result":    5.0,
 						},
-					},
+					}},
 				},
 			},
 			SessionInput: &evalset.SessionInput{
@@ -194,35 +180,21 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 						Role:    model.RoleAssistant,
 						Content: "calc result: 42",
 					},
-					IntermediateData: &evalset.IntermediateData{
-						ToolCalls: []*model.ToolCall{
-							{
-								Type: "function",
-								ID:   "tool_use_2",
-								Function: model.FunctionDefinitionParam{
-									Name: "calculator",
-									Arguments: mustJSON(map[string]any{
-										"operation": "multiply",
-										"a":         6.0,
-										"b":         7.0,
-									}),
-								},
-							},
+					Tools: []*evalset.Tool{{
+						ID:   "tool_use_2",
+						Name: "calculator",
+						Arguments: map[string]any{
+							"operation": "multiply",
+							"a":         6.0,
+							"b":         7.0,
 						},
-						ToolResponses: []*model.Message{
-							{
-								Role:     model.RoleTool,
-								ToolID:   "tool_use_2",
-								ToolName: "calculator",
-								Content: string(mustJSON(map[string]any{
-									"a":         6.0,
-									"b":         7.0,
-									"operation": "multiply",
-									"result":    42.0,
-								})),
-							},
+						Result: map[string]any{
+							"a":         6.0,
+							"b":         7.0,
+							"operation": "multiply",
+							"result":    42.0,
 						},
-					},
+					}},
 				},
 			},
 			SessionInput: &evalset.SessionInput{
@@ -237,15 +209,6 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 		}
 	}
 	return nil
-}
-
-func mustJSON(v any) []byte {
-	data, err := json.Marshal(v)
-	if err != nil {
-		log.Errorf("mustJSON: %v", err)
-		return nil
-	}
-	return data
 }
 
 func prepareMetric(ctx context.Context, metricManager metric.Manager) error {

@@ -20,7 +20,8 @@ func TestNewOptionsDefaults(t *testing.T) {
 	opts := newOptions()
 	assert.Equal(t, defaultToolTrajectoryStrategy, opts.defaultStrategy)
 	assert.Nil(t, opts.toolStrategy)
-	assert.False(t, opts.orderInsensitive)
+	assert.False(t, opts.orderSensitive)
+	assert.False(t, opts.subsetMatching)
 	assert.Nil(t, opts.compare)
 }
 
@@ -38,9 +39,14 @@ func TestWithTool(t *testing.T) {
 	assert.Equal(t, tool, opts.toolStrategy)
 }
 
-func TestWithOrderInsensitive(t *testing.T) {
-	opts := newOptions(WithOrderInsensitive(true))
-	assert.True(t, opts.orderInsensitive)
+func TestWithOrderSensitive(t *testing.T) {
+	opts := newOptions(WithOrderSensitive(true))
+	assert.True(t, opts.orderSensitive)
+}
+
+func TestWithSubsetMatching(t *testing.T) {
+	opts := newOptions(WithSubsetMatching(true))
+	assert.True(t, opts.subsetMatching)
 }
 
 func TestWithCompare(t *testing.T) {
@@ -65,7 +71,7 @@ func TestDefaultToolTrajectoryStrategyDeepEqualMismatch(t *testing.T) {
 	assert.False(t, ok)
 	assert.Error(t, errArgs)
 
-	ok, errResp := defaultToolTrajectoryStrategy.Response.Match(
+	ok, errResp := defaultToolTrajectoryStrategy.Result.Match(
 		map[string]any{"r": 1},
 		map[string]any{"r": 3},
 	)

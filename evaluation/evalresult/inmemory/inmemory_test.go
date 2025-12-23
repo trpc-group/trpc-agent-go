@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 )
 
 func TestManagerSaveGetList(t *testing.T) {
@@ -99,4 +100,29 @@ func TestManagerListErrors(t *testing.T) {
 
 	_, err := mgr.List(ctx, "")
 	assert.Error(t, err)
+}
+
+func TestManagerSaveCloneError(t *testing.T) {
+	ctx := context.Background()
+	mgr := New().(*manager)
+	// channel value cannot be gob-encoded, forcing clone failure.
+	badResult := &evalresult.EvalSetResult{
+		EvalSetID: "set",
+		EvalCaseResults: []*evalresult.EvalCaseResult{
+			{
+				EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+					{
+						ActualInvocation: &evalset.Invocation{
+							Tools: []*evalset.Tool{
+								{Arguments: map[string]any{"bad": make(chan int)}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	_, err := mgr.Save(ctx, "app", badResult)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "clone result")
 }

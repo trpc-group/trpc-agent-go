@@ -97,11 +97,9 @@ func TestInferenceSuccess(t *testing.T) {
 	assert.Equal(t, input[0].UserContent, results[0].UserContent)
 	assert.NotNil(t, results[0].FinalResponse)
 	assert.Equal(t, "answer", results[0].FinalResponse.Content)
-	assert.Len(t, results[0].IntermediateData.ToolCalls, 1)
-	assert.Equal(t, "lookup", results[0].IntermediateData.ToolCalls[0].Function.Name)
-	var actualArgs map[string]any
-	assert.NoError(t, json.Unmarshal(results[0].IntermediateData.ToolCalls[0].Function.Arguments, &actualArgs))
-	assert.Equal(t, "bar", actualArgs["foo"])
+	assert.Len(t, results[0].Tools, 1)
+	assert.Equal(t, "lookup", results[0].Tools[0].Name)
+	assert.Equal(t, map[string]any{"foo": "bar"}, results[0].Tools[0].Arguments)
 }
 
 func TestInferenceValidation(t *testing.T) {
@@ -203,16 +201,14 @@ func TestConvertToolCallResponse(t *testing.T) {
 			},
 		},
 	}
-	result, err := convertToolCallResponse(ev)
+	result, err := convertTools(ev)
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)
-	assert.Equal(t, "tool", result[0].Function.Name)
-	var parsed map[string]any
-	assert.NoError(t, json.Unmarshal(result[0].Function.Arguments, &parsed))
-	assert.Equal(t, float64(1), parsed["count"])
+	assert.Equal(t, "tool", result[0].Name)
+	assert.Equal(t, map[string]any{"count": float64(1)}, result[0].Arguments)
 }
 
-func TestConvertToolResultResponse(t *testing.T) {
+func TestMergeToolResultResponse(t *testing.T) {
 	ev := &event.Event{
 		Response: &model.Response{
 			Choices: []model.Choice{
@@ -226,44 +222,51 @@ func TestConvertToolResultResponse(t *testing.T) {
 			},
 		},
 	}
-	result, err := convertToolResultResponse(ev)
+	tools := []*evalset.Tool{
+		{ID: "call-1", Name: "tool"},
+	}
+	idx := map[string]int{"call-1": 0}
+	err := mergeToolResultResponse(ev, idx, tools)
 	assert.NoError(t, err)
-	assert.Len(t, result, 1)
-	assert.Equal(t, "call-1", result[0].ToolID)
-	assert.Equal(t, "tool", result[0].ToolName)
-	var parsed map[string]any
-	assert.NoError(t, json.Unmarshal([]byte(result[0].Content), &parsed))
-	assert.Equal(t, float64(42), parsed["result"])
+	assert.Equal(t, map[string]any{"result": float64(42)}, tools[0].Result)
 }
 
-func TestConvertToolResultResponseSkipEmptyID(t *testing.T) {
+func TestMergeToolResultResponseMissingID(t *testing.T) {
 	ev := &event.Event{
 		Response: &model.Response{
 			Choices: []model.Choice{
-				{Message: model.Message{Content: "{}", ToolID: ""}},
-				{Message: model.Message{Content: `{"ok":true}`, ToolID: "id-1", ToolName: "t"}},
+				{
+					Message: model.Message{
+						ToolID:   "missing",
+						ToolName: "tool",
+						Content:  `{}`,
+					},
+				},
 			},
 		},
 	}
-	result, err := convertToolResultResponse(ev)
-	assert.NoError(t, err)
-	assert.Len(t, result, 1)
-	assert.Equal(t, "id-1", result[0].ToolID)
-	assert.Equal(t, "t", result[0].ToolName)
-	var parsed map[string]any
-	assert.NoError(t, json.Unmarshal([]byte(result[0].Content), &parsed))
-	assert.Equal(t, true, parsed["ok"])
+	tools := []*evalset.Tool{{ID: "call-1", Name: "tool"}}
+	idx := map[string]int{"call-1": 0}
+	err := mergeToolResultResponse(ev, idx, tools)
+	assert.Error(t, err)
 }
 
-func TestConvertToolResultResponseInvalidJSON(t *testing.T) {
+func TestMergeToolResultResponseInvalidJSON(t *testing.T) {
 	ev := &event.Event{
 		Response: &model.Response{
 			Choices: []model.Choice{
-				{Message: model.Message{Content: "{", ToolID: "bad"}},
+				{
+					Message: model.Message{
+						ToolID:  "call-1",
+						Content: "{",
+					},
+				},
 			},
 		},
 	}
-	_, err := convertToolResultResponse(ev)
+	tools := []*evalset.Tool{{ID: "call-1"}}
+	idx := map[string]int{"call-1": 0}
+	err := mergeToolResultResponse(ev, idx, tools)
 	assert.Error(t, err)
 }
 
