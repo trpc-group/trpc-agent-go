@@ -106,22 +106,24 @@ func New(opts ...Option) (*VectorStore, error) {
 		builderOpts = []postgres.ClientBuilderOpt{
 			postgres.WithClientConnString(option.dsn),
 		}
-	} else if option.host != "" {
-		// Priority 2: Custom Configuration (Host is checked as sufficient condition)
-		// Apply defaults for missing fields
-		if option.host == "" {
-			option.host = "localhost"
-		}
-		if option.port == 0 {
-			option.port = 5432
-		}
-		if option.database == "" {
-			option.database = "trpc_agent_go"
-		}
-		if option.sslMode == "" {
-			option.sslMode = "disable"
+	} else if option.instanceName != "" {
+		// Priority 2: Instance Name
+		var ok bool
+		builderOpts, ok = postgres.GetPostgresInstance(option.instanceName)
+		if !ok {
+			return nil, fmt.Errorf("postgres instance %s not found", option.instanceName)
 		}
 
+		if len(option.extraOptions) > 0 {
+			builderOpts = append(builderOpts, postgres.WithExtraOptions(option.extraOptions...))
+		}
+
+		client, err = builder(context.Background(), builderOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("create postgres client from instance name failed: %w", err)
+		}
+	} else if option.host != "" {
+		// Priority 3: Custom Configuration (Host is checked as sufficient condition)
 		encodedUser := url.QueryEscape(option.user)
 		encodedPassword := url.QueryEscape(option.password)
 		connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
@@ -130,22 +132,22 @@ func New(opts ...Option) (*VectorStore, error) {
 		builderOpts = []postgres.ClientBuilderOpt{
 			postgres.WithClientConnString(connStr),
 		}
-	} else if option.instanceName != "" {
-		// Priority 3: Instance Name
-		var ok bool
-		builderOpts, ok = postgres.GetPostgresInstance(option.instanceName)
-		if !ok {
-			return nil, fmt.Errorf("postgres instance %s not found", option.instanceName)
-		}
 	}
 
-	if len(option.extraOptions) > 0 {
+	// If no connection method specified
+	if client == nil && len(builderOpts) == 0 {
+		return nil, fmt.Errorf("no postgres connection configuration provided")
+	}
+
+	if len(option.extraOptions) > 0 && client == nil {
 		builderOpts = append(builderOpts, postgres.WithExtraOptions(option.extraOptions...))
 	}
 
-	client, err = builder(context.Background(), builderOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("create postgres client failed: %w", err)
+	if client == nil {
+		client, err = builder(context.Background(), builderOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("create postgres client failed: %w", err)
+		}
 	}
 
 	vs := &VectorStore{

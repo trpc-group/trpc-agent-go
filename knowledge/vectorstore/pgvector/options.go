@@ -135,9 +135,13 @@ type options struct {
 
 // defaultOptions is the default options for pgvector.
 var defaultOptions = options{
+	host:           "localhost",
+	port:           5432,
+	database:       "trpc_agent_go",
 	table:          "documents",
 	enableTSVector: true,
 	indexDimension: 1536,
+	sslMode:        "disable",
 	vectorWeight:   0.7, // Default: Vector similarity weight 70%
 	textWeight:     0.3, // Default: Text relevance weight 30%
 	language:       "english",
