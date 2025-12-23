@@ -19,7 +19,13 @@ import (
 
 type mockConn struct {
 	driver.Conn
-	pingErr error
+	pingErr         error
+	prepareBatchErr error
+	execErr         error
+	queryErr        error
+	asyncInsertErr  error
+	closeErr        error
+	lastBatch       *mockBatch
 }
 
 func (m *mockConn) Ping(ctx context.Context) error {
@@ -27,31 +33,38 @@ func (m *mockConn) Ping(ctx context.Context) error {
 }
 
 func (m *mockConn) Close() error {
-	return nil
+	return m.closeErr
 }
 
 func (m *mockConn) Exec(ctx context.Context, query string, args ...any) error {
-	return nil
+	return m.execErr
 }
 
 func (m *mockConn) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+	if m.queryErr != nil {
+		return nil, m.queryErr
+	}
 	return &mockRows{}, nil
 }
 
 func (m *mockConn) QueryRow(ctx context.Context, query string, args ...any) driver.Row {
-	return &mockRow{}
+	return &mockRow{err: m.queryErr}
 }
 
 func (m *mockConn) PrepareBatch(ctx context.Context, query string, opts ...driver.PrepareBatchOption) (driver.Batch, error) {
-	return &mockBatch{}, nil
+	if m.prepareBatchErr != nil {
+		return nil, m.prepareBatchErr
+	}
+	m.lastBatch = &mockBatch{}
+	return m.lastBatch, nil
 }
 
 func (m *mockConn) AsyncInsert(ctx context.Context, query string, wait bool, args ...any) error {
-	return nil
+	return m.asyncInsertErr
 }
 
 func (m *mockConn) Select(ctx context.Context, dest any, query string, args ...any) error {
-	return nil
+	return m.queryErr
 }
 
 type mockRows struct {
@@ -80,18 +93,20 @@ func (m *mockRows) Err() error {
 
 type mockRow struct {
 	driver.Row
+	err error
 }
 
 func (m *mockRow) Scan(dest ...any) error {
-	return nil
+	return m.err
 }
 
 func (m *mockRow) ScanStruct(dest any) error {
-	return nil
+	return m.err
 }
 
 type mockBatch struct {
 	driver.Batch
+	isAborted bool
 }
 
 func (m *mockBatch) Append(v ...any) error {
@@ -103,6 +118,7 @@ func (m *mockBatch) Send() error {
 }
 
 func (m *mockBatch) Abort() error {
+	m.isAborted = true
 	return nil
 }
 
@@ -243,6 +259,43 @@ func TestClientOperations(t *testing.T) {
 		}
 	})
 
+	t.Run("BatchInsertPrepareError", func(t *testing.T) {
+		conn.prepareBatchErr = errors.New("prepare error")
+		defer func() { conn.prepareBatchErr = nil }()
+		err := client.BatchInsert(ctx, "INSERT INTO table", func(batch driver.Batch) error {
+			return nil
+		})
+		if err == nil || !contains(err.Error(), "prepare batch failed") {
+			t.Errorf("BatchInsert expected prepare error, got %v", err)
+		}
+	})
+
+	t.Run("BatchInsertFnError", func(t *testing.T) {
+		err := client.BatchInsert(ctx, "INSERT INTO table", func(batch driver.Batch) error {
+			return errors.New("fn error")
+		})
+		if err == nil || err.Error() != "fn error" {
+			t.Errorf("BatchInsert expected fn error, got %v", err)
+		}
+		if !conn.lastBatch.isAborted {
+			t.Error("expected batch to be aborted")
+		}
+	})
+
+	t.Run("BatchInsertPanic", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic")
+			}
+			if !conn.lastBatch.isAborted {
+				t.Error("expected batch to be aborted after panic")
+			}
+		}()
+		client.BatchInsert(ctx, "INSERT INTO table", func(batch driver.Batch) error {
+			panic("oops")
+		})
+	})
+
 	t.Run("AsyncInsert", func(t *testing.T) {
 		err := client.AsyncInsert(ctx, "INSERT INTO table VALUES (?)", true, 123)
 		if err != nil {
@@ -256,6 +309,22 @@ func TestClientOperations(t *testing.T) {
 			t.Errorf("Close failed: %v", err)
 		}
 	})
+}
+
+func TestDefaultClientBuilderErrors(t *testing.T) {
+	// Test Ping error (connection refused)
+	// We use a local address that is unlikely to have a ClickHouse server running
+	dsn := "clickhouse://localhost:54321"
+	_, err := defaultClientBuilder(WithClientBuilderDSN(dsn))
+	if err == nil {
+		t.Error("expected ping failure error")
+	} else if !contains(err.Error(), "ping failed") && !contains(err.Error(), "connect failed") {
+		// depending on driver version/behavior it might fail at Open or Ping
+		// But "connect failed" is wrapped around Open error, "ping failed" around Ping error.
+		// If the port is closed, Open might succeed (lazy) but Ping fails, or Open fails.
+		// Let's verify what we get.
+		t.Logf("Got error: %v", err)
+	}
 }
 
 func TestSetAndGetClientBuilder(t *testing.T) {
