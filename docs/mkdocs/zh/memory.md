@@ -6,24 +6,24 @@ Memory 是 tRPC-Agent-Go 框架中的记忆管理系统，为 Agent 提供持久
 
 ### 定位
 
-Memory 用于管理与用户相关的长期信息，隔离维度为 `<appName, userID>`，可以理解为围绕单个用户逐步积累的"个人档案"。
+Memory 用于管理与用户相关的长期信息，隔离维度为 `<appName, userID>`，可以理解为围绕单个用户逐步积累的“个人档案”。
 
 在跨会话场景中，Memory 使系统依然能够保留当前用户的关键信息，避免每个会话都从零开始重复获取用户信息。
 
-它适合记录稳定、可复用的事实，例如"用户姓名是张三"、"职业是后端工程师"、"偏好简短回答"、"常用语言是英文"等用户信息，并在后续多次交互中直接使用这些信息。
+它适合记录稳定、可复用的事实，例如“用户姓名是张三”、“职业是后端工程师”、“偏好简短回答”、“常用语言是英文”等用户信息，并在后续多次交互中直接使用这些信息。
 
 ### 两种记忆模式
 
 Memory 支持两种模式来创建和管理记忆，根据你的场景选择合适的模式：
 
-| 维度 | 工具驱动模式（Agentic） | 自动提取模式（Auto） |
-|------|------------------------|----------------------|
-| **工作方式** | Agent 决定何时调用记忆工具 | 系统自动从对话中提取记忆 |
-| **用户体验** | 显式 - 用户可见工具调用过程 | 透明 - 后台静默创建记忆 |
-| **控制权** | Agent 完全控制记什么 | 提取器根据对话分析决定 |
-| **可用工具** | 全部 6 个工具 | 只读工具（search） |
-| **处理方式** | 同步 - 响应生成过程中 | 异步 - 响应后由后台 worker 处理 |
-| **适用场景** | 精确控制、用户主导的记忆管理 | 自然对话、无感知的记忆积累 |
+| 维度         | 工具驱动模式（Agentic）      | 自动提取模式（Auto）            |
+| ------------ | ---------------------------- | ------------------------------- |
+| **工作方式** | Agent 决定何时调用记忆工具   | 系统自动从对话中提取记忆        |
+| **用户体验** | 显式 - 用户可见工具调用过程  | 透明 - 后台静默创建记忆         |
+| **控制权**   | Agent 完全控制记什么         | 提取器根据对话分析决定          |
+| **可用工具** | 全部 6 个工具                | 只读工具（search）              |
+| **处理方式** | 同步 - 响应生成过程中        | 异步 - 响应后由后台 worker 处理 |
+| **适用场景** | 精确控制、用户主导的记忆管理 | 自然对话、无感知的记忆积累      |
 
 **选择建议**：
 
@@ -46,6 +46,7 @@ Memory 模块适用于需要跨会话保留用户信息和上下文的场景：
 **需求**：客服 Agent 需要记住用户信息、历史问题和偏好，提供一致性服务。
 
 **实现方式**：
+
 - 首次对话：Agent 使用 `memory_add` 记录姓名、公司、联系方式
 - 记录用户偏好如"喜欢简短回答"、"技术背景"
 - 后续会话：Agent 使用 `memory_load` 加载用户信息，无需重复询问
@@ -56,6 +57,7 @@ Memory 模块适用于需要跨会话保留用户信息和上下文的场景：
 **需求**：教育 Agent 需要追踪学生学习进度、知识掌握情况和兴趣。
 
 **实现方式**：
+
 - 使用 `memory_add` 记录已掌握的知识点
 - 使用主题标签分类：`["数学", "几何"]`、`["编程", "Python"]`
 - 使用 `memory_search` 查询相关知识，避免重复教学
@@ -66,10 +68,12 @@ Memory 模块适用于需要跨会话保留用户信息和上下文的场景：
 **需求**：项目管理 Agent 需要追踪项目信息、团队成员和任务进度。
 
 **实现方式**：
+
 - 记录关键项目信息：`memory_add("项目 X 使用 Go 语言", ["项目", "技术栈"])`
 - 记录团队成员角色：`memory_add("张三是后端负责人", ["团队", "角色"])`
 - 使用 `memory_search` 快速查找相关信息
 - 项目完成后：使用 `memory_clear` 清空临时信息
+
 ## 快速开始
 
 ### 环境要求
@@ -128,30 +132,30 @@ import (
 func main() {
     ctx := context.Background()
 
-    // 步骤 1：创建记忆服务。
+    // 步骤 1：创建记忆服务
     memoryService := memoryinmemory.NewMemoryService()
 
-    // 步骤 2：创建 Agent 并注册记忆工具。
+    // 步骤 2：创建 Agent 并注册记忆工具
     modelInstance := openai.New("deepseek-chat")
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(modelInstance),
         llmagent.WithDescription("具有记忆能力的智能助手"),
         llmagent.WithInstruction("记住用户的重要信息，并在需要时回忆起来。"),
-        llmagent.WithTools(memoryService.Tools()), // 注册全部 6 个记忆工具。
+        llmagent.WithTools(memoryService.Tools()), // 注册记忆工具。
     )
 
-    // 步骤 3：创建 Runner 并设置记忆服务。
+    // 步骤 3：创建 Runner 并设置记忆服务
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
         "memory-chat",
         llmAgent,
         runner.WithSessionService(sessionService),
-        runner.WithMemoryService(memoryService), // 设置记忆服务。
+        runner.WithMemoryService(memoryService), // 设置记忆服务
     )
     defer appRunner.Close()
 
-    // 执行对话（Agent 会自动使用记忆工具）。
+    // 执行对话（Agent 会自动使用记忆工具）
     log.Println("🧠 开始记忆对话...")
     message := model.NewUserMessage("你好，我的名字是张三，我喜欢编程")
     eventChan, err := appRunner.Run(ctx, "user123", "session456", message)
@@ -201,29 +205,29 @@ import (
 func main() {
     ctx := context.Background()
 
-    // 步骤 1：创建记忆服务（配置 Extractor 启用自动提取模式）。
+    // 步骤 1：创建记忆服务（配置 Extractor 启用自动提取模式）
     extractorModel := openai.New("deepseek-chat")
     memExtractor := extractor.NewExtractor(extractorModel)
     memoryService := memoryinmemory.NewMemoryService(
-        memoryinmemory.WithExtractor(memExtractor), // 关键：配置提取器。
-        // 可选：配置异步 worker。
-        memoryinmemory.WithAsyncMemoryNum(3),
-        memoryinmemory.WithMemoryQueueSize(100),
-        memoryinmemory.WithMemoryJobTimeout(30*time.Second),
+        memoryinmemory.WithExtractor(memExtractor), // 关键：配置提取器
+        // 可选：配置异步 worker
+        memoryinmemory.WithAsyncMemoryNum(1), // 配置记忆提取任务异步 worker 数量
+        memoryinmemory.WithMemoryQueueSize(10), // 配置记忆提取任务队列大小
+        memoryinmemory.WithMemoryJobTimeout(30*time.Second), // 配置记忆提取任务超时时间
     )
     defer memoryService.Close()
 
-    // 步骤 2：创建 Agent 并注册记忆工具。
+    // 步骤 2：创建 Agent 并注册记忆工具
     // 注意：配置了 Extractor 后，只有 search 工具可用。
     chatModel := openai.New("deepseek-chat")
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(chatModel),
         llmagent.WithDescription("具有自动记忆能力的智能助手"),
-        llmagent.WithTools(memoryService.Tools()), // 只有 search 工具。
+        llmagent.WithTools(memoryService.Tools()), // 只有 search 工具
     )
 
-    // 步骤 3：创建 Runner 并设置记忆服务。
+    // 步骤 3：创建 Runner 并设置记忆服务
     // Runner 会在响应后自动触发记忆提取。
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
@@ -234,7 +238,7 @@ func main() {
     )
     defer appRunner.Close()
 
-    // 执行对话（系统自动在后台提取记忆）。
+    // 执行对话（系统自动在后台提取记忆）
     log.Println("🧠 开始自动记忆对话...")
     message := model.NewUserMessage("你好，我的名字是张三，我喜欢编程")
     eventChan, err := appRunner.Run(ctx, "user123", "session456", message)
@@ -258,13 +262,13 @@ Agent：你好张三！很高兴认识腾讯的朋友。今天有什么可以帮
 
 ### 两种模式配置对比
 
-| 步骤 | 工具驱动模式（Agentic） | 自动提取模式（Auto） |
-|------|------------------------|----------------------|
-| **步骤 1** | `NewMemoryService()` | `NewMemoryService(WithExtractor(ext))` |
-| **步骤 2** | `WithTools(memoryService.Tools())` | `WithTools(memoryService.Tools())` |
-| **步骤 3** | `WithMemoryService(memoryService)` | `WithMemoryService(memoryService)` |
-| **可用工具** | add/update/delete/clear/search/load | search |
-| **记忆创建** | Agent 显式调用工具 | 后台自动提取 |
+| 步骤         | 工具驱动模式（Agentic）             | 自动提取模式（Auto）                   |
+| ------------ | ----------------------------------- | -------------------------------------- |
+| **步骤 1**   | `NewMemoryService()`                | `NewMemoryService(WithExtractor(ext))` |
+| **步骤 2**   | `WithTools(memoryService.Tools())`  | `WithTools(memoryService.Tools())`     |
+| **步骤 3**   | `WithMemoryService(memoryService)`  | `WithMemoryService(memoryService)`     |
+| **可用工具** | add/update/delete/clear/search/load | search                                 |
+| **记忆创建** | Agent 显式调用工具                  | 后台自动提取                           |
 
 ## 核心概念
 
@@ -311,15 +315,15 @@ Memory 模块采用分层设计，由以下核心组件组成：
 
 ### 核心组件
 
-| 组件 | 描述 | 技术细节 |
-|------|------|----------|
-| **Memory Service** | 核心记忆管理服务，提供 CRUD 能力 | 实现统一 Service 接口，支持多种存储后端 |
-| **UserKey** | 用户标识符，由 `appName` 和 `userID` 组成 | 记忆隔离的最小单位，确保应用/用户间记忆不干扰 |
-| **Entry** | 记忆条目，包含完整记忆信息 | 包括 ID、内容、主题、created_at、updated_at 字段 |
-| **Memory ID** | 记忆的唯一标识符 | 基于内容 + 主题的 SHA256 哈希，相同内容产生相同 ID |
-| **Topics** | 记忆的主题标签 | 用于分类和检索，支持多个标签 |
-| **Memory Tools** | Agent 可调用的记忆操作工具 | 包括 add、update、delete、search、load、clear |
-| **Storage Backend** | 存储后端实现 | 支持 InMemory、Redis、MySQL、PostgreSQL |
+| 组件                | 描述                                      | 技术细节                                           |
+| ------------------- | ----------------------------------------- | -------------------------------------------------- |
+| **Memory Service**  | 核心记忆管理服务，提供 CRUD 能力          | 实现统一 Service 接口，支持多种存储后端            |
+| **UserKey**         | 用户标识符，由 `appName` 和 `userID` 组成 | 记忆隔离的最小单位，确保应用/用户间记忆不干扰      |
+| **Entry**           | 记忆条目，包含完整记忆信息                | 包括 ID、内容、主题、created_at、updated_at 字段   |
+| **Memory ID**       | 记忆的唯一标识符                          | 基于内容 + 主题的 SHA256 哈希，相同内容产生相同 ID |
+| **Topics**          | 记忆的主题标签                            | 用于分类和检索，支持多个标签                       |
+| **Memory Tools**    | Agent 可调用的记忆操作工具                | 包括 add、update、delete、search、load、clear      |
+| **Storage Backend** | 存储后端实现                              | 支持 InMemory、Redis、MySQL、PostgreSQL            |
 
 ### 关键流程
 
@@ -359,11 +363,13 @@ Memory 模块采用分层设计，由以下核心组件组成：
 #### 记忆检索流程
 
 **Load（加载记忆）**：
+
 1. 根据 UserKey 查询该用户的所有记忆
 2. 按 `updated_at` 降序排序（最近更新的在前）
 3. 返回前 N 条记忆（默认 10 条）
 
 **Search（搜索记忆）**：
+
 1. 将查询文本分词（支持中英文）
 2. 过滤停用词（a、the、is、of 等）
 3. 对每条记忆的内容和主题进行匹配
@@ -383,6 +389,7 @@ memoryID := SHA256(content) // 64 位十六进制字符串
 ```
 
 **特性**：
+
 - **幂等性**：重复添加相同内容不会创建新记忆，而是覆盖更新
 - **一致性**：相同内容在不同时间添加产生相同 ID
 - **去重**：天然支持去重，避免冗余存储
@@ -474,13 +481,13 @@ if err != nil {
 
 **快速选择指南**：
 
-| 场景 | 推荐后端 | 原因 |
-|------|---------|------|
-| 本地开发 | InMemory | 零配置，快速启动 |
-| 高并发读写 | Redis | 内存级性能，支持分布式 |
-| 需要复杂查询 | MySQL/PostgreSQL | 关系型数据库，SQL 支持 |
-| 需要 JSON 高级操作 | PostgreSQL | JSONB 类型，高效 JSON 查询 |
-| 需要审计追踪 | MySQL/PostgreSQL | 支持软删除，可恢复数据 |
+| 场景               | 推荐后端         | 原因                       |
+| ------------------ | ---------------- | -------------------------- |
+| 本地开发           | InMemory         | 零配置，快速启动           |
+| 高并发读写         | Redis            | 内存级性能，支持分布式     |
+| 需要复杂查询       | MySQL/PostgreSQL | 关系型数据库，SQL 支持     |
+| 需要 JSON 高级操作 | PostgreSQL       | JSONB 类型，高效 JSON 查询 |
+| 需要审计追踪       | MySQL/PostgreSQL | 支持软删除，可恢复数据     |
 
 ### 记忆工具配置
 
@@ -488,14 +495,14 @@ if err != nil {
 
 #### 工具清单
 
-| 工具 | 功能 | 默认状态 | 说明 |
-|------|------|---------|------|
-| `memory_add` | 添加新记忆 | ✅ 启用 | 创建新记忆条目 |
-| `memory_update` | 更新记忆 | ✅ 启用 | 修改现有记忆 |
-| `memory_search` | 搜索记忆 | ✅ 启用 | 根据关键词查找 |
-| `memory_load` | 加载记忆 | ✅ 启用 | 加载最近的记忆 |
-| `memory_delete` | 删除记忆 | ❌ 禁用 | 删除单条记忆 |
-| `memory_clear` | 清空记忆 | ❌ 禁用 | 删除所有记忆 |
+| 工具            | 功能       | 默认状态 | 说明           |
+| --------------- | ---------- | -------- | -------------- |
+| `memory_add`    | 添加新记忆 | ✅ 启用  | 创建新记忆条目 |
+| `memory_update` | 更新记忆   | ✅ 启用  | 修改现有记忆   |
+| `memory_search` | 搜索记忆   | ✅ 启用  | 根据关键词查找 |
+| `memory_load`   | 加载记忆   | ✅ 启用  | 加载最近的记忆 |
+| `memory_delete` | 删除记忆   | ❌ 禁用  | 删除单条记忆   |
+| `memory_clear`  | 清空记忆   | ❌ 禁用  | 删除所有记忆   |
 
 #### 启用/禁用工具
 
@@ -745,7 +752,7 @@ func main() {
 
 func createMemoryService(memType string, softDelete bool) (
     memory.Service, error) {
-    
+
     switch memType {
     case "redis":
         redisAddr := os.Getenv("REDIS_ADDR")
@@ -758,7 +765,7 @@ func createMemoryService(memType string, softDelete bool) (
             ),
             memoryredis.WithToolEnabled(memory.DeleteToolName, false),
         )
-    
+
     case "mysql":
         dsn := buildMySQLDSN()
         return memorymysql.NewService(
@@ -766,7 +773,7 @@ func createMemoryService(memType string, softDelete bool) (
             memorymysql.WithSoftDelete(softDelete),
             memorymysql.WithToolEnabled(memory.DeleteToolName, false),
         )
-    
+
     case "postgres":
         return memorypostgres.NewService(
             memorypostgres.WithHost(getEnv("PG_HOST", "localhost")),
@@ -777,7 +784,7 @@ func createMemoryService(memType string, softDelete bool) (
             memorypostgres.WithSoftDelete(softDelete),
             memorypostgres.WithToolEnabled(memory.DeleteToolName, false),
         )
-    
+
     default: // inmemory
         return memoryinmemory.NewMemoryService(
             memoryinmemory.WithToolEnabled(memory.DeleteToolName, false),
@@ -791,7 +798,7 @@ func buildMySQLDSN() string {
     user := getEnv("MYSQL_USER", "root")
     password := getEnv("MYSQL_PASSWORD", "")
     database := getEnv("MYSQL_DATABASE", "trpc_agent_go")
-    
+
     return fmt.Sprintf(
         "%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4",
         user, password, host, port, database,
@@ -822,6 +829,7 @@ memoryService := memoryinmemory.NewMemoryService()
 ```
 
 **配置选项**：
+
 - `WithMemoryLimit(limit int)`: 设置每用户记忆数量上限
 - `WithCustomTool(toolName, creator)`: 注册自定义工具实现
 - `WithToolEnabled(toolName, enabled)`: 启用/禁用特定工具
@@ -841,6 +849,7 @@ redisService, err := memoryredis.NewService(
 ```
 
 **配置选项**：
+
 - `WithRedisClientURL(url)`: Redis 连接 URL（推荐）
 - `WithRedisInstance(name)`: 使用预注册的 Redis 实例
 - `WithMemoryLimit(limit)`: 每用户记忆上限
@@ -865,6 +874,7 @@ mysqlService, err := memorymysql.NewService(
 ```
 
 **配置选项**：
+
 - `WithMySQLClientDSN(dsn)`: MySQL DSN 连接字符串（推荐，必需 `parseTime=true`）
 - `WithMySQLInstance(name)`: 使用预注册的 MySQL 实例
 - `WithSoftDelete(enabled)`: 启用软删除（默认 false）
@@ -876,11 +886,13 @@ mysqlService, err := memorymysql.NewService(
 - `WithSkipDBInit(skip)`: 跳过表初始化（适用于无 DDL 权限场景）
 
 **DSN 示例**：
+
 ```
 root:password@tcp(localhost:3306)/memory_db?parseTime=true&charset=utf8mb4
 ```
 
 **表结构**（自动创建）：
+
 ```sql
 CREATE TABLE memories (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -896,6 +908,7 @@ CREATE TABLE memories (
 ```
 
 **资源清理**：使用完毕后需调用 `Close()` 方法释放数据库连接：
+
 ```go
 defer mysqlService.Close()
 ```
@@ -918,6 +931,7 @@ postgresService, err := memorypostgres.NewService(
 ```
 
 **配置选项**：
+
 - `WithHost/WithPort/WithUser/WithPassword/WithDatabase`: 连接参数
 - `WithSSLMode(mode)`: SSL 模式（默认 "disable"）
 - `WithPostgresInstance(name)`: 使用预注册的 PostgreSQL 实例
@@ -933,6 +947,7 @@ postgresService, err := memorypostgres.NewService(
 **注意**：直接连接参数优先级高于 `WithPostgresInstance`
 
 **表结构**（自动创建）：
+
 ```sql
 CREATE TABLE memories (
     id BIGSERIAL PRIMARY KEY,
@@ -948,23 +963,24 @@ CREATE TABLE memories (
 ```
 
 **资源清理**：使用完毕后需调用 `Close()` 方法释放数据库连接：
+
 ```go
 defer postgresService.Close()
 ```
 
 ### 后端对比与选择
 
-| 特性 | InMemory | Redis | MySQL | PostgreSQL |
-|------|----------|-------|-------|------------|
-| **持久化** | ❌ | ✅ | ✅ | ✅ |
-| **分布式** | ❌ | ✅ | ✅ | ✅ |
-| **事务** | ❌ | 部分 | ✅ ACID | ✅ ACID |
-| **查询** | 简单 | 中等 | SQL | SQL |
-| **JSON** | ❌ | 基础 | JSON | JSONB |
-| **性能** | 极高 | 高 | 中高 | 中高 |
-| **配置** | 零配置 | 简单 | 中等 | 中等 |
-| **软删除** | ❌ | ❌ | ✅ | ✅ |
-| **适用场景** | 开发测试 | 高并发 | 企业应用 | 高级特性 |
+| 特性         | InMemory | Redis  | MySQL    | PostgreSQL |
+| ------------ | -------- | ------ | -------- | ---------- |
+| **持久化**   | ❌       | ✅     | ✅       | ✅         |
+| **分布式**   | ❌       | ✅     | ✅       | ✅         |
+| **事务**     | ❌       | 部分   | ✅ ACID  | ✅ ACID    |
+| **查询**     | 简单     | 中等   | SQL      | SQL        |
+| **JSON**     | ❌       | 基础   | JSON     | JSONB      |
+| **性能**     | 极高     | 高     | 中高     | 中高       |
+| **配置**     | 零配置   | 简单   | 中等     | 中等       |
+| **软删除**   | ❌       | ❌     | ✅       | ✅         |
+| **适用场景** | 开发测试 | 高并发 | 企业应用 | 高级特性   |
 
 **选择建议**：
 
@@ -982,14 +998,14 @@ defer postgresService.Close()
 
 这是最常见的疑问。Memory 和 Session 解决不同的问题：
 
-| 维度 | Memory（记忆） | Session（会话） |
-|------|--------------|---------------|
-| **定位** | 长期用户档案 | 临时对话上下文 |
-| **隔离维度** | `<appName, userID>` | `<appName, userID, sessionID>` |
-| **生命周期** | 跨会话持久化 | 单次会话内有效 |
-| **存储内容** | 用户画像、偏好、事实 | 对话历史、消息记录 |
-| **数据量** | 小（几十到几百条） | 大（几十到几千条消息） |
-| **使用场景** | “记住用户是谁” | “记住说了什么” |
+| 维度         | Memory（记忆）       | Session（会话）                |
+| ------------ | -------------------- | ------------------------------ |
+| **定位**     | 长期用户档案         | 临时对话上下文                 |
+| **隔离维度** | `<appName, userID>`  | `<appName, userID, sessionID>` |
+| **生命周期** | 跨会话持久化         | 单次会话内有效                 |
+| **存储内容** | 用户画像、偏好、事实 | 对话历史、消息记录             |
+| **数据量**   | 小（几十到几百条）   | 大（几十到几千条消息）         |
+| **使用场景** | “记住用户是谁”       | “记住说了什么”                 |
 
 **示例**：
 
@@ -1019,6 +1035,7 @@ memory.AddMemory(ctx, userKey, "用户喜欢编程", []string{"爱好"})
 ```
 
 **影响**：
+
 - ✅ **天然去重**：避免冗余存储
 - ✅ **幂等操作**：重复添加不会创建多条记录
 - ⚠️ **覆盖更新**：无法追加相同内容（如需追加，可在内容中加时间戳或序号）
@@ -1048,17 +1065,20 @@ Memory 使用**Token 匹配**，不是语义搜索：
 ```
 
 **限制**：
+
 - 所有后端均在**应用层**过滤和排序（O(n) 复杂度）
 - 数据量大时性能受影响
 - 不支持语义相似度搜索
 
 **建议**：
+
 - 使用明确关键词和主题标签提高命中率
 - 如需语义搜索，考虑集成向量数据库（需自定义实现）
 
 ### 软删除的注意事项
 
 **支持情况**：
+
 - ✅ MySQL、PostgreSQL：支持软删除
 - ❌ InMemory、Redis：不支持（只有硬删除）
 
@@ -1073,14 +1093,15 @@ mysqlService, err := memorymysql.NewService(
 
 **行为差异**：
 
-| 操作 | 硬删除 | 软删除 |
-|------|-------|--------|
-| 删除 | 立即移除 | 设置 `deleted_at` 字段 |
-| 查询 | 不可见 | 自动过滤（WHERE deleted_at IS NULL） |
-| 恢复 | 无法恢复 | 可手动清除 `deleted_at` |
-| 存储 | 节省空间 | 占用空间 |
+| 操作 | 硬删除   | 软删除                               |
+| ---- | -------- | ------------------------------------ |
+| 删除 | 立即移除 | 设置 `deleted_at` 字段               |
+| 查询 | 不可见   | 自动过滤（WHERE deleted_at IS NULL） |
+| 恢复 | 无法恢复 | 可手动清除 `deleted_at`              |
+| 存储 | 节省空间 | 占用空间                             |
 
 **迁移陷阱**：
+
 ```go
 // ⚠️ 从支持软删除的后端迁移到不支持的后端
 // 软删除的记录会丢失！
@@ -1101,10 +1122,10 @@ postgresService, err := memorypostgres.NewService(
     memorypostgres.WithUser(os.Getenv("DB_USER")),
     memorypostgres.WithPassword(os.Getenv("DB_PASSWORD")),
     memorypostgres.WithDatabase(os.Getenv("DB_NAME")),
-    
+
     // 启用软删除（便于恢复）
     memorypostgres.WithSoftDelete(true),
-    
+
     // 合理限制
     memorypostgres.WithMemoryLimit(1000),
 )
@@ -1153,23 +1174,23 @@ adminService := memoryinmemory.NewMemoryService(
 
 ### 自动提取模式配置选项
 
-| 选项 | 说明 | 默认值 |
-|------|------|--------|
+| 选项                       | 说明                            | 默认值      |
+| -------------------------- | ------------------------------- | ----------- |
 | `WithExtractor(extractor)` | 使用 LLM 提取器启用自动提取模式 | nil（禁用） |
-| `WithAsyncMemoryNum(n)` | 后台 worker goroutine 数量 | 3 |
-| `WithMemoryQueueSize(n)` | 记忆任务队列大小 | 100 |
-| `WithMemoryJobTimeout(d)` | 每个提取任务的超时时间 | 30s |
+| `WithAsyncMemoryNum(n)`    | 后台 worker goroutine 数量      | 1           |
+| `WithMemoryQueueSize(n)`   | 记忆任务队列大小                | 10          |
+| `WithMemoryJobTimeout(d)`  | 每个提取任务的超时时间          | 30s         |
 
 ### 各模式工具可用性
 
-| 工具 | 工具驱动模式 | 自动提取模式 |
-|------|-------------|--------------|
-| `memory_add` | ✅ 可用 | ❌ 隐藏 |
-| `memory_update` | ✅ 可用 | ❌ 隐藏 |
-| `memory_delete` | ⚙️ 可配置 | ❌ 隐藏 |
-| `memory_clear` | ⚙️ 可配置 | ❌ 隐藏 |
-| `memory_search` | ✅ 可用 | ✅ 可用 |
-| `memory_load` | ✅ 可用 | ❌ 隐藏 |
+| 工具            | 工具驱动模式 | 自动提取模式 |
+| --------------- | ------------ | ------------ |
+| `memory_add`    | ✅ 可用      | ❌ 隐藏      |
+| `memory_update` | ✅ 可用      | ❌ 隐藏      |
+| `memory_delete` | ⚙️ 可配置    | ❌ 隐藏      |
+| `memory_clear`  | ⚙️ 可配置    | ❌ 隐藏      |
+| `memory_search` | ✅ 可用      | ✅ 可用      |
+| `memory_load`   | ✅ 可用      | ❌ 隐藏      |
 
 ### 记忆预加载
 
@@ -1217,4 +1238,3 @@ llmAgent := llmagent.New(
 - [工具驱动模式示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory)
 - [自动提取模式示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto)
 - [API 文档](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go/memory)
-

@@ -389,7 +389,7 @@ func TestExtractor_ParseToolCall_InvalidJSON(t *testing.T) {
 		},
 	}
 
-	op := extractor.parseToolCall(call)
+	op := extractor.parseToolCall(context.Background(), call)
 	assert.Nil(t, op)
 }
 
@@ -409,6 +409,6 @@ func TestExtractor_ParseToolCall_UnknownTool(t *testing.T) {
 		},
 	}
 
-	op := extractor.parseToolCall(call)
+	op := extractor.parseToolCall(context.Background(), call)
 	assert.Nil(t, op)
 }

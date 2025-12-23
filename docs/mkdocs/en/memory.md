@@ -27,14 +27,14 @@ interactions.
 
 Memory supports two modes for creating and managing memories. Choose based on your scenario:
 
-| Aspect | Agentic Mode (Tools) | Auto Mode (Extractor) |
-|--------|---------------------|----------------------|
-| **How it works** | Agent decides when to call memory tools | System extracts memories automatically from conversations |
-| **User experience** | Explicit - user sees tool calls | Transparent - memories created silently in background |
-| **Control** | Agent has full control over what to remember | Extractor decides based on conversation analysis |
-| **Available tools** | All 6 tools | Read-only tool (search) |
-| **Processing** | Synchronous - during response generation | Asynchronous - background workers after response |
-| **Best for** | Precise control, user-driven memory management | Natural conversations, hands-off memory building |
+| Aspect              | Agentic Mode (Tools)                           | Auto Mode (Extractor)                                     |
+| ------------------- | ---------------------------------------------- | --------------------------------------------------------- |
+| **How it works**    | Agent decides when to call memory tools        | System extracts memories automatically from conversations |
+| **User experience** | Explicit - user sees tool calls                | Transparent - memories created silently in background     |
+| **Control**         | Agent has full control over what to remember   | Extractor decides based on conversation analysis          |
+| **Available tools** | All 6 tools                                    | Read-only tool (search)                                   |
+| **Processing**      | Synchronous - during response generation       | Asynchronous - background workers after response          |
+| **Best for**        | Precise control, user-driven memory management | Natural conversations, hands-off memory building          |
 
 **Selection Guide**:
 
@@ -63,6 +63,7 @@ information and context retention:
 historical issues, and preferences for consistent service.
 
 **Implementation**:
+
 - First conversation: Agent uses `memory_add` to record name, company, contact
 - Record user preferences like "prefers concise answers", "technical
   background"
@@ -76,6 +77,7 @@ historical issues, and preferences for consistent service.
 knowledge mastery, and interests.
 
 **Implementation**:
+
 - Use `memory_add` to record mastered knowledge points
 - Use topic tags for categorization: `["math", "geometry"]`,
   `["programming", "Python"]`
@@ -89,10 +91,11 @@ knowledge mastery, and interests.
 team members, and task progress.
 
 **Implementation**:
+
 - Record key project info: `memory_add("Project X uses Go language",
-  ["project", "tech-stack"])`
+["project", "tech-stack"])`
 - Record team member roles: `memory_add("John Doe is backend lead",
-  ["team", "role"])`
+["team", "role"])`
 - Use `memory_search` to quickly find relevant information
 - After project completion: Use `memory_clear` to clear temporary information
 
@@ -147,7 +150,7 @@ func main() {
         llmagent.WithInstruction(
             "Remember important user info and recall it when needed.",
         ),
-        llmagent.WithTools(memoryService.Tools()), // Register all 6 memory tools.
+        llmagent.WithTools(memoryService.Tools()), // Register memory tools.
     )
 
     // Step 3: Create Runner with memory service.
@@ -219,9 +222,9 @@ func main() {
     memoryService := memoryinmemory.NewMemoryService(
         memoryinmemory.WithExtractor(memExtractor), // Key: configure extractor.
         // Optional: configure async workers.
-        memoryinmemory.WithAsyncMemoryNum(3),
-        memoryinmemory.WithMemoryQueueSize(100),
-        memoryinmemory.WithMemoryJobTimeout(30*time.Second),
+        memoryinmemory.WithAsyncMemoryNum(1), // Configure number of async memory worker.
+        memoryinmemory.WithMemoryQueueSize(10), // Configure memory queue size.
+        memoryinmemory.WithMemoryJobTimeout(30*time.Second), // Configure memory extraction job timeout.
     )
     defer memoryService.Close()
 
@@ -273,13 +276,13 @@ Agent: Nice to meet you, Alice! It's great to connect with someone from TechCorp
 
 ### Configuration Comparison
 
-| Step | Agentic Mode | Auto Mode |
-|------|-------------|-----------|
-| **Step 1** | `NewMemoryService()` | `NewMemoryService(WithExtractor(ext))` |
-| **Step 2** | `WithTools(memoryService.Tools())` | `WithTools(memoryService.Tools())` |
-| **Step 3** | `WithMemoryService(memoryService)` | `WithMemoryService(memoryService)` |
-| **Available tools** | add/update/delete/clear/search/load | search |
-| **Memory creation** | Agent explicitly calls tools | Background auto extraction |
+| Step                | Agentic Mode                        | Auto Mode                              |
+| ------------------- | ----------------------------------- | -------------------------------------- |
+| **Step 1**          | `NewMemoryService()`                | `NewMemoryService(WithExtractor(ext))` |
+| **Step 2**          | `WithTools(memoryService.Tools())`  | `WithTools(memoryService.Tools())`     |
+| **Step 3**          | `WithMemoryService(memoryService)`  | `WithMemoryService(memoryService)`     |
+| **Available tools** | add/update/delete/clear/search/load | search                                 |
+| **Memory creation** | Agent explicitly calls tools        | Background auto extraction             |
 
 ## Core Concepts
 
@@ -402,14 +405,14 @@ The memory service provides 6 tools. Common tools are enabled by default, while 
 
 #### Tool List
 
-| Tool | Function | Default | Description |
-|------|----------|---------|-------------|
-| `memory_add` | Add new memory | ✅ Enabled | Create new memory entry |
-| `memory_update` | Update memory | ✅ Enabled | Modify existing memory |
-| `memory_search` | Search memory | ✅ Enabled | Find by keywords |
-| `memory_load` | Load memories | ✅ Enabled | Load recent memories |
-| `memory_delete` | Delete memory | ❌ Disabled | Delete single memory |
-| `memory_clear` | Clear memories | ❌ Disabled | Delete all memories |
+| Tool            | Function       | Default     | Description             |
+| --------------- | -------------- | ----------- | ----------------------- |
+| `memory_add`    | Add new memory | ✅ Enabled  | Create new memory entry |
+| `memory_update` | Update memory  | ✅ Enabled  | Modify existing memory  |
+| `memory_search` | Search memory  | ✅ Enabled  | Find by keywords        |
+| `memory_load`   | Load memories  | ✅ Enabled  | Load recent memories    |
+| `memory_delete` | Delete memory  | ❌ Disabled | Delete single memory    |
+| `memory_clear`  | Clear memories | ❌ Disabled | Delete all memories     |
 
 #### Enable/Disable Tools
 
@@ -523,7 +526,7 @@ go run . -streaming=false
 ### Interactive Demo
 
 ```bash
-$ go run .                                          
+$ go run .
 🧠 Multi Turn Chat with Memory
 Model: deepseek-chat
 Memory Service: inmemory
@@ -659,7 +662,7 @@ func main() {
 
 func createMemoryService(memType string, softDelete bool) (
     memory.Service, error) {
-    
+
     switch memType {
     case "redis":
         redisAddr := os.Getenv("REDIS_ADDR")
@@ -672,7 +675,7 @@ func createMemoryService(memType string, softDelete bool) (
             ),
             memoryredis.WithToolEnabled(memory.DeleteToolName, false),
         )
-    
+
     case "mysql":
         dsn := buildMySQLDSN()
         return memorymysql.NewService(
@@ -680,7 +683,7 @@ func createMemoryService(memType string, softDelete bool) (
             memorymysql.WithSoftDelete(softDelete),
             memorymysql.WithToolEnabled(memory.DeleteToolName, false),
         )
-    
+
     case "postgres":
         return memorypostgres.NewService(
             memorypostgres.WithHost(getEnv("PG_HOST", "localhost")),
@@ -691,7 +694,7 @@ func createMemoryService(memType string, softDelete bool) (
             memorypostgres.WithSoftDelete(softDelete),
             memorypostgres.WithToolEnabled(memory.DeleteToolName, false),
         )
-    
+
     default: // inmemory
         return memoryinmemory.NewMemoryService(
             memoryinmemory.WithToolEnabled(memory.DeleteToolName, false),
@@ -705,7 +708,7 @@ func buildMySQLDSN() string {
     user := getEnv("MYSQL_USER", "root")
     password := getEnv("MYSQL_PASSWORD", "")
     database := getEnv("MYSQL_DATABASE", "trpc_agent_go")
-    
+
     return fmt.Sprintf(
         "%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4",
         user, password, host, port, database,
@@ -736,6 +739,7 @@ memoryService := memoryinmemory.NewMemoryService()
 ```
 
 **Configuration options**:
+
 - `WithMemoryLimit(limit int)`: Set memory limit per user
 - `WithCustomTool(toolName, creator)`: Register custom tool implementation
 - `WithToolEnabled(toolName, enabled)`: Enable/disable specific tool
@@ -755,6 +759,7 @@ redisService, err := memoryredis.NewService(
 ```
 
 **Configuration options**:
+
 - `WithRedisClientURL(url)`: Redis connection URL (recommended)
 - `WithRedisInstance(name)`: Use pre-registered Redis instance
 - `WithMemoryLimit(limit)`: Memory limit per user
@@ -779,6 +784,7 @@ mysqlService, err := memorymysql.NewService(
 ```
 
 **Configuration options**:
+
 - `WithMySQLClientDSN(dsn)`: MySQL DSN connection string (recommended, requires `parseTime=true`)
 - `WithMySQLInstance(name)`: Use pre-registered MySQL instance
 - `WithSoftDelete(enabled)`: Enable soft delete (default false)
@@ -790,11 +796,13 @@ mysqlService, err := memorymysql.NewService(
 - `WithSkipDBInit(skip)`: Skip table initialization (for users without DDL permissions)
 
 **DSN example**:
+
 ```
 root:password@tcp(localhost:3306)/memory_db?parseTime=true&charset=utf8mb4
 ```
 
 **Table schema** (auto-created):
+
 ```sql
 CREATE TABLE memories (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -810,6 +818,7 @@ CREATE TABLE memories (
 ```
 
 **Resource cleanup**: Call `Close()` method to release database connection:
+
 ```go
 defer mysqlService.Close()
 ```
@@ -832,6 +841,7 @@ postgresService, err := memorypostgres.NewService(
 ```
 
 **Configuration options**:
+
 - `WithHost/WithPort/WithUser/WithPassword/WithDatabase`: Connection parameters
 - `WithSSLMode(mode)`: SSL mode (default "disable")
 - `WithPostgresInstance(name)`: Use pre-registered PostgreSQL instance
@@ -847,6 +857,7 @@ postgresService, err := memorypostgres.NewService(
 **Note**: Direct connection parameters take priority over `WithPostgresInstance`
 
 **Table schema** (auto-created):
+
 ```sql
 CREATE TABLE memories (
     id BIGSERIAL PRIMARY KEY,
@@ -862,23 +873,24 @@ CREATE TABLE memories (
 ```
 
 **Resource cleanup**: Call `Close()` method to release database connection:
+
 ```go
 defer postgresService.Close()
 ```
 
 ### Backend Comparison
 
-| Feature | InMemory | Redis | MySQL | PostgreSQL |
-|---------|----------|-------|-------|------------|
-| **Persistence** | ❌ | ✅ | ✅ | ✅ |
-| **Distributed** | ❌ | ✅ | ✅ | ✅ |
-| **Transactions** | ❌ | Partial | ✅ ACID | ✅ ACID |
-| **Queries** | Simple | Medium | SQL | SQL |
-| **JSON** | ❌ | Basic | JSON | JSONB |
-| **Performance** | Very High | High | Med-High | Med-High |
-| **Configuration** | Zero | Simple | Medium | Medium |
-| **Soft Delete** | ❌ | ❌ | ✅ | ✅ |
-| **Use Case** | Dev/Test | High Concurrency | Enterprise | Advanced Features |
+| Feature           | InMemory  | Redis            | MySQL      | PostgreSQL        |
+| ----------------- | --------- | ---------------- | ---------- | ----------------- |
+| **Persistence**   | ❌        | ✅               | ✅         | ✅                |
+| **Distributed**   | ❌        | ✅               | ✅         | ✅                |
+| **Transactions**  | ❌        | Partial          | ✅ ACID    | ✅ ACID           |
+| **Queries**       | Simple    | Medium           | SQL        | SQL               |
+| **JSON**          | ❌        | Basic            | JSON       | JSONB             |
+| **Performance**   | Very High | High             | Med-High   | Med-High          |
+| **Configuration** | Zero      | Simple           | Medium     | Medium            |
+| **Soft Delete**   | ❌        | ❌               | ✅         | ✅                |
+| **Use Case**      | Dev/Test  | High Concurrency | Enterprise | Advanced Features |
 
 **Selection guide**:
 
@@ -937,14 +949,14 @@ postgresService, err := memorypostgres.NewService(
 
 Memory and Session solve different problems:
 
-| Dimension | Memory | Session |
-|-----------|--------|---------|
-| **Purpose** | Long-term user profile | Temporary conversation context |
-| **Isolation** | `<appName, userID>` | `<appName, userID, sessionID>` |
-| **Lifecycle** | Persists across sessions | Valid within a single session |
-| **Content** | User profile, preferences, facts | Conversation history, messages |
-| **Data Size** | Small (tens to hundreds) | Large (tens to thousands of messages) |
-| **Use Case** | "Remember who the user is" | "Remember what was said" |
+| Dimension     | Memory                           | Session                               |
+| ------------- | -------------------------------- | ------------------------------------- |
+| **Purpose**   | Long-term user profile           | Temporary conversation context        |
+| **Isolation** | `<appName, userID>`              | `<appName, userID, sessionID>`        |
+| **Lifecycle** | Persists across sessions         | Valid within a single session         |
+| **Content**   | User profile, preferences, facts | Conversation history, messages        |
+| **Data Size** | Small (tens to hundreds)         | Large (tens to thousands of messages) |
+| **Use Case**  | "Remember who the user is"       | "Remember what was said"              |
 
 **Example**:
 
@@ -974,6 +986,7 @@ memory.AddMemory(ctx, userKey, "User likes programming", []string{"hobby"})
 ```
 
 **Implications**:
+
 - ✅ **Natural deduplication**: Avoids redundant storage
 - ✅ **Idempotent operations**: Repeated additions don't create multiple records
 - ⚠️ **Overwrite update**: Cannot append same content (add timestamp or sequence number if append is needed)
@@ -1003,17 +1016,20 @@ Search: "写代码" ❌ No match (different words)
 ```
 
 **Limitations**:
+
 - All backends perform filtering and sorting in **application layer** (O(n) complexity)
 - Performance affected by data volume
 - No semantic similarity search
 
 **Recommendations**:
+
 - Use explicit keywords and topic tags to improve hit rate
 - Consider integrating vector database for semantic search (requires custom implementation)
 
 ### Soft Delete Considerations
 
 **Support status**:
+
 - ✅ MySQL, PostgreSQL: support soft delete
 - ❌ InMemory, Redis: not supported (hard delete only)
 
@@ -1028,14 +1044,15 @@ mysqlService, err := memorymysql.NewService(
 
 **Behavior differences**:
 
-| Operation | Hard Delete | Soft Delete |
-|-----------|-------------|-------------|
-| Delete | Immediate removal | Set `deleted_at` field |
-| Query | Not visible | Auto-filtered (WHERE deleted_at IS NULL) |
-| Recovery | Cannot recover | Can manually clear `deleted_at` |
-| Storage | Saves space | Occupies space |
+| Operation | Hard Delete       | Soft Delete                              |
+| --------- | ----------------- | ---------------------------------------- |
+| Delete    | Immediate removal | Set `deleted_at` field                   |
+| Query     | Not visible       | Auto-filtered (WHERE deleted_at IS NULL) |
+| Recovery  | Cannot recover    | Can manually clear `deleted_at`          |
+| Storage   | Saves space       | Occupies space                           |
 
 **Migration trap**:
+
 ```go
 // ⚠️ Migrating from soft-delete backend to non-supporting backend
 // Soft-deleted records will be lost!
@@ -1056,10 +1073,10 @@ postgresService, err := memorypostgres.NewService(
     memorypostgres.WithUser(os.Getenv("DB_USER")),
     memorypostgres.WithPassword(os.Getenv("DB_PASSWORD")),
     memorypostgres.WithDatabase(os.Getenv("DB_NAME")),
-    
+
     // Enable soft delete (for recovery)
     memorypostgres.WithSoftDelete(true),
-    
+
     // Reasonable limit
     memorypostgres.WithMemoryLimit(1000),
 )
@@ -1108,23 +1125,23 @@ adminService := memoryinmemory.NewMemoryService(
 
 ### Auto Mode Configuration Options
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `WithExtractor(extractor)` | Enable auto mode with LLM extractor | nil (disabled) |
-| `WithAsyncMemoryNum(n)` | Number of background worker goroutines | 3 |
-| `WithMemoryQueueSize(n)` | Size of memory job queue | 100 |
-| `WithMemoryJobTimeout(d)` | Timeout for each extraction job | 30s |
+| Option                     | Description                            | Default        |
+| -------------------------- | -------------------------------------- | -------------- |
+| `WithExtractor(extractor)` | Enable auto mode with LLM extractor    | nil (disabled) |
+| `WithAsyncMemoryNum(n)`    | Number of background worker goroutines | 1              |
+| `WithMemoryQueueSize(n)`   | Size of memory job queue               | 10             |
+| `WithMemoryJobTimeout(d)`  | Timeout for each extraction job        | 30s            |
 
 ### Tool Availability by Mode
 
-| Tool | Agentic Mode | Auto Mode |
-|------|-------------|-----------|
-| `memory_add` | ✅ Available | ❌ Hidden |
-| `memory_update` | ✅ Available | ❌ Hidden |
-| `memory_delete` | ⚙️ Configurable | ❌ Hidden |
-| `memory_clear` | ⚙️ Configurable | ❌ Hidden |
-| `memory_search` | ✅ Available | ✅ Available |
-| `memory_load` | ✅ Available | ❌ Hidden |
+| Tool            | Agentic Mode    | Auto Mode    |
+| --------------- | --------------- | ------------ |
+| `memory_add`    | ✅ Available    | ❌ Hidden    |
+| `memory_update` | ✅ Available    | ❌ Hidden    |
+| `memory_delete` | ⚙️ Configurable | ❌ Hidden    |
+| `memory_clear`  | ⚙️ Configurable | ❌ Hidden    |
+| `memory_search` | ✅ Available    | ✅ Available |
+| `memory_load`   | ✅ Available    | ❌ Hidden    |
 
 ### Memory Preloading
 

@@ -757,8 +757,8 @@ func TestAutoMemoryConfig(t *testing.T) {
 }
 
 func TestDefaultConstants(t *testing.T) {
-	assert.Equal(t, 3, DefaultAsyncMemoryNum)
-	assert.Equal(t, 100, DefaultMemoryQueueSize)
+	assert.Equal(t, 1, DefaultAsyncMemoryNum)
+	assert.Equal(t, 10, DefaultMemoryQueueSize)
 	assert.Equal(t, 30*time.Second, DefaultMemoryJobTimeout)
 	assert.Equal(t, 50, DefaultMaxExistingMemories)
 }

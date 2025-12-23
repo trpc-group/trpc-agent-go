@@ -92,7 +92,7 @@ func (e *memoryExtractor) Extract(
 			continue
 		}
 		for _, call := range rsp.Choices[0].Message.ToolCalls {
-			op := e.parseToolCall(call)
+			op := e.parseToolCall(ctx, call)
 			if op != nil {
 				ops = append(ops, op)
 			}
@@ -166,10 +166,10 @@ func (e *memoryExtractor) buildSystemPrompt(existing []*memory.Entry) string {
 }
 
 // parseToolCall parses a tool call and returns a memory operation.
-func (e *memoryExtractor) parseToolCall(call model.ToolCall) *Operation {
+func (e *memoryExtractor) parseToolCall(ctx context.Context, call model.ToolCall) *Operation {
 	var args map[string]any
 	if err := json.Unmarshal(call.Function.Arguments, &args); err != nil {
-		log.Warnf("extractor: failed to parse tool args: %v", err)
+		log.WarnfContext(ctx, "extractor: failed to parse tool args: %v", err)
 		return nil
 	}
 	return parseToolCallArgs(call.Function.Name, args)

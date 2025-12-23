@@ -24,8 +24,8 @@ import (
 
 // Default values for auto memory configuration.
 const (
-	DefaultAsyncMemoryNum      = 3
-	DefaultMemoryQueueSize     = 100
+	DefaultAsyncMemoryNum      = 1
+	DefaultMemoryQueueSize     = 10
 	DefaultMemoryJobTimeout    = 30 * time.Second
 	DefaultMaxExistingMemories = 50
 )
@@ -142,6 +142,7 @@ func (w *AutoMemoryWorker) EnqueueJob(
 		log.DebugfContext(ctx, "auto_memory: skipped due to empty messages")
 		return nil
 	}
+
 	// If async workers are not started, fall back to synchronous.
 	w.mu.Lock()
 	started := w.started
@@ -160,6 +161,8 @@ func (w *AutoMemoryWorker) EnqueueJob(
 		return nil
 	}
 	// Fall back to synchronous processing.
+	log.DebugfContext(ctx, "auto_memory: queue full, processing synchronously for user %s/%s",
+		userKey.AppName, userKey.UserID)
 	return w.createAutoMemory(ctx, userKey, messages)
 }
 
@@ -200,7 +203,7 @@ func (w *AutoMemoryWorker) tryEnqueueJob(
 func (w *AutoMemoryWorker) processJob(job *MemoryJob) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Errorf("panic in memory worker: %v", r)
+			log.ErrorfContext(context.Background(), "panic in memory worker: %v", r)
 		}
 	}()
 	ctx := job.Ctx
@@ -214,8 +217,10 @@ func (w *AutoMemoryWorker) processJob(job *MemoryJob) {
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithTimeout(ctx, timeout)
 	defer cancel()
+
 	if err := w.createAutoMemory(ctx, job.UserKey, job.Messages); err != nil {
-		log.Warnf("memory worker failed: %v", err)
+		log.WarnfContext(ctx, "auto_memory: job failed for user %s/%s: %v",
+			job.UserKey.AppName, job.UserKey.UserID, err)
 	}
 }
 
@@ -228,6 +233,7 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	if w.config.Extractor == nil {
 		return nil
 	}
+
 	// Read existing memories.
 	maxExisting := w.config.MaxExistingMemories
 	if maxExisting <= 0 {
@@ -235,18 +241,24 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	}
 	existing, err := w.operator.ReadMemories(ctx, userKey, maxExisting)
 	if err != nil {
-		log.Warnf("auto_memory: failed to read existing: %v", err)
+		log.WarnfContext(ctx, "auto_memory: failed to read existing memories for user %s/%s: %v",
+			userKey.AppName, userKey.UserID, err)
 		existing = nil
 	}
+
 	// Extract memory operations.
 	ops, err := w.config.Extractor.Extract(ctx, messages, existing)
 	if err != nil {
+		log.WarnfContext(ctx, "auto_memory: extraction failed for user %s/%s: %v",
+			userKey.AppName, userKey.UserID, err)
 		return fmt.Errorf("auto_memory: extract failed: %w", err)
 	}
+
 	// Execute operations.
 	for _, op := range ops {
 		w.executeOperation(ctx, userKey, op)
 	}
+
 	return nil
 }
 
@@ -259,7 +271,8 @@ func (w *AutoMemoryWorker) executeOperation(
 	switch op.Type {
 	case extractor.OperationAdd:
 		if err := w.operator.AddMemory(ctx, userKey, op.Memory, op.Topics); err != nil {
-			log.Warnf("auto_memory: add failed: %v", err)
+			log.WarnfContext(ctx, "auto_memory: add memory failed for user %s/%s: %v",
+				userKey.AppName, userKey.UserID, err)
 		}
 	case extractor.OperationUpdate:
 		memKey := memory.Key{
@@ -268,7 +281,8 @@ func (w *AutoMemoryWorker) executeOperation(
 			MemoryID: op.MemoryID,
 		}
 		if err := w.operator.UpdateMemory(ctx, memKey, op.Memory, op.Topics); err != nil {
-			log.Warnf("auto_memory: update failed: %v", err)
+			log.WarnfContext(ctx, "auto_memory: update memory failed for user %s/%s, memory_id=%s: %v",
+				userKey.AppName, userKey.UserID, op.MemoryID, err)
 		}
 	case extractor.OperationDelete:
 		memKey := memory.Key{
@@ -277,10 +291,12 @@ func (w *AutoMemoryWorker) executeOperation(
 			MemoryID: op.MemoryID,
 		}
 		if err := w.operator.DeleteMemory(ctx, memKey); err != nil {
-			log.Warnf("auto_memory: delete failed: %v", err)
+			log.WarnfContext(ctx, "auto_memory: delete memory failed for user %s/%s, memory_id=%s: %v",
+				userKey.AppName, userKey.UserID, op.MemoryID, err)
 		}
 	default:
-		log.Warnf("auto_memory: unknown operation type: %s", op.Type)
+		log.WarnfContext(ctx, "auto_memory: unknown operation type '%s' for user %s/%s",
+			op.Type, userKey.AppName, userKey.UserID)
 	}
 }
 
