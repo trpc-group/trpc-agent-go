@@ -49,6 +49,7 @@ const (
 	OperationInvokeAgent     = "invoke_agent"
 	OperationCreateAgent     = "create_agent"
 	OperationEmbeddings      = "embeddings"
+	OperationWorkflow        = "workflow"
 )
 
 // NewChatSpanName creates a new chat span name.
@@ -59,6 +60,27 @@ func NewChatSpanName(requestModel string) string {
 // NewExecuteToolSpanName creates a new execute tool span name.
 func NewExecuteToolSpanName(toolName string) string {
 	return fmt.Sprintf("%s %s", OperationExecuteTool, toolName)
+}
+
+const (
+	KeyGenAIWorkflowName = "gen_ai.workflow.name"
+	KeyGenAIWorkflowID   = "gen_ai.workflow.id"
+)
+
+type Workflow struct {
+	Name      string
+	ID        string
+	ErrorType string
+}
+
+func NewWorkflowSpanName(workflowName string) string {
+	return fmt.Sprintf("%s %s", OperationWorkflow, workflowName)
+}
+
+func TraceWorkflow(span trace.Span, workflow *Workflow) {
+	span.SetAttributes(attribute.String(KeyGenAIOperationName, OperationWorkflow))
+	span.SetAttributes(attribute.String(KeyGenAIWorkflowName, workflow.Name))
+	span.SetAttributes(attribute.String(KeyGenAIWorkflowID, workflow.ID))
 }
 
 // newInferenceSpanName creates a new inference span name.

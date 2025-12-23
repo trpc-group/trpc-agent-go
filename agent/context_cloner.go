@@ -12,8 +12,6 @@ package agent
 import (
 	"context"
 	"sync/atomic"
-
-	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // GoroutineContextCloner clones a context before it is used by a new
@@ -53,9 +51,8 @@ func CloneContext(ctx context.Context) context.Context {
 	if !ok || cloner == nil {
 		return ctx
 	}
-	span := oteltrace.SpanFromContext(ctx)
-	ctx = cloner(ctx)
-	return oteltrace.ContextWithSpan(ctx, span)
+
+	return cloner(ctx)
 }
 
 // CloneContextForGoroutine returns a context safe to use inside a new
