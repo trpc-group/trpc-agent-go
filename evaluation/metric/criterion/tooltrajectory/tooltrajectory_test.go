@@ -154,6 +154,20 @@ func TestToolTrajectoryCriterionCountMismatch(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestToolTrajectoryCriterionSubsetTooFewActual(t *testing.T) {
+	actual := makeInvocation([]toolData{
+		{id: "call-1", name: "tool", args: map[string]any{"a": 1}},
+	})
+	expected := makeInvocation([]toolData{
+		{id: "call-1", name: "tool", args: map[string]any{"a": 1}},
+		{id: "call-2", name: "tool", args: map[string]any{"a": 2}},
+	})
+	ok, err := New(WithSubsetMatching(true)).Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "actual(1) < expected(2)")
+}
+
 func TestToolTrajectoryCriterionStrategyMismatch(t *testing.T) {
 	strategy := &ToolTrajectoryStrategy{
 		Name:      &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact},
@@ -212,6 +226,105 @@ func TestToolTrajectoryCriterionStrategyLookupByExpectedName(t *testing.T) {
 
 func TestToolTrajectoryCriterionZeroTools(t *testing.T) {
 	ok, err := New().Match(&evalset.Invocation{}, &evalset.Invocation{})
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestToolTrajectoryCriterionOrderedMatchSkipAndSucceed(t *testing.T) {
+	actual := makeInvocation([]toolData{
+		{id: "call-1", name: "other", args: map[string]any{"a": 0}},
+		{id: "call-2", name: "tool", args: map[string]any{"a": 1}},
+	})
+	expected := makeInvocation([]toolData{
+		{id: "call-2", name: "tool", args: map[string]any{"a": 1}},
+	})
+	ok, err := New(WithOrderSensitive(true), WithSubsetMatching(true)).Match(actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestToolTrajectoryMatchToolNil(t *testing.T) {
+	criterion := New()
+	err := criterion.matchTool(nil, &evalset.Tool{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "actual or expected tool is nil")
+}
+
+func TestToolTrajectoryMatchToolMismatch(t *testing.T) {
+	criterion := New()
+	err := criterion.matchTool(&evalset.Tool{ID: "a", Name: "one"}, &evalset.Tool{ID: "b", Name: "two"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "mismatch with expected tool")
+
+	// Mismatch from strategy false without error.
+	criterion = New(WithTool(map[string]*ToolTrajectoryStrategy{
+		"one": {
+			Name: &text.TextCriterion{
+				Compare: func(_, _ string) (bool, error) {
+					return false, nil
+				},
+			},
+		},
+	}))
+	err = criterion.matchTool(&evalset.Tool{ID: "a", Name: "one"}, &evalset.Tool{ID: "a", Name: "one"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "mismatch with expected tool")
+}
+
+func TestToolTrajectoryGetStrategyDefault(t *testing.T) {
+	criterion := &ToolTrajectoryCriterion{}
+	strategy := criterion.getStrategy(&evalset.Tool{Name: "x"}, &evalset.Tool{Name: "y"})
+	assert.Equal(t, defaultToolTrajectoryStrategy, strategy)
+}
+
+func TestToolTrajectoryStrategyMatchBranches(t *testing.T) {
+	// Name mismatch with error.
+	strategy := &ToolTrajectoryStrategy{
+		Name: &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact},
+	}
+	ok, err := strategy.Match(&evalset.Tool{Name: "a"}, &evalset.Tool{Name: "b"})
+	assert.False(t, ok)
+	assert.Error(t, err)
+
+	// Name mismatch without error using Compare.
+	strategy = &ToolTrajectoryStrategy{
+		Name: &text.TextCriterion{
+			Compare: func(actual, expected string) (bool, error) {
+				return false, nil
+			},
+		},
+	}
+	ok, err = strategy.Match(&evalset.Tool{Name: "a"}, &evalset.Tool{Name: "a"})
+	assert.False(t, ok)
+	assert.Error(t, err)
+
+	// Arguments mismatch.
+	strategy = &ToolTrajectoryStrategy{
+		Arguments: &criterionjson.JSONCriterion{},
+	}
+	ok, err = strategy.Match(
+		&evalset.Tool{Name: "a", Arguments: map[string]any{"k": 1}},
+		&evalset.Tool{Name: "a", Arguments: map[string]any{"k": 2}},
+	)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "arguments mismatch")
+
+	// Result mismatch.
+	strategy = &ToolTrajectoryStrategy{
+		Result: &criterionjson.JSONCriterion{},
+	}
+	ok, err = strategy.Match(
+		&evalset.Tool{Name: "a", Result: map[string]any{"k": 1}},
+		&evalset.Tool{Name: "a", Result: map[string]any{"k": 2}},
+	)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "result mismatch")
+
+	// Success path.
+	strategy = &ToolTrajectoryStrategy{}
+	ok, err = strategy.Match(&evalset.Tool{Name: "a"}, &evalset.Tool{Name: "a"})
 	assert.True(t, ok)
 	assert.NoError(t, err)
 }

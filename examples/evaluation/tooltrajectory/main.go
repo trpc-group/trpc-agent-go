@@ -28,7 +28,7 @@ import (
 var (
 	dataDir   = flag.String("data-dir", "./data", "Directory containing evaluation set and metric files")
 	outputDir = flag.String("output-dir", "./output", "Directory where evaluation results will be stored")
-	modelName = flag.String("model", "gpt-4o-mini", "Model to use for evaluation runs")
+	modelName = flag.String("model", "deepseek-chat", "Model to use for evaluation runs")
 	streaming = flag.Bool("streaming", false, "Enable streaming responses from the agent")
 	evalSetID = flag.String("eval-set", "tooltrajectory-basic", "Evaluation set identifier to execute")
 	numRuns   = flag.Int("runs", 1, "Number of times to repeat the evaluation loop per case")

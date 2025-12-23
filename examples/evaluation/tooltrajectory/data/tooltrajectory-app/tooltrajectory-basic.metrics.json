@@ -1,44 +1,44 @@
 [
-  {
-    "metricName": "tool_trajectory_avg_score",
-    "threshold": 1,
-    "criterion": {
-      "toolTrajectory": {
-        "orderInsensitive": true,
-        "subsetMatching": true,
-        "defaultStrategy": {
-          "name": {
-            "matchStrategy": "exact"
-          },
-          "arguments": {
-            "matchStrategy": "exact"
-          },
-          "response": {
-            "matchStrategy": "exact"
-          }
-        },
-        "toolStrategy": {
-          "get_time": {
-            "response": {
-              "ignore": true
-            }
-          },
-          "get_ticket": {
-            "arguments": {
-              "ignoreTree": {
-                "time": true
-              },
+    {
+      "metricName": "tool_trajectory_avg_score",
+      "threshold": 1,
+      "criterion": {
+        "toolTrajectory": {
+          "orderSensitive": false,
+          "subsetMatching": false,
+          "defaultStrategy": {
+            "name": {
               "matchStrategy": "exact"
             },
-            "response": {
-              "ignoreTree": {
-                "time": true
-              },
+            "arguments": {
               "matchStrategy": "exact"
+            },
+            "result": {
+              "matchStrategy": "exact"
+            }
+          },
+          "toolStrategy": {
+            "get_time": {
+              "result": {
+                "ignore": true
+              }
+            },
+            "get_ticket": {
+              "arguments": {
+                "ignoreTree": {
+                  "time": true
+                },
+                "matchStrategy": "exact"
+              },
+              "result": {
+                "ignoreTree": {
+                  "time": true
+                },
+                "matchStrategy": "exact"
+              }
             }
           }
         }
       }
     }
-  }
 ]
