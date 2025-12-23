@@ -112,3 +112,67 @@ func TestPlanningResponseProcessor_AllBranches(t *testing.T) {
 		t.Fatal("expected postprocessing event")
 	}
 }
+
+func TestPlanningRequestProcessor_InvocationNil(t *testing.T) {
+	ctx := context.Background()
+	ch := make(chan *event.Event, 4)
+
+	fp := &fakePlanner{instr: "PLAN: do X"}
+	req := &model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: "ping"}}}
+
+	// invocation is nil - should not send event
+	NewPlanningRequestProcessor(fp).ProcessRequest(ctx, nil, req, ch)
+
+	// Should not have sent any event
+	select {
+	case <-ch:
+		t.Fatal("should not have sent event when invocation is nil")
+	default:
+		// Expected - no event sent
+	}
+}
+
+func TestPlanningResponseProcessor_PartialResponse(t *testing.T) {
+	ctx := context.Background()
+	ch := make(chan *event.Event, 4)
+
+	pr := NewPlanningResponseProcessor(&fakePlanner{})
+	rsp := &model.Response{
+		ID:        "test",
+		Choices:   []model.Choice{{}},
+		IsPartial: true, // Partial response should be ignored
+	}
+
+	pr.ProcessResponse(ctx, &agent.Invocation{AgentName: "a", InvocationID: "i1"}, nil, rsp, ch)
+
+	// Should not have processed or sent event
+	select {
+	case <-ch:
+		t.Fatal("should not have sent event for partial response")
+	default:
+		// Expected - no event sent
+	}
+}
+
+func TestPlanningResponseProcessor_EmitEventError(t *testing.T) {
+	// Create a cancelled context to force EmitEvent to return an error
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel the context immediately
+
+	ch := make(chan *event.Event, 4)
+	pr := NewPlanningResponseProcessor(&fakePlanner{})
+	rsp := &model.Response{ID: "test", Choices: []model.Choice{{}}}
+
+	// This should trigger the error path in agent.EmitEvent
+	pr.ProcessResponse(ctx, &agent.Invocation{AgentName: "a", InvocationID: "i1"}, nil, rsp, ch)
+
+	// Should have processed the response but failed to emit event
+	assert.Equal(t, "processed", rsp.ID)
+	// Channel should be empty due to EmitEvent error
+	select {
+	case <-ch:
+		t.Fatal("should not have sent event due to EmitEvent error")
+	default:
+		// Expected - no event sent due to error
+	}
+}

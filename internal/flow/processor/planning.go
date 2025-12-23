@@ -56,6 +56,13 @@ func (p *PlanningRequestProcessor) ProcessRequest(
 		)
 		return
 	}
+	if invocation == nil {
+		log.DebugContext(
+			ctx,
+			"Planning request processor: invocation is nil",
+		)
+		return
+	}
 
 	log.DebugfContext(
 		ctx,
@@ -82,10 +89,6 @@ func (p *PlanningRequestProcessor) ProcessRequest(
 				"Planning request processor: added planning instruction",
 			)
 		}
-	}
-
-	if invocation == nil {
-		return
 	}
 
 	log.DebugContext(
@@ -119,14 +122,6 @@ func hasSystemMessage(messages []model.Message, content string) bool {
 		}
 	}
 	return false
-}
-
-// min returns the minimum of two integers.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // PlanningResponseProcessor implements planning response processing logic.
