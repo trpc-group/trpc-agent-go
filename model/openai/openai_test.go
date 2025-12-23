@@ -4819,9 +4819,76 @@ func TestExtractThoughtSignature(t *testing.T) {
 		assert.Equal(t, "", format)
 	})
 
-	// Note: Testing with valid thought_signature content would require
-	// integration tests with real API responses, as the respjson.Field
-	// structure is internal to the OpenAI SDK and difficult to mock.
+	t.Run("returns top_level format when valid quoted string", func(t *testing.T) {
+		// Use json.Unmarshal to properly populate ExtraFields via SDK.
+		extraFields := parseToolCallExtraFields(t, `{
+			"id": "call_123",
+			"type": "function",
+			"function": {"name": "test", "arguments": "{}"},
+			"thought_signature": "test_signature_123"
+		}`)
+		sig, format := extractThoughtSignature(extraFields)
+		assert.Equal(t, "test_signature_123", sig)
+		assert.Equal(t, ThoughtSignatureFormatTopLevel, format)
+	})
+
+	t.Run("returns empty when thought_signature is null", func(t *testing.T) {
+		extraFields := parseToolCallExtraFields(t, `{
+			"id": "call_123",
+			"type": "function",
+			"function": {"name": "test", "arguments": "{}"},
+			"thought_signature": null
+		}`)
+		sig, format := extractThoughtSignature(extraFields)
+		assert.Equal(t, "", sig)
+		assert.Equal(t, "", format)
+	})
+
+	t.Run("returns extra_content format when nested google.thought_signature exists", func(t *testing.T) {
+		extraFields := parseToolCallExtraFields(t, `{
+			"id": "call_123",
+			"type": "function",
+			"function": {"name": "test", "arguments": "{}"},
+			"extra_content": {"google": {"thought_signature": "nested_sig_456"}}
+		}`)
+		sig, format := extractThoughtSignature(extraFields)
+		assert.Equal(t, "nested_sig_456", sig)
+		assert.Equal(t, ThoughtSignatureFormatExtraContent, format)
+	})
+
+	t.Run("returns empty when extra_content.google.thought_signature is empty", func(t *testing.T) {
+		extraFields := parseToolCallExtraFields(t, `{
+			"id": "call_123",
+			"type": "function",
+			"function": {"name": "test", "arguments": "{}"},
+			"extra_content": {"google": {"thought_signature": ""}}
+		}`)
+		sig, format := extractThoughtSignature(extraFields)
+		assert.Equal(t, "", sig)
+		assert.Equal(t, "", format)
+	})
+
+	t.Run("returns empty when extra_content has empty google object", func(t *testing.T) {
+		extraFields := parseToolCallExtraFields(t, `{
+			"id": "call_123",
+			"type": "function",
+			"function": {"name": "test", "arguments": "{}"},
+			"extra_content": {"google": {}}
+		}`)
+		sig, format := extractThoughtSignature(extraFields)
+		assert.Equal(t, "", sig)
+		assert.Equal(t, "", format)
+	})
+}
+
+// parseToolCallExtraFields parses a JSON string into a ChatCompletionMessageToolCall
+// and returns its ExtraFields. This allows testing with properly populated respjson.Field values.
+func parseToolCallExtraFields(t *testing.T, jsonStr string) map[string]respjson.Field {
+	t.Helper()
+	var toolCall openai.ChatCompletionMessageToolCall
+	err := json.Unmarshal([]byte(jsonStr), &toolCall)
+	require.NoError(t, err)
+	return toolCall.JSON.ExtraFields
 }
 
 // TestConvertToolCalls_ThoughtSignatureFormat tests that convertToolCalls
