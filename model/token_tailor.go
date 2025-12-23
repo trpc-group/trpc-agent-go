@@ -89,10 +89,33 @@ func (c *SimpleTokenCounter) CountTokens(_ context.Context, message Message) (in
 	}
 
 	// Total should be at least 1 if message is not empty.
-	if len(message.Content) > 0 {
+	if isMessageNotEmpty(message) {
 		return max(total, 1), nil
 	}
 	return total, nil
+}
+
+// isMessageNotEmpty checks if the message contains any content that should result in at least 1 token.
+func isMessageNotEmpty(message Message) bool {
+	// Check main content.
+	if len(message.Content) > 0 {
+		return true
+	}
+
+	// Check reasoning content.
+	if len(message.ReasoningContent) > 0 {
+		return true
+	}
+
+	// Check tool calls - any tool call with content should count.
+	for _, toolCall := range message.ToolCalls {
+		if toolCall.Type != "" || toolCall.ID != "" ||
+			toolCall.Function.Name != "" || toolCall.Function.Description != "" ||
+			len(toolCall.Function.Arguments) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // countToolCallRunes calculates the rune count for a single tool call.
@@ -113,7 +136,7 @@ func (c *SimpleTokenCounter) countToolCallRunes(toolCall ToolCall) int {
 	total += utf8.RuneCountInString(toolCall.Function.Description)
 
 	// Count runes for function arguments (JSON string).
-	total += utf8.RuneCountInString(string(toolCall.Function.Arguments))
+	total += utf8.RuneCount(toolCall.Function.Arguments)
 
 	return total
 }

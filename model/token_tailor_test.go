@@ -42,6 +42,16 @@ func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 		assert.Equal(t, 0, result) // len(message.Content) == 0, return total directly
 	})
 
+	t.Run("empty tool calls return 0", func(t *testing.T) {
+		msg := Message{
+			Role:      RoleAssistant,
+			ToolCalls: []ToolCall{{}}, // Empty tool call
+		}
+		result, err := counter.CountTokens(ctx, msg)
+		require.NoError(t, err)
+		assert.Equal(t, 0, result) // Empty tool calls should not count as content
+	})
+
 	t.Run("basic content ensures minimum 1 token", func(t *testing.T) {
 		msg := Message{
 			Role:    RoleUser,
@@ -50,6 +60,18 @@ func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 		result, err := counter.CountTokens(ctx, msg)
 		require.NoError(t, err)
 		assert.Equal(t, 1, result) // max(0, 1) = 1
+	})
+
+	t.Run("tool calls ensure minimum 1 token", func(t *testing.T) {
+		msg := Message{
+			Role: RoleAssistant,
+			ToolCalls: []ToolCall{
+				{Type: "f"}, // Very short content that would be < 1 token
+			},
+		}
+		result, err := counter.CountTokens(ctx, msg)
+		require.NoError(t, err)
+		assert.Equal(t, 1, result) // Should be at least 1 even with minimal tool call content
 	})
 
 	t.Run("content with reasoning content", func(t *testing.T) {
