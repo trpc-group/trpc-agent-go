@@ -19,6 +19,9 @@ import (
 
 // ExtractTextFromContent extracts plain text from model message.
 func ExtractTextFromContent(content *model.Message) string {
+	if content == nil {
+		return ""
+	}
 	return content.Content
 }
 

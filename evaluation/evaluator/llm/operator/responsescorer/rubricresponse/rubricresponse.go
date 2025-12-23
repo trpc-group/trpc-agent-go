@@ -53,8 +53,9 @@ func (e *rubricResponseScorer) ScoreBasedOnResponse(ctx context.Context, respons
 	if len(matches) == 0 {
 		return nil, fmt.Errorf("no rubric blocks found in response")
 	}
-	result := &evaluator.ScoreResult{}
 	averageScore := 0.0
+	reasons := make([]string, 0, len(matches))
+	result := &evaluator.ScoreResult{}
 	for _, match := range matches {
 		rubricID := strings.TrimSpace(match[1])
 		reason := strings.TrimSpace(match[4])
@@ -71,8 +72,10 @@ func (e *rubricResponseScorer) ScoreBasedOnResponse(ctx context.Context, respons
 			Score:  score,
 		})
 		averageScore += score
+		reasons = append(reasons, reason)
 	}
 	averageScore /= float64(len(matches))
 	result.Score = averageScore
+	result.Reason = strings.Join(reasons, "\n")
 	return result, nil
 }

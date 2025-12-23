@@ -24,8 +24,11 @@ import (
 
 const labelValid string = "valid" // labelValid marks a valid agent response.
 
-// labelMatchIsResponseValidRe extracts the validity label from judge output.
-var labelMatchIsResponseValidRe = regexp.MustCompile(`"is_the_agent_response_valid"\s*:\s*\[?\s*"?([A-Za-z_]+)"?\s*\]?`)
+// finalResponseBlockRegex extracts the reasoning and validity label from the judge response.
+var finalResponseBlockRegex = regexp.MustCompile(
+	`(?ms)reasoning:\s*(.*?)\s*` + // 1: reasoning text
+		`is_the_agent_response_valid:\s*(.*?)\s*$`, // 2: validity label
+)
 
 type finalResponseResponseScorer struct {
 }
@@ -41,28 +44,21 @@ func (e *finalResponseResponseScorer) ScoreBasedOnResponse(ctx context.Context, 
 	if len(response.Choices) == 0 {
 		return nil, fmt.Errorf("no choices in response")
 	}
-	responseText := response.Choices[0].Message.Content
-	if responseText == "" {
+	content := response.Choices[0].Message.Content
+	if content == "" {
 		return nil, fmt.Errorf("empty response text")
 	}
-	label := extractLabel(responseText)
+	matches := finalResponseBlockRegex.FindAllStringSubmatch(content, -1)
+	if len(matches) < 1 {
+		return nil, fmt.Errorf("no final response blocks found in response")
+	}
+	reasoning := strings.TrimSpace(matches[0][1])
+	label := strings.TrimSpace(matches[0][2])
+	label = strings.Trim(label, "\"")
+	label = strings.ToLower(label)
 	score := 0.0
 	if label == labelValid {
 		score = 1.0
 	}
-	return &evaluator.ScoreResult{Score: score, RubricScores: nil}, nil
-}
-
-// extractLabel extracts the validity label from the judge response.
-func extractLabel(response string) string {
-	match := labelMatchIsResponseValidRe.FindStringSubmatch(response)
-	if len(match) < 1 {
-		return ""
-	}
-	label := strings.TrimSpace(match[1])
-	switch strings.ToLower(label) {
-	case labelValid:
-		return labelValid
-	}
-	return ""
+	return &evaluator.ScoreResult{Score: score, Reason: reasoning}, nil
 }
