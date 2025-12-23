@@ -559,3 +559,79 @@ func TestVerifyColumns_Scenarios(t *testing.T) {
 		})
 	}
 }
+
+func TestVerifySchema_TableExistsError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	// Mock: First table check fails
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+		WithArgs(sqldb.BuildTableName(s.opts.tablePrefix, sqldb.TableNameSessionStates)).
+		WillReturnError(assert.AnError)
+
+	err = s.verifySchema(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "check table")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVerifySchema_TableMissing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	// Mock: First table check returns 0 count (missing)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+		WithArgs(sqldb.BuildTableName(s.opts.tablePrefix, sqldb.TableNameSessionStates)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	err = s.verifySchema(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "does not exist")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVerifyColumns_QueryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	// Mock: verifyColumns query fails
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME")).
+		WithArgs(sqldb.BuildTableName(s.opts.tablePrefix, "test_table")).
+		WillReturnError(assert.AnError)
+
+	err = s.verifyColumns(ctx, sqldb.BuildTableName(s.opts.tablePrefix, "test_table"), []tableColumn{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "query columns failed")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVerifyIndexes_QueryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	// Mock: verifyIndexes query fails
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
+		WithArgs(sqldb.BuildTableName(s.opts.tablePrefix, "test_table")).
+		WillReturnError(assert.AnError)
+
+	err = s.verifyIndexes(ctx, sqldb.BuildTableName(s.opts.tablePrefix, "test_table"), []tableIndex{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "query indexes failed")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

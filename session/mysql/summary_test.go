@@ -1354,9 +1354,10 @@ func TestRedisService_ProcessSummaryJob_Panic(t *testing.T) {
 
 func TestProcessSummaryJob(t *testing.T) {
 	tests := []struct {
-		name        string
-		setup       func(t *testing.T, service *Service) *summaryJob
-		expectError bool
+		name             string
+		setup            func(t *testing.T, service *Service) *summaryJob
+		expectError      bool
+		expectNoDBAction bool
 	}{
 		{
 			name: "successful summary processing",
@@ -1418,7 +1419,8 @@ func TestProcessSummaryJob(t *testing.T) {
 					session:   sess,
 				}
 			},
-			expectError: false,
+			expectError:      false,
+			expectNoDBAction: true,
 		},
 		{
 			name: "summarizer returns error",
@@ -1434,7 +1436,8 @@ func TestProcessSummaryJob(t *testing.T) {
 					session:   sess,
 				}
 			},
-			expectError: false, // Should not panic or error, just log
+			expectError:      false, // Should not panic or error, just log
+			expectNoDBAction: true,
 		},
 	}
 
@@ -1452,37 +1455,75 @@ func TestProcessSummaryJob(t *testing.T) {
 			)
 			job := tt.setup(t, s)
 
-			// Mock: Try UPDATE first
-			mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
-				WithArgs(
-					sqlmock.AnyArg(), // summary
-					sqlmock.AnyArg(), // updated_at
-					sqlmock.AnyArg(), // expires_at
-					job.session.AppName,
-					job.session.UserID,
-					job.session.ID,
-					job.filterKey,
-				).
-				WillReturnResult(sqlmock.NewResult(0, 0))
+			if !tt.expectNoDBAction {
+				// Disable order matching to handle cascading updates (which might happen in any order or parallel)
+				mock.MatchExpectationsInOrder(false)
 
-			// Mock: Then INSERT
-			mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-				WithArgs(
-					job.session.AppName,
-					job.session.UserID,
-					job.session.ID,
-					job.filterKey,
-					sqlmock.AnyArg(), // summary
-					sqlmock.AnyArg(), // updated_at
-					sqlmock.AnyArg(), // expires_at
-				).
-				WillReturnResult(sqlmock.NewResult(1, 1))
+				// Mock: Try UPDATE first
+				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+					WithArgs(
+						sqlmock.AnyArg(), // summary
+						sqlmock.AnyArg(), // updated_at
+						sqlmock.AnyArg(), // expires_at
+						job.session.AppName,
+						job.session.UserID,
+						job.session.ID,
+						job.filterKey,
+					).
+					WillReturnResult(sqlmock.NewResult(0, 0))
+
+				// Mock: Then INSERT
+				mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+					WithArgs(
+						job.session.AppName,
+						job.session.UserID,
+						job.session.ID,
+						job.filterKey,
+						sqlmock.AnyArg(), // summary
+						sqlmock.AnyArg(), // updated_at
+						sqlmock.AnyArg(), // expires_at
+					).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+
+				// If filterKey is provided, cascading update to full-session summary (empty key) is expected
+				if job.filterKey != "" {
+					// Mock: Try UPDATE first for cascade
+					mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+						WithArgs(
+							sqlmock.AnyArg(), // summary
+							sqlmock.AnyArg(), // updated_at
+							sqlmock.AnyArg(), // expires_at
+							job.session.AppName,
+							job.session.UserID,
+							job.session.ID,
+							"", // filter_key is empty for cascade
+						).
+						WillReturnResult(sqlmock.NewResult(0, 0))
+
+					// Mock: Then INSERT for cascade
+					mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+						WithArgs(
+							job.session.AppName,
+							job.session.UserID,
+							job.session.ID,
+							"",               // filter_key
+							sqlmock.AnyArg(), // summary
+							sqlmock.AnyArg(), // updated_at
+							sqlmock.AnyArg(), // expires_at
+						).
+						WillReturnResult(sqlmock.NewResult(1, 1))
+				}
+			}
+
 			defer db.Close()
 
 			// This should not panic
 			require.NotPanics(t, func() {
 				s.processSummaryJob(job)
 			})
+
+			// Verify expectations
+			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
 }
