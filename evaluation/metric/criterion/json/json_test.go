@@ -10,6 +10,7 @@
 package json
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -233,4 +234,85 @@ func TestJSONCriterionIgnoreTreeNestedMapsWithExtraKeys(t *testing.T) {
 	ok, err := criterion.Match(actual, expected)
 	assert.False(t, ok)
 	assert.Error(t, err)
+}
+
+func TestJSONCriterionNumberToleranceDefault(t *testing.T) {
+	criterion := &JSONCriterion{}
+	actual := map[string]any{"value": 0.3000005}
+	expected := map[string]any{"value": 0.3}
+	ok, err := criterion.Match(actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestJSONCriterionNumberToleranceFail(t *testing.T) {
+	criterion := &JSONCriterion{}
+	actual := map[string]any{"value": 0.301}
+	expected := map[string]any{"value": 0.3}
+	ok, err := criterion.Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+}
+
+func TestJSONCriterionNumberToleranceJSONNumber(t *testing.T) {
+	criterion := &JSONCriterion{}
+	actual := map[string]any{"value": json.Number("1.0000001")}
+	expected := map[string]any{"value": 1}
+	ok, err := criterion.Match(actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestJSONCriterionNumberToleranceWithIgnoreTree(t *testing.T) {
+	criterion := &JSONCriterion{
+		IgnoreTree: map[string]any{
+			"skip": true,
+		},
+	}
+	actual := map[string]any{
+		"skip":  123.456,
+		"value": 10.0000004,
+	}
+	expected := map[string]any{
+		"skip":  200.0,
+		"value": 10,
+	}
+	ok, err := criterion.Match(actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestJSONCriterionNumberToleranceExactZero(t *testing.T) {
+	criterion := &JSONCriterion{
+		NumberTolerance: floatPtr(0),
+	}
+	actual := map[string]any{"value": 1.0000001}
+	expected := map[string]any{"value": 1.0}
+	ok, err := criterion.Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+}
+
+func TestJSONCriterionNumberToleranceWithOption(t *testing.T) {
+	criterion := New(WithNumberTolerance(0.2))
+	actual := map[string]any{"value": 1.1}
+	expected := map[string]any{"value": 1.0}
+	ok, err := criterion.Match(actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestJSONCriterionNumberToleranceNegative(t *testing.T) {
+	criterion := &JSONCriterion{
+		NumberTolerance: floatPtr(-0.1),
+	}
+	actual := map[string]any{"value": 1.0}
+	expected := map[string]any{"value": 1.0}
+	ok, err := criterion.Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+}
+
+func floatPtr(v float64) *float64 {
+	return &v
 }
