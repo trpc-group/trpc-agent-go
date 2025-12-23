@@ -83,6 +83,9 @@ type Invocation struct {
 	// TransferInfo contains information about a pending agent transfer.
 	TransferInfo *TransferInfo
 
+	// Plugins provides runner-scoped hooks applied to this invocation.
+	Plugins PluginManager
+
 	// StructuredOutput defines how the model should produce structured output for this invocation.
 	StructuredOutput *model.StructuredOutput
 	// StructuredOutputType is the Go type to unmarshal the final JSON into.
@@ -515,6 +518,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		RunOptions:      inv.RunOptions,
 		MemoryService:   inv.MemoryService,
 		ArtifactService: inv.ArtifactService,
+		Plugins:         inv.Plugins,
 		noticeMu:        inv.noticeMu,
 		noticeChannels:  inv.noticeChannels,
 		eventFilterKey:  inv.eventFilterKey,

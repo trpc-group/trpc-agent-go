@@ -175,7 +175,11 @@ func (a *CycleAgent) runSubAgent(
 	subAgentCtx := agent.NewInvocationContext(ctx, subInvocation)
 
 	// Run the sub-agent.
-	subEventChan, err := subAgent.Run(subAgentCtx, subInvocation)
+	subEventChan, err := agent.RunWithPlugins(
+		subAgentCtx,
+		subInvocation,
+		subAgent,
+	)
 	if err != nil {
 		// Send error event and escalate.
 		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(

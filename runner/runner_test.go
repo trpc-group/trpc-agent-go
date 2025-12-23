@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -167,6 +168,75 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	agentEvent := sess.Events[1]
 	assert.Equal(t, "test-agent", agentEvent.Author)
 	assert.Contains(t, agentEvent.Response.Choices[0].Message.Content, "Hello, world!")
+}
+
+type testPlugin struct {
+	name string
+	reg  func(r *plugin.Registry)
+}
+
+func (p *testPlugin) Name() string { return p.name }
+
+func (p *testPlugin) Register(r *plugin.Registry) {
+	if p.reg != nil {
+		p.reg(r)
+	}
+}
+
+func TestRunner_WithPlugins_AppliesHooks(t *testing.T) {
+	beforeCalled := false
+	const tagged = "tagged"
+
+	p := &testPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.BeforeAgent(func(
+				ctx context.Context,
+				args *agent.BeforeAgentArgs,
+			) (*agent.BeforeAgentResult, error) {
+				beforeCalled = true
+				return nil, nil
+			})
+			r.OnEvent(func(
+				ctx context.Context,
+				inv *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				if e != nil {
+					e.Tag = tagged
+				}
+				return nil, nil
+			})
+		},
+	}
+
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &mockAgent{name: "test-agent"}
+	r := NewRunner(
+		"test-app",
+		ag,
+		WithSessionService(sessionService),
+		WithPlugins(p),
+	)
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+	)
+	require.NoError(t, err)
+
+	var events []*event.Event
+	for evt := range ch {
+		events = append(events, evt)
+	}
+
+	require.True(t, beforeCalled)
+	require.NotEmpty(t, events)
+	for _, evt := range events {
+		require.Equal(t, tagged, evt.Tag)
+	}
 }
 
 func TestRunner_SessionCreateIfMissing(t *testing.T) {

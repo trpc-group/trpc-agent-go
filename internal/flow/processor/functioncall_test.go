@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -2152,6 +2153,137 @@ func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
 	require.NoError(t, err)
 	b, _ := json.Marshal(map[string]any{"v": 1})
 	require.JSONEq(t, string(b), string(mustJSON(res)))
+}
+
+type hookPlugin struct {
+	name string
+	reg  func(r *plugin.Registry)
+}
+
+func (p *hookPlugin) Name() string { return p.name }
+
+func (p *hookPlugin) Register(r *plugin.Registry) {
+	if p.reg != nil {
+		p.reg(r)
+	}
+}
+
+func TestExecuteToolWithCallbacks_PluginBeforeToolShortCircuit(t *testing.T) {
+	localCalled := false
+	toolCalled := false
+	var callID string
+
+	local := tool.NewCallbacks()
+	local.RegisterBeforeTool(func(
+		ctx context.Context,
+		toolName string,
+		decl *tool.Declaration,
+		jsonArgs *[]byte,
+	) (any, error) {
+		localCalled = true
+		return nil, nil
+	})
+
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.BeforeTool(func(
+				ctx context.Context,
+				args *tool.BeforeToolArgs,
+			) (*tool.BeforeToolResult, error) {
+				callID, _ = tool.ToolCallIDFromContext(ctx)
+				return &tool.BeforeToolResult{
+					CustomResult: map[string]any{"v": 1},
+				}, nil
+			})
+		},
+	}
+
+	pm := plugin.MustNewManager(p)
+	proc := NewFunctionCallResponseProcessor(false, local)
+	inv := &agent.Invocation{Plugins: pm}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			toolCalled = true
+			return "x", nil
+		},
+	}
+
+	toolCall := model.ToolCall{
+		ID:       "call-1",
+		Function: model.FunctionDefinitionParam{Name: "t"},
+	}
+
+	_, res, _, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		toolCall,
+		tl,
+		nil,
+	)
+	require.NoError(t, err)
+	require.False(t, localCalled)
+	require.False(t, toolCalled)
+	require.Equal(t, "call-1", callID)
+	require.Equal(t, map[string]any{"v": 1}, res)
+}
+
+func TestExecuteToolWithCallbacks_PluginAfterToolOverrides(t *testing.T) {
+	localAfterCalled := false
+
+	local := tool.NewCallbacks()
+	local.RegisterAfterTool(func(
+		ctx context.Context,
+		toolName string,
+		decl *tool.Declaration,
+		jsonArgs []byte,
+		result any,
+		runErr error,
+	) (any, error) {
+		localAfterCalled = true
+		return nil, nil
+	})
+
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterTool(func(
+				ctx context.Context,
+				args *tool.AfterToolArgs,
+			) (*tool.AfterToolResult, error) {
+				return &tool.AfterToolResult{
+					CustomResult: map[string]any{"p": true},
+				}, nil
+			})
+		},
+	}
+
+	pm := plugin.MustNewManager(p)
+	proc := NewFunctionCallResponseProcessor(false, local)
+	inv := &agent.Invocation{Plugins: pm}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return "x", nil
+		},
+	}
+
+	toolCall := model.ToolCall{
+		ID:       "call-1",
+		Function: model.FunctionDefinitionParam{Name: "t"},
+	}
+
+	_, res, _, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		toolCall,
+		tl,
+		nil,
+	)
+	require.NoError(t, err)
+	require.False(t, localAfterCalled)
+	require.Equal(t, map[string]any{"p": true}, res)
 }
 
 func TestExecuteToolWithCallbacks_BeforeError(t *testing.T) {
