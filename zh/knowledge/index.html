@@ -1043,7 +1043,7 @@
           <li class="md-nav__item">
   <a href="#pgvectorpostgresql-pgvector" class="md-nav__link">
     <span class="md-ellipsis">
-      PgVector（PostgreSQL + pgvector）
+      PGVector（PostgreSQL + pgvector）
     </span>
   </a>
   
@@ -1808,7 +1808,7 @@
           <li class="md-nav__item">
   <a href="#pgvectorpostgresql-pgvector" class="md-nav__link">
     <span class="md-ellipsis">
-      PgVector（PostgreSQL + pgvector）
+      PGVector（PostgreSQL + pgvector）
     </span>
   </a>
   
@@ -2571,7 +2571,7 @@
 <p>trpc-agent-go 支持多种向量存储实现：</p>
 <ul>
 <li><strong>Memory</strong>：内存向量存储，适用于测试和小规模数据</li>
-<li><strong>PgVector</strong>：基于 PostgreSQL + pgvector 扩展的向量存储，支持混合检索 - <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/postgres">示例</a></li>
+<li><strong>PGVector</strong>：基于 PostgreSQL + pgvector 扩展的向量存储，支持混合检索 - <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/postgres">示例</a></li>
 <li><strong>TcVector</strong>：腾讯云向量数据库，支持远程 embedding 计算和混合检索 - <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/tcvector">示例</a></li>
 <li><strong>Elasticsearch</strong>：支持 v7/v8/v9 多版本的 Elasticsearch 向量存储 - <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/elasticsearch">示例</a></li>
 <li><strong>Milvus</strong>：高性能向量数据库，支持十亿级向量搜索 - <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/milvus">示例</a></li>
@@ -2600,7 +2600,7 @@
 </span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span><span class="w"> </span><span class="c1">// 需要配置本地 embedder</span>
 </span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h5 id="pgvectorpostgresql-pgvector">PgVector（PostgreSQL + pgvector）</h5>
+<h5 id="pgvectorpostgresql-pgvector">PGVector（PostgreSQL + pgvector）</h5>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-7-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-7-3"> 3</a></span>
@@ -2624,38 +2624,30 @@
 <span class="normal"><a href="#__codelineno-7-21">21</a></span>
 <span class="normal"><a href="#__codelineno-7-22">22</a></span>
 <span class="normal"><a href="#__codelineno-7-23">23</a></span>
-<span class="normal"><a href="#__codelineno-7-24">24</a></span>
-<span class="normal"><a href="#__codelineno-7-25">25</a></span>
-<span class="normal"><a href="#__codelineno-7-26">26</a></span>
-<span class="normal"><a href="#__codelineno-7-27">27</a></span>
-<span class="normal"><a href="#__codelineno-7-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-7-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector&quot;</span>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="p">)</span>
 </span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a>
 </span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="c1">// PostgreSQL + pgvector</span>
 </span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="nx">pgVS</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;127.0.0.1&quot;</span><span class="p">),</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">WithPort</span><span class="p">(</span><span class="mi">5432</span><span class="p">),</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">WithUser</span><span class="p">(</span><span class="s">&quot;postgres&quot;</span><span class="p">),</span>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">WithPassword</span><span class="p">(</span><span class="s">&quot;your-password&quot;</span><span class="p">),</span>
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">WithDatabase</span><span class="p">(</span><span class="s">&quot;your-database&quot;</span><span class="p">),</span>
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">    </span><span class="c1">// 根据 embedding 模型设置索引维度（text-embedding-3-small 为 1536）</span>
-</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">WithIndexDimension</span><span class="p">(</span><span class="mi">1536</span><span class="p">),</span>
-</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a><span class="w">    </span><span class="c1">// 启用/关闭文本检索向量，配合混合检索权重使用</span>
-</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">WithEnableTSVector</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="w">    </span><span class="c1">// 调整混合检索权重（向量相似度权重与文本相关性权重）</span>
-</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">WithHybridSearchWeights</span><span class="p">(</span><span class="mf">0.7</span><span class="p">,</span><span class="w"> </span><span class="mf">0.3</span><span class="p">),</span>
-</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">    </span><span class="c1">// 如安装了中文分词扩展（如 zhparser/jieba），可设置语言以提升文本召回</span>
-</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">WithLanguageExtension</span><span class="p">(</span><span class="s">&quot;english&quot;</span><span class="p">),</span>
-</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="p">)</span>
-</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a><span class="w">    </span><span class="c1">// 处理 error</span>
-</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23"></a><span class="p">}</span>
-</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24"></a>
-</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">pgVS</span><span class="p">),</span>
-</span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span><span class="w"> </span><span class="c1">// 需要配置本地 embedder</span>
-</span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28"></a><span class="p">)</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">WithPGVectorClientDSN</span><span class="p">(</span><span class="s">&quot;postgres://postgres:your-password@127.0.0.1:5432/your-database?sslmode=disable&quot;</span><span class="p">),</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="w">    </span><span class="c1">// 根据 embedding 模型设置索引维度（text-embedding-3-small 为 1536）</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">WithIndexDimension</span><span class="p">(</span><span class="mi">1536</span><span class="p">),</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="w">    </span><span class="c1">// 启用/关闭文本检索向量，配合混合检索权重使用</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">WithEnableTSVector</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">    </span><span class="c1">// 调整混合检索权重（向量相似度权重与文本相关性权重）</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">WithHybridSearchWeights</span><span class="p">(</span><span class="mf">0.7</span><span class="p">,</span><span class="w"> </span><span class="mf">0.3</span><span class="p">),</span>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a><span class="w">    </span><span class="c1">// 如安装了中文分词扩展（如 zhparser/jieba），可设置语言以提升文本召回</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="w">    </span><span class="nx">vectorpgvector</span><span class="p">.</span><span class="nx">WithLanguageExtension</span><span class="p">(</span><span class="s">&quot;english&quot;</span><span class="p">),</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="p">)</span>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">    </span><span class="c1">// 处理 error</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="p">}</span>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a>
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">pgVS</span><span class="p">),</span>
+</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span><span class="w"> </span><span class="c1">// 需要配置本地 embedder</span>
+</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h5 id="tcvector">TcVector（腾讯云向量数据库）</h5>
 <p>TcVector 支持两种 embedding 模式：</p>
@@ -4574,7 +4566,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月9日 13:06:40 UTC">2025-12-09 13:06:40</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月23日 10:44:48 UTC">2025-12-23 10:44:48</span>
   </span>
 
     
