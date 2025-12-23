@@ -191,11 +191,15 @@ func (p *PlanningResponseProcessor) ProcessResponse(
 		"Planning response processor: sent postprocessing event",
 	)
 
-	if err := agent.EmitEvent(ctx, invocation, ch, event.New(
+	planningEvent := event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePostprocessingPlanning),
-	)); err != nil {
+	)
+	// Mark as partial response so it doesn't interfere with full response detection.
+	planningEvent.Response.IsPartial = true
+
+	if err := agent.EmitEvent(ctx, invocation, ch, planningEvent); err != nil {
 		log.DebugContext(
 			ctx,
 			"Planning response processor: context cancelled",

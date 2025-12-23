@@ -13,6 +13,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -53,18 +55,16 @@ func TestPlanningRequestProcessor_AllBranches(t *testing.T) {
 	bp := builtin.New(builtin.Options{ReasoningEffort: &eff, ThinkingEnabled: &think, ThinkingTokens: &tokens})
 	req3 := &model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}}}
 	NewPlanningRequestProcessor(bp).ProcessRequest(ctx, &agent.Invocation{AgentName: "a"}, req3, ch)
-	if req3.ReasoningEffort == nil || *req3.ReasoningEffort != "low" {
-		t.Fatalf("expected reasoning effort applied")
-	}
+	require.NotNil(t, req3.ReasoningEffort)
+	assert.Equal(t, "low", *req3.ReasoningEffort)
 
 	// 4) Non-builtin planner: adds instruction if not present, emits event
 	fp := &fakePlanner{instr: "PLAN: do X"}
 	req4 := &model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: "ping"}}}
 	inv := &agent.Invocation{AgentName: "agent1", InvocationID: "inv1"}
 	NewPlanningRequestProcessor(fp).ProcessRequest(ctx, inv, req4, ch)
-	if len(req4.Messages) == 0 || req4.Messages[0].Role != model.RoleSystem {
-		t.Fatalf("expected planning instruction system message added")
-	}
+	require.NotEmpty(t, req4.Messages)
+	assert.Equal(t, model.RoleSystem, req4.Messages[0].Role)
 
 	// 5) Non-builtin but same instruction content already present -> no duplication
 	req5 := &model.Request{Messages: []model.Message{
@@ -79,9 +79,7 @@ func TestPlanningRequestProcessor_AllBranches(t *testing.T) {
 			count++
 		}
 	}
-	if count != 1 {
-		t.Fatalf("expected no duplicate system message, got %d", count)
-	}
+	assert.Equal(t, 1, count)
 }
 
 func TestPlanningResponseProcessor_AllBranches(t *testing.T) {
@@ -101,7 +99,16 @@ func TestPlanningResponseProcessor_AllBranches(t *testing.T) {
 	// 5) process with choices and verify replacement
 	rsp := &model.Response{ID: "orig", Choices: []model.Choice{{}}}
 	pr2.ProcessResponse(ctx, &agent.Invocation{AgentName: "a", InvocationID: "i1"}, nil, rsp, ch)
-	if rsp.ID != "processed" {
-		t.Fatalf("expected processed response id, got %s", rsp.ID)
+	assert.Equal(t, "processed", rsp.ID)
+
+	// Verify that the postprocessing event is marked as partial
+	select {
+	case evt := <-ch:
+		require.NotNil(t, evt)
+		require.NotNil(t, evt.Response)
+		assert.True(t, evt.Response.IsPartial)
+		assert.Equal(t, model.ObjectTypePostprocessingPlanning, evt.Object)
+	default:
+		t.Fatal("expected postprocessing event")
 	}
 }
