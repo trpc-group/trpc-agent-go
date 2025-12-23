@@ -3142,3 +3142,634 @@ func (m *mockTokenCounter) CountTokensRange(ctx context.Context, messages []mode
 	return 0, nil
 }
 
+
+// TestWithChannelBufferSize tests the WithChannelBufferSize option with various inputs.
+func TestWithChannelBufferSize(t *testing.T) {
+	tests := []struct {
+		name     string
+		size     int
+		expected int
+	}{
+		{
+			name:     "positive size",
+			size:     512,
+			expected: 512,
+		},
+		{
+			name:     "zero size uses default",
+			size:     0,
+			expected: defaultChannelBufferSize,
+		},
+		{
+			name:     "negative size uses default",
+			size:     -10,
+			expected: defaultChannelBufferSize,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, err := New(
+				"test-model",
+				WithAPIKey("test-key"),
+				WithChannelBufferSize(tt.size),
+			)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, m.channelBufferSize)
+		})
+	}
+}
+
+// TestWithTokenCounter_Options tests the WithTokenCounter option.
+func TestWithTokenCounter_Options(t *testing.T) {
+	t.Run("with valid counter", func(t *testing.T) {
+		counter := &mockTokenCounter{}
+		m, err := New(
+			"test-model",
+			WithAPIKey("test-key"),
+			WithTokenCounter(counter),
+		)
+		require.NoError(t, err)
+		assert.NotNil(t, m.tokenCounter)
+	})
+
+	t.Run("with nil counter", func(t *testing.T) {
+		_, err := New(
+			"test-model",
+			WithAPIKey("test-key"),
+			WithTokenCounter(nil),
+		)
+		require.NoError(t, err)
+		// Default counter is used
+	})
+}
+
+// TestWithTokenTailoringConfig_Options tests the WithTokenTailoringConfig option with various inputs.
+func TestWithTokenTailoringConfig_Options(t *testing.T) {
+	t.Run("with nil config", func(t *testing.T) {
+		_, err := New(
+			"test-model",
+			WithAPIKey("test-key"),
+			WithTokenTailoringConfig(nil),
+		)
+		require.NoError(t, err)
+		// Default config is used
+	})
+
+	t.Run("with partial config uses defaults", func(t *testing.T) {
+		config := &model.TokenTailoringConfig{
+			ProtocolOverheadTokens: 0,
+			ReserveOutputTokens:    0,
+		}
+		m, err := New(
+			"test-model",
+			WithAPIKey("test-key"),
+			WithTokenTailoringConfig(config),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, 512, config.ProtocolOverheadTokens)
+		assert.Equal(t, 2048, config.ReserveOutputTokens)
+		assert.Equal(t, 0.1, config.SafetyMarginRatio)
+		assert.Equal(t, 1024, config.InputTokensFloor)
+		assert.Equal(t, 512, config.OutputTokensFloor)
+		assert.Equal(t, 0.8, config.MaxInputTokensRatio)
+		_ = m
+	})
+
+	t.Run("with full config", func(t *testing.T) {
+		config := &model.TokenTailoringConfig{
+			ProtocolOverheadTokens: 100,
+			ReserveOutputTokens:    500,
+			SafetyMarginRatio:      0.2,
+			InputTokensFloor:       200,
+			OutputTokensFloor:      100,
+			MaxInputTokensRatio:    0.9,
+		}
+		m, err := New(
+			"test-model",
+			WithAPIKey("test-key"),
+			WithTokenTailoringConfig(config),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, 100, config.ProtocolOverheadTokens)
+		assert.Equal(t, 500, config.ReserveOutputTokens)
+		assert.Equal(t, 0.2, config.SafetyMarginRatio)
+		assert.Equal(t, 200, config.InputTokensFloor)
+		assert.Equal(t, 100, config.OutputTokensFloor)
+		assert.Equal(t, 0.9, config.MaxInputTokensRatio)
+		_ = m
+	})
+}
+
+// TestConvertMessageToModel_WithContentParts tests convertMessageToModel with []ContentPart type.
+func TestConvertMessageToModel_WithContentParts(t *testing.T) {
+	tests := []struct {
+		name     string
+		hfMsg    ChatMessage
+		validate func(t *testing.T, result model.Message)
+	}{
+		{
+			name: "with text content part",
+			hfMsg: ChatMessage{
+				Role: "user",
+				Content: []ContentPart{
+					{
+						Type: "text",
+						Text: "Hello",
+					},
+				},
+			},
+			validate: func(t *testing.T, result model.Message) {
+				assert.Equal(t, model.Role("user"), result.Role)
+				require.Len(t, result.ContentParts, 1)
+				assert.Equal(t, model.ContentTypeText, result.ContentParts[0].Type)
+				require.NotNil(t, result.ContentParts[0].Text)
+				assert.Equal(t, "Hello", *result.ContentParts[0].Text)
+			},
+		},
+		{
+			name: "with image_url content part",
+			hfMsg: ChatMessage{
+				Role: "user",
+				Content: []ContentPart{
+					{
+						Type: "image_url",
+						ImageURL: &ImageURL{
+							URL:    "https://example.com/image.jpg",
+							Detail: "high",
+						},
+					},
+				},
+			},
+			validate: func(t *testing.T, result model.Message) {
+				assert.Equal(t, model.Role("user"), result.Role)
+				require.Len(t, result.ContentParts, 1)
+				assert.Equal(t, model.ContentTypeImage, result.ContentParts[0].Type)
+				require.NotNil(t, result.ContentParts[0].Image)
+				assert.Equal(t, "https://example.com/image.jpg", result.ContentParts[0].Image.URL)
+				assert.Equal(t, "high", result.ContentParts[0].Image.Detail)
+			},
+		},
+		{
+			name: "with nil image_url",
+			hfMsg: ChatMessage{
+				Role: "user",
+				Content: []ContentPart{
+					{
+						Type:     "image_url",
+						ImageURL: nil,
+					},
+				},
+			},
+			validate: func(t *testing.T, result model.Message) {
+				assert.Equal(t, model.Role("user"), result.Role)
+				require.Len(t, result.ContentParts, 1)
+				assert.Equal(t, model.ContentTypeText, result.ContentParts[0].Type)
+				require.NotNil(t, result.ContentParts[0].Text)
+				assert.Equal(t, "image_url is nil", *result.ContentParts[0].Text)
+			},
+		},
+		{
+			name: "with unsupported content type",
+			hfMsg: ChatMessage{
+				Role: "user",
+				Content: []ContentPart{
+					{
+						Type: "video",
+					},
+				},
+			},
+			validate: func(t *testing.T, result model.Message) {
+				assert.Equal(t, model.Role("user"), result.Role)
+				require.Len(t, result.ContentParts, 1)
+				assert.Equal(t, model.ContentTypeText, result.ContentParts[0].Type)
+				require.NotNil(t, result.ContentParts[0].Text)
+				assert.Contains(t, *result.ContentParts[0].Text, "unsupported content type: video")
+			},
+		},
+		{
+			name: "with tool call id",
+			hfMsg: ChatMessage{
+				Role:       "tool",
+				ToolCallID: "call_123",
+				Name:       "get_weather",
+				Content:    "sunny",
+			},
+			validate: func(t *testing.T, result model.Message) {
+				assert.Equal(t, model.Role("tool"), result.Role)
+				assert.Equal(t, "call_123", result.ToolID)
+				assert.Equal(t, "get_weather", result.ToolName)
+				assert.Equal(t, "sunny", result.Content)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := convertMessageToModel(tt.hfMsg)
+			tt.validate(t, result)
+		})
+	}
+}
+
+// TestConvertTool_Cases tests convertTool with various cases.
+func TestConvertTool_Cases(t *testing.T) {
+	t.Run("with valid tool", func(t *testing.T) {
+		mockTool := &mockToolForConvert{
+			declaration: &tool.Declaration{
+				Name:        "test_tool",
+				Description: "A test tool",
+				InputSchema: &tool.Schema{
+					Type: "object",
+					Properties: map[string]*tool.Schema{
+						"param1": {
+							Type: "string",
+						},
+					},
+				},
+			},
+		}
+
+		result, err := convertTool(mockTool)
+		require.NoError(t, err)
+		assert.Equal(t, "function", result.Type)
+		assert.Equal(t, "test_tool", result.Function.Name)
+		assert.Equal(t, "A test tool", result.Function.Description)
+		assert.NotNil(t, result.Function.Parameters)
+	})
+
+	t.Run("with nil input schema", func(t *testing.T) {
+		mockTool := &mockToolForConvert{
+			declaration: &tool.Declaration{
+				Name:        "test_tool",
+				Description: "A test tool",
+				InputSchema: nil,
+			},
+		}
+
+		result, err := convertTool(mockTool)
+		require.NoError(t, err)
+		assert.Equal(t, "function", result.Type)
+		assert.Equal(t, "test_tool", result.Function.Name)
+		assert.Nil(t, result.Function.Parameters)
+	})
+}
+
+// mockToolForConvert is a mock implementation of tool.Tool for testing.
+type mockToolForConvert struct {
+	declaration *tool.Declaration
+}
+
+func (m *mockToolForConvert) Declaration() *tool.Declaration {
+	return m.declaration
+}
+
+// TestWithTailoringStrategy tests the WithTailoringStrategy option.
+func TestWithTailoringStrategy_Option(t *testing.T) {
+	mockStrategy := &mockTailoringStrategyImpl{}
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithEnableTokenTailoring(true),
+		WithTailoringStrategy(mockStrategy),
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, m.tailoringStrategy)
+}
+
+// mockTailoringStrategyImpl is a mock implementation of model.TailoringStrategy for testing.
+type mockTailoringStrategyImpl struct{}
+
+func (m *mockTailoringStrategyImpl) TailorMessages(ctx context.Context, messages []model.Message, maxTokens int) ([]model.Message, error) {
+	return messages, nil
+}
+
+// TestConvertContentPart_WithImageData tests convertContentPart with base64 image data.
+func TestConvertContentPart_WithImageData(t *testing.T) {
+	part := model.ContentPart{
+		Type: model.ContentTypeImage,
+		Image: &model.Image{
+			Data:   []byte("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="),
+			Format: "png",
+			Detail: "high",
+		},
+	}
+
+	result, err := convertContentPart(part)
+	require.NoError(t, err)
+	assert.Equal(t, "image_url", result.Type)
+	require.NotNil(t, result.ImageURL)
+	assert.Contains(t, result.ImageURL.URL, "data:image/png;base64,")
+	assert.Equal(t, "high", result.ImageURL.Detail)
+}
+
+// TestConvertContentPart_WithNilImage tests convertContentPart with nil image.
+func TestConvertContentPart_WithNilImage(t *testing.T) {
+	part := model.ContentPart{
+		Type:  model.ContentTypeImage,
+		Image: nil,
+	}
+
+	_, err := convertContentPart(part)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "image is nil")
+}
+
+// TestConvertContentPart_WithUnsupportedType tests convertContentPart with unsupported type.
+func TestConvertContentPart_WithUnsupportedType(t *testing.T) {
+	part := model.ContentPart{
+		Type: model.ContentType("unsupported"),
+	}
+
+	_, err := convertContentPart(part)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported content type")
+}
+
+// TestGenerateContent_WithExtraFields tests GenerateContent with extra fields.
+func TestGenerateContent_WithExtraFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		json.NewDecoder(r.Body).Decode(&req)
+		
+		// Verify extra fields are present
+		assert.Equal(t, "custom_value", req["custom_field"])
+		
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ChatCompletionResponse{
+			ID:      "test-id",
+			Object:  "chat.completion",
+			Created: 1234567890,
+			Model:   "test-model",
+			Choices: []ChatCompletionChoice{
+				{
+					Index: 0,
+					Message: ChatMessage{
+						Role:    "assistant",
+						Content: "Response",
+					},
+					FinishReason: "stop",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithExtraFields(map[string]any{
+			"custom_field": "custom_value",
+		}),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: "user", Content: "Hello"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	for range responseChan {
+		// Consume responses
+	}
+}
+
+// TestApplyTokenTailoring_WithCustomStrategy tests token tailoring with custom strategy.
+func TestApplyTokenTailoring_WithCustomStrategy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ChatCompletionResponse{
+			ID:      "test-id",
+			Object:  "chat.completion",
+			Created: 1234567890,
+			Model:   "test-model",
+			Choices: []ChatCompletionChoice{
+				{
+					Index: 0,
+					Message: ChatMessage{
+						Role:    "assistant",
+						Content: "Response",
+					},
+					FinishReason: "stop",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	mockStrategy := &mockTailoringStrategyImpl{}
+	m, err := New(
+		"test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithEnableTokenTailoring(true),
+		WithTailoringStrategy(mockStrategy),
+		WithMaxInputTokens(1000),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: "user", Content: "Hello"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	for range responseChan {
+		// Consume responses
+	}
+}
+
+// TestConvertMessage_WithContentPartsError tests convertMessage with content parts that cause errors.
+func TestConvertMessage_WithContentPartsError(t *testing.T) {
+	msg := model.Message{
+		Role: "user",
+		ContentParts: []model.ContentPart{
+			{
+				Type:  model.ContentTypeImage,
+				Image: nil, // This will cause an error
+			},
+		},
+	}
+
+	_, err := convertMessage(msg)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to convert content part")
+}
+
+// TestGenerateContent_WithStructuredOutput tests GenerateContent with structured output.
+func TestGenerateContent_WithStructuredOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ChatCompletionRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		
+		// Verify response format is set
+		assert.NotNil(t, req.ResponseFormat)
+		assert.Equal(t, "json_object", req.ResponseFormat.Type)
+		
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ChatCompletionResponse{
+			ID:      "test-id",
+			Object:  "chat.completion",
+			Created: 1234567890,
+			Model:   "test-model",
+			Choices: []ChatCompletionChoice{
+				{
+					Index: 0,
+					Message: ChatMessage{
+						Role:    "assistant",
+						Content: `{"result": "success"}`,
+					},
+					FinishReason: "stop",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: "user", Content: "Hello"},
+		},
+		StructuredOutput: &model.StructuredOutput{
+			Type: model.StructuredOutputJSONSchema,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	for range responseChan {
+		// Consume responses
+	}
+}
+
+// TestGenerateContent_WithContentParts tests GenerateContent with content parts.
+func TestGenerateContent_WithContentParts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ChatCompletionRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		
+		
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ChatCompletionResponse{
+			ID:      "test-id",
+			Object:  "chat.completion",
+			Created: 1234567890,
+			Model:   "test-model",
+			Choices: []ChatCompletionChoice{
+				{
+					Index: 0,
+					Message: ChatMessage{
+						Role:    "assistant",
+						Content: "Response",
+					},
+					FinishReason: "stop",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+	)
+	require.NoError(t, err)
+
+	textContent := "Hello"
+	request := &model.Request{
+		Messages: []model.Message{
+			{
+				Role: "user",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeText,
+						Text: &textContent,
+					},
+					{
+						Type: model.ContentTypeImage,
+						Image: &model.Image{
+							URL:    "https://example.com/image.jpg",
+							Detail: "high",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	for range responseChan {
+		// Consume responses
+	}
+}
+
+// TestConvertChunk_WithToolCalls tests convertChunk with tool calls.
+
+// TestGenerateContent_WithMaxInputTokens tests GenerateContent with max input tokens.
+func TestGenerateContent_WithMaxInputTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ChatCompletionResponse{
+			ID:      "test-id",
+			Object:  "chat.completion",
+			Created: 1234567890,
+			Model:   "test-model",
+			Choices: []ChatCompletionChoice{
+				{
+					Index: 0,
+					Message: ChatMessage{
+						Role:    "assistant",
+						Content: "Response",
+					},
+					FinishReason: "stop",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithMaxInputTokens(1000),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: "user", Content: "Hello"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	for range responseChan {
+		// Consume responses
+	}
+}
