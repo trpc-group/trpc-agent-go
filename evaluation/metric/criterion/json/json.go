@@ -25,7 +25,7 @@ type JSONCriterion struct {
 	IgnoreTree map[string]any `json:"ignoreTree,omitempty"`
 	// MatchStrategy selects the comparison rule.
 	MatchStrategy JSONMatchStrategy `json:"matchStrategy,omitempty"`
-	// NumberTolerance defines the allowed absolute difference between numeric values. Nil uses default 1e-6; zero means exact.
+	// NumberTolerance defines the allowed absolute difference between numeric values. 1e-6 is the default.
 	NumberTolerance *float64 `json:"numberTolerance,omitempty"`
 	// Compare overrides default comparison when provided.
 	Compare func(actual, expected map[string]any) (bool, error) `json:"-"`
