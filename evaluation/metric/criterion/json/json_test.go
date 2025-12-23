@@ -313,6 +313,40 @@ func TestJSONCriterionNumberToleranceNegative(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestToFloatCoversNumericTypes(t *testing.T) {
+	cases := []struct {
+		name   string
+		input  any
+		expect float64
+		ok     bool
+	}{
+		{"float32", float32(1.5), 1.5, true},
+		{"float64", float64(2.5), 2.5, true},
+		{"int", int(3), 3, true},
+		{"int8", int8(4), 4, true},
+		{"int16", int16(5), 5, true},
+		{"int32", int32(6), 6, true},
+		{"int64", int64(7), 7, true},
+		{"uint", uint(8), 8, true},
+		{"uint8", uint8(9), 9, true},
+		{"uint16", uint16(10), 10, true},
+		{"uint32", uint32(11), 11, true},
+		{"uint64", uint64(12), 12, true},
+		{"json.Number", json.Number("13.5"), 13.5, true},
+		{"invalid json.Number", json.Number("not-number"), 0, false},
+		{"unsupported type", "string", 0, false},
+	}
+	for _, tc := range cases {
+		val, ok := toFloat(tc.input)
+		if tc.ok {
+			assert.True(t, ok, tc.name)
+			assert.InDelta(t, tc.expect, val, 1e-9, tc.name)
+		} else {
+			assert.False(t, ok, tc.name)
+		}
+	}
+}
+
 func floatPtr(v float64) *float64 {
 	return &v
 }
