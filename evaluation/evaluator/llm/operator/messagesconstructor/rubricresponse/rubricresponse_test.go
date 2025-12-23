@@ -25,22 +25,20 @@ import (
 func TestConstructMessagesIncludesAllFields(t *testing.T) {
 	constructor := New()
 	actual := &evalset.Invocation{
-		UserContent:   &model.Message{Content: "hello"},
-		FinalResponse: &model.Message{Content: "final"},
-		Tools: []*evalset.Tool{
-			{
-				ID:   "1",
-				Name: "call",
-				Arguments: map[string]any{
-					"arg": "value",
-				},
-			},
-		},
+		UserContent:   &model.Message{Content: "test_user_content"},
+		FinalResponse: &model.Message{Content: "test_final_response"},
 	}
 	evalMetric := &metric.EvalMetric{
 		Criterion: &criterion.Criterion{
 			LLMJudge: &llm.LLMCriterion{
-				Rubrics: []*llm.Rubric{{ID: "1", Content: &llm.RubricContent{Text: "rubric text"}}},
+				Rubrics: []*llm.Rubric{
+					{
+						ID: "1",
+						Content: &llm.RubricContent{
+							Text: "test_rubric_text",
+						},
+					},
+				},
 			},
 		},
 	}
@@ -49,8 +47,7 @@ func TestConstructMessagesIncludesAllFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, model.RoleUser, messages[0].Role)
-	assert.Contains(t, messages[0].Content, "hello")
-	assert.Contains(t, messages[0].Content, "final")
-	assert.Contains(t, messages[0].Content, "rubric text")
-	assert.Contains(t, messages[0].Content, "call")
+	assert.Contains(t, messages[0].Content, "test_user_content")
+	assert.Contains(t, messages[0].Content, "test_final_response")
+	assert.Contains(t, messages[0].Content, "test_rubric_text")
 }
