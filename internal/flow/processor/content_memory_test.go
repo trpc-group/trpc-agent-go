@@ -105,7 +105,7 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := formatMemoriesForPrompt(tt.memories)
+			result := formatMemoryContent(tt.memories)
 			for _, expected := range tt.contains {
 				assert.Contains(t, result, expected)
 			}
@@ -268,6 +268,25 @@ func TestGetPreloadMemoryMessage(t *testing.T) {
 		assert.Contains(t, msg.Content, "mem-1")
 	})
 
+	t.Run("preload disabled returns nil without calling service", func(t *testing.T) {
+		p := NewContentRequestProcessor(WithPreloadMemory(0))
+		mockSvc := &mockMemoryService{
+			memories: []*memory.Entry{
+				{ID: "mem-1", Memory: &memory.Memory{Memory: "test"}},
+			},
+		}
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(&session.Session{
+				AppName: "app",
+				UserID:  "user",
+			}),
+		)
+		inv.MemoryService = mockSvc
+		msg := p.getPreloadMemoryMessage(context.Background(), inv)
+		assert.Nil(t, msg)
+		assert.False(t, mockSvc.readCalled)
+	})
+
 	t.Run("negative preload converts to zero limit", func(t *testing.T) {
 		p := NewContentRequestProcessor(WithPreloadMemory(-1))
 		mockSvc := &mockMemoryService{
@@ -284,6 +303,7 @@ func TestGetPreloadMemoryMessage(t *testing.T) {
 		inv.MemoryService = mockSvc
 		p.getPreloadMemoryMessage(context.Background(), inv)
 		assert.Equal(t, 0, mockSvc.readLimit)
+		assert.True(t, mockSvc.readCalled)
 	})
 
 	t.Run("positive preload uses limit", func(t *testing.T) {
@@ -302,6 +322,26 @@ func TestGetPreloadMemoryMessage(t *testing.T) {
 		inv.MemoryService = mockSvc
 		p.getPreloadMemoryMessage(context.Background(), inv)
 		assert.Equal(t, 5, mockSvc.readLimit)
+		assert.True(t, mockSvc.readCalled)
+	})
+
+	t.Run("zero preload disabled", func(t *testing.T) {
+		p := NewContentRequestProcessor(WithPreloadMemory(0))
+		mockSvc := &mockMemoryService{
+			memories: []*memory.Entry{
+				{ID: "mem-1", Memory: &memory.Memory{Memory: "test"}},
+			},
+		}
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(&session.Session{
+				AppName: "app",
+				UserID:  "user",
+			}),
+		)
+		inv.MemoryService = mockSvc
+		msg := p.getPreloadMemoryMessage(context.Background(), inv)
+		assert.Nil(t, msg)
+		assert.False(t, mockSvc.readCalled)
 	})
 }
 

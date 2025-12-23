@@ -13,8 +13,8 @@ package inmemory
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sort"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"

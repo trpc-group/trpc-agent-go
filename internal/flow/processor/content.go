@@ -925,11 +925,15 @@ func (p *ContentRequestProcessor) getPreloadMemoryMessage(
 	if userKey.AppName == "" || userKey.UserID == "" {
 		return nil
 	}
-	// Convert PreloadMemory to limit: -1 means all (use 0 for ReadMemories).
-	limit := p.PreloadMemory
-	if limit < 0 {
-		limit = 0 // ReadMemories with 0 means no limit.
+	// Handle PreloadMemory: 0 = disabled, -1 = all, N > 0 = most recent N.
+	if p.PreloadMemory == 0 {
+		// PreloadMemory = 0 means disabled, return nil.
+		return nil
 	}
+	// PreloadMemory = -1 means all memories, use 0 for ReadMemories (no limit).
+	// PreloadMemory = N > 0 means most recent N memories.
+	// Here we use max to handle the case when PreloadMemory is negative.
+	limit := max(p.PreloadMemory, 0)
 	memories, err := inv.MemoryService.ReadMemories(ctx, userKey, limit)
 	if err != nil {
 		log.WarnfContext(ctx, "Failed to preload memories: %v", err)
@@ -940,13 +944,12 @@ func (p *ContentRequestProcessor) getPreloadMemoryMessage(
 	}
 	return &model.Message{
 		Role:    model.RoleSystem,
-		Content: formatMemoriesForPrompt(memories),
+		Content: formatMemoryContent(memories),
 	}
 }
 
-// formatMemoriesForPrompt formats memories for system prompt injection.
-// Format aligns with Agno's memory format.
-func formatMemoriesForPrompt(memories []*memory.Entry) string {
+// formatMemoryContent formats memories for system prompt injection.
+func formatMemoryContent(memories []*memory.Entry) string {
 	var sb strings.Builder
 	sb.WriteString("## User Memories\n\n")
 	sb.WriteString("The following are memories about the user:\n\n")
