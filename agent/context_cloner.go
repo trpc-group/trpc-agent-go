@@ -51,7 +51,6 @@ func CloneContext(ctx context.Context) context.Context {
 	if !ok || cloner == nil {
 		return ctx
 	}
-
 	return cloner(ctx)
 }
 
