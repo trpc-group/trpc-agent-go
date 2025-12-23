@@ -1030,7 +1030,12 @@ func TestTools_AutoMemoryMode(t *testing.T) {
 
 	tools := memoryService.Tools()
 
-	// In auto memory mode, only search tool should be returned.
-	assert.Len(t, tools, 1)
-	assert.Equal(t, memory.SearchToolName, tools[0].Declaration().Name)
+	// In auto memory mode, only search and clear tools should be returned.
+	assert.Len(t, tools, 2)
+	toolNames := make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	assert.True(t, toolNames[memory.SearchToolName])
+	assert.True(t, toolNames[memory.ClearToolName])
 }

@@ -618,18 +618,18 @@ func TestHashUserKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hash := HashUserKey(tt.userKey)
+			hash := hashUserKey(tt.userKey)
 			assert.GreaterOrEqual(t, hash, 0)
 
 			// Same key should produce same hash.
-			hash2 := HashUserKey(tt.userKey)
+			hash2 := hashUserKey(tt.userKey)
 			assert.Equal(t, hash, hash2)
 		})
 	}
 
 	// Different keys should produce different hashes (usually).
-	hash1 := HashUserKey(memory.UserKey{AppName: "app1", UserID: "user1"})
-	hash2 := HashUserKey(memory.UserKey{AppName: "app2", UserID: "user2"})
+	hash1 := hashUserKey(memory.UserKey{AppName: "app1", UserID: "user1"})
+	hash2 := hashUserKey(memory.UserKey{AppName: "app2", UserID: "user2"})
 	// Not strictly required, but very likely.
 	assert.NotEqual(t, hash1, hash2)
 }

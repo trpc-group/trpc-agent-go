@@ -177,7 +177,7 @@ func (w *AutoMemoryWorker) tryEnqueueJob(
 		return false
 	}
 	// Use hash distribution for consistent routing.
-	hash := HashUserKey(userKey)
+	hash := hashUserKey(userKey)
 	index := hash % len(w.jobChans)
 	// Use a defer-recover pattern to handle potential panic from sending to
 	// closed channel.
@@ -300,8 +300,8 @@ func (w *AutoMemoryWorker) executeOperation(
 	}
 }
 
-// HashUserKey computes a hash from userKey for channel distribution.
-func HashUserKey(userKey memory.UserKey) int {
+// hashUserKey computes a hash from userKey for channel distribution.
+func hashUserKey(userKey memory.UserKey) int {
 	h := fnv.New32a()
 	h.Write([]byte(userKey.AppName))
 	h.Write([]byte(userKey.UserID))

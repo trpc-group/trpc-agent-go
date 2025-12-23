@@ -8,13 +8,13 @@ Auto memory mode uses an LLM-based extractor to analyze conversations and automa
 
 ### Key Differences from Manual Memory
 
-| Aspect | Manual Memory (Agentic) | Auto Memory |
-|--------|------------------------|-------------|
-| **Memory Creation** | Agent explicitly calls `memory_add` | System extracts automatically |
-| **User Experience** | Visible tool calls in conversation | Transparent, no tool call interruptions |
-| **Available Tools** | All 6 tools (add/update/delete/clear/search/load) | Only `memory_search` |
-| **Processing** | Synchronous during response | Asynchronous after response |
-| **Control** | Agent decides what to remember | Extractor analyzes and decides |
+| Aspect              | Manual Memory (Agentic)                           | Auto Memory                             |
+| ------------------- | ------------------------------------------------- | --------------------------------------- |
+| **Memory Creation** | Agent explicitly calls `memory_add`               | System extracts automatically           |
+| **User Experience** | Visible tool calls in conversation                | Transparent, no tool call interruptions |
+| **Available Tools** | All 6 tools (add/update/delete/clear/search/load) | Only `memory_search`                    |
+| **Processing**      | Synchronous during response                       | Asynchronous after response             |
+| **Control**         | Agent decides what to remember                    | Extractor analyzes and decides          |
 
 ### Key Features
 
@@ -46,7 +46,7 @@ extractorModel := openai.New("deepseek-chat")
 memExtractor := extractor.NewExtractor(extractorModel)
 
 // Create memory service with auto extraction enabled.
-// When extractor is set, only search tool is exposed.
+// When extractor is set, only search and clear tools are exposed.
 memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithExtractor(memExtractor),
     // Optional: configure async worker settings.
@@ -56,11 +56,11 @@ memoryService := memoryinmemory.NewMemoryService(
 )
 
 // Create LLM agent with memory tools.
-// Only search tool is available since extractor is set.
+// Only search and clear tools are available since extractor is set.
 llmAgent := llmagent.New(
     "auto-memory-assistant",
     llmagent.WithModel(chatModel),
-    llmagent.WithTools(memoryService.Tools()), // Only memory_search.
+    llmagent.WithTools(memoryService.Tools()), // memory_search and memory_clear.
 )
 
 // Create runner with memory service.
@@ -75,23 +75,31 @@ runner := runner.NewRunner(
 
 ### Auto Memory Configuration Options
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `WithExtractor(extractor)` | Enable auto mode with LLM extractor | nil (disabled) |
-| `WithAsyncMemoryNum(n)` | Number of background worker goroutines | 3 |
-| `WithMemoryQueueSize(n)` | Size of memory job queue | 100 |
-| `WithMemoryJobTimeout(d)` | Timeout for each extraction job | 30s |
+| Option                     | Description                            | Default        |
+| -------------------------- | -------------------------------------- | -------------- |
+| `WithExtractor(extractor)` | Enable auto mode with LLM extractor    | nil (disabled) |
+| `WithAsyncMemoryNum(n)`    | Number of background worker goroutines | 3              |
+| `WithMemoryQueueSize(n)`   | Size of memory job queue               | 100            |
+| `WithMemoryJobTimeout(d)`  | Timeout for each extraction job        | 30s            |
 
 ### Tool Availability
 
-| Tool | Manual Mode | Auto Mode |
-|------|-------------|-----------|
-| `memory_add` | ✅ Available | ❌ Hidden |
-| `memory_update` | ✅ Available | ❌ Hidden |
-| `memory_delete` | ⚙️ Configurable | ❌ Hidden |
-| `memory_clear` | ⚙️ Configurable | ❌ Hidden |
-| `memory_search` | ✅ Available | ✅ Available |
-| `memory_load` | ✅ Available | ❌ Hidden |
+| Tool            | Agentic Mode    | Auto Extraction Mode | Notes                |
+| --------------- | --------------- | -------------------- | -------------------- |
+| `memory_add`    | ✅ Default      | ❌ Unavailable       | Auto-extracted       |
+| `memory_update` | ✅ Default      | ❌ Unavailable       | Auto-extracted       |
+| `memory_search` | ✅ Default      | ✅ Default           | For memory retrieval |
+| `memory_load`   | ✅ Default      | ❌ Unavailable       | Not needed           |
+| `memory_delete` | ⚙️ Configurable | ❌ Unavailable       | Not needed           |
+| `memory_clear`  | ⚙️ Configurable | ⚙️ Configurable      | For bulk operations  |
+
+**Notes**:
+
+- **Agentic Mode**: Agent actively calls tools to manage memory
+- **Auto Extraction Mode**: LLM extractor automatically handles write operations
+- **Default**: Available immediately when service is created
+- **Configurable**: Must be manually enabled via `WithToolEnabled()`
+- **Unavailable**: Tool cannot be used in this mode
 
 ## Prerequisites
 
@@ -100,19 +108,19 @@ runner := runner.NewRunner(
 
 ## Environment Variables
 
-| Variable | Description | Default Value |
-|----------|-------------|---------------|
-| `OPENAI_API_KEY` | API key for the model service (required) | `` |
-| `OPENAI_BASE_URL` | Base URL for the model API endpoint | `https://api.openai.com/v1` |
+| Variable          | Description                              | Default Value               |
+| ----------------- | ---------------------------------------- | --------------------------- |
+| `OPENAI_API_KEY`  | API key for the model service (required) | ``                          |
+| `OPENAI_BASE_URL` | Base URL for the model API endpoint      | `https://api.openai.com/v1` |
 
 ## Command Line Arguments
 
-| Argument | Description | Default Value |
-|----------|-------------|---------------|
-| `-model` | Name of the model for chat responses | `deepseek-chat` |
-| `-ext-model` | Name of the model for memory extraction | Same as `-model` |
-| `-streaming` | Enable streaming mode for responses | `true` |
-| `-debug` | Enable debug mode to print messages sent to model | `false` |
+| Argument     | Description                                       | Default Value    |
+| ------------ | ------------------------------------------------- | ---------------- |
+| `-model`     | Name of the model for chat responses              | `deepseek-chat`  |
+| `-ext-model` | Name of the model for memory extraction           | Same as `-model` |
+| `-streaming` | Enable streaming mode for responses               | `true`           |
+| `-debug`     | Enable debug mode to print messages sent to model | `false`          |
 
 ## Usage
 
@@ -188,7 +196,7 @@ Streaming: true
    /exit     - End the conversation
 
 👤 You: Hi! My name is Alice and I work at TechCorp as a backend engineer.
-🤖 Assistant: Hello Alice! Nice to meet you. It's great to connect with a 
+🤖 Assistant: Hello Alice! Nice to meet you. It's great to connect with a
 backend engineer from TechCorp. How can I help you today?
 
 (Background: Extractor analyzes conversation and creates memory automatically)
@@ -211,7 +219,7 @@ backend engineer from TechCorp. How can I help you today?
 🔄 Executing...
 ✅ Tool response (ID: call_xyz789): {"results":[...]}
 
-🤖 Assistant: Based on my memory, I know that your name is Alice and you 
+🤖 Assistant: Based on my memory, I know that your name is Alice and you
 work at TechCorp as a backend engineer.
 
 👤 You: /exit

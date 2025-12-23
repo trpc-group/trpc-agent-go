@@ -21,7 +21,7 @@ Memory 支持两种模式来创建和管理记忆，根据你的场景选择合�
 | **工作方式** | Agent 决定何时调用记忆工具   | 系统自动从对话中提取记忆        |
 | **用户体验** | 显式 - 用户可见工具调用过程  | 透明 - 后台静默创建记忆         |
 | **控制权**   | Agent 完全控制记什么         | 提取器根据对话分析决定          |
-| **可用工具** | 全部 6 个工具                | 只读工具（search）              |
+| **可用工具** | 全部 6 个工具                | 只读工具（search、clear）       |
 | **处理方式** | 同步 - 响应生成过程中        | 异步 - 响应后由后台 worker 处理 |
 | **适用场景** | 精确控制、用户主导的记忆管理 | 自然对话、无感知的记忆积累      |
 
@@ -218,13 +218,13 @@ func main() {
     defer memoryService.Close()
 
     // 步骤 2：创建 Agent 并注册记忆工具
-    // 注意：配置了 Extractor 后，只有 search 工具可用。
+    // 注意：配置了 Extractor 后，只有 search 和 clear 工具可用。
     chatModel := openai.New("deepseek-chat")
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(chatModel),
         llmagent.WithDescription("具有自动记忆能力的智能助手"),
-        llmagent.WithTools(memoryService.Tools()), // 只有 search 工具
+        llmagent.WithTools(memoryService.Tools()), // 只有 search 和 clear 工具
     )
 
     // 步骤 3：创建 Runner 并设置记忆服务
@@ -495,14 +495,22 @@ if err != nil {
 
 #### 工具清单
 
-| 工具            | 功能       | 默认状态 | 说明           |
-| --------------- | ---------- | -------- | -------------- |
-| `memory_add`    | 添加新记忆 | ✅ 启用  | 创建新记忆条目 |
-| `memory_update` | 更新记忆   | ✅ 启用  | 修改现有记忆   |
-| `memory_search` | 搜索记忆   | ✅ 启用  | 根据关键词查找 |
-| `memory_load`   | 加载记忆   | ✅ 启用  | 加载最近的记忆 |
-| `memory_delete` | 删除记忆   | ❌ 禁用  | 删除单条记忆   |
-| `memory_clear`  | 清空记忆   | ❌ 禁用  | 删除所有记忆   |
+| 工具            | 功能       | 工具驱动模式 | 自动提取模式 | 说明           |
+| --------------- | ---------- | ------------ | ------------ | -------------- |
+| `memory_add`    | 添加新记忆 | ✅ 默认启用  | ❌ 不可用    | 创建新记忆条目 |
+| `memory_update` | 更新记忆   | ✅ 默认启用  | ❌ 不可用    | 修改现有记忆   |
+| `memory_search` | 搜索记忆   | ✅ 默认启用  | ✅ 默认启用  | 根据关键词查找 |
+| `memory_load`   | 加载记忆   | ✅ 默认启用  | ❌ 不可用    | 加载最近的记忆 |
+| `memory_delete` | 删除记忆   | ⚙️ 可配置    | ❌ 不可用    | 删除单条记忆   |
+| `memory_clear`  | 清空记忆   | ⚙️ 可配置    | ⚙️ 可配置    | 删除所有记忆   |
+
+**说明**：
+
+- **工具驱动模式**：Agent 主动调用工具管理记忆，所有工具均可配置
+- **自动提取模式**：LLM 提取器自动管理写入操作，只保留搜索和清空工具
+- **默认启用**：创建服务时自动可用，无需额外配置
+- **可配置**：需要通过 `WithToolEnabled()` 手动启用
+- **不可用**：该模式下无法使用此工具
 
 #### 启用/禁用工具
 
@@ -1227,7 +1235,7 @@ memoryService := memoryinmemory.NewMemoryService(
 llmAgent := llmagent.New(
     "assistant",
     llmagent.WithModel(model),
-    llmagent.WithTools(memoryService.Tools()),  // 只有 search。
+    llmagent.WithTools(memoryService.Tools()),  // 只有 search 和 clear。
     llmagent.WithPreloadMemory(10),             // 预加载最近记忆。
 )
 ```

@@ -13,11 +13,13 @@ package memory
 import (
 	"crypto/sha256"
 	"fmt"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -68,24 +70,57 @@ var validToolNames = map[string]struct{}{
 	memory.LoadToolName:   {},
 }
 
-// writeToolNames contains memory tool names that modify data.
-var writeToolNames = map[string]struct{}{
-	memory.AddToolName:    {},
-	memory.UpdateToolName: {},
-	memory.DeleteToolName: {},
-	memory.ClearToolName:  {},
-}
-
 // IsValidToolName checks if the given tool name is valid.
 func IsValidToolName(toolName string) bool {
 	_, ok := validToolNames[toolName]
 	return ok
 }
 
-// IsWriteTool returns true if the tool is a write tool (add/update/delete/clear).
-func IsWriteTool(toolName string) bool {
-	_, ok := writeToolNames[toolName]
-	return ok
+// autoMemoryTools contains tool names available in auto memory mode.
+var autoMemoryTools = map[string]struct{}{
+	memory.SearchToolName: {},
+	memory.ClearToolName:  {},
+}
+
+// BuildToolsList builds the tools list based on configuration.
+// This is a shared implementation for all memory service backends.
+// Parameters:
+//   - ext: the memory extractor (nil for agentic mode).
+//   - toolCreators: map of tool name to creator function.
+//   - enabledTools: map of tool name to enabled status.
+//   - cachedTools: map to cache created tools (will be modified).
+func BuildToolsList(
+	ext extractor.MemoryExtractor,
+	toolCreators map[string]memory.ToolCreator,
+	enabledTools map[string]bool,
+	cachedTools map[string]tool.Tool,
+) []tool.Tool {
+	// Collect tool names and sort for stable order.
+	names := make([]string, 0, len(toolCreators))
+	for name := range toolCreators {
+		// In auto memory mode, only keep search and clear tools.
+		if ext != nil {
+			if _, ok := autoMemoryTools[name]; ok {
+				names = append(names, name)
+			}
+			continue
+		}
+		// In agentic mode, respect enabledTools setting.
+		if !enabledTools[name] {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	tools := make([]tool.Tool, 0, len(names))
+	for _, name := range names {
+		if _, ok := cachedTools[name]; !ok {
+			cachedTools[name] = toolCreators[name]()
+		}
+		tools = append(tools, cachedTools[name])
+	}
+	return tools
 }
 
 // BuildSearchTokens builds tokens for searching memory content.

@@ -229,13 +229,13 @@ func main() {
     defer memoryService.Close()
 
     // Step 2: Create Agent and register memory tools.
-    // Note: With Extractor configured, only search tool is available.
+    // Note: With Extractor configured, only search and clear tools are available.
     chatModel := openai.New("deepseek-chat")
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(chatModel),
         llmagent.WithDescription("An assistant with automatic memory."),
-        llmagent.WithTools(memoryService.Tools()), // Only search tool.
+        llmagent.WithTools(memoryService.Tools()), // Only search and clear tools.
     )
 
     // Step 3: Create Runner with memory service.
@@ -405,14 +405,22 @@ The memory service provides 6 tools. Common tools are enabled by default, while 
 
 #### Tool List
 
-| Tool            | Function       | Default     | Description             |
-| --------------- | -------------- | ----------- | ----------------------- |
-| `memory_add`    | Add new memory | ✅ Enabled  | Create new memory entry |
-| `memory_update` | Update memory  | ✅ Enabled  | Modify existing memory  |
-| `memory_search` | Search memory  | ✅ Enabled  | Find by keywords        |
-| `memory_load`   | Load memories  | ✅ Enabled  | Load recent memories    |
-| `memory_delete` | Delete memory  | ❌ Disabled | Delete single memory    |
-| `memory_clear`  | Clear memories | ❌ Disabled | Delete all memories     |
+| Tool            | Function       | Agentic Mode    | Auto Extraction Mode | Description             |
+| --------------- | -------------- | --------------- | -------------------- | ----------------------- |
+| `memory_add`    | Add new memory | ✅ Default      | ❌ Unavailable       | Create new memory entry |
+| `memory_update` | Update memory  | ✅ Default      | ❌ Unavailable       | Modify existing memory  |
+| `memory_search` | Search memory  | ✅ Default      | ✅ Default           | Find by keywords        |
+| `memory_load`   | Load memories  | ✅ Default      | ❌ Unavailable       | Load recent memories    |
+| `memory_delete` | Delete memory  | ⚙️ Configurable | ❌ Unavailable       | Delete single memory    |
+| `memory_clear`  | Clear memories | ⚙️ Configurable | ⚙️ Configurable      | Delete all memories     |
+
+**Notes**:
+
+- **Agentic Mode**: Agent actively calls tools to manage memory, all tools are configurable
+- **Auto Extraction Mode**: LLM extractor automatically handles write operations, only search and clear tools remain
+- **Default**: Available immediately when service is created, no extra configuration needed
+- **Configurable**: Must be manually enabled via `WithToolEnabled()`
+- **Unavailable**: Tool cannot be used in this mode
 
 #### Enable/Disable Tools
 

@@ -86,7 +86,12 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 
 	// Pre-compute tools list to avoid lock contention in Tools() method.
-	svc.precomputedTools = svc.buildToolsList()
+	svc.precomputedTools = imemory.BuildToolsList(
+		opts.extractor,
+		opts.toolCreators,
+		opts.enabledTools,
+		svc.cachedTools,
+	)
 
 	// Initialize auto memory worker if extractor is configured.
 	if opts.extractor != nil {
@@ -278,33 +283,6 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 // The tools list is pre-computed at service creation time.
 func (s *Service) Tools() []tool.Tool {
 	return s.precomputedTools
-}
-
-// buildToolsList builds the tools list based on configuration.
-// This is called once at service creation time.
-func (s *Service) buildToolsList() []tool.Tool {
-	// Concurrency-safe and stable order by name.
-	names := make([]string, 0, len(s.opts.toolCreators))
-	for name := range s.opts.toolCreators {
-		if !s.opts.enabledTools[name] {
-			continue
-		}
-		// In auto memory mode, only keep search tool.
-		if s.opts.extractor != nil && name != memory.SearchToolName {
-			continue
-		}
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	tools := make([]tool.Tool, 0, len(names))
-	for _, name := range names {
-		if _, ok := s.cachedTools[name]; !ok {
-			s.cachedTools[name] = s.opts.toolCreators[name]()
-		}
-		tools = append(tools, s.cachedTools[name])
-	}
-	return tools
 }
 
 // EnqueueAutoMemoryJob enqueues an auto memory extraction job for async

@@ -662,27 +662,3 @@ func TestGenerateMemoryID(t *testing.T) {
 		assert.NotEqual(t, id1, id2)
 	})
 }
-
-func TestIsWriteTool(t *testing.T) {
-	tests := []struct {
-		name     string
-		toolName string
-		expected bool
-	}{
-		{"add tool is write", memory.AddToolName, true},
-		{"update tool is write", memory.UpdateToolName, true},
-		{"delete tool is write", memory.DeleteToolName, true},
-		{"clear tool is write", memory.ClearToolName, true},
-		{"search tool is not write", memory.SearchToolName, false},
-		{"load tool is not write", memory.LoadToolName, false},
-		{"invalid tool is not write", "invalid_tool", false},
-		{"empty tool is not write", "", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := IsWriteTool(tt.toolName)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}

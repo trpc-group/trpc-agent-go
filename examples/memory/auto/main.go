@@ -106,8 +106,8 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 	memExtractor := extractor.NewExtractor(extractModel)
 
 	// Create memory service with auto extraction enabled.
-	// When extractor is set, write tools (add/update/delete/clear) and load are hidden.
-	// Only search tool is exposed to the agent.
+	// When extractor is set, write tools (add/update/delete) are hidden, but
+	// search and clear tools remain available. Load tool is also hidden in auto mode.
 	c.memoryService = memoryinmemory.NewMemoryService(
 		memoryinmemory.WithExtractor(memExtractor),
 		// Optional: configure async worker settings.

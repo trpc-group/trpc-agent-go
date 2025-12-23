@@ -3284,11 +3284,21 @@ func TestTools_AutoMemoryMode(t *testing.T) {
 	s.opts.toolCreators = imemory.AllToolCreators
 	s.opts.enabledTools = imemory.DefaultEnabledTools
 	// Re-compute tools list after changing opts to simulate auto memory mode.
-	s.precomputedTools = s.buildToolsList()
+	s.precomputedTools = imemory.BuildToolsList(
+		s.opts.extractor,
+		s.opts.toolCreators,
+		s.opts.enabledTools,
+		s.cachedTools,
+	)
 
 	tools := s.Tools()
 
-	// In auto memory mode, only search tool should be returned.
-	assert.Len(t, tools, 1)
-	assert.Equal(t, memory.SearchToolName, tools[0].Declaration().Name)
+	// In auto memory mode, only search and clear tools should be returned.
+	assert.Len(t, tools, 2)
+	toolNames := make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	assert.True(t, toolNames[memory.SearchToolName])
+	assert.True(t, toolNames[memory.ClearToolName])
 }

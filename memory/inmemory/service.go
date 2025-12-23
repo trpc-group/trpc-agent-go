@@ -13,8 +13,8 @@ package inmemory
 import (
 	"context"
 	"fmt"
-	"sort"
 	"sync"
+	"sort"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -69,7 +69,12 @@ func NewMemoryService(options ...ServiceOpt) *MemoryService {
 	}
 
 	// Pre-compute tools list to avoid lock contention in Tools() method.
-	svc.precomputedTools = svc.buildToolsList()
+	svc.precomputedTools = imemory.BuildToolsList(
+		opts.extractor,
+		opts.toolCreators,
+		opts.enabledTools,
+		svc.cachedTools,
+	)
 
 	// Initialize auto memory worker if extractor is configured.
 	if opts.extractor != nil {
@@ -307,33 +312,6 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 // The tools list is pre-computed at service creation time.
 func (s *MemoryService) Tools() []tool.Tool {
 	return s.precomputedTools
-}
-
-// buildToolsList builds the tools list based on configuration.
-// This is called once at service creation time.
-func (s *MemoryService) buildToolsList() []tool.Tool {
-	// Collect enabled tool names and sort for stable order.
-	var names []string
-	for toolName := range s.opts.toolCreators {
-		if !s.opts.enabledTools[toolName] {
-			continue
-		}
-		// In auto memory mode, only keep search tool.
-		if s.opts.extractor != nil && toolName != memory.SearchToolName {
-			continue
-		}
-		names = append(names, toolName)
-	}
-	sort.Strings(names)
-
-	tools := make([]tool.Tool, 0, len(names))
-	for _, name := range names {
-		if _, exists := s.cachedTools[name]; !exists {
-			s.cachedTools[name] = s.opts.toolCreators[name]()
-		}
-		tools = append(tools, s.cachedTools[name])
-	}
-	return tools
 }
 
 // EnqueueAutoMemoryJob enqueues an auto memory extraction job for async
