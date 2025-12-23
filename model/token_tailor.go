@@ -83,11 +83,39 @@ func (c *SimpleTokenCounter) CountTokens(_ context.Context, message Message) (in
 		}
 	}
 
+	// Count tool calls.
+	for _, toolCall := range message.ToolCalls {
+		total += c.countToolCallRunes(toolCall) / approxRunesPerToken
+	}
+
 	// Total should be at least 1 if message is not empty.
 	if len(message.Content) > 0 {
 		return max(total, 1), nil
 	}
 	return total, nil
+}
+
+// countToolCallRunes calculates the rune count for a single tool call.
+// This is used for simple token estimation based on character count.
+func (c *SimpleTokenCounter) countToolCallRunes(toolCall ToolCall) int {
+	total := 0
+
+	// Count runes for tool call type (e.g., "function").
+	total += utf8.RuneCountInString(toolCall.Type)
+
+	// Count runes for tool call ID.
+	total += utf8.RuneCountInString(toolCall.ID)
+
+	// Count runes for function name.
+	total += utf8.RuneCountInString(toolCall.Function.Name)
+
+	// Count runes for function description.
+	total += utf8.RuneCountInString(toolCall.Function.Description)
+
+	// Count runes for function arguments (JSON string).
+	total += utf8.RuneCountInString(string(toolCall.Function.Arguments))
+
+	return total
 }
 
 // CountTokensRange estimates tokens for a range of messages.

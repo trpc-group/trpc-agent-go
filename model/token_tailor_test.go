@@ -1657,3 +1657,126 @@ func TestTailOutStrategy_BalancedMessages(t *testing.T) {
 	}
 	assert.LessOrEqual(t, totalTokens, 100)
 }
+
+func TestSimpleTokenCounter_WithToolCalls(t *testing.T) {
+	counter := NewSimpleTokenCounter()
+	ctx := context.Background()
+
+	// Test message with tool calls
+	toolCall := ToolCall{
+		Type: "function",
+		ID:   "call_123",
+		Function: FunctionDefinitionParam{
+			Name:        "get_weather",
+			Description: "Get the current weather",
+			Arguments:   []byte(`{"location": "Beijing"}`),
+		},
+	}
+
+	msg := Message{
+		Role:      RoleAssistant,
+		Content:   "I'll check the weather for you.",
+		ToolCalls: []ToolCall{toolCall},
+	}
+
+	result, err := counter.CountTokens(ctx, msg)
+	require.NoError(t, err)
+	assert.Greater(t, result, 0)
+
+	// Verify tool calls contribute to token count
+	contentOnlyMsg := Message{
+		Role:    RoleAssistant,
+		Content: "I'll check the weather for you.",
+	}
+	contentTokens, _ := counter.CountTokens(ctx, contentOnlyMsg)
+
+	// Tool calls should add additional tokens
+	assert.Greater(t, result, contentTokens)
+}
+
+func TestSimpleTokenCounter_OnlyToolCalls(t *testing.T) {
+	counter := NewSimpleTokenCounter()
+	ctx := context.Background()
+
+	toolCall := ToolCall{
+		Type: "function",
+		ID:   "call_456",
+		Function: FunctionDefinitionParam{
+			Name:        "calculate",
+			Description: "Perform mathematical calculations",
+			Arguments:   []byte(`{"expression": "2+2"}`),
+		},
+	}
+
+	msg := Message{
+		Role:      RoleAssistant,
+		ToolCalls: []ToolCall{toolCall},
+	}
+
+	result, err := counter.CountTokens(ctx, msg)
+	require.NoError(t, err)
+	assert.Greater(t, result, 0)
+}
+
+func TestSimpleTokenCounter_MultipleToolCalls(t *testing.T) {
+	counter := NewSimpleTokenCounter()
+	ctx := context.Background()
+
+	toolCalls := []ToolCall{
+		{
+			Type: "function",
+			ID:   "call_weather",
+			Function: FunctionDefinitionParam{
+				Name:        "get_weather",
+				Description: "Get weather information",
+				Arguments:   []byte(`{"location": "Shanghai"}`),
+			},
+		},
+		{
+			Type: "function",
+			ID:   "call_time",
+			Function: FunctionDefinitionParam{
+				Name:        "get_time",
+				Description: "Get current time",
+				Arguments:   []byte(`{"timezone": "UTC"}`),
+			},
+		},
+	}
+
+	msg := Message{
+		Role:      RoleAssistant,
+		Content:   "Here are multiple tool calls:",
+		ToolCalls: toolCalls,
+	}
+
+	result, err := counter.CountTokens(ctx, msg)
+	require.NoError(t, err)
+	assert.Greater(t, result, 0)
+
+	// Compare with single tool call
+	singleToolMsg := Message{
+		Role:      RoleAssistant,
+		Content:   "Here are multiple tool calls:",
+		ToolCalls: []ToolCall{toolCalls[0]},
+	}
+	singleTokens, _ := counter.CountTokens(ctx, singleToolMsg)
+
+	// Multiple tool calls should have more tokens
+	assert.Greater(t, result, singleTokens)
+}
+
+func TestSimpleTokenCounter_EmptyToolCall(t *testing.T) {
+	counter := NewSimpleTokenCounter()
+	ctx := context.Background()
+
+	// Test empty tool call
+	emptyToolCall := ToolCall{}
+	msg := Message{
+		Role:      RoleAssistant,
+		ToolCalls: []ToolCall{emptyToolCall},
+	}
+
+	result, err := counter.CountTokens(ctx, msg)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, result, 0)
+}

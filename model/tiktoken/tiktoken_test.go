@@ -271,3 +271,157 @@ func TestTiktokenCounter_DifferentModels(t *testing.T) {
 		require.Greater(t, used, 0)
 	})
 }
+
+func TestTiktokenCounter_WithToolCalls(t *testing.T) {
+	counter, err := New("gpt-4o")
+	if err != nil {
+		t.Skip("tiktoken-go not available: ", err)
+	}
+
+	// Test message with tool calls
+	toolCall := model.ToolCall{
+		Type: "function",
+		ID:   "call_123",
+		Function: model.FunctionDefinitionParam{
+			Name:        "get_weather",
+			Description: "Get the current weather",
+			Arguments:   []byte(`{"location": "Beijing"}`),
+		},
+	}
+
+	msg := model.Message{
+		Role:      model.RoleAssistant,
+		Content:   "I'll check the weather for you.",
+		ToolCalls: []model.ToolCall{toolCall},
+	}
+
+	used, err := counter.CountTokens(context.Background(), msg)
+	require.NoError(t, err)
+	require.Greater(t, used, 0)
+
+	// Verify tool calls contribute to token count
+	contentOnlyMsg := model.Message{
+		Role:    model.RoleAssistant,
+		Content: "I'll check the weather for you.",
+	}
+	contentTokens, _ := counter.CountTokens(context.Background(), contentOnlyMsg)
+
+	// Tool calls should add additional tokens
+	require.Greater(t, used, contentTokens)
+}
+
+func TestTiktokenCounter_OnlyToolCalls(t *testing.T) {
+	counter, err := New("gpt-4o")
+	if err != nil {
+		t.Skip("tiktoken-go not available: ", err)
+	}
+
+	toolCall := model.ToolCall{
+		Type: "function",
+		ID:   "call_456",
+		Function: model.FunctionDefinitionParam{
+			Name:        "calculate",
+			Description: "Perform mathematical calculations",
+			Arguments:   []byte(`{"expression": "2+2"}`),
+		},
+	}
+
+	msg := model.Message{
+		Role:      model.RoleAssistant,
+		ToolCalls: []model.ToolCall{toolCall},
+	}
+
+	used, err := counter.CountTokens(context.Background(), msg)
+	require.NoError(t, err)
+	require.Greater(t, used, 0)
+}
+
+func TestTiktokenCounter_MultipleToolCalls(t *testing.T) {
+	counter, err := New("gpt-4o")
+	if err != nil {
+		t.Skip("tiktoken-go not available: ", err)
+	}
+
+	toolCalls := []model.ToolCall{
+		{
+			Type: "function",
+			ID:   "call_weather",
+			Function: model.FunctionDefinitionParam{
+				Name:        "get_weather",
+				Description: "Get weather information",
+				Arguments:   []byte(`{"location": "Shanghai"}`),
+			},
+		},
+		{
+			Type: "function",
+			ID:   "call_time",
+			Function: model.FunctionDefinitionParam{
+				Name:        "get_time",
+				Description: "Get current time",
+				Arguments:   []byte(`{"timezone": "UTC"}`),
+			},
+		},
+	}
+
+	msg := model.Message{
+		Role:      model.RoleAssistant,
+		Content:   "Here are multiple tool calls:",
+		ToolCalls: toolCalls,
+	}
+
+	used, err := counter.CountTokens(context.Background(), msg)
+	require.NoError(t, err)
+	require.Greater(t, used, 0)
+
+	// Compare with single tool call
+	singleToolMsg := model.Message{
+		Role:      model.RoleAssistant,
+		Content:   "Here are multiple tool calls:",
+		ToolCalls: []model.ToolCall{toolCalls[0]},
+	}
+	singleTokens, _ := counter.CountTokens(context.Background(), singleToolMsg)
+
+	// Multiple tool calls should have more tokens
+	require.Greater(t, used, singleTokens)
+}
+
+func TestTiktokenCounter_EmptyToolCall(t *testing.T) {
+	counter, err := New("gpt-4o")
+	if err != nil {
+		t.Skip("tiktoken-go not available: ", err)
+	}
+
+	// Test empty tool call
+	emptyToolCall := model.ToolCall{}
+	msg := model.Message{
+		Role:      model.RoleAssistant,
+		ToolCalls: []model.ToolCall{emptyToolCall},
+	}
+
+	used, err := counter.CountTokens(context.Background(), msg)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, used, 0)
+}
+
+func TestTiktokenCounter_ToolCallArgumentsOnly(t *testing.T) {
+	counter, err := New("gpt-4o")
+	if err != nil {
+		t.Skip("tiktoken-go not available: ", err)
+	}
+
+	// Test tool call with only arguments
+	toolCall := model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Arguments: []byte(`{"key": "value", "number": 123, "array": [1, 2, 3]}`),
+		},
+	}
+
+	msg := model.Message{
+		Role:      model.RoleAssistant,
+		ToolCalls: []model.ToolCall{toolCall},
+	}
+
+	used, err := counter.CountTokens(context.Background(), msg)
+	require.NoError(t, err)
+	require.Greater(t, used, 0)
+}
