@@ -97,6 +97,7 @@ type options struct {
 	table          string // PostgreSQL table
 	indexDimension int    // PostgreSQL index dimension
 	sslMode        string // PostgreSQL SSL mode
+	dsn            string // PostgreSQL DSN
 	enableTSVector bool   // Enable text search vector
 	instanceName   string // Registered postgres instance name from storage/postgres
 	extraOptions   []any  // Extra options for storage/postgres
@@ -222,6 +223,13 @@ func WithIndexDimension(dimension int) Option {
 func WithSSLMode(sslMode string) Option {
 	return func(o *options) {
 		o.sslMode = sslMode
+	}
+}
+
+// WithPGVectorClientDSN sets the DSN for connection.
+func WithPGVectorClientDSN(dsn string) Option {
+	return func(o *options) {
+		o.dsn = dsn
 	}
 }
 

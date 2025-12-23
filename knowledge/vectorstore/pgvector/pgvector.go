@@ -99,35 +99,54 @@ func New(opts ...Option) (*VectorStore, error) {
 	var client postgres.Client
 	var err error
 	builder := postgres.GetClientBuilder()
+	var builderOpts []postgres.ClientBuilderOpt
 
-	// If instance name is set, use it to create postgres client
-	if option.instanceName != "" {
-		builderOpts, ok := postgres.GetPostgresInstance(option.instanceName)
+	// Priority 1: DSN
+	if option.dsn != "" {
+		builderOpts = []postgres.ClientBuilderOpt{
+			postgres.WithClientConnString(option.dsn),
+		}
+	} else if option.instanceName != "" {
+		// Priority 2: Instance Name
+		var ok bool
+		builderOpts, ok = postgres.GetPostgresInstance(option.instanceName)
 		if !ok {
 			return nil, fmt.Errorf("postgres instance %s not found", option.instanceName)
 		}
-		client, err = builder(context.Background(), builderOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("create postgres client from instance name failed: %w", err)
-		}
-	} else {
-		// Build connection string from individual parameters
-		// URL encode username and password to handle special characters
-		encodedUser := url.QueryEscape(option.user)
-		encodedPassword := url.QueryEscape(option.password)
-		connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-			encodedUser, encodedPassword, option.host, option.port, option.database, option.sslMode)
 
-		builderOpts := []postgres.ClientBuilderOpt{
-			postgres.WithClientConnString(connStr),
-		}
 		if len(option.extraOptions) > 0 {
 			builderOpts = append(builderOpts, postgres.WithExtraOptions(option.extraOptions...))
 		}
 
 		client, err = builder(context.Background(), builderOpts...)
 		if err != nil {
-			return nil, fmt.Errorf("create postgres client from connection string failed: %w", err)
+			return nil, fmt.Errorf("create postgres client from instance name failed: %w", err)
+		}
+	} else if option.host != "" {
+		// Priority 3: Custom Configuration (Host is checked as sufficient condition)
+		encodedUser := url.QueryEscape(option.user)
+		encodedPassword := url.QueryEscape(option.password)
+		connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+			encodedUser, encodedPassword, option.host, option.port, option.database, option.sslMode)
+
+		builderOpts = []postgres.ClientBuilderOpt{
+			postgres.WithClientConnString(connStr),
+		}
+	}
+
+	// If no connection method specified
+	if client == nil && len(builderOpts) == 0 {
+		return nil, fmt.Errorf("no postgres connection configuration provided")
+	}
+
+	if len(option.extraOptions) > 0 && client == nil {
+		builderOpts = append(builderOpts, postgres.WithExtraOptions(option.extraOptions...))
+	}
+
+	if client == nil {
+		client, err = builder(context.Background(), builderOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("create postgres client failed: %w", err)
 		}
 	}
 
