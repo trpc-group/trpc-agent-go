@@ -16,7 +16,7 @@ replace (
 require (
 	github.com/google/uuid v1.6.0
 	trpc.group/trpc-go/trpc-agent-go v0.5.0
-	trpc.group/trpc-go/trpc-agent-go/session/clickhouse v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/session/clickhouse v0.0.0-20251223085213-2e39323ebfdf
 	trpc.group/trpc-go/trpc-agent-go/session/mysql v0.0.0-20251126064502-c8c2594d2519
 	trpc.group/trpc-go/trpc-agent-go/session/postgres v0.0.0-20251126064502-c8c2594d2519
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0-20251126064502-c8c2594d2519
@@ -76,7 +76,7 @@ require (
 	google.golang.org/grpc v1.65.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v0.5.0 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v0.0.0-20251223085213-2e39323ebfdf // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.5.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect

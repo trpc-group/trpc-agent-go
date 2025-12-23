@@ -12,7 +12,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.10.0
 	trpc.group/trpc-go/trpc-agent-go v0.5.0
-	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v0.5.0
+	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v0.0.0-20251223085213-2e39323ebfdf
 )
 
 require (
