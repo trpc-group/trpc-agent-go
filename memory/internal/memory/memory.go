@@ -98,15 +98,7 @@ func BuildToolsList(
 	// Collect tool names and sort for stable order.
 	names := make([]string, 0, len(toolCreators))
 	for name := range toolCreators {
-		// In auto memory mode, only keep search and clear tools.
-		if ext != nil {
-			if _, ok := autoMemoryTools[name]; ok {
-				names = append(names, name)
-			}
-			continue
-		}
-		// In agentic mode, respect enabledTools setting.
-		if !enabledTools[name] {
+		if !shouldIncludeTool(name, ext, enabledTools) {
 			continue
 		}
 		names = append(names, name)
@@ -121,6 +113,33 @@ func BuildToolsList(
 		tools = append(tools, cachedTools[name])
 	}
 	return tools
+}
+
+// shouldIncludeTool determines if a tool should be included based on mode and settings.
+func shouldIncludeTool(name string, ext extractor.MemoryExtractor, enabledTools map[string]bool) bool {
+	// In auto memory mode, handle auto memory tools with special logic.
+	if ext != nil {
+		return shouldIncludeAutoMemoryTool(name, enabledTools)
+	}
+
+	// In agentic mode, respect enabledTools setting.
+	return enabledTools[name]
+}
+
+// shouldIncludeAutoMemoryTool checks if an auto memory tool should be included.
+// Auto memory tools are enabled by default but can be explicitly disabled.
+func shouldIncludeAutoMemoryTool(name string, enabledTools map[string]bool) bool {
+	// Only include tools that are in the auto memory tools set.
+	if _, ok := autoMemoryTools[name]; !ok {
+		return false
+	}
+
+	// Check if the tool was explicitly disabled.
+	if enabled, exists := enabledTools[name]; exists && !enabled {
+		return false
+	}
+
+	return true
 }
 
 // BuildSearchTokens builds tokens for searching memory content.

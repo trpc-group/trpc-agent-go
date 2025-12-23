@@ -405,21 +405,26 @@ The memory service provides 6 tools. Common tools are enabled by default, while 
 
 #### Tool List
 
-| Tool            | Function       | Agentic Mode    | Auto Extraction Mode | Description             |
-| --------------- | -------------- | --------------- | -------------------- | ----------------------- |
-| `memory_add`    | Add new memory | ✅ Default      | ❌ Unavailable       | Create new memory entry |
-| `memory_update` | Update memory  | ✅ Default      | ❌ Unavailable       | Modify existing memory  |
-| `memory_search` | Search memory  | ✅ Default      | ✅ Default           | Find by keywords        |
-| `memory_load`   | Load memories  | ✅ Default      | ❌ Unavailable       | Load recent memories    |
-| `memory_delete` | Delete memory  | ⚙️ Configurable | ❌ Unavailable       | Delete single memory    |
-| `memory_clear`  | Clear memories | ⚙️ Configurable | ⚙️ Configurable      | Delete all memories     |
+| Tool            | Function       | Agentic Mode    | Auto Extraction Mode | Description                                           |
+| --------------- | -------------- | --------------- | -------------------- | ----------------------------------------------------- |
+| `memory_add`    | Add new memory | ✅ Default      | ❌ Unavailable       | Create new memory entry                               |
+| `memory_update` | Update memory  | ✅ Default      | ❌ Unavailable       | Modify existing memory                                |
+| `memory_search` | Search memory  | ✅ Default      | ✅ Default           | Find by keywords                                      |
+| `memory_load`   | Load memories  | ✅ Default      | ❌ Unavailable       | Load recent memories                                  |
+| `memory_delete` | Delete memory  | ⚙️ Configurable | ❌ Unavailable       | Delete single memory                                  |
+| `memory_clear`  | Clear memories | ⚙️ Configurable | ⚙️ Configurable      | Delete all memories, disabled by default in auto mode |
 
 **Notes**:
 
 - **Agentic Mode**: Agent actively calls tools to manage memory, all tools are configurable
-- **Auto Extraction Mode**: LLM extractor automatically handles write operations, only search and clear tools remain
+  - Default enabled tools: `memory_add`, `memory_update`, `memory_search`, `memory_load`
+  - Default disabled tools: `memory_delete`, `memory_clear`
+- **Auto Extraction Mode**: LLM extractor automatically handles write operations, search tool enabled by default, clear tool disabled by default, both configurable
+  - Default enabled tools: `memory_search`
+  - Default disabled tools: `memory_clear`
+  - Unavailable tools: `memory_add`, `memory_update`, `memory_delete`, `memory_load`
 - **Default**: Available immediately when service is created, no extra configuration needed
-- **Configurable**: Must be manually enabled via `WithToolEnabled()`
+- **Configurable**: Can be enabled/disabled via `WithToolEnabled()`
 - **Unavailable**: Tool cannot be used in this mode
 
 #### Enable/Disable Tools

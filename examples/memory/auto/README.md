@@ -84,21 +84,26 @@ runner := runner.NewRunner(
 
 ### Tool Availability
 
-| Tool            | Agentic Mode    | Auto Extraction Mode | Notes                |
-| --------------- | --------------- | -------------------- | -------------------- |
-| `memory_add`    | ✅ Default      | ❌ Unavailable       | Auto-extracted       |
-| `memory_update` | ✅ Default      | ❌ Unavailable       | Auto-extracted       |
-| `memory_search` | ✅ Default      | ✅ Default           | For memory retrieval |
-| `memory_load`   | ✅ Default      | ❌ Unavailable       | Not needed           |
-| `memory_delete` | ⚙️ Configurable | ❌ Unavailable       | Not needed           |
-| `memory_clear`  | ⚙️ Configurable | ⚙️ Configurable      | For bulk operations  |
+| Tool            | Agentic Mode    | Auto Extraction Mode | Notes                                    |
+| --------------- | --------------- | -------------------- | ---------------------------------------- |
+| `memory_add`    | ✅ Default      | ❌ Unavailable       | Auto-extracted                           |
+| `memory_update` | ✅ Default      | ❌ Unavailable       | Auto-extracted                           |
+| `memory_search` | ✅ Default      | ✅ Default           | For memory retrieval                     |
+| `memory_load`   | ✅ Default      | ❌ Unavailable       | Not needed                               |
+| `memory_delete` | ⚙️ Configurable | ❌ Unavailable       | Not needed                               |
+| `memory_clear`  | ⚙️ Configurable | ⚙️ Configurable      | For bulk operations, disabled by default |
 
 **Notes**:
 
 - **Agentic Mode**: Agent actively calls tools to manage memory
-- **Auto Extraction Mode**: LLM extractor automatically handles write operations
+  - Default enabled: `memory_add`, `memory_update`, `memory_search`, `memory_load`
+  - Configurable: `memory_delete`, `memory_clear`
+- **Auto Extraction Mode**: LLM extractor automatically handles write operations, search tool is enabled by default, clear tool is disabled by default, both can be configured
+  - Default enabled: `memory_search`
+  - Configurable: `memory_clear`
+  - Unavailable: `memory_add`, `memory_update`, `memory_delete`, `memory_load`
 - **Default**: Available immediately when service is created
-- **Configurable**: Must be manually enabled via `WithToolEnabled()`
+- **Configurable**: Can be enabled/disabled via `WithToolEnabled()`
 - **Unavailable**: Tool cannot be used in this mode
 
 ## Prerequisites
