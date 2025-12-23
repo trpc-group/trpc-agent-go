@@ -68,8 +68,8 @@ func inferenceInvocation(
 	var (
 		invocationID  string
 		finalResponse *model.Message
-		toolCalls     []*model.ToolCall
-		toolResponses []*model.Message
+		tools         = make([]*evalset.Tool, 0)
+		toolIDIdx     = make(map[string]int)
 	)
 	for event := range events {
 		if event == nil {
@@ -89,63 +89,66 @@ func inferenceInvocation(
 		}
 		// Capture tool call uses.
 		if event.IsToolCallResponse() {
-			calls, err := convertToolCallResponse(event)
+			toolcalls, err := convertTools(event)
 			if err != nil {
 				return nil, fmt.Errorf("convert tool call response: %w", err)
 			}
-			toolCalls = append(toolCalls, calls...)
+			for _, toolcall := range toolcalls {
+				tools = append(tools, toolcall)
+				toolIDIdx[toolcall.ID] = len(tools) - 1
+			}
 		}
 		// Capture tool call responses.
 		if event.IsToolResultResponse() {
-			responses, err := convertToolResultResponse(event)
+			err := mergeToolResultResponse(event, toolIDIdx, tools)
 			if err != nil {
 				return nil, fmt.Errorf("convert tool result response: %w", err)
 			}
-			toolResponses = append(toolResponses, responses...)
 		}
 	}
-	// Convert the final response to evalset content.
+	// Convert the final response to invocation.
 	return &evalset.Invocation{
 		InvocationID:  invocationID,
 		UserContent:   invocation.UserContent,
 		FinalResponse: finalResponse,
-		IntermediateData: &evalset.IntermediateData{
-			ToolCalls:     toolCalls,
-			ToolResponses: toolResponses,
-		},
+		Tools:         tools,
 	}, nil
 }
 
-// convertToolCallResponse converts the tool call response to tool calls.
-func convertToolCallResponse(event *event.Event) ([]*model.ToolCall, error) {
-	toolCalls := []*model.ToolCall{}
+// convertTools converts the tool call to tools.
+func convertTools(event *event.Event) ([]*evalset.Tool, error) {
+	tools := []*evalset.Tool{}
 	for _, choice := range event.Response.Choices {
 		for _, toolCall := range choice.Message.ToolCalls {
-			call := toolCall
-			call.Function.Arguments = append([]byte{}, call.Function.Arguments...)
-			toolCalls = append(toolCalls, &call)
+			args := map[string]any{}
+			if err := json.Unmarshal(toolCall.Function.Arguments, &args); err != nil {
+				return nil, fmt.Errorf("unmarshal tool call arguments %s for tool %s: %w",
+					string(toolCall.Function.Arguments), toolCall.ID, err)
+			}
+			tool := &evalset.Tool{
+				ID:        toolCall.ID,
+				Name:      toolCall.Function.Name,
+				Arguments: args,
+			}
+			tools = append(tools, tool)
 		}
 	}
-	return toolCalls, nil
+	return tools, nil
 }
 
-// convertToolResultResponse converts the tool result response to tool response messages.
-func convertToolResultResponse(event *event.Event) ([]*model.Message, error) {
-	toolResponses := []*model.Message{}
+// mergeToolResultResponse merges the tool result response into the tools.
+func mergeToolResultResponse(event *event.Event, toolIDIdx map[string]int, tools []*evalset.Tool) error {
 	for _, choice := range event.Response.Choices {
-		if choice.Message.ToolID == "" {
-			continue
+		idx, ok := toolIDIdx[choice.Message.ToolID]
+		if !ok {
+			return fmt.Errorf("tool ID %s not found in tool ID index for tool result response", choice.Message.ToolID)
 		}
-		var response map[string]any
-		if err := json.Unmarshal([]byte(choice.Message.Content), &response); err != nil {
-			return nil, fmt.Errorf("unmarshal tool result response: %w", err)
+		result := map[string]any{}
+		if err := json.Unmarshal([]byte(choice.Message.Content), &result); err != nil {
+			return fmt.Errorf("unmarshal tool result response %s for tool %s: %w",
+				choice.Message.Content, choice.Message.ToolID, err)
 		}
-		toolResponses = append(toolResponses, &model.Message{
-			Role:     model.RoleTool,
-			ToolID:   choice.Message.ToolID,
-			ToolName: choice.Message.ToolName,
-			Content:  choice.Message.Content,
-		})
+		tools[idx].Result = result
 	}
-	return toolResponses, nil
+	return nil
 }

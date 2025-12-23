@@ -74,36 +74,24 @@ if err != nil {
             "role": "assistant",
             "content": "calc result: 5"
           },
-            "intermediateData": {
-              "toolCalls": [
-                {
-                  "id": "tool_use_1",
-                  "type": "function",
-                  "function": {
-                    "name": "calculator",
-                    "arguments": {
-                      "operation": "add",
-                      "a": 2,
-                      "b": 3
-                    }
-                  }
-                }
-              ],
-              "toolResponses": [
-                {
-                  "role": "tool",
-                  "toolId": "tool_use_1",
-                  "toolName": "calculator",
-                  "content": {
-                    "a": 2,
-                    "b": 3,
-                    "operation": "add",
-                    "result": 5
-                  }
-                }
-              ]
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "calculator",
+              "arguments": {
+                "operation": "add",
+                "a": 2,
+                "b": 3
+              },
+              "result": {
+                "a": 2,
+                "b": 3,
+                "operation": "add",
+                "result": 5
+              }
             }
-          }
+          ]
+        }
       ],
       "sessionInput": {
         "appName": "math-eval-app",
@@ -124,6 +112,7 @@ if err != nil {
     "threshold": 1,
     "criterion": {
       "toolTrajectory": {
+        "orderSensitive": false,
         "defaultStrategy": {
           "name": {
             "matchStrategy": "exact"
@@ -131,7 +120,7 @@ if err != nil {
           "arguments": {
             "matchStrategy": "exact"
           },
-          "response": {
+          "result": {
             "matchStrategy": "exact"
           }
         }
@@ -145,30 +134,30 @@ if err != nil {
 
 ```json
 {
-  "evalSetResultId": "math-eval-app_math-basic_64377112-1403-4e7d-ab90-8fce26f5aeb0",
-  "evalSetResultName": "math-eval-app_math-basic_64377112-1403-4e7d-ab90-8fce26f5aeb0",
+  "evalSetResultId": "math-eval-app_math-basic_538cdf6e-925d-41cf-943b-2849982b195e",
+  "evalSetResultName": "math-eval-app_math-basic_538cdf6e-925d-41cf-943b-2849982b195e",
   "evalSetId": "math-basic",
-      "evalCaseResults": [
+  "evalCaseResults": [
+    {
+      "evalSetId": "math-basic",
+      "evalId": "calc_add",
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
         {
-          "evalSetId": "math-basic",
-          "evalId": "calc_add",
-          "finalEvalStatus": "passed",
-          "overallEvalMetricResults": [
-            {
-              "metricName": "tool_trajectory_avg_score",
-              "score": 1,
-              "evalStatus": "passed",
-              "threshold": 1,
-              "criterion": {
-                "toolTrajectory": {
-                  "defaultStrategy": {
-                    "name": {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
                   "matchStrategy": "exact"
                 },
                 "arguments": {
                   "matchStrategy": "exact"
                 },
-                "response": {
+                "result": {
                   "matchStrategy": "exact"
                 }
               }
@@ -182,44 +171,32 @@ if err != nil {
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "74ca1b65-e143-4c98-b42e-3239f3b91ea0",
+            "invocationId": "5cc1f162-37e6-4d07-90e9-eb3ec5205b8d",
             "userContent": {
               "role": "user",
               "content": "calc add 2 3"
             },
             "finalResponse": {
               "role": "assistant",
-              "content": "2 + 3 = 5"
+              "content": "The result of 2 + 3 is **5**."
             },
-            "intermediateData": {
-              "toolCalls": [
-                {
-                  "id": "call_00_YFh5dH5naCL8SDmdPGx23lbT",
-                  "type": "function",
-                  "function": {
-                    "name": "calculator",
-                    "arguments": {
-                      "a": 2,
-                      "b": 3,
-                      "operation": "add"
-                    }
-                  }
+            "tools": [
+              {
+                "id": "call_00_etTEEthmCocxvq7r3m2LJRXf",
+                "name": "calculator",
+                "arguments": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add"
+                },
+                "result": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add",
+                  "result": 5
                 }
-              ],
-              "toolResponses": [
-                {
-                  "role": "tool",
-                  "toolId": "call_00_YFh5dH5naCL8SDmdPGx23lbT",
-                  "toolName": "calculator",
-                  "content": {
-                    "a": 2,
-                    "b": 3,
-                    "operation": "add",
-                    "result": 5
-                  }
-                }
-              ]
-            }
+              }
+            ]
           },
           "expectedInvocation": {
             "invocationId": "calc_add-1",
@@ -231,35 +208,23 @@ if err != nil {
               "role": "assistant",
               "content": "calc result: 5"
             },
-            "intermediateData": {
-              "toolCalls": [
-                {
-                  "id": "tool_use_1",
-                  "type": "function",
-                  "function": {
-                    "name": "calculator",
-                    "arguments": {
-                      "a": 2,
-                      "b": 3,
-                      "operation": "add"
-                    }
-                  }
+            "tools": [
+              {
+                "id": "tool_use_1",
+                "name": "calculator",
+                "arguments": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add"
+                },
+                "result": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add",
+                  "result": 5
                 }
-              ],
-              "toolResponses": [
-                {
-                  "role": "tool",
-                  "toolId": "tool_use_1",
-                  "toolName": "calculator",
-                  "content": {
-                    "a": 2,
-                    "b": 3,
-                    "operation": "add",
-                    "result": 5
-                  }
-                }
-              ]
-            }
+              }
+            ]
           },
           "evalMetricResults": [
             {
@@ -276,7 +241,7 @@ if err != nil {
                     "arguments": {
                       "matchStrategy": "exact"
                     },
-                    "response": {
+                    "result": {
                       "matchStrategy": "exact"
                     }
                   }
@@ -289,11 +254,11 @@ if err != nil {
           ]
         }
       ],
-      "sessionId": "154015e2-2126-4ff5-9da0-d70012b819f5",
+      "sessionId": "19877398-9586-4a97-b1d3-f8ce636ea54f",
       "userId": "user"
     }
   ],
-  "creationTimestamp": 1765982990.106037
+  "creationTimestamp": 1766455261.342534
 }
 ```
 
@@ -378,23 +343,20 @@ cases := []*evalset.EvalCase{
 					Role:    model.RoleAssistant,
 					Content: "calc result: 5",
 				},
-				IntermediateData: &evalset.IntermediateData{
-					ToolCalls: []*model.ToolCall{
-						{
-							ID:   "tool_use_1",
-							Type: "function",
-							Function: model.FunctionDefinitionParam{
-								Name:      "calculator",
-								Arguments: []byte(`{"operation":"add","a":2,"b":3}`),
-							},
+				Tools: []*evalset.Tool{
+					{
+						ID:   "tool_use_1",
+						Name: "calculator",
+						Arguments: map[string]any{
+							"operation": "add",
+							"a":         2,
+							"b":         3,
 						},
-					},
-					ToolResponses: []*model.Message{
-						{
-							Role:     model.RoleTool,
-							ToolID:   "tool_use_1",
-							ToolName: "calculator",
-							Content:  `{"a":2,"b":3,"operation":"add","result":5}`,
+						Result: map[string]any{
+							"a":         2,
+							"b":         3,
+							"operation": "add",
+							"result":    5,
 						},
 					},
 				},
@@ -416,7 +378,13 @@ for _, evalCase := range cases {
 #### Metric Construction
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	ctooltrajectory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+)
 
 evalMetric := &metric.EvalMetric{
 	MetricName: "tool_trajectory_avg_score",
@@ -426,13 +394,13 @@ evalMetric := &metric.EvalMetric{
 			ctooltrajectory.New(
 				ctooltrajectory.WithDefault(
 					&ctooltrajectory.ToolTrajectoryStrategy{
-						Name: &text.TextCriterion{
-							MatchStrategy: text.TextMatchStrategyExact,
+						Name: &ctext.TextCriterion{
+							MatchStrategy: ctext.TextMatchStrategyExact,
 						},
 						Arguments: &cjson.JSONCriterion{
 							MatchStrategy: cjson.JSONMatchStrategyExact,
 						},
-						Response: &cjson.JSONCriterion{
+						Result: &cjson.JSONCriterion{
 							MatchStrategy: cjson.JSONMatchStrategyExact,
 						},
 					},
@@ -467,10 +435,8 @@ Conversation data includes three types of content:
 
 - User input
 - Agent final response
-- Agent intermediate response, including:
-  - Tool invocation
-  - Tool response
-  - Intermediate response information
+- Tool invocation and result
+- Intermediate response information
 
 ```go
 import (
@@ -497,25 +463,27 @@ type EvalCase struct {
 
 // Invocation represents a user-agent interaction.
 type Invocation struct {
-	InvocationID      string
-	UserContent       *model.Message       // User input.
-	FinalResponse     *model.Message       // Agent final response.
-	IntermediateData  *IntermediateData    // Agent intermediate response data.
-	CreationTimestamp *epochtime.EpochTime // Creation time.
+	InvocationID          string
+	UserContent           *model.Message       // User input.
+	FinalResponse         *model.Message       // Agent final response.
+	Tools                 []*Tool              // Tool calls and results.
+	IntermediateResponses []*model.Message     // Intermediate responses.
+	CreationTimestamp     *epochtime.EpochTime // Creation time.
 }
 
-// IntermediateData represents intermediate data during execution.
-type IntermediateData struct {
-	ToolCalls             []*model.ToolCall   // Tool calls.
-	ToolResponses         []*model.Message    // Tool responses.
-	IntermediateResponses []*model.Message    // Intermediate responses.
+// Tool represents a single tool invocation and its execution result.
+type Tool struct {
+	ID        string         // Tool invocation ID.
+	Name      string         // Tool name.
+	Arguments map[string]any // Tool invocation parameters.
+	Result    map[string]any // Tool execution result.
 }
 
 // SessionInput represents session initialization input.
 type SessionInput struct {
-	AppName string                 // Application name.
-	UserID  string                 // User ID.
-	State   map[string]any         // Initial state.
+	AppName string         // Application name.
+	UserID  string         // User ID.
+	State   map[string]any // Initial state.
 }
 ```
 
@@ -1209,8 +1177,9 @@ JSONCriterion is used to compare structured JSON data. You can configure whether
 ```go
 // JSONCriterion defines the matching method for JSON objects.
 type JSONCriterion struct {
-	Ignore        bool               // Whether to skip matching.
-	MatchStrategy JSONMatchStrategy  // Matching strategy.
+	Ignore        bool                                                // Whether to skip matching.
+	IgnoreTree    map[string]any                                      // Ignore tree; a true leaf skips the key and its subtree.
+	MatchStrategy JSONMatchStrategy                                   // Matching strategy.
 	Compare       func(actual, expected map[string]any) (bool, error) // Custom comparison.
 }
 ```
@@ -1221,24 +1190,71 @@ Explanation of JSONMatchStrategy values:
 | ----------------------- | ------------------------------------------------------------------- |
 | exact                   | The actual JSON is exactly the same as the expected JSON (default). |
 
-#### ToolTrajectoryCriterion
+`IgnoreTree` lets you skip specific fields and their subtrees while checking the remaining fields.
 
-ToolTrajectoryCriterion is used to configure the evaluation criteria for tool invocations and responses. You can set default strategies, customize strategies by tool name, and control whether to ignore the invocation order.
+For example, ignore `metadata.updatedAt` but verify other fields:
 
 ```go
-// ToolTrajectoryCriterion defines the evaluation criteria for tool invocations and responses.
+criterion := &json.JSONCriterion{
+	IgnoreTree: map[string]any{
+		"metadata": map[string]any{
+			"updatedAt": true,
+		},
+	},
+}
+```
+
+Configuration file example:
+
+```json
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": false,
+        "defaultStrategy": {
+          "name": {
+            "matchStrategy": "exact"
+          },
+          "arguments": {
+            "matchStrategy": "exact"
+          },
+          "result": {
+            "matchStrategy": "exact",
+            "ignoreTree": {
+              "metadata": {
+                "updatedAt": true
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+#### ToolTrajectoryCriterion
+
+ToolTrajectoryCriterion is used to configure the evaluation criteria for tool invocations and results. You can set default strategies, customize strategies by tool name, and control whether invocation order must be preserved.
+
+```go
+// ToolTrajectoryCriterion defines the evaluation criteria for tool invocations and results.
 type ToolTrajectoryCriterion struct {
-	DefaultStrategy  *ToolTrajectoryStrategy            // Default strategy.
-	ToolStrategy     map[string]*ToolTrajectoryStrategy // Customized strategies by tool name.
-	OrderInsensitive bool                               // Whether to ignore invocation order.
-	Compare          func(actual, expected *evalset.Invocation) (bool, error) // Custom comparison.
+	DefaultStrategy *ToolTrajectoryStrategy                                  // Default strategy.
+	ToolStrategy    map[string]*ToolTrajectoryStrategy                       // Customized strategies by tool name.
+	OrderSensitive  bool                                                     // Whether to require strict order matching.
+	SubsetMatching  bool                                                     // Whether expected calls can be a subset of actual.
+	Compare         func(actual, expected *evalset.Invocation) (bool, error) // Custom comparison.
 }
 
 // ToolTrajectoryStrategy defines the matching strategy for a single tool.
 type ToolTrajectoryStrategy struct {
-	Name      *TextCriterion  // Tool name matching.
-	Arguments *JSONCriterion  // Invocation arguments matching.
-	Response  *JSONCriterion  // Tool response matching.
+	Name      *TextCriterion // Tool name matching.
+	Arguments *JSONCriterion // Invocation arguments matching.
+	Result    *JSONCriterion // Tool result matching.
 }
 ```
 
@@ -1246,7 +1262,7 @@ DefaultStrategy is used to configure the global default evaluation criterion and
 
 ToolStrategy overrides the evaluation criterion for specific tools by tool name. When ToolStrategy is not set, all tool invocations use DefaultStrategy.
 
-If no evaluation criterion is configured, the framework uses the default evaluation criterion: tool names are compared using TextCriterion with the `exact` strategy, and arguments and responses are compared using JSONCriterion with the `exact` strategy. This ensures that tool trajectory evaluation always has a reasonable fallback behavior.
+If no evaluation criterion is configured, the framework uses the default evaluation criterion: tool names are compared using TextCriterion with the `exact` strategy, and arguments and results are compared using JSONCriterion with the `exact` strategy. This ensures that tool trajectory evaluation always has a reasonable fallback behavior.
 
 The following example illustrates a typical scenario: for most tools you want strict alignment of tool invocations and results, but for time-related tools such as `current_time`, the response value itself is unstable. Therefore, you only need to check whether the correct tool and arguments were invoked as expected, without requiring the time value itself to be exactly the same.
 
@@ -1269,7 +1285,7 @@ criterion := criterion.New(
 					Arguments: &json.JSONCriterion{
 						MatchStrategy: json.JSONMatchStrategyExact,
 					},
-					Response: &json.JSONCriterion{
+					Result: &json.JSONCriterion{
 						MatchStrategy: json.JSONMatchStrategyExact,
 					},
 				},
@@ -1282,8 +1298,8 @@ criterion := criterion.New(
 					Arguments: &json.JSONCriterion{
 						MatchStrategy: json.JSONMatchStrategyExact,
 					},
-					Response: &json.JSONCriterion{
-						Ignore: true, // Ignore matching of this tool's response.
+					Result: &json.JSONCriterion{
+						Ignore: true, // Ignore matching of this tool's result.
 					},
 				},
 			}),
@@ -1291,20 +1307,102 @@ criterion := criterion.New(
 	),
 )
 ```
-
-By default, tool invocations are compared one by one in the order in which they appear. The actual tool invocation sequence and the expected tool invocation sequence must match in length, order, and in the tool name, arguments, and response at each step. If the invocation order is different, the evaluation will be considered as failed.
-
-OrderInsensitive controls whether the tool invocation order is ignored. When enabled, the evaluation logic first generates a sorting key for each tool invocation (composed of the tool name and the normalized representation of arguments and response). It then sorts the actual invocation sequence and the expected invocation sequence by this key, producing two invocation lists with stable order. Next, it compares the corresponding invocations in the sorted lists one by one, and determines whether these invocations match according to the configured evaluation criteria. Put simply, as long as the tool invocations on both sides are completely identical in content, the evaluation will not fail due to differences in the original invocation order. For example:
+	
+By default, tool invocation matching is order-insensitive. Each expected tool attempts to pair with any actual tool that satisfies the strategy, and a single actual invocation will not be reused. Matching passes when all expected tools find a partner. Specifically, the evaluator builds a bipartite graph with expected invocations as left nodes and actual invocations as right nodes; for every expected/actual pair that satisfies the tool strategy, it adds an edge. It then uses the Kuhn algorithm to compute the maximum matching and checks unmatched expected nodes. If every expected node is matched, tool matching passes; otherwise, the unmatched expected nodes are returned.
+	
+If you want to strictly compare in the order tools appear, enable `WithOrderSensitive(true)`. The evaluator scans the expected and actual lists in order and fails if an expected invocation cannot find a matching actual invocation.
 
 ```go
 criterion := criterion.New(
 	criterion.WithToolTrajectory(
 		ctooltrajectory.New(
-			ctooltrajectory.WithOrderInsensitive(true),
+			ctooltrajectory.WithOrderSensitive(true), // Enable order-sensitive matching.
 		),
 	),
 )
 ```
+
+Configuration example for strict order matching:
+
+```json
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": true,
+        "defaultStrategy": {
+          "name": {
+            "matchStrategy": "exact"
+          },
+          "arguments": {
+            "matchStrategy": "exact"
+          },
+          "result": {
+            "matchStrategy": "exact"
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+SubsetMatching controls whether the expected tool sequence can be just a subset of the actual tool sequence. It is off by default.
+
+- Off: the expected and actual tool call counts must be the same.
+- On: the actual sequence may be longer, allowing the expected tools to be a subset of the actual tools.
+
+```go
+criterion := criterion.New(
+	criterion.WithToolTrajectory(
+		ctooltrajectory.New(
+			ctooltrajectory.WithSubsetMatching(true),
+		),
+	),
+)
+```
+
+Configuration example with subset matching:
+
+```json
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "subsetMatching": true,
+        "defaultStrategy": {
+          "name": {
+            "matchStrategy": "exact"
+          },
+          "arguments": {
+            "matchStrategy": "exact"
+          },
+          "result": {
+            "matchStrategy": "exact"
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+Assume `A`, `B`, `C`, and `D` each denote one tool call. Matching examples:
+
+| SubsetMatching | OrderSensitive | Expected | Actual | Result | Note |
+| --- | --- | --- | --- | --- | --- |
+| Off | Off | `[A]` | `[A, B]` | Mismatch | Count differs |
+| On | Off | `[A]` | `[A, B]` | Match | Expected is subset |
+| On | Off | `[C, A]` | `[A, B, C]` | Match | Expected is subset with order-insensitive matching |
+| On | On | `[A, C]` | `[A, B, C]` | Match | Expected is subset and order matches |
+| On | On | `[C, A]` | `[A, B, C]` | Mismatch | Order not satisfied |
+| On | Off | `[C, D]` | `[A, B, C]` | Mismatch | Actual tool sequence missing D |
+| Any | Any | `[A, A]` | `[A]` | Mismatch | Actual calls insufficient; a single call cannot be reused |
+
 
 #### LLMCriterion
 
@@ -1389,7 +1487,6 @@ criterion := criterion.New(
 )
 ```
 
-
 ### Evaluator
 
 #### Tool Trajectory Evaluator
@@ -1417,7 +1514,7 @@ evalMetric := &metric.EvalMetric{
 	Threshold:  1.0,
 	Criterion: criterion.New(
 		criterion.WithToolTrajectory(
-			// Use the default evaluation criterion; tool name, arguments, and response must be strictly identical.
+			// Use the default evaluation criterion; tool name, arguments, and result must be strictly identical.
 			ctooltrajectory.New(),
 		),
 	),
@@ -1438,7 +1535,7 @@ An example of the corresponding metric config file:
 ]
 ```
 
-See the complete example at [examples/evaluation/local](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/local).
+For a complete example, see [examples/evaluation/tooltrajectory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/tooltrajectory).
 
 #### LLM Final Response Evaluator
 

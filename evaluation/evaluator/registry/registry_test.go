@@ -123,3 +123,13 @@ func TestRegistryListSorted(t *testing.T) {
 	assert.Contains(t, names, "aaa")
 	assert.Contains(t, names, "zzz")
 }
+
+func TestRegistryListSorting(t *testing.T) {
+	reg := &registry{
+		evaluators: map[string]evaluator.Evaluator{
+			"b-eval": &stubEvaluator{name: "b-eval"},
+			"a-eval": &stubEvaluator{name: "a-eval"},
+		},
+	}
+	assert.Equal(t, []string{"a-eval", "b-eval"}, reg.List())
+}

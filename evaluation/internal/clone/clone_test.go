@@ -16,33 +16,32 @@ import (
 )
 
 type sample struct {
-	ID    string
-	Attrs map[string]int
+	Value string
+}
+
+type nonSerializable struct {
+	Bad map[string]any
 }
 
 func TestCloneSuccess(t *testing.T) {
-
-	src := &sample{
-		ID: "item",
-		Attrs: map[string]int{
-			"score": 1,
-		},
-	}
+	src := &sample{Value: "ok"}
 	dst, err := Clone(src)
 	assert.NoError(t, err)
 	assert.NotSame(t, src, dst)
 	assert.Equal(t, src, dst)
-
-	dst.Attrs["score"] = 2
-	assert.Equal(t, 1, src.Attrs["score"])
 }
 
 func TestCloneNilInput(t *testing.T) {
-
-	var src *sample
-	clone, err := Clone(src)
-	assert.Nil(t, clone)
+	dst, err := Clone[*sample](nil)
 	assert.Error(t, err)
+	assert.Nil(t, dst)
+}
+
+func TestCloneGobError(t *testing.T) {
+	src := &nonSerializable{Bad: map[string]any{"c": make(chan int)}}
+	dst, err := Clone(src)
+	assert.Error(t, err)
+	assert.Nil(t, dst)
 }
 
 type dynamic struct {

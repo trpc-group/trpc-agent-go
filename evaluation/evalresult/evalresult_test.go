@@ -51,41 +51,29 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
               "role": "assistant",
               "content": "final: 1+2=3."
             },
-            "intermediateData": {
-              "toolCalls": [
-                {
-                  "id": "tool-call-1",
-                  "type": "function",
-                  "function": {
-                    "name": "calculator",
-                    "arguments": {
-                      "operation": "add",
-                      "a": 1,
-                      "b": 2
-                    }
-                  }
+            "tools": [
+              {
+                "id": "tool-call-1",
+                "name": "calculator",
+                "arguments": {
+                  "operation": "add",
+                  "a": 1,
+                  "b": 2
+                },
+                "result": {
+                  "a": 1,
+                  "b": 2,
+                  "operation": "add",
+                  "result": 3
                 }
-              ],
-              "toolResponses": [
-                {
-                  "content": {
-                    "a": 1,
-                    "b": 2,
-                    "operation": "add",
-                    "result": 3
-                  },
-                  "role": "tool",
-                  "toolId": "tool-call-1",
-                  "toolName": "calculator"
-                }
-              ],
-              "intermediateResponses": [
-                {
-                  "role": "assistant",
-                  "content": "thinking..."
-                }
-              ]
-            },
+              }
+            ],
+            "intermediateResponses": [
+              {
+                "role": "assistant",
+                "content": "thinking..."
+              }
+            ],
             "creationTimestamp": 1700000000
           },
           "expectedInvocation": {
@@ -98,41 +86,29 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
               "role": "assistant",
               "content": "final: 1+2=3."
             },
-            "intermediateData": {
-              "toolCalls": [
-                {
-                  "id": "tool-call-1",
-                  "type": "function",
-                  "function": {
-                    "name": "calculator",
-                    "arguments": {
-                      "operation": "add",
-                      "a": 1,
-                      "b": 2
-                    }
-                  }
+            "tools": [
+              {
+                "id": "tool-call-1",
+                "name": "calculator",
+                "arguments": {
+                  "operation": "add",
+                  "a": 1,
+                  "b": 2
+                },
+                "result": {
+                  "a": 1,
+                  "b": 2,
+                  "operation": "add",
+                  "result": 3
                 }
-              ],
-              "toolResponses": [
-                {
-                  "content": {
-                    "a": 1,
-                    "b": 2,
-                    "operation": "add",
-                    "result": 3
-                  },
-                  "role": "tool",
-                  "toolId": "tool-call-1",
-                  "toolName": "calculator"
-                }
-              ],
-              "intermediateResponses": [
-                {
-                  "role": "assistant",
-                  "content": "thinking..."
-                }
-              ]
-            },
+              }
+            ],
+            "intermediateResponses": [
+              {
+                "role": "assistant",
+                "content": "thinking..."
+              }
+            ],
             "creationTimestamp": 1700000000
           },
           "evalMetricResults": [
