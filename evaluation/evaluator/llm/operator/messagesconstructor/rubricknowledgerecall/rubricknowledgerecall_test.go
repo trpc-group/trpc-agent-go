@@ -30,9 +30,9 @@ func TestConstructMessagesWithKnowledge(t *testing.T) {
 			{
 				ID:   "1",
 				Name: "knowledge_search",
-				Arguments: map[string]any{
-					"documents": []any{
-						map[string]any{
+				Result: map[string]any{
+					"documents": []map[string]any{
+						{
 							"text":  "result",
 							"score": 0.9,
 						},
@@ -86,7 +86,7 @@ func TestConstructMessagesKnowledgeError(t *testing.T) {
 			{
 				ID:   "1",
 				Name: "knowledge_search",
-				Arguments: map[string]any{
+				Result: map[string]any{
 					"documents": "bad",
 				},
 			},

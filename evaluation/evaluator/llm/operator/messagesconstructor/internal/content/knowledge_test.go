@@ -11,6 +11,7 @@ package content
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
@@ -91,6 +92,7 @@ func TestExtractKnowledgeRecallNilResponses(t *testing.T) {
 		},
 	}
 	result, err := ExtractKnowledgeRecall(tools)
-	require.Error(t, err)
-	require.Empty(t, result)
+	require.NoError(t, err)
+	require.NotEmpty(t, result)
+	assert.Contains(t, result, `"documents":null`)
 }
