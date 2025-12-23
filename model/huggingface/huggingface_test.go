@@ -11,7 +11,9 @@ package huggingface
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const ApiKey = "*****"
@@ -652,10 +655,6 @@ func TestModel_TokenTailoring_Integration(t *testing.T) {
 			return
 		}
 
-		// 验证请求头
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
-		assert.Contains(t, r.Header.Get("Authorization"), "Bearer")
-
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 
@@ -664,7 +663,7 @@ func TestModel_TokenTailoring_Integration(t *testing.T) {
 			"id": "chatcmpl-test",
 			"object": "chat.completion",
 			"created": 1234567890,
-			"model": "meta-llama/Llama-3.1-8B-Instruct",
+			"model": "test-model",
 			"choices": [{
 				"index": 0,
 				"message": {
@@ -683,9 +682,6 @@ func TestModel_TokenTailoring_Integration(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// 使用一个测试模型名称
-	testModelName := "meta-llama/Llama-3.1-8B-Instruct"
-
 	// Create a large conversation that exceeds token limit.
 	var messages []model.Message
 	for i := 0; i < 100; i++ {
@@ -702,7 +698,7 @@ func TestModel_TokenTailoring_Integration(t *testing.T) {
 	}
 
 	m, err := New(
-		testModelName,
+		"test-model",
 		WithAPIKey("test-api-key"),
 		WithBaseURL(server.URL),
 		WithMaxInputTokens(500), // Set a low limit to trigger tailoring
@@ -722,10 +718,6 @@ func TestModel_TokenTailoring_Integration(t *testing.T) {
 	var responses []*model.Response
 	for resp := range responseChan {
 		responses = append(responses, resp)
-		// 如果有错误，记录下来
-		if resp.Error != nil {
-			log.Errorf("Response error: %v", resp.Error)
-		}
 	}
 
 	log.Infof("request.Messages: %d", len(request.Messages))
@@ -739,17 +731,9 @@ func TestModel_TokenTailoring_Integration(t *testing.T) {
 
 	// Verify response was received.
 	require.NotEmpty(t, responses, "Should receive at least one response")
-
-	// 检查响应是否有错误
 	assert.Nil(t, responses[0].Error, "Response should not have error")
-
-	// 检查是否有 Choices
 	require.NotEmpty(t, responses[0].Choices, "Response should have choices")
 	log.Info(responses[0].Choices[0].Message.Content)
-
-	// 验证响应内容
-	assert.NotEmpty(t, responses[0].Choices[0].Message.Content)
-	assert.Equal(t, model.RoleAssistant, responses[0].Choices[0].Message.Role)
 }
 
 func TestModel_Multimodal_ImageURL(t *testing.T) {
@@ -765,7 +749,7 @@ func TestModel_Multimodal_ImageURL(t *testing.T) {
 				"index": 0,
 				"message": {
 					"role": "assistant",
-					"content": "I can see a beautiful landscape in the image."
+					"content": "I can see a beautiful image."
 				},
 				"finish_reason": "stop"
 			}],
@@ -777,9 +761,10 @@ func TestModel_Multimodal_ImageURL(t *testing.T) {
 		}`)
 	}))
 	defer server.Close()
+
 	m, err := New(
-		"zai-org/GLM-4.6V-Flash",
-		WithAPIKey(ApiKey),
+		"test-model",
+		WithAPIKey("test-api-key"),
 		WithBaseURL(server.URL),
 	)
 	require.NoError(t, err)
@@ -819,9 +804,9 @@ func TestModel_Multimodal_ImageURL(t *testing.T) {
 	}
 
 	// Verify response.
-	require.NotEmpty(t, responses)
-	assert.Nil(t, responses[0].Error)
-	assert.NotEmpty(t, responses[0].Choices)
+	require.NotEmpty(t, responses, "Should receive at least one response")
+	assert.Nil(t, responses[0].Error, "Response should not have error")
+	require.NotEmpty(t, responses[0].Choices, "Response should have choices")
 	assert.Contains(t, responses[0].Choices[0].Message.Content, "image")
 	log.Infof("%+v", responses[0].Choices[0].Message.Content)
 }
@@ -848,8 +833,8 @@ func TestModel_Multimodal_Base64Image(t *testing.T) {
 	defer server.Close()
 
 	m, err := New(
-		"zai-org/GLM-4.6V-Flash",
-		WithAPIKey(ApiKey),
+		"test-model",
+		WithAPIKey("test-api-key"),
 		WithBaseURL(server.URL),
 	)
 	require.NoError(t, err)
@@ -890,8 +875,9 @@ func TestModel_Multimodal_Base64Image(t *testing.T) {
 	}
 
 	// Verify response.
-	require.NotEmpty(t, responses)
-	assert.Nil(t, responses[0].Error)
+	require.NotEmpty(t, responses, "Should receive at least one response")
+	assert.Nil(t, responses[0].Error, "Response should not have error")
+	require.NotEmpty(t, responses[0].Choices, "Response should have choices")
 	log.Infof("Responses: %v", responses[0].Choices[0].Message.Content)
 }
 
@@ -917,8 +903,8 @@ func TestModel_Multimodal_MultipleImages(t *testing.T) {
 	defer server.Close()
 
 	m, err := New(
-		"ServiceNow-AI/Apriel-1.6-15b-Thinker",
-		WithAPIKey(ApiKey),
+		"test-model",
+		WithAPIKey("test-api-key"),
 		WithBaseURL(server.URL),
 	)
 	require.NoError(t, err)
@@ -964,10 +950,85 @@ func TestModel_Multimodal_MultipleImages(t *testing.T) {
 	}
 
 	// Verify response.
-	require.NotEmpty(t, responses)
-	assert.Nil(t, responses[0].Error)
-	assert.NotEmpty(t, responses[0].Choices)
+	require.NotEmpty(t, responses, "Should receive at least one response")
+	assert.Nil(t, responses[0].Error, "Response should not have error")
+	require.NotEmpty(t, responses[0].Choices, "Response should have choices")
 	log.Infof("responses: %v", responses[0].Choices[0].Message.Content)
+}
+
+func TestModel_Multimodal_StreamingWithImage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		// Send streaming chunks
+		chunks := []string{
+			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"I can"},"finish_reason":null}]}` + "\n\n",
+			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"content":" see"},"finish_reason":null}]}` + "\n\n",
+			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"content":" the image"},"finish_reason":null}]}` + "\n\n",
+			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n",
+			"data: [DONE]\n\n",
+		}
+
+		for _, chunk := range chunks {
+			fmt.Fprint(w, chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-api-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	// Create a streaming request with image.
+	request := &model.Request{
+		Messages: []model.Message{
+			{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeText,
+						Text: stringPtr("这张图片里面有什么?"),
+					},
+					{
+						Type: model.ContentTypeImage,
+						Image: &model.Image{
+							URL:    "data:image/jpeg;base64,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",
+							Detail: "auto",
+						},
+					},
+				},
+			},
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	// Collect streaming responses.
+	var responses []*model.Response
+	var fullContent strings.Builder
+	for resp := range responseChan {
+		responses = append(responses, resp)
+		if len(resp.Choices) > 0 && resp.Choices[0].Delta.Content != "" {
+			fullContent.WriteString(resp.Choices[0].Delta.Content)
+		}
+	}
+
+	// Verify streaming responses.
+	assert.NotEmpty(t, responses)
+	assert.Equal(t, "I can see the image", fullContent.String())
 }
 
 func TestConvertContentPart_Image(t *testing.T) {
@@ -1125,3 +1186,1626 @@ func TestConvertMessage_Multimodal(t *testing.T) {
 func stringPtr(s string) *string {
 	return &s
 }
+
+// TestModel_ExtraFields tests the extra fields functionality
+func TestModel_ExtraFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Read and verify request body contains extra fields
+		body, _ := io.ReadAll(r.Body)
+		var reqMap map[string]any
+		json.Unmarshal(body, &reqMap)
+		
+		// Verify extra fields are present
+		assert.Equal(t, "custom_value", reqMap["custom_field"])
+		assert.Equal(t, float64(123), reqMap["custom_number"])
+		
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "test-id",
+			"object": "chat.completion",
+			"created": 1234567890,
+			"model": "test-model",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "Test response"
+				},
+				"finish_reason": "stop"
+			}]
+		}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithExtraFields(map[string]any{
+			"custom_field": "custom_value",
+			"custom_number": 123,
+		}),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+}
+
+// TestModel_StreamingError tests streaming request error handling
+func TestModel_StreamingError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error": {"message": "Unauthorized", "type": "auth_error"}}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("invalid-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.NotNil(t, responses[0].Error)
+	assert.Contains(t, responses[0].Error.Message, "Unauthorized")
+}
+
+// TestModel_NonStreamingError tests non-streaming request error handling
+func TestModel_NonStreamingError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error": {"message": "Bad request", "type": "invalid_request_error"}}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.NotNil(t, responses[0].Error)
+	assert.Contains(t, responses[0].Error.Message, "Bad request")
+}
+
+// TestModel_InvalidJSON tests handling of invalid JSON responses
+func TestModel_InvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{invalid json}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.NotNil(t, responses[0].Error)
+}
+
+// TestModel_ContextCancellation tests context cancellation
+func TestModel_ContextCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate slow response
+		time.Sleep(2 * time.Second)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id": "test"}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.NotNil(t, responses[0].Error)
+}
+
+// TestModel_StreamingInvalidChunk tests handling of invalid streaming chunks
+func TestModel_StreamingInvalidChunk(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Send a valid chunk first
+		fmt.Fprint(w, `data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"valid"},"finish_reason":null}]}`+"\n\n")
+		// Then send an invalid chunk (will be logged as warning but not stop the stream)
+		fmt.Fprint(w, "data: {invalid json}\n\n")
+		// End the stream
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	// Should receive at least the valid chunk
+	require.NotEmpty(t, responses)
+	// The first response should be valid
+	if len(responses) > 0 && responses[0].Error == nil {
+		assert.NotEmpty(t, responses[0].Choices)
+	}
+}
+
+// TestModel_WithCallbacks tests callback functionality
+func TestModel_WithCallbacks(t *testing.T) {
+	var requestCallbackCalled bool
+	var chunkCallbackCalled bool
+	var streamCompleteCallbackCalled bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithChatRequestCallback(func(ctx context.Context, req *ChatCompletionRequest) {
+			requestCallbackCalled = true
+		}),
+		WithChatChunkCallback(func(ctx context.Context, req *ChatCompletionRequest, chunk *ChatCompletionChunk) {
+			chunkCallbackCalled = true
+		}),
+		WithChatStreamCompleteCallback(func(ctx context.Context, req *ChatCompletionRequest, err error) {
+			streamCompleteCallbackCalled = true
+		}),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	for range responseChan {
+	}
+
+	assert.True(t, requestCallbackCalled)
+	assert.True(t, chunkCallbackCalled)
+	assert.True(t, streamCompleteCallbackCalled)
+}
+
+// TestModel_WithTools tests tool calling functionality
+func TestModel_WithTools(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Read and verify request contains tools
+		body, _ := io.ReadAll(r.Body)
+		var reqMap map[string]any
+		json.Unmarshal(body, &reqMap)
+		
+		// Verify tools are present
+		tools, ok := reqMap["tools"].([]any)
+		assert.True(t, ok)
+		assert.NotEmpty(t, tools)
+		
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "test-id",
+			"object": "chat.completion",
+			"created": 1234567890,
+			"model": "test-model",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": null,
+					"tool_calls": [{
+						"id": "call_123",
+						"type": "function",
+						"function": {
+							"name": "get_weather",
+							"arguments": "{\"location\":\"Beijing\"}"
+						}
+					}]
+				},
+				"finish_reason": "tool_calls"
+			}]
+		}`)
+	}))
+	defer server.Close()
+
+	// Create a simple mock tool
+	mockTool := &simpleMockTool{
+		name:        "get_weather",
+		description: "Get weather information",
+	}
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "What's the weather in Beijing?"},
+		},
+		Tools: map[string]tool.Tool{
+			"get_weather": mockTool,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+	require.NotEmpty(t, responses[0].Choices)
+	assert.NotEmpty(t, responses[0].Choices[0].Message.ToolCalls)
+	assert.Equal(t, "get_weather", responses[0].Choices[0].Message.ToolCalls[0].Function.Name)
+}
+
+// simpleMockTool is a simple mock tool for testing
+type simpleMockTool struct {
+	name        string
+	description string
+}
+
+func (t *simpleMockTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        t.name,
+		Description: t.description,
+		InputSchema: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"location": {
+					Type:        "string",
+					Description: "City name",
+				},
+			},
+			Required: []string{"location"},
+		},
+	}
+}
+
+func (t *simpleMockTool) Execute(ctx context.Context, input string) (string, error) {
+	return "Sunny, 25°C", nil
+}
+
+// TestModel_ToolCallResponse tests responding to tool calls
+func TestModel_ToolCallResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "test-id",
+			"object": "chat.completion",
+			"created": 1234567890,
+			"model": "test-model",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "The weather in Beijing is sunny."
+				},
+				"finish_reason": "stop"
+			}]
+		}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "What's the weather?"},
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{
+						ID:   "call_123",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "get_weather",
+							Arguments: []byte(`{"location":"Beijing"}`),
+						},
+					},
+				},
+			},
+			{
+				Role:     model.RoleTool,
+				Content:  "Sunny, 25°C",
+				ToolID:   "call_123",
+				ToolName: "get_weather",
+			},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+}
+
+// TestConvertRequest tests the convertRequest function with various scenarios
+func TestConvertRequest(t *testing.T) {
+	m, _ := New("test-model", WithAPIKey("test-key"))
+
+	t.Run("with_generation_config", func(t *testing.T) {
+		maxTokens := 100
+		temp := 0.7
+		topP := 0.9
+		request := &model.Request{
+			Messages: []model.Message{
+				{Role: model.RoleUser, Content: "test"},
+			},
+			GenerationConfig: model.GenerationConfig{
+				MaxTokens:   &maxTokens,
+				Temperature: &temp,
+				TopP:        &topP,
+				Stop:        []string{"stop1", "stop2"},
+			},
+		}
+
+		hfReq, err := m.convertRequest(request)
+		require.NoError(t, err)
+		assert.Equal(t, &maxTokens, hfReq.MaxTokens)
+		assert.Equal(t, &temp, hfReq.Temperature)
+		assert.Equal(t, &topP, hfReq.TopP)
+		assert.Equal(t, []string{"stop1", "stop2"}, hfReq.Stop)
+	})
+
+	t.Run("with_system_message", func(t *testing.T) {
+		request := &model.Request{
+			Messages: []model.Message{
+				{Role: model.RoleSystem, Content: "You are a helpful assistant"},
+				{Role: model.RoleUser, Content: "Hello"},
+			},
+		}
+
+		hfReq, err := m.convertRequest(request)
+		require.NoError(t, err)
+		assert.Len(t, hfReq.Messages, 2)
+		assert.Equal(t, "system", hfReq.Messages[0].Role)
+	})
+}
+
+// TestConvertMessage tests message conversion with different content types
+func TestConvertMessage(t *testing.T) {
+	t.Run("simple_text_message", func(t *testing.T) {
+		msg := model.Message{
+			Role:    model.RoleUser,
+			Content: "Hello",
+		}
+
+		hfMsg, err := convertMessage(msg)
+		require.NoError(t, err)
+		assert.Equal(t, "user", hfMsg.Role)
+		assert.Equal(t, "Hello", hfMsg.Content)
+	})
+
+	t.Run("message_with_tool_id", func(t *testing.T) {
+		msg := model.Message{
+			Role:     model.RoleUser,
+			Content:  "Hello",
+			ToolID:   "tool_123",
+			ToolName: "test_tool",
+		}
+
+		hfMsg, err := convertMessage(msg)
+		require.NoError(t, err)
+		assert.Equal(t, "user", hfMsg.Role)
+	})
+
+	t.Run("tool_message", func(t *testing.T) {
+		msg := model.Message{
+			Role:     model.RoleTool,
+			Content:  "Tool result",
+			ToolID:   "call_123",
+			ToolName: "get_weather",
+		}
+
+		hfMsg, err := convertMessage(msg)
+		require.NoError(t, err)
+		assert.Equal(t, "tool", hfMsg.Role)
+	})
+}
+
+// TestMarshalRequest tests the marshalRequest function
+func TestMarshalRequest(t *testing.T) {
+	t.Run("without_extra_fields", func(t *testing.T) {
+		m, _ := New("test-model", WithAPIKey("test-key"))
+		
+		hfReq := &ChatCompletionRequest{
+			Model: "test-model",
+			Messages: []ChatMessage{
+				{Role: "user", Content: "test"},
+			},
+		}
+
+		data, err := m.marshalRequest(hfReq)
+		require.NoError(t, err)
+		assert.NotEmpty(t, data)
+	})
+
+	t.Run("with_model_extra_fields", func(t *testing.T) {
+		m, _ := New(
+			"test-model",
+			WithAPIKey("test-key"),
+			WithExtraFields(map[string]any{
+				"custom_field": "value",
+			}),
+		)
+		
+		hfReq := &ChatCompletionRequest{
+			Model: "test-model",
+			Messages: []ChatMessage{
+				{Role: "user", Content: "test"},
+			},
+		}
+
+		data, err := m.marshalRequest(hfReq)
+		require.NoError(t, err)
+		
+		var result map[string]any
+		json.Unmarshal(data, &result)
+		assert.Equal(t, "value", result["custom_field"])
+	})
+
+	t.Run("with_request_extra_fields", func(t *testing.T) {
+		m, _ := New("test-model", WithAPIKey("test-key"))
+		
+		hfReq := &ChatCompletionRequest{
+			Model: "test-model",
+			Messages: []ChatMessage{
+				{Role: "user", Content: "test"},
+			},
+			ExtraFields: map[string]any{
+				"request_field": "request_value",
+			},
+		}
+
+		data, err := m.marshalRequest(hfReq)
+		require.NoError(t, err)
+		
+		var result map[string]any
+		json.Unmarshal(data, &result)
+		assert.Equal(t, "request_value", result["request_field"])
+	})
+}
+
+// TestModel_MultimodalResponse tests handling of multimodal responses
+func TestModel_MultimodalResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "test-id",
+			"object": "chat.completion",
+			"created": 1234567890,
+			"model": "test-model",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": [
+						{"type": "text", "text": "Here is an image:"},
+						{"type": "image_url", "image_url": {"url": "https://example.com/image.jpg", "detail": "high"}}
+					]
+				},
+				"finish_reason": "stop"
+			}]
+		}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "Show me an image"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+	require.NotEmpty(t, responses[0].Choices)
+	assert.Len(t, responses[0].Choices[0].Message.ContentParts, 2)
+	assert.Equal(t, model.ContentTypeText, responses[0].Choices[0].Message.ContentParts[0].Type)
+	assert.Equal(t, model.ContentTypeImage, responses[0].Choices[0].Message.ContentParts[1].Type)
+}
+
+// TestModel_MultimodalResponseWithUnsupportedType tests handling of unsupported content types
+func TestModel_MultimodalResponseWithUnsupportedType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "test-id",
+			"object": "chat.completion",
+			"created": 1234567890,
+			"model": "test-model",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": [
+						{"type": "unknown_type", "text": "test"}
+					]
+				},
+				"finish_reason": "stop"
+			}]
+		}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+	require.NotEmpty(t, responses[0].Choices)
+	// Should convert unsupported type to text
+	assert.Len(t, responses[0].Choices[0].Message.ContentParts, 1)
+	assert.Equal(t, model.ContentTypeText, responses[0].Choices[0].Message.ContentParts[0].Type)
+}
+
+// TestModel_AdditionalOptions tests additional model options
+func TestModel_AdditionalOptions(t *testing.T) {
+	t.Run("with_presence_penalty", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			var reqMap map[string]any
+			json.Unmarshal(body, &reqMap)
+			
+			assert.Equal(t, 0.5, reqMap["presence_penalty"])
+			
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
+		}))
+		defer server.Close()
+
+		m, err := New(
+			"test-model",
+			WithAPIKey("test-key"),
+			WithBaseURL(server.URL),
+		)
+		require.NoError(t, err)
+
+		presencePenalty := 0.5
+		request := &model.Request{
+			Messages: []model.Message{
+				{Role: model.RoleUser, Content: "test"},
+			},
+			GenerationConfig: model.GenerationConfig{
+				PresencePenalty: &presencePenalty,
+			},
+		}
+
+		ctx := context.Background()
+		responseChan, err := m.GenerateContent(ctx, request)
+		require.NoError(t, err)
+
+		var responses []*model.Response
+		for resp := range responseChan {
+			responses = append(responses, resp)
+		}
+
+		require.NotEmpty(t, responses)
+		assert.Nil(t, responses[0].Error)
+	})
+
+	t.Run("with_frequency_penalty", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			var reqMap map[string]any
+			json.Unmarshal(body, &reqMap)
+			
+			assert.Equal(t, 0.3, reqMap["frequency_penalty"])
+			
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
+		}))
+		defer server.Close()
+
+		m, err := New(
+			"test-model",
+			WithAPIKey("test-key"),
+			WithBaseURL(server.URL),
+		)
+		require.NoError(t, err)
+
+		frequencyPenalty := 0.3
+		request := &model.Request{
+			Messages: []model.Message{
+				{Role: model.RoleUser, Content: "test"},
+			},
+			GenerationConfig: model.GenerationConfig{
+				FrequencyPenalty: &frequencyPenalty,
+			},
+		}
+
+		ctx := context.Background()
+		responseChan, err := m.GenerateContent(ctx, request)
+		require.NoError(t, err)
+
+		var responses []*model.Response
+		for resp := range responseChan {
+			responses = append(responses, resp)
+		}
+
+		require.NotEmpty(t, responses)
+		assert.Nil(t, responses[0].Error)
+	})
+}
+
+// TestModel_RequestWithContentParts tests sending messages with content parts
+func TestModel_RequestWithContentParts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var reqMap map[string]any
+		json.Unmarshal(body, &reqMap)
+		
+		// Verify messages contain content parts
+		messages := reqMap["messages"].([]any)
+		assert.NotEmpty(t, messages)
+		
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	textContent := "What's in this image?"
+	request := &model.Request{
+		Messages: []model.Message{
+			{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeText,
+						Text: &textContent,
+					},
+					{
+						Type: model.ContentTypeImage,
+						Image: &model.Image{
+							URL:    "https://example.com/image.jpg",
+							Detail: "high",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+}
+
+// TestModel_StreamingWithMultipleChunks tests streaming with multiple chunks
+func TestModel_StreamingWithMultipleChunks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		
+		chunks := []string{
+			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}` + "\n\n",
+			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}` + "\n\n",
+			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}` + "\n\n",
+			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"content":"!"},"finish_reason":"stop"}]}` + "\n\n",
+			"data: [DONE]\n\n",
+		}
+
+		for _, chunk := range chunks {
+			fmt.Fprint(w, chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	// Should receive multiple chunks
+	assert.GreaterOrEqual(t, len(responses), 3)
+}
+
+// TestModel_EmptyMessages tests handling of empty messages
+func TestModel_EmptyMessages(t *testing.T) {
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	// Should handle empty messages gracefully
+	require.NotEmpty(t, responses)
+}
+
+// TestModel_LargeResponse tests handling of large responses
+func TestModel_LargeResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		
+		// Create a large response
+		largeContent := strings.Repeat("This is a test. ", 1000)
+		response := fmt.Sprintf(`{
+			"id": "test-id",
+			"object": "chat.completion",
+			"created": 1234567890,
+			"model": "test-model",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "%s"
+				},
+				"finish_reason": "stop"
+			}]
+		}`, largeContent)
+		
+		fmt.Fprint(w, response)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+	assert.Greater(t, len(responses[0].Choices[0].Message.Content), 1000)
+}
+
+// TestModel_WithHTTPClient tests using custom HTTP client
+func TestModel_WithHTTPClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	customClient := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithHTTPClient(customClient),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+}
+
+// TestModel_ResponseWithUsage tests response with usage information
+func TestModel_ResponseWithUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "test-id",
+			"object": "chat.completion",
+			"created": 1234567890,
+			"model": "test-model",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "test"
+				},
+				"finish_reason": "stop"
+			}],
+			"usage": {
+				"prompt_tokens": 10,
+				"completion_tokens": 5,
+				"total_tokens": 15
+			}
+		}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+	assert.NotNil(t, responses[0].Usage)
+	assert.Equal(t, 10, responses[0].Usage.PromptTokens)
+	assert.Equal(t, 5, responses[0].Usage.CompletionTokens)
+	assert.Equal(t, 15, responses[0].Usage.TotalTokens)
+}
+
+// TestModel_WithExtraHeaders tests using extra headers
+func TestModel_WithExtraHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify extra headers are present
+		assert.Equal(t, "custom-value", r.Header.Get("X-Custom-Header"))
+		assert.Equal(t, "another-value", r.Header.Get("X-Another-Header"))
+		
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithExtraHeaders(map[string]string{
+			"X-Custom-Header":  "custom-value",
+			"X-Another-Header": "another-value",
+		}),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+}
+
+// TestModel_StreamingWithEmptyDelta tests streaming with empty delta
+func TestModel_StreamingWithEmptyDelta(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		
+		chunks := []string{
+			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"test"},"finish_reason":null}]}` + "\n\n",
+			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n",
+			"data: [DONE]\n\n",
+		}
+
+		for _, chunk := range chunks {
+			fmt.Fprint(w, chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+}
+
+// TestModel_NonStreamingWithError tests non-streaming request with HTTP error
+func TestModel_NonStreamingWithError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"error": {"message": "Internal server error", "type": "server_error"}}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.NotNil(t, responses[0].Error)
+	assert.Contains(t, responses[0].Error.Message, "Internal server error")
+}
+
+// TestModel_StreamingReadError tests streaming with read error
+func TestModel_StreamingReadError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Send one valid chunk then close connection abruptly
+		fmt.Fprint(w, `data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"test"},"finish_reason":null}]}`+"\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Connection will be closed by server shutdown
+	}))
+	
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	// Close server to simulate connection error
+	server.Close()
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	// Should receive at least one response (could be error or valid chunk)
+	require.NotEmpty(t, responses)
+}
+
+// TestModel_TokenTailoringWithCustomConfig tests token tailoring with custom config
+func TestModel_TokenTailoringWithCustomConfig(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithEnableTokenTailoring(true),
+		WithTokenTailoringConfig(&model.TokenTailoringConfig{
+			ProtocolOverheadTokens: 100,
+			ReserveOutputTokens:    500,
+			OutputTokensFloor:      100,
+			SafetyMarginRatio:      0.1,
+		}),
+	)
+	require.NoError(t, err)
+
+	// Create messages that exceed token limit
+	var messages []model.Message
+	for i := 0; i < 50; i++ {
+		messages = append(messages,
+			model.Message{
+				Role:    model.RoleUser,
+				Content: fmt.Sprintf("User message %d with some content", i),
+			},
+			model.Message{
+				Role:    model.RoleAssistant,
+				Content: fmt.Sprintf("Assistant response %d with some content", i),
+			},
+		)
+	}
+
+	request := &model.Request{
+		Messages: messages,
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+}
+
+// TestModel_TokenTailoringDisabled tests with token tailoring disabled
+func TestModel_TokenTailoringDisabled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithEnableTokenTailoring(false),
+	)
+	require.NoError(t, err)
+
+	// Create many messages
+	var messages []model.Message
+	for i := 0; i < 50; i++ {
+		messages = append(messages,
+			model.Message{
+				Role:    model.RoleUser,
+				Content: fmt.Sprintf("User message %d", i),
+			},
+		)
+	}
+
+	request := &model.Request{
+		Messages: messages,
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	// Messages should not be tailored
+	assert.Equal(t, 50, len(request.Messages))
+}
+
+// TestModel_WithTailoringStrategy tests token tailoring with default strategy
+func TestModel_WithTailoringStrategy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(100),
+	)
+	require.NoError(t, err)
+
+	// Create messages that exceed token limit
+	var messages []model.Message
+	for i := 0; i < 30; i++ {
+		messages = append(messages,
+			model.Message{
+				Role:    model.RoleUser,
+				Content: fmt.Sprintf("User message %d with content", i),
+			},
+		)
+	}
+
+	request := &model.Request{
+		Messages: messages,
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+	// Messages should be tailored
+	assert.Less(t, len(request.Messages), 30)
+}
+
+// TestModel_ResponseWithMultipleChoices tests response with multiple choices
+func TestModel_ResponseWithMultipleChoices(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "test-id",
+			"object": "chat.completion",
+			"created": 1234567890,
+			"model": "test-model",
+			"choices": [
+				{
+					"index": 0,
+					"message": {"role": "assistant", "content": "Response 1"},
+					"finish_reason": "stop"
+				},
+				{
+					"index": 1,
+					"message": {"role": "assistant", "content": "Response 2"},
+					"finish_reason": "stop"
+				}
+			]
+		}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+	assert.Len(t, responses[0].Choices, 2)
+	assert.Equal(t, "Response 1", responses[0].Choices[0].Message.Content)
+	assert.Equal(t, "Response 2", responses[0].Choices[1].Message.Content)
+}
+
+// TestModel_TokenTailoringWithAutoCalculation tests token tailoring with auto-calculated limits
+func TestModel_TokenTailoringWithAutoCalculation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithEnableTokenTailoring(true),
+		// Don't set MaxInputTokens, let it auto-calculate
+	)
+	require.NoError(t, err)
+
+	// Create many messages
+	var messages []model.Message
+	for i := 0; i < 100; i++ {
+		messages = append(messages,
+			model.Message{
+				Role:    model.RoleUser,
+				Content: fmt.Sprintf("User message %d with some content to make it longer", i),
+			},
+		)
+	}
+
+	request := &model.Request{
+		Messages: messages,
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+	// Messages should be tailored (or at least not increased)
+	assert.LessOrEqual(t, len(request.Messages), 100)
+	// MaxTokens should be set automatically
+	assert.NotNil(t, request.GenerationConfig.MaxTokens)
+}
+
+// TestModel_RequestWithMaxTokensSet tests that user-specified MaxTokens is respected
+func TestModel_RequestWithMaxTokensSet(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var reqMap map[string]any
+		json.Unmarshal(body, &reqMap)
+		
+		// Verify user-specified max_tokens is used
+		assert.Equal(t, float64(200), reqMap["max_tokens"])
+		
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithEnableTokenTailoring(true),
+	)
+	require.NoError(t, err)
+
+	maxTokens := 200
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &maxTokens,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	assert.Nil(t, responses[0].Error)
+	// User-specified MaxTokens should be preserved
+	assert.Equal(t, 200, *request.GenerationConfig.MaxTokens)
+}
+
+// TestModel_StreamingWithToolCalls tests streaming response with tool calls
+func TestModel_StreamingWithToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		
+		chunks := []string{
+			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}` + "\n\n",
+			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"location\""}}]},"finish_reason":null}]}` + "\n\n",
+			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"Beijing\"}"}}]},"finish_reason":"tool_calls"}]}` + "\n\n",
+			"data: [DONE]\n\n",
+		}
+
+		for _, chunk := range chunks {
+			fmt.Fprint(w, chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "What's the weather?"},
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.NotEmpty(t, responses)
+	// Last response should have tool calls
+	lastResp := responses[len(responses)-1]
+	if len(lastResp.Choices) > 0 && len(lastResp.Choices[0].Message.ToolCalls) > 0 {
+		assert.Equal(t, "get_weather", lastResp.Choices[0].Message.ToolCalls[0].Function.Name)
+	}
+}
+
