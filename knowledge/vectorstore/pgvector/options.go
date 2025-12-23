@@ -97,6 +97,7 @@ type options struct {
 	table          string // PostgreSQL table
 	indexDimension int    // PostgreSQL index dimension
 	sslMode        string // PostgreSQL SSL mode
+	dsn            string // PostgreSQL DSN
 	enableTSVector bool   // Enable text search vector
 	instanceName   string // Registered postgres instance name from storage/postgres
 	extraOptions   []any  // Extra options for storage/postgres
@@ -134,13 +135,9 @@ type options struct {
 
 // defaultOptions is the default options for pgvector.
 var defaultOptions = options{
-	host:           "localhost",
-	port:           5432,
-	database:       "trpc_agent_go",
 	table:          "documents",
 	enableTSVector: true,
 	indexDimension: 1536,
-	sslMode:        "disable",
 	vectorWeight:   0.7, // Default: Vector similarity weight 70%
 	textWeight:     0.3, // Default: Text relevance weight 30%
 	language:       "english",
@@ -222,6 +219,13 @@ func WithIndexDimension(dimension int) Option {
 func WithSSLMode(sslMode string) Option {
 	return func(o *options) {
 		o.sslMode = sslMode
+	}
+}
+
+// WithPGVectorClientDSN sets the DSN for connection.
+func WithPGVectorClientDSN(dsn string) Option {
+	return func(o *options) {
+		o.dsn = dsn
 	}
 }
 

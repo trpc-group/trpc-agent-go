@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"net/url"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
@@ -71,12 +72,13 @@ func newPGVectorStore() (vectorstore.VectorStore, error) {
 	database := GetEnvOrDefault("PGVECTOR_DATABASE", "vectordb")
 	table := GetEnvOrDefault("PGVECTOR_TABLE", "trpc-agent-go")
 
+	encodedUser := url.QueryEscape(user)
+	encodedPassword := url.QueryEscape(password)
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
+		encodedUser, encodedPassword, host, port, database)
+
 	return pgvector.New(
-		pgvector.WithHost(host),
-		pgvector.WithPort(port),
-		pgvector.WithUser(user),
-		pgvector.WithPassword(password),
-		pgvector.WithDatabase(database),
+		pgvector.WithPGVectorClientDSN(dsn),
 		pgvector.WithTable(table),
 	)
 }
