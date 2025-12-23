@@ -48,7 +48,6 @@ const (
 	qwenAPIKeyName     string = "DASHSCOPE_API_KEY"
 	defaultQwenBaseURL string = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
-	// ThoughtSignatureFormat constants for tracking thought signature source format.
 	// ThoughtSignatureFormatTopLevel indicates tool_calls[].thought_signature format.
 	ThoughtSignatureFormatTopLevel = "top_level"
 	// ThoughtSignatureFormatExtraContent indicates tool_calls[].extra_content.google.thought_signature format.
