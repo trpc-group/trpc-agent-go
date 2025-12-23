@@ -763,13 +763,20 @@ func audioToBase64(audio *model.Audio) string {
 func (m *Model) convertToolCalls(toolCalls []model.ToolCall) []openai.ChatCompletionMessageToolCallParam {
 	var result []openai.ChatCompletionMessageToolCallParam
 	for _, toolCall := range toolCalls {
-		result = append(result, openai.ChatCompletionMessageToolCallParam{
+		param := openai.ChatCompletionMessageToolCallParam{
 			ID: toolCall.ID,
 			Function: openai.ChatCompletionMessageToolCallFunctionParam{
 				Name:      toolCall.Function.Name,
 				Arguments: string(toolCall.Function.Arguments),
 			},
-		})
+		}
+		// Set thought_signature as extra field for Gemini 3 compatibility.
+		if toolCall.ThoughtSignature != "" {
+			param.SetExtraFields(map[string]any{
+				"thought_signature": toolCall.ThoughtSignature,
+			})
+		}
+		result = append(result, param)
 	}
 	return result
 }
@@ -1065,6 +1072,25 @@ func extractReasoningContent(extraFields map[string]respjson.Field) string {
 	return ""
 }
 
+// extractThoughtSignature extracts thought_signature from ExtraFields.
+// This is used for Gemini 3 models which require thought signatures for multi-turn function calling.
+// See: https://cloud.google.com/vertex-ai/generative-ai/docs/thought-signatures
+func extractThoughtSignature(extraFields map[string]respjson.Field) string {
+	if extraFields == nil {
+		return ""
+	}
+	sigField, ok := extraFields["thought_signature"]
+	if !ok {
+		return ""
+	}
+	sigStr, err := strconv.Unquote(sigField.Raw())
+	if err == nil {
+		return sigStr
+	}
+	// If unquote fails, return raw value (might already be unquoted)
+	return sigField.Raw()
+}
+
 // createPartialResponse creates a partial response from a chunk.
 func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.Response {
 	response := &model.Response{
@@ -1231,6 +1257,9 @@ func (m *Model) processAccumulatedToolCalls(
 			synthesizedID = fmt.Sprintf("auto_call_%d", originalIndex)
 		}
 
+		// Extract thought_signature from ExtraFields (Gemini 3 support).
+		thoughtSignature := extractThoughtSignature(toolCall.JSON.ExtraFields)
+
 		accumulatedToolCalls = append(accumulatedToolCalls, model.ToolCall{
 			Index: func() *int { idx := originalIndex; return &idx }(),
 			ID:    synthesizedID,
@@ -1239,6 +1268,7 @@ func (m *Model) processAccumulatedToolCalls(
 				Name:      toolCall.Function.Name,
 				Arguments: []byte(toolCall.Function.Arguments),
 			},
+			ThoughtSignature: thoughtSignature,
 		})
 	}
 
@@ -1361,6 +1391,8 @@ func (m *Model) handleNonStreamingResponse(
 					// Synthesize ID for providers that omit it (e.g., gpt-5-nano).
 					synthesizedID = fmt.Sprintf("auto_call_%d", j)
 				}
+				// Extract thought_signature from ExtraFields (Gemini 3 support).
+				thoughtSignature := extractThoughtSignature(toolCall.JSON.ExtraFields)
 				response.Choices[i].Message.ToolCalls[j] = model.ToolCall{
 					ID:   synthesizedID,
 					Type: string(toolCall.Type),
@@ -1368,6 +1400,7 @@ func (m *Model) handleNonStreamingResponse(
 						Name:      toolCall.Function.Name,
 						Arguments: []byte(toolCall.Function.Arguments),
 					},
+					ThoughtSignature: thoughtSignature,
 				}
 			}
 

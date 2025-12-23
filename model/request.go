@@ -366,6 +366,11 @@ type ToolCall struct {
 
 	// Index is the index of the tool call in the message for streaming responses.
 	Index *int `json:"index,omitempty"`
+
+	// ThoughtSignature is the Gemini 3 thought signature for multi-turn function calling.
+	// This must be preserved and sent back to the model in subsequent requests.
+	// See: https://cloud.google.com/vertex-ai/generative-ai/docs/thought-signatures
+	ThoughtSignature string `json:"thought_signature,omitempty"`
 }
 
 // FunctionDefinitionParam represents the parameters for a function definition in tool calls.
