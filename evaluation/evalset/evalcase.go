@@ -42,11 +42,12 @@ type Invocation struct {
 	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp,omitempty"`
 }
 
+// Tool represents a single tool invocation and its execution result.
 type Tool struct {
-	ID        string         `json:"id,omitempty"`
-	Name      string         `json:"name,omitempty"`
-	Arguments map[string]any `json:"arguments,omitempty"`
-	Result    map[string]any `json:"result,omitempty"`
+	ID        string         `json:"id,omitempty"`        // Tool call ID.
+	Name      string         `json:"name,omitempty"`      // Tool name.
+	Arguments map[string]any `json:"arguments,omitempty"` // Tool call parameters.
+	Result    map[string]any `json:"result,omitempty"`    // Tool execution result.
 }
 
 // SessionInput represents values that help initialize a session.

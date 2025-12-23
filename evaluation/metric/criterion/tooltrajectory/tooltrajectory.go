@@ -118,6 +118,7 @@ func (t *ToolTrajectoryCriterion) orderedMatch(actual, expected []*evalset.Tool)
 	return nil
 }
 
+// unorderedMatch matches actual and expected tool calls in no order.
 func (t *ToolTrajectoryCriterion) unorderedMatch(actual, expected []*evalset.Tool) error {
 	leftSize := len(expected)
 	rightSize := len(actual)

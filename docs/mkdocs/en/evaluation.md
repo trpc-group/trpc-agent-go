@@ -435,9 +435,8 @@ Conversation data includes three types of content:
 
 - User input
 - Agent final response
-- Agent intermediate response, including:
-  - Tool invocation and result
-  - Intermediate response information
+- Tool invocation and result
+- Intermediate response information
 
 ```go
 import (

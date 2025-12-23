@@ -435,9 +435,8 @@ EvalSet 是一组 EvalCase 的集合，通过唯一的 EvalSetID 进行标识，
 
 - 用户输入
 - Agent 最终响应
-- Agent 中间响应，包括:
-  - 工具调用与结果
-  - 中间响应信息
+- 工具调用与结果
+- 中间响应信息
 
 ```go
 import (
