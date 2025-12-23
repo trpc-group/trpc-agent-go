@@ -9,11 +9,7 @@
           "invocationId": "knowledge-recall-1",
           "userContent": {
             "role": "user",
-            "parts": [
-              {
-                "text": "What is trpc-agent-go?"
-              }
-            ]
+            "content": "What is trpc-agent-go?"
           }
         }
       ],

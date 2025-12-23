@@ -9,19 +9,11 @@
           "invocationId": "qa_paris-1",
           "userContent": {
             "role": "user",
-            "parts": [
-              {
-                "text": "With a principal of 1000 dollars and a compound annual interest rate of 10%, what will the profit be after 30 years?"
-              }
-            ]
+            "content": "With a principal of 1000 dollars and a compound annual interest rate of 10%, what will the profit be after 30 years?"
           },
           "finalResponse": {
             "role": "assistant",
-            "parts": [
-              {
-                "text": "16,449.40 dollars"
-              }
-            ]
+            "content": "16,449.40 dollars"
           }
         }
       ],

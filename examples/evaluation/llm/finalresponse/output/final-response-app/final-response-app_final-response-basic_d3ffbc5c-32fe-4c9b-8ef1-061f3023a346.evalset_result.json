@@ -1,0 +1,138 @@
+{
+  "evalSetResultId": "final-response-app_final-response-basic_d3ffbc5c-32fe-4c9b-8ef1-061f3023a346",
+  "evalSetResultName": "final-response-app_final-response-basic_d3ffbc5c-32fe-4c9b-8ef1-061f3023a346",
+  "evalSetId": "final-response-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "final-response-basic",
+      "evalId": "qa_paris",
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "llm_final_response",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 0.9,
+          "criterion": {
+            "llmJudge": {
+              "judgeModel": {
+                "providerName": "openai",
+                "modelName": "deepseek-chat",
+                "numSamples": 3,
+                "generationConfig": {
+                  "max_tokens": 512,
+                  "temperature": 1,
+                  "stream": false
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "94a54c65-92b0-4c8a-a49c-cb7e82011a1c",
+            "userContent": {
+              "role": "user",
+              "content": "With a principal of 1000 dollars and a compound annual interest rate of 10%, what will the profit be after 30 years?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "With a principal of $1,000 and a compound annual interest rate of 10%, after 30 years:\n\n- **Total amount**: $17,449.40\n- **Profit**: $16,449.40\n\nThe profit is calculated as the total amount minus the original principal. The compound interest formula used is: A = P(1 + r)^t, where P = $1,000, r = 0.10 (10%), and t = 30 years."
+            },
+            "tools": [
+              {
+                "id": "call_00_U8cOpBTdLgnghLzXXJTdAN4i",
+                "name": "calculator",
+                "arguments": {
+                  "a": 1.1,
+                  "b": 30,
+                  "operation": "power"
+                },
+                "result": {
+                  "a": 1.1,
+                  "b": 30,
+                  "operation": "power",
+                  "result": 17.449402268886445
+                }
+              },
+              {
+                "id": "call_00_sDCSb0ok0EHLLiI2Y3e65q2b",
+                "name": "calculator",
+                "arguments": {
+                  "a": 1000,
+                  "b": 17.449402268886445,
+                  "operation": "multiply"
+                },
+                "result": {
+                  "a": 1000,
+                  "b": 17.449402268886445,
+                  "operation": "multiply",
+                  "result": 17449.402268886446
+                }
+              },
+              {
+                "id": "call_00_aryCJjKqEkIeXLqF0mnW92GY",
+                "name": "calculator",
+                "arguments": {
+                  "a": 17449.402268886446,
+                  "b": 1000,
+                  "operation": "subtract"
+                },
+                "result": {
+                  "a": 17449.402268886446,
+                  "b": 1000,
+                  "operation": "subtract",
+                  "result": 16449.402268886446
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "qa_paris-1",
+            "userContent": {
+              "role": "user",
+              "content": "With a principal of 1000 dollars and a compound annual interest rate of 10%, what will the profit be after 30 years?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "16,449.40 dollars"
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "llm_final_response",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 0.9,
+              "criterion": {
+                "llmJudge": {
+                  "judgeModel": {
+                    "providerName": "openai",
+                    "modelName": "deepseek-chat",
+                    "numSamples": 3,
+                    "generationConfig": {
+                      "max_tokens": 512,
+                      "temperature": 1,
+                      "stream": false
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "dfd76bac-851b-4ade-a11f-f335019413b3",
+      "userId": "demo-user"
+    }
+  ],
+  "creationTimestamp": 1766505321.801543
+}
