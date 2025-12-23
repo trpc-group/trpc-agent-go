@@ -217,3 +217,10 @@ func TestDocBuilderFunc(t *testing.T) {
 		assert.Equal(t, "test-id", doc.Document.ID)
 	})
 }
+
+func TestWithPGVectorClientDSN(t *testing.T) {
+	opts := defaultOptions
+	dsn := "postgres://user:pass@host:5432/db"
+	WithPGVectorClientDSN(dsn)(&opts)
+	assert.Equal(t, dsn, opts.dsn)
+}
