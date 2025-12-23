@@ -42,7 +42,7 @@ type JudgeModelOptions struct {
 	// ExtraFields carries extra fields.
 	ExtraFields map[string]any `json:"extraFields,omitempty"`
 	// NumSamples sets how many judge samples to collect.
-	NumSamples int `json:"numSamples,omitempty"`
+	NumSamples *int `json:"numSamples,omitempty"`
 	// Generation holds generation parameters for the judge.
 	Generation *model.GenerationConfig `json:"generationConfig,omitempty"`
 }
@@ -50,6 +50,7 @@ type JudgeModelOptions struct {
 // New builds an LlmCriterion with judge model settings.
 func New(providerName, modelName string, opt ...Option) *LLMCriterion {
 	opts := newOptions(opt...)
+	numSamples := opts.numSamples
 	return &LLMCriterion{
 		Rubrics: opts.rubrics,
 		JudgeModel: &JudgeModelOptions{
@@ -58,7 +59,7 @@ func New(providerName, modelName string, opt ...Option) *LLMCriterion {
 			BaseURL:      opts.baseURL,
 			APIKey:       opts.apiKey,
 			ExtraFields:  opts.extraFields,
-			NumSamples:   opts.numSamples,
+			NumSamples:   &numSamples,
 			Generation:   opts.generation,
 		},
 	}

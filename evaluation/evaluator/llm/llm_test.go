@@ -110,7 +110,7 @@ func buildEvalMetric(providerName string, numSamples int) *metric.EvalMetric {
 				JudgeModel: &llm.JudgeModelOptions{
 					ProviderName: providerName,
 					ModelName:    "fake-model",
-					NumSamples:   numSamples,
+					NumSamples:   &numSamples,
 					Generation:   &model.GenerationConfig{},
 				},
 			},

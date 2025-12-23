@@ -23,15 +23,13 @@ func TestScoreBasedOnResponse(t *testing.T) {
 	scorer := New()
 	ctx := context.Background()
 
-	score, err := scorer.ScoreBasedOnResponse(ctx, makeResponse(`{"is_the_agent_response_valid":"VALID"}`), nil)
+	score, err := scorer.ScoreBasedOnResponse(ctx, makeResponse(`reasoning: ok
+is_the_agent_response_valid: VALID`), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1.0, score.Score)
 
-	score, err = scorer.ScoreBasedOnResponse(ctx, makeResponse(`{"is_the_agent_response_valid":"invalid"}`), nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0.0, score.Score)
-
-	_, err = scorer.ScoreBasedOnResponse(ctx, makeResponse(`{"is_the_agent_response_valid":"UNKNOWN"}`), nil)
+	score, err = scorer.ScoreBasedOnResponse(ctx, makeResponse(`reasoning: bad
+is_the_agent_response_valid: invalid`), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0.0, score.Score)
 
@@ -42,11 +40,15 @@ func TestScoreBasedOnResponse(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestExtractLabel(t *testing.T) {
-	assert.Equal(t, labelValid, extractLabel(`"is_the_agent_response_valid":"VALID"`))
-	assert.NotEqual(t, labelValid, extractLabel(`no label`))
-	assert.NotEqual(t, labelValid, extractLabel(`"is_the_agent_response_valid":"INVALID"`))
-	assert.NotEqual(t, labelValid, extractLabel(`"is_the_agent_response_valid":"maybe"`))
+func TestExtractReasoningAndLabelText(t *testing.T) {
+	content := `
+reasoning: something
+is_the_agent_response_valid: invalid
+`
+	reason, label, err := extractReasoningAndLabel(content)
+	require.NoError(t, err)
+	assert.Equal(t, "something", reason)
+	assert.Equal(t, "invalid", label)
 }
 
 func makeResponse(content string) *model.Response {

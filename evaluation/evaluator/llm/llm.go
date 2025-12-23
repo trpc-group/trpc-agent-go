@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/samplesaggregator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/provider"
@@ -61,11 +62,15 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 	if evalMetric == nil ||
 		evalMetric.Criterion == nil ||
 		evalMetric.Criterion.LLMJudge == nil ||
-		evalMetric.Criterion.LLMJudge.JudgeModel == nil ||
-		evalMetric.Criterion.LLMJudge.JudgeModel.Generation == nil {
+		evalMetric.Criterion.LLMJudge.JudgeModel == nil {
 		return nil, fmt.Errorf("missing required fields in eval metric")
 	}
-	if evalMetric.Criterion.LLMJudge.JudgeModel.NumSamples <= 0 {
+	numSamples := evalMetric.Criterion.LLMJudge.JudgeModel.NumSamples
+	if numSamples == nil {
+		defaultNumSamples := llm.DefaultNumSamples
+		numSamples = &defaultNumSamples
+	}
+	if *numSamples <= 0 {
 		return nil, fmt.Errorf("num samples must be greater than 0")
 	}
 	if len(actuals) != len(expecteds) {
@@ -80,9 +85,8 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 		if err != nil {
 			return nil, fmt.Errorf("construct messages: %w", err)
 		}
-		numSamples := evalMetric.Criterion.LLMJudge.JudgeModel.NumSamples
-		samples := make([]*evaluator.PerInvocationResult, 0, numSamples)
-		for range numSamples {
+		samples := make([]*evaluator.PerInvocationResult, 0, *numSamples)
+		for range *numSamples {
 			response, err := judgeModelResponse(ctx, messages, evalMetric)
 			if err != nil {
 				return nil, fmt.Errorf("judge model response: %w", err)
@@ -144,9 +148,13 @@ func (r *LLMBaseEvaluator) ConstructMessages(ctx context.Context, actuals, expec
 func judgeModelResponse(ctx context.Context, messages []model.Message,
 	evalMetric *metric.EvalMetric) (*model.Response, error) {
 	judgeModel := evalMetric.Criterion.LLMJudge.JudgeModel
+	generation := evalMetric.Criterion.LLMJudge.JudgeModel.Generation
+	if generation == nil {
+		generation = &llm.DefaultGeneration
+	}
 	req := model.Request{
 		Messages:         messages,
-		GenerationConfig: *judgeModel.Generation,
+		GenerationConfig: *generation,
 	}
 	req.GenerationConfig.Stream = false
 	modelInstance, err := provider.Model(

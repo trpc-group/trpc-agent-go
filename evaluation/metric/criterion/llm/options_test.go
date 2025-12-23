@@ -20,7 +20,7 @@ import (
 
 func TestNewOptionsDefaults(t *testing.T) {
 	opts := newOptions()
-	assert.Equal(t, defaultNumSamples, opts.numSamples)
+	assert.Equal(t, DefaultNumSamples, opts.numSamples)
 	require.NotNil(t, opts.generation)
 	assert.Equal(t, defaultStream, opts.generation.Stream)
 	require.NotNil(t, opts.generation.MaxTokens)

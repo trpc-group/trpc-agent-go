@@ -48,17 +48,25 @@ func (e *finalResponseResponseScorer) ScoreBasedOnResponse(ctx context.Context, 
 	if content == "" {
 		return nil, fmt.Errorf("empty response text")
 	}
-	matches := finalResponseBlockRegex.FindAllStringSubmatch(content, -1)
-	if len(matches) < 1 {
-		return nil, fmt.Errorf("no final response blocks found in response")
+	reasoning, label, err := extractReasoningAndLabel(content)
+	if err != nil {
+		return nil, fmt.Errorf("extract reasoning and label: %w", err)
 	}
-	reasoning := strings.TrimSpace(matches[0][1])
-	label := strings.TrimSpace(matches[0][2])
-	label = strings.Trim(label, "\"")
-	label = strings.ToLower(label)
 	score := 0.0
 	if label == labelValid {
 		score = 1.0
 	}
 	return &evaluator.ScoreResult{Score: score, Reason: reasoning}, nil
+}
+
+// extractReasoningAndLabel parses judge output in text form.
+func extractReasoningAndLabel(content string) (string, string, error) {
+	matches := finalResponseBlockRegex.FindAllStringSubmatch(content, -1)
+	if len(matches) < 1 {
+		return "", "", fmt.Errorf("no final response blocks found in response")
+	}
+	reasoning := strings.TrimSpace(matches[0][1])
+	label := strings.TrimSpace(matches[0][2])
+	label = strings.ToLower(label)
+	return reasoning, label, nil
 }

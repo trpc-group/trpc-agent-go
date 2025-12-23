@@ -47,18 +47,16 @@ You are an expert evaluator for an AI agent (Agent: a model that executes tasks)
 
 ### Input
 
-You will receive an object containing:
+You will receive three items:
 
 * User prompt: the user’s question
 * Agent response: the agent’s answer
 * Reference response: the reference answer (the only Ground Truth)
 
 Format:
-{
-"User prompt": {{.UserPrompt}},
-"Agent response": {{.ActualResponse}},
-"Reference response": {{.ExpectedResponse}}
-}
+User prompt: {{.UserPrompt}}
+Agent response: {{.ActualResponse}}
+Reference response: {{.ExpectedResponse}}
 
 ### Matching rules
 
@@ -78,16 +76,14 @@ Must mark **invalid** in typical cases:
 
 ### Output requirements
 
-Your output must be **only** one JSON object with fixed field types:
+Your output must be plain text with fixed field types:
 
 * reasoning: string. Briefly explain why you judged valid/invalid, pointing to the key aligned or misaligned points.
 * is_the_agent_response_valid: string, must be either "valid" or "invalid".
 
-Output structure:
-{
-"reasoning": "<your reasoning>",
-"is_the_agent_response_valid": "valid" or "invalid"
-}
+Output structure (exactly two lines):
+reasoning: [your reasoning]
+is_the_agent_response_valid: [valid|invalid]
 
 Requirement: be assertive and unambiguous; do not hedge.
 `

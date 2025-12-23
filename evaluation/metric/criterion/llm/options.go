@@ -12,10 +12,20 @@ package llm
 import "trpc.group/trpc-go/trpc-agent-go/model"
 
 var (
-	defaultNumSamples  = 1     // defaultNumSamples sets the default judge sample count.
-	defaultMaxTokens   = 2000  // defaultMaxTokens sets the default max tokens for judge generation.
-	defaultTemperature = 0.8   // defaultTemperature sets the default temperature for judge generation.
-	defaultStream      = false // defaultStream sets the default streaming behavior for judge generation.
+	// DefaultNumSamples sets the default judge sample count.
+	DefaultNumSamples = 1
+	// defaultMaxTokens sets the default max tokens for judge generation.
+	defaultMaxTokens = 2000
+	// defaultTemperature sets the default temperature for judge generation.
+	defaultTemperature = 0.8
+	// defaultStream sets the default streaming behavior for judge generation.
+	defaultStream = false
+	// DefaultGeneration sets the default generation configuration for judge.
+	DefaultGeneration = model.GenerationConfig{
+		MaxTokens:   &defaultMaxTokens,
+		Temperature: &defaultTemperature,
+		Stream:      defaultStream,
+	}
 )
 
 // options captures judge model configuration overrides.
@@ -31,12 +41,8 @@ type options struct {
 // newOptions applies Option overrides on top of sensible defaults.
 func newOptions(opt ...Option) *options {
 	opts := &options{
-		numSamples: defaultNumSamples,
-		generation: &model.GenerationConfig{
-			MaxTokens:   &defaultMaxTokens,
-			Temperature: &defaultTemperature,
-			Stream:      defaultStream,
-		},
+		numSamples: DefaultNumSamples,
+		generation: &DefaultGeneration,
 	}
 	for _, o := range opt {
 		o(opts)
