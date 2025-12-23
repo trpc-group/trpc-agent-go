@@ -95,7 +95,11 @@ func New(
 		)
 	}
 
-	memberToolSet := newMemberToolSet(cfg.memberTools.name, members)
+	memberToolSet := newMemberToolSet(
+		cfg.memberTools.name,
+		cfg.memberTools.streamInner,
+		members,
+	)
 	adder.AddToolSet(memberToolSet)
 
 	return &Team{
@@ -274,12 +278,14 @@ func buildMemberIndex(
 
 func newMemberToolSet(
 	name string,
+	streamInner bool,
 	members []agent.Agent,
 ) tool.ToolSet {
 	tools := make([]tool.Tool, 0, len(members))
 	for _, m := range members {
 		tools = append(tools, agenttool.NewTool(
 			m,
+			agenttool.WithStreamInner(streamInner),
 			agenttool.WithHistoryScope(
 				agenttool.HistoryScopeParentBranch,
 			),

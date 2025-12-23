@@ -58,12 +58,23 @@ var (
 	variant   = flag.String("variant", "openai", "OpenAI provider variant")
 	streaming = flag.Bool("streaming", true, "Enable streaming")
 	timeout   = flag.Duration("timeout", 5*time.Minute, "Request timeout")
+	showInner = flag.Bool(
+		"show-inner",
+		true,
+		"Show inner member transcript in team mode",
+	)
 )
 
 func main() {
 	flag.Parse()
 
-	r, err := buildRunner(*mode, *modelName, *variant, *streaming)
+	r, err := buildRunner(
+		*mode,
+		*modelName,
+		*variant,
+		*streaming,
+		*showInner,
+	)
 	if err != nil {
 		log.Fatalf("build runner: %v", err)
 	}
@@ -75,6 +86,7 @@ func main() {
 	fmt.Printf("Mode: %s\n", *mode)
 	fmt.Printf("Session: %s\n", sessionID)
 	fmt.Printf("Timeout: %s\n", timeout.String())
+	fmt.Printf("ShowInner: %t\n", *showInner)
 	fmt.Printf("Type %q to exit\n", exitCommand)
 	fmt.Println(strings.Repeat("=", 50))
 
@@ -107,7 +119,7 @@ func main() {
 			fmt.Printf("Error: %v\n", err)
 			continue
 		}
-		printEvents(evCh)
+		printEvents(evCh, *showInner)
 		if reqCtx.Err() == context.DeadlineExceeded {
 			fmt.Fprintln(os.Stderr, "\n[timeout] error: request timed out")
 		}
@@ -124,6 +136,7 @@ func buildRunner(
 	modelName string,
 	variant string,
 	streaming bool,
+	showInner bool,
 ) (runner.Runner, error) {
 	modelInstance := openai.New(
 		modelName,
@@ -185,7 +198,11 @@ func buildRunner(
 					"answer for the user.",
 			),
 		)
-		tm, err := team.New(coordinator, members)
+		tm, err := team.New(
+			coordinator,
+			members,
+			team.WithMemberToolStreamInner(showInner),
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -208,11 +225,14 @@ func buildRunner(
 	), nil
 }
 
-func printEvents(evCh <-chan *event.Event) {
+func printEvents(evCh <-chan *event.Event, showInner bool) {
 	printedDelta := make(map[string]bool)
 	printedToolCalls := make(map[string]bool)
 	printedToolResults := make(map[string]bool)
 	toolNameByID := make(map[string]string)
+	printedPrefix := make(map[string]bool)
+
+	atLineStart := true
 
 	for ev := range evCh {
 		if ev == nil {
@@ -233,6 +253,7 @@ func printEvents(evCh <-chan *event.Event) {
 
 		if ev.Object == model.ObjectTypeTransfer {
 			fmt.Printf("\n[%s] %s\n", ev.Author, firstContent(ev))
+			atLineStart = true
 			continue
 		}
 
@@ -240,19 +261,30 @@ func printEvents(evCh <-chan *event.Event) {
 		if ev.Response.IsToolCallResponse() && !printedToolCalls[rspID] {
 			printedToolCalls[rspID] = true
 			recordToolIDs(toolNameByID, ev)
-			printToolCalls(ev)
+			printToolCalls(ev, showInner)
+			atLineStart = true
 		}
 
 		if ev.IsToolResultResponse() {
 			printToolResults(toolNameByID, printedToolResults, ev)
+			atLineStart = true
 			continue
 		}
 
 		if ev.Response.IsPartial {
 			text := firstDelta(ev)
 			if text != "" {
+				if showInner && ev.Author != teamName &&
+					!printedPrefix[rspID] {
+					if !atLineStart {
+						fmt.Println()
+					}
+					fmt.Printf("[%s] ", ev.Author)
+					printedPrefix[rspID] = true
+				}
 				printedDelta[rspID] = true
 				fmt.Print(text)
+				atLineStart = strings.HasSuffix(text, "\n")
 			}
 			continue
 		}
@@ -261,22 +293,33 @@ func printEvents(evCh <-chan *event.Event) {
 			if ev.IsFinalResponse() {
 				delete(printedDelta, rspID)
 				fmt.Println()
+				atLineStart = true
 			}
 			continue
 		}
 
 		text := firstContent(ev)
 		if text != "" {
+			if showInner && ev.Author != teamName &&
+				!printedPrefix[rspID] {
+				if !atLineStart {
+					fmt.Println()
+				}
+				fmt.Printf("[%s] ", ev.Author)
+				printedPrefix[rspID] = true
+			}
 			fmt.Print(text)
+			atLineStart = strings.HasSuffix(text, "\n")
 		}
 
 		if ev.IsFinalResponse() {
 			fmt.Println()
+			atLineStart = true
 		}
 	}
 }
 
-func printToolCalls(ev *event.Event) {
+func printToolCalls(ev *event.Event, showArgs bool) {
 	if ev == nil || ev.Response == nil || len(ev.Response.Choices) == 0 {
 		return
 	}
@@ -298,6 +341,20 @@ func printToolCalls(ev *event.Event) {
 		fmt.Print(tc.Function.Name)
 	}
 	fmt.Println()
+
+	if !showArgs {
+		return
+	}
+	for _, tc := range toolCalls {
+		if len(tc.Function.Arguments) == 0 {
+			continue
+		}
+		fmt.Printf(
+			"[tool.args] %s: %s\n",
+			tc.Function.Name,
+			string(tc.Function.Arguments),
+		)
+	}
 }
 
 func recordToolIDs(toolNameByID map[string]string, ev *event.Event) {

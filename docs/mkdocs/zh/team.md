@@ -115,6 +115,8 @@ _ = r
   `coordinator.Info().Name`），这样同一次会话（session）的事件（event）里不会出现
   两套作者名。
 - 协调者需要支持动态 ToolSet（工具集，ToolSet）（LLMAgent 支持）。
+- 如果你想把成员（以工具调用）的输出流式展示到父流程里，可以启用
+  `team.WithMemberToolStreamInner(true)`，并确保协调者和成员都使用流式输出。
 
 ## 快速上手：Swarm
 

@@ -249,6 +249,35 @@ func TestNew_AppliesOptions(t *testing.T) {
 	require.Equal(t, testToolSetName, coordinator.addedToolSets[0].Name())
 }
 
+func TestNew_MemberToolStreamInner(t *testing.T) {
+	coordinator := &testCoordinator{name: testCoordinatorName}
+	members := []agent.Agent{testAgent{name: testMemberNameOne}}
+
+	_, err := New(
+		coordinator,
+		members,
+		WithMemberToolStreamInner(true),
+	)
+	require.NoError(t, err)
+
+	require.Len(t, coordinator.addedToolSets, 1)
+	ts := coordinator.addedToolSets[0]
+
+	tools := itool.NewNamedToolSet(ts).Tools(context.Background())
+	require.Len(t, tools, 1)
+
+	named, ok := tools[0].(*itool.NamedTool)
+	require.True(t, ok)
+
+	original := named.Original()
+	type streamPref interface {
+		StreamInner() bool
+	}
+	pref, ok := original.(streamPref)
+	require.True(t, ok)
+	require.True(t, pref.StreamInner())
+}
+
 func TestTeam_Run_Coordinator(t *testing.T) {
 	coordinator := &testCoordinator{name: testCoordinatorName}
 	members := []agent.Agent{testAgent{name: testMemberNameOne}}
@@ -319,7 +348,7 @@ func TestTeam_FindSubAgent(t *testing.T) {
 
 func TestStaticToolSet_ToolsAndClose(t *testing.T) {
 	members := []agent.Agent{testAgent{name: testMemberNameOne}}
-	ts := newMemberToolSet(testToolSetName, members)
+	ts := newMemberToolSet(testToolSetName, false, members)
 	tools := ts.Tools(context.Background())
 	require.Len(t, tools, 1)
 

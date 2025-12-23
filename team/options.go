@@ -18,7 +18,8 @@ type options struct {
 }
 
 type memberToolOptions struct {
-	name string
+	name        string
+	streamInner bool
 }
 
 // Option configures a Team.
@@ -38,6 +39,16 @@ func WithDescription(desc string) Option {
 func WithMemberToolSetName(name string) Option {
 	return func(o *options) {
 		o.memberTools.name = name
+	}
+}
+
+// WithMemberToolStreamInner controls whether member AgentTools forward inner
+// agent events to the parent flow.
+//
+// This only applies to coordinator teams.
+func WithMemberToolStreamInner(enabled bool) Option {
+	return func(o *options) {
+		o.memberTools.streamInner = enabled
 	}
 }
 

@@ -115,6 +115,9 @@ Notes:
   `team.New` reuses `coordinator.Info().Name`), so the same session history
   and events don't end up with two different Agent author names.
 - The coordinator must support dynamic ToolSets (LLMAgent does).
+- If you want to stream member output in the parent transcript, enable
+  `team.WithMemberToolStreamInner(true)` and use streaming for both the
+  coordinator and members.
 
 ## Quickstart: Swarm
 

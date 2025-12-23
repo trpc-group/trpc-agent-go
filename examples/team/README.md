@@ -42,6 +42,7 @@ A Team is an `agent.Agent` that helps you run multiple Agents together.
 | `-variant`    | Variant passed to the OpenAI provider | `openai`        |
 | `-streaming`  | Enable streaming output               | `true`          |
 | `-timeout`    | Request timeout                       | `5m`            |
+| `-show-inner` | Show inner member transcript in `team` mode | `true`      |
 
 ## Usage
 
@@ -56,8 +57,9 @@ go run . -mode team
 Notes:
 
 - If the output shows a line like `[tools] ...`, the coordinator is calling a
-  member as a tool. Tool results are not printed; the coordinator will use them
-  to produce the final answer.
+  member as a tool.
+- By default, member tool output is streamed in `team` mode. Pass
+  `-show-inner=false` to hide it (you will only see `[tool.done] ...`).
 - For very long prompts, increase `-timeout` (for example, `-timeout 10m`).
 
 ### Swarm Mode
