@@ -100,13 +100,17 @@ func (t *ToolTrajectoryCriterion) validateToolCounts(actual, expected *evalset.I
 func (t *ToolTrajectoryCriterion) orderedMatch(actual, expected []*evalset.Tool) error {
 	actualIdx := -1
 	for expectedIdx := range len(expected) {
+		if actualIdx == len(actual)-1 {
+			return fmt.Errorf("tool id %s with name %s mismatch", expected[expectedIdx].ID, expected[expectedIdx].Name)
+		}
+		var err error
 		for actualIdx+1 < len(actual) {
 			actualIdx++
-			if t.matchTool(actual[actualIdx], expected[expectedIdx]) == nil {
+			if err = t.matchTool(actual[actualIdx], expected[expectedIdx]); err == nil {
 				break
 			}
 		}
-		if err := t.matchTool(actual[actualIdx], expected[expectedIdx]); err != nil {
+		if err != nil {
 			return fmt.Errorf("tool id %s with name %s mismatch: %w",
 				expected[expectedIdx].ID, expected[expectedIdx].Name, err)
 		}

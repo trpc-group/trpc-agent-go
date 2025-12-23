@@ -124,6 +124,24 @@ func TestToolTrajectoryCriterionOrderSensitiveMismatch(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestToolTrajectoryCriterionOrderSensitiveLeadingExtraActual(t *testing.T) {
+	actual := makeInvocation([]toolData{
+		{id: "call-0", name: "other", args: map[string]any{"extra": 1}},
+		{id: "call-1", name: "tool", args: map[string]any{"a": 1}},
+		{id: "call-2", name: "tool", args: map[string]any{"a": 2}},
+	})
+	expected := makeInvocation([]toolData{
+		{id: "call-1", name: "tool", args: map[string]any{"a": 1}},
+		{id: "call-2", name: "tool", args: map[string]any{"a": 2}},
+		{id: "call-3", name: "tool", args: map[string]any{"a": 3}},
+	})
+
+	ok, err := New(WithOrderSensitive(true)).Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "tool id call-3")
+}
+
 func TestToolTrajectoryCriterionSubsetMatching(t *testing.T) {
 	actual := makeInvocation([]toolData{
 		{id: "call-1", name: "tool", args: map[string]any{"a": 0}},
