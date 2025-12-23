@@ -47,6 +47,12 @@ const (
 	//nolint:gosec
 	qwenAPIKeyName     string = "DASHSCOPE_API_KEY"
 	defaultQwenBaseURL string = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+	// ThoughtSignatureFormat constants for tracking thought signature source format.
+	// ThoughtSignatureFormatTopLevel indicates tool_calls[].thought_signature format.
+	ThoughtSignatureFormatTopLevel = "top_level"
+	// ThoughtSignatureFormatExtraContent indicates tool_calls[].extra_content.google.thought_signature format.
+	ThoughtSignatureFormatExtraContent = "extra_content"
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -770,11 +776,26 @@ func (m *Model) convertToolCalls(toolCalls []model.ToolCall) []openai.ChatComple
 				Arguments: string(toolCall.Function.Arguments),
 			},
 		}
-		// Set thought_signature as extra field for Gemini 3 compatibility.
+		// Set thought_signature based on the format it was received in.
+		// This ensures compatibility with both proxy services (top-level) and official API (extra_content).
 		if toolCall.ThoughtSignature != "" {
-			param.SetExtraFields(map[string]any{
-				"thought_signature": toolCall.ThoughtSignature,
-			})
+			switch toolCall.ThoughtSignatureFormat {
+			case ThoughtSignatureFormatExtraContent:
+				// Use extra_content.google.thought_signature format (official Gemini API)
+				param.SetExtraFields(map[string]any{
+					"extra_content": map[string]any{
+						"google": map[string]any{
+							"thought_signature": toolCall.ThoughtSignature,
+						},
+					},
+				})
+			default:
+				// Use top-level format (proxy services like Venus)
+				// This is also the default for new thought signatures without a format
+				param.SetExtraFields(map[string]any{
+					"thought_signature": toolCall.ThoughtSignature,
+				})
+			}
 		}
 		result = append(result, param)
 	}
@@ -1074,21 +1095,41 @@ func extractReasoningContent(extraFields map[string]respjson.Field) string {
 
 // extractThoughtSignature extracts thought_signature from ExtraFields.
 // This is used for Gemini 3 models which require thought signatures for multi-turn function calling.
+// Returns the signature value and the format it was found in.
 // See: https://cloud.google.com/vertex-ai/generative-ai/docs/thought-signatures
-func extractThoughtSignature(extraFields map[string]respjson.Field) string {
+func extractThoughtSignature(extraFields map[string]respjson.Field) (string, string) {
 	if extraFields == nil {
-		return ""
+		return "", ""
 	}
-	sigField, ok := extraFields["thought_signature"]
-	if !ok {
-		return ""
+
+	// Try top-level format first: tool_calls[].thought_signature
+	if sigField, ok := extraFields["thought_signature"]; ok {
+		sigStr, err := strconv.Unquote(sigField.Raw())
+		if err == nil && sigStr != "" {
+			return sigStr, ThoughtSignatureFormatTopLevel
+		}
+		// If unquote fails, try raw value
+		raw := sigField.Raw()
+		if raw != "" && raw != "null" {
+			return raw, ThoughtSignatureFormatTopLevel
+		}
 	}
-	sigStr, err := strconv.Unquote(sigField.Raw())
-	if err == nil {
-		return sigStr
+
+	// Try extra_content.google.thought_signature format
+	if extraContentField, ok := extraFields["extra_content"]; ok {
+		var extraContent struct {
+			Google struct {
+				ThoughtSignature string `json:"thought_signature"`
+			} `json:"google"`
+		}
+		if err := json.Unmarshal([]byte(extraContentField.Raw()), &extraContent); err == nil {
+			if extraContent.Google.ThoughtSignature != "" {
+				return extraContent.Google.ThoughtSignature, ThoughtSignatureFormatExtraContent
+			}
+		}
 	}
-	// If unquote fails, return raw value (might already be unquoted)
-	return sigField.Raw()
+
+	return "", ""
 }
 
 // createPartialResponse creates a partial response from a chunk.
@@ -1258,7 +1299,7 @@ func (m *Model) processAccumulatedToolCalls(
 		}
 
 		// Extract thought_signature from ExtraFields (Gemini 3 support).
-		thoughtSignature := extractThoughtSignature(toolCall.JSON.ExtraFields)
+		thoughtSignature, thoughtSignatureFormat := extractThoughtSignature(toolCall.JSON.ExtraFields)
 
 		accumulatedToolCalls = append(accumulatedToolCalls, model.ToolCall{
 			Index: func() *int { idx := originalIndex; return &idx }(),
@@ -1268,7 +1309,8 @@ func (m *Model) processAccumulatedToolCalls(
 				Name:      toolCall.Function.Name,
 				Arguments: []byte(toolCall.Function.Arguments),
 			},
-			ThoughtSignature: thoughtSignature,
+			ThoughtSignature:       thoughtSignature,
+			ThoughtSignatureFormat: thoughtSignatureFormat,
 		})
 	}
 
@@ -1392,7 +1434,7 @@ func (m *Model) handleNonStreamingResponse(
 					synthesizedID = fmt.Sprintf("auto_call_%d", j)
 				}
 				// Extract thought_signature from ExtraFields (Gemini 3 support).
-				thoughtSignature := extractThoughtSignature(toolCall.JSON.ExtraFields)
+				thoughtSignature, thoughtSignatureFormat := extractThoughtSignature(toolCall.JSON.ExtraFields)
 				response.Choices[i].Message.ToolCalls[j] = model.ToolCall{
 					ID:   synthesizedID,
 					Type: string(toolCall.Type),
@@ -1400,7 +1442,8 @@ func (m *Model) handleNonStreamingResponse(
 						Name:      toolCall.Function.Name,
 						Arguments: []byte(toolCall.Function.Arguments),
 					},
-					ThoughtSignature: thoughtSignature,
+					ThoughtSignature:       thoughtSignature,
+					ThoughtSignatureFormat: thoughtSignatureFormat,
 				}
 			}
 
