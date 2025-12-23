@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
@@ -89,11 +90,12 @@ func (s *Service) EnqueueSummaryJob(ctx context.Context, sess *session.Session, 
 
 	// If async workers are not initialized, fall back to synchronous processing.
 	if len(s.summaryJobChans) == 0 {
-		return s.CreateSessionSummary(ctx, sess, filterKey, force)
+		return isummary.CreateSessionSummaryWithCascade(ctx, sess, filterKey, force, s.CreateSessionSummary)
 	}
 
 	// Create summary job.
 	job := &summaryJob{
+		ctx:       context.WithoutCancel(ctx),
 		filterKey: filterKey,
 		force:     force,
 		session:   sess,
@@ -105,7 +107,7 @@ func (s *Service) EnqueueSummaryJob(ctx context.Context, sess *session.Session, 
 	}
 
 	// If async enqueue failed, fall back to synchronous processing.
-	return s.CreateSessionSummary(ctx, sess, filterKey, force)
+	return isummary.CreateSessionSummaryWithCascade(ctx, sess, filterKey, force, s.CreateSessionSummary)
 }
 
 // tryEnqueueJob attempts to enqueue a summary job to the appropriate channel.
@@ -236,12 +238,6 @@ func (s *Service) startAsyncSummaryWorker() {
 			defer s.summaryWg.Done()
 			for job := range summaryJobChan {
 				s.processSummaryJob(job)
-				// After branch summary, cascade a full-session summary by
-				// reusing the same processing path to keep logic unified.
-				if job.filterKey != session.SummaryFilterKeyAllContents {
-					job.filterKey = session.SummaryFilterKeyAllContents
-					s.processSummaryJob(job)
-				}
 			}
 		}(summaryJobChan)
 	}
@@ -250,19 +246,30 @@ func (s *Service) startAsyncSummaryWorker() {
 func (s *Service) processSummaryJob(job *summaryJob) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Errorf("panic in summary worker: %v", r)
+			log.ErrorfContext(
+				context.Background(),
+				"panic in summary worker: %v",
+				r,
+			)
 		}
 	}()
 
-	// Create a fresh context with timeout for this job.
-	ctx := context.Background()
+	// Use the detached context from job which preserves values (e.g., trace ID).
+	// Fallback to background context if job.ctx is nil for defensive programming.
+	ctx := util.If(job.ctx == nil, context.Background(), job.ctx)
+	// Apply timeout if configured.
 	if s.opts.summaryJobTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, s.opts.summaryJobTimeout)
 		defer cancel()
 	}
 
-	if err := s.CreateSessionSummary(ctx, job.session, job.filterKey, job.force); err != nil {
-		log.Warnf("summary worker failed to create session summary: %v", err)
+	if err := isummary.CreateSessionSummaryWithCascade(ctx, job.session, job.filterKey,
+		job.force, s.CreateSessionSummary); err != nil {
+		log.WarnfContext(
+			ctx,
+			"summary worker failed to create session summary: %v",
+			err,
+		)
 	}
 }
