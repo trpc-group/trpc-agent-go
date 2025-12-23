@@ -326,6 +326,29 @@ func TestInjectSessionState_RawNumericPrefixText(t *testing.T) {
 	}
 }
 
+func TestInjectSessionState_EmptyRawValue(t *testing.T) {
+	const (
+		stateKey  = "empty"
+		template  = "E={empty}"
+		want      = "E="
+		errPrefix = "InjectSessionState empty raw value"
+	)
+
+	sm := make(session.StateMap)
+	sm[stateKey] = nil
+	inv := &agent.Invocation{
+		Session: &session.Session{State: sm},
+	}
+
+	got, err := InjectSessionState(template, inv)
+	if err != nil {
+		t.Fatalf("%s: unexpected error: %v", errPrefix, err)
+	}
+	if got != want {
+		t.Fatalf("%s: got %q, want %q", errPrefix, got, want)
+	}
+}
+
 func TestInjectSessionState_JSONObjectAndArray(t *testing.T) {
 	sm := make(session.StateMap)
 	sm["obj"] = []byte(`{"a":1,"b":[2,3]}`)
