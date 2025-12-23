@@ -11,26 +11,24 @@
 package tooltrajectory
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"sort"
 
+	"github.com/hashicorp/go-multierror"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	criterionjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
-	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory/internal/kuhn"
 )
 
 // New creates a ToolTrajectoryCriterion with the provided options.
 func New(opt ...Option) *ToolTrajectoryCriterion {
 	opts := newOptions(opt...)
 	return &ToolTrajectoryCriterion{
-		DefaultStrategy:  opts.defaultStrategy,
-		ToolStrategy:     opts.toolStrategy,
-		OrderInsensitive: opts.orderInsensitive,
-		SubsetMatching:   opts.subsetMatching,
-		Compare:          opts.compare,
+		DefaultStrategy: opts.defaultStrategy,
+		ToolStrategy:    opts.toolStrategy,
+		OrderSensitive:  opts.orderSensitive,
+		SubsetMatching:  opts.subsetMatching,
+		Compare:         opts.compare,
 	}
 }
 
@@ -40,8 +38,8 @@ type ToolTrajectoryCriterion struct {
 	DefaultStrategy *ToolTrajectoryStrategy `json:"defaultStrategy,omitempty"`
 	// ToolStrategy holds per-tool strategies keyed by tool name.
 	ToolStrategy map[string]*ToolTrajectoryStrategy `json:"toolStrategy,omitempty"`
-	// OrderInsensitive toggles comparison order for args and responses.
-	OrderInsensitive bool `json:"orderInsensitive,omitempty"`
+	// OrderSensitive requires tools to match in sequence when true; when false, matching is order-agnostic.
+	OrderSensitive bool `json:"orderSensitive,omitempty"`
 	// SubsetMatching allows expected tool list to be a subset of actual list.
 	SubsetMatching bool `json:"subsetMatching,omitempty"`
 	// Compare allows custom comparison override.
@@ -52,7 +50,7 @@ type ToolTrajectoryCriterion struct {
 type ToolTrajectoryStrategy struct {
 	Name      *text.TextCriterion          `json:"name,omitempty"`      // Name compares tool names.
 	Arguments *criterionjson.JSONCriterion `json:"arguments,omitempty"` // Arguments compares tool call arguments.
-	Response  *criterionjson.JSONCriterion `json:"response,omitempty"`  // Response compares tool call responses.
+	Result    *criterionjson.JSONCriterion `json:"result,omitempty"`    // Result compares tool call results.
 }
 
 // Match compares actual and expected invocations according to tool trajectory rules.
@@ -63,272 +61,107 @@ func (t *ToolTrajectoryCriterion) Match(actual, expected *evalset.Invocation) (b
 	if actual == nil || expected == nil {
 		return false, fmt.Errorf("actual or expected invocation is nil")
 	}
-	if actual.IntermediateData == nil || expected.IntermediateData == nil {
-		return false, fmt.Errorf("actual or expected intermediate data is nil")
+	if len(actual.Tools) == 0 && len(expected.Tools) == 0 {
+		return true, nil
 	}
-	valid, err := t.validateToolCounts(actual, expected)
-	if err != nil {
+	if err := t.validateToolCounts(actual, expected); err != nil {
 		return false, fmt.Errorf("validate tool counts: %w", err)
 	}
-	if !valid {
-		return false, fmt.Errorf("tool counts mismatch")
+	var err error
+	if t.OrderSensitive {
+		err = t.orderedMatch(actual.Tools, expected.Tools)
+	} else {
+		err = t.unorderedMatch(actual.Tools, expected.Tools)
 	}
-	actualTools, err := getToolComparers(
-		actual.IntermediateData.ToolCalls,
-		actual.IntermediateData.ToolResponses,
-		t.OrderInsensitive,
-	)
 	if err != nil {
-		return false, fmt.Errorf("get actual tools: %w", err)
+		return false, fmt.Errorf("match tools: %w", err)
 	}
-	expectedTools, err := getToolComparers(
-		expected.IntermediateData.ToolCalls,
-		expected.IntermediateData.ToolResponses,
-		t.OrderInsensitive,
-	)
-	if err != nil {
-		return false, fmt.Errorf("get expected tools: %w", err)
-	}
-	if t.OrderInsensitive {
-		sort.Slice(actualTools, func(i, j int) bool {
-			return actualTools[i].lessThan(actualTools[j])
-		})
-		sort.Slice(expectedTools, func(i, j int) bool {
-			return expectedTools[i].lessThan(expectedTools[j])
-		})
-	}
-	if t.SubsetMatching {
-		return subsetMatch(t, actualTools, expectedTools)
-	}
-	return orderedMatch(t, actualTools, expectedTools)
+	return true, nil
 }
 
 // validateToolCounts validates the tool counts of actual and expected invocations.
-func (t *ToolTrajectoryCriterion) validateToolCounts(actual, expected *evalset.Invocation) (bool, error) {
-	actualToolCount := len(actual.IntermediateData.ToolCalls)
-	actualResponseCount := len(actual.IntermediateData.ToolResponses)
-	expectedToolCount := len(expected.IntermediateData.ToolCalls)
-	expectedResponseCount := len(expected.IntermediateData.ToolResponses)
-	if actualToolCount != actualResponseCount {
-		return false, fmt.Errorf("actual tool calls and tool responses count mismatch: %d != %d",
-			actualToolCount, actualResponseCount)
-	}
-	if expectedToolCount != expectedResponseCount {
-		return false, fmt.Errorf("expected tool calls and tool responses count mismatch: %d != %d",
-			expectedToolCount, expectedResponseCount)
-	}
+func (t *ToolTrajectoryCriterion) validateToolCounts(actual, expected *evalset.Invocation) error {
+	numActualTools := len(actual.Tools)
+	numExpectedTools := len(expected.Tools)
 	if t.SubsetMatching {
-		if actualToolCount < expectedToolCount {
-			return false, fmt.Errorf("tool calls count mismatch: actual(%d) < expected(%d)", actualToolCount, expectedToolCount)
+		if numActualTools < numExpectedTools {
+			return fmt.Errorf("number of tool calls mismatch: actual(%d) < expected(%d)",
+				numActualTools, numExpectedTools)
 		}
-	} else {
-		if actualToolCount != expectedToolCount {
-			return false, fmt.Errorf("tool calls count mismatch: actual(%d) != expected(%d)", actualToolCount, expectedToolCount)
-		}
+		return nil
 	}
-	return true, nil
-}
-
-// Match validates a single tool call pair using configured criteria.
-func (t *ToolTrajectoryStrategy) match(actual, expected *toolComparer) (bool, error) {
-	if t.Name != nil {
-		ok, err := t.Name.Match(actual.name, expected.name)
-		if err != nil {
-			return false, fmt.Errorf("name mismatch: %w", err)
-		}
-		if !ok {
-			return false, fmt.Errorf("name mismatch")
-		}
-	}
-	if t.Arguments != nil {
-		ok, err := t.Arguments.Match(actual.args, expected.args)
-		if err != nil {
-			return false, fmt.Errorf("arguments mismatch: %w", err)
-		}
-		if !ok {
-			return false, fmt.Errorf("arguments mismatch")
-		}
-	}
-	if t.Response != nil {
-		ok, err := t.Response.Match(actual.response, expected.response)
-		if err != nil {
-			return false, fmt.Errorf("response mismatch: %w", err)
-		}
-		if !ok {
-			return false, fmt.Errorf("response mismatch")
-		}
-	}
-	return true, nil
-}
-
-// orderedMatch matches the tool calls and responses in order.
-func orderedMatch(t *ToolTrajectoryCriterion, actualTools, expectedTools []*toolComparer) (bool, error) {
-	for i := range len(actualTools) {
-		if err := matchTool(t, actualTools[i], expectedTools[i]); err != nil {
-			return false, fmt.Errorf("actual tool %s mismatch with expected tool %s: %w",
-				actualTools[i].name, expectedTools[i].name, err)
-		}
-	}
-	return true, nil
-}
-
-// subsetMatch matches the tool calls and responses in subset.
-func subsetMatch(t *ToolTrajectoryCriterion, actualTools, expectedTools []*toolComparer) (bool, error) {
-	if len(expectedTools) == 0 {
-		return true, nil
-	}
-	matched := 0
-	var lastErr error
-	for i, j := 0, 0; i < len(actualTools) && j < len(expectedTools); i++ {
-		if err := matchTool(t, actualTools[i], expectedTools[j]); err != nil {
-			lastErr = fmt.Errorf("actual tool %s mismatch with expected tool %s: %w",
-				actualTools[i].name, expectedTools[j].name, err)
-			continue
-		}
-		matched++
-		j++
-	}
-	if matched != len(expectedTools) {
-		if lastErr != nil {
-			return false, fmt.Errorf("tool subset mismatch: %w", lastErr)
-		}
-		return false, fmt.Errorf("tool subset mismatch: %d of %d matched", matched, len(expectedTools))
-	}
-	return true, nil
-}
-
-// matchTool matches a single tool call and response.
-func matchTool(t *ToolTrajectoryCriterion, actualTool, expectedTool *toolComparer) error {
-	strategy := getStrategy(t, actualTool, expectedTool)
-	ok, err := strategy.match(actualTool, expectedTool)
-	if err != nil {
-		return fmt.Errorf("tool %s mismatch: %w", actualTool.name, err)
-	}
-	if !ok {
-		return fmt.Errorf("tool %s mismatch", actualTool.name)
+	if numActualTools != numExpectedTools {
+		return fmt.Errorf("number of tool calls mismatch: actual(%d) != expected(%d)", numActualTools, numExpectedTools)
 	}
 	return nil
 }
 
-// toolComparer normalizes tool call and response data for comparison.
-type toolComparer struct {
-	name          string         // name holds the tool name.
-	args          map[string]any // args holds parsed tool arguments.
-	response      map[string]any // response holds parsed tool response payload.
-	argsOrder     string         // argsOrder caches JSON for order-insensitive compare.
-	responseOrder string         // responseOrder caches JSON for order-insensitive compare.
+// orderedMatch matches actual and expected tool calls in order.
+func (t *ToolTrajectoryCriterion) orderedMatch(actual, expected []*evalset.Tool) error {
+	actualIdx := -1
+	for expectedIdx := range len(expected) {
+		for actualIdx+1 < len(actual) {
+			actualIdx++
+			if t.matchTool(actual[actualIdx], expected[expectedIdx]) == nil {
+				break
+			}
+		}
+		if err := t.matchTool(actual[actualIdx], expected[expectedIdx]); err != nil {
+			return fmt.Errorf("tool id %s with name %s mismatch: %w",
+				expected[expectedIdx].ID, expected[expectedIdx].Name, err)
+		}
+	}
+	return nil
 }
 
-// lessThan provides deterministic ordering when order-insensitive compares require sorting.
-func (t *toolComparer) lessThan(other *toolComparer) bool {
-	if t.name != other.name {
-		return t.name < other.name
+func (t *ToolTrajectoryCriterion) unorderedMatch(actual, expected []*evalset.Tool) error {
+	leftSize := len(expected)
+	rightSize := len(actual)
+	matcher := kuhn.New(leftSize, rightSize)
+	for i := range leftSize {
+		for j := range rightSize {
+			if t.matchTool(actual[j], expected[i]) == nil {
+				matcher.AddEdge(i, j)
+			}
+		}
 	}
-	if t.argsOrder != other.argsOrder {
-		return t.argsOrder < other.argsOrder
+	unmatchedLeft, err := matcher.FullLeftMatch()
+	if err == nil {
+		return nil
 	}
-	if t.responseOrder != other.responseOrder {
-		return t.responseOrder < other.responseOrder
+	for _, left := range unmatchedLeft {
+		err = multierror.Append(err, fmt.Errorf("tool id %s with name %s mismatch",
+			expected[left].ID, expected[left].Name))
 	}
-	return false
+	return err
 }
 
-// getToolComparers aligns tool calls with their responses and builds toolComparer.
-func getToolComparers(toolCalls []*model.ToolCall, toolResponses []*model.Message,
-	orderInsensitive bool) ([]*toolComparer, error) {
-	// toolCallIDs ensures every tool use can be matched by ID.
-	// Map from tool call id to index.
-	toolCallIDs := make(map[string]int)
-	for i := range len(toolCalls) {
-		if toolCalls[i] == nil {
-			return nil, fmt.Errorf("tool use is nil")
-		}
-		if toolCalls[i].ID == "" {
-			return nil, fmt.Errorf("tool use id is empty")
-		}
-		if _, ok := toolCallIDs[toolCalls[i].ID]; ok {
-			return nil, fmt.Errorf("tool use id %s is duplicated", toolCalls[i].ID)
-		}
-		toolCallIDs[toolCalls[i].ID] = i
+// matchTool matches a single tool call and response.
+func (t *ToolTrajectoryCriterion) matchTool(actualTool, expectedTool *evalset.Tool) error {
+	if actualTool == nil || expectedTool == nil {
+		return fmt.Errorf("actual or expected tool is nil")
 	}
-	// toolResponseIDs ensures every tool response can be matched by ID.
-	// Map from tool response id to index.
-	toolResponseIDs := make(map[string]int)
-	for i := range len(toolResponses) {
-		if toolResponses[i] == nil {
-			return nil, fmt.Errorf("tool response is nil")
-		}
-		if toolResponses[i].ToolID == "" {
-			return nil, fmt.Errorf("tool response id is empty")
-		}
-		if _, ok := toolResponseIDs[toolResponses[i].ToolID]; ok {
-			return nil, fmt.Errorf("tool response id %s is duplicated", toolResponses[i].ToolID)
-		}
-		toolResponseIDs[toolResponses[i].ToolID] = i
+	strategy := t.getStrategy(actualTool, expectedTool)
+	ok, err := strategy.Match(actualTool, expectedTool)
+	if err != nil {
+		return fmt.Errorf("actual tool %s named %s mismatch with expected tool %s named %s: %w",
+			actualTool.ID, actualTool.Name, expectedTool.ID, expectedTool.Name, err)
 	}
-	for toolID := range toolCallIDs {
-		if _, ok := toolResponseIDs[toolID]; !ok {
-			return nil, fmt.Errorf("tool id %s is missing response", toolID)
-		}
+	if !ok {
+		return fmt.Errorf("actual tool %s named %s mismatch with expected tool %s named %s",
+			actualTool.ID, actualTool.Name, expectedTool.ID, expectedTool.Name)
 	}
-	toolComparers := make([]*toolComparer, 0, len(toolCalls))
-	for i := range len(toolCalls) {
-		toolComparer, err := getToolComparer(
-			toolCalls[i],
-			toolResponses[toolResponseIDs[toolCalls[i].ID]],
-			orderInsensitive,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("get tool comparer: %w", err)
-		}
-		toolComparers = append(toolComparers, toolComparer)
-	}
-	return toolComparers, nil
-}
-
-// getToolComparer pairs a tool call with its response and precomputes ordering hints.
-func getToolComparer(toolCall *model.ToolCall, toolResponse *model.Message,
-	orderInsensitive bool) (*toolComparer, error) {
-	if toolCall == nil || toolResponse == nil {
-		return nil, errors.New("tool call or tool response is nil")
-	}
-	tool := &toolComparer{
-		name: toolCall.Function.Name,
-	}
-	if len(toolCall.Function.Arguments) > 0 {
-		if err := json.Unmarshal(toolCall.Function.Arguments, &tool.args); err != nil {
-			return nil, fmt.Errorf("unmarshal arguments: %w", err)
-		}
-	}
-	if toolResponse.Content != "" {
-		if err := json.Unmarshal([]byte(toolResponse.Content), &tool.response); err != nil {
-			return nil, fmt.Errorf("unmarshal response: %w", err)
-		}
-	}
-	if orderInsensitive {
-		args, err := json.Marshal(tool.args)
-		if err != nil {
-			return nil, fmt.Errorf("marshal arguments: %w", err)
-		}
-		response, err := json.Marshal(tool.response)
-		if err != nil {
-			return nil, fmt.Errorf("marshal response: %w", err)
-		}
-		tool.argsOrder = string(args)
-		tool.responseOrder = string(response)
-	}
-	return tool, nil
+	return nil
 }
 
 // getStrategy picks the comparison strategy for a specific tool pair.
-func getStrategy(t *ToolTrajectoryCriterion, actualTool,
-	expectedTool *toolComparer) *ToolTrajectoryStrategy {
+func (t *ToolTrajectoryCriterion) getStrategy(actualTool, expectedTool *evalset.Tool) *ToolTrajectoryStrategy {
 	if t.ToolStrategy != nil {
-		strategy, ok := t.ToolStrategy[actualTool.name]
+		strategy, ok := t.ToolStrategy[actualTool.Name]
 		if ok {
 			return strategy
 		}
-		strategy, ok = t.ToolStrategy[expectedTool.name]
+		strategy, ok = t.ToolStrategy[expectedTool.Name]
 		if ok {
 			return strategy
 		}
@@ -337,4 +170,35 @@ func getStrategy(t *ToolTrajectoryCriterion, actualTool,
 		return t.DefaultStrategy
 	}
 	return defaultToolTrajectoryStrategy
+}
+
+func (t *ToolTrajectoryStrategy) Match(actual, expected *evalset.Tool) (bool, error) {
+	if t.Name != nil {
+		ok, err := t.Name.Match(actual.Name, expected.Name)
+		if err != nil {
+			return false, fmt.Errorf("name mismatch: %w", err)
+		}
+		if !ok {
+			return false, fmt.Errorf("name mismatch")
+		}
+	}
+	if t.Arguments != nil {
+		ok, err := t.Arguments.Match(actual.Arguments, expected.Arguments)
+		if err != nil {
+			return false, fmt.Errorf("arguments mismatch: %w", err)
+		}
+		if !ok {
+			return false, fmt.Errorf("arguments mismatch")
+		}
+	}
+	if t.Result != nil {
+		ok, err := t.Result.Match(actual.Result, expected.Result)
+		if err != nil {
+			return false, fmt.Errorf("result mismatch: %w", err)
+		}
+		if !ok {
+			return false, fmt.Errorf("result mismatch")
+		}
+	}
+	return true, nil
 }
