@@ -105,13 +105,8 @@ func (e *rubricResponseMessagesConstructor) ConstructMessages(ctx context.Contex
 	if len(actuals) == 0 {
 		return nil, fmt.Errorf("actuals is empty")
 	}
-	responseSteps, err := content.ExtractIntermediateData(actuals[0].IntermediateData)
-	if err != nil {
-		return nil, fmt.Errorf("extract intermediate data: %w", err)
-	}
 	data := rubricResponsePromptData{
 		UserInput:     content.ExtractTextFromContent(actuals[0].UserContent),
-		ResponseSteps: responseSteps,
 		FinalResponse: content.ExtractTextFromContent(actuals[0].FinalResponse),
 		Rubrics:       content.ExtractRubrics(evalMetric.Criterion.LLMJudge.Rubrics),
 	}
@@ -130,7 +125,6 @@ func (e *rubricResponseMessagesConstructor) ConstructMessages(ctx context.Contex
 // rubricResponsePromptData feeds values into the judge prompt template.
 type rubricResponsePromptData struct {
 	UserInput     string
-	ResponseSteps string
 	FinalResponse string
 	Rubrics       string
 }

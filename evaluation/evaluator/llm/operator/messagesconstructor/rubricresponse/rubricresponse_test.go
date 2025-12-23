@@ -27,8 +27,14 @@ func TestConstructMessagesIncludesAllFields(t *testing.T) {
 	actual := &evalset.Invocation{
 		UserContent:   &model.Message{Content: "hello"},
 		FinalResponse: &model.Message{Content: "final"},
-		IntermediateData: &evalset.IntermediateData{
-			ToolCalls: []*model.ToolCall{{Type: "function", Function: model.FunctionDefinitionParam{Name: "call"}}},
+		Tools: []*evalset.Tool{
+			{
+				ID:   "1",
+				Name: "call",
+				Arguments: map[string]any{
+					"arg": "value",
+				},
+			},
 		},
 	}
 	evalMetric := &metric.EvalMetric{

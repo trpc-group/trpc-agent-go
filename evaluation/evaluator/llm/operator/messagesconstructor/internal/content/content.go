@@ -11,10 +11,8 @@
 package content
 
 import (
-	"encoding/json"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -22,15 +20,6 @@ import (
 // ExtractTextFromContent extracts plain text from model message.
 func ExtractTextFromContent(content *model.Message) string {
 	return content.Content
-}
-
-// ExtractIntermediateData extracts intermediate data from evalset.IntermediateData.
-func ExtractIntermediateData(intermediateData *evalset.IntermediateData) (string, error) {
-	data, err := json.Marshal(intermediateData)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
 }
 
 // ExtractRubrics extracts rubrics from llm.Rubric.

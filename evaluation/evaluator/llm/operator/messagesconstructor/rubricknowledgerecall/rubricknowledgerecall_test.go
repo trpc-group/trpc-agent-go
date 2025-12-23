@@ -26,12 +26,17 @@ func TestConstructMessagesWithKnowledge(t *testing.T) {
 	constructor := New()
 	actual := &evalset.Invocation{
 		UserContent: &model.Message{Content: "who?"},
-		IntermediateData: &evalset.IntermediateData{
-			ToolResponses: []*model.Message{
-				{
-					ToolID:   "1",
-					ToolName: "knowledge_search",
-					Content:  "{\"documents\": [{\"text\": \"result\", \"score\": 0.9}]}",
+		Tools: []*evalset.Tool{
+			{
+				ID:   "1",
+				Name: "knowledge_search",
+				Arguments: map[string]any{
+					"documents": []any{
+						map[string]any{
+							"text":  "result",
+							"score": 0.9,
+						},
+					},
 				},
 			},
 		},
@@ -57,7 +62,6 @@ func TestConstructMessagesNoKnowledgeFound(t *testing.T) {
 	constructor := New()
 	actual := &evalset.Invocation{
 		UserContent:       &model.Message{Content: "question"},
-		IntermediateData:  &evalset.IntermediateData{},
 		FinalResponse:     nil,
 		InvocationID:      "id",
 		CreationTimestamp: nil,
@@ -78,12 +82,12 @@ func TestConstructMessagesKnowledgeError(t *testing.T) {
 	constructor := New()
 	actual := &evalset.Invocation{
 		UserContent: &model.Message{Content: "question"},
-		IntermediateData: &evalset.IntermediateData{
-			ToolResponses: []*model.Message{
-				{
-					ToolID:   "1",
-					ToolName: "knowledge_search",
-					Content:  "{\"documents\": \"bad\"}",
+		Tools: []*evalset.Tool{
+			{
+				ID:   "1",
+				Name: "knowledge_search",
+				Arguments: map[string]any{
+					"documents": "bad",
 				},
 			},
 		},

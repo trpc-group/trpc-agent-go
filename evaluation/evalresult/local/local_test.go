@@ -20,10 +20,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-<<<<<<< HEAD
 	"github.com/stretchr/testify/require"
-=======
->>>>>>> main
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -157,6 +154,8 @@ func TestLocalManagerListLocatorError(t *testing.T) {
 
 	_, err := mgr.List(context.Background(), "app")
 	assert.Error(t, err)
+}
+
 func TestLocalManagerLegacyAndErrorPaths(t *testing.T) {
 	dir := t.TempDir()
 	mgr := New(evalresult.WithBaseDir(dir)).(*manager)

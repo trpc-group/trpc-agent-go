@@ -2,8 +2,6 @@ module trpc.group/trpc-go/trpc-agent-go/evaluation
 
 go 1.24.1
 
-toolchain go1.24.4
-
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic => ../model/anthropic

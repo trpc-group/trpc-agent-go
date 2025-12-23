@@ -121,7 +121,7 @@ func (e *rubricKnowledgeRecallMessagesConstructor) ConstructMessages(ctx context
 	if len(actuals) == 0 {
 		return nil, fmt.Errorf("actuals is empty")
 	}
-	retrieved, err := content.ExtractKnowledgeRecall(actuals[0].IntermediateData)
+	retrieved, err := content.ExtractKnowledgeRecall(actuals[0].Tools)
 	if err != nil {
 		return nil, fmt.Errorf("extract knowledge recall: %w", err)
 	}
