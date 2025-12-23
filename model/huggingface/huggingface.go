@@ -391,7 +391,7 @@ func (m *Model) marshalRequest(hfRequest *ChatCompletionRequest) ([]byte, error)
 	}
 
 	// Unmarshal to map to merge extra fields.
-	var requestMap map[string]interface{}
+	var requestMap map[string]any
 	if err := json.Unmarshal(baseJSON, &requestMap); err != nil {
 		return nil, err
 	}

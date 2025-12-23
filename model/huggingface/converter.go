@@ -29,7 +29,7 @@ func (m *Model) convertRequest(req *model.Request) (*ChatCompletionRequest, erro
 		Stop:             req.Stop,
 		PresencePenalty:  req.PresencePenalty,
 		FrequencyPenalty: req.FrequencyPenalty,
-		ExtraFields:      make(map[string]interface{}),
+		ExtraFields:      make(map[string]any),
 	}
 
 	// Convert messages.
@@ -288,11 +288,11 @@ func convertMessageToModel(hfMsg ChatMessage) model.Message {
 		if content != "" {
 			msg.Content = content
 		}
-	case []interface{}:
+	case []any:
 		// Array content.
 		msg.ContentParts = make([]model.ContentPart, 0, len(content))
 		for _, part := range content {
-			if partMap, ok := part.(map[string]interface{}); ok {
+			if partMap, ok := part.(map[string]any); ok {
 				contentPart := convertContentPartToModel(partMap)
 				msg.ContentParts = append(msg.ContentParts, contentPart)
 			}
@@ -324,7 +324,7 @@ func convertMessageToModel(hfMsg ChatMessage) model.Message {
 }
 
 // convertContentPartToModel converts a content part map to a model.ContentPart.
-func convertContentPartToModel(partMap map[string]interface{}) model.ContentPart {
+func convertContentPartToModel(partMap map[string]any) model.ContentPart {
 	partType, _ := partMap["type"].(string)
 
 	switch partType {
@@ -336,7 +336,7 @@ func convertContentPartToModel(partMap map[string]interface{}) model.ContentPart
 			Text: textPtr,
 		}
 	case "image_url":
-		imageURL, _ := partMap["image_url"].(map[string]interface{})
+		imageURL, _ := partMap["image_url"].(map[string]any)
 		url, _ := imageURL["url"].(string)
 		detail, _ := imageURL["detail"].(string)
 		return model.ContentPart{

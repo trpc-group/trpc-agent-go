@@ -11,21 +11,21 @@ package huggingface
 
 // ChatCompletionRequest represents a request to the HuggingFace chat completion API.
 type ChatCompletionRequest struct {
-	Model            string                 `json:"model"`
-	Messages         []ChatMessage          `json:"messages"`
-	MaxTokens        *int                   `json:"max_tokens,omitempty"`
-	Temperature      *float64               `json:"temperature,omitempty"`
-	TopP             *float64               `json:"top_p,omitempty"`
-	N                *int                   `json:"n,omitempty"`
-	Stream           bool                   `json:"stream,omitempty"`
-	Stop             []string               `json:"stop,omitempty"`
-	PresencePenalty  *float64               `json:"presence_penalty,omitempty"`
-	FrequencyPenalty *float64               `json:"frequency_penalty,omitempty"`
-	Tools            []Tool                 `json:"tools,omitempty"`
-	ToolChoice       any                    `json:"tool_choice,omitempty"`
-	ResponseFormat   *ResponseFormat        `json:"response_format,omitempty"`
-	Seed             *int                   `json:"seed,omitempty"`
-	ExtraFields      map[string]interface{} `json:"-"` // Extra fields to be merged into the request
+	Model            string          `json:"model"`
+	Messages         []ChatMessage   `json:"messages"`
+	MaxTokens        *int            `json:"max_tokens,omitempty"`
+	Temperature      *float64        `json:"temperature,omitempty"`
+	TopP             *float64        `json:"top_p,omitempty"`
+	N                *int            `json:"n,omitempty"`
+	Stream           bool            `json:"stream,omitempty"`
+	Stop             []string        `json:"stop,omitempty"`
+	PresencePenalty  *float64        `json:"presence_penalty,omitempty"`
+	FrequencyPenalty *float64        `json:"frequency_penalty,omitempty"`
+	Tools            []Tool          `json:"tools,omitempty"`
+	ToolChoice       any             `json:"tool_choice,omitempty"`
+	ResponseFormat   *ResponseFormat `json:"response_format,omitempty"`
+	Seed             *int            `json:"seed,omitempty"`
+	ExtraFields      map[string]any  `json:"-"` // Extra fields to be merged into the request
 }
 
 // ChatMessage represents a message in the chat completion request.
