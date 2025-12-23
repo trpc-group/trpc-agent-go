@@ -77,7 +77,7 @@ func (c *Counter) CountTokens(_ context.Context, message model.Message) (int, er
 		}
 	}
 
-	// Count tokens for tool calls
+	// Count tokens for tool calls.
 	for _, toolCall := range message.ToolCalls {
 		toolCallTokens, err := c.countToolCallTokens(toolCall)
 		if err != nil {
@@ -94,7 +94,7 @@ func (c *Counter) CountTokens(_ context.Context, message model.Message) (int, er
 func (c *Counter) countToolCallTokens(toolCall model.ToolCall) (int, error) {
 	total := 0
 
-	// Count tokens for tool call type (e.g., "function")
+	// Count tokens for tool call type (e.g., "function").
 	if toolCall.Type != "" {
 		toks, _, err := c.encoding.Encode(toolCall.Type)
 		if err != nil {
@@ -103,7 +103,7 @@ func (c *Counter) countToolCallTokens(toolCall model.ToolCall) (int, error) {
 		total += len(toks)
 	}
 
-	// Count tokens for tool call ID
+	// Count tokens for tool call ID.
 	if toolCall.ID != "" {
 		toks, _, err := c.encoding.Encode(toolCall.ID)
 		if err != nil {
@@ -112,7 +112,7 @@ func (c *Counter) countToolCallTokens(toolCall model.ToolCall) (int, error) {
 		total += len(toks)
 	}
 
-	// Count tokens for function name
+	// Count tokens for function name.
 	if toolCall.Function.Name != "" {
 		toks, _, err := c.encoding.Encode(toolCall.Function.Name)
 		if err != nil {
@@ -121,7 +121,7 @@ func (c *Counter) countToolCallTokens(toolCall model.ToolCall) (int, error) {
 		total += len(toks)
 	}
 
-	// Count tokens for function description
+	// Count tokens for function description.
 	if toolCall.Function.Description != "" {
 		toks, _, err := c.encoding.Encode(toolCall.Function.Description)
 		if err != nil {
@@ -130,7 +130,7 @@ func (c *Counter) countToolCallTokens(toolCall model.ToolCall) (int, error) {
 		total += len(toks)
 	}
 
-	// Count tokens for function arguments (JSON string)
+	// Count tokens for function arguments (JSON string).
 	if len(toolCall.Function.Arguments) > 0 {
 		toks, _, err := c.encoding.Encode(string(toolCall.Function.Arguments))
 		if err != nil {
