@@ -41,19 +41,12 @@
                 "type": "string",
                 "description": "The original math problem"
               },
-              "steps": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "Step-by-step solution"
-              },
               "answer": {
                 "type": "number",
                 "description": "The final numerical answer"
               }
             },
-            "required": ["problem", "steps", "answer"]
+            "required": ["problem", "answer"]
           }
         }
       }
