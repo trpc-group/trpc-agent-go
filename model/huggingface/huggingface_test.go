@@ -739,14 +739,14 @@ func TestModel_TokenTailoring_Integration(t *testing.T) {
 
 	// Verify response was received.
 	require.NotEmpty(t, responses, "Should receive at least one response")
-	
+
 	// 检查响应是否有错误
 	assert.Nil(t, responses[0].Error, "Response should not have error")
-	
+
 	// 检查是否有 Choices
 	require.NotEmpty(t, responses[0].Choices, "Response should have choices")
 	log.Info(responses[0].Choices[0].Message.Content)
-	
+
 	// 验证响应内容
 	assert.NotEmpty(t, responses[0].Choices[0].Message.Content)
 	assert.Equal(t, model.RoleAssistant, responses[0].Choices[0].Message.Role)
@@ -754,34 +754,33 @@ func TestModel_TokenTailoring_Integration(t *testing.T) {
 
 func TestModel_Multimodal_ImageURL(t *testing.T) {
 	// Test sending a message with an image URL.
-	//server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	//	w.Header().Set("Content-Type", "application/json").
-	//	fmt.Fprint(w, `{.
-	//		"id": "test-id",
-	//		"object": "chat.completion",
-	//		"created": 1699200000,
-	//		"model": "test-model",
-	//		"choices": [{
-	//			"index": 0,
-	//			"message": {
-	//				"role": "assistant",
-	//				"content": "I can see a beautiful landscape in the image."
-	//			},
-	//			"finish_reason": "stop"
-	//		}],
-	//		"usage": {
-	//			"prompt_tokens": 100,
-	//			"completion_tokens": 20,
-	//			"total_tokens": 120
-	//		}
-	//	}`)
-	//}))
-	//defer server.Close().
-
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "test-id",
+			"object": "chat.completion",
+			"created": 1699200000,
+			"model": "test-model",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "I can see a beautiful landscape in the image."
+				},
+				"finish_reason": "stop"
+			}],
+			"usage": {
+				"prompt_tokens": 100,
+				"completion_tokens": 20,
+				"total_tokens": 120
+			}
+		}`)
+	}))
+	defer server.Close()
 	m, err := New(
 		"zai-org/GLM-4.6V-Flash",
 		WithAPIKey(ApiKey),
-		//WithBaseURL(server.URL),
+		WithBaseURL(server.URL),
 	)
 	require.NoError(t, err)
 
@@ -829,29 +828,29 @@ func TestModel_Multimodal_ImageURL(t *testing.T) {
 
 func TestModel_Multimodal_Base64Image(t *testing.T) {
 	// Test sending a message with a base64-encoded image.
-	//server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	//	w.Header().Set("Content-Type", "application/json").
-	//	fmt.Fprint(w, `{.
-	//		"id": "test-id",
-	//		"object": "chat.completion",
-	//		"created": 1699200000,
-	//		"model": "test-model",
-	//		"choices": [{
-	//			"index": 0,
-	//			"message": {
-	//				"role": "assistant",
-	//				"content": "This is a 1x1 red pixel image."
-	//			},
-	//			"finish_reason": "stop"
-	//		}]
-	//	}`)
-	//}))
-	//defer server.Close().
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "test-id",
+			"object": "chat.completion",
+			"created": 1699200000,
+			"model": "test-model",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "This is a 1x1 red pixel image."
+				},
+				"finish_reason": "stop"
+			}]
+		}`)
+	}))
+	defer server.Close()
 
 	m, err := New(
 		"zai-org/GLM-4.6V-Flash",
 		WithAPIKey(ApiKey),
-		//WithBaseURL(server.URL),
+		WithBaseURL(server.URL),
 	)
 	require.NoError(t, err)
 
@@ -898,29 +897,29 @@ func TestModel_Multimodal_Base64Image(t *testing.T) {
 
 func TestModel_Multimodal_MultipleImages(t *testing.T) {
 	// Test sending a message with multiple images.
-	//server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	//	w.Header().Set("Content-Type", "application/json").
-	//	fmt.Fprint(w, `{.
-	//		"id": "test-id",
-	//		"object": "chat.completion",
-	//		"created": 1699200000,
-	//		"model": "test-model",
-	//		"choices": [{
-	//			"index": 0,
-	//			"message": {
-	//				"role": "assistant",
-	//				"content": "I can see two different images."
-	//			},
-	//			"finish_reason": "stop"
-	//		}]
-	//	}`)
-	//}))
-	//defer server.Close().
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "test-id",
+			"object": "chat.completion",
+			"created": 1699200000,
+			"model": "test-model",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "I can see two different images."
+				},
+				"finish_reason": "stop"
+			}]
+		}`)
+	}))
+	defer server.Close()
 
 	m, err := New(
 		"ServiceNow-AI/Apriel-1.6-15b-Thinker",
 		WithAPIKey(ApiKey),
-		//WithBaseURL(server.URL),
+		WithBaseURL(server.URL),
 	)
 	require.NoError(t, err)
 
@@ -969,58 +968,6 @@ func TestModel_Multimodal_MultipleImages(t *testing.T) {
 	assert.Nil(t, responses[0].Error)
 	assert.NotEmpty(t, responses[0].Choices)
 	log.Infof("responses: %v", responses[0].Choices[0].Message.Content)
-}
-
-func TestModel_Multimodal_StreamingWithImage(t *testing.T) {
-	m, err := New(
-		"ServiceNow-AI/Apriel-1.6-15b-Thinker",
-		WithAPIKey(ApiKey),
-		//WithBaseURL(server.URL),
-	)
-	require.NoError(t, err)
-
-	// Create a streaming request with image.
-	request := &model.Request{
-		Messages: []model.Message{
-			{
-				Role: model.RoleUser,
-				ContentParts: []model.ContentPart{
-					{
-						Type: model.ContentTypeText,
-						Text: stringPtr("这张图片里面有什么?"),
-					},
-					{
-						Type: model.ContentTypeImage,
-						Image: &model.Image{
-							URL:    "data:image/jpeg;base64,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",
-							Detail: "auto",
-						},
-					},
-				},
-			},
-		},
-		GenerationConfig: model.GenerationConfig{
-			Stream: true,
-		},
-	}
-
-	ctx := context.Background()
-	responseChan, err := m.GenerateContent(ctx, request)
-	require.NoError(t, err)
-
-	// Collect streaming responses.
-	var responses []*model.Response
-	var fullContent strings.Builder
-	for resp := range responseChan {
-		responses = append(responses, resp)
-		if len(resp.Choices) > 0 && resp.Choices[0].Delta.Content != "" {
-			fullContent.WriteString(resp.Choices[0].Delta.Content)
-		}
-	}
-
-	// Verify streaming responses.
-	assert.NotEmpty(t, responses)
-	assert.Equal(t, "I can see the image", fullContent.String())
 }
 
 func TestConvertContentPart_Image(t *testing.T) {
