@@ -105,9 +105,10 @@ func (e *rubricResponseMessagesConstructor) ConstructMessages(ctx context.Contex
 	if len(actuals) == 0 {
 		return nil, fmt.Errorf("actuals is empty")
 	}
+	actual := actuals[len(actuals)-1]
 	data := rubricResponsePromptData{
-		UserInput:     content.ExtractTextFromContent(actuals[0].UserContent),
-		FinalResponse: content.ExtractTextFromContent(actuals[0].FinalResponse),
+		UserInput:     content.ExtractTextFromContent(actual.UserContent),
+		FinalResponse: content.ExtractTextFromContent(actual.FinalResponse),
 		Rubrics:       content.ExtractRubrics(evalMetric.Criterion.LLMJudge.Rubrics),
 	}
 	var buf bytes.Buffer

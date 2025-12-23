@@ -121,7 +121,8 @@ func (e *rubricKnowledgeRecallMessagesConstructor) ConstructMessages(ctx context
 	if len(actuals) == 0 {
 		return nil, fmt.Errorf("actuals is empty")
 	}
-	retrieved, err := content.ExtractKnowledgeRecall(actuals[0].Tools)
+	actual := actuals[len(actuals)-1]
+	retrieved, err := content.ExtractKnowledgeRecall(actual.Tools)
 	if err != nil {
 		return nil, fmt.Errorf("extract knowledge recall: %w", err)
 	}
@@ -129,7 +130,7 @@ func (e *rubricKnowledgeRecallMessagesConstructor) ConstructMessages(ctx context
 		retrieved = "No knowledge search results were found."
 	}
 	data := rubricKnowledgeRecallPromptData{
-		UserInput:          content.ExtractTextFromContent(actuals[0].UserContent),
+		UserInput:          content.ExtractTextFromContent(actual.UserContent),
 		RetrievedKnowledge: retrieved,
 		Rubrics:            content.ExtractRubrics(evalMetric.Criterion.LLMJudge.Rubrics),
 	}

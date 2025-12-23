@@ -112,8 +112,8 @@ func (e *finalResponseMessagesConstructor) ConstructMessages(ctx context.Context
 	if len(expecteds) == 0 {
 		return nil, fmt.Errorf("expecteds is empty")
 	}
-	actual := actuals[0]
-	expected := expecteds[0]
+	actual := actuals[len(actuals)-1]
+	expected := expecteds[len(expecteds)-1]
 	data := finalResponsePromptData{
 		UserPrompt:       content.ExtractTextFromContent(actual.UserContent),
 		ActualResponse:   content.ExtractTextFromContent(actual.FinalResponse),
