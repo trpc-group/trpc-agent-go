@@ -50,6 +50,10 @@ func (m *mockConn) AsyncInsert(ctx context.Context, query string, wait bool, arg
 	return nil
 }
 
+func (m *mockConn) Select(ctx context.Context, dest any, query string, args ...any) error {
+	return nil
+}
+
 type mockRows struct {
 	driver.Rows
 }

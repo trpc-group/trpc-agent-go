@@ -120,24 +120,7 @@ func (c *defaultClient) QueryToStruct(ctx context.Context, dest any, query strin
 
 // QueryToStructs implements Client.QueryToStructs.
 func (c *defaultClient) QueryToStructs(ctx context.Context, dest any, query string, args ...any) error {
-	rows, err := c.conn.Query(ctx, query, args...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	columns := rows.Columns()
-	for rows.Next() {
-		values := make([]any, len(columns))
-		for i := range values {
-			values[i] = new(any)
-		}
-		if err := rows.Scan(values...); err != nil {
-			return err
-		}
-	}
-
-	return rows.Err()
+	return c.conn.Select(ctx, dest, query, args...)
 }
 
 // BatchInsert implements Client.BatchInsert.
