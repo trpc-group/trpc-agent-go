@@ -56,9 +56,8 @@ You can add new cases or metrics by editing these JSON files or by creating addi
 ```shell
 output/
 └── math-eval-app/
-    └── math-eval-app_math-basic_76798060-dcc3-41e9-b20e-06f23aa3cdbc.evalset_result.json    # EvalResult file for math-basic EvalSet.
+    └── math-eval-app_math-basic_538cdf6e-925d-41cf-943b-2849982b195e.evalset_result.json    # EvalResult file for math-basic EvalSet.
 ```
-
 ### Log
 
 ```log

@@ -16,6 +16,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
@@ -95,19 +98,14 @@ func TestSessionManager_CallTool_ClientNil(t *testing.T) {
 	}
 }
 
-func TestSessionManager_CallTool_AppendsStructuredContent(t *testing.T) {
+func TestSessionManager_CallTool_UsesStructuredContentWhenContentEmpty(t *testing.T) {
 	structured := map[string]any{"count": 1, "foo": "bar"}
 	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil)
 	manager.client = &stubConnector{
 		callToolFn: func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			if ctx == nil {
-				t.Fatal("context should not be nil")
-			}
-			if req.Params.Name != "test-tool" {
-				t.Fatalf("unexpected tool name: %s", req.Params.Name)
-			}
+			require.NotNil(t, ctx)
+			require.Equal(t, "test-tool", req.Params.Name)
 			return &mcp.CallToolResult{
-				Content:           []mcp.Content{mcp.NewTextContent("original")},
 				StructuredContent: structured,
 			}, nil
 		},
@@ -116,34 +114,56 @@ func TestSessionManager_CallTool_AppendsStructuredContent(t *testing.T) {
 	manager.initialized = true
 
 	result, err := manager.callTool(context.Background(), "test-tool", map[string]any{"key": "value"})
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
+	require.NoError(t, err)
+	require.Len(t, result, 1)
 
-	if len(result) != 2 {
-		t.Fatalf("Expected 2 content items, got %d", len(result))
-	}
-
-	original, ok := result[0].(mcp.TextContent)
-	if !ok {
-		t.Fatalf("Expected first content to be TextContent, got %T", result[0])
-	}
-	if original.Text != "original" {
-		t.Fatalf("Expected original content to stay intact, got %q", original.Text)
-	}
-
-	structuredText, ok := result[1].(mcp.TextContent)
-	if !ok {
-		t.Fatalf("Expected structured content to be appended as TextContent, got %T", result[1])
-	}
+	structuredText, ok := result[0].(mcp.TextContent)
+	require.True(t, ok)
 
 	expectedJSON, err := json.Marshal(structured)
-	if err != nil {
-		t.Fatalf("Failed to marshal expected structured content: %v", err)
+	require.NoError(t, err)
+	assert.Equal(t, string(expectedJSON), structuredText.Text)
+}
+
+func TestSessionManager_CallTool_IgnoresStructuredContentWhenContentPresent(t *testing.T) {
+	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil)
+	manager.client = &stubConnector{
+		callToolFn: func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			require.NotNil(t, ctx)
+			require.Equal(t, "test-tool", req.Params.Name)
+			return &mcp.CallToolResult{
+				Content:           []mcp.Content{mcp.NewTextContent("original")},
+				StructuredContent: map[string]any{"count": 1},
+			}, nil
+		},
 	}
-	if structuredText.Text != string(expectedJSON) {
-		t.Fatalf("Expected structured content JSON %s, got %s", string(expectedJSON), structuredText.Text)
+	manager.connected = true
+	manager.initialized = true
+
+	result, err := manager.callTool(context.Background(), "test-tool", map[string]any{"key": "value"})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+
+	original, ok := result[0].(mcp.TextContent)
+	require.True(t, ok)
+	assert.Equal(t, "original", original.Text)
+}
+
+func TestSessionManager_CallTool_NoContentNoStructured(t *testing.T) {
+	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil)
+	manager.client = &stubConnector{
+		callToolFn: func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			require.NotNil(t, ctx)
+			require.Equal(t, "test-tool", req.Params.Name)
+			return &mcp.CallToolResult{}, nil
+		},
 	}
+	manager.connected = true
+	manager.initialized = true
+
+	result, err := manager.callTool(context.Background(), "test-tool", nil)
+	require.NoError(t, err)
+	assert.Len(t, result, 0)
 }
 
 func TestSessionManager_CallTool_StructuredContentMarshalError(t *testing.T) {
@@ -151,9 +171,7 @@ func TestSessionManager_CallTool_StructuredContentMarshalError(t *testing.T) {
 	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil)
 	manager.client = &stubConnector{
 		callToolFn: func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			_ = ctx
 			return &mcp.CallToolResult{
-				Content:           []mcp.Content{mcp.NewTextContent("partial")},
 				StructuredContent: badStructured,
 			}, nil
 		},
@@ -162,15 +180,9 @@ func TestSessionManager_CallTool_StructuredContentMarshalError(t *testing.T) {
 	manager.initialized = true
 
 	result, err := manager.callTool(context.Background(), "test-tool", nil)
-	if err == nil {
-		t.Fatal("Expected error when marshaling structured content")
-	}
-	if !strings.Contains(err.Error(), "marshal structured content") {
-		t.Fatalf("Expected marshal structured content error, got %v", err)
-	}
-	if len(result) != 1 {
-		t.Fatalf("Expected original content to remain without appended structured content, got %d items", len(result))
-	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "marshal structured content")
+	assert.Len(t, result, 0)
 }
 
 // stubConnector implements mcp.Connector for testing.

@@ -52,3 +52,14 @@ func TestDefaultLocatorListMissingDir(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, results)
 }
+
+func TestDefaultLocatorListReadError(t *testing.T) {
+	dir := t.TempDir()
+	appPath := filepath.Join(dir, "appfile")
+	err := os.WriteFile(appPath, []byte("not a dir"), 0o644)
+	assert.NoError(t, err)
+
+	loc := &locator{}
+	_, err = loc.List(dir, "appfile")
+	assert.Error(t, err)
+}
