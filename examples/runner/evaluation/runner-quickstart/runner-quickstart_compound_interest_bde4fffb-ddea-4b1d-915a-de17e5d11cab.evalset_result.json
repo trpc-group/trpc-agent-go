@@ -1,0 +1,185 @@
+{
+  "evalSetResultId": "runner-quickstart_compound_interest_bde4fffb-ddea-4b1d-915a-de17e5d11cab",
+  "evalSetResultName": "runner-quickstart_compound_interest_bde4fffb-ddea-4b1d-915a-de17e5d11cab",
+  "evalSetId": "compound_interest",
+  "evalCaseResults": [
+    {
+      "evalSetId": "compound_interest",
+      "evalId": "compound_interest",
+      "finalEvalStatus": "failed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "evalStatus": "failed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "matchStrategy": "exact"
+                },
+                "result": {
+                  "matchStrategy": "exact"
+                }
+              },
+              "orderSensitive": true,
+              "subsetMatching": true
+            }
+          },
+          "details": {
+            "reason": "tool trajectory mismatch: match tools: tool id calculator_power with name calculator mismatch: actual tool call_00_1DCt55IUtLZjzeE4hDqKtLb3 named calculator mismatch with expected tool calculator_power named calculator: arguments mismatch: actual map[a:1744.9402268886445 b:100 operation:subtract] and expected map[a:1.1 b:30 operation:power] do not match: actual[operation] subtract and expected[operation] power do not match"
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "4055dc16-ac5a-410e-8d05-f3f2c7a551e0",
+            "userContent": {
+              "role": "user",
+              "content": "With a principal of 100 and an annual compound interest rate of 10%, what will the profit be after 30 years?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "With a principal of $100 and an annual compound interest rate of 10% for 30 years:\n\n- **Total amount after 30 years**: $1,744.94\n- **Profit (interest earned)**: $1,644.94\n\nThe compound interest formula used is: A = P(1 + r)^t, where:\n- P = $100 (principal)\n- r = 0.10 (10% interest rate)\n- t = 30 years\n\nThe profit is calculated as: Total amount - Principal = $1,744.94 - $100 = $1,644.94"
+            },
+            "tools": [
+              {
+                "id": "call_00_fSTSAFuOCQXkJkuxsoZz1SVd",
+                "name": "calculator",
+                "arguments": {
+                  "a": 1.1,
+                  "b": 30,
+                  "operation": "power"
+                },
+                "result": {
+                  "a": 1.1,
+                  "b": 30,
+                  "operation": "power",
+                  "result": 17.449402268886445
+                }
+              },
+              {
+                "id": "call_00_kuC5ct4aDcYAs0jnQtLG2Efy",
+                "name": "calculator",
+                "arguments": {
+                  "a": 100,
+                  "b": 17.449402268886445,
+                  "operation": "multiply"
+                },
+                "result": {
+                  "a": 100,
+                  "b": 17.449402268886445,
+                  "operation": "multiply",
+                  "result": 1744.9402268886445
+                }
+              },
+              {
+                "id": "call_00_1DCt55IUtLZjzeE4hDqKtLb3",
+                "name": "calculator",
+                "arguments": {
+                  "a": 1744.9402268886445,
+                  "b": 100,
+                  "operation": "subtract"
+                },
+                "result": {
+                  "a": 1744.9402268886445,
+                  "b": 100,
+                  "operation": "subtract",
+                  "result": 1644.9402268886445
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "compound_interest-1",
+            "userContent": {
+              "role": "user",
+              "content": "With a principal of 100 and an annual compound interest rate of 10%, what will the profit be after 30 years?"
+            },
+            "tools": [
+              {
+                "id": "calculator_power",
+                "name": "calculator",
+                "arguments": {
+                  "a": 1.1,
+                  "b": 30,
+                  "operation": "power"
+                },
+                "result": {
+                  "a": 1.1,
+                  "b": 30,
+                  "operation": "power",
+                  "result": 17.4494022689
+                }
+              },
+              {
+                "id": "calculator_multiply",
+                "name": "calculator",
+                "arguments": {
+                  "a": 100,
+                  "b": 17.4494022689,
+                  "operation": "multiply"
+                },
+                "result": {
+                  "a": 100,
+                  "b": 17.4494022689,
+                  "operation": "multiply",
+                  "result": 1744.94022689
+                }
+              },
+              {
+                "id": "calculator_subtract",
+                "name": "calculator",
+                "arguments": {
+                  "a": 1744.94022689,
+                  "b": 100,
+                  "operation": "subtract"
+                },
+                "result": {
+                  "a": 1744.94022689,
+                  "b": 100,
+                  "operation": "subtract",
+                  "result": 1644.94022689
+                }
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "evalStatus": "failed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "matchStrategy": "exact"
+                    },
+                    "result": {
+                      "matchStrategy": "exact"
+                    }
+                  },
+                  "orderSensitive": true,
+                  "subsetMatching": true
+                }
+              },
+              "details": {
+                "reason": "tool trajectory mismatch: match tools: tool id calculator_power with name calculator mismatch: actual tool call_00_1DCt55IUtLZjzeE4hDqKtLb3 named calculator mismatch with expected tool calculator_power named calculator: arguments mismatch: actual map[a:1744.9402268886445 b:100 operation:subtract] and expected map[a:1.1 b:30 operation:power] do not match: actual[operation] subtract and expected[operation] power do not match"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "5eaa79da-6644-4a04-bfd6-3b6a36fde5bc",
+      "userId": "tool-user"
+    }
+  ],
+  "creationTimestamp": 1766495270.5954142
+}
