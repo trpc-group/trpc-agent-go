@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/knowledgeconfig"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/outputformat"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -342,6 +343,27 @@ func (si *SchemaInference) ComputeVariableGroups(graphDef *Graph, nodeID string)
 				gv.JSONSchema = schema
 			}
 			vars = append(vars, gv)
+		} else if engine.NodeType == "builtin.knowledge_search" {
+			// Knowledge Search node exposes a fixed output structure.
+			// Variable is input.documents (array), so JSONSchema should be the documents array schema,
+			// not the entire output object schema.
+			gv := GraphVar{
+				Variable: "input.documents",
+				Origin:   "node_output",
+				Kind:     "array",
+			}
+			if schema, ok := engine.Config["output_schema"].(map[string]any); ok {
+				// Extract documents schema from custom output_schema
+				if props, ok := schema["properties"].(map[string]any); ok {
+					if docsSchema, ok := props["documents"].(map[string]any); ok {
+						gv.JSONSchema = docsSchema
+					}
+				}
+			} else {
+				// Use the canonical default documents array schema
+				gv.JSONSchema = knowledgeconfig.DefaultDocumentsSchema()
+			}
+			vars = append(vars, gv)
 		}
 
 		if len(vars) == 0 {
@@ -488,12 +510,13 @@ func (si *SchemaInference) buildParameterMap(graphDef *Graph) (map[string]*param
 		component, exists := si.registry.Get(engine.NodeType)
 		if !exists {
 			// For builtin components not present in the registry, fall back to
-			// processing DSL-level outputs only. builtin.mcp currently does not
-			// contribute additional state fields, but we still treat it as a
-			// known builtin so schema inference does not fail.
+			// processing DSL-level outputs only. builtin.mcp and builtin.knowledge_search
+			// currently do not contribute additional state fields, but we still treat them
+			// as known builtins so schema inference does not fail.
 			if engine.NodeType == "builtin.llm" ||
 				engine.NodeType == "builtin.tools" ||
-				engine.NodeType == "builtin.mcp" {
+				engine.NodeType == "builtin.mcp" ||
+				engine.NodeType == "builtin.knowledge_search" {
 				if err := si.addDSLOutputs(node, params); err != nil {
 					return nil, fmt.Errorf("node %s: %w", node.ID, err)
 				}

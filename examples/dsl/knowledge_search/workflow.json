@@ -1,0 +1,141 @@
+{
+  "version": "1.0",
+  "name": "knowledge_search_example",
+  "description": "Demonstrates Knowledge Search node for RAG (Retrieval-Augmented Generation)",
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "node_type": "builtin.start",
+      "config": {}
+    },
+    {
+      "id": "query_rewriter",
+      "label": "Query Rewriter",
+      "node_type": "builtin.llmagent",
+      "config": {
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "deepseek-chat",
+          "base_url": "https://api.deepseek.com/v1",
+          "api_key": "env:OPENAI_API_KEY"
+        },
+        "instruction": "You are a query rewriting assistant. Given a user question, rewrite it into a clear, concise search query optimized for vector similarity search. Output only the rewritten query.",
+        "description": "Rewrites user questions into optimized search queries",
+        "output_format": {
+          "type": "json",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "search_query": {
+                "type": "string",
+                "description": "The optimized search query"
+              },
+              "keywords": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Key terms extracted from the question"
+              }
+            },
+            "required": ["search_query", "keywords"]
+          }
+        },
+        "temperature": 0.3
+      }
+    },
+    {
+      "id": "knowledge_search",
+      "label": "Knowledge Search",
+      "node_type": "builtin.knowledge_search",
+      "config": {
+        "query": {
+          "expression": "input.output_parsed.search_query",
+          "format": "cel"
+        },
+        "max_results": 5,
+        "min_score": 0.5,
+        "vector_store": {
+          "type": "tcvector",
+          "url": "env:TCVECTOR_URL",
+          "collection": "env:TCVECTOR_COLLECTION",
+          "user": "env:TCVECTOR_USERNAME",
+          "password": "env:TCVECTOR_PASSWORD"
+        },
+        "embedder": {
+          "type": "openai",
+          "model": "text-embedding-3-small",
+          "base_url": "env:OPENAI_BASE_URL",
+          "api_key": "env:OPENAI_API_KEY"
+        },
+        "conditioned_filter": {
+          "operator": "and",
+          "value": [
+            {
+              "field": "status",
+              "operator": "eq",
+              "value": "published"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "answer_generator",
+      "label": "Answer Generator",
+      "node_type": "builtin.llmagent",
+      "config": {
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "deepseek-chat",
+          "base_url": "https://api.deepseek.com/v1",
+          "api_key": "env:OPENAI_API_KEY"
+        },
+        "instruction": "You are a helpful assistant. Based on the retrieved documents provided in the context, answer the user's question. If the documents don't contain relevant information, say so honestly.\n\nRetrieved documents:\n{{input.documents}}\n\nUser's original question: {{state.user_question}}",
+        "description": "Generates answers based on retrieved knowledge",
+        "temperature": 0.7,
+        "max_tokens": 2048
+      }
+    },
+    {
+      "id": "end",
+      "label": "End",
+      "node_type": "builtin.end",
+      "config": {}
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_start_rewriter",
+      "source": "start",
+      "target": "query_rewriter"
+    },
+    {
+      "id": "edge_rewriter_search",
+      "source": "query_rewriter",
+      "target": "knowledge_search"
+    },
+    {
+      "id": "edge_search_generator",
+      "source": "knowledge_search",
+      "target": "answer_generator"
+    },
+    {
+      "id": "edge_generator_end",
+      "source": "answer_generator",
+      "target": "end"
+    },
+    {
+      "id": "edge_end_final",
+      "source": "end",
+      "target": "__end__"
+    }
+  ],
+  "start_node_id": "start",
+  "state_variables": [
+    {
+      "name": "user_question",
+      "type": "string",
+      "description": "The original user question"
+    }
+  ]
+}

@@ -97,7 +97,7 @@
         },
         "node_type": {
           "type": "string",
-          "enum": ["builtin.start", "builtin.llmagent", "builtin.end", "builtin.mcp", "builtin.while", "builtin.user_approval", "builtin.transform", "builtin.set_state"],
+          "enum": ["builtin.start", "builtin.llmagent", "builtin.end", "builtin.mcp", "builtin.knowledge_search", "builtin.while", "builtin.user_approval", "builtin.transform", "builtin.set_state"],
           "description": "Node type identifier."
         },
         "config": {
@@ -149,6 +149,17 @@
             "required": ["config"],
             "properties": {
               "config": { "$ref": "#/$defs/MCPConfig" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "node_type": { "const": "builtin.knowledge_search" } }
+          },
+          "then": {
+            "required": ["config"],
+            "properties": {
+              "config": { "$ref": "#/$defs/KnowledgeSearchConfig" }
             }
           }
         },
@@ -882,6 +893,53 @@
         "params": {
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/Expression" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "KnowledgeSearchConfig": {
+      "type": "object",
+      "description": "Configuration for a standalone Knowledge Search node that performs vector similarity search.",
+      "required": ["query", "vector_store", "embedder"],
+      "properties": {
+        "query": {
+          "$ref": "#/$defs/Expression",
+          "description": "CEL Expression that evaluates to the search query string. Can reference input.* variables from upstream node."
+        },
+        "max_results": {
+          "type": "integer",
+          "description": "Maximum number of search results to return (top-k).",
+          "minimum": 1,
+          "default": 10
+        },
+        "min_score": {
+          "type": "number",
+          "description": "Minimum similarity score threshold (0.0-1.0).",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.0
+        },
+        "vector_store": {
+          "$ref": "#/$defs/VectorStoreConfig",
+          "description": "Vector store configuration."
+        },
+        "embedder": {
+          "$ref": "#/$defs/EmbedderConfig",
+          "description": "Embedder configuration for generating query embeddings."
+        },
+        "conditioned_filter": {
+          "$ref": "#/$defs/FilterCondition",
+          "description": "Optional static complex condition filter for search results."
+        },
+        "input_schema": {
+          "type": "object",
+          "description": "Optional explicit input schema (typically inferred from edge inspection).",
+          "additionalProperties": true
+        },
+        "output_schema": {
+          "type": "object",
+          "description": "Optional output schema override (defaults to framework Knowledge Search format).",
+          "additionalProperties": true
         }
       },
       "additionalProperties": false

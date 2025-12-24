@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/knowledgeconfig"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/outputformat"
 )
 
@@ -150,6 +151,15 @@ func inferNodeOutputSchema(node *Node) map[string]any {
 		if schema, ok := cfg["output_schema"].(map[string]any); ok {
 			return schema
 		}
+
+	case "builtin.knowledge_search":
+		// Knowledge Search node exposes a fixed output structure.
+		// If output_schema is explicitly provided, use it; otherwise use the default.
+		if schema, ok := cfg["output_schema"].(map[string]any); ok {
+			return schema
+		}
+		// Return the default output schema for knowledge search
+		return knowledgeconfig.DefaultOutputSchema()
 	}
 
 	return nil
@@ -171,6 +181,17 @@ func inferNodeInputSchema(node *Node) map[string]any {
 		if schema, ok := cfg["input_schema"].(map[string]any); ok {
 			return schema
 		}
+
+	case "builtin.knowledge_search":
+		// Knowledge Search node input depends on variables used in the query CEL expression.
+		// If input_schema is explicitly provided (describing dependency schema / used input paths),
+		// use it for edge validation.
+		if schema, ok := cfg["input_schema"].(map[string]any); ok {
+			return schema
+		}
+		// Otherwise, inferring input schema from CEL expression requires parsing the expression
+		// to extract variable references. For now, return nil to indicate no explicit input
+		// schema (edge is treated as valid).
 	}
 
 	return nil

@@ -13,11 +13,17 @@ import (
 
 	dsl "trpc.group/trpc-go/trpc-agent-go/dsl"
 	dslcel "trpc.group/trpc-go/trpc-agent-go/dsl/internal/cel"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/knowledgeconfig"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/mcpconfig"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/internal/toolspec"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	ctool "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // Option configures a Compiler instance.
@@ -40,6 +46,11 @@ type Compiler struct {
 	// MCP parameter expressions so that input.* refers to the immediate
 	// predecessor's structured output, not a global state field.
 	mcpInputSource map[string]string
+
+	// knowledgeSearchInputSource records, for each builtin.knowledge_search node ID,
+	// the ID of its primary upstream node. This is used to construct the "input" view
+	// for query_template variable resolution.
+	knowledgeSearchInputSource map[string]string
 }
 
 // whileBodyConfig describes the nested subgraph that forms the body of a
@@ -191,6 +202,7 @@ func (c *Compiler) Compile(graphDef *dsl.Graph) (*graph.Graph, error) {
 
 	// Ensure per-compile transient maps are reset.
 	c.mcpInputSource = nil
+	c.knowledgeSearchInputSource = nil
 
 	// Step 0: Expand structural builtin.while nodes. While is represented as
 	// a nested subgraph in the engine DSL but compiled into a flat set of
@@ -236,20 +248,27 @@ func (c *Compiler) Compile(graphDef *dsl.Graph) (*graph.Graph, error) {
 	// structured output, mirroring the semantics used by builtin
 	// conditions and while.
 	mcpInputSource := make(map[string]string)
+	knowledgeSearchInputSource := make(map[string]string)
 	for _, edge := range graphDef.Edges {
 		targetNode, ok := nodeByID[edge.Target]
 		if !ok {
 			continue
 		}
-		if targetNode.EngineNode.NodeType != "builtin.mcp" {
-			continue
+		switch targetNode.EngineNode.NodeType {
+		case "builtin.mcp":
+			if existing, exists := mcpInputSource[edge.Target]; exists && existing != edge.Source {
+				return nil, fmt.Errorf("builtin.mcp node %s has multiple incoming edges (%s, %s); it must have a single upstream node for input.* semantics", edge.Target, existing, edge.Source)
+			}
+			mcpInputSource[edge.Target] = edge.Source
+		case "builtin.knowledge_search":
+			if existing, exists := knowledgeSearchInputSource[edge.Target]; exists && existing != edge.Source {
+				return nil, fmt.Errorf("builtin.knowledge_search node %s has multiple incoming edges (%s, %s); it must have a single upstream node for input.* semantics", edge.Target, existing, edge.Source)
+			}
+			knowledgeSearchInputSource[edge.Target] = edge.Source
 		}
-		if existing, exists := mcpInputSource[edge.Target]; exists && existing != edge.Source {
-			return nil, fmt.Errorf("builtin.mcp node %s has multiple incoming edges (%s, %s); it must have a single upstream node for input.* semantics", edge.Target, existing, edge.Source)
-		}
-		mcpInputSource[edge.Target] = edge.Source
 	}
 	c.mcpInputSource = mcpInputSource
+	c.knowledgeSearchInputSource = knowledgeSearchInputSource
 
 	// Step 3: Add all nodes
 	for _, node := range graphDef.Nodes {
@@ -477,6 +496,11 @@ func (c *Compiler) createNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 	// Handle standalone MCP components specially.
 	if engine.NodeType == "builtin.mcp" {
 		return c.createMCPNodeFunc(node)
+	}
+
+	// Handle standalone Knowledge Search components specially.
+	if engine.NodeType == "builtin.knowledge_search" {
+		return c.createKnowledgeSearchNodeFunc(node)
 	}
 
 	// Handle LLMAgent components specially (dynamically create LLMAgent)
@@ -1026,4 +1050,334 @@ func (c *Compiler) createUserApprovalNodeFunc(node dsl.Node) (graph.NodeFunc, er
 // createMCPToolSet creates an MCP ToolSet from DSL configuration.
 func (c *Compiler) createMCPToolSet(config map[string]interface{}) (tool.ToolSet, error) {
 	return createMCPToolSet(config)
+}
+
+// createKnowledgeSearchNodeFunc creates a NodeFunc for a standalone Knowledge Search node.
+// The Knowledge Search node performs vector similarity search on a knowledge base and exposes
+// the results under node_structured[nodeID].documents for downstream nodes.
+func (c *Compiler) createKnowledgeSearchNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
+	engine := node.EngineNode
+
+	parsed, err := knowledgeconfig.ParseNodeConfig(engine.Config)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the query CEL expression
+	queryExpr := strings.TrimSpace(parsed.Query.Expression)
+	if queryExpr == "" {
+		return nil, fmt.Errorf("builtin.knowledge_search node %s: query.expression is required", node.ID)
+	}
+
+	// Convert parsed config to toolspec types and create Knowledge + Tool
+	vsConfig, err := mapToVectorStoreConfig(parsed.VectorStore)
+	if err != nil {
+		return nil, fmt.Errorf("builtin.knowledge_search node %s: %w", node.ID, err)
+	}
+
+	embConfig, err := mapToEmbedderConfig(parsed.Embedder)
+	if err != nil {
+		return nil, fmt.Errorf("builtin.knowledge_search node %s: %w", node.ID, err)
+	}
+
+	// Create vector store and embedder
+	vs, err := createVectorStore(vsConfig)
+	if err != nil {
+		return nil, fmt.Errorf("builtin.knowledge_search node %s: failed to create vector store: %w", node.ID, err)
+	}
+
+	emb, err := createEmbedder(embConfig)
+	if err != nil {
+		return nil, fmt.Errorf("builtin.knowledge_search node %s: failed to create embedder: %w", node.ID, err)
+	}
+
+	// Create Knowledge instance
+	kb := knowledge.New(
+		knowledge.WithVectorStore(vs),
+		knowledge.WithEmbedder(emb),
+	)
+
+	// Create knowledge search tool with options
+	var toolOpts []knowledgetool.Option
+	if parsed.MaxResults > 0 {
+		toolOpts = append(toolOpts, knowledgetool.WithMaxResults(parsed.MaxResults))
+	}
+	if parsed.MinScore > 0 {
+		toolOpts = append(toolOpts, knowledgetool.WithMinScore(parsed.MinScore))
+	}
+
+	// Add conditioned filter if specified
+	if parsed.ConditionedFilter != nil {
+		converted := convertMapFilterCondition(parsed.ConditionedFilter)
+		if converted != nil {
+			toolOpts = append(toolOpts, knowledgetool.WithConditionedFilter(converted))
+		}
+	}
+
+	// Create the knowledge search tool
+	kbTool := knowledgetool.NewKnowledgeSearchTool(kb, toolOpts...)
+
+	// Resolve the primary upstream node for this Knowledge Search node, if any,
+	// so that we can build a stable input.* view from the immediate predecessor's
+	// structured output (mirroring MCP/condition/while semantics).
+	fromNodeID := ""
+	if c.knowledgeSearchInputSource != nil {
+		if src, ok := c.knowledgeSearchInputSource[node.ID]; ok {
+			fromNodeID = src
+		}
+	}
+
+	return func(ctx context.Context, state graph.State) (interface{}, error) {
+		// Build the input view for CEL expression evaluation from the
+		// immediate upstream node's structured output.
+		var input any
+		if fromNodeID != "" {
+			input = buildNodeInputView(state, fromNodeID)
+		}
+
+		// Evaluate the query CEL expression
+		queryResult, err := dslcel.Eval(queryExpr, state, input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to evaluate query expression: %w", err)
+		}
+
+		// Convert query result to string
+		var resolvedQuery string
+		switch v := queryResult.(type) {
+		case string:
+			resolvedQuery = v
+		default:
+			resolvedQuery = fmt.Sprintf("%v", v)
+		}
+
+		log.Debugf("Knowledge Search node %s executing with query length: %d", node.ID, len(resolvedQuery))
+
+		// Call the knowledge search tool
+		callableTool, ok := kbTool.(ctool.CallableTool)
+		if !ok {
+			return nil, fmt.Errorf("knowledge search tool does not implement CallableTool interface")
+		}
+
+		// Prepare the tool input as JSON
+		toolInput := map[string]string{"query": resolvedQuery}
+		toolInputJSON, err := json.Marshal(toolInput)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal tool input: %w", err)
+		}
+
+		// Execute the tool
+		result, err := callableTool.Call(ctx, toolInputJSON)
+		if err != nil {
+			log.Warnf("Knowledge Search node %s failed: %v", node.ID, err)
+			// Return empty documents on error instead of failing the workflow
+			result = &knowledgetool.KnowledgeSearchResponse{
+				Documents: []*knowledgetool.DocumentResult{},
+				Message:   fmt.Sprintf("Search failed: %v", err),
+			}
+		}
+
+		// Convert result to output format
+		var entry map[string]any
+		switch r := result.(type) {
+		case *knowledgetool.KnowledgeSearchResponse:
+			documents := make([]map[string]any, 0, len(r.Documents))
+			for _, doc := range r.Documents {
+				docMap := map[string]any{
+					"text":  doc.Text,
+					"score": doc.Score,
+				}
+				if doc.Metadata != nil {
+					docMap["metadata"] = doc.Metadata
+				}
+				documents = append(documents, docMap)
+			}
+			entry = map[string]any{
+				"documents": documents,
+			}
+			if r.Message != "" {
+				entry["message"] = r.Message
+			}
+		default:
+			// Fallback: try to convert result directly
+			entry = map[string]any{
+				"documents": []map[string]any{},
+				"message":   "Unexpected result type",
+			}
+		}
+
+		log.Infof("Knowledge Search node %s returned %d documents", node.ID, len(entry["documents"].([]map[string]any)))
+
+		// Merge with existing node_structured cache (if any) to avoid clobbering
+		// structured outputs from other nodes.
+		nodeStructured := map[string]any{}
+		if existingRaw, ok := state["node_structured"]; ok {
+			if existingMap, ok := existingRaw.(map[string]any); ok && existingMap != nil {
+				for k, v := range existingMap {
+					nodeStructured[k] = v
+				}
+			}
+		}
+
+		nodeStructured[node.ID] = entry
+
+		return graph.State{
+			"node_structured": nodeStructured,
+		}, nil
+	}, nil
+}
+
+// mapToVectorStoreConfig converts a map[string]any to toolspec.VectorStoreConfig.
+func mapToVectorStoreConfig(m map[string]any) (*toolspec.VectorStoreConfig, error) {
+	if m == nil {
+		return nil, fmt.Errorf("vector_store config is required")
+	}
+
+	cfg := &toolspec.VectorStoreConfig{}
+
+	if t, ok := m["type"].(string); ok {
+		cfg.Type = toolspec.VectorStoreType(t)
+	} else {
+		return nil, fmt.Errorf("vector_store.type is required")
+	}
+
+	// Common fields
+	if v, ok := m["host"].(string); ok {
+		cfg.Host = v
+	}
+	if v, ok := m["port"].(float64); ok {
+		cfg.Port = int(v)
+	} else if v, ok := m["port"].(int); ok {
+		cfg.Port = v
+	}
+	if v, ok := m["user"].(string); ok {
+		cfg.User = v
+	}
+	if v, ok := m["password"].(string); ok {
+		cfg.Password = v
+	}
+	if v, ok := m["database"].(string); ok {
+		cfg.Database = v
+	}
+	if v, ok := m["table"].(string); ok {
+		cfg.Table = v
+	}
+	if v, ok := m["dimension"].(float64); ok {
+		cfg.Dimension = int(v)
+	} else if v, ok := m["dimension"].(int); ok {
+		cfg.Dimension = v
+	}
+	if v, ok := m["ssl_mode"].(string); ok {
+		cfg.SSLMode = v
+	}
+	if v, ok := m["address"].(string); ok {
+		cfg.Address = v
+	}
+	if v, ok := m["collection"].(string); ok {
+		cfg.Collection = v
+	}
+	if v, ok := m["index"].(string); ok {
+		cfg.Index = v
+	}
+	if v, ok := m["url"].(string); ok {
+		cfg.URL = v
+	}
+
+	// Handle addresses array
+	if addrs, ok := m["addresses"].([]any); ok {
+		for _, addr := range addrs {
+			if s, ok := addr.(string); ok {
+				cfg.Addresses = append(cfg.Addresses, s)
+			}
+		}
+	} else if addrs, ok := m["addresses"].([]string); ok {
+		cfg.Addresses = addrs
+	}
+
+	return cfg, nil
+}
+
+// mapToEmbedderConfig converts a map[string]any to toolspec.EmbedderConfig.
+func mapToEmbedderConfig(m map[string]any) (*toolspec.EmbedderConfig, error) {
+	if m == nil {
+		return nil, fmt.Errorf("embedder config is required")
+	}
+
+	cfg := &toolspec.EmbedderConfig{}
+
+	if t, ok := m["type"].(string); ok {
+		cfg.Type = toolspec.EmbedderType(t)
+	} else {
+		return nil, fmt.Errorf("embedder.type is required")
+	}
+
+	if v, ok := m["api_key"].(string); ok {
+		cfg.APIKey = v
+	}
+	if v, ok := m["base_url"].(string); ok {
+		cfg.BaseURL = v
+	}
+	if v, ok := m["model"].(string); ok {
+		cfg.Model = v
+	}
+	if v, ok := m["dimensions"].(float64); ok {
+		cfg.Dimensions = int(v)
+	} else if v, ok := m["dimensions"].(int); ok {
+		cfg.Dimensions = v
+	}
+
+	// HuggingFace specific fields
+	if v, ok := m["normalize"].(bool); ok {
+		cfg.Normalize = v
+	}
+	if v, ok := m["prompt_name"].(string); ok {
+		cfg.PromptName = v
+	}
+	if v, ok := m["truncate"].(bool); ok {
+		cfg.Truncate = v
+	}
+	if v, ok := m["truncation_direction"].(string); ok {
+		cfg.TruncationDirection = v
+	}
+	if v, ok := m["embed_route"].(string); ok {
+		cfg.EmbedRoute = v
+	}
+
+	return cfg, nil
+}
+
+// convertMapFilterCondition converts a map-based filter condition to searchfilter.UniversalFilterCondition.
+func convertMapFilterCondition(m map[string]any) *searchfilter.UniversalFilterCondition {
+	if m == nil {
+		return nil
+	}
+
+	result := &searchfilter.UniversalFilterCondition{}
+
+	if field, ok := m["field"].(string); ok {
+		result.Field = field
+	}
+	if op, ok := m["operator"].(string); ok {
+		result.Operator = op
+	}
+
+	// Handle logical operators (and/or) - Value should be array of conditions
+	if result.Operator == "and" || result.Operator == "or" {
+		if conditions, ok := m["value"].([]any); ok {
+			subConditions := make([]*searchfilter.UniversalFilterCondition, 0, len(conditions))
+			for _, c := range conditions {
+				if condMap, ok := c.(map[string]any); ok {
+					subCond := convertMapFilterCondition(condMap)
+					if subCond != nil {
+						subConditions = append(subConditions, subCond)
+					}
+				}
+			}
+			result.Value = subConditions
+		}
+	} else {
+		// For comparison operators, keep the value as-is
+		result.Value = m["value"]
+	}
+
+	return result
 }

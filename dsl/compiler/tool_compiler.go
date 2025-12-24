@@ -411,8 +411,12 @@ func createTCVectorStore(cfg *toolspec.VectorStoreConfig) (vectorstore.VectorSto
 		tcvector.WithURL(url),
 		tcvector.WithUsername(user),
 		tcvector.WithPassword(cfg.Password), // Already resolved in createVectorStore
-		tcvector.WithDatabase(cfg.Database),
 		tcvector.WithCollection(cfg.Collection),
+	}
+
+	// Only set database if explicitly configured (otherwise use SDK default)
+	if cfg.Database != "" {
+		opts = append(opts, tcvector.WithDatabase(cfg.Database))
 	}
 
 	if cfg.Dimension > 0 {
