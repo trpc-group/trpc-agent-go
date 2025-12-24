@@ -729,63 +729,63 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 
 func TestCreateSessionSummary(t *testing.T) {
 	tests := []struct {
-		name       string
-		summarizer summary.SessionSummarizer
-		sess       *session.Session
-		filterKey  string
-		force      bool
+		name        string
+		summarizer  summary.SessionSummarizer
+		sess        *session.Session
+		filterKey   string
+		force       bool
 		wantUpdated bool
 		wantError   bool
-		errorMsg   string
+		errorMsg    string
 	}{
 		{
-			name:       "nil summarizer",
-			summarizer: nil,
-			sess:       &session.Session{ID: "s1", AppName: "app", UserID: "user"},
-			filterKey:  "",
-			force:      false,
+			name:        "nil summarizer",
+			summarizer:  nil,
+			sess:        &session.Session{ID: "s1", AppName: "app", UserID: "user"},
+			filterKey:   "",
+			force:       false,
 			wantUpdated: false,
 			wantError:   false,
 		},
 		{
-			name:       "nil session",
-			summarizer: &fakeSummarizer{allow: true, out: "sum"},
-			sess:       nil,
-			filterKey:  "",
-			force:      false,
+			name:        "nil session",
+			summarizer:  &fakeSummarizer{allow: true, out: "sum"},
+			sess:        nil,
+			filterKey:   "",
+			force:       false,
 			wantUpdated: false,
 			wantError:   true,
-			errorMsg:   "nil session",
+			errorMsg:    "nil session",
 		},
 		{
-			name:       "invalid session key - empty ID",
-			summarizer: &fakeSummarizer{allow: true, out: "sum"},
-			sess:       &session.Session{ID: "", AppName: "app", UserID: "user"},
-			filterKey:  "",
-			force:      false,
+			name:        "invalid session key - empty ID",
+			summarizer:  &fakeSummarizer{allow: true, out: "sum"},
+			sess:        &session.Session{ID: "", AppName: "app", UserID: "user"},
+			filterKey:   "",
+			force:       false,
 			wantUpdated: false,
 			wantError:   true,
-			errorMsg:   "check session key failed",
+			errorMsg:    "check session key failed",
 		},
 		{
-			name:       "invalid session key - empty AppName",
-			summarizer: &fakeSummarizer{allow: true, out: "sum"},
-			sess:       &session.Session{ID: "s1", AppName: "", UserID: "user"},
-			filterKey:  "",
-			force:      false,
+			name:        "invalid session key - empty AppName",
+			summarizer:  &fakeSummarizer{allow: true, out: "sum"},
+			sess:        &session.Session{ID: "s1", AppName: "", UserID: "user"},
+			filterKey:   "",
+			force:       false,
 			wantUpdated: false,
 			wantError:   true,
-			errorMsg:   "check session key failed",
+			errorMsg:    "check session key failed",
 		},
 		{
-			name:       "invalid session key - empty UserID",
-			summarizer: &fakeSummarizer{allow: true, out: "sum"},
-			sess:       &session.Session{ID: "s1", AppName: "app", UserID: ""},
-			filterKey:  "",
-			force:      false,
+			name:        "invalid session key - empty UserID",
+			summarizer:  &fakeSummarizer{allow: true, out: "sum"},
+			sess:        &session.Session{ID: "s1", AppName: "app", UserID: ""},
+			filterKey:   "",
+			force:       false,
 			wantUpdated: false,
 			wantError:   true,
-			errorMsg:   "check session key failed",
+			errorMsg:    "check session key failed",
 		},
 		{
 			name:       "successful summarization",
@@ -803,8 +803,8 @@ func TestCreateSessionSummary(t *testing.T) {
 					},
 				},
 			},
-			filterKey:  "",
-			force:      false,
+			filterKey:   "",
+			force:       false,
 			wantUpdated: true,
 			wantError:   false,
 		},
@@ -816,8 +816,8 @@ func TestCreateSessionSummary(t *testing.T) {
 				AppName: "app",
 				UserID:  "user",
 			},
-			filterKey:  "",
-			force:      false,
+			filterKey:   "",
+			force:       false,
 			wantUpdated: false,
 			wantError:   false,
 		},
@@ -829,8 +829,8 @@ func TestCreateSessionSummary(t *testing.T) {
 				AppName: "app",
 				UserID:  "user",
 			},
-			filterKey:  "",
-			force:      true,
+			filterKey:   "",
+			force:       true,
 			wantUpdated: true,
 			wantError:   false,
 		},

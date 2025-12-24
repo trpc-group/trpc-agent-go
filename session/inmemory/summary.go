@@ -13,7 +13,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
@@ -47,7 +46,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 			return nil
 		}
 		app = s.getOrCreateAppSessions(sess.AppName)
-		return s.writeSummaryUnderLock(app, key, filterKey, sum.Summary)
+		return s.writeSummaryUnderLock(app, key, filterKey, sum)
 	}
 
 	app.mu.RLock()
@@ -84,12 +83,12 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 		return nil
 	}
 
-	return s.writeSummaryUnderLock(app, key, filterKey, sum.Summary)
+	return s.writeSummaryUnderLock(app, key, filterKey, sum)
 }
 
 // writeSummaryUnderLock writes a summary for a filterKey under app lock and refreshes TTL.
 // When filterKey is "", it represents the full-session summary.
-func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key, filterKey string, text string) error {
+func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key, filterKey string, sum *session.Summary) error {
 	app.mu.Lock()
 	defer app.mu.Unlock()
 	swt, ok := app.sessions[key.UserID][key.SessionID]
@@ -107,8 +106,10 @@ func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key
 	if cur.Summaries == nil {
 		cur.Summaries = make(map[string]*session.Summary)
 	}
-	cur.Summaries[filterKey] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
-	cur.UpdatedAt = time.Now()
+	// Copy the summary to preserve UpdatedAt calculated by isummary.CreateSessionSummary.
+	sumCopy := *sum
+	cur.Summaries[filterKey] = &sumCopy
+	cur.UpdatedAt = sum.UpdatedAt
 	swt.session = cur
 	swt.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
 	return nil
