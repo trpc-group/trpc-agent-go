@@ -16,11 +16,14 @@ import (
 )
 
 // defaultToolTrajectoryStrategy is used when no user strategy is supplied.
-var defaultToolTrajectoryStrategy = &ToolTrajectoryStrategy{
-	Name:      &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact},
-	Arguments: &json.JSONCriterion{MatchStrategy: json.JSONMatchStrategyExact},
-	Result:    &json.JSONCriterion{MatchStrategy: json.JSONMatchStrategyExact},
-}
+var (
+	defaultJsonCriterion          = json.New()
+	defaultToolTrajectoryStrategy = &ToolTrajectoryStrategy{
+		Name:      &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact},
+		Arguments: defaultJsonCriterion,
+		Result:    defaultJsonCriterion,
+	}
+)
 
 // options configures ToolTrajectoryCriterion.
 type options struct {
