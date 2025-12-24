@@ -492,10 +492,14 @@ The source module provides multiple document source types, each supporting rich 
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/source"
     filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
     dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
     urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
     autosource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto"
+    vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 )
 
 // File source: Single file processing, supports .txt, .md, .go, .json, etc. formats.
@@ -551,8 +555,13 @@ autoSrc := autosource.New(
 // Combine usage.
 sources := []source.Source{fileSrc, dirSrc, urlSrc, autoSrc}
 
+embedder := openaiembedder.New(openaiembedder.WithModel("text-embedding-3-small"))
+vectorStore := vectorinmemory.New()
+
 // Pass to Knowledge.
 kb := knowledge.New(
+    knowledge.WithEmbedder(embedder),
+    knowledge.WithVectorStore(vectorStore),
     knowledge.WithSources(sources),
 )
 
