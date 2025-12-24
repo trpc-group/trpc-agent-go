@@ -20,7 +20,40 @@ without repeating configuration on every Agent:
 If you only need customization for one specific Agent, you usually want
 Callbacks instead of Plugins.
 
+## Terminology
+
+To avoid mixing “plugin / callback / hook”, here is the mapping:
+
+- **Lifecycle**: the full process of handling one user input (create an
+  Invocation, run the Agent, call the model/tools, emit events, finish).
+- **Hook point**: a specific “time slot” in the lifecycle where the framework
+  will call your code (for example, `BeforeModel`, `AfterTool`, `OnEvent`).
+- **Callback**: the function you provide and register to a hook point.
+- **Hook**: a generic term that usually refers to a hook point or the callback
+  attached to it. In this project, hooks are implemented as callbacks.
+- **Plugin**: a component that registers a set of callbacks to multiple hook
+  points and is enabled once per Runner via `runner.WithPlugins(...)`.
+
+One line summary:
+
+- hook point = where/when
+- callback = what runs there
+- plugin = packaged callbacks, applied globally
+
+Common variable names used in examples:
+
+- `runnerInstance`: a Runner instance (`*runner.Runner`)
+- `reg`: the registry where you register callbacks (`*plugin.Registry`)
+- `ctx`: a context (`context.Context`)
+
 ## Plugins vs. Callbacks
+
+One sentence: **plugins follow the Runner; callbacks follow the Agent**.
+
+If you try to achieve “global behavior” using callbacks only, you must attach
+the same callback logic to every Agent that the Runner may execute. A plugin
+centralizes that setup: register once on the Runner, and the callbacks apply
+automatically across all agents/tools/model calls under that Runner.
 
 Callbacks are *functions* that run at specific hook points (before/after model,
 tool, agent). You attach them where you need them (often per Agent).
@@ -33,6 +66,48 @@ In other words:
 - **Callback**: “A hook function at a lifecycle point.”
 - **Plugin**: “A reusable module that registers multiple callbacks + optional
   configuration + optional lifecycle management.”
+
+## How Plugins relate to Callbacks (key idea)
+
+Plugins do not introduce a separate callback system. A plugin is simply a way
+to **register callbacks at the Runner level**:
+
+- Your plugin implements `Register(reg *plugin.Registry)`.
+- `reg.BeforeModel(...)` / `reg.AfterTool(...)` are registering callbacks.
+- At runtime, the framework executes those callbacks at the same lifecycle
+  points as normal callbacks.
+
+You can think of a plugin as: **a packaged set of callbacks applied globally**.
+
+For agent-local configuration, see `callbacks.md`.
+
+## Diagram: from registration to execution
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User as User code
+    participant Runner as Runner
+    participant Plugin as Plugin (plugin.Plugin)
+    participant Reg as Registry (plugin.Registry)
+    participant Agent as Agent
+    participant ModelTool as Model/Tool
+
+    Note over User,Reg: 1) Registration (once per Runner)
+    User->>Runner: NewRunner(..., WithPlugins(Plugin))
+    Runner->>Plugin: Register(Reg)
+    Plugin->>Reg: reg.BeforeModel(callback)
+    Plugin->>Reg: reg.OnEvent(callback)
+
+    Note over User,ModelTool: 2) Execution (every Run)
+    User->>Runner: Run(ctx, input)
+    Runner->>Agent: call Agent
+    Note over Runner,Agent: Reach a hook point (for example BeforeModel)
+    Runner->>Runner: run plugin callbacks (global)
+    Runner->>Agent: run agent callbacks (local, optional)
+    Runner->>ModelTool: call model/tool (unless short-circuited)
+    Runner-->>User: result
+```
 
 ## When to use Plugins
 
@@ -64,7 +139,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
-r := runner.NewRunner(
+runnerInstance := runner.NewRunner(
 	"my-app",
 	agentInstance,
 	runner.WithPlugins(
@@ -74,7 +149,7 @@ r := runner.NewRunner(
 		),
 	),
 )
-defer r.Close()
+defer runnerInstance.Close()
 ```
 
 ## How Plugins Execute
@@ -91,22 +166,23 @@ defer r.Close()
 
 In `BeforeModel`, `AfterModel`, `BeforeTool`, and `AfterTool`, you usually get
 only a `context.Context`. If you need the current Invocation, you can retrieve
-it from the context:
+it from the context.
+
+The snippet uses `fmt.Printf` for demonstration (import `fmt` if you copy it):
 
 ```go
-invocation, ok := agent.InvocationFromContext(ctx)
-_ = invocation
-_ = ok
+if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+	fmt.Printf("invocation id: %s\n", inv.InvocationID)
+}
 ```
 
 For tool callbacks, the framework also injects the tool call identifier (ID)
-into the
-context:
+into the context:
 
 ```go
-toolCallID, ok := tool.ToolCallIDFromContext(ctx)
-_ = toolCallID
-_ = ok
+if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
+	fmt.Printf("tool call id: %s\n", toolCallID)
+}
 ```
 
 ### Order and early-exit (short-circuit)
@@ -174,33 +250,39 @@ later plugins can depend on earlier ones during shutdown.
 Use `BeforeModel` to short-circuit the model call:
 
 ```go
-const blockedKeyword = "/deny"
+type PolicyPlugin struct{}
 
-r.BeforeModel(func(
-	ctx context.Context,
-	args *model.BeforeModelArgs,
-) (*model.BeforeModelResult, error) {
-	if args == nil || args.Request == nil {
-		return nil, nil
-	}
-	for _, msg := range args.Request.Messages {
-		if msg.Role == model.RoleUser &&
-			strings.Contains(msg.Content, blockedKeyword) {
-			return &model.BeforeModelResult{
-				CustomResponse: &model.Response{
-					Done: true,
-					Choices: []model.Choice{{
-						Index: 0,
-						Message: model.NewAssistantMessage(
-							"Blocked by plugin policy.",
-						),
-					}},
-				},
-			}, nil
+func (p *PolicyPlugin) Name() string { return "policy" }
+
+func (p *PolicyPlugin) Register(reg *plugin.Registry) {
+	const blockedKeyword = "/deny"
+
+	reg.BeforeModel(func(
+		ctx context.Context,
+		args *model.BeforeModelArgs,
+	) (*model.BeforeModelResult, error) {
+		if args == nil || args.Request == nil {
+			return nil, nil
 		}
-	}
-	return nil, nil
-})
+		for _, msg := range args.Request.Messages {
+			if msg.Role == model.RoleUser &&
+				strings.Contains(msg.Content, blockedKeyword) {
+				return &model.BeforeModelResult{
+					CustomResponse: &model.Response{
+						Done: true,
+						Choices: []model.Choice{{
+							Index: 0,
+							Message: model.NewAssistantMessage(
+								"Blocked by plugin policy.",
+							),
+						}},
+					},
+				}, nil
+			}
+		}
+		return nil, nil
+	})
+}
 ```
 
 ### 2) Tag every event (audit/debug)
@@ -211,23 +293,29 @@ filter on:
 ```go
 const demoTag = "plugin_demo"
 
-r.OnEvent(func(
-	ctx context.Context,
-	inv *agent.Invocation,
-	e *event.Event,
-) (*event.Event, error) {
-	if e == nil {
+type TagPlugin struct{}
+
+func (p *TagPlugin) Name() string { return "tag" }
+
+func (p *TagPlugin) Register(reg *plugin.Registry) {
+	reg.OnEvent(func(
+		ctx context.Context,
+		inv *agent.Invocation,
+		e *event.Event,
+	) (*event.Event, error) {
+		if e == nil {
+			return nil, nil
+		}
+		if e.Tag == "" {
+			e.Tag = demoTag
+			return nil, nil
+		}
+		if !e.ContainsTag(demoTag) {
+			e.Tag = e.Tag + event.TagDelimiter + demoTag
+		}
 		return nil, nil
-	}
-	if e.Tag == "" {
-		e.Tag = demoTag
-		return nil, nil
-	}
-	if !e.ContainsTag(demoTag) {
-		e.Tag = e.Tag + event.TagDelimiter + demoTag
-	}
-	return nil, nil
-})
+	})
+}
 ```
 
 ### 3) Rewrite tool arguments (sanitization)
@@ -236,20 +324,28 @@ Use `BeforeTool` to replace tool arguments (JSON (JavaScript Object Notation)
 bytes):
 
 ```go
-r.BeforeTool(func(
-	ctx context.Context,
-	args *tool.BeforeToolArgs,
-) (*tool.BeforeToolResult, error) {
-	if args == nil {
+type ToolArgsPlugin struct{}
+
+func (p *ToolArgsPlugin) Name() string { return "tool_args" }
+
+func (p *ToolArgsPlugin) Register(reg *plugin.Registry) {
+	reg.BeforeTool(func(
+		ctx context.Context,
+		args *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		if args == nil {
+			return nil, nil
+		}
+		if args.ToolName == "calculator" {
+			return &tool.BeforeToolResult{
+				ModifiedArguments: []byte(
+					`{"operation":"add","a":1,"b":2}`,
+				),
+			}, nil
+		}
 		return nil, nil
-	}
-	if args.ToolName == "calculator" {
-		return &tool.BeforeToolResult{
-			ModifiedArguments: []byte(`{"operation":"add","a":1,"b":2}`),
-		}, nil
-	}
-	return nil, nil
-})
+	})
+}
 ```
 
 ## Built-in Plugins
@@ -272,9 +368,9 @@ should apply to all agents managed by a Runner.
 Create a type that implements:
 
 - `Name() string`: must be unique per Runner
-- `Register(r *plugin.Registry)`: register hooks
+- `Register(reg *plugin.Registry)`: register callbacks (hooks)
 
-### 2) Register hooks in `Register`
+### 2) Register callbacks (hooks) in `Register`
 
 Use the `Registry` methods:
 
