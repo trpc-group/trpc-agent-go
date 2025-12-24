@@ -974,7 +974,7 @@ func TestClose_WithAsyncWorkers(t *testing.T) {
 
 	s := createTestService(t, db, WithEnableAsyncPersist(true), WithAsyncPersisterNum(2))
 	s.startAsyncPersistWorker()
-	s.startAsyncSummaryWorker()
+	// Note: startAsyncSummaryWorker is now handled in NewService if summarizer is configured
 
 	err = s.Close()
 	assert.NoError(t, err)

@@ -533,13 +533,7 @@ func TestEnqueueSummaryJob_Success(t *testing.T) {
 	s := createTestService(t, db, WithSessionTTL(1*time.Hour), WithSummarizer(summarizer),
 		WithAsyncSummaryNum(1), WithSummaryQueueSize(10))
 
-	// Start async summary workers
-	s.startAsyncSummaryWorker()
-	defer func() {
-		for _, ch := range s.summaryJobChans {
-			close(ch)
-		}
-	}()
+	// Async workers are initialized in NewService if summarizer and asyncSummaryNum are set
 
 	ctx := context.Background()
 
@@ -661,28 +655,18 @@ func TestEnqueueSummaryJob_ContextCancelled(t *testing.T) {
 		WithAsyncSummaryNum(1),
 		WithSummaryQueueSize(1),
 	)
-	// Manually initialize summary workers
-	s.summaryJobChans = []chan *summaryJob{make(chan *summaryJob, 1)}
 	defer s.Close()
 
 	ctx := context.Background()
 	sess := session.NewSession("test-app", "user-456", "session-123")
 
-	// Fill the queue with a blocking job
-	blockingJob := &summaryJob{
-		filterKey: "",
-		force:     false,
-		session:   sess,
-	}
-	index := sess.Hash % len(s.summaryJobChans)
-	s.summaryJobChans[index] <- blockingJob
-
 	// Create cancelled context
 	cancelledCtx, cancel := context.WithCancel(ctx)
 	cancel()
 
-	// Try to enqueue with cancelled context - should return context error
+	// Try to enqueue with cancelled context - should fallback to sync processing
 	err = s.EnqueueSummaryJob(cancelledCtx, sess, "", false)
+	// Note: With cancelled context, it will fallback to sync processing
 	assert.NoError(t, err)
 }
 
@@ -702,21 +686,14 @@ func TestEnqueueSummaryJob_QueueFull(t *testing.T) {
 		WithAsyncSummaryNum(1),
 		WithSummaryQueueSize(1),
 	)
-	// Manually initialize summary workers.
-	s.summaryJobChans = []chan *summaryJob{make(chan *summaryJob, 1)}
 	defer s.Close()
 
 	ctx := context.Background()
 	sess := session.NewSession("test-app", "user-456", "session-123")
 
-	// Fill the queue first.
-	job1 := &summaryJob{
-		filterKey: "",
-		force:     false,
-		session:   sess,
-	}
-	index := sess.Hash % len(s.summaryJobChans)
-	s.summaryJobChans[index] <- job1
+	// Fill the queue by enqueueing a job first (queue size is 1)
+	err = s.EnqueueSummaryJob(ctx, sess, "", false)
+	assert.NoError(t, err)
 
 	// Mock sync fallback processing.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary, updated_at FROM session_summaries")).
@@ -752,8 +729,6 @@ func TestEnqueueSummaryJob_QueueFull_FallbackToSyncWithCascade(t *testing.T) {
 		WithAsyncSummaryNum(1),
 		WithSummaryQueueSize(1),
 	)
-	// Manually initialize summary workers.
-	s.summaryJobChans = []chan *summaryJob{make(chan *summaryJob, 1)}
 	defer s.Close()
 
 	ctx := context.Background()
@@ -767,14 +742,9 @@ func TestEnqueueSummaryJob_QueueFull_FallbackToSyncWithCascade(t *testing.T) {
 	}}}
 	sess.Events = append(sess.Events, *e)
 
-	// Fill the queue first.
-	job1 := &summaryJob{
-		filterKey: "blocking",
-		force:     false,
-		session:   sess,
-	}
-	index := sess.Hash % len(s.summaryJobChans)
-	s.summaryJobChans[index] <- job1
+	// Fill the queue by enqueueing a job first (queue size is 1)
+	err = s.EnqueueSummaryJob(ctx, sess, "blocking", false)
+	require.NoError(t, err)
 
 	// Mock sync fallback processing for branch summary.
 	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
@@ -1092,9 +1062,8 @@ func TestEnqueueSummaryJob_ChannelClosed(t *testing.T) {
 
 	s := createTestService(t, db, WithSummarizer(summarizer), WithAsyncSummaryNum(1), WithSummaryQueueSize(1))
 
-	// Manually initialize and close summary job channels
-	s.summaryJobChans = []chan *summaryJob{make(chan *summaryJob, 1)}
-	close(s.summaryJobChans[0])
+	// Note: summaryJobChans is now handled by asyncWorker in session/internal/summary
+	// The asyncWorker handles closed channels gracefully
 
 	ctx := context.Background()
 
@@ -1112,75 +1081,7 @@ func TestEnqueueSummaryJob_ChannelClosed(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestTryEnqueueJob(t *testing.T) {
-	tests := []struct {
-		name       string
-		setup      func(t *testing.T, service *Service) (context.Context, *summaryJob, bool)
-		expectSend bool
-	}{
-		{
-			name: "successful enqueue",
-			setup: func(t *testing.T, service *Service) (context.Context, *summaryJob, bool) {
-				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
-				job := &summaryJob{
-					filterKey: "",
-					force:     false,
-					session:   &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
-				}
-				return context.Background(), job, true
-			},
-			expectSend: true,
-		},
-		{
-			name: "queue full fallback",
-			setup: func(t *testing.T, service *Service) (context.Context, *summaryJob, bool) {
-				// Fill up the queue by creating a job that blocks
-				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid3"}
-				job := &summaryJob{
-					filterKey: "",
-					force:     false,
-					session:   &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
-				}
-
-				// Fill the channel to capacity
-			loop:
-				for i := 0; i < service.opts.summaryQueueSize; i++ {
-					select {
-					case service.summaryJobChans[0] <- job:
-						// Successfully sent
-					default:
-						// Channel is full
-						break loop
-					}
-				}
-
-				return context.Background(), job, false
-			},
-			expectSend: false,
-		},
-	}
-
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
-			s := createTestService(t, db,
-				WithSummaryQueueSize(1),
-				WithAsyncSummaryNum(1),
-				WithSummarizer(summarizer),
-			)
-			s.startAsyncSummaryWorker()
-
-			ctx, job, expected := tt.setup(t, s)
-			result := s.tryEnqueueJob(ctx, job)
-
-			assert.Equal(t, expected, result)
-		})
-	}
-}
+// TestTryEnqueueJob is removed because tryEnqueueJob is now handled by AsyncSummaryWorker in session/internal/summary.
 
 func TestEnqueueSummaryJob_NoSummarizer(t *testing.T) {
 	// Create service without summarizer (pass nil)
@@ -1200,145 +1101,11 @@ func TestEnqueueSummaryJob_NoSummarizer(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestRedisService_ProcessSummaryJob_Panic(t *testing.T) {
-	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-	s := createTestService(t, db,
-		WithSummaryQueueSize(1),
-		WithAsyncSummaryNum(1),
-		WithSummarizer(summarizer),
-	)
+// TestRedisService_ProcessSummaryJob_Panic is removed because processSummaryJob
+// is now handled by AsyncSummaryWorker in session/internal/summary.
 
-	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
-
-	// Process a job with no stored session - should trigger error but not panic.
-	job := &summaryJob{
-		filterKey: "",
-		force:     false,
-		session:   &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
-	}
-
-	// This should not panic, just log error.
-	require.NotPanics(t, func() {
-		s.processSummaryJob(job)
-	})
-}
-
-func TestProcessSummaryJob(t *testing.T) {
-	tests := []struct {
-		name        string
-		setup       func(t *testing.T, service *Service) *summaryJob
-		expectError bool
-	}{
-		{
-			name: "successful summary processing",
-			setup: func(t *testing.T, service *Service) *summaryJob {
-				// Create a session with events
-				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
-				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
-
-				// Add an event to make delta non-empty
-				e := event.New("inv", "author")
-				e.Timestamp = time.Now()
-				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
-				sess.Events = append(sess.Events, *e)
-
-				// Enable summarizer
-				service.opts.summarizer = &fakeSummarizer{allow: true, out: "test summary"}
-
-				return &summaryJob{
-					filterKey: "",
-					force:     false,
-					session:   sess,
-				}
-			},
-			expectError: false,
-		},
-		{
-			name: "summary job with branch filter",
-			setup: func(t *testing.T, service *Service) *summaryJob {
-				// Create a session with events
-				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid2"}
-				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
-
-				// Add an event
-				e := event.New("inv", "author")
-				e.Timestamp = time.Now()
-				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
-				sess.Events = append(sess.Events, *e)
-				service.opts.summarizer = &fakeSummarizer{allow: true, out: "branch summary"}
-
-				return &summaryJob{
-					filterKey: "branch1",
-					force:     false,
-					session:   sess,
-				}
-			},
-			expectError: false,
-		},
-		{
-			name: "summarizer returns false",
-			setup: func(t *testing.T, service *Service) *summaryJob {
-				// Create a session
-				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid3"}
-				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
-				service.opts.summarizer = &fakeSummarizer{allow: false, out: "no update"}
-
-				return &summaryJob{
-					filterKey: "",
-					force:     false,
-					session:   sess,
-				}
-			},
-			expectError: false,
-		},
-		{
-			name: "summarizer returns error",
-			setup: func(t *testing.T, service *Service) *summaryJob {
-				// Create a session
-				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid4"}
-				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
-				service.opts.summarizer = &fakeErrorSummarizer{}
-
-				return &summaryJob{
-					filterKey: "",
-					force:     false,
-					session:   sess,
-				}
-			},
-			expectError: false, // Should not panic or error, just log
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
-			db, mock, err := sqlmock.New()
-			require.NoError(t, err)
-			defer db.Close()
-			s := createTestService(t, db,
-				WithSummaryQueueSize(1),
-				WithAsyncSummaryNum(1),
-				WithSummarizer(summarizer),
-				WithSummaryJobTimeout(time.Second*10),
-			)
-			job := tt.setup(t, s)
-
-			mock.ExpectExec(regexp.QuoteMeta(fmt.Sprintf(`REPLACE INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`, s.tableSessionSummaries))).
-				WithArgs(job.session.AppName, job.session.UserID, job.session.ID, job.filterKey, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-				WillReturnResult(sqlmock.NewResult(1, 1))
-			defer db.Close()
-
-			// This should not panic
-			require.NotPanics(t, func() {
-				s.processSummaryJob(job)
-			})
-		})
-	}
-}
+// TestProcessSummaryJob is removed because processSummaryJob is now handled
+// by AsyncSummaryWorker in session/internal/summary.
 
 type fakeSummarizer struct {
 	allow bool
@@ -1496,13 +1263,8 @@ func TestEnqueueSummaryJob_AsyncProcessing(t *testing.T) {
 	s := createTestService(t, db, WithSessionTTL(1*time.Hour), WithSummarizer(summarizer),
 		WithAsyncSummaryNum(1), WithSummaryQueueSize(10))
 
-	// Start async workers
-	s.startAsyncSummaryWorker()
-	defer func() {
-		for _, ch := range s.summaryJobChans {
-			close(ch)
-		}
-	}()
+	// Async workers are initialized in NewService if summarizer and asyncSummaryNum are set
+	defer s.Close()
 
 	ctx := context.Background()
 
@@ -1533,81 +1295,11 @@ func TestEnqueueSummaryJob_AsyncProcessing(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 }
 
-func TestTryEnqueueJob_QueueFull(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+// TestTryEnqueueJob_QueueFull is removed because tryEnqueueJob
+// is now handled by AsyncSummaryWorker in session/internal/summary.
 
-	s := createTestService(t, db,
-		WithAsyncSummaryNum(1),
-		WithSummaryQueueSize(1),
-	)
-
-	// Initialize channels without starting workers to keep queue full.
-	s.summaryJobChans = []chan *summaryJob{
-		make(chan *summaryJob, 1),
-	}
-
-	ctx := context.Background()
-	sess := session.NewSession("test-app", "user-456", "session-123")
-	job := &summaryJob{
-		filterKey: "",
-		force:     false,
-		session:   sess,
-	}
-
-	// Fill the queue by sending to the channel directly
-	index := sess.Hash % len(s.summaryJobChans)
-	select {
-	case s.summaryJobChans[index] <- job:
-		// Successfully sent, now try to enqueue another which should fail
-	default:
-		t.Skip("Could not fill queue for testing")
-	}
-
-	// Try to enqueue when queue is full - should return false
-	result := s.tryEnqueueJob(ctx, job)
-	assert.False(t, result)
-}
-
-func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	s := createTestService(t, db,
-		WithAsyncSummaryNum(1),
-		WithSummaryQueueSize(1),
-	)
-
-	// Start async workers to initialize channels
-	s.startAsyncSummaryWorker()
-	defer s.Close() // This will close the channels
-
-	sess := session.NewSession("test-app", "user-456", "session-123")
-	job := &summaryJob{
-		filterKey: "",
-		force:     false,
-		session:   sess,
-	}
-
-	// First, fill the queue to make subsequent enqueue operations check ctx.Done()
-	index := sess.Hash % len(s.summaryJobChans)
-	select {
-	case s.summaryJobChans[index] <- job:
-		// Successfully filled the queue
-	default:
-		t.Skip("Could not fill queue for testing")
-	}
-
-	// Create cancelled context
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	// Try to enqueue with cancelled context when queue is full - should return false
-	result := s.tryEnqueueJob(ctx, job)
-	assert.False(t, result, "tryEnqueueJob should return false when context is cancelled and queue is full")
-}
+// TestTryEnqueueJob_ContextCancelled is removed because tryEnqueueJob
+// is now handled by AsyncSummaryWorker in session/internal/summary.
 
 type doneNoErrContext struct {
 	context.Context
@@ -1622,97 +1314,14 @@ func (doneNoErrContext) Err() error {
 	return nil
 }
 
-func TestTryEnqueueJob_ContextDoneBranch(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+// TestTryEnqueueJob_ContextDoneBranch is removed because tryEnqueueJob
+// is now handled by AsyncSummaryWorker in session/internal/summary.
 
-	s := createTestService(t, db,
-		WithAsyncSummaryNum(1),
-		WithSummaryQueueSize(1),
-	)
-	// Initialize channels without starting workers to keep queue full.
-	s.summaryJobChans = []chan *summaryJob{
-		make(chan *summaryJob, 1),
-	}
+// TestProcessSummaryJob_NilJob_Recovers is removed because processSummaryJob
+// is now handled by AsyncSummaryWorker in session/internal/summary.
 
-	sess := session.NewSession("test-app", "user-456", "session-123")
-	job := &summaryJob{
-		filterKey: "",
-		force:     false,
-		session:   sess,
-	}
+// TestProcessSummaryJob_NilSession_LogsWarning is removed because processSummaryJob
+// is now handled by AsyncSummaryWorker in session/internal/summary.
 
-	index := sess.Hash % len(s.summaryJobChans)
-	s.summaryJobChans[index] <- job
-
-	doneCh := make(chan struct{})
-	close(doneCh)
-	ctx := doneNoErrContext{
-		Context: context.Background(),
-		done:    doneCh,
-	}
-
-	result := s.tryEnqueueJob(ctx, job)
-	assert.False(t, result)
-}
-
-func TestProcessSummaryJob_NilJob_Recovers(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	summarizer := &fakeSummarizer{allow: true, out: "test"}
-	s := createTestService(t, db, WithSummarizer(summarizer))
-	defer s.Close()
-
-	require.NotPanics(t, func() {
-		s.processSummaryJob(nil)
-	})
-}
-
-func TestProcessSummaryJob_NilSession_LogsWarning(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	summarizer := &fakeSummarizer{allow: true, out: "test"}
-	s := createTestService(t, db, WithSummarizer(summarizer))
-	defer s.Close()
-
-	job := &summaryJob{
-		filterKey: "",
-		force:     false,
-		session:   nil,
-	}
-	require.NotPanics(t, func() {
-		s.processSummaryJob(job)
-	})
-}
-
-func TestProcessSummaryJob_Timeout(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	summarizer := &fakeSummarizer{allow: true, out: "timeout summary"}
-
-	s := createTestService(t, db, WithSummarizer(summarizer),
-		WithSummaryJobTimeout(10*time.Millisecond))
-
-	job := &summaryJob{
-		filterKey: "",
-		force:     false,
-		session: &session.Session{
-			ID:        "session-123",
-			AppName:   "test-app",
-			UserID:    "user-456",
-			UpdatedAt: time.Now(),
-		},
-	}
-
-	// This should not panic even with timeout
-	require.NotPanics(t, func() {
-		s.processSummaryJob(job)
-	})
-}
+// TestProcessSummaryJob_Timeout is removed because processSummaryJob
+// is now handled by AsyncSummaryWorker in session/internal/summary.

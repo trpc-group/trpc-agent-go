@@ -12,6 +12,7 @@ package summary
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -82,11 +83,11 @@ func buildFilterSession(base *session.Session, filterKey string, evs []event.Eve
 	}
 }
 
-// SummarizeSession performs per-filterKey delta summarization using the given
+// summarizeSession performs per-filterKey delta summarization using the given
 // summarizer and writes results to base.Summaries.
 // - When filterKey is non-empty, summarizes only that filter's events.
 // - When filterKey is empty, summarizes all events as a single full-session summary.
-func SummarizeSession(
+func summarizeSession(
 	ctx context.Context,
 	m summary.SessionSummarizer,
 	base *session.Session,
@@ -263,4 +264,52 @@ func CreateSessionSummaryWithCascade(
 	summaryWg.Wait()
 
 	return util.If(result[0] != nil, result[0], result[1])
+}
+
+// CreateSessionSummary provides common logic for CreateSessionSummary.
+// It handles summarization and returns updated status.
+// The caller is responsible for persistence if needed.
+func CreateSessionSummary(
+	ctx context.Context,
+	summarizer summary.SessionSummarizer,
+	sess *session.Session,
+	filterKey string,
+	force bool,
+) (updated bool, err error) {
+	if summarizer == nil {
+		return false, nil
+	}
+
+	if sess == nil {
+		return false, errors.New("nil session")
+	}
+
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return false, fmt.Errorf("check session key failed: %w", err)
+	}
+
+	return summarizeSession(ctx, summarizer, sess, filterKey, force)
+}
+
+// GetSessionSummaryText provides common logic for GetSessionSummaryText.
+// It checks session validity and tries in-memory summaries first.
+// Returns the summary text and whether it was found.
+// Callers can extend this with storage-specific query logic.
+func GetSessionSummaryText(
+	ctx context.Context,
+	sess *session.Session,
+	opts ...session.SummaryOption,
+) (string, bool) {
+	if sess == nil {
+		return "", false
+	}
+
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return "", false
+	}
+
+	// Try in-memory session summaries first.
+	return GetSummaryTextFromSession(sess, opts...)
 }

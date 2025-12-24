@@ -2092,8 +2092,8 @@ func TestClose(t *testing.T) {
 
 	// Initialize channels
 	s.eventPairChans = []chan *sessionEventPair{make(chan *sessionEventPair)}
-	s.summaryJobChans = []chan *summaryJob{make(chan *summaryJob)}
 	s.cleanupDone = make(chan struct{})
+	// Note: summaryJobChans is now handled by asyncWorker in session/internal/summary
 
 	// Call Close (no mock expectations needed since mockMySQLClient.Close() does nothing)
 	err = s.Close()

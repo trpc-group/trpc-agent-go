@@ -239,21 +239,10 @@ func TestMemoryService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) 
 	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
 	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
 
-	// Fill up the target worker queue with a blocking job
-	blockingJob := &summaryJob{
-		filterKey: "blocking",
-		force:     true,
-		session:   sess,
-	}
-	idx := sess.Hash % len(s.summaryJobChans)
-
-	// Send a job to fill that queue (this will block the worker)
-	select {
-	case s.summaryJobChans[idx] <- blockingJob:
-		// Queue is now full
-	default:
-		// Queue was already full
-	}
+	// Fill up the queue by enqueueing multiple jobs
+	// The queue size is 1, so after the first job, the queue will be full
+	err = s.EnqueueSummaryJob(context.Background(), sess, "blocking", true)
+	require.NoError(t, err)
 
 	// Now try to enqueue another job - should fall back to sync
 	err = s.EnqueueSummaryJob(context.Background(), sess, "branch", false)
@@ -494,26 +483,8 @@ func TestMemoryService_CreateSessionSummary_SessionNotFound(t *testing.T) {
 	require.Contains(t, err.Error(), "session not found")
 }
 
-func TestMemoryService_ProcessSummaryJob_Panic(t *testing.T) {
-	s := NewSessionService(
-		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
-	)
-	defer s.Close()
-
-	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
-
-	// Process a job with no stored session - should trigger error but not panic.
-	job := &summaryJob{
-		filterKey: "",
-		force:     false,
-		session:   &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
-	}
-
-	// This should not panic, just log error.
-	require.NotPanics(t, func() {
-		s.processSummaryJob(job)
-	})
-}
+// TestMemoryService_ProcessSummaryJob_Panic is removed because processSummaryJob
+// is now handled by AsyncSummaryWorker in session/internal/summary.
 
 type panicSummarizer struct{}
 
@@ -540,125 +511,14 @@ func (p *panicSummarizer) SetPrompt(prompt string) {
 func (p *panicSummarizer) SetModel(m model.Model) {
 }
 
-func TestMemoryService_ProcessSummaryJob_RecoversFromPanic(t *testing.T) {
-	s := NewSessionService(
-		WithSummarizer(&panicSummarizer{}),
-	)
-	defer s.Close()
+// TestMemoryService_ProcessSummaryJob_RecoversFromPanic is removed because
+// processSummaryJob is now handled by AsyncSummaryWorker in session/internal/summary.
 
-	key := session.Key{
-		AppName:   "app",
-		UserID:    "user",
-		SessionID: "sid",
-	}
-	sess, err := s.CreateSession(
-		context.Background(),
-		key,
-		session.StateMap{},
-	)
-	require.NoError(t, err)
+// TestMemoryService_TryEnqueueJob_ContextCancelled is removed because
+// tryEnqueueJob is now handled by AsyncSummaryWorker in session/internal/summary.
 
-	e := event.New("inv", "author")
-	e.Timestamp = time.Now()
-	e.Response = &model.Response{
-		Choices: []model.Choice{
-			{
-				Message: model.Message{
-					Role:    model.RoleUser,
-					Content: "hello",
-				},
-			},
-		},
-	}
-	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
-
-	job := &summaryJob{
-		filterKey: "",
-		force:     false,
-		session:   sess,
-	}
-
-	require.NotPanics(t, func() {
-		s.processSummaryJob(job)
-	})
-}
-
-func TestMemoryService_TryEnqueueJob_ContextCancelled(t *testing.T) {
-	// Use blocking summarizer to ensure queue stays full.
-	service := NewSessionService(
-		WithSummarizer(&fakeBlockingSummarizer{}),
-		WithAsyncSummaryNum(1),
-		WithSummaryQueueSize(1),
-	)
-	defer service.Close()
-
-	ctx := context.Background()
-	key := session.Key{AppName: "app", UserID: "u", SessionID: "s"}
-	sess, err := service.CreateSession(ctx, key, session.StateMap{})
-	require.NoError(t, err)
-
-	// Calculate the worker index for this session to ensure we use the same worker.
-	idx := sess.Hash % len(service.summaryJobChans)
-
-	// Fill the queue first with a blocking job.
-	job1 := &summaryJob{
-		filterKey: "",
-		force:     false,
-		session:   sess,
-	}
-
-	select {
-	case service.summaryJobChans[idx] <- job1:
-		// Queue is now full.
-	default:
-		// Queue was already full.
-	}
-
-	// Create a cancelled context.
-	cancelledCtx, cancel := context.WithCancel(ctx)
-	cancel()
-
-	// Use the same session to ensure it hashes to the same worker (queue is full).
-	job2 := &summaryJob{
-		filterKey: "",
-		force:     false,
-		session:   sess,
-	}
-
-	// Should return false when context is cancelled (even if queue is full).
-	assert.False(t, service.tryEnqueueJob(cancelledCtx, job2))
-}
-
-func TestMemoryService_TryEnqueueJob_ClosedChannel(t *testing.T) {
-	service := NewSessionService(
-		WithAsyncSummaryNum(1),
-		WithSummaryQueueSize(1),
-		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
-	)
-
-	ctx := context.Background()
-	key := session.Key{
-		AppName:   "app",
-		UserID:    "user",
-		SessionID: "sess",
-	}
-	sess, err := service.CreateSession(ctx, key, session.StateMap{})
-	require.NoError(t, err)
-
-	idx := sess.Hash % len(service.summaryJobChans)
-	closedChan := service.summaryJobChans[idx]
-	close(closedChan)
-
-	job := &summaryJob{
-		filterKey: "",
-		force:     false,
-		session:   sess,
-	}
-	assert.False(t, service.tryEnqueueJob(ctx, job))
-
-	service.summaryJobChans[idx] = make(chan *summaryJob)
-	service.Close()
-}
+// TestMemoryService_TryEnqueueJob_ClosedChannel is removed because
+// tryEnqueueJob is now handled by AsyncSummaryWorker in session/internal/summary.
 
 func TestMemoryService_AppendEvent_Errors(t *testing.T) {
 	service := NewSessionService()
@@ -791,119 +651,8 @@ func TestMemoryService_GetOrCreateAppSessions_Concurrent(t *testing.T) {
 	assert.NotNil(t, app)
 }
 
-func TestProcessSummaryJob(t *testing.T) {
-	tests := []struct {
-		name        string
-		setup       func(t *testing.T, service *SessionService) *summaryJob
-		expectError bool
-	}{
-		{
-			name: "successful summary processing",
-			setup: func(t *testing.T, service *SessionService) *summaryJob {
-				// Create a session with events
-				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
-				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
-				require.NoError(t, err)
-
-				// Add an event to make delta non-empty
-				e := event.New("inv", "author")
-				e.Timestamp = time.Now()
-				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
-				err = service.AppendEvent(context.Background(), sess, e)
-				require.NoError(t, err)
-
-				// Enable summarizer
-				service.opts.summarizer = &fakeSummarizer{allow: true, out: "test summary"}
-
-				return &summaryJob{
-					filterKey: "",
-					force:     false,
-					session:   sess,
-				}
-			},
-			expectError: false,
-		},
-		{
-			name: "summary job with branch filter",
-			setup: func(t *testing.T, service *SessionService) *summaryJob {
-				// Create a session with events
-				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid2"}
-				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
-				require.NoError(t, err)
-
-				// Add an event
-				e := event.New("inv", "author")
-				e.Timestamp = time.Now()
-				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
-				err = service.AppendEvent(context.Background(), sess, e)
-				require.NoError(t, err)
-
-				// Enable summarizer
-				service.opts.summarizer = &fakeSummarizer{allow: true, out: "branch summary"}
-
-				return &summaryJob{
-					filterKey: "branch1",
-					force:     false,
-					session:   sess,
-				}
-			},
-			expectError: false,
-		},
-		{
-			name: "summarizer returns false",
-			setup: func(t *testing.T, service *SessionService) *summaryJob {
-				// Create a session
-				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid3"}
-				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
-				require.NoError(t, err)
-
-				// Enable summarizer that returns false
-				service.opts.summarizer = &fakeSummarizer{allow: false, out: "no update"}
-
-				return &summaryJob{
-					filterKey: "",
-					force:     false,
-					session:   sess,
-				}
-			},
-			expectError: false,
-		},
-		{
-			name: "summarizer returns error",
-			setup: func(t *testing.T, service *SessionService) *summaryJob {
-				// Create a session
-				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid4"}
-				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
-				require.NoError(t, err)
-
-				// Enable summarizer that returns error
-				service.opts.summarizer = &fakeErrorSummarizer{}
-
-				return &summaryJob{
-					filterKey: "",
-					force:     false,
-					session:   sess,
-				}
-			},
-			expectError: false, // Should not panic or error, just log
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-
-			service := NewSessionService()
-			defer service.Close()
-
-			job := tt.setup(t, service)
-
-			// This should not panic
-			require.NotPanics(t, func() {
-				service.processSummaryJob(job)
-			})
-		})
-	}
-}
+// TestProcessSummaryJob is removed because processSummaryJob is now handled
+// by AsyncSummaryWorker in session/internal/summary.
 
 type fakeErrorSummarizer struct{}
 
@@ -915,21 +664,8 @@ func (f *fakeErrorSummarizer) SetPrompt(prompt string)  {}
 func (f *fakeErrorSummarizer) SetModel(m model.Model)   {}
 func (f *fakeErrorSummarizer) Metadata() map[string]any { return map[string]any{} }
 
-func TestMemoryService_StopAsyncSummaryWorker_AlreadyStopped(t *testing.T) {
-	service := NewSessionService(
-		WithAsyncSummaryNum(2),
-		WithSummaryQueueSize(10),
-		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
-	)
-
-	// First close
-	service.Close()
-
-	// Second close should not panic (channels already set to nil)
-	require.NotPanics(t, func() {
-		service.stopAsyncSummaryWorker()
-	})
-}
+// TestMemoryService_StopAsyncSummaryWorker_AlreadyStopped is removed because
+// stopAsyncSummaryWorker is now handled by AsyncSummaryWorker.Stop().
 
 func TestMemoryService_TryEnqueueJob_ChannelsNotInitialized(t *testing.T) {
 	service := NewSessionService(

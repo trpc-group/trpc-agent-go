@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 type mockSummarizerWithTs struct {
@@ -66,7 +67,7 @@ func TestSummarizeSession_UsesLastIncludedTimestamp(t *testing.T) {
 	}
 
 	ms := &mockSummarizerWithTs{}
-	updated, err := SummarizeSession(context.Background(), ms, sess, "", false)
+	updated, err := summarizeSession(context.Background(), ms, sess, "", false)
 	require.NoError(t, err)
 	require.True(t, updated)
 
@@ -146,13 +147,13 @@ func TestSummarizeSession_FilteredKey_RespectsDeltaAndShould(t *testing.T) {
 
 	// allow=false and force=false should skip.
 	s := &fakeSummarizer{allow: false, out: "sum"}
-	updated, err := SummarizeSession(context.Background(), s, base, "b1", false)
+	updated, err := summarizeSession(context.Background(), s, base, "b1", false)
 	require.NoError(t, err)
 	require.False(t, updated)
 
 	// allow=true should write.
 	s.allow = true
-	updated, err = SummarizeSession(context.Background(), s, base, "b1", false)
+	updated, err = summarizeSession(context.Background(), s, base, "b1", false)
 	require.NoError(t, err)
 	require.True(t, updated)
 	require.NotNil(t, base.Summaries)
@@ -160,7 +161,7 @@ func TestSummarizeSession_FilteredKey_RespectsDeltaAndShould(t *testing.T) {
 
 	// force=true should write even when ShouldSummarize=false.
 	s.allow = false
-	updated, err = SummarizeSession(context.Background(), s, base, "b1", true)
+	updated, err = summarizeSession(context.Background(), s, base, "b1", true)
 	require.NoError(t, err)
 	require.True(t, updated)
 	require.Equal(t, "sum", base.Summaries["b1"].Summary)
@@ -174,7 +175,7 @@ func TestSummarizeSession_FullSession_SingleWrite(t *testing.T) {
 		makeEvent("e2", now.Add(-30*time.Second), "b2"),
 	}
 	s := &fakeSummarizer{allow: true, out: "sum"}
-	updated, err := SummarizeSession(context.Background(), s, base, "", false)
+	updated, err := summarizeSession(context.Background(), s, base, "", false)
 	require.NoError(t, err)
 	require.True(t, updated)
 	require.NotNil(t, base.Summaries)
@@ -183,14 +184,14 @@ func TestSummarizeSession_FullSession_SingleWrite(t *testing.T) {
 
 func TestSummarizeSession_NilSummarizer(t *testing.T) {
 	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
-	updated, err := SummarizeSession(context.Background(), nil, base, "", false)
+	updated, err := summarizeSession(context.Background(), nil, base, "", false)
 	require.NoError(t, err)
 	require.False(t, updated)
 }
 
 func TestSummarizeSession_NilSession(t *testing.T) {
 	s := &fakeSummarizer{allow: true, out: "sum"}
-	updated, err := SummarizeSession(context.Background(), s, nil, "", false)
+	updated, err := summarizeSession(context.Background(), s, nil, "", false)
 	require.NoError(t, err)
 	require.False(t, updated)
 }
@@ -204,13 +205,13 @@ func TestSummarizeSession_EmptyDelta_NoForce(t *testing.T) {
 
 	// First summarization.
 	s := &fakeSummarizer{allow: true, out: "sum1"}
-	updated, err := SummarizeSession(context.Background(), s, base, "b1", false)
+	updated, err := summarizeSession(context.Background(), s, base, "b1", false)
 	require.NoError(t, err)
 	require.True(t, updated)
 
 	// Second summarization without new events - should skip.
 	s.out = "sum2"
-	updated, err = SummarizeSession(context.Background(), s, base, "b1", false)
+	updated, err = summarizeSession(context.Background(), s, base, "b1", false)
 	require.NoError(t, err)
 	require.False(t, updated)
 	require.Equal(t, "sum1", base.Summaries["b1"].Summary)
@@ -225,13 +226,13 @@ func TestSummarizeSession_EmptyDelta_WithForce(t *testing.T) {
 
 	// First summarization.
 	s := &fakeSummarizer{allow: true, out: "sum1"}
-	updated, err := SummarizeSession(context.Background(), s, base, "b1", false)
+	updated, err := summarizeSession(context.Background(), s, base, "b1", false)
 	require.NoError(t, err)
 	require.True(t, updated)
 
 	// Second summarization without new events but with force - should update.
 	s.out = "sum2"
-	updated, err = SummarizeSession(context.Background(), s, base, "b1", true)
+	updated, err = summarizeSession(context.Background(), s, base, "b1", true)
 	require.NoError(t, err)
 	require.True(t, updated)
 	require.Equal(t, "sum2", base.Summaries["b1"].Summary)
@@ -246,7 +247,7 @@ func TestSummarizeSession_EmptySummary_NotUpdated(t *testing.T) {
 
 	// Summarizer returns empty string - should not update.
 	s := &fakeSummarizer{allow: true, out: ""}
-	updated, err := SummarizeSession(context.Background(), s, base, "b1", false)
+	updated, err := summarizeSession(context.Background(), s, base, "b1", false)
 	require.NoError(t, err)
 	require.False(t, updated)
 }
@@ -304,7 +305,7 @@ func TestSummarizeSession_UsesLastIncludedTimestampWhenProvided(t *testing.T) {
 		ts:  t2, // simulate summarizer skipping the latest event and using t2 as last included
 	}
 
-	updated, err := SummarizeSession(context.Background(), s, base, "", false)
+	updated, err := summarizeSession(context.Background(), s, base, "", false)
 	require.NoError(t, err)
 	require.True(t, updated)
 	require.NotNil(t, base.Summaries)
@@ -718,4 +719,251 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 	// Should have created both summaries
 	require.Equal(t, "summary-user-messages", mockSvc.summaries["user-messages"])
 	require.Equal(t, "summary-", mockSvc.summaries[""])
+}
+
+func TestCreateSessionSummary(t *testing.T) {
+	tests := []struct {
+		name       string
+		summarizer summary.SessionSummarizer
+		sess       *session.Session
+		filterKey  string
+		force      bool
+		wantUpdated bool
+		wantError   bool
+		errorMsg   string
+	}{
+		{
+			name:       "nil summarizer",
+			summarizer: nil,
+			sess:       &session.Session{ID: "s1", AppName: "app", UserID: "user"},
+			filterKey:  "",
+			force:      false,
+			wantUpdated: false,
+			wantError:   false,
+		},
+		{
+			name:       "nil session",
+			summarizer: &fakeSummarizer{allow: true, out: "sum"},
+			sess:       nil,
+			filterKey:  "",
+			force:      false,
+			wantUpdated: false,
+			wantError:   true,
+			errorMsg:   "nil session",
+		},
+		{
+			name:       "invalid session key - empty ID",
+			summarizer: &fakeSummarizer{allow: true, out: "sum"},
+			sess:       &session.Session{ID: "", AppName: "app", UserID: "user"},
+			filterKey:  "",
+			force:      false,
+			wantUpdated: false,
+			wantError:   true,
+			errorMsg:   "check session key failed",
+		},
+		{
+			name:       "invalid session key - empty AppName",
+			summarizer: &fakeSummarizer{allow: true, out: "sum"},
+			sess:       &session.Session{ID: "s1", AppName: "", UserID: "user"},
+			filterKey:  "",
+			force:      false,
+			wantUpdated: false,
+			wantError:   true,
+			errorMsg:   "check session key failed",
+		},
+		{
+			name:       "invalid session key - empty UserID",
+			summarizer: &fakeSummarizer{allow: true, out: "sum"},
+			sess:       &session.Session{ID: "s1", AppName: "app", UserID: ""},
+			filterKey:  "",
+			force:      false,
+			wantUpdated: false,
+			wantError:   true,
+			errorMsg:   "check session key failed",
+		},
+		{
+			name:       "successful summarization",
+			summarizer: &fakeSummarizer{allow: true, out: "test summary"},
+			sess: &session.Session{
+				ID:      "s1",
+				AppName: "app",
+				UserID:  "user",
+				Events: []event.Event{
+					{
+						Timestamp: time.Now(),
+						Response: &model.Response{
+							Choices: []model.Choice{{Message: model.Message{Content: "hello"}}},
+						},
+					},
+				},
+			},
+			filterKey:  "",
+			force:      false,
+			wantUpdated: true,
+			wantError:   false,
+		},
+		{
+			name:       "summarizer returns false",
+			summarizer: &fakeSummarizer{allow: false, out: "no update"},
+			sess: &session.Session{
+				ID:      "s1",
+				AppName: "app",
+				UserID:  "user",
+			},
+			filterKey:  "",
+			force:      false,
+			wantUpdated: false,
+			wantError:   false,
+		},
+		{
+			name:       "force=true should update even when ShouldSummarize=false",
+			summarizer: &fakeSummarizer{allow: false, out: "forced summary"},
+			sess: &session.Session{
+				ID:      "s1",
+				AppName: "app",
+				UserID:  "user",
+			},
+			filterKey:  "",
+			force:      true,
+			wantUpdated: true,
+			wantError:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			updated, err := CreateSessionSummary(context.Background(), tt.summarizer, tt.sess, tt.filterKey, tt.force)
+			if tt.wantError {
+				require.Error(t, err)
+				if tt.errorMsg != "" {
+					require.Contains(t, err.Error(), tt.errorMsg)
+				}
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tt.wantUpdated, updated)
+		})
+	}
+}
+
+func TestGetSessionSummaryText(t *testing.T) {
+	tests := []struct {
+		name     string
+		sess     *session.Session
+		opts     []session.SummaryOption
+		wantText string
+		wantOk   bool
+	}{
+		{
+			name:     "nil session",
+			sess:     nil,
+			opts:     nil,
+			wantText: "",
+			wantOk:   false,
+		},
+		{
+			name: "invalid session key - empty ID",
+			sess: &session.Session{
+				ID:      "",
+				AppName: "app",
+				UserID:  "user",
+				Summaries: map[string]*session.Summary{
+					"": {Summary: "full summary"},
+				},
+			},
+			opts:     nil,
+			wantText: "",
+			wantOk:   false,
+		},
+		{
+			name: "invalid session key - empty AppName",
+			sess: &session.Session{
+				ID:      "s1",
+				AppName: "",
+				UserID:  "user",
+				Summaries: map[string]*session.Summary{
+					"": {Summary: "full summary"},
+				},
+			},
+			opts:     nil,
+			wantText: "",
+			wantOk:   false,
+		},
+		{
+			name: "invalid session key - empty UserID",
+			sess: &session.Session{
+				ID:      "s1",
+				AppName: "app",
+				UserID:  "",
+				Summaries: map[string]*session.Summary{
+					"": {Summary: "full summary"},
+				},
+			},
+			opts:     nil,
+			wantText: "",
+			wantOk:   false,
+		},
+		{
+			name: "session with summaries - default filter key",
+			sess: &session.Session{
+				ID:      "s1",
+				AppName: "app",
+				UserID:  "user",
+				Summaries: map[string]*session.Summary{
+					"":        {Summary: "full summary"},
+					"filter1": {Summary: "filtered summary"},
+				},
+			},
+			opts:     nil,
+			wantText: "full summary",
+			wantOk:   true,
+		},
+		{
+			name: "session with summaries - specific filter key",
+			sess: &session.Session{
+				ID:      "s1",
+				AppName: "app",
+				UserID:  "user",
+				Summaries: map[string]*session.Summary{
+					"":        {Summary: "full summary"},
+					"filter1": {Summary: "filtered summary"},
+				},
+			},
+			opts:     []session.SummaryOption{session.WithSummaryFilterKey("filter1")},
+			wantText: "filtered summary",
+			wantOk:   true,
+		},
+		{
+			name: "session with no summaries",
+			sess: &session.Session{
+				ID:        "s1",
+				AppName:   "app",
+				UserID:    "user",
+				Summaries: nil,
+			},
+			opts:     nil,
+			wantText: "",
+			wantOk:   false,
+		},
+		{
+			name: "session with empty summaries",
+			sess: &session.Session{
+				ID:        "s1",
+				AppName:   "app",
+				UserID:    "user",
+				Summaries: map[string]*session.Summary{},
+			},
+			opts:     nil,
+			wantText: "",
+			wantOk:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			text, ok := GetSessionSummaryText(context.Background(), tt.sess, tt.opts...)
+			require.Equal(t, tt.wantText, text)
+			require.Equal(t, tt.wantOk, ok)
+		})
+	}
 }
