@@ -41,6 +41,11 @@ var (
 	variant        = flag.String("variant", "openai", "Name of the variant to use when calling the OpenAI provider")
 )
 
+const (
+	appName   = "runner-quickstart"
+	agentName = "chat-assistant"
+)
+
 func main() {
 	flag.Parse()
 
@@ -92,7 +97,7 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 	calculatorTool := function.NewFunctionTool(
 		c.calculate,
 		function.WithName("calculator"),
-		function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide)"),
+		function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide, power)"),
 	)
 	timeTool := function.NewFunctionTool(
 		c.getCurrentTime,
@@ -106,8 +111,6 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 		Stream:      c.streaming,
 	}
 
-	appName := "runner-quickstart"
-	agentName := "chat-assistant"
 	llmAgent := llmagent.New(
 		agentName,
 		llmagent.WithModel(modelInstance),

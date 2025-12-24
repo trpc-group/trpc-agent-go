@@ -22,7 +22,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 }
 
 func TestWithToolTrajectory(t *testing.T) {
-	custom := tooltrajectory.New(tooltrajectory.WithOrderInsensitive(true))
+	custom := tooltrajectory.New(tooltrajectory.WithOrderSensitive(true))
 	opts := newOptions(WithToolTrajectory(custom))
 	assert.Equal(t, custom, opts.ToolTrajectory)
 }

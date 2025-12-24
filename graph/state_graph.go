@@ -1058,7 +1058,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		author = config.NodeID
 	}
 	llmEvent = event.NewResponseEvent(config.InvocationID, author, config.Response)
-	if config.EventChan != nil && !config.Response.Done {
+	if config.EventChan != nil && shouldEmitModelResponse(config.Response) {
 		invocation, ok := agent.InvocationFromContext(ctx)
 		if !ok {
 			invocation = agent.NewInvocation(
@@ -1077,6 +1077,27 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		return ctx, nil, fmt.Errorf("model API error: %s", config.Response.Error.Message)
 	}
 	return ctx, llmEvent, nil
+}
+
+func shouldEmitModelResponse(rsp *model.Response) bool {
+	if rsp == nil {
+		return false
+	}
+	if rsp.Error != nil {
+		return true
+	}
+	if rsp.IsValidContent() {
+		return true
+	}
+	for _, choice := range rsp.Choices {
+		if choice.Message.ReasoningContent != "" {
+			return true
+		}
+		if choice.Delta.ReasoningContent != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func runModel(

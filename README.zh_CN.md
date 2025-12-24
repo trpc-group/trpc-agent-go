@@ -392,7 +392,6 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 - 提供遵循 MCP 规范的 structured prompts、tool 调用、resource 与 session 消息。
 - 使 agent 与 LLM 之间能够进行动态工具执行与上下文丰富的交互。
 
-<<<<<<< HEAD
 ### 9. AG-UI Demo
 
 示例：[examples/agui](examples/agui)
@@ -428,8 +427,6 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 - Agent-to-Agent（A2A）与 ADK Python A2A Server 的互通示例。
 - 演示跨运行时的流式输出、工具调用与代码执行。
 
-=======
->>>>>>> main
 其他值得关注的示例：
 
 - [examples/humaninloop](examples/humaninloop) – Human-in-the-loop。

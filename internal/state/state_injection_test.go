@@ -11,6 +11,7 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -24,6 +25,7 @@ func TestInjectSessionState(t *testing.T) {
 		state       map[string]any
 		expected    string
 		expectError bool
+		invState    map[string]any
 	}{
 		{
 			name:        "empty template",
@@ -116,6 +118,13 @@ func TestInjectSessionState(t *testing.T) {
 			expected:    "Enabled: true, Active: false",
 			expectError: false,
 		},
+		{
+			name:        "invocation values",
+			template:    "Enabled: {invocation:enabled}, name: {invocation:name}",
+			invState:    map[string]any{"enabled": true, "name": "name-123"},
+			expected:    "Enabled: true, name: name-123",
+			expectError: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -133,6 +142,11 @@ func TestInjectSessionState(t *testing.T) {
 				Session: &session.Session{
 					State: stateMap,
 				},
+			}
+			if tt.invState != nil {
+				for k, v := range tt.invState {
+					invocation.SetState(k, v)
+				}
 			}
 
 			result, err := InjectSessionState(tt.template, invocation)
@@ -262,6 +276,76 @@ func TestInjectSessionState_RawNumericString(t *testing.T) {
 	const want = "Code: 123456789012345678901234567890"
 	if s != want {
 		t.Fatalf("InjectSessionState raw numeric string: got %q, want %q", s, want)
+	}
+}
+
+func TestInjectSessionState_RawNumericPrefixText(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "rfc822_date",
+			raw:  "23 Dec 25 18:31 CST",
+		},
+		{
+			name: "iso_date",
+			raw:  "2025-12-23",
+		},
+		{
+			name: "number_and_chinese",
+			raw:  "23中文",
+		},
+	}
+
+	const (
+		stateKey  = "value"
+		template  = "V={value}"
+		wantFmt   = "V=%s"
+		errPrefix = "InjectSessionState raw numeric prefix text"
+	)
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := make(session.StateMap)
+			sm[stateKey] = []byte(tt.raw)
+			inv := &agent.Invocation{
+				Session: &session.Session{State: sm},
+			}
+
+			got, err := InjectSessionState(template, inv)
+			if err != nil {
+				t.Fatalf("%s: unexpected error: %v", errPrefix, err)
+			}
+			want := fmt.Sprintf(wantFmt, tt.raw)
+			if got != want {
+				t.Fatalf("%s: got %q, want %q", errPrefix, got,
+					want)
+			}
+		})
+	}
+}
+
+func TestInjectSessionState_EmptyRawValue(t *testing.T) {
+	const (
+		stateKey  = "empty"
+		template  = "E={empty}"
+		want      = "E="
+		errPrefix = "InjectSessionState empty raw value"
+	)
+
+	sm := make(session.StateMap)
+	sm[stateKey] = nil
+	inv := &agent.Invocation{
+		Session: &session.Session{State: sm},
+	}
+
+	got, err := InjectSessionState(template, inv)
+	if err != nil {
+		t.Fatalf("%s: unexpected error: %v", errPrefix, err)
+	}
+	if got != want {
+		t.Fatalf("%s: got %q, want %q", errPrefix, got, want)
 	}
 }
 

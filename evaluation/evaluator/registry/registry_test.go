@@ -111,3 +111,13 @@ func TestRegistryGetMissing(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "missing")
 }
+
+func TestRegistryListSorting(t *testing.T) {
+	reg := &registry{
+		evaluators: map[string]evaluator.Evaluator{
+			"b-eval": &stubEvaluator{name: "b-eval"},
+			"a-eval": &stubEvaluator{name: "a-eval"},
+		},
+	}
+	assert.Equal(t, []string{"a-eval", "b-eval"}, reg.List())
+}

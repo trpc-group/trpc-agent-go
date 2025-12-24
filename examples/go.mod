@@ -1,10 +1,14 @@
 module trpc.group/trpc-go/trpc-agent-go/examples
 
-go 1.23.0
+go 1.24.4
 
-replace trpc.group/trpc-go/trpc-agent-go => ../
+replace (
+	trpc.group/trpc-go/trpc-agent-go => ../
+	trpc.group/trpc-go/trpc-agent-go/evaluation => ../evaluation
+)
 
 require (
+	github.com/go-openapi/testify/v2 v2.0.2
 	github.com/google/uuid v1.6.0
 	github.com/openai/openai-go v1.12.0
 	go.opentelemetry.io/otel v1.38.0
@@ -12,6 +16,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.38.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5
 	trpc.group/trpc-go/trpc-agent-go v0.6.0
+	trpc.group/trpc-go/trpc-agent-go/evaluation v0.8.0
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
 
@@ -60,12 +65,12 @@ require (
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
-	golang.org/x/crypto v0.32.0 // indirect
-	golang.org/x/net v0.34.0 // indirect
+	golang.org/x/crypto v0.36.0 // indirect
+	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/oauth2 v0.26.0 // indirect
-	golang.org/x/sync v0.10.0 // indirect
+	golang.org/x/sync v0.12.0 // indirect
 	golang.org/x/sys v0.35.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
+	golang.org/x/text v0.23.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240903143218-8af14fe29dc1 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240903143218-8af14fe29dc1 // indirect
 	google.golang.org/grpc v1.67.0 // indirect

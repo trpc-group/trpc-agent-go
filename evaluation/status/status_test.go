@@ -10,21 +10,33 @@
 package status
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestEvalStatusString(t *testing.T) {
+func TestEvalStatusJSONRoundTrip(t *testing.T) {
 	tests := map[EvalStatus]string{
-		EvalStatusUnknown:      "unknown",
-		EvalStatusPassed:       "passed",
-		EvalStatusFailed:       "failed",
-		EvalStatusNotEvaluated: "not_evaluated",
-		EvalStatus(99):         "unknown",
+		EvalStatusUnknown:      `"unknown"`,
+		EvalStatusPassed:       `"passed"`,
+		EvalStatusFailed:       `"failed"`,
+		EvalStatusNotEvaluated: `"not_evaluated"`,
 	}
 
-	for input, expected := range tests {
-		assert.Equal(t, expected, input.String())
+	for statusValue, expectedJSON := range tests {
+		data, err := json.Marshal(statusValue)
+		assert.NoError(t, err)
+		assert.Equal(t, expectedJSON, string(data))
+
+		var decoded EvalStatus
+		assert.NoError(t, json.Unmarshal(data, &decoded))
+		assert.Equal(t, statusValue, decoded)
 	}
+}
+
+func TestEvalStatusUnmarshalRejectsNonString(t *testing.T) {
+	var invalid EvalStatus
+	err := json.Unmarshal([]byte(`1`), &invalid)
+	assert.Error(t, err)
 }

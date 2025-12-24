@@ -3,111 +3,79 @@
   "name": "math-basic",
   "evalCases": [
     {
-        "evalId": "calc_add",
-        "conversation": [
-          {
-            "invocationId": "calc_add-1",
-            "userContent": {
-              "parts": [
-                {
-                  "text": "calc add 2 3"
-                }
-              ],
-              "role": "user"
-            },
-            "finalResponse": {
-              "parts": [
-                {
-                  "text": "calc result: 5"
-                }
-              ],
-              "role": "assistant"
-            },
-            "intermediateData": {
-              "toolUses": [
-                {
-                  "id": "tool_use_1",
-                  "args": {
-                    "a": 2,
-                    "b": 3,
-                    "operation": "add"
-                  },
-                  "name": "calculator"
-                }
-              ],
-              "toolResponses": [
-                {
-                  "id": "tool_use_1",
-                  "name": "calculator",
-                  "response": {
-                    "a": 2,
-                    "b": 3,
-                    "operation": "add",
-                    "result": 5
-                  }
-                }
-              ]
+      "evalId": "calc_add",
+      "conversation": [
+        {
+          "invocationId": "calc_add-1",
+          "userContent": {
+            "role": "user",
+            "content": "calc add 2 3"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "calc result: 5"
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "calculator",
+              "arguments": {
+                "operation": "add",
+                "a": 2,
+                "b": 3
+              },
+              "result": {
+                "a": 2,
+                "b": 3,
+                "operation": "add",
+                "result": 5
+              }
             }
-          }
-        ],
-        "sessionInput": {
-          "appName": "math-eval-app",
-          "userId": "user"
+          ]
         }
-      },
-      {
-        "evalId": "calc_multiply",
-        "conversation": [
-          {
-            "invocationId": "calc_multiply-1",
-            "userContent": {
-              "parts": [
-                {
-                  "text": "calc multiply 6 7"
-                }
-              ],
-              "role": "user"
-            },
-            "finalResponse": {
-              "parts": [
-                {
-                  "text": "calc result: 42"
-                }
-              ],
-              "role": "assistant"
-            },
-            "intermediateData": {
-              "toolUses": [
-                {
-                  "id": "tool_use_2",
-                  "args": {
-                    "a": 6,
-                    "b": 7,
-                    "operation": "multiply"
-                  },
-                  "name": "calculator"
-                }
-              ],
-              "toolResponses": [
-                {
-                  "id": "tool_use_2",
-                  "name": "calculator",
-                  "response": {
-                    "a": 6,
-                    "b": 7,
-                    "operation": "multiply",
-                    "result": 42
-                  }
-                }
-              ]
-            }
-          }
-        ],
-        "sessionInput": {
-          "appName": "math-eval-app",
-          "userId": "user"
-        }
+      ],
+      "sessionInput": {
+        "appName": "math-eval-app",
+        "userId": "user"
       }
+    },
+    {
+      "evalId": "calc_multiply",
+      "conversation": [
+        {
+          "invocationId": "calc_multiply-1",
+          "userContent": {
+            "role": "user",
+            "content": "calc multiply 6 7"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "calc result: 42"
+          },
+          "tools": [
+            {
+              "id": "tool_use_2",
+              "name": "calculator",
+              "arguments": {
+                "operation": "multiply",
+                "a": 6,
+                "b": 7
+              },
+              "result": {
+                "a": 6,
+                "b": 7,
+                "operation": "multiply",
+                "result": 42
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "math-eval-app",
+        "userId": "user"
+      }
+    }
   ],
   "creationTimestamp": 1761134484.9804401
 }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestEvalSetJSONRoundTrip(t *testing.T) {
@@ -30,50 +31,32 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
           "invocationId": "invoke-1",
           "userContent": {
             "role": "user",
-            "parts": [
-              {
-                "text": "Hello agent."
-              }
-            ]
+            "content": "Hello agent."
           },
           "finalResponse": {
             "role": "assistant",
-            "parts": [
-              {
-                "text": "Greetings, user."
-              }
-            ]
+            "content": "Greetings, user."
           },
-          "intermediateData": {
-            "toolUses": [
-              {
-                "name": "calculator",
-                "args": {
-                  "operation": "add",
-                  "a": 1,
-                  "b": 2
-                }
+          "tools": [
+            {
+              "id": "use-1",
+              "name": "calculator",
+              "arguments": {
+                "operation": "add",
+                "a": 1,
+                "b": 2
+              },
+              "result": {
+                "result": 3
               }
-            ],
-            "toolResponses": [
-              {
-                "name": "calculator",
-                "response": {
-                  "result": 3
-                }
-              }
-            ],
-            "intermediateResponses": [
-              [
-                "assistant",
-                [
-                  {
-                    "text": "Let me compute that."
-                  }
-                ]
-              ]
-            ]
-          },
+            }
+          ],
+          "intermediateResponses": [
+            {
+              "role": "assistant",
+              "content": "Let me compute that."
+            }
+          ],
           "creationTimestamp": 1700000100
         }
       ],
@@ -115,37 +98,145 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
 	assert.Len(t, firstCase.Conversation, 1)
 	firstInvocation := firstCase.Conversation[0]
 	assert.Equal(t, "invoke-1", firstInvocation.InvocationID)
-	assert.Equal(t, "user", firstInvocation.UserContent.Role)
-	assert.Len(t, firstInvocation.UserContent.Parts, 1)
-	assert.Equal(t, "Hello agent.", firstInvocation.UserContent.Parts[0].Text)
-	assert.Equal(t, "assistant", firstInvocation.FinalResponse.Role)
-	assert.Len(t, firstInvocation.FinalResponse.Parts, 1)
-	assert.Equal(t, "Greetings, user.", firstInvocation.FinalResponse.Parts[0].Text)
+	assert.Equal(t, model.RoleUser, firstInvocation.UserContent.Role)
+	assert.Equal(t, "Hello agent.", firstInvocation.UserContent.Content)
+	assert.Equal(t, model.RoleAssistant, firstInvocation.FinalResponse.Role)
+	assert.Equal(t, "Greetings, user.", firstInvocation.FinalResponse.Content)
 	assert.NotNil(t, firstInvocation.CreationTimestamp)
 	assert.WithinDuration(t, time.Unix(1700000100, 0).UTC(), firstInvocation.CreationTimestamp.Time, time.Nanosecond)
 
-	assert.NotNil(t, firstInvocation.IntermediateData)
-	assert.Len(t, firstInvocation.IntermediateData.ToolUses, 1)
-	assert.Equal(t, "calculator", firstInvocation.IntermediateData.ToolUses[0].Name)
-	assert.Equal(t, map[string]any{"operation": "add", "a": float64(1), "b": float64(2)},
-		firstInvocation.IntermediateData.ToolUses[0].Args)
+	assert.Len(t, firstInvocation.Tools, 1)
+	assert.Equal(t, "use-1", firstInvocation.Tools[0].ID)
+	assert.Equal(t, "calculator", firstInvocation.Tools[0].Name)
+	assert.Equal(t, map[string]any{"operation": "add", "a": float64(1), "b": float64(2)}, firstInvocation.Tools[0].Arguments)
 
-	assert.Len(t, firstInvocation.IntermediateData.ToolResponses, 1)
+	nestedArgs := map[string]any{
+		"operation": "batch",
+		"items": []any{
+			map[string]any{"op": "add", "a": float64(1), "b": float64(2)},
+			map[string]any{"op": "mul", "a": float64(3), "b": float64(4)},
+		},
+	}
+	firstInvocation.Tools[0].Arguments = nestedArgs
+	encoded, err := json.Marshal(evalSet)
+	assert.NoError(t, err)
+	var decoded EvalSet
+	assert.NoError(t, json.Unmarshal(encoded, &decoded))
+	assert.Len(t, decoded.EvalCases[0].Conversation[0].Tools, 1)
+	assert.Equal(t, nestedArgs, decoded.EvalCases[0].Conversation[0].Tools[0].Arguments)
+
 	expectedToolResponse := map[string]any{"result": float64(3)}
-	assert.Equal(t, "calculator", firstInvocation.IntermediateData.ToolResponses[0].Name)
-	assert.Equal(t, expectedToolResponse, firstInvocation.IntermediateData.ToolResponses[0].Response)
+	assert.Equal(t, expectedToolResponse, firstInvocation.Tools[0].Result)
 
-	expectedIntermediateResponses := [][]any{
+	expectedIntermediateResponses := []*model.Message{
 		{
-			"assistant",
-			[]any{
-				map[string]any{"text": "Let me compute that."},
+			Role:    "assistant",
+			Content: "Let me compute that.",
+		},
+	}
+	assert.Equal(t, expectedIntermediateResponses, firstInvocation.IntermediateResponses)
+
+	firstInvocation.Tools[0].Arguments = map[string]any{
+		"operation": "add",
+		"a":         float64(1),
+		"b":         float64(2),
+	}
+	encoded, err = json.Marshal(evalSet)
+	assert.NoError(t, err)
+	assert.JSONEq(t, jsonData, string(encoded))
+}
+
+func TestEvalSetNestedToolCallArgsFromJSON(t *testing.T) {
+	const jsonData = `{
+  "evalSetId": "nested-set",
+  "name": "Nested Args",
+  "evalCases": [
+    {
+      "evalId": "case-nested",
+      "conversation": [
+        {
+          "invocationId": "invoke-nested",
+          "userContent": {
+            "role": "user",
+            "content": "plan a calculation"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "done"
+          },
+          "tools": [
+            {
+              "id": "call-1",
+              "name": "planner",
+              "arguments": {
+                "steps": [
+                  {
+                    "op": "add",
+                    "value": {
+                      "a": 1,
+                      "b": 2
+                    }
+                  },
+                  {
+                    "op": "chain",
+                    "value": {
+                      "inner": {
+                        "op": "mul",
+                        "params": [
+                          3,
+                          4
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}`
+
+	var evalSet EvalSet
+	err := json.Unmarshal([]byte(jsonData), &evalSet)
+	assert.NoError(t, err)
+	assert.Len(t, evalSet.EvalCases, 1)
+	assert.Len(t, evalSet.EvalCases[0].Conversation, 1)
+	assert.Len(t, evalSet.EvalCases[0].Conversation[0].Tools, 1)
+
+	toolCall := evalSet.EvalCases[0].Conversation[0].Tools[0]
+	expectedArgs := map[string]any{
+		"steps": []any{
+			map[string]any{
+				"op": "add",
+				"value": map[string]any{
+					"a": float64(1),
+					"b": float64(2),
+				},
+			},
+			map[string]any{
+				"op": "chain",
+				"value": map[string]any{
+					"inner": map[string]any{
+						"op": "mul",
+						"params": []any{
+							float64(3),
+							float64(4),
+						},
+					},
+				},
 			},
 		},
 	}
-	assert.Equal(t, expectedIntermediateResponses, firstInvocation.IntermediateData.IntermediateResponses)
+	assert.Equal(t, expectedArgs, toolCall.Arguments)
 
-	encoded, err := json.Marshal(evalSet)
-	assert.NoError(t, err)
+	encoded, marshalErr := json.Marshal(evalSet)
+	assert.NoError(t, marshalErr)
+
+	var decoded EvalSet
+	assert.NoError(t, json.Unmarshal(encoded, &decoded))
+	assert.Equal(t, expectedArgs, decoded.EvalCases[0].Conversation[0].Tools[0].Arguments)
 	assert.JSONEq(t, jsonData, string(encoded))
 }

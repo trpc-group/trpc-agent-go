@@ -633,6 +633,7 @@ func TestMemoryService_TryEnqueueJob_ClosedChannel(t *testing.T) {
 	service := NewSessionService(
 		WithAsyncSummaryNum(1),
 		WithSummaryQueueSize(1),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
 	)
 
 	ctx := context.Background()

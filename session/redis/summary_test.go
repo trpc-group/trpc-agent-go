@@ -1108,6 +1108,7 @@ func TestTryEnqueueJob(t *testing.T) {
 				WithRedisClientURL(redisURL),
 				WithAsyncSummaryNum(1),
 				WithSummaryQueueSize(1),
+				WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
 			)
 			require.NoError(t, err)
 			defer service.Close()
@@ -1128,6 +1129,7 @@ func TestTryEnqueueJob_ContextCancelledBranch(t *testing.T) {
 		WithRedisClientURL(redisURL),
 		WithAsyncSummaryNum(1),
 		WithSummaryQueueSize(1),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
 	)
 	require.NoError(t, err)
 	defer service.Close()
@@ -1181,6 +1183,7 @@ func TestStartAsyncSummaryWorker_Initialization(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
+	// Test without summarizer - channels should not be initialized
 	service, err := NewService(
 		WithRedisClientURL(redisURL),
 		WithAsyncSummaryNum(3),
@@ -1189,7 +1192,24 @@ func TestStartAsyncSummaryWorker_Initialization(t *testing.T) {
 	require.NoError(t, err)
 	defer service.Close()
 
-	// Verify channels are properly initialized
+	// Verify channels are not initialized when no summarizer is provided
+	assert.Len(t, service.summaryJobChans, 0)
+}
+
+func TestStartAsyncSummaryWorker_InitializationWithSummarizer(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(3),
+		WithSummaryQueueSize(100),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	// Verify channels are properly initialized when summarizer is provided
 	assert.Len(t, service.summaryJobChans, 3)
 	for i, ch := range service.summaryJobChans {
 		assert.NotNil(t, ch, "Channel %d should not be nil", i)

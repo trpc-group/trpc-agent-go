@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -248,11 +249,31 @@ func (r *runner) Run(
 	// Create flush channel and attach flusher before agent.Run to ensure cloned invocations inherit it.
 	flushChan := make(chan *flush.FlushRequest)
 	flush.Attach(ctx, invocation, flushChan)
+	appender.Attach(invocation, func(ctx context.Context, e *event.Event) error {
+		if e == nil {
+			return nil
+		}
+		return r.sessionService.AppendEvent(ctx, sess, e)
+	})
 	barrier.Enable(invocation)
 
 	// Run the agent and get the event channel.
 	agentEventCh, err := ag.Run(ctx, invocation)
 	if err != nil {
+		// Attempt to persist the error event so the session reflects the failure.
+		errorEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			ag.Info().Name,
+			model.ErrorTypeRunError,
+			err.Error(),
+		)
+		// Populate content to ensure it is valid for persistence (and viewable by users).
+		ensureErrorEventContent(errorEvent)
+
+		if appendErr := r.sessionService.AppendEvent(ctx, sess, errorEvent); appendErr != nil {
+			log.Errorf("failed to append agent run error event: %v", appendErr)
+		}
+
 		invocation.CleanupNotice(ctx)
 		return nil, err
 	}
@@ -303,6 +324,7 @@ type eventLoopContext struct {
 	processedEventCh chan *event.Event
 	finalStateDelta  map[string][]byte
 	finalChoices     []model.Choice
+	assistantContent map[string]struct{}
 }
 
 // processAgentEvents consumes agent events, persists to session, and emits.
@@ -320,6 +342,7 @@ func (r *runner) processAgentEvents(
 		agentEventCh:     agentEventCh,
 		flushChan:        flushChan,
 		processedEventCh: processedEventCh,
+		assistantContent: make(map[string]struct{}),
 	}
 	runCtx := agent.CloneContext(ctx)
 	go r.runEventLoop(runCtx, loop)
@@ -336,6 +359,7 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		r.safeEmitRunnerCompletion(ctx, loop)
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
+		appender.Clear(loop.invocation)
 		close(loop.processedEventCh)
 		loop.invocation.CleanupNotice(ctx)
 	}()
@@ -377,6 +401,8 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		return nil
 	}
 
+	r.recordAssistantContent(loop, agentEvent)
+
 	// Append qualifying events to session and trigger summarization.
 	r.handleEventPersistence(ctx, loop.sess, agentEvent)
 
@@ -397,6 +423,34 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	}
 
 	return nil
+}
+
+func (r *runner) recordAssistantContent(loop *eventLoopContext, e *event.Event) {
+	if loop == nil || e == nil || e.Response == nil {
+		return
+	}
+	if loop.invocation == nil {
+		return
+	}
+	if loop.assistantContent == nil {
+		loop.assistantContent = make(map[string]struct{})
+	}
+	if isGraphCompletionEvent(e) {
+		return
+	}
+	if e.IsPartial || !e.IsValidContent() {
+		return
+	}
+	for _, choice := range e.Response.Choices {
+		msg := choice.Message
+		if msg.Role != model.RoleAssistant {
+			continue
+		}
+		if msg.Content == "" {
+			continue
+		}
+		loop.assistantContent[msg.Content] = struct{}{}
+	}
 }
 
 // safeEmitRunnerCompletion guards emitRunnerCompletion against panics from session services.
@@ -437,6 +491,9 @@ func (r *runner) handleEventPersistence(
 	sess *session.Session,
 	agentEvent *event.Event,
 ) {
+	// Ensure error events have content so they are valid for persistence.
+	ensureErrorEventContent(agentEvent)
+
 	// Append event to session if it's complete (not partial).
 	if !r.shouldPersistEvent(agentEvent) {
 		return
@@ -537,7 +594,13 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 
 	// Propagate graph-level completion data if available.
 	if len(loop.finalStateDelta) > 0 {
-		r.propagateGraphCompletion(runnerCompletionEvent, loop.finalStateDelta, loop.finalChoices)
+		includeChoices := r.shouldIncludeFinalChoices(loop)
+		r.propagateGraphCompletion(
+			runnerCompletionEvent,
+			loop.finalStateDelta,
+			loop.finalChoices,
+			includeChoices,
+		)
 	}
 
 	// Append runner completion event to session.
@@ -555,6 +618,7 @@ func (r *runner) propagateGraphCompletion(
 	runnerCompletionEvent *event.Event,
 	finalStateDelta map[string][]byte,
 	finalChoices []model.Choice,
+	includeChoices bool,
 ) {
 	// Initialize state delta map if needed.
 	if runnerCompletionEvent.StateDelta == nil {
@@ -574,7 +638,8 @@ func (r *runner) propagateGraphCompletion(
 
 	// Optionally echo the final text as a non-streaming assistant message
 	// if graph provided it in its completion.
-	if runnerCompletionEvent.Response != nil &&
+	if includeChoices &&
+		runnerCompletionEvent.Response != nil &&
 		len(runnerCompletionEvent.Response.Choices) == 0 &&
 		len(finalChoices) > 0 {
 		// Keep only content to avoid carrying tool deltas etc.
@@ -582,6 +647,31 @@ func (r *runner) propagateGraphCompletion(
 		b, _ := json.Marshal(finalChoices)
 		_ = json.Unmarshal(b, &runnerCompletionEvent.Response.Choices)
 	}
+}
+
+func (r *runner) shouldIncludeFinalChoices(loop *eventLoopContext) bool {
+	if loop == nil {
+		return true
+	}
+	if len(loop.finalChoices) == 0 {
+		return false
+	}
+	if len(loop.assistantContent) == 0 {
+		return true
+	}
+	for _, choice := range loop.finalChoices {
+		msg := choice.Message
+		if msg.Role != model.RoleAssistant {
+			continue
+		}
+		if msg.Content == "" {
+			continue
+		}
+		if _, ok := loop.assistantContent[msg.Content]; ok {
+			return false
+		}
+	}
+	return true
 }
 
 // shouldAppendUserMessage checks if the incoming user message should be appended to the session.
@@ -599,6 +689,40 @@ func shouldAppendUserMessage(message model.Message, seed []model.Message) bool {
 		return !model.MessagesEqual(seed[i], message)
 	}
 	return true
+}
+
+// ensureErrorEventContent ensures that error events have valid content.
+// This is necessary because some models return error responses without content,
+// which would otherwise be discarded by the session service.
+func ensureErrorEventContent(e *event.Event) {
+	if e == nil || e.Response == nil || e.Response.Error == nil {
+		return
+	}
+	// If content is valid (non-empty), do nothing.
+	if e.IsValidContent() {
+		return
+	}
+
+	// Ensure Choices slice exists
+	if len(e.Response.Choices) == 0 {
+		e.Response.Choices = []model.Choice{{
+			Index: 0,
+			Message: model.Message{
+				Role: model.RoleAssistant,
+			},
+		}}
+	}
+
+	// Populate content if empty
+	if e.Response.Choices[0].Message.Content == "" {
+		e.Response.Choices[0].Message.Content = "An error occurred during execution. Please contact the service provider."
+	}
+
+	// Ensure FinishReason is set
+	if e.Response.Choices[0].FinishReason == nil {
+		reason := "error"
+		e.Response.Choices[0].FinishReason = &reason
+	}
 }
 
 // RunWithMessages is a convenience helper that lets callers pass a full
