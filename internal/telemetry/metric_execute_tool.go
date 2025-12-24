@@ -15,6 +15,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
@@ -25,7 +26,7 @@ var (
 	// ExecuteToolMetricTRPCAgentGoClientRequestCnt records the number of tool execution requests made.
 	ExecuteToolMetricTRPCAgentGoClientRequestCnt metric.Int64Counter
 	// ExecuteToolMetricGenAIClientOperationDuration records the distribution of tool execution durations in seconds.
-	ExecuteToolMetricGenAIClientOperationDuration *DynamicFloat64Histogram
+	ExecuteToolMetricGenAIClientOperationDuration *histogram.DynamicFloat64Histogram
 )
 
 // ExecuteToolAttributes is the attributes for tool execution metrics.

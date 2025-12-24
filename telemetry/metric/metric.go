@@ -25,6 +25,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
@@ -48,7 +49,7 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric GenAIClientTokenUsage: %w", err)
 	}
-	if itelemetry.ChatMetricGenAIClientOperationDuration, err = itelemetry.NewDynamicFloat64Histogram(
+	if itelemetry.ChatMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(
 		itelemetry.ChatMeter,
 		metrics.MetricGenAIClientOperationDuration,
 		"Duration of client operation",
@@ -57,7 +58,7 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric GenAIClientOperationDuration: %w", err)
 	}
-	if itelemetry.ChatMetricGenAIServerTimeToFirstToken, err = itelemetry.NewDynamicFloat64Histogram(
+	if itelemetry.ChatMetricGenAIServerTimeToFirstToken, err = histogram.NewDynamicFloat64Histogram(
 		itelemetry.ChatMeter,
 		metrics.MetricGenAIServerTimeToFirstToken,
 		"Time to first token for server",
@@ -66,7 +67,7 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric GenAIServerTimeToFirstToken: %w", err)
 	}
-	if itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken, err = itelemetry.NewDynamicFloat64Histogram(
+	if itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken, err = histogram.NewDynamicFloat64Histogram(
 		itelemetry.ChatMeter,
 		metrics.MetricTRPCAgentGoClientTimeToFirstToken,
 		"Time to first token (legacy metric name)",
@@ -75,7 +76,7 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientTimeToFirstToken: %w", err)
 	}
-	if itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken, err = itelemetry.NewDynamicFloat64Histogram(
+	if itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken, err = histogram.NewDynamicFloat64Histogram(
 		itelemetry.ChatMeter,
 		metrics.MetricTRPCAgentGoClientTimePerOutputToken,
 		"Time per output token for client",
@@ -84,7 +85,7 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientTimePerOutputToken: %w", err)
 	}
-	if itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime, err = itelemetry.NewDynamicFloat64Histogram(
+	if itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime, err = histogram.NewDynamicFloat64Histogram(
 		itelemetry.ChatMeter,
 		metrics.MetricTRPCAgentGoClientOutputTokenPerTime,
 		"Output token per time for client",
@@ -102,7 +103,7 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	); err != nil {
 		return fmt.Errorf("failed to create execute tool metric TRPCAgentGoClientRequestCnt: %w", err)
 	}
-	if itelemetry.ExecuteToolMetricGenAIClientOperationDuration, err = itelemetry.NewDynamicFloat64Histogram(
+	if itelemetry.ExecuteToolMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(
 		itelemetry.ExecuteToolMeter,
 		metrics.MetricGenAIClientOperationDuration,
 		"Duration of client operation",
@@ -213,7 +214,7 @@ func initInvokeAgentMetrics(mp metric.MeterProvider) error {
 	); err != nil {
 		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIClientTokenUsage, err)
 	}
-	if itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken, err = itelemetry.NewDynamicFloat64Histogram(
+	if itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken, err = histogram.NewDynamicFloat64Histogram(
 		itelemetry.InvokeAgentMeter,
 		metrics.MetricTRPCAgentGoClientTimeToFirstToken,
 		"Time to first token for client",
@@ -222,7 +223,7 @@ func initInvokeAgentMetrics(mp metric.MeterProvider) error {
 	); err != nil {
 		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricTRPCAgentGoClientTimeToFirstToken, err)
 	}
-	if itelemetry.InvokeAgentMetricGenAIClientOperationDuration, err = itelemetry.NewDynamicFloat64Histogram(
+	if itelemetry.InvokeAgentMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(
 		itelemetry.InvokeAgentMeter,
 		metrics.MetricGenAIClientOperationDuration,
 		"Duration of client operation",

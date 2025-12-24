@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
@@ -29,9 +30,9 @@ var (
 	// InvokeAgentMetricGenAIClientTokenUsage records the distribution of input and output token usage.
 	InvokeAgentMetricGenAIClientTokenUsage metric.Int64Histogram
 	// InvokeAgentMetricGenAIClientTimeToFirstToken records the distribution of time to first token latency in seconds.
-	InvokeAgentMetricGenAIClientTimeToFirstToken *DynamicFloat64Histogram
+	InvokeAgentMetricGenAIClientTimeToFirstToken *histogram.DynamicFloat64Histogram
 	// InvokeAgentMetricGenAIClientOperationDuration records the distribution of total agent invocation durations in seconds.
-	InvokeAgentMetricGenAIClientOperationDuration *DynamicFloat64Histogram
+	InvokeAgentMetricGenAIClientOperationDuration *histogram.DynamicFloat64Histogram
 )
 
 // invokeAgentAttributes is the attributes for invoke agent metrics.

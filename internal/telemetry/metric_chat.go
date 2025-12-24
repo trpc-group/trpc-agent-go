@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
@@ -31,19 +32,19 @@ var (
 	// ChatMetricGenAIClientTokenUsage records the distribution of token usage (both input and output tokens).
 	ChatMetricGenAIClientTokenUsage metric.Int64Histogram
 	// ChatMetricGenAIClientOperationDuration records the distribution of total chat operation durations in seconds.
-	ChatMetricGenAIClientOperationDuration *DynamicFloat64Histogram
+	ChatMetricGenAIClientOperationDuration *histogram.DynamicFloat64Histogram
 	// ChatMetricGenAIServerTimeToFirstToken records the distribution of time to first token latency in seconds.
 	// This measures the time from request start until the first token is received.
-	ChatMetricGenAIServerTimeToFirstToken *DynamicFloat64Histogram
+	ChatMetricGenAIServerTimeToFirstToken *histogram.DynamicFloat64Histogram
 	// ChatMetricTRPCAgentGoClientTimeToFirstToken records the distribution of time to first token latency in seconds.
 	// Note: This metric is reported alongside ChatMetricGenAIServerTimeToFirstToken with the same value.
-	ChatMetricTRPCAgentGoClientTimeToFirstToken *DynamicFloat64Histogram
+	ChatMetricTRPCAgentGoClientTimeToFirstToken *histogram.DynamicFloat64Histogram
 	// ChatMetricTRPCAgentGoClientTimePerOutputToken records the distribution of average time per output token in seconds.
 	// This metric measures the decode phase performance by calculating (total_duration - time_to_first_token) / (output_tokens - first_token_count).
-	ChatMetricTRPCAgentGoClientTimePerOutputToken *DynamicFloat64Histogram
+	ChatMetricTRPCAgentGoClientTimePerOutputToken *histogram.DynamicFloat64Histogram
 	// ChatMetricTRPCAgentGoClientOutputTokenPerTime records the distribution of output token per time for client.
 	// 1 / ChatMetricTRPCAgentGoClientTimePerOutputToken.
-	ChatMetricTRPCAgentGoClientOutputTokenPerTime *DynamicFloat64Histogram
+	ChatMetricTRPCAgentGoClientOutputTokenPerTime *histogram.DynamicFloat64Histogram
 )
 
 // chatAttributes is the attributes for chat metrics.

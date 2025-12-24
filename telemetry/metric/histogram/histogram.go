@@ -7,7 +7,8 @@
 //
 //
 
-package telemetry
+// Package histogram provides dynamic histogram types for OpenTelemetry metrics.
+package histogram
 
 import (
 	"context"
@@ -92,4 +93,14 @@ func (d *DynamicFloat64Histogram) SetBuckets(boundaries []float64) error {
 	d.histogram = h
 	d.boundaries = boundaries
 	return nil
+}
+
+// GetBuckets returns the current bucket boundaries.
+// This method is thread-safe.
+func (d *DynamicFloat64Histogram) GetBuckets() []float64 {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	result := make([]float64, len(d.boundaries))
+	copy(result, d.boundaries)
+	return result
 }
