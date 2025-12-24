@@ -14,8 +14,7 @@
             "matchStrategy": "exact"
           },
           "result": {
-            "matchStrategy": "exact",
-            "numberTolerance": 1e-6
+            "matchStrategy": "exact"
           }
         }
       }

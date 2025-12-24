@@ -22,14 +22,14 @@ func TestTool(t *testing.T) {
 		name      string
 		evalSetID string
 	}{
-		// {
-		// 	name:      "calculator",
-		// 	evalSetID: "calculator_tool",
-		// },
-		// {
-		// 	name:      "currenttime",
-		// 	evalSetID: "currenttime_tool",
-		// },
+		{
+			name:      "calculator",
+			evalSetID: "calculator_tool",
+		},
+		{
+			name:      "currenttime",
+			evalSetID: "currenttime_tool",
+		},
 		{
 			name:      "compound_interest",
 			evalSetID: "compound_interest",
