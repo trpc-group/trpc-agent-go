@@ -80,11 +80,7 @@ type InvokeAgentTracker struct {
 	totalCompletionTokens  int
 	totalPromptTokens      int
 
-	invocation *agent.Invocation
-	stream     bool // indicates whether the request is streaming
-
-	err               *error // pointer to capture final error
-	responseErrorType string
+	attributes invokeAgentAttributes
 }
 
 // NewInvokeAgentTracker creates a new telemetry tracker for agent invocation.
@@ -94,13 +90,25 @@ func NewInvokeAgentTracker(
 	stream bool,
 	err *error,
 ) *InvokeAgentTracker {
+	attributes := invokeAgentAttributes{Stream: stream, Error: *err}
+	if invocation != nil {
+		if invocation.AgentName != "" {
+			attributes.AgentName = invocation.AgentName
+		}
+		if invocation.Model != nil {
+			attributes.System = invocation.Model.Info().Name
+		}
+		if invocation.Session != nil {
+			attributes.UserID = invocation.Session.UserID
+			attributes.AppName = invocation.Session.AppName
+		}
+	}
+
 	return &InvokeAgentTracker{
 		ctx:          ctx,
 		start:        time.Now(),
 		isFirstToken: true,
-		invocation:   invocation,
-		stream:       stream,
-		err:          err,
+		attributes:   attributes,
 	}
 }
 
@@ -124,16 +132,15 @@ func (t *InvokeAgentTracker) TrackResponse(response *model.Response) {
 
 // SetResponseErrorType updates the response error type seen (for extracting error info).
 func (t *InvokeAgentTracker) SetResponseErrorType(errorType string) {
-	t.responseErrorType = errorType
+	t.attributes.ErrorType = errorType
 }
 
 // RecordMetrics returns a defer function that records all telemetry metrics.
 // Should be called with defer immediately after creating the tracker.
 func (t *InvokeAgentTracker) RecordMetrics() func() {
 	return func() {
-		attrs := t.buildAttributes()
 		requestDuration := time.Since(t.start)
-		otelAttrs := attrs.toAttributes()
+		otelAttrs := t.attributes.toAttributes()
 
 		// Increment request counter
 		InvokeAgentMetricGenAIRequestCnt.Add(t.ctx, 1, metric.WithAttributes(otelAttrs...))
@@ -159,36 +166,4 @@ func (t *InvokeAgentTracker) RecordMetrics() func() {
 // FirstTokenTimeDuration returns the time to first token duration.
 func (t *InvokeAgentTracker) FirstTokenTimeDuration() time.Duration {
 	return t.firstTokenTimeDuration
-}
-
-// buildAttributes constructs invokeAgentAttributes from tracked state.
-func (t *InvokeAgentTracker) buildAttributes() invokeAgentAttributes {
-	attrs := invokeAgentAttributes{}
-
-	// Extract error
-	if t.err != nil && *t.err != nil {
-		attrs.Error = *t.err
-	}
-	if t.responseErrorType != "" {
-		attrs.ErrorType = t.responseErrorType
-	}
-
-	// Extract request attributes
-	attrs.Stream = t.stream
-
-	// Extract invocation attributes (with nil safety)
-	if t.invocation != nil {
-		if t.invocation.AgentName != "" {
-			attrs.AgentName = t.invocation.AgentName
-		}
-		if t.invocation.Model != nil {
-			attrs.System = t.invocation.Model.Info().Name
-		}
-		if t.invocation.Session != nil {
-			attrs.UserID = t.invocation.Session.UserID
-			attrs.AppName = t.invocation.Session.AppName
-		}
-	}
-
-	return attrs
 }

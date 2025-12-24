@@ -410,7 +410,6 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
 	itelemetry.TraceBeforeInvokeAgent(span, invocation, a.description, a.systemPrompt+a.instruction, &a.genConfig)
 	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, a.genConfig.Stream, &err)
-	defer tracker.RecordMetrics()()
 
 	ctx, flowEventChan, err := a.executeAgentFlow(ctx, invocation)
 	if err != nil {
@@ -535,6 +534,7 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
 			}
 			tracker.SetResponseErrorType(responseErrorType)
+			tracker.RecordMetrics()()
 			span.End()
 			close(wrappedChan)
 		}()

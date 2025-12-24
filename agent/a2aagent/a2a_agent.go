@@ -161,7 +161,6 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	itelemetry.TraceBeforeInvokeAgent(span, invocation, r.description, "", nil)
 	useStreaming := r.shouldUseStreaming()
 	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, useStreaming, &err)
-	defer tracker.RecordMetrics()()
 
 	if r.a2aClient == nil {
 		span.SetStatus(codes.Error, "A2A client is nil")
@@ -455,6 +454,7 @@ func (r *A2AAgent) wrapEventChannelWithTelemetry(
 			}
 
 			tracker.SetResponseErrorType(responseErrorType)
+			tracker.RecordMetrics()()
 			span.End()
 			close(wrappedChan)
 		}()
