@@ -100,16 +100,18 @@ func (s *Service) GetSessionSummaryText(
 	sess *session.Session,
 	opts ...session.SummaryOption,
 ) (string, bool) {
+	// Check session validity.
 	if sess == nil {
 		return "", false
 	}
+
 	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
 	if err := key.CheckSessionKey(); err != nil {
 		return "", false
 	}
 
 	// Try in-memory summaries first.
-	if text, ok := isummary.GetSessionSummaryText(ctx, sess, opts...); ok {
+	if text, ok := isummary.GetSummaryTextFromSession(sess, opts...); ok {
 		return text, true
 	}
 

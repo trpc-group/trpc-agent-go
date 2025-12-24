@@ -113,14 +113,23 @@ func (s *Service) GetSessionSummaryText(
 	sess *session.Session,
 	opts ...session.SummaryOption,
 ) (string, bool) {
+	// Check session validity.
+	if sess == nil {
+		return "", false
+	}
+
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return "", false
+	}
+
 	// Try in-memory summaries first.
-	if text, ok := isummary.GetSessionSummaryText(ctx, sess, opts...); ok {
+	if text, ok := isummary.GetSummaryTextFromSession(sess, opts...); ok {
 		return text, true
 	}
 
 	// Query database with specified filterKey.
 	filterKey := isummary.GetFilterKeyFromOptions(opts...)
-	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
 
 	var summaryText string
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
@@ -146,8 +155,12 @@ func (s *Service) GetSessionSummaryText(
 		return "", false
 	}
 
+	if summaryText != "" {
+		return summaryText, true
+	}
+
 	// If requested filterKey not found, try fallback to full-session summary.
-	if summaryText == "" && filterKey != session.SummaryFilterKeyAllContents {
+	if filterKey != session.SummaryFilterKeyAllContents {
 		err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 			// rows.Next() is already called by the Query loop.
 			var summaryBytes []byte

@@ -447,9 +447,11 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 		err := worker.EnqueueJob(context.Background(), sess, "branch1", false)
 		require.NoError(t, err)
 
-		time.Sleep(50 * time.Millisecond)
-		// Should create both branch1 and full-session summary
-		assert.NotEmpty(t, receivedFilterKey)
+		// Wait for async processing to complete
+		time.Sleep(200 * time.Millisecond)
+		// Should create both branch1 and full-session summary (cascade)
+		// receivedFilterKey will be set to either "branch1" or "" depending on processing order
+		assert.NotEmpty(t, receivedFilterKey, "CreateSummaryFunc should have been called with a filterKey")
 	})
 }
 

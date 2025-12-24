@@ -88,13 +88,22 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 // When no options are provided, returns the full-session summary (SummaryFilterKeyAllContents).
 // Use session.WithSummaryFilterKey to specify a different filter key.
 func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Session, opts ...session.SummaryOption) (string, bool) {
+	// Check session validity.
+	if sess == nil {
+		return "", false
+	}
+
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return "", false
+	}
+
 	// Try in-memory summaries first.
-	if text, ok := isummary.GetSessionSummaryText(ctx, sess, opts...); ok {
+	if text, ok := isummary.GetSummaryTextFromSession(sess, opts...); ok {
 		return text, true
 	}
 
 	// Fall back to Redis-stored summaries.
-	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
 	bytes, err := s.redisClient.HGet(ctx, getSessionSummaryKey(key), key.SessionID).Bytes()
 	if err != nil || len(bytes) == 0 {
 		return "", false

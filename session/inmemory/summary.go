@@ -119,8 +119,18 @@ func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key
 // When no options are provided, returns the full-session summary (SummaryFilterKeyAllContents).
 // Use session.WithSummaryFilterKey to specify a different filter key.
 func (s *SessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session, opts ...session.SummaryOption) (string, bool) {
+	// Check session validity.
+	if sess == nil {
+		return "", false
+	}
+
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return "", false
+	}
+
 	// inmemory only needs in-memory summaries.
-	return isummary.GetSessionSummaryText(ctx, sess, opts...)
+	return isummary.GetSummaryTextFromSession(sess, opts...)
 }
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.

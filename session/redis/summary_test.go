@@ -548,14 +548,14 @@ func TestRedisService_EnqueueSummaryJob_ChannelClosed_PanicRecovery(t *testing.T
 	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
 	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
 
-	// Close the service to simulate channel closure
-	// This will cause a panic when trying to send to the closed channel
-	s.Close()
-
 	// Get the latest session from storage to ensure we have the latest events
 	sessFromStorage, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
 	require.NotNil(t, sessFromStorage)
+
+	// Close the service to simulate channel closure
+	// This will cause a panic when trying to send to the closed channel
+	s.Close()
 
 	// Enqueue summary job should handle the panic and fall back to sync processing
 	err = s.EnqueueSummaryJob(context.Background(), sessFromStorage, "", false)
@@ -606,13 +606,13 @@ func TestRedisService_EnqueueSummaryJob_ChannelClosed_AllChannelsClosed(t *testi
 	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
 	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
 
-	// Close the service to simulate channel closure
-	s.Close()
-
 	// Get the latest session from storage to ensure we have the latest events
 	sessFromStorage, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
 	require.NotNil(t, sessFromStorage)
+
+	// Close the service to simulate channel closure
+	s.Close()
 
 	// Enqueue summary job should handle the panic and fall back to sync processing
 	err = s.EnqueueSummaryJob(context.Background(), sessFromStorage, "", false)
@@ -664,13 +664,13 @@ func TestRedisService_EnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade
 	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
 	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
 
-	// Close the service to simulate no async workers scenario.
-	s.Close()
-
 	// Get the latest session from storage to ensure we have the latest events
 	sessFromStorage, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
 	require.NotNil(t, sessFromStorage)
+
+	// Close the service to simulate no async workers scenario.
+	s.Close()
 
 	// EnqueueSummaryJob should fall back to sync processing with cascade.
 	err = s.EnqueueSummaryJob(context.Background(), sessFromStorage, "tool-usage", false)
