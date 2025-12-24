@@ -482,7 +482,9 @@ func TestFunctionCallResponseProcessor_ToolIterationLimitEmitsFlowError(t *testi
 	require.True(t, inv.EndInvocation, "invocation should be marked as ended")
 }
 
-func TestFunctionCallResponseProcessor_ToolExecutionFilter_AllDeferred(t *testing.T) {
+func TestFunctionCallResponseProcessor_ToolExecutionFilter_AllDeferred(
+	t *testing.T,
+) {
 	const (
 		toolName = "external_tool"
 		callID   = "call-1"
@@ -540,7 +542,204 @@ func TestFunctionCallResponseProcessor_ToolExecutionFilter_AllDeferred(t *testin
 	require.True(t, inv.EndInvocation)
 }
 
-func TestFunctionCallResponseProcessor_ToolExecutionFilter_MixedStops(t *testing.T) {
+func TestFunctionCallResponseProcessor_ToolExecutionDecision(t *testing.T) {
+	const (
+		toolName      = "tool"
+		unknownTool   = "unknown_tool"
+		toolCallID    = "call-1"
+		unknownCallID = "call-2"
+		toolCallType  = "function"
+		toolArgJSON   = `{}`
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	makeReq := func(tools map[string]tool.Tool) *model.Request {
+		return &model.Request{Tools: tools}
+	}
+
+	makeRsp := func(toolCalls []model.ToolCall) *model.Response {
+		return &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:      model.RoleAssistant,
+						ToolCalls: toolCalls,
+					},
+				},
+			},
+		}
+	}
+
+	makeInvWithFilter := func(filter tool.FilterFunc) *agent.Invocation {
+		return &agent.Invocation{
+			RunOptions: agent.RunOptions{
+				ToolExecutionFilter: filter,
+			},
+		}
+	}
+
+	t.Run("invocation nil", func(t *testing.T) {
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			nil,
+			nil,
+			nil,
+		)
+		require.False(t, deferred)
+		require.True(t, executable)
+		require.False(t, unknown)
+	})
+
+	t.Run("filter nil", func(t *testing.T) {
+		inv := &agent.Invocation{}
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			inv,
+			nil,
+			nil,
+		)
+		require.False(t, deferred)
+		require.True(t, executable)
+		require.False(t, unknown)
+	})
+
+	t.Run("request nil", func(t *testing.T) {
+		inv := makeInvWithFilter(tool.NewIncludeToolNamesFilter(toolName))
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			inv,
+			nil,
+			nil,
+		)
+		require.False(t, deferred)
+		require.True(t, executable)
+		require.False(t, unknown)
+	})
+
+	t.Run("request tools nil", func(t *testing.T) {
+		inv := makeInvWithFilter(tool.NewIncludeToolNamesFilter(toolName))
+		req := &model.Request{}
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			inv,
+			req,
+			nil,
+		)
+		require.False(t, deferred)
+		require.True(t, executable)
+		require.False(t, unknown)
+	})
+
+	t.Run("response nil", func(t *testing.T) {
+		inv := makeInvWithFilter(tool.NewIncludeToolNamesFilter(toolName))
+		req := makeReq(map[string]tool.Tool{
+			toolName: &mockTool{name: toolName},
+		})
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			inv,
+			req,
+			nil,
+		)
+		require.False(t, deferred)
+		require.True(t, executable)
+		require.False(t, unknown)
+	})
+
+	t.Run("response has no choices", func(t *testing.T) {
+		inv := makeInvWithFilter(tool.NewIncludeToolNamesFilter(toolName))
+		req := makeReq(map[string]tool.Tool{
+			toolName: &mockTool{name: toolName},
+		})
+		rsp := &model.Response{}
+
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			inv,
+			req,
+			rsp,
+		)
+		require.False(t, deferred)
+		require.True(t, executable)
+		require.False(t, unknown)
+	})
+
+	t.Run("unknown tool call", func(t *testing.T) {
+		inv := makeInvWithFilter(tool.NewExcludeToolNamesFilter(toolName))
+		req := makeReq(map[string]tool.Tool{
+			toolName: &mockTool{name: toolName},
+		})
+		rsp := makeRsp([]model.ToolCall{
+			{
+				ID:   unknownCallID,
+				Type: toolCallType,
+				Function: model.FunctionDefinitionParam{
+					Name:      unknownTool,
+					Arguments: []byte(toolArgJSON),
+				},
+			},
+			{
+				ID:   toolCallID,
+				Type: toolCallType,
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(toolArgJSON),
+				},
+			},
+		})
+
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			inv,
+			req,
+			rsp,
+		)
+		require.True(t, deferred)
+		require.False(t, executable)
+		require.True(t, unknown)
+	})
+
+	t.Run("unknown plus executable", func(t *testing.T) {
+		inv := makeInvWithFilter(tool.NewIncludeToolNamesFilter(toolName))
+		req := makeReq(map[string]tool.Tool{
+			toolName: &mockTool{name: toolName},
+		})
+		rsp := makeRsp([]model.ToolCall{
+			{
+				ID:   unknownCallID,
+				Type: toolCallType,
+				Function: model.FunctionDefinitionParam{
+					Name:      unknownTool,
+					Arguments: []byte(toolArgJSON),
+				},
+			},
+			{
+				ID:   toolCallID,
+				Type: toolCallType,
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(toolArgJSON),
+				},
+			},
+		})
+
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			inv,
+			req,
+			rsp,
+		)
+		require.False(t, deferred)
+		require.True(t, executable)
+		require.True(t, unknown)
+	})
+}
+
+func TestFunctionCallResponseProcessor_ToolExecutionFilter_MixedStops(
+	t *testing.T,
+) {
 	const (
 		autoToolName = "auto_tool"
 		extToolName  = "external_tool"
@@ -623,7 +822,9 @@ func TestFunctionCallResponseProcessor_ToolExecutionFilter_MixedStops(t *testing
 	require.True(t, inv.EndInvocation)
 }
 
-func TestFunctionCallResponseProcessor_ToolExecutionFilter_NoPlaceholders(t *testing.T) {
+func TestFunctionCallResponseProcessor_ToolExecutionFilter_NoPlaceholders(
+	t *testing.T,
+) {
 	const (
 		autoToolName = "auto_tool"
 		extToolName  = "external_tool"
@@ -694,7 +895,7 @@ func TestFunctionCallResponseProcessor_ToolExecutionFilter_NoPlaceholders(t *tes
 	require.True(t, inv.EndInvocation)
 }
 
-func TestFunctionCallResponseProcessor_ToolExecutionFilter_NoPlaceholdersParallel(
+func TestFunctionCallResponseProcessor_ToolExecutionFilter_NoPlaceholdersPar(
 	t *testing.T,
 ) {
 	const (

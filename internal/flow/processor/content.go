@@ -440,9 +440,6 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 	// insert invocation message if not already included
 	var hasInvocationMessage bool
 	for _, evt := range events {
-		if len(evt.Choices) == 0 {
-			continue
-		}
 		if invocationMessageEqual(inv.Message, evt.Choices[0].Message) {
 			hasInvocationMessage = true
 			break

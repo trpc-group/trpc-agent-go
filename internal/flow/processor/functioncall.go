@@ -278,10 +278,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 		filter := invocation.RunOptions.ToolExecutionFilter
 		for _, tc := range toolCalls {
 			tl, ok := tools[tc.Function.Name]
-			if !ok {
-				continue
-			}
-			if !filter(ctx, tl) {
+			if ok && !filter(ctx, tl) {
 				return nil, nil
 			}
 		}
@@ -412,10 +409,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 		filter := invocation.RunOptions.ToolExecutionFilter
 		for _, tc := range toolCalls {
 			tl, ok := tools[tc.Function.Name]
-			if !ok {
-				continue
-			}
-			if !filter(ctx, tl) {
+			if ok && !filter(ctx, tl) {
 				return nil, nil
 			}
 		}
