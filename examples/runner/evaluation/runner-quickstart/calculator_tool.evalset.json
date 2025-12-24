@@ -1,0 +1,171 @@
+{
+  "evalSetId": "calculator_tool",
+  "name": "calculator_tool",
+  "evalCases": [
+    {
+      "evalId": "calculator_add",
+      "conversation": [
+        {
+          "invocationId": "calculator_add-1",
+          "userContent": {
+            "role": "user",
+            "content": "Use the calculator to add 6 and 7."
+          },
+          "tools": [
+            {
+              "id": "calculator_add",
+              "name": "calculator",
+              "arguments": {
+                "operation": "add",
+                "a": 6,
+                "b": 7
+              },
+              "result": {
+                "operation": "add",
+                "a": 6,
+                "b": 7,
+                "result": 13
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "runner-quickstart",
+        "userId": "tool-user"
+      }
+    },
+    {
+      "evalId": "calculator_subtract",
+      "conversation": [
+        {
+          "invocationId": "calculator_subtract-1",
+          "userContent": {
+            "role": "user",
+            "content": "Use the calculator to subtract 6 and 7."
+          },
+          "tools": [
+            {
+              "id": "calculator_subtract",
+              "name": "calculator",
+              "arguments": {
+                "operation": "subtract",
+                "a": 6,
+                "b": 7
+              },
+              "result": {
+                "operation": "subtract",
+                "a": 6,
+                "b": 7,
+                "result": -1
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "runner-quickstart",
+        "userId": "tool-user"
+      }
+    },
+    {
+      "evalId": "calculator_multiply",
+      "conversation": [
+        {
+          "invocationId": "calculator_multiply-1",
+          "userContent": {
+            "role": "user",
+            "content": "Use the calculator to multiply 6 and 7."
+          },
+          "tools": [
+            {
+              "id": "calculator_multiply",
+              "name": "calculator",
+              "arguments": {
+                "operation": "multiply",
+                "a": 6,
+                "b": 7
+              },
+              "result": {
+                "operation": "multiply",
+                "a": 6,
+                "b": 7,
+                "result": 42
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "runner-quickstart",
+        "userId": "tool-user"
+      }
+    },
+    {
+      "evalId": "calculator_divide",
+      "conversation": [
+        {
+          "invocationId": "calculator_divide-1",
+          "userContent": {
+            "role": "user",
+            "content": "Use the calculator to divide 6 and 7."
+          },
+          "tools": [
+            {
+              "id": "calculator_divide",
+              "name": "calculator",
+              "arguments": {
+                "operation": "divide",
+                "a": 6,
+                "b": 7
+              },
+              "result": {
+                "operation": "divide",
+                "a": 6,
+                "b": 7,
+                "result": 0.8571428571428571
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "runner-quickstart",
+        "userId": "tool-user"
+      }
+    },
+    {
+      "evalId": "calculator_power",
+      "conversation": [
+        {
+          "invocationId": "calculator_power-1",
+          "userContent": {
+            "role": "user",
+            "content": "Use the calculator to calculate 2 to the power of 3."
+          },
+          "tools": [
+            {
+              "id": "calculator_power",
+              "name": "calculator",
+              "arguments": {
+                "operation": "power",
+                "a": 2,
+                "b": 3
+              },
+              "result": {
+                "operation": "power",
+                "a": 2,
+                "b": 3,
+                "result": 8
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "runner-quickstart",
+        "userId": "tool-user"
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "evalSetId": "currenttime_tool",
+  "name": "currenttime_tool",
+  "evalCases": [
+    {
+      "evalId": "timezone_lookup",
+      "conversation": [
+        {
+          "invocationId": "timezone_lookup-1",
+          "userContent": {
+            "role": "user",
+            "content": "Get the current time in UTC."
+          },
+          "tools": [
+            {
+              "id": "currenttime_lookup",
+              "name": "current_time",
+              "arguments": {
+                "timezone": "UTC"
+              },
+              "result": {
+                "timezone": "UTC"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "runner-quickstart",
+        "userId": "tool-user"
+      }
+    }
+  ]
+}
