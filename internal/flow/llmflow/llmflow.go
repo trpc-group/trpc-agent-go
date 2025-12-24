@@ -384,9 +384,13 @@ func (f *Flow) runAfterModelCallbacks(
 	req *model.Request,
 	response *model.Response,
 ) (context.Context, *model.Response, error) {
+	var (
+		override bool
+		err      error
+	)
 	if invocation != nil && invocation.Plugins != nil {
 		callbacks := invocation.Plugins.ModelCallbacks()
-		ctx, rsp, override, err := runAfterModelCallbackSet(
+		ctx, response, override, err = runAfterModelCallbackSet(
 			ctx,
 			callbacks,
 			req,
@@ -396,17 +400,17 @@ func (f *Flow) runAfterModelCallbacks(
 			return ctx, nil, err
 		}
 		if override {
-			return ctx, rsp, nil
+			return ctx, response, nil
 		}
 	}
 
-	ctx, rsp, _, err := runAfterModelCallbackSet(
+	ctx, response, _, err = runAfterModelCallbackSet(
 		ctx,
 		f.modelCallbacks,
 		req,
 		response,
 	)
-	return ctx, rsp, err
+	return ctx, response, err
 }
 
 func runAfterModelCallbackSet(
