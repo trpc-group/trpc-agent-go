@@ -1310,7 +1310,13 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		// Build invocation for the target agent with custom runtime state and scope.
 		invocation := buildAgentInvocationWithStateAndScope(ctx, parentForInput, childState, targetAgent, scope)
 
-		itelemetry.TraceBeforeInvokeAgent(span, invocation, targetAgent.Info().Description, "", nil)
+		itelemetry.TraceBeforeInvokeAgent(span, invocation, targetAgent.Info().Description, "", dummyNode.llmGenerationConfig)
+		var stream bool
+		if dummyNode.llmGenerationConfig != nil {
+			stream = dummyNode.llmGenerationConfig.Stream
+		}
+		tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &err)
+		defer tracker.RecordMetrics()()
 
 		// Emit agent execution start event.
 		startTime := time.Now()
@@ -1326,18 +1332,19 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			endTime := time.Now()
 			emitAgentErrorEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime, err)
 			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			tracker.SetResponseErrorType(itelemetry.ValueDefaultErrorType)
 			return nil, fmt.Errorf("failed to run agent %s: %w", agentName, err)
 		}
 
 		// Process agent event stream and capture completion state.
 		lastResponse, finalState, rawDelta, fullRespEvent, tokenUsage, err := processAgentEventStream(
-			ctx, agentEventChan, nodeCallbacks, nodeID, state, eventChan, agentName,
+			ctx, agentEventChan, nodeCallbacks, nodeID, state, eventChan, agentName, tracker,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process agent event stream: %w", err)
 		}
 
-		itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage)
+		itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
 		// Emit agent execution complete event.
 		endTime := time.Now()
 		emitAgentCompleteEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime)
@@ -1367,6 +1374,7 @@ func processAgentEventStream(
 	state State,
 	eventChan chan<- *event.Event,
 	agentName string,
+	tracker *itelemetry.InvokeAgentTracker,
 ) (string, State, map[string][]byte, *event.Event, *itelemetry.TokenUsage, error) {
 	var lastResponse string
 	var finalState State
@@ -1397,6 +1405,7 @@ func processAgentEventStream(
 		}
 
 		if agentEvent.Response != nil {
+			tracker.TrackResponse(agentEvent.Response)
 			if !agentEvent.Response.IsPartial {
 				if agentEvent.Response.Usage != nil {
 					tokenUsage.PromptTokens += agentEvent.Response.Usage.PromptTokens
