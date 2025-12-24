@@ -1,0 +1,71 @@
+{
+  "name": "knowledge-agent-with-filters",
+  "description": "Demo agent with knowledge_search tool (agentic mode)",
+  "version": "1.0",
+  "start_node_id": "start",
+  "nodes": [
+    {
+      "id": "start",
+      "node_type": "builtin.start"
+    },
+    {
+      "id": "agent",
+      "node_type": "builtin.llmagent",
+      "label": "Knowledge Agent",
+      "config": {
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "claude-4-5-sonnet-20250929",
+          "base_url": "http://v2.open.venus.oa.com/llmproxy/",
+          "api_key": "env:OPENAI_API_KEY"
+        },
+        "instruction": "You are a helpful assistant with knowledge base access. Use the knowledge_search tool to find relevant information when answering user questions.",
+        "tools": [
+          {
+            "type": "knowledge_search",
+            "vector_store": {
+              "type": "tcvector",
+              "url": "env:TCVECTOR_URL",
+              "collection": "env:TCVECTOR_COLLECTION",
+              "user": "env:TCVECTOR_USERNAME",
+              "password": "env:TCVECTOR_PASSWORD"
+            },
+            "embedder": {
+              "type": "openai",
+              "model": "text-embedding-3-small",
+              "base_url": "env:OPENAI_BASE_URL",
+              "api_key": "env:OPENAI_API_KEY"
+            },
+            "max_results": 5,
+            "min_score": 0.5,
+            "conditioned_filter": {
+              "operator": "and",
+              "value": [
+                {
+                  "field": "metadata.category",
+                  "operator": "in",
+                  "value": ["machine_learning", "programming"]
+                },
+                {
+                  "field": "metadata.format",
+                  "operator": "eq",
+                  "value": "markdown"
+                }
+              ]
+            }
+          }
+        ],
+        "temperature": 0.7
+      }
+    },
+    {
+      "id": "end",
+      "node_type": "builtin.end",
+      "config": {}
+    }
+  ],
+  "edges": [
+    { "source": "start", "target": "agent" },
+    { "source": "agent", "target": "end" }
+  ]
+}
