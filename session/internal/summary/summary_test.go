@@ -701,8 +701,11 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 	}
 
 	mockSvc := &mockService{}
+	var summariesMu sync.Mutex
 
 	createFunc := func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+		summariesMu.Lock()
+		defer summariesMu.Unlock()
 		if mockSvc.summaries == nil {
 			mockSvc.summaries = make(map[string]string)
 		}
