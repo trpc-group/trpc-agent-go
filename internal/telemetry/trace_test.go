@@ -157,7 +157,7 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	rsp := &model.Response{ID: "rid", Model: "m-1", Usage: &model.Usage{PromptTokens: 1, CompletionTokens: 2}, Choices: []model.Choice{{FinishReason: &stop}, {}}, Error: &model.ResponseError{Message: "oops", Type: "api_error"}}
 	evt := event.New("eid", "alpha", event.WithResponse(rsp))
 	s2 := newRecordingSpan()
-	TraceAfterInvokeAgent(s2, evt, nil)
+	TraceAfterInvokeAgent(s2, evt, nil, 0)
 	if s2.status != codes.Error {
 		t.Fatalf("expected error status")
 	}
@@ -405,7 +405,7 @@ func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			span := newRecordingSpan()
-			TraceAfterInvokeAgent(span, tt.rspEvent, tt.tokenUsage)
+			TraceAfterInvokeAgent(span, tt.rspEvent, tt.tokenUsage, 0)
 
 			if tt.tokenUsage != nil && tt.rspEvent != nil && tt.rspEvent.Response != nil {
 				require.True(t, hasAttr(span.attrs, KeyGenAIUsageInputTokens, int64(tt.tokenUsage.PromptTokens)))

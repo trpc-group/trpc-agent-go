@@ -23,6 +23,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -352,6 +353,7 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 		State{},
 		parentEventChan,
 		"agent",
+		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "", last)
@@ -399,6 +401,7 @@ func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
 		State{},
 		parentEventChan,
 		"agent",
+		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "final", last)
