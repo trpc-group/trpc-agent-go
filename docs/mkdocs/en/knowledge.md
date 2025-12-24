@@ -257,6 +257,7 @@ trpc-agent-go supports multiple vector store implementations:
 - **TcVector**: Tencent Cloud Vector Database, supports remote embedding computation and hybrid search - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/tcvector)
 - **Elasticsearch**: Supports v7/v8/v9 multi-version Elasticsearch vector store - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/elasticsearch)
 - **Milvus**: High-performance vector database, supports billion-scale vector search - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/milvus)
+- **Qdrant**: High-performance vector database with advanced filtering, supports cloud and self-hosted deployments - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/qdrant)
 
 #### Vector Store Configuration Examples
 
@@ -425,6 +426,69 @@ kb := knowledge.New(
     knowledge.WithVectorStore(esVS),
 )
 ```
+
+##### Qdrant
+
+[Qdrant](https://qdrant.tech/) is a high-performance vector database with advanced filtering capabilities, supporting both cloud and self-hosted deployments.
+
+**Basic Configuration**
+
+```go
+import (
+    vectorqdrant "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/qdrant"
+)
+
+// Local Qdrant instance (default: localhost:6334)
+qdrantVS, err := vectorqdrant.New(ctx)
+if err != nil {
+    // Handle error
+}
+
+// Custom configuration
+qdrantVS, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("qdrant.example.com"),
+    vectorqdrant.WithPort(6334),
+    vectorqdrant.WithCollectionName("my_documents"),
+    vectorqdrant.WithDimension(1536),  // Must match embedding model
+)
+
+kb := knowledge.New(
+    knowledge.WithVectorStore(qdrantVS),
+    knowledge.WithEmbedder(embedder),
+)
+```
+
+**Qdrant Cloud Configuration**
+
+```go
+qdrantVS, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("xyz-abc.cloud.qdrant.io"),
+    vectorqdrant.WithPort(6334),
+    vectorqdrant.WithAPIKey(os.Getenv("QDRANT_API_KEY")),
+    vectorqdrant.WithTLS(true),  // Required for Qdrant Cloud
+    vectorqdrant.WithCollectionName("my_documents"),
+    vectorqdrant.WithDimension(1536),
+)
+```
+
+**Configuration Options Reference**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithHost(host)` | `"localhost"` | Qdrant server hostname |
+| `WithPort(port)` | `6334` | Qdrant gRPC port (1-65535) |
+| `WithAPIKey(key)` | `""` | API key for Qdrant Cloud authentication |
+| `WithTLS(enabled)` | `false` | Enable TLS (required for Qdrant Cloud) |
+| `WithCollectionName(name)` | `"trpc_agent_documents"` | Collection name |
+| `WithDimension(dim)` | `1536` | Vector dimension (must match embedding model) |
+| `WithDistance(d)` | `DistanceCosine` | Distance metric (Cosine, Euclid, Dot, Manhattan) |
+| `WithMaxResults(max)` | `10` | Default number of search results |
+| `WithOnDiskVectors(enabled)` | `false` | Store vectors on disk (for large datasets) |
+| `WithOnDiskPayload(enabled)` | `false` | Store payloads on disk |
+| `WithHNSWConfig(m, efConstruct)` | `16, 128` | HNSW index parameters (higher = better recall, more memory) |
+| `WithMaxRetries(n)` | `3` | Max retry attempts for transient gRPC errors |
+| `WithBaseRetryDelay(d)` | `100ms` | Initial retry delay |
+| `WithMaxRetryDelay(d)` | `5s` | Maximum retry delay |
 
 ### Embedder
 
@@ -951,6 +1015,21 @@ vectorStore, err := vectortcvector.New(
 - **v0.4.0+ new collections**: Automatically create metadata JSON index, all fields queryable
 - **Legacy collections**: Only fields in `WithFilterIndexFields` are queryable
 
+#### Qdrant
+
+- ✅ Supports all metadata field filtering
+- ✅ Supports complex query conditions (AND, OR, comparison operators)
+- ✅ Supports IN, NOT IN, LIKE, BETWEEN operators
+- ✅ Automatic retry for transient errors
+
+```go
+vectorStore, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("localhost"),
+    vectorqdrant.WithPort(6334),
+    // ... other configurations
+)
+```
+
 #### In-memory Storage
 
 - ✅ Supports all filter functionality
@@ -1130,6 +1209,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
     vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
     vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
+    vectorqdrant "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/qdrant"
     vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
 
     // Import PDF reader to register it (optional - has separate go.mod to avoid unnecessary dependencies).
@@ -1139,7 +1219,7 @@ import (
 func main() {
     var (
         embedderType    = flag.String("embedder", "openai", "embedder type (openai, gemini, ollama, huggingface)")
-        vectorStoreType = flag.String("vectorstore", "inmemory", "vector store type (inmemory, pgvector, tcvector)")
+        vectorStoreType = flag.String("vectorstore", "inmemory", "vector store type (inmemory, pgvector, tcvector, qdrant)")
         modelName       = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
     )
 
@@ -1199,6 +1279,21 @@ func main() {
         )
         if err != nil {
             log.Fatalf("Failed to create tcvector store: %v", err)
+        }
+    case "qdrant":
+        port, err := strconv.Atoi(getEnvOrDefault("QDRANT_PORT", "6334"))
+        if err != nil {
+            log.Fatalf("Failed to convert QDRANT_PORT to int: %v", err)
+        }
+        vectorStore, err = vectorqdrant.New(ctx,
+            vectorqdrant.WithHost(getEnvOrDefault("QDRANT_HOST", "localhost")),
+            vectorqdrant.WithPort(port),
+            vectorqdrant.WithAPIKey(getEnvOrDefault("QDRANT_API_KEY", "")),
+            vectorqdrant.WithTLS(getEnvOrDefault("QDRANT_TLS", "") == "true"),
+            vectorqdrant.WithDimension(1536),
+        )
+        if err != nil {
+            log.Fatalf("Failed to create qdrant store: %v", err)
         }
     default: // inmemory.
         vectorStore = vectorinmemory.New()
@@ -1375,6 +1470,12 @@ export ELASTICSEARCH_USERNAME=""
 export ELASTICSEARCH_PASSWORD=""
 export ELASTICSEARCH_API_KEY=""
 export ELASTICSEARCH_INDEX_NAME="trpc_agent_documents"
+
+# Qdrant configuration (required when using -vectorstore=qdrant)
+export QDRANT_HOST="localhost"          # or "xyz-abc.cloud.qdrant.io" for Qdrant Cloud
+export QDRANT_PORT="6334"
+export QDRANT_API_KEY=""                # Required for Qdrant Cloud
+export QDRANT_TLS="false"               # Set to "true" for Qdrant Cloud
 ```
 
 ### Command Line Parameters
@@ -1385,10 +1486,11 @@ go run main.go -embedder openai -vectorstore inmemory
 go run main.go -embedder gemini -vectorstore pgvector
 go run main.go -embedder openai -vectorstore tcvector
 go run main.go -embedder openai -vectorstore elasticsearch -es-version v9
+go run main.go -embedder openai -vectorstore qdrant
 
 # Parameter description:
 # -embedder: Select embedder type (openai, gemini, ollama, huggingface), default is openai.
-# -vectorstore: Select vector store type (inmemory, pgvector, tcvector, elasticsearch), default is inmemory.
+# -vectorstore: Select vector store type (inmemory, pgvector, tcvector, elasticsearch, qdrant), default is inmemory.
 # -es-version: Elasticsearch version (v7, v8, v9), only when vectorstore=elasticsearch.
 ```
 
