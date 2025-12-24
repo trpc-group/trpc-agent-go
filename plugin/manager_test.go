@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package plugin_test
 
 import (
@@ -89,6 +98,23 @@ func TestManager_CallbackSetsNilWhenEmpty(t *testing.T) {
 	require.NoError(t, m.Close(nil))
 }
 
+func TestManager_NilReceiver_IsSafe(t *testing.T) {
+	var m *plugin.Manager
+	require.Nil(t, m.AgentCallbacks())
+	require.Nil(t, m.ModelCallbacks())
+	require.Nil(t, m.ToolCallbacks())
+
+	out, err := m.OnEvent(
+		context.Background(),
+		&agent.Invocation{},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Nil(t, out)
+
+	require.NoError(t, m.Close(nil))
+}
+
 func TestManager_Close_ReverseOrderAndFirstError(t *testing.T) {
 	var closeOrder []string
 	p1 := &closerPlugin{name: "p1", closeOrder: &closeOrder}
@@ -107,6 +133,18 @@ func TestManager_Close_ReverseOrderAndFirstError(t *testing.T) {
 
 	require.Equal(t, []string{"p3", "p2", "p1"}, closeOrder)
 	require.NotNil(t, p3.closedWith)
+}
+
+func TestManager_Close_SkipsNonCloser(t *testing.T) {
+	var closeOrder []string
+	p1 := &closerPlugin{name: "p1", closeOrder: &closeOrder}
+	p2 := &testPlugin{name: "p2"}
+	p3 := &closerPlugin{name: "p3", closeOrder: &closeOrder}
+
+	m := plugin.MustNewManager(p1, p2, p3)
+	err := m.Close(nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"p3", "p1"}, closeOrder)
 }
 
 func TestManager_ModelCallbacks_Order(t *testing.T) {
@@ -351,6 +389,66 @@ func TestManager_ToolCallbacks_WrapErrorWithName(t *testing.T) {
 	require.Contains(t, err.Error(), "p")
 }
 
+func TestManager_ModelCallbacks_WrapAfterErrorWithName(t *testing.T) {
+	wantErr := errors.New("boom")
+	p := &testPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterModel(func(
+				ctx context.Context,
+				args *model.AfterModelArgs,
+			) (*model.AfterModelResult, error) {
+				return nil, wantErr
+			})
+		},
+	}
+
+	m := plugin.MustNewManager(p)
+	cb := m.ModelCallbacks()
+	require.NotNil(t, cb)
+
+	_, err := cb.RunAfterModel(
+		context.Background(),
+		&model.AfterModelArgs{
+			Request:  &model.Request{},
+			Response: &model.Response{Done: true},
+		},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "p")
+}
+
+func TestManager_ToolCallbacks_WrapAfterErrorWithName(t *testing.T) {
+	wantErr := errors.New("boom")
+	p := &testPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterTool(func(
+				ctx context.Context,
+				args *tool.AfterToolArgs,
+			) (*tool.AfterToolResult, error) {
+				return nil, wantErr
+			})
+		},
+	}
+
+	m := plugin.MustNewManager(p)
+	cb := m.ToolCallbacks()
+	require.NotNil(t, cb)
+
+	_, err := cb.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolName:    "t",
+			Declaration: nil,
+			Arguments:   []byte("{}"),
+			Result:      "x",
+		},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "p")
+}
+
 func TestGlobalInstruction_PrependsSystemMessage(t *testing.T) {
 	m := plugin.MustNewManager(plugin.NewGlobalInstruction("policy"))
 	callbacks := m.ModelCallbacks()
@@ -541,6 +639,54 @@ func TestLoggingPlugin_Callbacks_DoNotError(t *testing.T) {
 		Result:      "ok",
 		Error:       nil,
 	})
+	require.NoError(t, err)
+}
+
+func TestLoggingPlugin_NoInvocationContextAndErrorArgs(t *testing.T) {
+	m := plugin.MustNewManager(plugin.NewLogging())
+	cb := m.ModelCallbacks()
+	require.NotNil(t, cb)
+
+	before, err := cb.RunBeforeModel(
+		context.Background(),
+		&model.BeforeModelArgs{Request: &model.Request{}},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+
+	afterCtx := context.Background()
+	if before.Context != nil {
+		afterCtx = before.Context
+	}
+	_, err = cb.RunAfterModel(afterCtx, &model.AfterModelArgs{
+		Request:  &model.Request{},
+		Response: &model.Response{Done: true},
+		Error:    errors.New("boom"),
+	})
+	require.NoError(t, err)
+
+	toolCB := m.ToolCallbacks()
+	require.NotNil(t, toolCB)
+	_, err = toolCB.RunBeforeTool(
+		context.Background(),
+		&tool.BeforeToolArgs{
+			ToolName:    "t",
+			Declaration: nil,
+			Arguments:   []byte("{}"),
+		},
+	)
+	require.NoError(t, err)
+}
+
+func TestGlobalInstruction_NilRequest_IsSafe(t *testing.T) {
+	m := plugin.MustNewManager(plugin.NewGlobalInstruction("policy"))
+	cb := m.ModelCallbacks()
+	require.NotNil(t, cb)
+
+	_, err := cb.RunBeforeModel(
+		context.Background(),
+		&model.BeforeModelArgs{Request: nil},
+	)
 	require.NoError(t, err)
 }
 

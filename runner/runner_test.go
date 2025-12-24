@@ -239,6 +239,114 @@ func TestRunner_WithPlugins_AppliesHooks(t *testing.T) {
 	}
 }
 
+func TestRunner_applyEventPlugins_ReplacesEventAndCopiesFields(t *testing.T) {
+	const (
+		reqID    = "req"
+		invID    = "inv"
+		parentID = "parent"
+		branch   = "branch"
+		filter   = "filter"
+		tag      = "tag"
+	)
+	p := &testPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				ctx context.Context,
+				inv *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				updated := &event.Event{
+					Tag:    tag,
+					Author: "plugin",
+				}
+				return updated, nil
+			})
+		},
+	}
+
+	ag := &mockAgent{name: "test-agent"}
+	run := NewRunner("test-app", ag, WithPlugins(p)).(*runner)
+
+	inv := &agent.Invocation{Plugins: plugin.MustNewManager(p)}
+	orig := &event.Event{
+		Response:           &model.Response{Done: true},
+		RequestID:          reqID,
+		InvocationID:       invID,
+		ParentInvocationID: parentID,
+		Branch:             branch,
+		FilterKey:          filter,
+		Author:             "a",
+	}
+
+	out := run.applyEventPlugins(context.Background(), inv, orig)
+	require.NotNil(t, out)
+	require.Equal(t, tag, out.Tag)
+	require.Equal(t, reqID, out.RequestID)
+	require.Equal(t, invID, out.InvocationID)
+	require.Equal(t, parentID, out.ParentInvocationID)
+	require.Equal(t, branch, out.Branch)
+	require.Equal(t, filter, out.FilterKey)
+}
+
+func TestRunner_applyEventPlugins_ErrorKeepsOriginal(t *testing.T) {
+	p := &testPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				ctx context.Context,
+				inv *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				return nil, errors.New("boom")
+			})
+		},
+	}
+
+	ag := &mockAgent{name: "test-agent"}
+	run := NewRunner("test-app", ag, WithPlugins(p)).(*runner)
+
+	inv := &agent.Invocation{Plugins: plugin.MustNewManager(p)}
+	orig := &event.Event{Response: &model.Response{Done: true}}
+	out := run.applyEventPlugins(context.Background(), inv, orig)
+	require.Same(t, orig, out)
+}
+
+type closePlugin struct {
+	name     string
+	closed   bool
+	closeErr error
+}
+
+func (p *closePlugin) Name() string { return p.name }
+
+func (p *closePlugin) Register(r *plugin.Registry) {}
+
+func (p *closePlugin) Close(ctx context.Context) error {
+	p.closed = true
+	return p.closeErr
+}
+
+func TestRunner_Close_ClosesPlugins(t *testing.T) {
+	p := &closePlugin{name: "p"}
+	ag := &mockAgent{name: "test-agent"}
+	run := NewRunner("test-app", ag, WithPlugins(p)).(*runner)
+
+	err := run.Close()
+	require.NoError(t, err)
+	require.True(t, p.closed)
+}
+
+func TestRunner_Close_PropagatesPluginCloseError(t *testing.T) {
+	p := &closePlugin{name: "p", closeErr: errors.New("boom")}
+	ag := &mockAgent{name: "test-agent"}
+	run := NewRunner("test-app", ag, WithPlugins(p)).(*runner)
+
+	err := run.Close()
+	require.Error(t, err)
+	require.True(t, p.closed)
+}
+
 func TestRunner_SessionCreateIfMissing(t *testing.T) {
 	// Create an in-memory session service.
 	sessionService := sessioninmemory.NewSessionService()

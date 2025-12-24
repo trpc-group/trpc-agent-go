@@ -12,6 +12,7 @@ package llmflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -661,6 +662,94 @@ func TestFlow_CallLLM_PluginBeforeModelCanShortCircuit(t *testing.T) {
 	require.False(t, m.called)
 }
 
+type testCtxKey struct{}
+
+func TestFlow_CallLLM_PluginBeforeModelError(t *testing.T) {
+	plugCalled := false
+	localCalled := false
+
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.BeforeModel(func(
+				ctx context.Context,
+				args *model.BeforeModelArgs,
+			) (*model.BeforeModelResult, error) {
+				plugCalled = true
+				return nil, fmt.Errorf("boom")
+			})
+		},
+	}
+	pm := plugin.MustNewManager(p)
+
+	local := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, req *model.Request) (*model.Response, error) {
+			localCalled = true
+			return nil, nil
+		},
+	)
+
+	flow := &Flow{modelCallbacks: local}
+	m := &captureModel{}
+	inv := &agent.Invocation{
+		AgentName: "a",
+		Model:     m,
+		Plugins:   pm,
+	}
+
+	ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
+	require.Error(t, err)
+	require.Nil(t, ch)
+	require.True(t, plugCalled)
+	require.False(t, localCalled)
+	require.False(t, m.called)
+}
+
+func TestFlow_CallLLM_PluginBeforeModelContextPropagates(t *testing.T) {
+	plugCalled := false
+	localSaw := ""
+
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.BeforeModel(func(
+				ctx context.Context,
+				args *model.BeforeModelArgs,
+			) (*model.BeforeModelResult, error) {
+				plugCalled = true
+				return &model.BeforeModelResult{
+					Context: context.WithValue(ctx, testCtxKey{}, "v"),
+				}, nil
+			})
+		},
+	}
+	pm := plugin.MustNewManager(p)
+
+	local := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, req *model.Request) (*model.Response, error) {
+			if v, ok := ctx.Value(testCtxKey{}).(string); ok {
+				localSaw = v
+			}
+			return &model.Response{Done: true}, nil
+		},
+	)
+
+	flow := &Flow{modelCallbacks: local}
+	m := &captureModel{}
+	inv := &agent.Invocation{
+		AgentName: "a",
+		Model:     m,
+		Plugins:   pm,
+	}
+
+	ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.True(t, plugCalled)
+	require.Equal(t, "v", localSaw)
+}
+
 func TestFlow_AfterModelPluginOverridesLocal(t *testing.T) {
 	localCalled := false
 	custom := &model.Response{Done: true}
@@ -704,6 +793,115 @@ func TestFlow_AfterModelPluginOverridesLocal(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, custom, got)
 	require.False(t, localCalled)
+}
+
+func TestFlow_AfterModelPluginError(t *testing.T) {
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterModel(func(
+				ctx context.Context,
+				args *model.AfterModelArgs,
+			) (*model.AfterModelResult, error) {
+				return nil, fmt.Errorf("boom")
+			})
+		},
+	}
+	pm := plugin.MustNewManager(p)
+
+	flow := &Flow{modelCallbacks: nil}
+	inv := &agent.Invocation{Plugins: pm}
+
+	_, _, err := flow.runAfterModelCallbacks(
+		context.Background(),
+		inv,
+		&model.Request{},
+		&model.Response{Done: true},
+	)
+	require.Error(t, err)
+}
+
+func TestFlow_AfterModelPluginContextPropagatesToLocal(t *testing.T) {
+	localSaw := ""
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterModel(func(
+				ctx context.Context,
+				args *model.AfterModelArgs,
+			) (*model.AfterModelResult, error) {
+				return &model.AfterModelResult{
+					Context: context.WithValue(ctx, testCtxKey{}, "v"),
+				}, nil
+			})
+		},
+	}
+	pm := plugin.MustNewManager(p)
+
+	local := model.NewCallbacks().RegisterAfterModel(
+		func(
+			ctx context.Context,
+			req *model.Request,
+			rsp *model.Response,
+			modelErr error,
+		) (*model.Response, error) {
+			if v, ok := ctx.Value(testCtxKey{}).(string); ok {
+				localSaw = v
+			}
+			return nil, nil
+		},
+	)
+
+	flow := &Flow{modelCallbacks: local}
+	inv := &agent.Invocation{Plugins: pm}
+
+	_, _, err := flow.runAfterModelCallbacks(
+		context.Background(),
+		inv,
+		&model.Request{},
+		&model.Response{Done: true},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "v", localSaw)
+}
+
+func TestFlow_AfterModelPluginSeesResponseError(t *testing.T) {
+	sawErr := ""
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterModel(func(
+				ctx context.Context,
+				args *model.AfterModelArgs,
+			) (*model.AfterModelResult, error) {
+				if args != nil && args.Error != nil {
+					sawErr = args.Error.Error()
+				}
+				return nil, nil
+			})
+		},
+	}
+	pm := plugin.MustNewManager(p)
+
+	flow := &Flow{modelCallbacks: nil}
+	inv := &agent.Invocation{Plugins: pm}
+	rsp := &model.Response{
+		Done: true,
+		Error: &model.ResponseError{
+			Type:    "test",
+			Message: "boom",
+		},
+	}
+
+	_, _, err := flow.runAfterModelCallbacks(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+	)
+	require.NoError(t, err)
+	require.Contains(t, sawErr, "test")
+	require.Contains(t, sawErr, "boom")
 }
 
 func TestFlow_callLLM_NoModel(t *testing.T) {
