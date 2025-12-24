@@ -462,11 +462,11 @@ func TestInvokeAgentTracker_RecordMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	InvokeAgentMetricGenAIClientTimeToFirstToken, err = InvokeAgentMeter.Float64Histogram("gen_ai.client.time_to_first_token")
+	InvokeAgentMetricGenAIClientTimeToFirstToken, err = NewDynamicFloat64Histogram(InvokeAgentMeter, "gen_ai.client.time_to_first_token", "", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	InvokeAgentMetricGenAIClientOperationDuration, err = InvokeAgentMeter.Float64Histogram("gen_ai.client.operation.duration")
+	InvokeAgentMetricGenAIClientOperationDuration, err = NewDynamicFloat64Histogram(InvokeAgentMeter, "gen_ai.client.operation.duration", "", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
@@ -547,11 +547,11 @@ func TestInvokeAgentTracker_RecordMetrics_WithError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	InvokeAgentMetricGenAIClientTimeToFirstToken, err = InvokeAgentMeter.Float64Histogram("gen_ai.client.time_to_first_token")
+	InvokeAgentMetricGenAIClientTimeToFirstToken, err = NewDynamicFloat64Histogram(InvokeAgentMeter, "gen_ai.client.time_to_first_token", "", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	InvokeAgentMetricGenAIClientOperationDuration, err = InvokeAgentMeter.Float64Histogram("gen_ai.client.operation.duration")
+	InvokeAgentMetricGenAIClientOperationDuration, err = NewDynamicFloat64Histogram(InvokeAgentMeter, "gen_ai.client.operation.duration", "", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
@@ -598,11 +598,11 @@ func TestInvokeAgentTracker_RecordMetrics_NoTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	InvokeAgentMetricGenAIClientTimeToFirstToken, err = InvokeAgentMeter.Float64Histogram("gen_ai.client.time_to_first_token")
+	InvokeAgentMetricGenAIClientTimeToFirstToken, err = NewDynamicFloat64Histogram(InvokeAgentMeter, "gen_ai.client.time_to_first_token", "", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	InvokeAgentMetricGenAIClientOperationDuration, err = InvokeAgentMeter.Float64Histogram("gen_ai.client.operation.duration")
+	InvokeAgentMetricGenAIClientOperationDuration, err = NewDynamicFloat64Histogram(InvokeAgentMeter, "gen_ai.client.operation.duration", "", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}

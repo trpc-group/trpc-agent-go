@@ -15,7 +15,6 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/noop"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
@@ -24,9 +23,9 @@ var (
 	ExecuteToolMeter = MeterProvider.Meter(metrics.MeterNameExecuteTool)
 
 	// ExecuteToolMetricTRPCAgentGoClientRequestCnt records the number of tool execution requests made.
-	ExecuteToolMetricTRPCAgentGoClientRequestCnt metric.Int64Counter = noop.Int64Counter{}
+	ExecuteToolMetricTRPCAgentGoClientRequestCnt metric.Int64Counter
 	// ExecuteToolMetricGenAIClientOperationDuration records the distribution of tool execution durations in seconds.
-	ExecuteToolMetricGenAIClientOperationDuration metric.Float64Histogram = noop.Float64Histogram{}
+	ExecuteToolMetricGenAIClientOperationDuration *DynamicFloat64Histogram
 )
 
 // ExecuteToolAttributes is the attributes for tool execution metrics.
@@ -70,6 +69,10 @@ func (a ExecuteToolAttributes) toAttributes() []attribute.KeyValue {
 // ReportExecuteToolMetrics reports the tool execution metrics.
 func ReportExecuteToolMetrics(ctx context.Context, attrs ExecuteToolAttributes, duration time.Duration) {
 	as := attrs.toAttributes()
-	ExecuteToolMetricTRPCAgentGoClientRequestCnt.Add(ctx, 1, metric.WithAttributes(as...))
-	ExecuteToolMetricGenAIClientOperationDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(as...))
+	if ExecuteToolMetricTRPCAgentGoClientRequestCnt != nil {
+		ExecuteToolMetricTRPCAgentGoClientRequestCnt.Add(ctx, 1, metric.WithAttributes(as...))
+	}
+	if ExecuteToolMetricGenAIClientOperationDuration != nil {
+		ExecuteToolMetricGenAIClientOperationDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(as...))
+	}
 }
