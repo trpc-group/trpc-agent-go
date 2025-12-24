@@ -1,0 +1,69 @@
+{
+  "evalSetId": "compound_interest",
+  "name": "compound_interest",
+  "evalCases": [
+    {
+      "evalId": "compound_interest",
+      "conversation": [
+        {
+          "invocationId": "compound_interest-1",
+          "userContent": {
+            "role": "user",
+            "content": "With a principal of 100 and an annual compound interest rate of 10%, what will the profit be after 30 years?"
+          },
+          "tools": [
+            {
+              "id": "calculator_power",
+              "name": "calculator",
+              "arguments": {
+                "operation": "power",
+                "a": 1.1,
+                "b": 30
+              },
+              "result": {
+                "operation": "power",
+                "a": 1.1,
+                "b": 30,
+                "result": 17.4494022689
+              }
+            },
+            {
+              "id": "calculator_multiply",
+              "name": "calculator",
+              "arguments": {
+                "operation": "multiply",
+                "a": 100,
+                "b": 17.4494022689
+              },
+              "result": {
+                "operation": "multiply",
+                "a": 100,
+                "b": 17.4494022689,
+                "result": 1744.94022689
+              }
+            },
+            {
+              "id": "calculator_subtract",
+              "name": "calculator",
+              "arguments": {
+                "operation": "subtract",
+                "a": 1744.94022689,
+                "b": 100
+              },
+              "result": {
+                "operation": "subtract",
+                "a": 1744.94022689,
+                "b": 100,
+                "result": 1644.94022689
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "runner-quickstart",
+        "userId": "tool-user"
+      }
+    }
+  ]
+}
