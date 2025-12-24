@@ -21,6 +21,6 @@ func TestNewLlmCriterion(t *testing.T) {
 	require.NotNil(t, crit.JudgeModel)
 	assert.Equal(t, "provider", crit.JudgeModel.ProviderName)
 	assert.Equal(t, "model", crit.JudgeModel.ModelName)
-	assert.Equal(t, 2, crit.JudgeModel.NumSamples)
+	assert.Equal(t, 2, *crit.JudgeModel.NumSamples)
 	assert.Equal(t, "base", crit.JudgeModel.BaseURL)
 }
