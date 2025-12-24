@@ -482,6 +482,293 @@ func TestFunctionCallResponseProcessor_ToolIterationLimitEmitsFlowError(t *testi
 	require.True(t, inv.EndInvocation, "invocation should be marked as ended")
 }
 
+func TestFunctionCallResponseProcessor_ToolExecutionFilter_AllDeferred(t *testing.T) {
+	const (
+		toolName = "external_tool"
+		callID   = "call-1"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-defer-all",
+		AgentName:    "test-agent",
+		RunOptions: agent.RunOptions{
+			ToolExecutionFilter: tool.NewExcludeToolNamesFilter(
+				toolName,
+			),
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			toolName: &mockTool{
+				name:        toolName,
+				shouldPanic: true,
+			},
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   callID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      toolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case <-ch:
+		t.Fatalf("unexpected tool response event")
+	default:
+	}
+	require.True(t, inv.EndInvocation)
+}
+
+func TestFunctionCallResponseProcessor_ToolExecutionFilter_MixedStops(t *testing.T) {
+	const (
+		autoToolName = "auto_tool"
+		extToolName  = "external_tool"
+		autoCallID   = "call-auto"
+		extCallID    = "call-ext"
+		toolResult   = "ok"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-mixed",
+		AgentName:    "test-agent",
+		RunOptions: agent.RunOptions{
+			ToolExecutionFilter: tool.NewIncludeToolNamesFilter(
+				autoToolName,
+			),
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			autoToolName: &mockTool{
+				name:   autoToolName,
+				result: toolResult,
+			},
+			extToolName: &mockTool{
+				name:        extToolName,
+				shouldPanic: true,
+			},
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   autoCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      autoToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+						{
+							ID:   extCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      extToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case ev := <-ch:
+		require.NotNil(t, ev.Response)
+		require.Len(t, ev.Response.Choices, 1)
+		msg := ev.Response.Choices[0].Message
+		require.Equal(t, model.RoleTool, msg.Role)
+		require.Equal(t, autoCallID, msg.ToolID)
+		require.Equal(t, autoToolName, msg.ToolName)
+
+		b, err := json.Marshal(toolResult)
+		require.NoError(t, err)
+		require.Equal(t, string(b), msg.Content)
+	default:
+		t.Fatalf("expected a tool response event")
+	}
+	require.True(t, inv.EndInvocation)
+}
+
+func TestFunctionCallResponseProcessor_ToolExecutionFilter_NoPlaceholders(t *testing.T) {
+	const (
+		autoToolName = "auto_tool"
+		extToolName  = "external_tool"
+		autoCallID   = "call-auto"
+		extCallID    = "call-ext"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-nil-longrunning",
+		AgentName:    "test-agent",
+		RunOptions: agent.RunOptions{
+			ToolExecutionFilter: tool.NewIncludeToolNamesFilter(
+				autoToolName,
+			),
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			autoToolName: &mockNilLongRunningTool{
+				name: autoToolName,
+			},
+			extToolName: &mockTool{
+				name:        extToolName,
+				shouldPanic: true,
+			},
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   autoCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      autoToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+						{
+							ID:   extCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      extToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case <-ch:
+		t.Fatalf("unexpected tool response event")
+	default:
+	}
+	require.True(t, inv.EndInvocation)
+}
+
+func TestFunctionCallResponseProcessor_ToolExecutionFilter_NoPlaceholdersParallel(
+	t *testing.T,
+) {
+	const (
+		autoToolName = "auto_tool"
+		extToolName  = "external_tool"
+		autoCallID   = "call-auto"
+		extCallID    = "call-ext"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(true, nil)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-nil-longrunning-parallel",
+		AgentName:    "test-agent",
+		RunOptions: agent.RunOptions{
+			ToolExecutionFilter: tool.NewIncludeToolNamesFilter(
+				autoToolName,
+			),
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			autoToolName: &mockNilLongRunningTool{
+				name: autoToolName,
+			},
+			extToolName: &mockTool{
+				name:        extToolName,
+				shouldPanic: true,
+			},
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							Index: intPtr(0),
+							ID:    autoCallID,
+							Type:  "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      autoToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+						{
+							Index: intPtr(1),
+							ID:    extCallID,
+							Type:  "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      extToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case <-ch:
+		t.Fatalf("unexpected tool response event")
+	default:
+	}
+	require.True(t, inv.EndInvocation)
+}
+
 func TestFlow_EnableParallelTools_ForcesSerialExecution(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
