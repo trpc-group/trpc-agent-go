@@ -124,6 +124,18 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 		s.startCleanupRoutine()
 	}
 
+	// Start async summary workers if summarizer is configured
+	if opts.summarizer != nil && opts.asyncSummaryNum > 0 {
+		s.asyncWorker = isummary.NewAsyncSummaryWorker(isummary.AsyncSummaryConfig{
+			Summarizer:        opts.summarizer,
+			AsyncSummaryNum:   opts.asyncSummaryNum,
+			SummaryQueueSize:  opts.summaryQueueSize,
+			SummaryJobTimeout: opts.summaryJobTimeout,
+			CreateSummaryFunc: s.CreateSessionSummary,
+		})
+		s.asyncWorker.Start()
+	}
+
 	return s
 }
 

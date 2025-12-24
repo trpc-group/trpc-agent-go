@@ -22,23 +22,69 @@ import (
 // CreateSessionSummary generates a summary for the session and stores it on the session object.
 // This implementation preserves original events and updates session.Summaries only.
 func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	updated, err := isummary.CreateSessionSummary(ctx, s.opts.summarizer, sess, filterKey, force)
+	if sess == nil {
+		return errors.New("nil session")
+	}
+
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return fmt.Errorf("check session key failed: %w", err)
+	}
+
+	// Get the authoritative session from storage directly (not via GetSession which clones).
+	app, ok := s.getAppSessions(key.AppName)
+	if !ok {
+		// If app not found, use the input session directly.
+		// This handles the case where CreateSessionSummary is called before session is stored.
+		updated, err := isummary.CreateSessionSummary(ctx, s.opts.summarizer, sess, filterKey, force)
+		if err != nil || !updated {
+			return err
+		}
+		sess.SummariesMu.RLock()
+		sum := sess.Summaries[filterKey]
+		sess.SummariesMu.RUnlock()
+		if sum == nil {
+			return nil
+		}
+		app = s.getOrCreateAppSessions(sess.AppName)
+		return s.writeSummaryUnderLock(app, key, filterKey, sum.Summary)
+	}
+
+	app.mu.RLock()
+	var stored *session.Session
+	if userSessions, ok := app.sessions[key.UserID]; ok {
+		if sessWithTTL, ok := userSessions[key.SessionID]; ok {
+			stored = getValidSession(sessWithTTL)
+		}
+	}
+	app.mu.RUnlock()
+
+	var workSession *session.Session
+	if stored == nil {
+		// If session not found in storage, use the input session directly.
+		// This handles the case where CreateSessionSummary is called before session is stored.
+		workSession = sess
+	} else {
+		// Clone the stored session to avoid modifying the original.
+		// Clone() already copies summaries, so prevAt will be correct.
+		workSession = stored.Clone()
+	}
+
+	updated, err := isummary.CreateSessionSummary(ctx, s.opts.summarizer, workSession, filterKey, force)
 	if err != nil || !updated {
 		return err
 	}
 
 	// Persist to in-memory store under lock.
-	sess.SummariesMu.RLock()
-	sum := sess.Summaries[filterKey]
-	sess.SummariesMu.RUnlock()
+	workSession.SummariesMu.RLock()
+	sum := workSession.Summaries[filterKey]
+	workSession.SummariesMu.RUnlock()
 
-	app := s.getOrCreateAppSessions(sess.AppName)
-	if err := s.writeSummaryUnderLock(
-		app, session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}, filterKey, sum.Summary,
-	); err != nil {
-		return fmt.Errorf("write summary under lock failed: %w", err)
+	if sum == nil {
+		return nil
 	}
-	return nil
+
+	return s.writeSummaryUnderLock(app, key, filterKey, sum.Summary)
 }
 
 // writeSummaryUnderLock writes a summary for a filterKey under app lock and refreshes TTL.
@@ -89,19 +135,6 @@ func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Se
 	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
 	if err := key.CheckSessionKey(); err != nil {
 		return fmt.Errorf("check session key failed: %w", err)
-	}
-
-	if s.asyncWorker == nil {
-		if s.opts.asyncSummaryNum > 0 {
-			s.asyncWorker = isummary.NewAsyncSummaryWorker(isummary.AsyncSummaryConfig{
-				Summarizer:        s.opts.summarizer,
-				AsyncSummaryNum:   s.opts.asyncSummaryNum,
-				SummaryQueueSize:  s.opts.summaryQueueSize,
-				SummaryJobTimeout: s.opts.summaryJobTimeout,
-				CreateSummaryFunc: s.CreateSessionSummary,
-			})
-			s.asyncWorker.Start()
-		}
 	}
 
 	if s.asyncWorker != nil {

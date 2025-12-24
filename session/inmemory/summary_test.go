@@ -37,10 +37,15 @@ func (f *fakeSummarizer) Metadata() map[string]any { return map[string]any{} }
 
 func TestMemoryService_GetSessionSummaryText_LocalPreferred(t *testing.T) {
 	s := NewSessionService()
-	sess := &session.Session{Summaries: map[string]*session.Summary{
-		"":   {Summary: "full", UpdatedAt: time.Now()},
-		"b1": {Summary: "branch", UpdatedAt: time.Now()},
-	}}
+	sess := &session.Session{
+		ID:      "s1",
+		AppName: "app",
+		UserID:  "user",
+		Summaries: map[string]*session.Summary{
+			"":   {Summary: "full", UpdatedAt: time.Now()},
+			"b1": {Summary: "branch", UpdatedAt: time.Now()},
+		},
+	}
 	text, ok := s.GetSessionSummaryText(context.Background(), sess)
 	require.True(t, ok)
 	require.Equal(t, "full", text)
@@ -333,15 +338,20 @@ func TestMemoryService_EnqueueSummaryJob_ChannelClosed_PanicRecovery(t *testing.
 	// This will cause a panic when trying to send to the closed channel
 	s.Close()
 
+	// Get the latest session from storage to ensure we have the latest events
+	sessFromStorage, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, sessFromStorage)
+
 	// Enqueue summary job should handle the panic and fall back to sync processing
-	err = s.EnqueueSummaryJob(context.Background(), sess, "panic-test", false)
+	err = s.EnqueueSummaryJob(context.Background(), sessFromStorage, "", false)
 	require.NoError(t, err)
 
 	// Verify summary was created through sync fallback
 	got, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	sum, ok := got.Summaries["panic-test"]
+	sum, ok := got.Summaries[""]
 	require.True(t, ok)
 	require.Equal(t, "panic-recovery-summary", sum.Summary)
 }
@@ -369,15 +379,20 @@ func TestMemoryService_EnqueueSummaryJob_ChannelClosed_AllChannelsClosed(t *test
 	// Close the service to simulate service shutdown scenario
 	s.Close()
 
+	// Get the latest session from storage to ensure we have the latest events
+	sessFromStorage, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, sessFromStorage)
+
 	// Enqueue summary job should handle the panic and fall back to sync processing
-	err = s.EnqueueSummaryJob(context.Background(), sess, "all-closed-test", false)
+	err = s.EnqueueSummaryJob(context.Background(), sessFromStorage, "", false)
 	require.NoError(t, err)
 
 	// Verify summary was created through sync fallback
 	got, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	sum, ok := got.Summaries["all-closed-test"]
+	sum, ok := got.Summaries[""]
 	require.True(t, ok)
 	require.Equal(t, "all-channels-closed-summary", sum.Summary)
 }
@@ -391,7 +406,12 @@ func TestMemoryService_GetSessionSummaryText_NilSession(t *testing.T) {
 
 func TestMemoryService_GetSessionSummaryText_EmptySummaries(t *testing.T) {
 	s := NewSessionService()
-	sess := &session.Session{ID: "s1", Summaries: map[string]*session.Summary{}}
+	sess := &session.Session{
+		ID:      "s1",
+		AppName: "app",
+		UserID:  "user",
+		Summaries: map[string]*session.Summary{},
+	}
 	text, ok := s.GetSessionSummaryText(context.Background(), sess)
 	require.False(t, ok)
 	require.Empty(t, text)
@@ -399,7 +419,12 @@ func TestMemoryService_GetSessionSummaryText_EmptySummaries(t *testing.T) {
 
 func TestMemoryService_GetSessionSummaryText_NilSummaries(t *testing.T) {
 	s := NewSessionService()
-	sess := &session.Session{ID: "s1", Summaries: nil}
+	sess := &session.Session{
+		ID:      "s1",
+		AppName: "app",
+		UserID:  "user",
+		Summaries: nil,
+	}
 	text, ok := s.GetSessionSummaryText(context.Background(), sess)
 	require.False(t, ok)
 	require.Empty(t, text)
@@ -408,7 +433,9 @@ func TestMemoryService_GetSessionSummaryText_NilSummaries(t *testing.T) {
 func TestMemoryService_GetSessionSummaryText_EmptySummaryText(t *testing.T) {
 	s := NewSessionService()
 	sess := &session.Session{
-		ID: "s1",
+		ID:      "s1",
+		AppName: "app",
+		UserID:  "user",
 		Summaries: map[string]*session.Summary{
 			session.SummaryFilterKeyAllContents: {Summary: "", UpdatedAt: time.Now()},
 		},
@@ -421,7 +448,9 @@ func TestMemoryService_GetSessionSummaryText_EmptySummaryText(t *testing.T) {
 func TestMemoryService_GetSessionSummaryText_NilSummaryEntry(t *testing.T) {
 	s := NewSessionService()
 	sess := &session.Session{
-		ID: "s1",
+		ID:      "s1",
+		AppName: "app",
+		UserID:  "user",
 		Summaries: map[string]*session.Summary{
 			session.SummaryFilterKeyAllContents: nil,
 		},
@@ -434,7 +463,9 @@ func TestMemoryService_GetSessionSummaryText_NilSummaryEntry(t *testing.T) {
 func TestMemoryService_GetSessionSummaryText_BranchSummaryFallback(t *testing.T) {
 	s := NewSessionService()
 	sess := &session.Session{
-		ID: "s1",
+		ID:      "s1",
+		AppName: "app",
+		UserID:  "user",
 		Summaries: map[string]*session.Summary{
 			"branch1": {Summary: "branch-summary", UpdatedAt: time.Now()},
 		},
@@ -688,8 +719,13 @@ func TestMemoryService_TryEnqueueJob_ChannelsNotInitialized(t *testing.T) {
 	// Close the service to simulate shutdown and set channels to nil
 	service.Close()
 
+	// Get the latest session from storage to ensure we have the latest events
+	sessFromStorage, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, sessFromStorage)
+
 	// EnqueueSummaryJob should fall back to sync processing when channels are nil
-	err = service.EnqueueSummaryJob(ctx, sess, "", false)
+	err = service.EnqueueSummaryJob(ctx, sessFromStorage, "", false)
 	require.NoError(t, err)
 
 	// Verify summary was created through sync fallback
@@ -704,7 +740,9 @@ func TestMemoryService_TryEnqueueJob_ChannelsNotInitialized(t *testing.T) {
 func TestMemoryService_GetSessionSummaryText_WithFilterKey(t *testing.T) {
 	s := NewSessionService()
 	sess := &session.Session{
-		ID: "s1",
+		ID:      "s1",
+		AppName: "app",
+		UserID:  "user",
 		Summaries: map[string]*session.Summary{
 			"":              {Summary: "full-summary", UpdatedAt: time.Now()},
 			"user-messages": {Summary: "user-only-summary", UpdatedAt: time.Now()},
@@ -738,7 +776,9 @@ func TestMemoryService_GetSessionSummaryText_FilterKeyFallback(t *testing.T) {
 
 	// Only full-session summary available, no specific filterKey.
 	sess := &session.Session{
-		ID: "s1",
+		ID:      "s1",
+		AppName: "app",
+		UserID:  "user",
 		Summaries: map[string]*session.Summary{
 			"": {Summary: "full-summary", UpdatedAt: time.Now()},
 		},
@@ -755,7 +795,9 @@ func TestMemoryService_GetSessionSummaryText_FilterKeyNotFoundNoFallback(t *test
 
 	// Only specific filterKey summary available, no full-session summary.
 	sess := &session.Session{
-		ID: "s1",
+		ID:      "s1",
+		AppName: "app",
+		UserID:  "user",
 		Summaries: map[string]*session.Summary{
 			"branch1": {Summary: "branch-summary", UpdatedAt: time.Now()},
 		},
@@ -772,7 +814,9 @@ func TestMemoryService_GetSessionSummaryText_FilterKeyEmptySummary(t *testing.T)
 
 	// filterKey exists but summary is empty.
 	sess := &session.Session{
-		ID: "s1",
+		ID:      "s1",
+		AppName: "app",
+		UserID:  "user",
 		Summaries: map[string]*session.Summary{
 			"user-messages": {Summary: "", UpdatedAt: time.Now()},
 			"":              {Summary: "full-summary", UpdatedAt: time.Now()},

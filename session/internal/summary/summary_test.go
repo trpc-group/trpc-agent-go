@@ -12,6 +12,7 @@ package summary
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -694,12 +695,15 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 	// Test using method value (like s.CreateSessionSummary)
 	type mockService struct {
+		mu        sync.Mutex
 		summaries map[string]string
 	}
 
 	mockSvc := &mockService{}
 
 	createFunc := func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+		mockSvc.mu.Lock()
+		defer mockSvc.mu.Unlock()
 		if mockSvc.summaries == nil {
 			mockSvc.summaries = make(map[string]string)
 		}
@@ -717,6 +721,8 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should have created both summaries
+	mockSvc.mu.Lock()
+	defer mockSvc.mu.Unlock()
 	require.Equal(t, "summary-user-messages", mockSvc.summaries["user-messages"])
 	require.Equal(t, "summary-", mockSvc.summaries[""])
 }
