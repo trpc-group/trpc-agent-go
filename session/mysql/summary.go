@@ -65,13 +65,33 @@ func (s *Service) CreateSessionSummary(
 		expiresAt = &t
 	}
 
-	_, err = s.mysqlClient.Exec(ctx,
-		fmt.Sprintf(`REPLACE INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, filterKey, summaryBytes, summary.UpdatedAt, expiresAt)
+	// Try UPDATE first, then INSERT if no rows affected
+	result, err := s.mysqlClient.Exec(ctx,
+		fmt.Sprintf(
+			`UPDATE %s SET summary = ?, updated_at = ?, expires_at = ?
+			WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ? AND deleted_at IS NULL`,
+			s.tableSessionSummaries,
+		),
+		summaryBytes, summary.UpdatedAt, expiresAt, key.AppName, key.UserID, key.SessionID, filterKey)
 
 	if err != nil {
-		return fmt.Errorf("upsert summary failed: %w", err)
+		return fmt.Errorf("update summary failed: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		// No existing record, insert new one
+		_, err = s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(
+				`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+				s.tableSessionSummaries,
+			),
+			key.AppName, key.UserID, key.SessionID, filterKey, summaryBytes, summary.UpdatedAt, expiresAt)
+
+		if err != nil {
+			return fmt.Errorf("insert summary failed: %w", err)
+		}
 	}
 
 	return nil
@@ -198,8 +218,9 @@ func (s *Service) GetSessionSummaryText(
 	}, fmt.Sprintf(`SELECT summary FROM %s
 		WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
 		AND (expires_at IS NULL OR expires_at > ?)
+		AND updated_at >= ?
 		AND deleted_at IS NULL`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, isummary.GetFilterKeyFromOptions(opts...), time.Now())
+		key.AppName, key.UserID, key.SessionID, isummary.GetFilterKeyFromOptions(opts...), time.Now(), sess.CreatedAt)
 
 	if err != nil {
 		return "", false
@@ -222,8 +243,9 @@ func (s *Service) GetSessionSummaryText(
 		}, fmt.Sprintf(`SELECT summary FROM %s
 			WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
 			AND (expires_at IS NULL OR expires_at > ?)
+			AND updated_at >= ?
 			AND deleted_at IS NULL`, s.tableSessionSummaries),
-			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now())
+			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now(), sess.CreatedAt)
 		if err != nil {
 			return "", false
 		}

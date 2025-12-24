@@ -31,11 +31,15 @@ func (s *Service) getSession(
 ) (*session.Session, error) {
 	// Query session state (MySQL syntax with ?)
 	var sessState *SessionState
-	stateQuery := fmt.Sprintf(`SELECT state, created_at, updated_at FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ? AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL`, s.tableSessionStates)
+	stateQuery := fmt.Sprintf(
+		`SELECT state, created_at, updated_at FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL`,
+		s.tableSessionStates,
+	)
 	stateArgs := []any{key.AppName, key.UserID, key.SessionID, time.Now()}
 
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		// rows.Next() is already called by the Query loop, so we just scan directly
 		var stateBytes []byte
 		var createdAt, updatedAt time.Time
 		if err := rows.Scan(&stateBytes, &createdAt, &updatedAt); err != nil {
@@ -49,8 +53,7 @@ func (s *Service) getSession(
 		sessState.UpdatedAt = updatedAt
 		log.DebugfContext(
 			ctx,
-			"getSession found session state: app=%s, user=%s, "+
-				"session=%s",
+			"getSession found session state: app=%s, user=%s, session=%s",
 			key.AppName,
 			key.UserID,
 			key.SessionID,
@@ -88,7 +91,7 @@ func (s *Service) getSession(
 	}
 
 	// Batch load events for all sessions
-	eventsList, err := s.getEventsList(ctx, []session.Key{key}, limit, afterTime)
+	eventsList, err := s.getEventsList(ctx, []session.Key{key}, []time.Time{sessState.CreatedAt}, limit, afterTime)
 	if err != nil {
 		return nil, fmt.Errorf("get events failed: %w", err)
 	}
@@ -98,7 +101,7 @@ func (s *Service) getSession(
 	summaries := make(map[string]*session.Summary)
 	if len(events) > 0 {
 		// Batch load summaries for all sessions
-		summariesList, err := s.getSummariesList(ctx, []session.Key{key})
+		summariesList, err := s.getSummariesList(ctx, []session.Key{key}, []time.Time{sessState.CreatedAt})
 		if err != nil {
 			return nil, fmt.Errorf("get summaries failed: %w", err)
 		}
@@ -182,24 +185,26 @@ func (s *Service) listSessions(
 		return nil, fmt.Errorf("list session states failed: %w", err)
 	}
 
-	// Build session keys for batch loading
+	// Build session keys and created_at times for batch loading
 	sessionKeys := make([]session.Key, 0, len(sessStates))
+	sessionCreatedAts := make([]time.Time, 0, len(sessStates))
 	for _, sessState := range sessStates {
 		sessionKeys = append(sessionKeys, session.Key{
 			AppName:   key.AppName,
 			UserID:    key.UserID,
 			SessionID: sessState.ID,
 		})
+		sessionCreatedAts = append(sessionCreatedAts, sessState.CreatedAt)
 	}
 
 	// Batch load events for all sessions
-	eventsList, err := s.getEventsList(ctx, sessionKeys, limit, afterTime)
+	eventsList, err := s.getEventsList(ctx, sessionKeys, sessionCreatedAts, limit, afterTime)
 	if err != nil {
 		return nil, fmt.Errorf("get events list failed: %w", err)
 	}
 
 	// Batch load summaries for all sessions
-	summariesList, err := s.getSummariesList(ctx, sessionKeys)
+	summariesList, err := s.getSummariesList(ctx, sessionKeys, sessionCreatedAts)
 	if err != nil {
 		return nil, fmt.Errorf("get summaries list failed: %w", err)
 	}
@@ -523,9 +528,12 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 }
 
 // getEventsList loads events for multiple sessions in batch.
+// sessionCreatedAts is used to filter out events created before the session was (re)created,
+// which handles the case where an expired session is overwritten but old events still exist.
 func (s *Service) getEventsList(
 	ctx context.Context,
 	sessionKeys []session.Key,
+	sessionCreatedAts []time.Time,
 	limit int,
 	afterTime time.Time,
 ) ([][]event.Event, error) {
@@ -545,11 +553,18 @@ func (s *Service) getEventsList(
 
 	// Note: We cannot apply LIMIT in SQL because we're querying multiple sessions
 	// The limit is applied per session in memory after grouping by session key
-	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event FROM %s
+	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event, created_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
 		AND deleted_at IS NULL
 		ORDER BY app_name, user_id, session_id, created_at ASC`,
 		s.tableSessionEvents, strings.Join(placeholders, ","))
+
+	// Build a map of session key to created_at for filtering
+	sessionCreatedAtMap := make(map[string]time.Time, len(sessionKeys))
+	for i, key := range sessionKeys {
+		keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
+		sessionCreatedAtMap[keyStr] = sessionCreatedAts[i]
+	}
 
 	// Map to collect events by session
 	eventsMap := make(map[string][]event.Event)
@@ -558,15 +573,24 @@ func (s *Service) getEventsList(
 		// rows.Next() is already called by the Query loop
 		var appName, userID, sessionID string
 		var eventBytes []byte
-		if err := rows.Scan(&appName, &userID, &sessionID, &eventBytes); err != nil {
+		var eventCreatedAt time.Time
+		if err := rows.Scan(&appName, &userID, &sessionID, &eventBytes, &eventCreatedAt); err != nil {
 			return err
 		}
+		keyStr := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
+
+		// Filter out events created before the session was (re)created
+		if sessCreatedAt, ok := sessionCreatedAtMap[keyStr]; ok {
+			if eventCreatedAt.Before(sessCreatedAt) {
+				return nil // skip this event
+			}
+		}
+
 		var evt event.Event
 		if err := json.Unmarshal(eventBytes, &evt); err != nil {
 			return fmt.Errorf("unmarshal event failed: %w", err)
 		}
-		key := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
-		eventsMap[key] = append(eventsMap[key], evt)
+		eventsMap[keyStr] = append(eventsMap[keyStr], evt)
 		return nil
 	}, query, args...)
 
@@ -690,9 +714,11 @@ func (s *Service) getTrackEvents(
 }
 
 // getSummariesList loads summaries for multiple sessions in batch.
+// sessionCreatedAts is used to filter out summaries created before the session was (re)created.
 func (s *Service) getSummariesList(
 	ctx context.Context,
 	sessionKeys []session.Key,
+	sessionCreatedAts []time.Time,
 ) ([]map[string]*session.Summary, error) {
 	if len(sessionKeys) == 0 {
 		return nil, nil
@@ -709,11 +735,18 @@ func (s *Service) getSummariesList(
 
 	args = append(args, time.Now())
 
-	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, filter_key, summary FROM %s
+	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
 		AND (expires_at IS NULL OR expires_at > ?)
 		AND deleted_at IS NULL`,
 		s.tableSessionSummaries, strings.Join(placeholders, ","))
+
+	// Build a map of session key to created_at for filtering
+	sessionCreatedAtMap := make(map[string]time.Time, len(sessionKeys))
+	for i, key := range sessionKeys {
+		keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
+		sessionCreatedAtMap[keyStr] = sessionCreatedAts[i]
+	}
 
 	// Map to collect summaries by session
 	summariesMap := make(map[string]map[string]*session.Summary)
@@ -722,18 +755,27 @@ func (s *Service) getSummariesList(
 		// rows.Next() is already called by the Query loop
 		var appName, userID, sessionID, filterKey string
 		var summaryBytes []byte
-		if err := rows.Scan(&appName, &userID, &sessionID, &filterKey, &summaryBytes); err != nil {
+		var updatedAt time.Time
+		if err := rows.Scan(&appName, &userID, &sessionID, &filterKey, &summaryBytes, &updatedAt); err != nil {
 			return err
 		}
+		keyStr := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
+
+		// Filter out summaries updated before the session was (re)created
+		if sessCreatedAt, ok := sessionCreatedAtMap[keyStr]; ok {
+			if updatedAt.Before(sessCreatedAt) {
+				return nil // skip this summary
+			}
+		}
+
 		var sum session.Summary
 		if err := json.Unmarshal(summaryBytes, &sum); err != nil {
 			return fmt.Errorf("unmarshal summary failed: %w", err)
 		}
-		key := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
-		if summariesMap[key] == nil {
-			summariesMap[key] = make(map[string]*session.Summary)
+		if summariesMap[keyStr] == nil {
+			summariesMap[keyStr] = make(map[string]*session.Summary)
 		}
-		summariesMap[key][filterKey] = &sum
+		summariesMap[keyStr][filterKey] = &sum
 		return nil
 	}, query, args...)
 
