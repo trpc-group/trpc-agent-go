@@ -107,6 +107,27 @@ func hasAttr(attrs []attribute.KeyValue, key string, want any) bool {
 	return false
 }
 
+func TestNewWorkflowSpanName(t *testing.T) {
+	require.Equal(t, "workflow myflow", NewWorkflowSpanName("myflow"))
+}
+
+func TestTraceWorkflow(t *testing.T) {
+	span := newRecordingSpan()
+	wf := &Workflow{Name: "myflow", ID: "wf-123"}
+
+	TraceWorkflow(span, wf)
+
+	if !hasAttr(span.attrs, KeyGenAIOperationName, OperationWorkflow) {
+		t.Fatalf("missing operation name attribute")
+	}
+	if !hasAttr(span.attrs, KeyGenAIWorkflowName, "myflow") {
+		t.Fatalf("missing workflow name attribute")
+	}
+	if !hasAttr(span.attrs, KeyGenAIWorkflowID, "wf-123") {
+		t.Fatalf("missing workflow id attribute")
+	}
+}
+
 func TestTraceFunctions_NoPanics(t *testing.T) {
 	span := newStubSpan()
 
