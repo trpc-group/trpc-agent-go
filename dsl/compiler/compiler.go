@@ -1374,6 +1374,29 @@ func convertMapFilterCondition(m map[string]any) *searchfilter.UniversalFilterCo
 			}
 			result.Value = subConditions
 		}
+	} else if result.Operator == "in" || result.Operator == "not in" {
+		// For in/not in operators, convert []any to []string if all elements are strings
+		// This is needed because tcvectordb.In expects []string to properly quote string values
+		if arr, ok := m["value"].([]any); ok {
+			allStrings := true
+			for _, v := range arr {
+				if _, ok := v.(string); !ok {
+					allStrings = false
+					break
+				}
+			}
+			if allStrings {
+				strArr := make([]string, len(arr))
+				for i, v := range arr {
+					strArr[i] = v.(string)
+				}
+				result.Value = strArr
+			} else {
+				result.Value = m["value"]
+			}
+		} else {
+			result.Value = m["value"]
+		}
 	} else {
 		// For comparison operators, keep the value as-is
 		result.Value = m["value"]

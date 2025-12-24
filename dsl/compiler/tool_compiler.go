@@ -294,6 +294,29 @@ func convertFilterCondition(fc *toolspec.FilterCondition) *searchfilter.Universa
 			}
 			result.Value = subConditions
 		}
+	} else if fc.Operator == "in" || fc.Operator == "not in" {
+		// For in/not in operators, convert []any to []string if all elements are strings
+		// This is needed because tcvectordb.In expects []string to properly quote string values
+		if arr, ok := fc.Value.([]any); ok {
+			allStrings := true
+			for _, v := range arr {
+				if _, ok := v.(string); !ok {
+					allStrings = false
+					break
+				}
+			}
+			if allStrings {
+				strArr := make([]string, len(arr))
+				for i, v := range arr {
+					strArr[i] = v.(string)
+				}
+				result.Value = strArr
+			} else {
+				result.Value = fc.Value
+			}
+		} else {
+			result.Value = fc.Value
+		}
 	} else {
 		// For comparison operators, keep the value as-is
 		result.Value = fc.Value
@@ -403,15 +426,16 @@ func createElasticsearchStore(cfg *toolspec.VectorStoreConfig) (vectorstore.Vect
 }
 
 func createTCVectorStore(cfg *toolspec.VectorStoreConfig) (vectorstore.VectorStore, error) {
-	// Resolve URL secret
+	// Resolve secrets
 	url := toolspec.ResolveSecret(cfg.URL)
 	user := toolspec.ResolveSecret(cfg.User)
+	collection := toolspec.ResolveSecret(cfg.Collection)
 
 	opts := []tcvector.Option{
 		tcvector.WithURL(url),
 		tcvector.WithUsername(user),
 		tcvector.WithPassword(cfg.Password), // Already resolved in createVectorStore
-		tcvector.WithCollection(cfg.Collection),
+		tcvector.WithCollection(collection),
 	}
 
 	// Only set database if explicitly configured (otherwise use SDK default)
@@ -435,6 +459,7 @@ func createEmbedder(cfg *toolspec.EmbedderConfig) (embedder.Embedder, error) {
 
 	// Resolve secrets
 	cfg.APIKey = toolspec.ResolveSecret(cfg.APIKey)
+	cfg.BaseURL = toolspec.ResolveSecret(cfg.BaseURL)
 
 	switch cfg.Type {
 	case toolspec.EmbedderOpenAI:

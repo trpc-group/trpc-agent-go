@@ -16,8 +16,8 @@
       "config": {
         "model_spec": {
           "provider": "openai",
-          "model_name": "deepseek-chat",
-          "base_url": "https://api.deepseek.com/v1",
+          "model_name": "claude-4-5-sonnet-20250929",
+          "base_url": "http://v2.open.venus.oa.com/llmproxy/",
           "api_key": "env:OPENAI_API_KEY"
         },
         "instruction": "You are a query rewriting assistant. Given a user question, rewrite it into a clear, concise search query optimized for vector similarity search. Output only the rewritten query.",
@@ -71,9 +71,14 @@
           "operator": "and",
           "value": [
             {
-              "field": "status",
+              "field": "metadata.category",
+              "operator": "in",
+              "value": ["machine_learning", "programming"]
+            },
+            {
+              "field": "metadata.format",
               "operator": "eq",
-              "value": "published"
+              "value": "markdown"
             }
           ]
         }
@@ -86,8 +91,8 @@
       "config": {
         "model_spec": {
           "provider": "openai",
-          "model_name": "deepseek-chat",
-          "base_url": "https://api.deepseek.com/v1",
+          "model_name": "claude-4-5-sonnet-20250929",
+          "base_url": "http://v2.open.venus.oa.com/llmproxy/",
           "api_key": "env:OPENAI_API_KEY"
         },
         "instruction": "You are a helpful assistant. Based on the retrieved documents provided in the context, answer the user's question. If the documents don't contain relevant information, say so honestly.\n\nRetrieved documents:\n{{input.documents}}\n\nUser's original question: {{state.user_question}}",
