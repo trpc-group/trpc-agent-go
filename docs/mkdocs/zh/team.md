@@ -228,6 +228,9 @@ Swarm 的 handoff（交接）如果不加限制，可能会出现来回 transfer
 - `NodeTimeout`：每次 transfer 后，目标成员这次运行的最大时长（只对 transfer 的目标成员生效）
 - `RepetitiveHandoffWindow` + `RepetitiveHandoffMinUnique`：循环检测（滑动窗口）
 
+提示：把 `RepetitiveHandoffWindow` 或 `RepetitiveHandoffMinUnique` 设为 0
+就会关闭循环检测（不会做“最近 N 次 transfer”的判断）。
+
 ```go
 import "time"
 

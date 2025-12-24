@@ -244,6 +244,9 @@ Swarm-style handoffs can loop if Agents keep transferring back and forth.
 - `RepetitiveHandoffWindow` + `RepetitiveHandoffMinUnique`: loop detection
   (sliding window)
 
+Tip: set either `RepetitiveHandoffWindow` or `RepetitiveHandoffMinUnique` to 0
+to disable loop detection (no "last N transfers" check).
+
 ```go
 import "time"
 

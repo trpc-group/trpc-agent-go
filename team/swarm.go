@@ -28,6 +28,7 @@ type SwarmConfig struct {
 
 	// RepetitiveHandoffMinUnique is the minimum number of unique agents that
 	// must appear in the window. If fewer appear, the transfer is rejected.
+	// A zero value disables this check.
 	RepetitiveHandoffMinUnique int
 }
 
