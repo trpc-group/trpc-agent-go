@@ -656,9 +656,6 @@ func TestService_EnqueueSummaryJob_ChannelClosed_PanicRecovery(t *testing.T) {
 	})
 }
 
-// TestStartAsyncSummaryWorker_Initialization is removed because startAsyncSummaryWorker
-// is now handled in NewService and AsyncSummaryWorker in session/internal/summary.
-
 func TestEnqueueSummaryJob_HashDistribution(t *testing.T) {
 	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
 	s, _, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
@@ -683,15 +680,6 @@ func TestEnqueueSummaryJob_HashDistribution(t *testing.T) {
 	// We can't directly verify distribution, but jobs should be processed
 	// The test verifies that EnqueueSummaryJob works correctly
 }
-
-// TestRedisService_ProcessSummaryJob_Panic is removed because processSummaryJob
-// is now handled by AsyncSummaryWorker in session/internal/summary.
-
-// TestProcessSummaryJob is removed because processSummaryJob is now handled
-// by AsyncSummaryWorker in session/internal/summary.
-
-// TestTryEnqueueJob is removed because tryEnqueueJob is now handled
-// by AsyncSummaryWorker in session/internal/summary.
 
 type fakeSummarizer struct {
 	allow bool
@@ -780,9 +768,6 @@ func TestEnqueueSummaryJob_NoAsyncWorkers(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestTryEnqueueJob_ContextCancelled is removed because tryEnqueueJob
-// is now handled by AsyncSummaryWorker in session/internal/summary.
-
 type doneNoErrContext struct {
 	context.Context
 	done <-chan struct{}
@@ -795,18 +780,6 @@ func (c doneNoErrContext) Done() <-chan struct{} {
 func (doneNoErrContext) Err() error {
 	return nil
 }
-
-// TestTryEnqueueJob_ContextDoneBranch is removed because tryEnqueueJob
-// is now handled by AsyncSummaryWorker in session/internal/summary.
-
-// TestProcessSummaryJob_NilJob_Recovers is removed because processSummaryJob
-// is now handled by AsyncSummaryWorker in session/internal/summary.
-
-// TestProcessSummaryJob_NilSession_LogsWarning is removed because processSummaryJob
-// is now handled by AsyncSummaryWorker in session/internal/summary.
-
-// TestTryEnqueueJob_SendSuccess is removed because tryEnqueueJob
-// is now handled by AsyncSummaryWorker in session/internal/summary.
 
 func TestCreateSessionSummary_MarshalError(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -888,9 +861,3 @@ func TestEnqueueSummaryJob_AsyncProcessing(t *testing.T) {
 	// Wait for async processing
 	time.Sleep(100 * time.Millisecond)
 }
-
-// TestTryEnqueueJob_QueueFull is removed because tryEnqueueJob
-// is now handled by AsyncSummaryWorker in session/internal/summary.
-
-// TestProcessSummaryJob_Timeout is removed because processSummaryJob
-// is now handled by AsyncSummaryWorker in session/internal/summary.

@@ -52,11 +52,11 @@ type SessionState struct {
 type Service struct {
 	opts            ServiceOpts
 	redisClient     redis.UniversalClient
-	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
-	trackEventChans []chan *trackEventPair   // channel for track events to persistence.
-	asyncWorker     *isummary.AsyncSummaryWorker
-	persistWg       sync.WaitGroup           // wait group for persist workers
-	once            sync.Once                // ensure Close is called only once
+	eventPairChans  []chan *sessionEventPair     // channel for session events to persistence
+	trackEventChans []chan *trackEventPair       // channel for track events to persistence.
+	asyncWorker     *isummary.AsyncSummaryWorker // async summary worker
+	persistWg       sync.WaitGroup               // wait group for persist workers
+	once            sync.Once                    // ensure Close is called only once
 }
 
 type sessionEventPair struct {

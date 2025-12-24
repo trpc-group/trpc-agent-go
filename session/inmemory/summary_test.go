@@ -407,9 +407,9 @@ func TestMemoryService_GetSessionSummaryText_NilSession(t *testing.T) {
 func TestMemoryService_GetSessionSummaryText_EmptySummaries(t *testing.T) {
 	s := NewSessionService()
 	sess := &session.Session{
-		ID:      "s1",
-		AppName: "app",
-		UserID:  "user",
+		ID:        "s1",
+		AppName:   "app",
+		UserID:    "user",
 		Summaries: map[string]*session.Summary{},
 	}
 	text, ok := s.GetSessionSummaryText(context.Background(), sess)
@@ -420,9 +420,9 @@ func TestMemoryService_GetSessionSummaryText_EmptySummaries(t *testing.T) {
 func TestMemoryService_GetSessionSummaryText_NilSummaries(t *testing.T) {
 	s := NewSessionService()
 	sess := &session.Session{
-		ID:      "s1",
-		AppName: "app",
-		UserID:  "user",
+		ID:        "s1",
+		AppName:   "app",
+		UserID:    "user",
 		Summaries: nil,
 	}
 	text, ok := s.GetSessionSummaryText(context.Background(), sess)
@@ -514,9 +514,6 @@ func TestMemoryService_CreateSessionSummary_SessionNotFound(t *testing.T) {
 	require.Contains(t, err.Error(), "session not found")
 }
 
-// TestMemoryService_ProcessSummaryJob_Panic is removed because processSummaryJob
-// is now handled by AsyncSummaryWorker in session/internal/summary.
-
 type panicSummarizer struct{}
 
 func (p *panicSummarizer) ShouldSummarize(
@@ -541,15 +538,6 @@ func (p *panicSummarizer) SetPrompt(prompt string) {
 
 func (p *panicSummarizer) SetModel(m model.Model) {
 }
-
-// TestMemoryService_ProcessSummaryJob_RecoversFromPanic is removed because
-// processSummaryJob is now handled by AsyncSummaryWorker in session/internal/summary.
-
-// TestMemoryService_TryEnqueueJob_ContextCancelled is removed because
-// tryEnqueueJob is now handled by AsyncSummaryWorker in session/internal/summary.
-
-// TestMemoryService_TryEnqueueJob_ClosedChannel is removed because
-// tryEnqueueJob is now handled by AsyncSummaryWorker in session/internal/summary.
 
 func TestMemoryService_AppendEvent_Errors(t *testing.T) {
 	service := NewSessionService()
@@ -682,9 +670,6 @@ func TestMemoryService_GetOrCreateAppSessions_Concurrent(t *testing.T) {
 	assert.NotNil(t, app)
 }
 
-// TestProcessSummaryJob is removed because processSummaryJob is now handled
-// by AsyncSummaryWorker in session/internal/summary.
-
 type fakeErrorSummarizer struct{}
 
 func (f *fakeErrorSummarizer) ShouldSummarize(sess *session.Session) bool { return true }
@@ -694,9 +679,6 @@ func (f *fakeErrorSummarizer) Summarize(ctx context.Context, sess *session.Sessi
 func (f *fakeErrorSummarizer) SetPrompt(prompt string)  {}
 func (f *fakeErrorSummarizer) SetModel(m model.Model)   {}
 func (f *fakeErrorSummarizer) Metadata() map[string]any { return map[string]any{} }
-
-// TestMemoryService_StopAsyncSummaryWorker_AlreadyStopped is removed because
-// stopAsyncSummaryWorker is now handled by AsyncSummaryWorker.Stop().
 
 func TestMemoryService_TryEnqueueJob_ChannelsNotInitialized(t *testing.T) {
 	service := NewSessionService(
