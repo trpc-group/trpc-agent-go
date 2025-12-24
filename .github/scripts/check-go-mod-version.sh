@@ -11,6 +11,46 @@ if [ -z "${root_module}" ]; then
   exit 1
 fi
 
+# Detect if this is a fork and try to fetch upstream tags.
+skip_tag_validation=false
+origin_url="$(git config --get remote.origin.url 2>/dev/null || true)"
+
+if [[ "${origin_url}" != *"${root_module}"* ]]; then
+  echo "Detected fork repository (module: ${root_module}, origin: ${origin_url})"
+  
+  # Try to infer upstream URL from module path.
+  upstream_url=""
+  if [[ "${root_module}" == trpc.group/* ]]; then
+    repo_path="${root_module#trpc.group/}"
+    upstream_url="https://github.com/${repo_path}.git"
+  elif [[ "${root_module}" == github.com/* ]]; then
+    repo_path="${root_module#github.com/}"
+    upstream_url="https://github.com/${repo_path}.git"
+  fi
+  
+  if [ -n "${upstream_url}" ]; then
+    echo "Attempting to fetch tags from upstream: ${upstream_url}"
+    if git remote add upstream "${upstream_url}" 2>/dev/null || true; then
+      if git fetch upstream --tags 2>/dev/null; then
+        echo "Successfully fetched upstream tags"
+      else
+        echo "::warning::Failed to fetch upstream tags, will skip tag validation"
+        skip_tag_validation=true
+      fi
+    else
+      echo "::warning::Failed to add upstream remote, will skip tag validation"
+      skip_tag_validation=true
+    fi
+  else
+    echo "::warning::Cannot infer upstream URL, will skip tag validation"
+    skip_tag_validation=true
+  fi
+fi
+
+if [ "${skip_tag_validation}" = true ]; then
+  echo "Tag validation will be skipped, only checking for forbidden placeholder versions."
+fi
+
 declare -A module_tags
 
 while IFS= read -r tag; do
@@ -82,6 +122,11 @@ for go_mod in "${go_mod_files[@]}"; do
     dep_path="${req%% *}"
     dep_ver="${req#* }"
     [[ "${dep_path}" != ${root_module}* ]] && continue
+
+    # Skip tag validation if requested.
+    if [ "${skip_tag_validation}" = "true" ]; then
+      continue
+    fi
 
     tags="${module_tags[$dep_path]:-}"
     line_number="$(grep -nF "${dep_path}" "${go_mod}" | head -n1 | cut -d: -f1)"
