@@ -743,6 +743,10 @@ func preparePromptNode(ctx context.Context, state graph.State) (any, error) {
 - `WithSubgraphIsolatedMessages(true)` 只对 `AddSubgraphNode` 有效，
   对 `AddLLMNode` 无效；如需在 LLM 节点间隔离消息，请使用
   `RemoveAllMessages`
+- 对 Agent 节点来说，`WithSubgraphIsolatedMessages(true)` 会禁止向子 Agent
+  注入会话历史；这也会让子 Agent 看不到工具返回，因此会破坏“工具多轮
+  调用”。若子 Agent 需要多轮工具调用，请不要开启该选项，而应通过子 Agent
+  的消息过滤能力来实现隔离（见“Agent 节点：隔离与工具多轮”）。
 
 ### 3. GraphAgent 配置选项
 
@@ -845,6 +849,30 @@ stateGraph.AddAgentNode("assistant",
 
 > Agent 节点会以节点 ID 作为查找键，因此需确保 `AddAgentNode("assistant")`
 > 与 `subAgent.Info().Name == "assistant"` 一致。
+
+#### Agent 节点：隔离与工具多轮
+
+工具调用通常是“多轮”的：模型（Large Language Model，LLM，大语言模型）
+先返回一个工具调用（tool call），框架执行工具并产出结果，然后**下一次**
+模型请求必须带上工具返回（一个 `role=tool` 的消息），模型才能基于工具结果
+继续推理与输出。
+
+`WithSubgraphIsolatedMessages(true)` 是一个**强隔离开关**：它会阻止子 Agent
+在构建下一轮模型请求时读取任何会话历史（内部等价于为子 Agent 设置
+`include_contents="none"`）。这会让子 Agent 变成“黑盒”（只看本轮
+`user_input`），但也意味着子 Agent 看不到工具返回，因此无法完成工具多轮。
+
+如果子 Agent 需要使用工具，并且需要在工具返回后继续下一轮：
+
+- 不要在该 Agent 节点上开启 `WithSubgraphIsolatedMessages(true)`。
+- 应保留会话注入，并通过子 Agent 自身的消息过滤把“可见历史”限制在其
+  invocation（一次调用链）范围内。对于 `LLMAgent`，可使用：
+  `llmagent.WithMessageFilterMode(llmagent.IsolatedInvocation)`。
+
+常见的错误现象：
+
+- 第二次模型请求与第一次几乎一致（prompt 里看不到工具返回）。
+- 子 Agent 会重复第一轮工具调用，或进入循环，因为它永远“看不到”工具结果。
 
 ### 4. 条件路由
 
@@ -2453,7 +2481,8 @@ sg.AddAgentNode("orchestrator",
         }
         return nil, nil
     }),
-    // 可选：隔离子 Agent 的会话注入，仅消费本轮 user_input
+    // 可选：隔离子 Agent 的会话注入，仅消费本轮 user_input。
+    // 仅在子 Agent 单轮即可完成（不需要工具多轮）时使用。
     graph.WithSubgraphIsolatedMessages(true),
 )
 ```
@@ -2464,7 +2493,9 @@ sg.AddAgentNode("orchestrator",
 // 框架提供声明式 Option，自动执行 last_response → user_input 的映射
 sg.AddAgentNode("orchestrator",
     graph.WithSubgraphInputFromLastResponse(),
-    graph.WithSubgraphIsolatedMessages(true), // 可选，配合隔离达到“只传结果”
+    // 可选：配合隔离达到“只传结果”。
+    // 仅在子 Agent 单轮即可完成（不需要工具多轮）时使用。
+    graph.WithSubgraphIsolatedMessages(true),
 )
 ```
 
