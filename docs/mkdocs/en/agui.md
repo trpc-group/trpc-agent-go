@@ -194,42 +194,32 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 ### Observability Reporting
 
-AG-UI Runner exposes `WithStartSpan` to create a tracing span at the beginning of each run and attach request attributes.
+Attach custom span attributes in `RunOptionResolver`; the framework will stamp them onto the agent entry span automatically:
 
 ```go
 import (
     "go.opentelemetry.io/otel/attribute"
-    "go.opentelemetry.io/otel/trace"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
     aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
     "trpc.group/trpc-go/trpc-agent-go/runner"
-    atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+    "trpc.group/trpc-go/trpc-agent-go/agent"
 )
 
-// Custom StartSpan: set threadId/userId/input as span attributes
-func startSpan(ctx context.Context, input *adapter.RunAgentInput) (context.Context, trace.Span, error) {
-    userID, _ := userIDResolver(ctx, input)
+runOptionResolver := func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
     attrs := []attribute.KeyValue{
-        attribute.String("session.id", input.ThreadID),
-        attribute.String("user.id", userID),
         attribute.String("trace.input", input.Messages[len(input.Messages)-1].Content),
     }
-    return atrace.Tracer.Start(ctx, "agui-run", trace.WithAttributes(attrs...))
-}
-
-func userIDResolver(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
-    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
-        return user, nil
+    if vote, ok := input.ForwardedProps["vote"].(string); ok {
+        attrs = append(attrs, attribute.String("conversation.vote", vote))
     }
-    return "anonymous", nil
+    return []agent.RunOption{agent.WithSpanAttributes(attrs...)}, nil
 }
 
 r := runner.NewRunner(agent.Info().Name, agent)
 server, err := agui.New(r,
     agui.WithAGUIRunnerOptions(
-        aguirunner.WithUserIDResolver(userIDResolver),
-        aguirunner.WithStartSpan(startSpan),
+        aguirunner.WithRunOptionResolver(runOptionResolver),
     ),
 )
 ```
