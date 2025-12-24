@@ -209,13 +209,17 @@ import (
 
 // Custom StartSpan: set threadId/userId/input as span attributes
 func startSpan(ctx context.Context, input *adapter.RunAgentInput) (context.Context, trace.Span, error) {
-    userID, _ := userIDResolver(ctx, input)
+    userID, err := userIDResolver(ctx, input)
+    if err != nil {
+        return nil, nil, err
+    }
     attrs := []attribute.KeyValue{
         attribute.String("session.id", input.ThreadID),
         attribute.String("user.id", userID),
         attribute.String("trace.input", input.Messages[len(input.Messages)-1].Content),
     }
-    return atrace.Tracer.Start(ctx, "agui-run", trace.WithAttributes(attrs...))
+    ctx, span := atrace.Tracer.Start(ctx, "agui-run", trace.WithAttributes(attrs...))
+    return ctx, span, nil
 }
 
 func userIDResolver(ctx context.Context, input *adapter.RunAgentInput) (string, error) {

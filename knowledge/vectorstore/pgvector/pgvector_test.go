@@ -301,6 +301,151 @@ func TestNew(t *testing.T) {
 	})
 }
 
+// TestNewConnectionPriority tests the connection priority: DSN > Instance Name > Host
+func TestNewConnectionPriority(t *testing.T) {
+	t.Run("dsn_priority_over_instance_and_host", func(t *testing.T) {
+		tc := newTestClient(t)
+		defer tc.Close()
+
+		oldBuilder := postgres.GetClientBuilder()
+		defer func() { postgres.SetClientBuilder(oldBuilder) }()
+
+		var receivedConnStr string
+		postgres.SetClientBuilder(func(ctx context.Context, opts ...postgres.ClientBuilderOpt) (postgres.Client, error) {
+			builderOpts := &postgres.ClientBuilderOpts{}
+			for _, opt := range opts {
+				opt(builderOpts)
+			}
+			receivedConnStr = builderOpts.ConnString
+			return tc.client, nil
+		})
+
+		tc.mock.ExpectExec("CREATE EXTENSION").WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_embedding_idx").WillReturnResult(sqlmock.NewResult(0, 0))
+
+		postgres.RegisterPostgresInstance("test-priority-instance",
+			postgres.WithClientConnString("postgres://instance:pass@instance-host:5432/instancedb"))
+
+		expectedDSN := "postgres://dsn:pass@dsn-host:5432/dsndb"
+		_, err := New(
+			WithPGVectorClientDSN(expectedDSN),
+			WithPostgresInstance("test-priority-instance"),
+			WithHost("host-config"),
+			WithEnableTSVector(false),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, expectedDSN, receivedConnStr)
+	})
+
+	t.Run("instance_priority_over_host", func(t *testing.T) {
+		tc := newTestClient(t)
+		defer tc.Close()
+
+		oldBuilder := postgres.GetClientBuilder()
+		defer func() { postgres.SetClientBuilder(oldBuilder) }()
+
+		var receivedConnStr string
+		postgres.SetClientBuilder(func(ctx context.Context, opts ...postgres.ClientBuilderOpt) (postgres.Client, error) {
+			builderOpts := &postgres.ClientBuilderOpts{}
+			for _, opt := range opts {
+				opt(builderOpts)
+			}
+			receivedConnStr = builderOpts.ConnString
+			return tc.client, nil
+		})
+
+		tc.mock.ExpectExec("CREATE EXTENSION").WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_embedding_idx").WillReturnResult(sqlmock.NewResult(0, 0))
+
+		instanceConnStr := "postgres://instance:pass@instance-host:5432/instancedb"
+		postgres.RegisterPostgresInstance("test-priority-instance-2",
+			postgres.WithClientConnString(instanceConnStr))
+
+		_, err := New(
+			WithPostgresInstance("test-priority-instance-2"),
+			WithHost("host-config"),
+			WithEnableTSVector(false),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, instanceConnStr, receivedConnStr)
+	})
+
+	t.Run("dsn_with_extra_options", func(t *testing.T) {
+		tc := newTestClient(t)
+		defer tc.Close()
+
+		oldBuilder := postgres.GetClientBuilder()
+		defer func() { postgres.SetClientBuilder(oldBuilder) }()
+
+		var receivedOpts *postgres.ClientBuilderOpts
+		postgres.SetClientBuilder(func(ctx context.Context, opts ...postgres.ClientBuilderOpt) (postgres.Client, error) {
+			builderOpts := &postgres.ClientBuilderOpts{}
+			for _, opt := range opts {
+				opt(builderOpts)
+			}
+			receivedOpts = builderOpts
+			return tc.client, nil
+		})
+
+		tc.mock.ExpectExec("CREATE EXTENSION").WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_embedding_idx").WillReturnResult(sqlmock.NewResult(0, 0))
+
+		extraOpt := "dsn-extra-option"
+		expectedDSN := "postgres://dsn:pass@dsn-host:5432/dsndb"
+		_, err := New(
+			WithPGVectorClientDSN(expectedDSN),
+			WithExtraOptions(extraOpt),
+			WithEnableTSVector(false),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, receivedOpts)
+		assert.Equal(t, expectedDSN, receivedOpts.ConnString)
+		require.Len(t, receivedOpts.ExtraOptions, 1)
+		assert.Equal(t, extraOpt, receivedOpts.ExtraOptions[0])
+	})
+
+	t.Run("instance_with_extra_options", func(t *testing.T) {
+		tc := newTestClient(t)
+		defer tc.Close()
+
+		oldBuilder := postgres.GetClientBuilder()
+		defer func() { postgres.SetClientBuilder(oldBuilder) }()
+
+		var receivedOpts *postgres.ClientBuilderOpts
+		postgres.SetClientBuilder(func(ctx context.Context, opts ...postgres.ClientBuilderOpt) (postgres.Client, error) {
+			builderOpts := &postgres.ClientBuilderOpts{}
+			for _, opt := range opts {
+				opt(builderOpts)
+			}
+			receivedOpts = builderOpts
+			return tc.client, nil
+		})
+
+		tc.mock.ExpectExec("CREATE EXTENSION").WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_embedding_idx").WillReturnResult(sqlmock.NewResult(0, 0))
+
+		instanceConnStr := "postgres://instance:pass@instance-host:5432/instancedb"
+		postgres.RegisterPostgresInstance("test-instance-extra-opts",
+			postgres.WithClientConnString(instanceConnStr))
+
+		extraOpt := "instance-extra-option"
+		_, err := New(
+			WithPostgresInstance("test-instance-extra-opts"),
+			WithExtraOptions(extraOpt),
+			WithEnableTSVector(false),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, receivedOpts)
+		assert.Equal(t, instanceConnStr, receivedOpts.ConnString)
+		require.Len(t, receivedOpts.ExtraOptions, 1)
+		assert.Equal(t, extraOpt, receivedOpts.ExtraOptions[0])
+	})
+}
+
 // TestVectorStore_Close tests the Close method
 func TestVectorStore_Close(t *testing.T) {
 	t.Run("close_with_nil_client", func(t *testing.T) {
