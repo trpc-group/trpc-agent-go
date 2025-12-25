@@ -597,6 +597,9 @@ Important notes:
 - One-shot keys (`user_input` / `one_shot_messages`) are automatically cleared after successful execution.
 - All state updates are atomic.
 - GraphAgent/Runner only sets `user_input` and no longer pre-populates `messages` with a user message. This allows any pre-LLM node to modify `user_input` and have it take effect in the same round.
+- When Graph runs sub-agents, it preserves the parent run's `RequestID`
+  (request identifier) so the current user input is included exactly once,
+  even when it already exists in session history.
 
 #### Three input paradigms
 

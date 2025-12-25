@@ -599,6 +599,8 @@ stateGraph.AddLLMNode("analyze", model,
 - GraphAgent/Runner 仅设置 `user_input`，不再预先把用户消息写入
   `messages`。这样可以允许在 LLM 节点之前的任意节点对 `user_input`
   进行修改，并能在同一轮生效。
+- Graph 在执行子 Agent 时会保留父调用的 `RequestID`（请求标识），
+  确保当会话历史里已包含本轮用户输入时，不会在提示词中重复插入。
 
 #### 三种输入范式
 
