@@ -335,3 +335,30 @@ func TestGetEmbeddingWithUsage_EmptyResponse(t *testing.T) {
 		_ = usage
 	})
 }
+
+// TestGetEmbedding_EmptyDataArray tests the log.WarnContext path for empty data array
+func TestGetEmbedding_EmptyDataArray(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		rsp := map[string]any{
+			"object": "list",
+			"data":   []map[string]any{},
+			"model":  "text-embedding-3-small",
+		}
+		_ = json.NewEncoder(w).Encode(rsp)
+	}))
+	defer srv.Close()
+
+	emb := New(
+		WithBaseURL(srv.URL),
+		WithAPIKey("dummy"),
+	)
+
+	vec, err := emb.GetEmbedding(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("GetEmbedding should not return error: %v", err)
+	}
+	if len(vec) != 0 {
+		t.Errorf("Expected empty embedding, got length %d", len(vec))
+	}
+}

@@ -243,6 +243,41 @@ func TestAPIKeyPriority(t *testing.T) {
 	})
 }
 
+// TestGetEmbedding_DimensionsOverflow tests dimensions overflow handling
+func TestGetEmbedding_DimensionsOverflow(t *testing.T) {
+	t.Run("dimensions exceeds MaxInt32", func(t *testing.T) {
+		ctx := context.Background()
+		e, err := New(ctx, WithAPIKey("test-key"), WithDimensions(math.MaxInt32+1))
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+
+		_, err = e.GetEmbedding(ctx, "test")
+		if err == nil {
+			t.Error("Expected error for dimensions exceeding MaxInt32")
+		}
+		if !strings.Contains(err.Error(), "out of range") {
+			t.Errorf("Expected 'out of range' error, got: %v", err)
+		}
+	})
+
+	t.Run("dimensions below MinInt32", func(t *testing.T) {
+		ctx := context.Background()
+		e, err := New(ctx, WithAPIKey("test-key"), WithDimensions(math.MinInt32-1))
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+
+		_, err = e.GetEmbedding(ctx, "test")
+		if err == nil {
+			t.Error("Expected error for dimensions below MinInt32")
+		}
+		if !strings.Contains(err.Error(), "out of range") {
+			t.Errorf("Expected 'out of range' error, got: %v", err)
+		}
+	})
+}
+
 // TestGetEmbedding_EmptyResponse tests handling of empty embedding responses
 func TestGetEmbedding_EmptyResponse(t *testing.T) {
 	t.Run("empty embeddings array", func(t *testing.T) {
