@@ -8,7 +8,7 @@ import (
 )
 
 func Test_methodOperations(t *testing.T) {
-	loader := NewURILoader("https://petstore3.swagger.io/api/v3/openapi.json")
+	loader := NewFileLoader("../../examples/openapitool/petstore3.yaml")
 	doc, _ := loader.Load(context.Background())
 	l := doc.Paths.Len()
 	if l == 0 {

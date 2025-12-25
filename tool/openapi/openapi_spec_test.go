@@ -17,11 +17,6 @@ func Test_urlSpecLoader_Load(t *testing.T) {
 			uri:     "http://localhost:8080",
 			wantErr: true,
 		},
-		{
-			name:    "LoadFromURI_OK",
-			uri:     "https://petstore3.swagger.io/api/v3/openapi.json",
-			wantErr: false,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

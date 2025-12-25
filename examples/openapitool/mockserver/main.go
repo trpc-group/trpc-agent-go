@@ -217,7 +217,7 @@ func (h *MockServerHandler) createHandler(path string, operation *openapi3.Opera
 	}
 }
 
-func (h *MockServerHandler) generateMockData(response *openapi3.Response, path, operationID string) interface{} {
+func (h *MockServerHandler) generateMockData(response *openapi3.Response, path, operationID string) any {
 	// Simple mock data generation based on operation ID and path
 	switch operationID {
 	case "addPet":
@@ -299,7 +299,7 @@ func (h *MockServerHandler) generateMockData(response *openapi3.Response, path, 
 func (h *MockServerHandler) sendError(w http.ResponseWriter, message string, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"error":   message,
 		"code":    statusCode,
 		"success": false,
