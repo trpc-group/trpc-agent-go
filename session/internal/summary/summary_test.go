@@ -697,12 +697,16 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 	// Test using method value (like s.CreateSessionSummary)
 	type mockService struct {
+		mu        sync.Mutex
 		summaries map[string]string
 	}
 
 	mockSvc := &mockService{}
 
 	createFunc := func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+		mockSvc.mu.Lock()
+		defer mockSvc.mu.Unlock()
+
 		if mockSvc.summaries == nil {
 			mockSvc.summaries = make(map[string]string)
 		}
