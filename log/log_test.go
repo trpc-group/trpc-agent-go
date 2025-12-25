@@ -11,7 +11,11 @@ package log_test
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
@@ -40,9 +44,7 @@ func TestContextHelpersUseContextDefault(t *testing.T) {
 	})
 
 	logger, ok := log.ContextDefault.(*countLogger)
-	if !ok {
-		t.Fatalf("ContextDefault is not *countLogger")
-	}
+	require.True(t, ok, "ContextDefault should be *countLogger")
 
 	log.DebugContext(ctx, "test")
 	log.DebugfContext(ctx, "test %s", "value")
@@ -55,66 +57,26 @@ func TestContextHelpersUseContextDefault(t *testing.T) {
 	log.FatalContext(ctx, "test")
 	log.FatalfContext(ctx, "test %s", "value")
 
-	if logger.debugCalls != 1 {
-		t.Fatalf(
-			"DebugContext should call Debug once; got %d",
-			logger.debugCalls,
-		)
-	}
-	if logger.debugfCalls != 1 {
-		t.Fatalf(
-			"DebugfContext should call Debugf once; got %d",
-			logger.debugfCalls,
-		)
-	}
-	if logger.infoCalls != 1 {
-		t.Fatalf(
-			"InfoContext should call Info once; got %d",
-			logger.infoCalls,
-		)
-	}
-	if logger.infofCalls != 1 {
-		t.Fatalf(
-			"InfofContext should call Infof once; got %d",
-			logger.infofCalls,
-		)
-	}
-	if logger.warnCalls != 1 {
-		t.Fatalf(
-			"WarnContext should call Warn once; got %d",
-			logger.warnCalls,
-		)
-	}
-	if logger.warnfCalls != 1 {
-		t.Fatalf(
-			"WarnfContext should call Warnf once; got %d",
-			logger.warnfCalls,
-		)
-	}
-	if logger.errorCalls != 1 {
-		t.Fatalf(
-			"ErrorContext should call Error once; got %d",
-			logger.errorCalls,
-		)
-	}
-	if logger.errorfCalls != 1 {
-		t.Fatalf(
-			"ErrorfContext should call Errorf once; got %d",
-			logger.errorfCalls,
-		)
-	}
-	if logger.fatalCalls != 1 {
-		t.Fatalf(
-			"FatalContext should call Fatal once; got %d",
-			logger.fatalCalls,
-		)
-	}
-	if logger.fatalfCalls != 1 {
-		t.Fatalf(
-			"FatalfContext should call Fatalf once; got %d",
-			logger.fatalfCalls,
-		)
-	}
+	assert.Equal(t, 1, logger.debugCalls,
+		"DebugContext should call Debug once")
+	assert.Equal(t, 1, logger.debugfCalls,
+		"DebugfContext should call Debugf once")
+	assert.Equal(t, 1, logger.infoCalls,
+		"InfoContext should call Info once")
+	assert.Equal(t, 1, logger.infofCalls,
+		"InfofContext should call Infof once")
+	assert.Equal(t, 1, logger.warnCalls,
+		"WarnContext should call Warn once")
+	assert.Equal(t, 1, logger.warnfCalls,
+		"WarnfContext should call Warnf once")
+	assert.Equal(t, 1, logger.errorCalls,
+		"ErrorContext should call Error once")
+	assert.Equal(t, 1, logger.errorfCalls,
+		"ErrorfContext should call Errorf once")
+	assert.Equal(t, 1, logger.fatalCalls,
+		"FatalContext should call Fatal once")
+	assert.Equal(t, 1, logger.fatalfCalls,
+		"FatalfContext should call Fatalf once")
 }
 
 type noopLogger struct{}
@@ -184,4 +146,52 @@ func (c *countLogger) Fatal(args ...any) {
 
 func (c *countLogger) Fatalf(format string, args ...any) {
 	c.fatalfCalls++
+}
+
+// traceLogger captures Debugf calls for TracefContext testing.
+type traceLogger struct {
+	debugfCalls int
+	lastFormat  string
+	lastArgs    []any
+}
+
+func (t *traceLogger) Debug(args ...any) {}
+func (t *traceLogger) Debugf(format string, args ...any) {
+	t.debugfCalls++
+	t.lastFormat = format
+	t.lastArgs = args
+}
+func (t *traceLogger) Info(args ...any)                  {}
+func (t *traceLogger) Infof(format string, args ...any)  {}
+func (t *traceLogger) Warn(args ...any)                  {}
+func (t *traceLogger) Warnf(format string, args ...any)  {}
+func (t *traceLogger) Error(args ...any)                 {}
+func (t *traceLogger) Errorf(format string, args ...any) {}
+func (t *traceLogger) Fatal(args ...any)                 {}
+func (t *traceLogger) Fatalf(format string, args ...any) {}
+
+// TestTracefContext verifies that TracefContext calls ContextDefault.Debugf
+// with the correct format string prefixed with "[TRACE] ".
+func TestTracefContext(t *testing.T) {
+	ctx := context.Background()
+	stub := &traceLogger{}
+	original := log.ContextDefault
+	log.ContextDefault = stub
+	t.Cleanup(func() {
+		log.ContextDefault = original
+	})
+
+	log.TracefContext(ctx, "hello %s", "world")
+
+	assert.Equal(t, 1, stub.debugfCalls,
+		"TracefContext should call Debugf once")
+	assert.True(t, strings.HasPrefix(stub.lastFormat, "[TRACE] "),
+		"TracefContext should prefix format with \"[TRACE] \"; got %q",
+		stub.lastFormat)
+	assert.Equal(t, "[TRACE] hello %s", stub.lastFormat,
+		"TracefContext format should match expected")
+	require.Len(t, stub.lastArgs, 1,
+		"TracefContext should pass args correctly")
+	assert.Equal(t, "world", stub.lastArgs[0],
+		"TracefContext args should match expected")
 }
