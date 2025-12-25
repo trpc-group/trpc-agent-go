@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"github.com/qdrant/go-client/qdrant"
+
+	qdrantstorage "trpc.group/trpc-go/trpc-agent-go/storage/qdrant"
 )
 
 const (
-	defaultHost            = "localhost"
-	defaultPort            = 6334
 	defaultCollectionName  = "trpc_agent_documents"
 	defaultDimension       = 1536
 	defaultHNSWM           = 16
@@ -67,27 +67,26 @@ const (
 	DistanceManhattan = qdrant.Distance_Manhattan
 )
 
+// Client is an alias for the storage qdrant Client interface.
+type Client = qdrantstorage.Client
+
 type options struct {
-	host            string
-	port            int
-	apiKey          string
-	useTLS          bool
-	collectionName  string
-	dimension       int
-	distance        Distance
-	onDiskVectors   bool
-	onDiskPayload   bool
-	hnswM           int
-	hnswEfConstruct int
-	maxResults      int
-	maxRetries      int
-	baseRetryDelay  time.Duration
-	maxRetryDelay   time.Duration
+	client            Client // pre-created client (if provided, clientBuilderOpts are ignored)
+	clientBuilderOpts []qdrantstorage.ClientBuilderOpt
+	collectionName    string
+	dimension         int
+	distance          Distance
+	onDiskVectors     bool
+	onDiskPayload     bool
+	hnswM             int
+	hnswEfConstruct   int
+	maxResults        int
+	maxRetries        int
+	baseRetryDelay    time.Duration
+	maxRetryDelay     time.Duration
 }
 
 var defaultOptions = options{
-	host:            defaultHost,
-	port:            defaultPort,
 	collectionName:  defaultCollectionName,
 	dimension:       defaultDimension,
 	distance:        DistanceCosine,
@@ -105,18 +104,28 @@ type Option func(*options)
 // WithHost sets the Qdrant server host. Empty values are ignored.
 func WithHost(host string) Option {
 	return func(o *options) {
-		if host != "" {
-			o.host = host
-		}
+		o.clientBuilderOpts = append(o.clientBuilderOpts, qdrantstorage.WithHost(host))
 	}
 }
 
 // WithPort sets the Qdrant server gRPC port. Invalid ports fall back to default.
 func WithPort(port int) Option {
 	return func(o *options) {
-		if port > 0 && port <= 65535 {
-			o.port = port
-		}
+		o.clientBuilderOpts = append(o.clientBuilderOpts, qdrantstorage.WithPort(port))
+	}
+}
+
+// WithAPIKey sets the API key for Qdrant Cloud authentication.
+func WithAPIKey(apiKey string) Option {
+	return func(o *options) {
+		o.clientBuilderOpts = append(o.clientBuilderOpts, qdrantstorage.WithAPIKey(apiKey))
+	}
+}
+
+// WithTLS enables TLS for secure connections (required for Qdrant Cloud).
+func WithTLS(enabled bool) Option {
+	return func(o *options) {
+		o.clientBuilderOpts = append(o.clientBuilderOpts, qdrantstorage.WithTLS(enabled))
 	}
 }
 
@@ -136,16 +145,6 @@ func WithDimension(dim int) Option {
 			o.dimension = dim
 		}
 	}
-}
-
-// WithAPIKey sets the API key for Qdrant Cloud authentication.
-func WithAPIKey(apiKey string) Option {
-	return func(o *options) { o.apiKey = apiKey }
-}
-
-// WithTLS enables TLS for secure connections (required for Qdrant Cloud).
-func WithTLS(enabled bool) Option {
-	return func(o *options) { o.useTLS = enabled }
 }
 
 // WithDistance sets the distance metric for similarity search.
@@ -210,5 +209,14 @@ func WithMaxRetryDelay(delay time.Duration) Option {
 		if delay > 0 {
 			o.maxRetryDelay = delay
 		}
+	}
+}
+
+// WithClient sets a pre-created Qdrant client.
+// When provided, connection options (WithHost, WithPort, WithAPIKey, WithTLS) are ignored.
+// This allows reusing a client created via storage/qdrant.
+func WithClient(client Client) Option {
+	return func(o *options) {
+		o.client = client
 	}
 }

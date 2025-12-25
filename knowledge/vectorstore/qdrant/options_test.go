@@ -19,8 +19,6 @@ func TestDefaultOptions(t *testing.T) {
 	t.Parallel()
 	opts := defaultOptions
 
-	assert.Equal(t, "localhost", opts.host)
-	assert.Equal(t, 6334, opts.port)
 	assert.Equal(t, "trpc_agent_documents", opts.collectionName)
 	assert.Equal(t, 1536, opts.dimension)
 	assert.Equal(t, DistanceCosine, opts.distance)
@@ -32,22 +30,21 @@ func TestDefaultOptions(t *testing.T) {
 	assert.Equal(t, 5*time.Second, opts.maxRetryDelay)
 	assert.False(t, opts.onDiskVectors)
 	assert.False(t, opts.onDiskPayload)
-	assert.False(t, opts.useTLS)
-	assert.Empty(t, opts.apiKey)
+	assert.Empty(t, opts.clientBuilderOpts)
 }
 
 func TestWithHost(t *testing.T) {
 	t.Parallel()
 	opts := defaultOptions
 	WithHost("custom-host")(&opts)
-	assert.Equal(t, "custom-host", opts.host)
+	assert.Len(t, opts.clientBuilderOpts, 1)
 }
 
 func TestWithPort(t *testing.T) {
 	t.Parallel()
 	opts := defaultOptions
 	WithPort(9999)(&opts)
-	assert.Equal(t, 9999, opts.port)
+	assert.Len(t, opts.clientBuilderOpts, 1)
 }
 
 func TestWithCollectionName(t *testing.T) {
@@ -68,14 +65,14 @@ func TestWithAPIKey(t *testing.T) {
 	t.Parallel()
 	opts := defaultOptions
 	WithAPIKey("secret-key")(&opts)
-	assert.Equal(t, "secret-key", opts.apiKey)
+	assert.Len(t, opts.clientBuilderOpts, 1)
 }
 
 func TestWithTLS(t *testing.T) {
 	t.Parallel()
 	opts := defaultOptions
 	WithTLS(true)(&opts)
-	assert.True(t, opts.useTLS)
+	assert.Len(t, opts.clientBuilderOpts, 1)
 }
 
 func TestWithDistance(t *testing.T) {
@@ -150,10 +147,8 @@ func TestMultipleOptions(t *testing.T) {
 		opt(&opts)
 	}
 
-	assert.Equal(t, "qdrant.example.com", opts.host)
-	assert.Equal(t, 6335, opts.port)
-	assert.Equal(t, "my-api-key", opts.apiKey)
-	assert.True(t, opts.useTLS)
+	// Connection options are forwarded to storage layer
+	assert.Len(t, opts.clientBuilderOpts, 4) // host, port, apiKey, tls
 	assert.Equal(t, "test_collection", opts.collectionName)
 	assert.Equal(t, 3072, opts.dimension)
 	assert.Equal(t, DistanceDot, opts.distance)
@@ -167,24 +162,6 @@ func TestMultipleOptions(t *testing.T) {
 
 func TestOptionsValidation(t *testing.T) {
 	t.Parallel()
-	t.Run("empty host ignored", func(t *testing.T) {
-		opts := defaultOptions
-		WithHost("")(&opts)
-		assert.Equal(t, defaultHost, opts.host)
-	})
-
-	t.Run("invalid port ignored", func(t *testing.T) {
-		opts := defaultOptions
-		WithPort(-1)(&opts)
-		assert.Equal(t, defaultPort, opts.port)
-
-		WithPort(0)(&opts)
-		assert.Equal(t, defaultPort, opts.port)
-
-		WithPort(70000)(&opts)
-		assert.Equal(t, defaultPort, opts.port)
-	})
-
 	t.Run("empty collection name ignored", func(t *testing.T) {
 		opts := defaultOptions
 		WithCollectionName("")(&opts)
@@ -257,4 +234,17 @@ func TestWithMaxRetryDelay(t *testing.T) {
 	opts := defaultOptions
 	WithMaxRetryDelay(10 * time.Second)(&opts)
 	assert.Equal(t, 10*time.Second, opts.maxRetryDelay)
+}
+
+func TestWithClient(t *testing.T) {
+	t.Parallel()
+	opts := defaultOptions
+
+	// Create a mock client (nil is valid for testing the option)
+	var mockClient Client = nil
+	WithClient(mockClient)(&opts)
+
+	assert.Nil(t, opts.client)
+
+	// Test with non-nil would require a real client implementation
 }

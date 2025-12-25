@@ -432,6 +432,13 @@ kb := knowledge.New(
 
 [Qdrant](https://qdrant.tech/) 是一个高性能向量数据库，具有高级过滤功能，支持云端和本地部署。
 
+**架构**
+
+Qdrant 集成分为两个模块，以实现更好的职责分离：
+
+- **`storage/qdrant`**: 底层客户端管理（连接、注册表、客户端构建器）
+- **`knowledge/vectorstore/qdrant`**: 用于 Knowledge 的高级向量存储实现
+
 **基础配置**
 
 ```go
@@ -472,10 +479,36 @@ qdrantVS, err := vectorqdrant.New(ctx,
 )
 ```
 
-**配置选项参考**
+**使用 Storage 模块（高级用法）**
+
+`storage/qdrant` 模块（`trpc.group/trpc-go/trpc-agent-go/storage/qdrant`）提供底层客户端管理，与向量存储实现分离。有两种使用方式：
+
+1. **直接使用向量存储选项**：在向量存储上配置连接
+
+```go
+vs, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("localhost"),
+    vectorqdrant.WithPort(6334),
+)
+```
+
+2. **使用 storage 模块**：创建客户端，实现多个向量存储共享
+
+```go
+client, err := qdrantstorage.GetClientBuilder()(ctx,
+    qdrantstorage.WithHost("localhost"),
+    qdrantstorage.WithPort(6334),
+)
+vs, err := vectorqdrant.New(ctx, vectorqdrant.WithClient(client))
+```
+
+storage 模块还提供**注册表模式**，可在启动时注册命名实例（如 "test"、"prod"），在应用中通过名称获取。
+
+**配置选项**
 
 | 选项 | 默认值 | 说明 |
 |------|--------|------|
+| `WithClient(client)` | `nil` | 使用预创建的客户端（来自 storage 模块） |
 | `WithHost(host)` | `"localhost"` | Qdrant 服务器主机名 |
 | `WithPort(port)` | `6334` | Qdrant gRPC 端口（1-65535） |
 | `WithAPIKey(key)` | `""` | Qdrant Cloud 认证 API 密钥 |

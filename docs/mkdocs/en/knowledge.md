@@ -431,6 +431,13 @@ kb := knowledge.New(
 
 [Qdrant](https://qdrant.tech/) is a high-performance vector database with advanced filtering capabilities, supporting both cloud and self-hosted deployments.
 
+**Architecture**
+
+The Qdrant integration is split into two modules.
+
+- **`storage/qdrant`**: Low-level client management (connection, registry, client builder)
+- **`knowledge/vectorstore/qdrant`**: High-level vectorstore implementation for Knowledge
+
 **Basic Configuration**
 
 ```go
@@ -471,10 +478,36 @@ qdrantVS, err := vectorqdrant.New(ctx,
 )
 ```
 
-**Configuration Options Reference**
+**Using the Storage Module (Advanced)**
+
+The `storage/qdrant` module (`trpc.group/trpc-go/trpc-agent-go/storage/qdrant`) provides low-level client management, separate from the vectorstore implementation. You have two options:
+
+1. **Use vectorstore options directly**: Configure connection on the vectorstore
+
+```go
+vs, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("localhost"),
+    vectorqdrant.WithPort(6334),
+)
+```
+
+2. **Use storage module**: Create a client and pass it for reuse across multiple vectorstores
+
+```go
+client, err := qdrantstorage.GetClientBuilder()(ctx,
+    qdrantstorage.WithHost("localhost"),
+    qdrantstorage.WithPort(6334),
+)
+vs, err := vectorqdrant.New(ctx, vectorqdrant.WithClient(client))
+```
+
+The storage module also provides a **registry pattern** to register named instances (e.g., "test", "prod") at startup and retrieve them by name throughout your application.
+
+**Configuration Options**
 
 | Option | Default | Description |
 |--------|---------|-------------|
+| `WithClient(client)` | `nil` | Use a pre-created client (from storage module) |
 | `WithHost(host)` | `"localhost"` | Qdrant server hostname |
 | `WithPort(port)` | `6334` | Qdrant gRPC port (1-65535) |
 | `WithAPIKey(key)` | `""` | API key for Qdrant Cloud authentication |

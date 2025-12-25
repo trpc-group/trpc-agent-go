@@ -506,3 +506,242 @@ func TestToFloat64Ptr(t *testing.T) {
 func ptrFloat64(f float64) *float64 {
 	return &f
 }
+
+func TestFilterConverter_LessThanOperator(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	cond := &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorLessThan,
+		Field:    "metadata.count",
+		Value:    10,
+	}
+
+	filter, err := converter.Convert(cond)
+	require.NoError(t, err)
+	require.NotNil(t, filter)
+	require.Len(t, filter.Must, 1)
+}
+
+func TestFilterConverter_GreaterThanOrEqualOperator(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	cond := &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorGreaterThanOrEqual,
+		Field:    "metadata.rating",
+		Value:    4.0,
+	}
+
+	filter, err := converter.Convert(cond)
+	require.NoError(t, err)
+	require.NotNil(t, filter)
+	require.Len(t, filter.Must, 1)
+}
+
+func TestFilterConverter_InOperatorMixedTypes(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	// Mixed types should fallback to OR filter
+	cond := &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorIn,
+		Field:    "metadata.mixed",
+		Value:    []any{true, false},
+	}
+
+	filter, err := converter.Convert(cond)
+	require.NoError(t, err)
+	require.NotNil(t, filter)
+}
+
+func TestFilterConverter_InOperatorInt32Slice(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	cond := &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorIn,
+		Field:    "metadata.ids",
+		Value:    []any{int32(1), int32(2), int32(3)},
+	}
+
+	filter, err := converter.Convert(cond)
+	require.NoError(t, err)
+	require.NotNil(t, filter)
+}
+
+func TestFilterConverter_InOperatorReflection(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	// Test with custom slice type that requires reflection
+	type CustomInt int
+	cond := &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorIn,
+		Field:    "metadata.custom",
+		Value:    []CustomInt{1, 2, 3},
+	}
+
+	filter, err := converter.Convert(cond)
+	require.NoError(t, err)
+	require.NotNil(t, filter)
+}
+
+func TestFilterConverter_InOperatorNonSlice(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	cond := &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorIn,
+		Field:    "metadata.field",
+		Value:    "not a slice",
+	}
+
+	_, err := converter.Convert(cond)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "requires array value")
+}
+
+func TestFilterConverter_NilValue(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	cond := &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorEqual,
+		Field:    "metadata.field",
+		Value:    nil,
+	}
+
+	filter, err := converter.Convert(cond)
+	require.NoError(t, err)
+	assert.Nil(t, filter)
+}
+
+func TestFilterConverter_NestedLogicalWithError(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	// Nested AND with an invalid operator should propagate error
+	cond := &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorAnd,
+		Value: []*searchfilter.UniversalFilterCondition{
+			{
+				Operator: searchfilter.OperatorEqual,
+				Field:    "metadata.category",
+				Value:    "docs",
+			},
+			{
+				Operator: searchfilter.OperatorAnd,
+				Value: []*searchfilter.UniversalFilterCondition{
+					{
+						Operator: "invalid_operator",
+						Field:    "metadata.status",
+						Value:    "active",
+					},
+				},
+			},
+		},
+	}
+
+	_, err := converter.Convert(cond)
+	assert.Error(t, err)
+}
+
+func TestFilterConverter_NestedOrWithError(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	// Nested OR with an invalid subcondition
+	cond := &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorOr,
+		Value: []*searchfilter.UniversalFilterCondition{
+			{
+				Operator: searchfilter.OperatorOr,
+				Value: []*searchfilter.UniversalFilterCondition{
+					{
+						Operator: searchfilter.OperatorBetween,
+						Field:    "metadata.age",
+						Value:    "invalid", // Should be array with 2 elements
+					},
+				},
+			},
+		},
+	}
+
+	_, err := converter.Convert(cond)
+	assert.Error(t, err)
+}
+
+func TestFilterConverter_InOperatorFloat64Slice(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	cond := &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorIn,
+		Field:    "metadata.scores",
+		Value:    []any{float64(1.5), float64(2.5), float64(3.5)},
+	}
+
+	filter, err := converter.Convert(cond)
+	require.NoError(t, err)
+	require.NotNil(t, filter)
+}
+
+func TestFilterConverter_InOperatorEmptyReflectSlice(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	type CustomType struct{ Value int }
+	cond := &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorIn,
+		Field:    "metadata.custom",
+		Value:    []CustomType{},
+	}
+
+	filter, err := converter.Convert(cond)
+	require.NoError(t, err)
+	assert.Nil(t, filter)
+}
+
+func TestFilterConverter_NotInOperatorWithTypedSlice(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	cond := &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorNotIn,
+		Field:    "metadata.tags",
+		Value:    []string{"excluded1", "excluded2"},
+	}
+
+	filter, err := converter.Convert(cond)
+	require.NoError(t, err)
+	require.NotNil(t, filter)
+}
+
+func TestFilterConverter_AndWithNilConditionResult(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	// AND with a nil value condition should skip it
+	cond := &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorAnd,
+		Value: []*searchfilter.UniversalFilterCondition{
+			{
+				Operator: searchfilter.OperatorEqual,
+				Field:    "metadata.category",
+				Value:    "docs",
+			},
+			{
+				Operator: searchfilter.OperatorEqual,
+				Field:    "metadata.field",
+				Value:    nil, // This results in nil condition
+			},
+		},
+	}
+
+	filter, err := converter.Convert(cond)
+	require.NoError(t, err)
+	require.NotNil(t, filter)
+	// Only the non-nil condition should be in the result
+	assert.Len(t, filter.Must, 1)
+}

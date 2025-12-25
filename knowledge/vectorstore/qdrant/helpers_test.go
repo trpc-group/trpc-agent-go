@@ -868,3 +868,174 @@ func TestToSearchResult(t *testing.T) {
 		assert.InDelta(t, 0.75, searchResult.Results[2].Score, 0.001)
 	})
 }
+
+func TestPointIDToStr_UnknownType(t *testing.T) {
+	t.Parallel()
+	// Test with an empty PointId (no type set)
+	pt := &qdrant.PointId{}
+	result := pointIDToStr(pt)
+	assert.Equal(t, "", result)
+}
+
+func TestPtrFloat32If(t *testing.T) {
+	t.Parallel()
+	t.Run("condition true", func(t *testing.T) {
+		result := ptrFloat32If(true, 3.14)
+		require.NotNil(t, result)
+		assert.InDelta(t, float32(3.14), *result, 0.001)
+	})
+
+	t.Run("condition false", func(t *testing.T) {
+		result := ptrFloat32If(false, 3.14)
+		assert.Nil(t, result)
+	})
+}
+
+func TestExtractPayloadMetadata_NonStruct(t *testing.T) {
+	t.Parallel()
+	// Test when metadata field exists but is not a struct
+	payload := map[string]*qdrant.Value{
+		fieldMetadata: {Kind: &qdrant.Value_StringValue{StringValue: "not a struct"}},
+	}
+
+	result := extractPayloadMetadata(payload)
+	assert.Nil(t, result)
+}
+
+func TestConvertValueToAny_NestedStruct(t *testing.T) {
+	t.Parallel()
+	value := &qdrant.Value{
+		Kind: &qdrant.Value_StructValue{
+			StructValue: &qdrant.Struct{
+				Fields: map[string]*qdrant.Value{
+					"nested": {Kind: &qdrant.Value_StringValue{StringValue: "value"}},
+				},
+			},
+		},
+	}
+
+	result := convertValueToAny(value)
+	require.NotNil(t, result)
+
+	m, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "value", m["nested"])
+}
+
+func TestPayloadToDocument_WithOriginalID(t *testing.T) {
+	t.Parallel()
+	// Test that original_id from payload is used instead of point ID
+	payload := map[string]*qdrant.Value{
+		fieldID:      {Kind: &qdrant.Value_StringValue{StringValue: "original-doc-id"}},
+		fieldName:    {Kind: &qdrant.Value_StringValue{StringValue: "doc-name"}},
+		fieldContent: {Kind: &qdrant.Value_StringValue{StringValue: "doc-content"}},
+	}
+
+	doc := payloadToDocument(qdrant.NewID("uuid-point-id"), payload)
+
+	assert.Equal(t, "original-doc-id", doc.ID)
+	assert.Equal(t, "doc-name", doc.Name)
+}
+
+func TestSanitizeValue_Nil(t *testing.T) {
+	t.Parallel()
+	result := sanitizeValue(nil)
+	assert.Nil(t, result)
+}
+
+func TestSanitizeValue_Time(t *testing.T) {
+	t.Parallel()
+	ts := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
+	result := sanitizeValue(ts)
+	assert.Equal(t, ts.Unix(), result)
+}
+
+func TestSanitizeValue_TimePointerNil(t *testing.T) {
+	t.Parallel()
+	var ts *time.Time
+	result := sanitizeValue(ts)
+	assert.Nil(t, result)
+}
+
+func TestSanitizeValue_TimePointer(t *testing.T) {
+	t.Parallel()
+	ts := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
+	result := sanitizeValue(&ts)
+	assert.Equal(t, ts.Unix(), result)
+}
+
+func TestSanitizeValue_NestedMap(t *testing.T) {
+	t.Parallel()
+	ts := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
+	input := map[string]any{
+		"timestamp": ts,
+		"value":     42,
+	}
+	result := sanitizeValue(input)
+	m, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, ts.Unix(), m["timestamp"])
+	assert.Equal(t, 42, m["value"])
+}
+
+func TestSanitizeValue_Array(t *testing.T) {
+	t.Parallel()
+	ts := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
+	input := []any{ts, "string", 42}
+	result := sanitizeValue(input)
+	arr, ok := result.([]any)
+	require.True(t, ok)
+	assert.Equal(t, ts.Unix(), arr[0])
+	assert.Equal(t, "string", arr[1])
+	assert.Equal(t, 42, arr[2])
+}
+
+func TestSanitizeValue_OtherType(t *testing.T) {
+	t.Parallel()
+	// Other types should be returned as-is
+	result := sanitizeValue(42)
+	assert.Equal(t, 42, result)
+
+	result = sanitizeValue("hello")
+	assert.Equal(t, "hello", result)
+
+	result = sanitizeValue(true)
+	assert.Equal(t, true, result)
+}
+
+func TestConvertValueToAny_NilKind(t *testing.T) {
+	t.Parallel()
+	// Value with nil Kind
+	value := &qdrant.Value{Kind: nil}
+	result := convertValueToAny(value)
+	assert.Nil(t, result)
+}
+
+func TestExtractVector_NonVectorType(t *testing.T) {
+	t.Parallel()
+	// Named vectors case
+	vectors := &qdrant.Vectors{
+		VectorsOptions: &qdrant.Vectors_Vectors{
+			Vectors: &qdrant.NamedVectors{
+				Vectors: map[string]*qdrant.Vector{
+					"default": {Data: []float32{1.0, 2.0}},
+				},
+			},
+		},
+	}
+	result := extractVector(vectors)
+	assert.Nil(t, result)
+}
+
+func TestPayloadToDocument_NoOriginalID(t *testing.T) {
+	t.Parallel()
+	// When no original ID is present, use point ID
+	payload := map[string]*qdrant.Value{
+		fieldName:    {Kind: &qdrant.Value_StringValue{StringValue: "doc-name"}},
+		fieldContent: {Kind: &qdrant.Value_StringValue{StringValue: "doc-content"}},
+	}
+
+	doc := payloadToDocument(qdrant.NewID("uuid-point-id"), payload)
+
+	assert.Equal(t, "uuid-point-id", doc.ID)
+}

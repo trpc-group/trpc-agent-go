@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+	qdrantstorage "trpc.group/trpc-go/trpc-agent-go/storage/qdrant"
 )
 
 var _ vectorstore.VectorStore = (*VectorStore)(nil)
@@ -40,20 +41,14 @@ func New(ctx context.Context, opts ...Option) (*VectorStore, error) {
 		opt(&o)
 	}
 
-	config := &qdrant.Config{
-		Host: o.host,
-		Port: o.port,
-	}
-	if o.apiKey != "" {
-		config.APIKey = o.apiKey
-	}
-	if o.useTLS {
-		config.UseTLS = true
-	}
-
-	client, err := NewClient(config)
-	if err != nil {
-		return nil, errors.Join(ErrConnectionFailed, err)
+	// Use pre-created client if provided, otherwise create one
+	client := o.client
+	if client == nil {
+		var err error
+		client, err = qdrantstorage.GetClientBuilder()(ctx, o.clientBuilderOpts...)
+		if err != nil {
+			return nil, errors.Join(ErrConnectionFailed, err)
+		}
 	}
 
 	vs := &VectorStore{
@@ -68,7 +63,10 @@ func New(ctx context.Context, opts ...Option) (*VectorStore, error) {
 	}
 
 	if err := vs.ensureCollection(ctx); err != nil {
-		_ = client.Close()
+		// Only close if we created the client
+		if o.client == nil {
+			_ = client.Close()
+		}
 		return nil, err
 	}
 

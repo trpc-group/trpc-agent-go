@@ -275,8 +275,6 @@ const testDimension = 4
 
 // testOptions returns options configured for testing with a small dimension
 var testOptions = options{
-	host:            defaultHost,
-	port:            defaultPort,
 	collectionName:  defaultCollectionName,
 	dimension:       testDimension,
 	distance:        DistanceCosine,
