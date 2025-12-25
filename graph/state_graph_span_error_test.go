@@ -41,10 +41,10 @@ type recordingSpan struct {
 	statusDesc     string
 }
 
-func (s *recordingSpan) End(options ...oteltrace.SpanEndOption) {}
+func (s *recordingSpan) End(options ...oteltrace.SpanEndOption)                 {}
 func (s *recordingSpan) AddEvent(name string, options ...oteltrace.EventOption) {}
-func (s *recordingSpan) AddLink(link oteltrace.Link) {}
-func (s *recordingSpan) IsRecording() bool { return true }
+func (s *recordingSpan) AddLink(link oteltrace.Link)                            {}
+func (s *recordingSpan) IsRecording() bool                                      { return true }
 
 func (s *recordingSpan) RecordError(err error, options ...oteltrace.EventOption) {
 	if err == nil {
@@ -66,8 +66,8 @@ func (s *recordingSpan) SetStatus(code codes.Code, description string) {
 	s.statusDesc = description
 }
 
-func (s *recordingSpan) SetName(name string) {}
-func (s *recordingSpan) SetAttributes(kv ...attribute.KeyValue) {}
+func (s *recordingSpan) SetName(name string)                      {}
+func (s *recordingSpan) SetAttributes(kv ...attribute.KeyValue)   {}
 func (s *recordingSpan) TracerProvider() oteltrace.TracerProvider { return noop.NewTracerProvider() }
 
 type recordingTracer struct {
@@ -137,5 +137,3 @@ func TestExecuteModelWithEvents_RunModelError_RecordsSpanAndWrapsError(t *testin
 	require.Equal(t, codes.Error, sp.statusCode)
 	require.True(t, strings.Contains(sp.statusDesc, "failed to generate content:"), sp.statusDesc)
 }
-
-
