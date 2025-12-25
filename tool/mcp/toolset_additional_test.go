@@ -187,14 +187,42 @@ func TestSessionManager_CallTool_StructuredContentMarshalError(t *testing.T) {
 
 // stubConnector implements mcp.Connector for testing.
 type stubConnector struct {
-	callToolFn func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error)
+	callToolFn      func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error)
+	initializeFn    func(ctx context.Context, req *mcp.InitializeRequest) (*mcp.InitializeResult, error)
+	listToolsFn     func(ctx context.Context, req *mcp.ListToolsRequest) (*mcp.ListToolsResult, error)
+	closeFn         func() error
+	closeError      error
+	initializeError error
+	listToolsError  error
 }
 
-func (s *stubConnector) Initialize(_ context.Context, _ *mcp.InitializeRequest) (*mcp.InitializeResult, error) {
-	return nil, nil
+func (s *stubConnector) Initialize(ctx context.Context, req *mcp.InitializeRequest) (*mcp.InitializeResult, error) {
+	if s.initializeFn != nil {
+		return s.initializeFn(ctx, req)
+	}
+	if s.initializeError != nil {
+		return nil, s.initializeError
+	}
+	result := &mcp.InitializeResult{
+		ProtocolVersion: "2024-11-05",
+	}
+	// Set ServerInfo fields if available
+	if result.ServerInfo.Name == "" {
+		result.ServerInfo.Name = "test-server"
+	}
+	if result.ServerInfo.Version == "" {
+		result.ServerInfo.Version = "1.0.0"
+	}
+	return result, nil
 }
 
 func (s *stubConnector) Close() error {
+	if s.closeFn != nil {
+		return s.closeFn()
+	}
+	if s.closeError != nil {
+		return s.closeError
+	}
 	return nil
 }
 
@@ -202,8 +230,21 @@ func (s *stubConnector) GetState() mcp.State {
 	return mcp.StateInitialized
 }
 
-func (s *stubConnector) ListTools(_ context.Context, _ *mcp.ListToolsRequest) (*mcp.ListToolsResult, error) {
-	return nil, nil
+func (s *stubConnector) ListTools(ctx context.Context, req *mcp.ListToolsRequest) (*mcp.ListToolsResult, error) {
+	if s.listToolsFn != nil {
+		return s.listToolsFn(ctx, req)
+	}
+	if s.listToolsError != nil {
+		return nil, s.listToolsError
+	}
+	return &mcp.ListToolsResult{
+		Tools: []mcp.Tool{
+			{
+				Name:        "test-tool",
+				Description: "A test tool",
+			},
+		},
+	}, nil
 }
 
 func (s *stubConnector) CallTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -781,6 +822,238 @@ func TestSessionManager_ExecuteWithSessionReconnect(t *testing.T) {
 		}
 		if callCount != 1 {
 			t.Errorf("Expected operation to be called once, got %d times", callCount)
+		}
+	})
+}
+
+// TestToolSet_Init tests the Init method
+func TestToolSet_Init(t *testing.T) {
+	t.Run("init with listTools error", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		toolset := NewMCPToolSet(config)
+		defer toolset.Close()
+
+		ctx := context.Background()
+		err := toolset.Init(ctx)
+		// Will fail because we can't connect to a real server
+		if err == nil {
+			t.Error("Expected error when init fails")
+		}
+	})
+}
+
+// TestToolSet_Tools tests the Tools method
+func TestToolSet_Tools(t *testing.T) {
+	t.Run("tools with refresh error returns cached", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		toolset := NewMCPToolSet(config)
+		defer toolset.Close()
+
+		// Set some cached tools
+		toolset.mu.Lock()
+		toolset.tools = []tool.Tool{}
+		toolset.mu.Unlock()
+
+		ctx := context.Background()
+		tools := toolset.Tools(ctx)
+		// Should return cached tools even if refresh fails
+		if tools == nil {
+			t.Error("Expected tools to be returned even on refresh error")
+		}
+	})
+}
+
+// TestSessionManager_Connect tests the connect method
+func TestSessionManager_Connect(t *testing.T) {
+	t.Run("connect when already connected", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+		manager.mu.Lock()
+		manager.connected = true
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		err := manager.connect(ctx)
+		if err != nil {
+			t.Errorf("Expected no error when already connected, got: %v", err)
+		}
+	})
+}
+
+// TestSessionManager_Initialize tests the initialize method
+func TestSessionManager_Initialize(t *testing.T) {
+	t.Run("initialize when already initialized", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+		manager.mu.Lock()
+		manager.initialized = true
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		err := manager.initialize(ctx)
+		if err != nil {
+			t.Errorf("Expected no error when already initialized, got: %v", err)
+		}
+	})
+
+	t.Run("initialize with client error", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+		manager.client = &stubConnector{
+			initializeError: fmt.Errorf("client init failed"),
+		}
+
+		ctx := context.Background()
+		err := manager.initialize(ctx)
+		if err == nil {
+			t.Error("Expected error when client initialize fails")
+		}
+		if !strings.Contains(err.Error(), "failed to initialize") {
+			t.Errorf("Expected 'failed to initialize' error, got: %v", err)
+		}
+	})
+}
+
+// TestSessionManager_ListTools tests the listTools method
+func TestSessionManager_ListTools(t *testing.T) {
+	t.Run("listTools with client nil", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+		manager.mu.Lock()
+		manager.client = nil
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		_, err := manager.listTools(ctx)
+		if err == nil {
+			t.Error("Expected error when client is nil")
+		}
+		if !strings.Contains(err.Error(), "transport is closed") {
+			t.Errorf("Expected 'transport is closed' error, got: %v", err)
+		}
+	})
+
+	t.Run("listTools with client error", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+		manager.client = &stubConnector{
+			listToolsError: fmt.Errorf("list tools failed"),
+		}
+		manager.mu.Lock()
+		manager.connected = true
+		manager.initialized = true
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		_, err := manager.listTools(ctx)
+		if err == nil {
+			t.Error("Expected error when listTools fails")
+		}
+	})
+}
+
+// TestSessionManager_Close_Error tests close with error
+func TestSessionManager_Close_Error(t *testing.T) {
+	t.Run("close with client close error", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+		manager.client = &stubConnector{
+			closeError: fmt.Errorf("close failed"),
+		}
+		manager.mu.Lock()
+		manager.connected = true
+		manager.mu.Unlock()
+
+		err := manager.close()
+		if err == nil {
+			t.Error("Expected error when client close fails")
+		}
+		if !strings.Contains(err.Error(), "failed to close") {
+			t.Errorf("Expected 'failed to close' error, got: %v", err)
+		}
+	})
+}
+
+// TestSessionManager_DoRecreateSession tests doRecreateSession error cases
+func TestSessionManager_DoRecreateSession(t *testing.T) {
+	t.Run("recreate session with createClient error", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "invalid-transport",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+		manager.mu.Lock()
+		manager.client = &stubConnector{}
+		manager.connected = true
+		manager.initialized = true
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		err := manager.doRecreateSession(ctx)
+		if err == nil {
+			t.Error("Expected error when createClient fails")
+		}
+	})
+}
+
+// TestToolSet_Close_WithError tests Close with session manager error
+func TestToolSet_Close_WithError(t *testing.T) {
+	t.Run("close with session manager error", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		toolset := NewMCPToolSet(config)
+
+		// Set up manager with a client that fails to close
+		manager := toolset.sessionManager
+		manager.mu.Lock()
+		manager.client = &stubConnector{
+			closeError: fmt.Errorf("close failed"),
+		}
+		manager.connected = true
+		manager.mu.Unlock()
+
+		err := toolset.Close()
+		if err == nil {
+			t.Error("Expected error when session manager close fails")
+		}
+		if !strings.Contains(err.Error(), "failed to close MCP session") {
+			t.Errorf("Expected 'failed to close MCP session' error, got: %v", err)
 		}
 	})
 }
