@@ -41,6 +41,8 @@ const (
 	contentHello    = "hello"
 	contentMsg      = "msg"
 	echoOK          = "echo ok"
+	cmdLS           = "ls"
+	echoOKThenLS    = "echo ok; ls"
 )
 
 // writeSkill creates a minimal skill folder.
@@ -216,6 +218,79 @@ func TestRunTool_ErrorOnMissingSkill(t *testing.T) {
 	args := runInput{Skill: "missing", Command: "echo " + contentHello}
 	enc, err := jsonMarshal(args)
 	require.NoError(t, err)
+	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
+}
+
+func TestRunTool_AllowedCommands_AllowsSingleCommand(t *testing.T) {
+	t.Setenv(envAllowedCommands, "echo")
+
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Contains(t, out.Stdout, "ok")
+}
+
+func TestRunTool_AllowedCommands_RejectsDisallowedCommand(t *testing.T) {
+	t.Setenv(envAllowedCommands, "echo")
+
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: cmdLS,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
+}
+
+func TestRunTool_AllowedCommands_RejectsShellSyntax(t *testing.T) {
+	t.Setenv(envAllowedCommands, "echo")
+
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: echoOKThenLS,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
 	_, err = rt.Call(context.Background(), enc)
 	require.Error(t, err)
 }
