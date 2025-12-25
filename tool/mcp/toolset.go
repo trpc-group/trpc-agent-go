@@ -97,7 +97,7 @@ func (ts *ToolSet) Init(ctx context.Context) error {
 // Tools implements the ToolSet interface.
 func (ts *ToolSet) Tools(ctx context.Context) []tool.Tool {
 	if err := ts.listTools(ctx); err != nil {
-		log.ErrorContext(ctx, "Failed to refresh tools", "error", err)
+		log.ErrorContext(ctx, "Failed to refresh tools", err)
 		// Return cached tools if refresh fails.
 	}
 
@@ -303,8 +303,7 @@ func (m *mcpSessionManager) createTimeoutContext(ctx context.Context, operation 
 	if m.config.Timeout > 0 {
 		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 			timeoutCtx, cancel := context.WithTimeout(ctx, m.config.Timeout)
-			log.DebugContext(ctx, "Applied MCP timeout",
-				"timeout", m.config.Timeout, "operation", operation)
+			log.DebugContext(ctx, "Applied MCP timeout", "timeout", m.config.Timeout, "operation", operation)
 			return timeoutCtx, cancel
 		}
 	}
@@ -396,8 +395,7 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 			return enhancedErr
 		}
 
-		log.DebugContext(ctx, "Tool call completed",
-			"name", name, "content_count", len(callResp.Content))
+		log.DebugContext(ctx, "Tool call completed", "name", name, "content_count", len(callResp.Content))
 		result = callResp.Content
 		if len(result) == 0 && callResp.StructuredContent != nil {
 			structuredBytes, err := json.Marshal(callResp.StructuredContent)
@@ -467,9 +465,8 @@ func (m *mcpSessionManager) executeWithSessionReconnect(ctx context.Context, ope
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		// Check if context is already cancelled or timed out.
 		if ctx.Err() != nil {
-			log.DebugfContext(ctx,
-				"Context cancelled or timed out, stopping reconnection attempts "+
-					"(attempt=%d, error=%v)", attempt, ctx.Err())
+			log.DebugfContext(ctx, "Context cancelled or timed out, stopping reconnection attempts "+
+				"(attempt=%d, error=%v)", attempt, ctx.Err())
 			return fmt.Errorf("reconnection aborted: %w", ctx.Err())
 		}
 
@@ -479,15 +476,13 @@ func (m *mcpSessionManager) executeWithSessionReconnect(ctx context.Context, ope
 
 		// Attempt session reconnection.
 		if reconnectErr := m.recreateSession(ctx); reconnectErr != nil {
-			log.ErrorfContext(ctx,
-				"Session reconnection failed (attempt=%d/%d, reconnect_error=%v, "+
-					"original_error=%v)", attempt, maxAttempts, reconnectErr, err)
+			log.ErrorfContext(ctx, "Session reconnection failed (attempt=%d/%d, reconnect_error=%v, "+
+				"original_error=%v)", attempt, maxAttempts, reconnectErr, err)
 
 			// If this was the last attempt, return the original error.
 			if attempt >= maxAttempts {
-				log.WarnfContext(ctx,
-					"Max session reconnect attempts reached for this operation, "+
-						"giving up (attempts=%d/%d)", attempt, maxAttempts)
+				log.WarnfContext(ctx, "Max session reconnect attempts reached for this operation, "+
+					"giving up (attempts=%d/%d)", attempt, maxAttempts)
 				return err
 			}
 
@@ -514,15 +509,13 @@ func (m *mcpSessionManager) executeWithSessionReconnect(ctx context.Context, ope
 
 		// If we have more attempts, continue the loop.
 		if attempt < maxAttempts {
-			log.DebugfContext(ctx,
-				"Operation failed after reconnection, will retry (attempt=%d/%d, error=%v)",
+			log.DebugfContext(ctx, "Operation failed after reconnection, will retry (attempt=%d/%d, error=%v)",
 				attempt, maxAttempts, err)
 		}
 	}
 
 	// All attempts exhausted.
-	log.WarnfContext(ctx,
-		"All reconnection attempts exhausted for this operation (max_attempts=%d)", maxAttempts)
+	log.WarnfContext(ctx, "All reconnection attempts exhausted for this operation (max_attempts=%d)", maxAttempts)
 	return err
 }
 
@@ -573,8 +566,7 @@ func (m *mcpSessionManager) doRecreateSession(ctx context.Context) error {
 	// Close existing client if any.
 	if m.client != nil {
 		if closeErr := m.client.Close(); closeErr != nil {
-			log.WarnContext(ctx, "Failed to close old client during session recreation",
-				"error", closeErr)
+			log.WarnContext(ctx, "Failed to close old client during session recreation", "error", closeErr)
 		}
 		m.client = nil
 	}
