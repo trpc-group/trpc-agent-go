@@ -135,6 +135,17 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		return
 	}
 
+	deferred, executable, unknown := p.toolExecutionDecision(
+		ctx,
+		invocation,
+		req,
+		rsp,
+	)
+	if deferred && !executable && !unknown {
+		invocation.EndInvocation = true
+		return
+	}
+
 	functioncallResponseEvent, err := p.handleFunctionCallsAndSendEvent(ctx, invocation, rsp, req.Tools, ch)
 
 	// Option one: set invocation.EndInvocation is true, and stop next step.
@@ -146,7 +157,15 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		return
 	}
 
+	if deferred && !unknown {
+		invocation.EndInvocation = true
+	}
+
 	if err != nil || functioncallResponseEvent == nil {
+		return
+	}
+
+	if invocation.EndInvocation {
 		return
 	}
 
@@ -156,6 +175,40 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		invocation.EndInvocation = true
 		return
 	}
+}
+
+func (p *FunctionCallResponseProcessor) toolExecutionDecision(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	rsp *model.Response,
+) (deferred bool, executable bool, unknown bool) {
+	if invocation == nil {
+		return false, true, false
+	}
+	filter := invocation.RunOptions.ToolExecutionFilter
+	if filter == nil {
+		return false, true, false
+	}
+	if req == nil || req.Tools == nil || rsp == nil {
+		return false, true, false
+	}
+	if len(rsp.Choices) == 0 {
+		return false, true, false
+	}
+	for _, tc := range rsp.Choices[0].Message.ToolCalls {
+		tl, ok := req.Tools[tc.Function.Name]
+		if !ok {
+			unknown = true
+			continue
+		}
+		if filter(ctx, tl) {
+			executable = true
+			continue
+		}
+		deferred = true
+	}
+	return deferred, executable, unknown
 }
 
 func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
@@ -216,6 +269,18 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 		}
 		if toolEvent != nil {
 			toolCallResponsesEvents = append(toolCallResponsesEvents, toolEvent)
+		}
+	}
+
+	if len(toolCallResponsesEvents) == 0 &&
+		invocation != nil &&
+		invocation.RunOptions.ToolExecutionFilter != nil {
+		filter := invocation.RunOptions.ToolExecutionFilter
+		for _, tc := range toolCalls {
+			tl, ok := tools[tc.Function.Name]
+			if ok && !filter(ctx, tl) {
+				return nil, nil
+			}
 		}
 	}
 
@@ -338,6 +403,17 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	toolCallResponsesEvents, err := p.collectParallelToolResults(
 		ctx, resultChan, len(toolCalls),
 	)
+	if len(toolCallResponsesEvents) == 0 &&
+		invocation != nil &&
+		invocation.RunOptions.ToolExecutionFilter != nil {
+		filter := invocation.RunOptions.ToolExecutionFilter
+		for _, tc := range toolCalls {
+			tl, ok := tools[tc.Function.Name]
+			if ok && !filter(ctx, tl) {
+				return nil, nil
+			}
+		}
+	}
 	mergedEvent := p.buildMergedParallelEvent(
 		ctx, invocation, llmResponse, tools, toolCalls, toolCallResponsesEvents,
 	)
@@ -646,6 +722,12 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			)
 			return ctx, nil, toolCall.Function.Arguments, true,
 				fmt.Errorf("executeToolCall: %s", ErrorToolNotFound)
+		}
+	}
+
+	if invocation != nil && invocation.RunOptions.ToolExecutionFilter != nil {
+		if !invocation.RunOptions.ToolExecutionFilter(ctx, tl) {
+			return ctx, nil, toolCall.Function.Arguments, true, nil
 		}
 	}
 

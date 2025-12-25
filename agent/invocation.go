@@ -340,6 +340,23 @@ func WithToolFilter(filter tool.FilterFunc) RunOption {
 	}
 }
 
+// WithToolExecutionFilter sets which tools the framework will execute.
+//
+// This is different from WithToolFilter:
+//   - WithToolFilter controls which tools are visible to the model.
+//   - WithToolExecutionFilter controls which tool calls are auto-executed
+//     after the model requests them.
+//
+// When the filter returns false for a tool, the tool call is not executed
+// and the run ends after emitting the assistant tool_call response. The
+// caller can then execute the tool externally and provide a RoleTool
+// message with the tool result to continue.
+func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
+	return func(opts *RunOptions) {
+		opts.ToolExecutionFilter = filter
+	}
+}
+
 // WithA2ARequestOptions sets the A2A request options for the RunOptions.
 // These options will be passed to A2A agent's SendMessage and StreamMessage calls.
 // This allows passing dynamic HTTP headers or other request-specific options for each run.
@@ -478,6 +495,21 @@ type RunOptions struct {
 	//       return t.Declaration().Name == "calculator"
 	//   })
 	ToolFilter tool.FilterFunc
+
+	// ToolExecutionFilter controls which tools are executed by the
+	// framework when the model returns tool calls.
+	//
+	// This is different from ToolFilter:
+	//   - ToolFilter controls which tools are sent to (and callable by) the
+	//     model.
+	//   - ToolExecutionFilter controls which tool calls are auto-executed by
+	//     the framework after the model requests them.
+	//
+	// When this filter is set and returns false for a tool, the tool call
+	// is not executed by the agent. The run stops after emitting the
+	// assistant tool_call response so the caller can execute the tool
+	// externally and later provide tool results (RoleTool messages).
+	ToolExecutionFilter tool.FilterFunc
 }
 
 // NewInvocation create a new invocation

@@ -10,10 +10,12 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestWithMessagesOption_SetsRunOptions(t *testing.T) {
@@ -147,4 +149,36 @@ func TestWithResume(t *testing.T) {
 
 	WithResume(false)(&ro)
 	require.False(t, ro.Resume)
+}
+
+type stubTool struct {
+	decl *tool.Declaration
+}
+
+func (s *stubTool) Declaration() *tool.Declaration {
+	return s.decl
+}
+
+func TestWithToolExecutionFilter(t *testing.T) {
+	const (
+		allowedToolName = "tool1"
+		deniedToolName  = "tool2"
+	)
+	filter := tool.NewIncludeToolNamesFilter(allowedToolName)
+
+	var ro RunOptions
+	WithToolExecutionFilter(filter)(&ro)
+
+	require.NotNil(t, ro.ToolExecutionFilter)
+
+	ctx := context.Background()
+	allowed := &stubTool{
+		decl: &tool.Declaration{Name: allowedToolName},
+	}
+	denied := &stubTool{
+		decl: &tool.Declaration{Name: deniedToolName},
+	}
+
+	require.True(t, ro.ToolExecutionFilter(ctx, allowed))
+	require.False(t, ro.ToolExecutionFilter(ctx, denied))
 }
