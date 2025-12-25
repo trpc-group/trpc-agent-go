@@ -2327,10 +2327,10 @@ func TestA2AMessageToAgentMessage_PointerAndValueTypes(t *testing.T) {
 
 func TestDefaultEventToA2AMessage_ReasoningContent(t *testing.T) {
 	tests := []struct {
-		name           string
-		event          *event.Event
-		adkCompat      bool
-		expectedParts  int
+		name            string
+		event           *event.Event
+		adkCompat       bool
+		expectedParts   int
 		expectedThought bool
 	}{
 		{
@@ -2346,8 +2346,8 @@ func TestDefaultEventToA2AMessage_ReasoningContent(t *testing.T) {
 					},
 				},
 			},
-			adkCompat:      false,
-			expectedParts:  1,
+			adkCompat:       false,
+			expectedParts:   1,
 			expectedThought: true,
 		},
 		{
@@ -2364,8 +2364,8 @@ func TestDefaultEventToA2AMessage_ReasoningContent(t *testing.T) {
 					},
 				},
 			},
-			adkCompat:      false,
-			expectedParts:  2,
+			adkCompat:       false,
+			expectedParts:   2,
 			expectedThought: true,
 		},
 		{
@@ -2382,8 +2382,8 @@ func TestDefaultEventToA2AMessage_ReasoningContent(t *testing.T) {
 					},
 				},
 			},
-			adkCompat:      true,
-			expectedParts:  2,
+			adkCompat:       true,
+			expectedParts:   2,
 			expectedThought: true,
 		},
 	}
@@ -2438,10 +2438,10 @@ func TestDefaultEventToA2AMessage_ReasoningContent(t *testing.T) {
 
 func TestDefaultEventToA2AMessage_StreamingReasoningContent(t *testing.T) {
 	tests := []struct {
-		name           string
-		event          *event.Event
-		adkCompat      bool
-		expectedParts  int
+		name            string
+		event           *event.Event
+		adkCompat       bool
+		expectedParts   int
 		expectedThought bool
 	}{
 		{
@@ -2458,8 +2458,8 @@ func TestDefaultEventToA2AMessage_StreamingReasoningContent(t *testing.T) {
 					},
 				},
 			},
-			adkCompat:      false,
-			expectedParts:  1,
+			adkCompat:       false,
+			expectedParts:   1,
 			expectedThought: true,
 		},
 		{
@@ -2477,8 +2477,8 @@ func TestDefaultEventToA2AMessage_StreamingReasoningContent(t *testing.T) {
 					},
 				},
 			},
-			adkCompat:      false,
-			expectedParts:  2,
+			adkCompat:       false,
+			expectedParts:   2,
 			expectedThought: true,
 		},
 		{
@@ -2495,8 +2495,8 @@ func TestDefaultEventToA2AMessage_StreamingReasoningContent(t *testing.T) {
 					},
 				},
 			},
-			adkCompat:      true,
-			expectedParts:  1,
+			adkCompat:       true,
+			expectedParts:   1,
 			expectedThought: true,
 		},
 	}

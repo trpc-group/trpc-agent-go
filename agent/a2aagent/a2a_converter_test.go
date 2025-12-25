@@ -2280,9 +2280,9 @@ func TestBuildStreamingResponse_ToolResponses(t *testing.T) {
 
 func TestProcessTextPart_WithThoughtMetadata(t *testing.T) {
 	tests := []struct {
-		name           string
-		part           protocol.Part
-		expectedText   string
+		name            string
+		part            protocol.Part
+		expectedText    string
 		expectedThought bool
 	}{
 		{
@@ -2290,7 +2290,7 @@ func TestProcessTextPart_WithThoughtMetadata(t *testing.T) {
 			part: &protocol.TextPart{
 				Text: "Hello world",
 			},
-			expectedText:   "Hello world",
+			expectedText:    "Hello world",
 			expectedThought: false,
 		},
 		{
@@ -2301,7 +2301,7 @@ func TestProcessTextPart_WithThoughtMetadata(t *testing.T) {
 					ia2a.TextPartMetadataThoughtKey: true,
 				},
 			},
-			expectedText:   "Let me think...",
+			expectedText:    "Let me think...",
 			expectedThought: true,
 		},
 		{
@@ -2312,7 +2312,7 @@ func TestProcessTextPart_WithThoughtMetadata(t *testing.T) {
 					ia2a.GetADKMetadataKey(ia2a.TextPartMetadataThoughtKey): true,
 				},
 			},
-			expectedText:   "ADK thinking...",
+			expectedText:    "ADK thinking...",
 			expectedThought: true,
 		},
 		{
@@ -2323,7 +2323,7 @@ func TestProcessTextPart_WithThoughtMetadata(t *testing.T) {
 					ia2a.TextPartMetadataThoughtKey: false,
 				},
 			},
-			expectedText:   "Not a thought",
+			expectedText:    "Not a thought",
 			expectedThought: false,
 		},
 	}
@@ -2343,10 +2343,10 @@ func TestProcessTextPart_WithThoughtMetadata(t *testing.T) {
 
 func TestParseA2AMessageParts_WithReasoningContent(t *testing.T) {
 	tests := []struct {
-		name                    string
-		msg                     *protocol.Message
-		expectedText            string
-		expectedReasoning       string
+		name              string
+		msg               *protocol.Message
+		expectedText      string
+		expectedReasoning string
 	}{
 		{
 			name: "message with reasoning and content",
