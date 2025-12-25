@@ -12,7 +12,11 @@ package openapi
 
 import (
 	"bytes"
+	"context"
+	"fmt"
+	"net/http"
 	"testing"
+	"time"
 )
 
 const (
@@ -108,6 +112,18 @@ func TestNewToolSet(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "create_toolset_with_opts",
+			args: args{
+				opts: []Option{
+					WithSpecLoader(NewFileLoader("../../examples/openapitool/petstore3.json")),
+					WithUserAgent("trpc-agent-go-test"),
+					WithName("trpc-agent-go-test"),
+					WithHTTPClient(http.DefaultClient),
+				},
+			},
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -115,6 +131,110 @@ func TestNewToolSet(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewToolSet() error = %v, wantErr %v", err, tt.wantErr)
 				return
+			}
+		})
+	}
+}
+
+func TestOpenAPIToolSet_NameWithDefault(t *testing.T) {
+	// Test with default name
+	toolSet, err := NewToolSet(
+		WithSpecLoader(NewFileLoader("../../examples/openapitool/petstore3.json")),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create toolset: %v", err)
+	}
+
+	name := toolSet.Name()
+	if name != "openapi" {
+		t.Errorf("Name() = %v, want %v", name, "openapi")
+	}
+}
+
+func TestOpenAPIToolSet_ToolsContext(t *testing.T) {
+	toolSet, err := NewToolSet(
+		WithSpecLoader(NewFileLoader("../../examples/openapitool/petstore3.json")),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create toolset: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+	}{
+		{"Background context", context.Background()},
+		{"WithCancel context", func() context.Context {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			return ctx
+		}()},
+		{"WithTimeout context", func() context.Context {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			return ctx
+		}()},
+		{"WithValue context", context.WithValue(context.Background(), "test", "value")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tools := toolSet.Tools(tt.ctx)
+			if tools == nil {
+				t.Error("Tools() returned nil")
+			}
+			if len(tools) == 0 {
+				t.Error("Tools() returned empty slice")
+			}
+		})
+	}
+}
+
+func TestOpenAPITool_Declaration(t *testing.T) {
+	toolSet, err := NewToolSet(
+		WithSpecLoader(NewFileLoader("../../examples/openapitool/petstore3.json")),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create toolset: %v", err)
+	}
+
+	// Get tools from the toolset
+	tools := toolSet.Tools(context.Background())
+	if len(tools) == 0 {
+		t.Fatal("No tools found in toolset")
+	}
+
+	// Test declaration for each tool
+	for i, tool := range tools {
+		t.Run(fmt.Sprintf("Tool_%d", i), func(t *testing.T) {
+			// Cast to openAPITool to access Declaration method
+			openAPITool, ok := tool.(*openAPITool)
+			if !ok {
+				t.Skip("Tool is not an openAPITool, skipping declaration test")
+				return
+			}
+
+			declaration := openAPITool.Declaration()
+			if declaration == nil {
+				t.Error("Declaration() returned nil")
+				return
+			}
+
+			// Test basic declaration fields
+			if declaration.Name == "" {
+				t.Error("Declaration name is empty")
+			}
+
+			if declaration.Description == "" {
+				t.Error("Declaration description is empty")
+			}
+
+			if declaration.InputSchema == nil {
+				t.Error("Declaration input schema is nil")
+			}
+
+			if declaration.OutputSchema == nil {
+				t.Error("Declaration output schema is nil")
 			}
 		})
 	}
