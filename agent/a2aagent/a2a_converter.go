@@ -235,6 +235,9 @@ type parseResult struct {
 	// textContent holds plain text content from TextParts
 	textContent string
 
+	// reasoningContent holds thought/reasoning content from TextParts with thought metadata
+	reasoningContent string
+
 	// toolCalls holds function call requests (assistant -> tool)
 	toolCalls []model.ToolCall
 
@@ -266,12 +269,18 @@ type toolResponseData struct {
 func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 	parts := msg.Parts
 	var textContent strings.Builder
+	var reasoningContent strings.Builder
 	result := &parseResult{}
 
 	for _, part := range parts {
 		switch part.GetKind() {
 		case protocol.KindText:
-			textContent.WriteString(processTextPart(part))
+			text, isThought := processTextPart(part)
+			if isThought {
+				reasoningContent.WriteString(text)
+			} else {
+				textContent.WriteString(text)
+			}
 		case protocol.KindData:
 			processDataPart(part, result)
 		}
@@ -287,17 +296,35 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 	}
 
 	result.textContent = textContent.String()
+	result.reasoningContent = reasoningContent.String()
 	return result
 }
 
-// processTextPart processes a TextPart and returns its content
-func processTextPart(part protocol.Part) string {
+// processTextPart processes a TextPart and returns its content and whether it's a thought
+func processTextPart(part protocol.Part) (text string, isThought bool) {
 	p, ok := part.(*protocol.TextPart)
 	if !ok {
 		log.Warnf("unexpected part type: %T", part)
-		return ""
+		return "", false
 	}
-	return p.Text
+
+	// Check if this is a thought/reasoning content by looking at metadata
+	// Support both "thought" and "adk_thought" keys for ADK compatibility
+	if p.Metadata != nil {
+		if thought, ok := p.Metadata[ia2a.TextPartMetadataThoughtKey]; ok {
+			if thoughtBool, ok := thought.(bool); ok && thoughtBool {
+				return p.Text, true
+			}
+		}
+		adkThoughtKey := ia2a.GetADKMetadataKey(ia2a.TextPartMetadataThoughtKey)
+		if thought, ok := p.Metadata[adkThoughtKey]; ok {
+			if thoughtBool, ok := thought.(bool); ok && thoughtBool {
+				return p.Text, true
+			}
+		}
+	}
+
+	return p.Text, false
 }
 
 // processDataPart processes a DataPart and updates the parseResult accordingly
@@ -465,9 +492,10 @@ func buildStreamingResponse(messageID string, result *parseResult) *model.Respon
 			ID: messageID,
 			Choices: []model.Choice{{
 				Message: model.Message{
-					Role:      model.RoleAssistant,
-					Content:   result.textContent,
-					ToolCalls: result.toolCalls,
+					Role:             model.RoleAssistant,
+					Content:          result.textContent,
+					ReasoningContent: result.reasoningContent,
+					ToolCalls:        result.toolCalls,
 				},
 			}},
 			Object:    model.ObjectTypeChatCompletion,
@@ -519,8 +547,9 @@ func buildStreamingResponse(messageID string, result *parseResult) *model.Respon
 		ID: messageID,
 		Choices: []model.Choice{{
 			Delta: model.Message{
-				Role:    model.RoleAssistant,
-				Content: content,
+				Role:             model.RoleAssistant,
+				Content:          content,
+				ReasoningContent: result.reasoningContent,
 			},
 		}},
 		Object:    objectType,
@@ -565,9 +594,10 @@ func buildNonStreamingResponse(messageID string, result *parseResult) *model.Res
 	if len(result.toolCalls) > 0 {
 		choices = append(choices, model.Choice{
 			Message: model.Message{
-				Role:      model.RoleAssistant,
-				Content:   result.textContent,
-				ToolCalls: result.toolCalls,
+				Role:             model.RoleAssistant,
+				Content:          result.textContent,
+				ReasoningContent: result.reasoningContent,
+				ToolCalls:        result.toolCalls,
 			},
 		})
 	}
@@ -588,7 +618,7 @@ func buildNonStreamingResponse(messageID string, result *parseResult) *model.Res
 
 	// Text content: final assistant response
 	// Only add if no tool calls (tool calls already include text content)
-	if len(result.toolCalls) == 0 && (result.textContent != "" || result.codeExecution != "" || result.codeExecutionResult != "") {
+	if len(result.toolCalls) == 0 && (result.textContent != "" || result.reasoningContent != "" || result.codeExecution != "" || result.codeExecutionResult != "") {
 		content := result.textContent
 		if result.codeExecution != "" {
 			content = result.codeExecution
@@ -597,8 +627,9 @@ func buildNonStreamingResponse(messageID string, result *parseResult) *model.Res
 		}
 		choices = append(choices, model.Choice{
 			Message: model.Message{
-				Role:    model.RoleAssistant,
-				Content: content,
+				Role:             model.RoleAssistant,
+				Content:          content,
+				ReasoningContent: result.reasoningContent,
 			},
 		})
 	}

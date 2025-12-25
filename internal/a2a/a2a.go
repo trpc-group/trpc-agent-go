@@ -78,6 +78,9 @@ const (
 	// allowing A2A clients to restore the tag information for business-specific labeling.
 	MessageMetadataTagKey = "tag"
 
+	// TextPartMetadataThoughtKey is the metadata key for thought/reasoning content in TextPart.
+	TextPartMetadataThoughtKey = "thought"
+
 	// ADKMetadataKeyPrefix is the prefix for ADK-compatible metadata keys.
 	// ADK uses "adk_" prefix for metadata keys like "adk_type", "adk_app_name", "adk_user_id", etc.
 	// This ensures compatibility with ADK's part converter which expects "adk_type" instead of "type".

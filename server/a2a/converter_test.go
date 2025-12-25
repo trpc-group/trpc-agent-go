@@ -2324,3 +2324,231 @@ func TestA2AMessageToAgentMessage_PointerAndValueTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultEventToA2AMessage_ReasoningContent(t *testing.T) {
+	tests := []struct {
+		name            string
+		event           *event.Event
+		adkCompat       bool
+		expectedParts   int
+		expectedThought bool
+	}{
+		{
+			name: "event with reasoning content only",
+			event: &event.Event{
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								ReasoningContent: "Let me think about this...",
+							},
+						},
+					},
+				},
+			},
+			adkCompat:       false,
+			expectedParts:   1,
+			expectedThought: true,
+		},
+		{
+			name: "event with both reasoning and content",
+			event: &event.Event{
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								ReasoningContent: "Let me think...",
+								Content:          "Here is the answer",
+							},
+						},
+					},
+				},
+			},
+			adkCompat:       false,
+			expectedParts:   2,
+			expectedThought: true,
+		},
+		{
+			name: "event with reasoning content - ADK mode",
+			event: &event.Event{
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								ReasoningContent: "Thinking in ADK mode...",
+								Content:          "Answer",
+							},
+						},
+					},
+				},
+			},
+			adkCompat:       true,
+			expectedParts:   2,
+			expectedThought: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			converter := &defaultEventToA2AMessage{adkCompatibility: tt.adkCompat}
+			result, err := converter.ConvertToA2AMessage(context.Background(), tt.event, EventToA2AUnaryOptions{})
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if result == nil {
+				t.Fatal("expected non-nil result")
+			}
+
+			msg, ok := result.(*protocol.Message)
+			if !ok {
+				t.Fatalf("expected *protocol.Message, got %T", result)
+			}
+
+			if len(msg.Parts) != tt.expectedParts {
+				t.Errorf("expected %d parts, got %d", tt.expectedParts, len(msg.Parts))
+			}
+
+			if tt.expectedThought && len(msg.Parts) > 0 {
+				var firstPart protocol.TextPart
+				switch p := msg.Parts[0].(type) {
+				case *protocol.TextPart:
+					firstPart = *p
+				case protocol.TextPart:
+					firstPart = p
+				default:
+					t.Fatalf("expected first part to be protocol.TextPart, got %T", msg.Parts[0])
+				}
+
+				expectedKey := "thought"
+				if tt.adkCompat {
+					expectedKey = "adk_thought"
+				}
+
+				if firstPart.Metadata == nil {
+					t.Error("expected metadata on reasoning part")
+				} else if _, hasThought := firstPart.Metadata[expectedKey]; !hasThought {
+					t.Errorf("expected %q key in metadata, got %v", expectedKey, firstPart.Metadata)
+				}
+			}
+		})
+	}
+}
+
+func TestDefaultEventToA2AMessage_StreamingReasoningContent(t *testing.T) {
+	tests := []struct {
+		name            string
+		event           *event.Event
+		adkCompat       bool
+		expectedParts   int
+		expectedThought bool
+	}{
+		{
+			name: "streaming event with reasoning delta",
+			event: &event.Event{
+				Response: &model.Response{
+					ID: "resp-1",
+					Choices: []model.Choice{
+						{
+							Delta: model.Message{
+								ReasoningContent: "Thinking...",
+							},
+						},
+					},
+				},
+			},
+			adkCompat:       false,
+			expectedParts:   1,
+			expectedThought: true,
+		},
+		{
+			name: "streaming event with both reasoning and content delta",
+			event: &event.Event{
+				Response: &model.Response{
+					ID: "resp-2",
+					Choices: []model.Choice{
+						{
+							Delta: model.Message{
+								ReasoningContent: "Thinking...",
+								Content:          "Answer",
+							},
+						},
+					},
+				},
+			},
+			adkCompat:       false,
+			expectedParts:   2,
+			expectedThought: true,
+		},
+		{
+			name: "streaming event with reasoning delta - ADK mode",
+			event: &event.Event{
+				Response: &model.Response{
+					ID: "resp-3",
+					Choices: []model.Choice{
+						{
+							Delta: model.Message{
+								ReasoningContent: "ADK thinking...",
+							},
+						},
+					},
+				},
+			},
+			adkCompat:       true,
+			expectedParts:   1,
+			expectedThought: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			converter := &defaultEventToA2AMessage{adkCompatibility: tt.adkCompat}
+			result, err := converter.ConvertStreamingToA2AMessage(
+				context.Background(),
+				tt.event,
+				EventToA2AStreamingOptions{TaskID: "task-1", CtxID: "ctx-1"},
+			)
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if result == nil {
+				t.Fatal("expected non-nil result")
+			}
+
+			artifact, ok := result.(*protocol.TaskArtifactUpdateEvent)
+			if !ok {
+				t.Fatalf("expected *protocol.TaskArtifactUpdateEvent, got %T", result)
+			}
+
+			if len(artifact.Artifact.Parts) != tt.expectedParts {
+				t.Errorf("expected %d parts, got %d", tt.expectedParts, len(artifact.Artifact.Parts))
+			}
+
+			if tt.expectedThought && len(artifact.Artifact.Parts) > 0 {
+				var firstPart protocol.TextPart
+				switch p := artifact.Artifact.Parts[0].(type) {
+				case *protocol.TextPart:
+					firstPart = *p
+				case protocol.TextPart:
+					firstPart = p
+				default:
+					t.Fatalf("expected first part to be protocol.TextPart, got %T", artifact.Artifact.Parts[0])
+				}
+
+				expectedKey := "thought"
+				if tt.adkCompat {
+					expectedKey = "adk_thought"
+				}
+
+				if firstPart.Metadata == nil {
+					t.Error("expected metadata on reasoning part")
+				} else if _, hasThought := firstPart.Metadata[expectedKey]; !hasThought {
+					t.Errorf("expected %q key in metadata, got %v", expectedKey, firstPart.Metadata)
+				}
+			}
+		})
+	}
+}

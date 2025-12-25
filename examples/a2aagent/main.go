@@ -38,8 +38,14 @@ import (
 var (
 	modelName  = flag.String("model", "deepseek-chat", "Model to use")
 	host       = flag.String("host", "0.0.0.0:8888", "Host to use")
-	streaming  = flag.Bool("streaming", true, "Streaming to use")
+	streaming  = flag.Bool("streaming", false, "Streaming to use")
 	remoteOnly = flag.Bool("remote-only", false, "Only output remote agent responses")
+)
+
+// ANSI color codes for terminal output
+const (
+	colorReset = "\033[0m"
+	colorCyan  = "\033[36m" // Cyan for reasoning/thinking content
 )
 
 const (
@@ -93,6 +99,7 @@ func startChat(localAgent agent.Agent, a2aAgent *a2aagent.A2AAgent) {
 	localSessionID := "local_session1"
 
 	fmt.Println("Chat with the agent. Type 'new' for a new session, or 'exit' to quit.")
+	fmt.Printf("Color legend: %sReasoning content%s | Normal content\n", colorCyan, colorReset)
 
 	for {
 		if err := processMessage(remoteRunner, localRunner, remoteUserID, &remoteSessionID, localUserID, &localSessionID); err != nil {
@@ -380,7 +387,12 @@ func handleContent(
 ) {
 	if len(event.Response.Choices) > 0 {
 		choice := event.Response.Choices[0]
-		content := extractContent(choice)
+		content, reasoningContent := extractContent(choice)
+
+		// Display reasoning content first (in cyan color)
+		if reasoningContent != "" {
+			displayReasoningContent(reasoningContent)
+		}
 
 		if content != "" {
 			displayContent(content, toolCallsDetected, assistantStarted, fullContent)
@@ -388,12 +400,17 @@ func handleContent(
 	}
 }
 
-// extractContent extracts content based on streaming mode.
-func extractContent(choice model.Choice) string {
+// extractContent extracts content and reasoning content based on streaming mode.
+func extractContent(choice model.Choice) (content string, reasoningContent string) {
 	if *streaming {
-		return choice.Delta.Content
+		return choice.Delta.Content, choice.Delta.ReasoningContent
 	}
-	return choice.Message.Content
+	return choice.Message.Content, choice.Message.ReasoningContent
+}
+
+// displayReasoningContent prints reasoning content in cyan color.
+func displayReasoningContent(reasoningContent string) {
+	fmt.Printf("%s%s%s", colorCyan, reasoningContent, colorReset)
 }
 
 // displayContent prints content to console.
