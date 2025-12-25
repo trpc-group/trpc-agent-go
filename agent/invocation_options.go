@@ -115,6 +115,13 @@ func WithInvocationArtifactService(artifactService artifact.Service) InvocationO
 	}
 }
 
+// WithInvocationPlugins sets the PluginManager for this invocation.
+func WithInvocationPlugins(pm PluginManager) InvocationOptions {
+	return func(inv *Invocation) {
+		inv.Plugins = pm
+	}
+}
+
 // WithInvocationEventFilterKey set eventFilterKey for the Invocation.
 func WithInvocationEventFilterKey(key string) InvocationOptions {
 	return func(inv *Invocation) {

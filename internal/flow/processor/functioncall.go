@@ -850,6 +850,40 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 
 	toolDeclaration := tl.Declaration()
 	// Run before tool callbacks if they exist.
+	if invocation != nil && invocation.Plugins != nil {
+		callbacks := invocation.Plugins.ToolCallbacks()
+		if callbacks != nil {
+			result, callbackErr := callbacks.RunBeforeTool(
+				ctx,
+				&tool.BeforeToolArgs{
+					ToolName:    toolCall.Function.Name,
+					Declaration: toolDeclaration,
+					Arguments:   toolCall.Function.Arguments,
+				},
+			)
+			if callbackErr != nil {
+				log.ErrorfContext(
+					ctx,
+					"Before tool plugin failed for %s: %v",
+					toolCall.Function.Name,
+					callbackErr,
+				)
+				return ctx, nil, toolCall.Function.Arguments,
+					fmt.Errorf("tool callback error: %w", callbackErr)
+			}
+			if result != nil && result.Context != nil {
+				ctx = result.Context
+			}
+			if result != nil && result.CustomResult != nil {
+				return ctx, result.CustomResult,
+					toolCall.Function.Arguments, nil
+			}
+			if result != nil && result.ModifiedArguments != nil {
+				toolCall.Function.Arguments = result.ModifiedArguments
+			}
+		}
+	}
+
 	if p.toolCallbacks != nil {
 		result, callbackErr := p.toolCallbacks.RunBeforeTool(ctx, &tool.BeforeToolArgs{
 			ToolName:    toolCall.Function.Name,
@@ -895,6 +929,40 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 
 	// Run after tool callbacks if they exist.
 	// If the tool returns an error, the callback function will still execute to allow the user to handle the error.
+	if invocation != nil && invocation.Plugins != nil {
+		callbacks := invocation.Plugins.ToolCallbacks()
+		if callbacks != nil {
+			afterResult, callbackErr := callbacks.RunAfterTool(
+				ctx,
+				&tool.AfterToolArgs{
+					ToolName:    toolCall.Function.Name,
+					Declaration: toolDeclaration,
+					Arguments:   toolCall.Function.Arguments,
+					Result:      toolResult,
+					Error:       err,
+				},
+			)
+			if callbackErr != nil {
+				log.ErrorfContext(
+					ctx,
+					"After tool plugin failed for %s: %v",
+					toolCall.Function.Name,
+					callbackErr,
+				)
+				return ctx, toolResult, toolCall.Function.Arguments,
+					fmt.Errorf("tool callback error: %w", callbackErr)
+			}
+			if afterResult != nil && afterResult.Context != nil {
+				ctx = afterResult.Context
+			}
+			if afterResult != nil && afterResult.CustomResult != nil {
+				toolResult = afterResult.CustomResult
+				return ctx, toolResult,
+					toolCall.Function.Arguments, err
+			}
+		}
+	}
+
 	if p.toolCallbacks != nil {
 		afterResult, callbackErr := p.toolCallbacks.RunAfterTool(ctx, &tool.AfterToolArgs{
 			ToolName:    toolCall.Function.Name,
