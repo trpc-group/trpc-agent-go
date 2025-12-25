@@ -3861,6 +3861,8 @@
 <li>GraphAgent/Runner 仅设置 <code>user_input</code>，不再预先把用户消息写入
   <code>messages</code>。这样可以允许在 LLM 节点之前的任意节点对 <code>user_input</code>
   进行修改，并能在同一轮生效。</li>
+<li>Graph 在执行子 Agent 时会保留父调用的 <code>RequestID</code>（请求标识），
+  确保当会话历史里已包含本轮用户输入时，不会在提示词中重复插入。</li>
 </ul>
 <h4 id="_9">三种输入范式</h4>
 <ul>
@@ -7950,7 +7952,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月24日 12:33:26 UTC">2025-12-24 12:33:26</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月25日 08:50:02 UTC">2025-12-25 08:50:02</span>
   </span>
 
     
