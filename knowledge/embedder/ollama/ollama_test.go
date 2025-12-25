@@ -323,3 +323,50 @@ func TestEmbedder_GetEmbedding(t *testing.T) {
 		t.Fatalf("GetEmbeddingWithUsage failed")
 	}
 }
+
+// TestGetEmbedding_EmptyResponse tests handling of empty embedding responses
+func TestGetEmbedding_EmptyResponse(t *testing.T) {
+	t.Run("empty embeddings array", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"embeddings": [][]float32{},
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		e := New(WithHost(srv.URL))
+		ctx := context.Background()
+
+		vec, err := e.GetEmbedding(ctx, "test")
+		if err != nil {
+			t.Fatalf("GetEmbedding should not return error for empty embeddings: %v", err)
+		}
+		if len(vec) != 0 {
+			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		}
+	})
+
+	t.Run("empty embedding vector", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"embeddings": [][]float32{{}},
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		e := New(WithHost(srv.URL))
+		ctx := context.Background()
+
+		vec, err := e.GetEmbedding(ctx, "test")
+		if err != nil {
+			t.Fatalf("GetEmbedding should not return error for empty vector: %v", err)
+		}
+		if len(vec) != 0 {
+			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		}
+	})
+}

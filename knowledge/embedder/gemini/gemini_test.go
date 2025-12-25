@@ -242,3 +242,72 @@ func TestAPIKeyPriority(t *testing.T) {
 		}
 	})
 }
+
+// TestGetEmbedding_EmptyResponse tests handling of empty embedding responses
+func TestGetEmbedding_EmptyResponse(t *testing.T) {
+	t.Run("empty embeddings array", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"embeddings": []map[string]any{},
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		emb, err := New(
+			context.Background(),
+			WithAPIKey("dummy"),
+			WithClientOptions(&genai.ClientConfig{
+				HTTPOptions: genai.HTTPOptions{
+					BaseURL: srv.URL + "/embeddings",
+				},
+			}),
+		)
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+
+		vec, err := emb.GetEmbedding(context.Background(), "test")
+		if err != nil {
+			t.Fatalf("GetEmbedding should not return error for empty embeddings: %v", err)
+		}
+		if len(vec) != 0 {
+			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		}
+	})
+
+	t.Run("empty values array", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"embeddings": []map[string]any{
+					{"values": []float64{}},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		emb, err := New(
+			context.Background(),
+			WithAPIKey("dummy"),
+			WithClientOptions(&genai.ClientConfig{
+				HTTPOptions: genai.HTTPOptions{
+					BaseURL: srv.URL + "/embeddings",
+				},
+			}),
+		)
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+
+		vec, err := emb.GetEmbedding(context.Background(), "test")
+		if err != nil {
+			t.Fatalf("GetEmbedding should not return error for empty values: %v", err)
+		}
+		if len(vec) != 0 {
+			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		}
+	})
+}

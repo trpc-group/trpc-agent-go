@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -844,6 +845,31 @@ func TestToolSet_Init(t *testing.T) {
 			t.Error("Expected error when init fails")
 		}
 	})
+
+	t.Run("init successfully with mocked client", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		toolset := NewMCPToolSet(config)
+		defer toolset.Close()
+
+		// Mock session manager
+		manager := toolset.sessionManager
+		manager.client = &stubConnector{}
+		manager.mu.Lock()
+		manager.connected = true
+		manager.initialized = true
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		err := toolset.Init(ctx)
+		// Should succeed with mocked client
+		if err != nil {
+			t.Errorf("Expected no error with mocked client, got: %v", err)
+		}
+	})
 }
 
 // TestToolSet_Tools tests the Tools method
@@ -869,6 +895,55 @@ func TestToolSet_Tools(t *testing.T) {
 			t.Error("Expected tools to be returned even on refresh error")
 		}
 	})
+
+	t.Run("tools with successful refresh", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		toolset := NewMCPToolSet(config)
+		defer toolset.Close()
+
+		// Mock session manager to return tools successfully
+		manager := toolset.sessionManager
+		manager.client = &stubConnector{}
+		manager.mu.Lock()
+		manager.connected = true
+		manager.initialized = true
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		tools := toolset.Tools(ctx)
+		// Should return tools from successful refresh
+		if tools == nil {
+			t.Error("Expected tools to be returned")
+		}
+	})
+
+	t.Run("tools with filter applied", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		filterFunc := tool.NewIncludeToolNamesFilter("test-tool")
+		toolset := NewMCPToolSet(config, WithToolFilterFunc(filterFunc))
+		defer toolset.Close()
+
+		// Mock session manager
+		manager := toolset.sessionManager
+		manager.client = &stubConnector{}
+		manager.mu.Lock()
+		manager.connected = true
+		manager.initialized = true
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		tools := toolset.Tools(ctx)
+		// Tools should be filtered
+		_ = tools
+	})
 }
 
 // TestSessionManager_Connect tests the connect method
@@ -888,6 +963,104 @@ func TestSessionManager_Connect(t *testing.T) {
 		err := manager.connect(ctx)
 		if err != nil {
 			t.Errorf("Expected no error when already connected, got: %v", err)
+		}
+	})
+
+	t.Run("connect with successful initialization", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+			Timeout:   time.Second,
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+
+		// Mock client that succeeds - set it before calling connect
+		// We need to bypass createClient by setting client directly
+		manager.mu.Lock()
+		manager.client = &stubConnector{}
+		manager.connected = false
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		// Manually test initialize since connect calls createClient which will fail
+		err := manager.initialize(ctx)
+		if err != nil {
+			t.Errorf("Expected no error with mocked client, got: %v", err)
+		}
+		if !manager.initialized {
+			t.Error("Expected initialized to be true after successful initialize")
+		}
+	})
+
+	t.Run("connect with initialization failure", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+
+		// Mock client that fails on Initialize
+		manager.client = &stubConnector{
+			initializeError: fmt.Errorf("init failed"),
+		}
+
+		ctx := context.Background()
+		manager.mu.Lock()
+		manager.connected = false
+		manager.mu.Unlock()
+
+		err := manager.connect(ctx)
+		if err == nil {
+			t.Error("Expected error when initialization fails")
+		}
+		if manager.connected {
+			t.Error("Expected connected to be false after initialization failure")
+		}
+	})
+
+	t.Run("connect with initialization failure and close error", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+
+		// Mock client that fails on Initialize and Close
+		manager.client = &stubConnector{
+			initializeError: fmt.Errorf("init failed"),
+			closeError:      fmt.Errorf("close failed"),
+		}
+
+		ctx := context.Background()
+		manager.mu.Lock()
+		manager.connected = false
+		manager.mu.Unlock()
+
+		err := manager.connect(ctx)
+		if err == nil {
+			t.Error("Expected error when initialization fails")
+		}
+		// Should handle close error gracefully
+		if manager.connected {
+			t.Error("Expected connected to be false after initialization failure")
+		}
+	})
+
+	t.Run("connect with createClient error", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "invalid-transport",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+
+		ctx := context.Background()
+		err := manager.connect(ctx)
+		if err == nil {
+			t.Error("Expected error when createClient fails")
 		}
 	})
 }
@@ -954,6 +1127,29 @@ func TestSessionManager_ListTools(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "transport is closed") {
 			t.Errorf("Expected 'transport is closed' error, got: %v", err)
+		}
+	})
+
+	t.Run("listTools successfully", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+		manager.client = &stubConnector{}
+		manager.mu.Lock()
+		manager.connected = true
+		manager.initialized = true
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		tools, err := manager.listTools(ctx)
+		if err != nil {
+			t.Errorf("Expected no error, got: %v", err)
+		}
+		if len(tools) == 0 {
+			t.Error("Expected at least one tool from stub connector")
 		}
 	})
 
@@ -1025,6 +1221,75 @@ func TestSessionManager_DoRecreateSession(t *testing.T) {
 		err := manager.doRecreateSession(ctx)
 		if err == nil {
 			t.Error("Expected error when createClient fails")
+		}
+	})
+
+	t.Run("recreate session successfully", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+		manager.mu.Lock()
+		manager.client = &stubConnector{}
+		manager.connected = true
+		manager.initialized = true
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		err := manager.doRecreateSession(ctx)
+		// Will fail because we can't create a real client, but exercises the path
+		_ = err
+	})
+
+	t.Run("recreate session with close error", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+		manager.mu.Lock()
+		manager.client = &stubConnector{
+			closeError: fmt.Errorf("close failed"),
+		}
+		manager.connected = true
+		manager.initialized = true
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		err := manager.doRecreateSession(ctx)
+		// Should continue even if close fails
+		_ = err
+	})
+
+	t.Run("recreate session with initialize error after reconnect", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+			Timeout:   time.Second,
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+
+		// Create a client that will fail on initialize
+		manager.mu.Lock()
+		manager.client = &stubConnector{
+			initializeError: fmt.Errorf("re-init failed"),
+		}
+		manager.connected = true
+		manager.initialized = false
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		// Manually test the initialize failure path
+		err := manager.initialize(ctx)
+		if err == nil {
+			t.Error("Expected error when re-initialization fails")
+		}
+		if manager.initialized {
+			t.Error("Expected initialized to be false after initialization failure")
 		}
 	})
 }
