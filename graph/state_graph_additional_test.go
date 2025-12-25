@@ -443,3 +443,28 @@ func TestBuildAgentInvocationWithStateAndScope_NoParentKey(t *testing.T) {
 	require.Equal(t, "scope", parts[0])
 	require.NotEmpty(t, parts[1])
 }
+
+func TestBuildAgentInvocationWithStateAndScope_PreservesRequestID(t *testing.T) {
+	// Parent invocation with RequestID.
+	parent := agent.NewInvocation(
+		agent.WithInvocationEventFilterKey("root"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "test-request-123",
+		}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	target := &stubAgent{name: "child"}
+	inv := buildAgentInvocationWithStateAndScope(
+		ctx,
+		State{},
+		State{"custom_key": "custom_value"},
+		target,
+		"scope",
+	)
+
+	// RequestID should be preserved from parent.
+	require.Equal(t, "test-request-123", inv.RunOptions.RequestID)
+	// RuntimeState should be set from child state.
+	require.Equal(t, "custom_value", inv.RunOptions.RuntimeState["custom_key"])
+}

@@ -1474,14 +1474,17 @@ func buildAgentInvocationWithStateAndScope(
 				base + agent.EventFilterKeyDelimiter +
 				uuid.NewString()
 		}
+		// Preserve parent's RequestID when building child RunOptions.
+		childRunOptions := agent.RunOptions{
+			RuntimeState: runtime,
+			RequestID:    parentInvocation.RunOptions.RequestID,
+		}
 		inv := parentInvocation.Clone(
 			agent.WithInvocationAgent(targetAgent),
 			agent.WithInvocationMessage(
 				model.NewUserMessage(userInput),
 			),
-			agent.WithInvocationRunOptions(agent.RunOptions{
-				RuntimeState: runtime,
-			}),
+			agent.WithInvocationRunOptions(childRunOptions),
 			agent.WithInvocationEventFilterKey(filterKey),
 		)
 		return inv
