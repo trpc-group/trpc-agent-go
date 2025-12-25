@@ -395,20 +395,26 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 		if exec == nil {
 			exec = defaultCodeExecutor()
 		}
+		runOpts := make(
+			[]func(*toolskill.RunTool), 0, 2,
+		)
 		if len(options.SkillRunAllowedCommands) > 0 {
-			allTools = append(allTools, toolskill.NewRunTool(
-				options.SkillsRepository,
-				exec,
+			runOpts = append(runOpts,
 				toolskill.WithAllowedCommands(
 					options.SkillRunAllowedCommands...,
 				),
-			))
-		} else {
-			allTools = append(allTools,
-				toolskill.NewRunTool(
-					options.SkillsRepository, exec,
-				))
+			)
 		}
+		if len(options.SkillRunDeniedCommands) > 0 {
+			runOpts = append(runOpts,
+				toolskill.WithDeniedCommands(
+					options.SkillRunDeniedCommands...,
+				),
+			)
+		}
+		allTools = append(allTools, toolskill.NewRunTool(
+			options.SkillsRepository, exec, runOpts...,
+		))
 	}
 
 	return allTools, userToolNames

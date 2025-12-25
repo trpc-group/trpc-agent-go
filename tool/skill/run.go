@@ -37,10 +37,12 @@ type RunTool struct {
 	reg  *codeexecutor.WorkspaceRegistry
 
 	allowedCmds map[string]struct{}
+	deniedCmds  map[string]struct{}
 }
 
 // NewRunTool creates a new RunTool.
-func NewRunTool(repo skill.Repository,
+func NewRunTool(
+	repo skill.Repository,
 	exec codeexecutor.CodeExecutor,
 	opts ...func(*RunTool),
 ) *RunTool {
@@ -55,10 +57,12 @@ func NewRunTool(repo skill.Repository,
 		}
 	}
 	rt.loadAllowedCommandsFromEnv()
+	rt.loadDeniedCommandsFromEnv()
 	return rt
 }
 
 const envAllowedCommands = "TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS"
+const envDeniedCommands = "TRPC_AGENT_SKILL_RUN_DENIED_COMMANDS"
 
 // WithAllowedCommands restricts skill_run to a single program execution
 // whose command name is in the allowlist.
@@ -71,17 +75,26 @@ func WithAllowedCommands(cmds ...string) func(*RunTool) {
 	}
 }
 
+// WithDeniedCommands rejects a single program execution whose command name
+// matches the denylist.
+//
+// When enabled, shell features (pipes, redirects, separators) are rejected
+// and the command is executed without "bash -lc".
+func WithDeniedCommands(cmds ...string) func(*RunTool) {
+	return func(t *RunTool) {
+		t.setDeniedCommands(cmds)
+	}
+}
+
 func (t *RunTool) loadAllowedCommandsFromEnv() {
 	if len(t.allowedCmds) > 0 {
 		return
 	}
-	raw := strings.TrimSpace(os.Getenv(envAllowedCommands))
-	if raw == "" {
+	raw := os.Getenv(envAllowedCommands)
+	parts := splitCommandList(raw)
+	if len(parts) == 0 {
 		return
 	}
-	parts := strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\t'
-	})
 	t.setAllowedCommands(parts)
 }
 
@@ -99,6 +112,52 @@ func (t *RunTool) setAllowedCommands(cmds []string) {
 		}
 		t.allowedCmds[s] = struct{}{}
 	}
+}
+
+func (t *RunTool) loadDeniedCommandsFromEnv() {
+	if len(t.deniedCmds) > 0 {
+		return
+	}
+	raw := os.Getenv(envDeniedCommands)
+	parts := splitCommandList(raw)
+	if len(parts) == 0 {
+		return
+	}
+	t.setDeniedCommands(parts)
+}
+
+func (t *RunTool) setDeniedCommands(cmds []string) {
+	if len(cmds) == 0 {
+		return
+	}
+	if t.deniedCmds == nil {
+		t.deniedCmds = make(map[string]struct{}, len(cmds))
+	}
+	for _, c := range cmds {
+		s := strings.TrimSpace(c)
+		if s == "" {
+			continue
+		}
+		t.deniedCmds[s] = struct{}{}
+	}
+}
+
+func splitCommandList(raw string) []string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t'
+	})
+	var out []string
+	for _, p := range parts {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // runInput is the JSON schema for skill_run.
@@ -441,20 +500,23 @@ func (t *RunTool) runProgram(
 	if _, ok := env[codeexecutor.EnvSkillName]; !ok {
 		env[codeexecutor.EnvSkillName] = in.Skill
 	}
-	if len(t.allowedCmds) > 0 {
+	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
 		argv, err := splitCommandLine(in.Command)
 		if err != nil {
 			return codeexecutor.RunResult{}, err
 		}
 		cmd := argv[0]
-		base := filepathBase(cmd)
-		if _, ok := t.allowedCmds[cmd]; !ok {
-			if _, ok := t.allowedCmds[base]; !ok {
-				return codeexecutor.RunResult{}, fmt.Errorf(
-					"skill_run: command %q is not allowed",
-					cmd,
-				)
-			}
+		if len(t.allowedCmds) > 0 && !cmdInList(t.allowedCmds, cmd) {
+			return codeexecutor.RunResult{}, fmt.Errorf(
+				"skill_run: command %q is not allowed",
+				cmd,
+			)
+		}
+		if cmdInList(t.deniedCmds, cmd) {
+			return codeexecutor.RunResult{}, fmt.Errorf(
+				"skill_run: command %q is denied",
+				cmd,
+			)
 		}
 		return eng.Runner().RunProgram(
 			ctx, ws, codeexecutor.RunProgramSpec{
@@ -479,14 +541,26 @@ func (t *RunTool) runProgram(
 
 const disallowedShellMeta = "\n\r;&|<>"
 
+func cmdInList(list map[string]struct{}, cmd string) bool {
+	if len(list) == 0 {
+		return false
+	}
+	if _, ok := list[cmd]; ok {
+		return true
+	}
+	base := filepathBase(cmd)
+	_, ok := list[base]
+	return ok
+}
+
 func splitCommandLine(s string) ([]string, error) {
 	if strings.TrimSpace(s) == "" {
 		return nil, fmt.Errorf("skill_run: command is empty")
 	}
 	if strings.ContainsAny(s, disallowedShellMeta) {
 		return nil, fmt.Errorf(
-			"skill_run: shell syntax is not allowed when %s is set",
-			envAllowedCommands,
+			"skill_run: shell syntax is not allowed " +
+				"when command restrictions are enabled",
 		)
 	}
 	var args []string

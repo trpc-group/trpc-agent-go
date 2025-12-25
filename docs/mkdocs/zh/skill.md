@@ -259,6 +259,13 @@ https://github.com/anthropics/skills
     或使用 `outputs` 收集输出文件
 - 代码侧也可通过 `llmagent.WithSkillRunAllowedCommands(...)` 配置。
 
+可选的安全限制（黑名单）：
+- 环境变量 `TRPC_AGENT_SKILL_RUN_DENIED_COMMANDS`：
+  - 逗号/空格分隔的命令名列表
+  - 启用后同样会拒绝 Shell 语法（仅允许“单条命令”），并拒绝
+    执行黑名单中的命令名
+- 代码侧也可通过 `llmagent.WithSkillRunDeniedCommands(...)` 配置。
+
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`
 - `output_files`：文件列表（`name`、`content`、`mime_type`）

@@ -253,6 +253,14 @@ Optional safety restriction (allowlist):
 - You can also configure this in code via
   `llmagent.WithSkillRunAllowedCommands(...)`.
 
+Optional safety restriction (denylist):
+- Env var `TRPC_AGENT_SKILL_RUN_DENIED_COMMANDS`:
+  - Comma/space-separated command names
+  - When set, `skill_run` also rejects shell syntax (single command only)
+    and blocks denylisted command names
+- You can also configure this in code via
+  `llmagent.WithSkillRunDeniedCommands(...)`.
+
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
 - `output_files` with `name`, `content`, `mime_type`

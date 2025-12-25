@@ -220,6 +220,7 @@ type Options struct {
 	// SkillsRepository enables Agent Skills if non-nil.
 	SkillsRepository          skill.Repository
 	SkillRunAllowedCommands   []string
+	SkillRunDeniedCommands    []string
 	messageTimelineFilterMode string
 	messageBranchFilterMode   string
 
@@ -354,6 +355,16 @@ func WithSkills(repo skill.Repository) Option {
 func WithSkillRunAllowedCommands(cmds ...string) Option {
 	return func(opts *Options) {
 		opts.SkillRunAllowedCommands = append(
+			[]string(nil), cmds...,
+		)
+	}
+}
+
+// WithSkillRunDeniedCommands rejects a single, denylisted command (no shell
+// syntax) when non-empty.
+func WithSkillRunDeniedCommands(cmds ...string) Option {
+	return func(opts *Options) {
+		opts.SkillRunDeniedCommands = append(
 			[]string(nil), cmds...,
 		)
 	}
