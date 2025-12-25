@@ -187,6 +187,36 @@ func TestSessionManager_CallTool_StructuredContentMarshalError(t *testing.T) {
 	assert.Len(t, result, 0)
 }
 
+// TestSessionManager_CallTool_Error tests callTool when CallTool returns an error
+func TestSessionManager_CallTool_Error(t *testing.T) {
+	config := ConnectionConfig{
+		Transport: "stdio",
+		Command:   "echo",
+		Args:      []string{"hello"},
+	}
+	manager := newMCPSessionManager(config, nil, nil)
+
+	manager.mu.Lock()
+	manager.client = &stubConnector{
+		callToolFn: func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Return an error to trigger the error log
+			return nil, fmt.Errorf("tool execution failed: invalid parameters")
+		},
+	}
+	manager.connected = true
+	manager.initialized = true
+	manager.mu.Unlock()
+
+	ctx := context.Background()
+	_, err := manager.callTool(ctx, "test-tool", map[string]any{"param": "value"})
+	if err == nil {
+		t.Error("Expected error when CallTool fails")
+	}
+	if !strings.Contains(err.Error(), "failed to call tool") {
+		t.Errorf("Expected 'failed to call tool' in error, got: %v", err)
+	}
+}
+
 // stubConnector implements mcp.Connector for testing.
 type stubConnector struct {
 	callToolFn      func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error)
@@ -889,9 +919,16 @@ func TestToolSet_Tools(t *testing.T) {
 		toolset.tools = []tool.Tool{}
 		toolset.mu.Unlock()
 
+		// Make listTools fail by setting session manager to fail
+		manager := toolset.sessionManager
+		manager.mu.Lock()
+		manager.client = nil
+		manager.connected = false
+		manager.initialized = false
+		manager.mu.Unlock()
+
 		ctx := context.Background()
 		tools := toolset.Tools(ctx)
-		// Should return cached tools even if refresh fails
 		if tools == nil {
 			t.Error("Expected tools to be returned even on refresh error")
 		}
@@ -1144,7 +1181,6 @@ func TestSessionManager_Connect(t *testing.T) {
 		if err != nil {
 			t.Errorf("Expected no error, got: %v", err)
 		}
-		// This exercises the successful path in connect
 		_ = err
 	})
 
@@ -1220,7 +1256,6 @@ func TestSessionManager_Connect(t *testing.T) {
 		manager := newMCPSessionManager(config, nil, nil)
 
 		// Mock client that fails on Initialize and Close
-		// This covers line 225-226: log.ErrorContext when close fails
 		manager.client = &stubConnector{
 			initializeError: fmt.Errorf("init failed"),
 			closeError:      fmt.Errorf("close failed"),
@@ -1239,10 +1274,9 @@ func TestSessionManager_Connect(t *testing.T) {
 		if manager.connected {
 			t.Error("Expected connected to be false after initialization failure")
 		}
-		// This covers line 225-226: log.ErrorContext(ctx, "Failed to close client after initialization failure", ...)
 	})
 
-	t.Run("connect successfully - covers line 231", func(t *testing.T) {
+	t.Run("connect successfully", func(t *testing.T) {
 		config := ConnectionConfig{
 			Transport: "stdio",
 			Command:   "echo",
@@ -1267,8 +1301,6 @@ func TestSessionManager_Connect(t *testing.T) {
 		if !manager.initialized {
 			t.Error("Expected initialized to be true")
 		}
-		// This covers line 231: log.DebugContext(ctx, "Successfully connected to MCP server")
-		// The actual connect method would call this after successful initialize
 	})
 
 	t.Run("connect with createClient error", func(t *testing.T) {
@@ -1577,6 +1609,77 @@ func TestSessionManager_DoRecreateSession(t *testing.T) {
 		}
 	})
 
+	t.Run("recreate session with initialize error and close error", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+			Timeout:   time.Second,
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+
+		// Set up initial client
+		manager.mu.Lock()
+		manager.client = &stubConnector{
+			closeError: fmt.Errorf("close failed"),
+		}
+		manager.connected = true
+		manager.initialized = true
+		manager.mu.Unlock()
+
+		// Simulate doRecreateSession: close fails, then createClient succeeds,
+		// but initialize fails and close also fails
+		manager.mu.Lock()
+		manager.client = &stubConnector{
+			initializeError: fmt.Errorf("init failed"),
+			closeError:      fmt.Errorf("close failed"),
+		}
+		manager.connected = false
+		manager.initialized = false
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		err := manager.initialize(ctx)
+		if err == nil {
+			t.Error("Expected error when initialization fails")
+		}
+	})
+
+	t.Run("recreate session successfully with close error", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+			Timeout:   time.Second,
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+
+		// Set up initial client that fails to close
+		manager.mu.Lock()
+		manager.client = &stubConnector{
+			closeError: fmt.Errorf("close failed"),
+		}
+		manager.connected = true
+		manager.initialized = true
+		manager.mu.Unlock()
+
+		// Simulate doRecreateSession: close fails, but new client succeeds
+		manager.mu.Lock()
+		manager.client = &stubConnector{}
+		manager.connected = false
+		manager.initialized = false
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		err := manager.initialize(ctx)
+		if err != nil {
+			t.Errorf("Expected no error, got: %v", err)
+		}
+		if !manager.initialized {
+			t.Error("Expected initialized to be true after successful re-initialization")
+		}
+	})
+
 	t.Run("recreate session successfully", func(t *testing.T) {
 		config := ConnectionConfig{
 			Transport: "stdio",
@@ -1613,7 +1716,6 @@ func TestSessionManager_DoRecreateSession(t *testing.T) {
 		if !manager.initialized {
 			t.Error("Expected initialized to be true after successful re-initialization")
 		}
-		// This covers line 598: MCP session recreation completed successfully
 	})
 
 	t.Run("recreate session with close error and initialize success", func(t *testing.T) {
@@ -1647,7 +1749,43 @@ func TestSessionManager_DoRecreateSession(t *testing.T) {
 		if err != nil {
 			t.Errorf("Expected no error, got: %v", err)
 		}
-		// This covers the path where close fails but recreation succeeds
+	})
+
+	t.Run("recreate session with initialize error and close error", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+			Timeout:   time.Second,
+		}
+		manager := newMCPSessionManager(config, nil, nil)
+
+		// Set up initial client
+		manager.mu.Lock()
+		manager.client = &stubConnector{
+			closeError: fmt.Errorf("close failed"),
+		}
+		manager.connected = true
+		manager.initialized = true
+		manager.mu.Unlock()
+
+		// Simulate doRecreateSession: close fails, then createClient succeeds,
+		// but initialize fails and close also fails
+		manager.mu.Lock()
+		manager.client = &stubConnector{
+			initializeError: fmt.Errorf("init failed"),
+			closeError:      fmt.Errorf("close failed"),
+		}
+		manager.connected = false
+		manager.initialized = false
+		manager.mu.Unlock()
+
+		ctx := context.Background()
+		// Test initialize which will fail
+		err := manager.initialize(ctx)
+		if err == nil {
+			t.Error("Expected error when initialization fails")
+		}
 	})
 }
 
@@ -1681,11 +1819,7 @@ func TestExecuteWithSessionReconnect(t *testing.T) {
 		manager.initialized = true
 		manager.mu.Unlock()
 
-		// Mock doRecreateSession to succeed by ensuring client stays valid
-		// We'll test the path where recreateSession succeeds and operation retries successfully
 		ctx := context.Background()
-		// First call will fail with session_expired, then recreateSession will be called
-		// and succeed (covers line 493-494), then operation will retry and succeed (covers line 499-500)
 		err := manager.executeWithSessionReconnect(ctx, func() error {
 			manager.mu.RLock()
 			defer manager.mu.RUnlock()
@@ -1696,11 +1830,6 @@ func TestExecuteWithSessionReconnect(t *testing.T) {
 			return listErr
 		})
 
-		// The test exercises the reconnection path, even if it doesn't fully succeed
-		// The important thing is that we've covered the code paths
-		// This covers:
-		// - Line 493-494: log.DebugfContext(ctx, "Session reconnection successful, retrying operation (attempt=%d)", attempt)
-		// - Line 499-500: log.DebugfContext(ctx, "Operation succeeded after session reconnection (attempt=%d)", attempt)
 		_ = err
 	})
 
@@ -1794,10 +1923,9 @@ func TestExecuteWithSessionReconnect(t *testing.T) {
 		if !strings.Contains(err.Error(), "session_expired") {
 			t.Errorf("Expected 'session_expired' error, got: %v", err)
 		}
-		// This covers line 518: log.WarnfContext(ctx, "All reconnection attempts exhausted for this operation (max_attempts=%d)", maxAttempts)
 	})
 
-	t.Run("operation fails after reconnection but has more attempts - covers line 512-513", func(t *testing.T) {
+	t.Run("operation fails after reconnection but has more attempts", func(t *testing.T) {
 		config := ConnectionConfig{
 			Transport: "stdio",
 			Command:   "echo",
@@ -1815,9 +1943,6 @@ func TestExecuteWithSessionReconnect(t *testing.T) {
 		manager.client = &stubConnector{
 			listToolsFn: func(ctx context.Context, req *mcp.ListToolsRequest) (*mcp.ListToolsResult, error) {
 				operationCallCount++
-				// Always return session_expired to trigger retries
-				// This will cause recreateSession to be called, then operation retries
-				// and fails again, but since attempt < maxAttempts, it will log and continue
 				return nil, fmt.Errorf("session_expired: test %d", operationCallCount)
 			},
 		}
@@ -1840,52 +1965,7 @@ func TestExecuteWithSessionReconnect(t *testing.T) {
 		if err == nil {
 			t.Error("Expected error after all attempts")
 		}
-		// This covers line 512-513: log.DebugfContext(ctx, "Operation failed after reconnection, will retry (attempt=%d/%d, error=%v)", ...)
-		// The log message is printed when attempt < maxAttempts and operation fails after reconnection
 		_ = err
-	})
-
-	t.Run("operation fails after reconnection but has more attempts", func(t *testing.T) {
-		config := ConnectionConfig{
-			Transport: "stdio",
-			Command:   "echo",
-			Args:      []string{"hello"},
-			Timeout:   time.Second,
-		}
-		reconnectConfig := &SessionReconnectConfig{
-			EnableAutoReconnect:  true,
-			MaxReconnectAttempts: 3,
-		}
-		manager := newMCPSessionManager(config, nil, reconnectConfig)
-
-		callCount := 0
-		manager.mu.Lock()
-		manager.client = &stubConnector{
-			listToolsFn: func(ctx context.Context, req *mcp.ListToolsRequest) (*mcp.ListToolsResult, error) {
-				callCount++
-				// Always return session_expired to trigger retries
-				return nil, fmt.Errorf("session_expired: test %d", callCount)
-			},
-		}
-		manager.connected = true
-		manager.initialized = true
-		manager.mu.Unlock()
-
-		ctx := context.Background()
-		err := manager.executeWithSessionReconnect(ctx, func() error {
-			manager.mu.RLock()
-			defer manager.mu.RUnlock()
-			if manager.client == nil {
-				return fmt.Errorf("transport is closed")
-			}
-			_, listErr := manager.client.ListTools(ctx, &mcp.ListToolsRequest{})
-			return listErr
-		})
-
-		// Should exhaust all attempts
-		if err == nil {
-			t.Error("Expected error after all attempts")
-		}
 	})
 
 	t.Run("context cancelled during reconnection", func(t *testing.T) {
@@ -2000,6 +2080,72 @@ func TestToolSet_Close_WithError(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "failed to close MCP session") {
 			t.Errorf("Expected 'failed to close MCP session' error, got: %v", err)
+		}
+	})
+}
+
+// TestExecuteWithSessionReconnect_SuccessfulReconnect tests the successful reconnection path.
+func TestExecuteWithSessionReconnect_SuccessfulReconnect(t *testing.T) {
+	t.Run("operation fails with different error after reconnection attempt", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		reconnectConfig := &SessionReconnectConfig{
+			EnableAutoReconnect:  true,
+			MaxReconnectAttempts: 3,
+		}
+		manager := newMCPSessionManager(config, nil, reconnectConfig)
+
+		manager.mu.Lock()
+		manager.connected = true
+		manager.initialized = true
+		manager.client = &stubConnector{}
+		manager.mu.Unlock()
+
+		callCount := 0
+		operation := func() error {
+			callCount++
+			if callCount == 1 {
+				return fmt.Errorf("session_expired: first attempt")
+			}
+			// After reconnection attempt, return a different (non-reconnectable) error.
+			return fmt.Errorf("invalid argument: second attempt")
+		}
+
+		err := manager.executeWithSessionReconnect(context.Background(), operation)
+		// Should fail because recreateSession fails.
+		if err == nil {
+			t.Error("Expected error")
+		}
+	})
+
+	t.Run("all reconnection attempts exhausted", func(t *testing.T) {
+		config := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+		}
+		reconnectConfig := &SessionReconnectConfig{
+			EnableAutoReconnect:  true,
+			MaxReconnectAttempts: 2,
+		}
+		manager := newMCPSessionManager(config, nil, reconnectConfig)
+
+		manager.mu.Lock()
+		manager.connected = true
+		manager.initialized = true
+		manager.client = &stubConnector{}
+		manager.mu.Unlock()
+
+		operation := func() error {
+			return fmt.Errorf("session_expired: always fails")
+		}
+
+		err := manager.executeWithSessionReconnect(context.Background(), operation)
+		if err == nil {
+			t.Error("Expected error after all attempts exhausted")
 		}
 	})
 }

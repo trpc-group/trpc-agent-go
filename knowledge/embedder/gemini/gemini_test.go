@@ -346,3 +346,78 @@ func TestGetEmbedding_EmptyResponse(t *testing.T) {
 		}
 	})
 }
+
+// TestGetEmbeddingWithUsage_EmptyResponse tests handling of empty responses with usage.
+func TestGetEmbeddingWithUsage_EmptyResponse(t *testing.T) {
+	t.Run("empty embeddings array with usage", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"embeddings": []map[string]any{},
+				"metadata": map[string]any{
+					"billableCharacterCount": 10,
+				},
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		emb, err := New(
+			context.Background(),
+			WithAPIKey("dummy"),
+			WithClientOptions(&genai.ClientConfig{
+				HTTPOptions: genai.HTTPOptions{
+					BaseURL: srv.URL + "/embeddings",
+				},
+			}),
+		)
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+
+		vec, _, err := emb.GetEmbeddingWithUsage(context.Background(), "test")
+		if err != nil {
+			t.Fatalf("GetEmbeddingWithUsage should not return error: %v", err)
+		}
+		if len(vec) != 0 {
+			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		}
+	})
+
+	t.Run("empty values array with usage", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"embeddings": []map[string]any{
+					{"values": []float64{}},
+				},
+				"metadata": map[string]any{
+					"billableCharacterCount": 10,
+				},
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		emb, err := New(
+			context.Background(),
+			WithAPIKey("dummy"),
+			WithClientOptions(&genai.ClientConfig{
+				HTTPOptions: genai.HTTPOptions{
+					BaseURL: srv.URL + "/embeddings",
+				},
+			}),
+		)
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+
+		vec, _, err := emb.GetEmbeddingWithUsage(context.Background(), "test")
+		if err != nil {
+			t.Fatalf("GetEmbeddingWithUsage should not return error: %v", err)
+		}
+		if len(vec) != 0 {
+			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		}
+	})
+}
