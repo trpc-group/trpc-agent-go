@@ -1480,6 +1480,9 @@ func buildAgentInvocationWithStateAndScope(
 	// Clone from parent invocation if available to preserve linkage and filtering.
 	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok &&
 		parentInvocation != nil {
+		runOptions := parentInvocation.RunOptions
+		runOptions.RuntimeState = runtime
+
 		base := util.If(scope != "", scope, targetAgent.Info().Name)
 		parentKey := parentInvocation.GetEventFilterKey()
 		var filterKey string
@@ -1496,9 +1499,7 @@ func buildAgentInvocationWithStateAndScope(
 			agent.WithInvocationMessage(
 				model.NewUserMessage(userInput),
 			),
-			agent.WithInvocationRunOptions(agent.RunOptions{
-				RuntimeState: runtime,
-			}),
+			agent.WithInvocationRunOptions(runOptions),
 			agent.WithInvocationEventFilterKey(filterKey),
 		)
 		return inv
