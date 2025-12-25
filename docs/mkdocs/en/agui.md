@@ -210,8 +210,8 @@ runOptionResolver := func(ctx context.Context, input *adapter.RunAgentInput) ([]
     attrs := []attribute.KeyValue{
         attribute.String("trace.input", input.Messages[len(input.Messages)-1].Content),
     }
-    if vote, ok := input.ForwardedProps["vote"].(string); ok {
-        attrs = append(attrs, attribute.String("conversation.vote", vote))
+    if scenario, ok := input.ForwardedProps["scenario"].(string); ok {
+        attrs = append(attrs, attribute.String("conversation.scenario", scenario))
     }
     return []agent.RunOption{agent.WithSpanAttributes(attrs...)}, nil
 }
