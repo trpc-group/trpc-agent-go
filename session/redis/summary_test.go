@@ -528,7 +528,7 @@ func TestRedisService_EnqueueSummaryJob_ChannelClosed_PanicRecovery(t *testing.T
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	// Create service with async summary enabled
+	// Create service with async summary enabled.
 	s, err := NewService(
 		WithRedisClientURL(redisURL),
 		WithAsyncSummaryNum(1),
@@ -537,37 +537,37 @@ func TestRedisService_EnqueueSummaryJob_ChannelClosed_PanicRecovery(t *testing.T
 	)
 	require.NoError(t, err)
 
-	// Create a session first
+	// Create a session first.
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
 	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
 	require.NoError(t, err)
 
-	// Append an event to make delta non-empty
+	// Append an event to make delta non-empty.
 	e := event.New("inv", "author")
 	e.Timestamp = time.Now()
 	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
 	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
 
-	// Get the latest session from storage to ensure we have the latest events
+	// Get the latest session from storage to ensure we have the latest events.
 	sessFromStorage, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
 	require.NotNil(t, sessFromStorage)
 
-	// Close the service to simulate channel closure
-	// This will cause a panic when trying to send to the closed channel
-	s.Close()
+	// Stop only the async worker (not the entire service) to simulate channel closure.
+	// This allows sync fallback to still write to Redis.
+	s.asyncWorker.Stop()
 
-	// Enqueue summary job should handle the panic and fall back to sync processing
+	// Enqueue summary job should fall back to sync processing since worker is stopped.
 	err = s.EnqueueSummaryJob(context.Background(), sessFromStorage, "", false)
 	require.NoError(t, err)
 
-	// Verify summary was created through sync fallback
+	// Verify summary was created through sync fallback.
 	client := buildRedisClient(t, redisURL)
 	exists, err := client.HExists(context.Background(), getSessionSummaryKey(key), key.SessionID).Result()
 	require.NoError(t, err)
 	require.True(t, exists)
 
-	// Verify the summary content
+	// Verify the summary content.
 	bytes, err := client.HGet(context.Background(), getSessionSummaryKey(key), key.SessionID).Bytes()
 	require.NoError(t, err)
 	require.NotEmpty(t, bytes)
@@ -580,13 +580,16 @@ func TestRedisService_EnqueueSummaryJob_ChannelClosed_PanicRecovery(t *testing.T
 	sum, ok := summaries[""]
 	require.True(t, ok)
 	require.Equal(t, "panic-recovery-summary", sum.Summary)
+
+	// Now close the service properly.
+	s.Close()
 }
 
 func TestRedisService_EnqueueSummaryJob_ChannelClosed_AllChannelsClosed(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	// Create service with multiple async workers
+	// Create service with multiple async workers.
 	s, err := NewService(
 		WithRedisClientURL(redisURL),
 		WithAsyncSummaryNum(3),
@@ -595,36 +598,37 @@ func TestRedisService_EnqueueSummaryJob_ChannelClosed_AllChannelsClosed(t *testi
 	)
 	require.NoError(t, err)
 
-	// Create a session first
+	// Create a session first.
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
 	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
 	require.NoError(t, err)
 
-	// Append an event to make delta non-empty
+	// Append an event to make delta non-empty.
 	e := event.New("inv", "author")
 	e.Timestamp = time.Now()
 	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
 	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
 
-	// Get the latest session from storage to ensure we have the latest events
+	// Get the latest session from storage to ensure we have the latest events.
 	sessFromStorage, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
 	require.NotNil(t, sessFromStorage)
 
-	// Close the service to simulate channel closure
-	s.Close()
+	// Stop only the async worker (not the entire service) to simulate channel closure.
+	// This allows sync fallback to still write to Redis.
+	s.asyncWorker.Stop()
 
-	// Enqueue summary job should handle the panic and fall back to sync processing
+	// Enqueue summary job should fall back to sync processing since worker is stopped.
 	err = s.EnqueueSummaryJob(context.Background(), sessFromStorage, "", false)
 	require.NoError(t, err)
 
-	// Verify summary was created through sync fallback
+	// Verify summary was created through sync fallback.
 	client := buildRedisClient(t, redisURL)
 	exists, err := client.HExists(context.Background(), getSessionSummaryKey(key), key.SessionID).Result()
 	require.NoError(t, err)
 	require.True(t, exists)
 
-	// Verify the summary content
+	// Verify the summary content.
 	bytes, err := client.HGet(context.Background(), getSessionSummaryKey(key), key.SessionID).Bytes()
 	require.NoError(t, err)
 	require.NotEmpty(t, bytes)
@@ -634,10 +638,13 @@ func TestRedisService_EnqueueSummaryJob_ChannelClosed_AllChannelsClosed(t *testi
 	require.NoError(t, err)
 	require.NotNil(t, summaries)
 
-	// Check full summary (should be created by sync fallback)
+	// Check full summary (should be created by sync fallback).
 	sum, ok := summaries[""]
 	require.True(t, ok)
 	require.Equal(t, "all-channels-closed-summary", sum.Summary)
+
+	// Now close the service properly.
+	s.Close()
 }
 
 func TestRedisService_EnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade(t *testing.T) {
@@ -664,13 +671,14 @@ func TestRedisService_EnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade
 	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
 	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
 
-	// Get the latest session from storage to ensure we have the latest events
+	// Get the latest session from storage to ensure we have the latest events.
 	sessFromStorage, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
 	require.NotNil(t, sessFromStorage)
 
-	// Close the service to simulate no async workers scenario.
-	s.Close()
+	// Stop only the async worker (not the entire service) to simulate no async workers scenario.
+	// This allows sync fallback to still write to Redis.
+	s.asyncWorker.Stop()
 
 	// EnqueueSummaryJob should fall back to sync processing with cascade.
 	err = s.EnqueueSummaryJob(context.Background(), sessFromStorage, "tool-usage", false)
