@@ -1,0 +1,246 @@
+{
+  "evalSetResultId": "math-eval-app_math-basic_538cdf6e-925d-41cf-943b-2849982b195e",
+  "evalSetResultName": "math-eval-app_math-basic_538cdf6e-925d-41cf-943b-2849982b195e",
+  "evalSetId": "math-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "math-basic",
+      "evalId": "calc_add",
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "matchStrategy": "exact"
+                },
+                "result": {
+                  "matchStrategy": "exact"
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "5cc1f162-37e6-4d07-90e9-eb3ec5205b8d",
+            "userContent": {
+              "role": "user",
+              "content": "calc add 2 3"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "The result of 2 + 3 is **5**."
+            },
+            "tools": [
+              {
+                "id": "call_00_etTEEthmCocxvq7r3m2LJRXf",
+                "name": "calculator",
+                "arguments": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add"
+                },
+                "result": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add",
+                  "result": 5
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "calc_add-1",
+            "userContent": {
+              "role": "user",
+              "content": "calc add 2 3"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "calc result: 5"
+            },
+            "tools": [
+              {
+                "id": "tool_use_1",
+                "name": "calculator",
+                "arguments": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add"
+                },
+                "result": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add",
+                  "result": 5
+                }
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "matchStrategy": "exact"
+                    },
+                    "result": {
+                      "matchStrategy": "exact"
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "19877398-9586-4a97-b1d3-f8ce636ea54f",
+      "userId": "user"
+    },
+    {
+      "evalSetId": "math-basic",
+      "evalId": "calc_multiply",
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "matchStrategy": "exact"
+                },
+                "result": {
+                  "matchStrategy": "exact"
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "1fefd4b0-1cbc-4216-bafa-5eedc2554023",
+            "userContent": {
+              "role": "user",
+              "content": "calc multiply 6 7"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "6 multiplied by 7 equals **42**."
+            },
+            "tools": [
+              {
+                "id": "call_00_fUCPyKvbfKCPSHQUPOZM0gpK",
+                "name": "calculator",
+                "arguments": {
+                  "a": 6,
+                  "b": 7,
+                  "operation": "multiply"
+                },
+                "result": {
+                  "a": 6,
+                  "b": 7,
+                  "operation": "multiply",
+                  "result": 42
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "calc_multiply-1",
+            "userContent": {
+              "role": "user",
+              "content": "calc multiply 6 7"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "calc result: 42"
+            },
+            "tools": [
+              {
+                "id": "tool_use_2",
+                "name": "calculator",
+                "arguments": {
+                  "a": 6,
+                  "b": 7,
+                  "operation": "multiply"
+                },
+                "result": {
+                  "a": 6,
+                  "b": 7,
+                  "operation": "multiply",
+                  "result": 42
+                }
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "matchStrategy": "exact"
+                    },
+                    "result": {
+                      "matchStrategy": "exact"
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "37cddb59-6fb4-431b-a549-21a987c433da",
+      "userId": "user"
+    }
+  ],
+  "creationTimestamp": 1766455261.342534
+}

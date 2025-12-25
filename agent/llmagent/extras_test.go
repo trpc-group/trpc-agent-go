@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -141,7 +142,7 @@ func TestLLMAgent_AfterCb(t *testing.T) {
 	inv := &agent.Invocation{InvocationID: "id", AgentName: "agent"}
 
 	llm := &LLMAgent{agentCallbacks: cb}
-	wrapped := llm.wrapEventChannel(context.Background(), inv, orig, noop.Span{})
+	wrapped := llm.wrapEventChannelWithTelemetry(context.Background(), inv, orig, noop.Span{}, &itelemetry.InvokeAgentTracker{})
 
 	var objs []string
 	for e := range wrapped {
@@ -165,7 +166,7 @@ func TestLLMAgent_AfterCbNoResp(t *testing.T) {
 	inv := &agent.Invocation{InvocationID: "id2", AgentName: "agent2"}
 
 	llm := &LLMAgent{}
-	wrapped := llm.wrapEventChannel(context.Background(), inv, orig, noop.Span{})
+	wrapped := llm.wrapEventChannelWithTelemetry(context.Background(), inv, orig, noop.Span{}, &itelemetry.InvokeAgentTracker{})
 
 	// Expect exactly one event propagated from original channel and no extras.
 	count := 0

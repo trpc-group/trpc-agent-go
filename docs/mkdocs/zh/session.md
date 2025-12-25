@@ -731,95 +731,8 @@ sessionService, err := postgres.NewService(
 
 ### 存储结构
 
-PostgreSQL 使用关系型表结构，JSON 数据使用 JSONB 类型存储：
 
-```sql
--- 会话状态表
-CREATE TABLE session_states (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    state JSONB,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP
-);
-
--- 部分唯一索引（只对未删除记录生效）
-CREATE UNIQUE INDEX idx_session_states_unique_active
-ON session_states(app_name, user_id, session_id)
-WHERE deleted_at IS NULL;
-
--- 会话事件表
-CREATE TABLE session_events (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    event JSONB NOT NULL,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP
-);
-
--- 轨迹事件表
-CREATE TABLE session_track_events (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    track VARCHAR(255) NOT NULL,
-    event JSONB NOT NULL,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP
-);
-
--- 会话摘要表
-CREATE TABLE session_summaries (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    filter_key VARCHAR(255) NOT NULL,
-    summary JSONB NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP,
-    UNIQUE(app_name, user_id, session_id, filter_key)
-);
-
--- 应用状态表
-CREATE TABLE app_states (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    key VARCHAR(255) NOT NULL,
-    value TEXT DEFAULT NULL,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP,
-    UNIQUE(app_name, key)
-);
-
--- 用户状态表
-CREATE TABLE user_states (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    key VARCHAR(255) NOT NULL,
-    value TEXT DEFAULT NULL,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP,
-    UNIQUE(app_name, user_id, key)
-);
-```
+完整的表定义请参考 [session/postgres/schema.sql](https://github.com/trpc-group/trpc-agent-go/blob/main/session/postgres/schema.sql)
 
 ## MySQL 存储
 
@@ -988,84 +901,9 @@ sessionService, err := mysql.NewService(
 
 ### 存储结构
 
-MySQL 使用关系型表结构，JSON 数据使用 JSON 类型存储：
 
-```sql
--- 会话状态表
-CREATE TABLE session_states (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    state JSON,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL,
-    deleted_at TIMESTAMP NULL,
-    UNIQUE KEY idx_session_states_unique (app_name, user_id, session_id, deleted_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+完整的表定义请参考 [session/mysql/schema.sql](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema.sql)
 
--- 会话事件表
-CREATE TABLE session_events (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    event JSON NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL,
-    deleted_at TIMESTAMP NULL,
-    KEY idx_session_events (app_name, user_id, session_id, deleted_at, created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- 会话摘要表
-CREATE TABLE session_summaries (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    filter_key VARCHAR(255) NOT NULL,
-    summary JSON NOT NULL,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL,
-    deleted_at TIMESTAMP NULL,
-    UNIQUE KEY idx_session_summaries_unique (app_name, user_id, session_id, filter_key, deleted_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- 应用状态表
-CREATE TABLE app_states (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    `key` VARCHAR(255) NOT NULL,
-    value TEXT DEFAULT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL,
-    deleted_at TIMESTAMP NULL,
-    UNIQUE KEY idx_app_states_unique (app_name, `key`, deleted_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- 用户状态表
-CREATE TABLE user_states (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    `key` VARCHAR(255) NOT NULL,
-    value TEXT DEFAULT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL,
-    deleted_at TIMESTAMP NULL,
-    UNIQUE KEY idx_user_states_unique (app_name, user_id, `key`, deleted_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-```
-
-**MySQL 与 PostgreSQL 的关键差异：**
-
-- MySQL 不支持 `WHERE deleted_at IS NULL` 的 partial index，需要将 `deleted_at` 包含在唯一索引中
-- MySQL 使用 `JSON` 类型而非 `JSONB`（功能类似，但存储格式不同）
-- MySQL 使用 `ON DUPLICATE KEY UPDATE` 语法实现 UPSERT
 
 ## 高级用法
 

@@ -1,0 +1,220 @@
+{
+  "evalSetResultId": "tooltrajectory-app_tooltrajectory-basic_1310c5e2-9f8a-4ee7-a18e-d03bdf37eec8",
+  "evalSetResultName": "tooltrajectory-app_tooltrajectory-basic_1310c5e2-9f8a-4ee7-a18e-d03bdf37eec8",
+  "evalSetId": "tooltrajectory-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "tooltrajectory-basic",
+      "evalId": "travel_alerts",
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "matchStrategy": "exact"
+                },
+                "result": {
+                  "matchStrategy": "exact"
+                }
+              },
+              "toolStrategy": {
+                "get_ticket": {
+                  "arguments": {
+                    "ignoreTree": {
+                      "time": true
+                    },
+                    "matchStrategy": "exact"
+                  },
+                  "result": {
+                    "ignoreTree": {
+                      "time": true
+                    },
+                    "matchStrategy": "exact"
+                  }
+                },
+                "get_time": {
+                  "result": {
+                    "ignore": true
+                  }
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "f2517289-189d-413a-87fc-8a2a97764155",
+            "userContent": {
+              "role": "user",
+              "content": "I'm traveling to Shanghai; what should I watch out for?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "根据我收集到的信息，以下是您前往上海旅行需要注意的事项：\n\n## 天气情况\n- **当前天气**：晴朗，气温26°C\n- **建议**：天气温暖晴朗，适合户外活动，但请注意防晒和适当补水\n\n## 安全提醒\n- **重要通知**：市中心将举办节日活动，请注意交通管制和道路拥堵\n- **建议**：规划行程时避开市中心活动区域，或提前了解交通管制时间\n\n## 票务情况\n- **剩余座位**：25个\n- **建议**：目前票源充足，但仍建议提前预订以确保行程顺利\n\n## 旅行建议\n1. **交通方面**：由于市中心有节日活动，建议使用地铁等公共交通，避免自驾进入市中心区域\n2. **穿着建议**：26°C的晴朗天气，建议穿着轻便舒适的衣物，携带防晒用品\n3. **行程规划**：考虑到节日活动，热门景点可能会比较拥挤，建议错峰游览\n4. **预订建议**：虽然目前票源充足，但考虑到节日期间，建议尽早确定行程并预订\n\n总体而言，上海天气宜人，但需要特别注意市中心节日活动带来的交通影响。提前规划好行程和交通方式，可以让您的旅行更加顺利愉快。"
+            },
+            "tools": [
+              {
+                "id": "call_00_JnaFLQG5AmRybnGvvRZ7pZPn",
+                "name": "get_weather",
+                "arguments": {
+                  "city": "Shanghai"
+                },
+                "result": {
+                  "city": "Shanghai",
+                  "condition": "sunny",
+                  "tempC": 26
+                }
+              },
+              {
+                "id": "call_00_MOlx6i9nfOvAVT1lIANo59cM",
+                "name": "get_news",
+                "arguments": {
+                  "city": "Shanghai"
+                },
+                "result": {
+                  "city": "Shanghai",
+                  "headline": "Festival events will be held in the city center; please be aware of traffic disruptions."
+                }
+              },
+              {
+                "id": "call_00_DyXdA49axSoYBt7NnuVFYseb",
+                "name": "get_time",
+                "result": {
+                  "timestamp": "2025-12-23T10:40:57+08:00"
+                }
+              },
+              {
+                "id": "call_00_oc06DxNwOLZ2BAhTE4KdWvqG",
+                "name": "get_ticket",
+                "arguments": {
+                  "city": "Shanghai",
+                  "time": "2025-12-23T10:40:57+08:00"
+                },
+                "result": {
+                  "city": "Shanghai",
+                  "seatsLeft": 25,
+                  "time": "2025-12-23T10:40:57+08:00"
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "travel_alerts-1",
+            "userContent": {
+              "role": "user",
+              "content": "I'm traveling to Shanghai; what should I watch out for?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Weather in Shanghai: sunny, 26C. City alert: festival traffic downtown. Tickets available (25 left). Arrive early to pick up tickets and watch traffic."
+            },
+            "tools": [
+              {
+                "id": "tool_use_weather",
+                "name": "get_weather",
+                "arguments": {
+                  "city": "Shanghai"
+                },
+                "result": {
+                  "city": "Shanghai",
+                  "condition": "sunny",
+                  "tempC": 26
+                }
+              },
+              {
+                "id": "tool_use_news",
+                "name": "get_news",
+                "arguments": {
+                  "city": "Shanghai"
+                },
+                "result": {
+                  "city": "Shanghai",
+                  "headline": "Festival downtown, expect traffic."
+                }
+              },
+              {
+                "id": "tool_use_time",
+                "name": "get_time"
+              },
+              {
+                "id": "tool_use_ticket",
+                "name": "get_ticket",
+                "arguments": {
+                  "city": "Shanghai"
+                },
+                "result": {
+                  "city": "Shanghai",
+                  "seatsLeft": 25
+                }
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "matchStrategy": "exact"
+                    },
+                    "result": {
+                      "matchStrategy": "exact"
+                    }
+                  },
+                  "toolStrategy": {
+                    "get_ticket": {
+                      "arguments": {
+                        "ignoreTree": {
+                          "time": true
+                        },
+                        "matchStrategy": "exact"
+                      },
+                      "result": {
+                        "ignoreTree": {
+                          "time": true
+                        },
+                        "matchStrategy": "exact"
+                      }
+                    },
+                    "get_time": {
+                      "result": {
+                        "ignore": true
+                      }
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "554da970-f20a-4b64-bb0c-a0e6b91724d3",
+      "userId": "traveler"
+    }
+  ],
+  "creationTimestamp": 1766457671.7236578
+}

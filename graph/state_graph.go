@@ -384,15 +384,22 @@ func WithModelCallbacks(callbacks *model.Callbacks) Option {
 // The name and description of the node can be set with the options.
 // This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *StateGraph {
+	f := func(ctx context.Context, state State) (any, error) {
+		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
+		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", id), ID: id})
+		defer span.End()
+		return function(ctx, state)
+	}
 	node := &Node{
 		ID:       id,
 		Name:     id,
-		Function: function,
+		Function: f,
 		Type:     NodeTypeFunction, // Default to function type
 	}
 	for _, opt := range opts {
 		opt(node)
 	}
+
 	sg.graph.addNode(node)
 
 	// Automatically set up Pregel-style configuration
@@ -1058,7 +1065,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		author = config.NodeID
 	}
 	llmEvent = event.NewResponseEvent(config.InvocationID, author, config.Response)
-	if config.EventChan != nil && !config.Response.Done {
+	if config.EventChan != nil && shouldEmitModelResponse(config.Response) {
 		invocation, ok := agent.InvocationFromContext(ctx)
 		if !ok {
 			invocation = agent.NewInvocation(
@@ -1077,6 +1084,27 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		return ctx, nil, fmt.Errorf("model API error: %s", config.Response.Error.Message)
 	}
 	return ctx, llmEvent, nil
+}
+
+func shouldEmitModelResponse(rsp *model.Response) bool {
+	if rsp == nil {
+		return false
+	}
+	if rsp.Error != nil {
+		return true
+	}
+	if rsp.IsValidContent() {
+		return true
+	}
+	for _, choice := range rsp.Choices {
+		if choice.Message.ReasoningContent != "" {
+			return true
+		}
+		if choice.Delta.ReasoningContent != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func runModel(
@@ -1145,7 +1173,8 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 	parallel := node.enableParallelTools
 
 	return func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, "execute_tools_node")
+		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
+		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: "execute_tools_node", ID: "execute_tools_node"})
 		defer span.End()
 
 		// Extract and validate messages from state.
@@ -1289,7 +1318,13 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		// Build invocation for the target agent with custom runtime state and scope.
 		invocation := buildAgentInvocationWithStateAndScope(ctx, parentForInput, childState, targetAgent, scope)
 
-		itelemetry.TraceBeforeInvokeAgent(span, invocation, targetAgent.Info().Description, "", nil)
+		itelemetry.TraceBeforeInvokeAgent(span, invocation, targetAgent.Info().Description, "", dummyNode.llmGenerationConfig)
+		var stream bool
+		if dummyNode.llmGenerationConfig != nil {
+			stream = dummyNode.llmGenerationConfig.Stream
+		}
+		tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &err)
+		defer tracker.RecordMetrics()()
 
 		// Emit agent execution start event.
 		startTime := time.Now()
@@ -1305,18 +1340,19 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			endTime := time.Now()
 			emitAgentErrorEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime, err)
 			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			tracker.SetResponseErrorType(itelemetry.ValueDefaultErrorType)
 			return nil, fmt.Errorf("failed to run agent %s: %w", agentName, err)
 		}
 
 		// Process agent event stream and capture completion state.
 		lastResponse, finalState, rawDelta, fullRespEvent, tokenUsage, err := processAgentEventStream(
-			ctx, agentEventChan, nodeCallbacks, nodeID, state, eventChan, agentName,
+			ctx, agentEventChan, nodeCallbacks, nodeID, state, eventChan, agentName, tracker,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process agent event stream: %w", err)
 		}
 
-		itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage)
+		itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
 		// Emit agent execution complete event.
 		endTime := time.Now()
 		emitAgentCompleteEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime)
@@ -1346,6 +1382,7 @@ func processAgentEventStream(
 	state State,
 	eventChan chan<- *event.Event,
 	agentName string,
+	tracker *itelemetry.InvokeAgentTracker,
 ) (string, State, map[string][]byte, *event.Event, *itelemetry.TokenUsage, error) {
 	var lastResponse string
 	var finalState State
@@ -1376,6 +1413,7 @@ func processAgentEventStream(
 		}
 
 		if agentEvent.Response != nil {
+			tracker.TrackResponse(agentEvent.Response)
 			if !agentEvent.Response.IsPartial {
 				if agentEvent.Response.Usage != nil {
 					tokenUsage.PromptTokens += agentEvent.Response.Usage.PromptTokens

@@ -248,3 +248,17 @@ jobs:
         run: pip install -r mkdocs/assets/requirements.txt
       - name: Build documentation
         run: mkdocs build --strict
+  check-go-mod-version:
+    name: check go.mod version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Validate go.mod version strings
+        shell: bash
+        run: bash .github/scripts/check-go-mod-version.sh

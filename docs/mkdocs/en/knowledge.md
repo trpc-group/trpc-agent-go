@@ -253,7 +253,7 @@ Vector storage can be configured through options in code. Configuration sources 
 trpc-agent-go supports multiple vector store implementations:
 
 - **Memory**: In-memory vector store, suitable for testing and small-scale data
-- **PgVector**: PostgreSQL + pgvector extension based vector store, supports hybrid search - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/postgres)
+- **PGVector**: PostgreSQL + pgvector extension based vector store, supports hybrid search - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/postgres)
 - **TcVector**: Tencent Cloud Vector Database, supports remote embedding computation and hybrid search - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/tcvector)
 - **Elasticsearch**: Supports v7/v8/v9 multi-version Elasticsearch vector store - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/elasticsearch)
 - **Milvus**: High-performance vector database, supports billion-scale vector search - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/milvus)
@@ -276,7 +276,7 @@ kb := knowledge.New(
 )
 ```
 
-##### PgVector (PostgreSQL + pgvector)
+##### PGVector (PostgreSQL + pgvector)
 
 ```go
 import (
@@ -285,11 +285,7 @@ import (
 
 // PostgreSQL + pgvector
 pgVS, err := vectorpgvector.New(
-    vectorpgvector.WithHost("127.0.0.1"),
-    vectorpgvector.WithPort(5432),
-    vectorpgvector.WithUser("postgres"),
-    vectorpgvector.WithPassword("your-password"),
-    vectorpgvector.WithDatabase("your-database"),
+    vectorpgvector.WithPGVectorClientDSN("postgres://postgres:your-password@127.0.0.1:5432/your-database?sslmode=disable"),
     // Set index dimension based on embedding model (text-embedding-3-small is 1536)
     vectorpgvector.WithIndexDimension(1536),
     // Enable/disable text retrieval vector, used with hybrid search weights
@@ -496,10 +492,14 @@ The source module provides multiple document source types, each supporting rich 
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/source"
     filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
     dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
     urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
     autosource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto"
+    vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 )
 
 // File source: Single file processing, supports .txt, .md, .go, .json, etc. formats.
@@ -555,8 +555,13 @@ autoSrc := autosource.New(
 // Combine usage.
 sources := []source.Source{fileSrc, dirSrc, urlSrc, autoSrc}
 
+embedder := openaiembedder.New(openaiembedder.WithModel("text-embedding-3-small"))
+vectorStore := vectorinmemory.New()
+
 // Pass to Knowledge.
 kb := knowledge.New(
+    knowledge.WithEmbedder(embedder),
+    knowledge.WithVectorStore(vectorStore),
     knowledge.WithSources(sources),
 )
 

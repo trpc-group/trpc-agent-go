@@ -1,156 +1,171 @@
 -- MySQL Session Service Schema
 -- This file provides reference SQL for manual database initialization.
 -- The service will automatically create these tables and indexes if skipDBInit is false.
+-- Note: Replace {{PREFIX}} with your actual table prefix (e.g., trpc_) in table and index names.
 
 -- ============================================================================
 -- Table: session_states
 -- Description: Stores session state data
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS session_states (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    state JSON DEFAULT NULL COMMENT 'Session state in JSON format',
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
-    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Session states table';
-
--- Unique index on (app_name, user_id, session_id, deleted_at)
--- Note: deleted_at is included because MySQL doesn't support partial indexes like PostgreSQL
-CREATE UNIQUE INDEX idx_session_states_unique_active
-ON session_states(app_name, user_id, session_id, deleted_at);
-
--- TTL cleanup index
-CREATE INDEX idx_session_states_expires
-ON session_states(expires_at);
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_states` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `app_name` VARCHAR(255) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `session_id` VARCHAR(255) NOT NULL,
+    `state` JSON DEFAULT NULL,
+    `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `idx_{{PREFIX}}session_states_unique_active` (`app_name`,`user_id`,`session_id`,`deleted_at`),
+    KEY `idx_{{PREFIX}}session_states_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
 -- Table: session_events
 -- Description: Stores session events/messages
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS session_events (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    event JSON NOT NULL COMMENT 'Event data in JSON format',
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
-    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-COMMENT='Session events table';
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_events` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `app_name` VARCHAR(255) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `session_id` VARCHAR(255) NOT NULL,
+    `event` JSON NOT NULL,
+    `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    KEY `idx_{{PREFIX}}session_events_lookup` (`app_name`,`user_id`,`session_id`,`created_at`),
+    KEY `idx_{{PREFIX}}session_events_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Lookup index for querying events by session
-CREATE INDEX idx_session_events_lookup
-ON session_events(app_name, user_id, session_id, created_at);
-
--- TTL cleanup index
-CREATE INDEX idx_session_events_expires
-ON session_events(expires_at);
+-- ============================================================================
+-- Table: session_track_events
+-- Description: Stores session track events
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_track_events` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `app_name` VARCHAR(255) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `session_id` VARCHAR(255) NOT NULL,
+    `track` VARCHAR(255) NOT NULL,
+    `event` JSON NOT NULL,
+    `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    KEY `idx_{{PREFIX}}session_track_events_lookup` (`app_name`,`user_id`,`session_id`,`created_at`),
+    KEY `idx_{{PREFIX}}session_track_events_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
 -- Table: session_summaries
 -- Description: Stores AI-generated session summaries
+-- Note: No created_at column because summaries use upsert pattern (overwrite on duplicate)
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS session_summaries (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    filter_key VARCHAR(255) NOT NULL DEFAULT '' COMMENT 'Filter key for multiple summaries per session',
-    summary JSON DEFAULT NULL COMMENT 'Summary data in JSON format',
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
-    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-COMMENT='Session summaries table';
-
--- Unique index on (app_name, user_id, session_id, filter_key, deleted_at)
-CREATE UNIQUE INDEX idx_session_summaries_unique_active
-ON session_summaries(app_name, user_id, session_id, filter_key, deleted_at);
-
--- TTL cleanup index
-CREATE INDEX idx_session_summaries_expires
-ON session_summaries(expires_at);
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_summaries` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `app_name` VARCHAR(255) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `session_id` VARCHAR(255) NOT NULL,
+    `filter_key` VARCHAR(255) NOT NULL DEFAULT '',
+    `summary` JSON DEFAULT NULL,
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    KEY `idx_{{PREFIX}}session_summaries_lookup` (`app_name`,`user_id`,`session_id`,`deleted_at`),
+    KEY `idx_{{PREFIX}}session_summaries_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
 -- Table: app_states
 -- Description: Stores application-level state data
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS app_states (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    `key` VARCHAR(255) NOT NULL COMMENT 'State key (backticks because key is a reserved word)',
-    value TEXT DEFAULT NULL COMMENT 'State value',
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
-    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-COMMENT='Application states table';
-
--- Unique index on (app_name, key, deleted_at)
-CREATE UNIQUE INDEX idx_app_states_unique_active
-ON app_states(app_name, `key`, deleted_at);
-
--- TTL cleanup index
-CREATE INDEX idx_app_states_expires
-ON app_states(expires_at);
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}app_states` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `app_name` VARCHAR(255) NOT NULL,
+    `key` VARCHAR(255) NOT NULL,
+    `value` TEXT DEFAULT NULL,
+    `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `idx_{{PREFIX}}app_states_unique_active` (`app_name`,`key`,`deleted_at`),
+    KEY `idx_{{PREFIX}}app_states_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
 -- Table: user_states
 -- Description: Stores user-level state data
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS user_states (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    `key` VARCHAR(255) NOT NULL COMMENT 'State key (backticks because key is a reserved word)',
-    value TEXT DEFAULT NULL COMMENT 'State value',
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
-    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-COMMENT='User states table';
-
--- Unique index on (app_name, user_id, key, deleted_at)
-CREATE UNIQUE INDEX idx_user_states_unique_active
-ON user_states(app_name, user_id, `key`, deleted_at);
-
--- TTL cleanup index
-CREATE INDEX idx_user_states_expires
-ON user_states(expires_at);
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}user_states` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `app_name` VARCHAR(255) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `key` VARCHAR(255) NOT NULL,
+    `value` TEXT DEFAULT NULL,
+    `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `idx_{{PREFIX}}user_states_unique_active` (`app_name`,`user_id`,`key`,`deleted_at`),
+    KEY `idx_{{PREFIX}}user_states_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
 -- Notes:
 -- ============================================================================
--- 1. MySQL vs PostgreSQL Differences:
---    - JSON type instead of JSONB (MySQL doesn't have JSONB)
---    - BIGINT AUTO_INCREMENT instead of BIGSERIAL
---    - ON DUPLICATE KEY UPDATE instead of ON CONFLICT DO UPDATE
---    - deleted_at included in unique indexes (MySQL doesn't support partial indexes)
+-- 1. Table Prefix:
+--    - Replace {{PREFIX}} with your actual table prefix (e.g., trpc_)
+--    - Example: {{PREFIX}}session_states becomes trpc_session_states
 --
 -- 2. Character Set:
 --    - Using utf8mb4 for full Unicode support (including emojis)
---    - Using utf8mb4_unicode_ci for case-insensitive comparisons
+--    - Using utf8mb4_unicode_ci collation for case-insensitive comparisons
 --
 -- 3. Storage Engine:
---    - Using InnoDB for transaction support and foreign key constraints
+--    - Using InnoDB for transaction support and ACID compliance
 --
--- 4. TTL and Soft Delete:
---    - expires_at: Used for automatic data cleanup
---    - deleted_at: Used for soft delete functionality
---    - Both are nullable TIMESTAMP fields
+-- 4. MySQL Version Requirements:
+--    - MySQL 5.6.5+ is required for multiple TIMESTAMP columns with CURRENT_TIMESTAMP
+--    - TIMESTAMP(6) provides microsecond precision (6 digits after decimal point)
+--    - Older MySQL versions may not support multiple TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 --
--- 5. Reserved Keywords:
---    - 'key' is a MySQL reserved word, so it's enclosed in backticks
+-- 5. Primary Keys:
+--    - All tables use BIGINT AUTO_INCREMENT for id
+--    - Defined inline with column definition
 --
--- 6. Index Strategy:
---    - Unique indexes include deleted_at to allow same key with different deleted_at values
---    - TTL indexes on expires_at for efficient cleanup
---    - Lookup indexes for common query patterns
+-- 6. Indexes:
+--    - All indexes are defined inline in CREATE TABLE statements
+--    - UNIQUE indexes include deleted_at column
+--    - Note: MySQL UNIQUE constraint doesn't prevent duplicate NULL values
+--    - Multiple records with deleted_at=NULL can coexist (NULL != NULL in MySQL)
+--    - Application code handles uniqueness for active records (deleted_at IS NULL)
+--
+-- 7. TTL and Soft Delete:
+--    - expires_at: Used for automatic data cleanup (NULL = never expires)
+--    - deleted_at: Used for soft delete functionality (NULL = active record)
+--    - Both are nullable TIMESTAMP(6) fields
+--
+-- 8. Reserved Keywords:
+--    - 'key' is a MySQL reserved word, enclosed in backticks
+--
+-- 9. Session Summaries Table:
+--    - No created_at column because summaries use upsert pattern
+--    - Application code uses updated_at >= session.created_at for filtering
+--    - When session expires and is recreated, old summaries are identified by updated_at
+--
+-- 10. Column Definitions:
+--     - All NOT NULL columns are explicitly marked
+--     - All nullable columns use NULL (DEFAULT NULL added for clarity)
+--     - JSON columns can be NULL (empty summary not yet generated)
+--     - TEXT columns for potentially large values (e.g., app_states.value)
+
+
+
