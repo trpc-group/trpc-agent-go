@@ -384,15 +384,22 @@ func WithModelCallbacks(callbacks *model.Callbacks) Option {
 // The name and description of the node can be set with the options.
 // This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *StateGraph {
+	f := func(ctx context.Context, state State) (any, error) {
+		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
+		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", id), ID: id})
+		defer span.End()
+		return function(ctx, state)
+	}
 	node := &Node{
 		ID:       id,
 		Name:     id,
-		Function: function,
+		Function: f,
 		Type:     NodeTypeFunction, // Default to function type
 	}
 	for _, opt := range opts {
 		opt(node)
 	}
+
 	sg.graph.addNode(node)
 
 	// Automatically set up Pregel-style configuration
@@ -1166,7 +1173,8 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 	parallel := node.enableParallelTools
 
 	return func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, "execute_tools_node")
+		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
+		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: "execute_tools_node", ID: "execute_tools_node"})
 		defer span.End()
 
 		// Extract and validate messages from state.
