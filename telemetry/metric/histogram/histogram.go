@@ -12,6 +12,7 @@ package histogram
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"go.opentelemetry.io/otel/metric"
@@ -23,7 +24,8 @@ import (
 type DynamicFloat64Histogram struct {
 	mu          sync.RWMutex
 	histogram   metric.Float64Histogram
-	meter       metric.Meter
+	meterName   string
+	mp          metric.MeterProvider
 	name        string
 	description string
 	unit        string
@@ -31,15 +33,24 @@ type DynamicFloat64Histogram struct {
 }
 
 // NewDynamicFloat64Histogram creates a new dynamic histogram with the given options.
-// The meter, name, description, and unit are stored for later use when recreating
+// The meter provider, meter name, histogram name, description, and unit are stored for later use when recreating
 // the histogram with new bucket boundaries.
 func NewDynamicFloat64Histogram(
+	mp metric.MeterProvider,
+	meterName string,
 	meter metric.Meter,
 	name string,
 	description string,
 	unit string,
 	boundaries []float64,
 ) (*DynamicFloat64Histogram, error) {
+	if mp == nil {
+		return nil, fmt.Errorf("meter provider is nil")
+	}
+
+	if meter == nil {
+		meter = mp.Meter(meterName)
+	}
 	opts := []metric.Float64HistogramOption{
 		metric.WithDescription(description),
 		metric.WithUnit(unit),
@@ -54,7 +65,8 @@ func NewDynamicFloat64Histogram(
 	}
 	return &DynamicFloat64Histogram{
 		histogram:   h,
-		meter:       meter,
+		mp:          mp,
+		meterName:   meterName,
 		name:        name,
 		description: description,
 		unit:        unit,
@@ -78,6 +90,11 @@ func (d *DynamicFloat64Histogram) SetBuckets(boundaries []float64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if d.mp == nil {
+		return fmt.Errorf("meter provider is nil")
+	}
+	// Create a new Meter each time buckets change (required for some SDK/provider implementations).
+	meter := d.mp.Meter(d.meterName)
 	opts := []metric.Float64HistogramOption{
 		metric.WithDescription(d.description),
 		metric.WithUnit(d.unit),
@@ -86,7 +103,7 @@ func (d *DynamicFloat64Histogram) SetBuckets(boundaries []float64) error {
 		opts = append(opts, metric.WithExplicitBucketBoundaries(boundaries...))
 	}
 
-	h, err := d.meter.Float64Histogram(d.name, opts...)
+	h, err := meter.Float64Histogram(d.name, opts...)
 	if err != nil {
 		return err
 	}
@@ -111,7 +128,8 @@ func (d *DynamicFloat64Histogram) GetBuckets() []float64 {
 type DynamicInt64Histogram struct {
 	mu          sync.RWMutex
 	histogram   metric.Int64Histogram
-	meter       metric.Meter
+	meterName   string
+	mp          metric.MeterProvider
 	name        string
 	description string
 	unit        string
@@ -119,15 +137,24 @@ type DynamicInt64Histogram struct {
 }
 
 // NewDynamicInt64Histogram creates a new dynamic histogram with the given options.
-// The meter, name, description, and unit are stored for later use when recreating
+// The meter provider, meter name, histogram name, description, and unit are stored for later use when recreating
 // the histogram with new bucket boundaries.
 func NewDynamicInt64Histogram(
+	mp metric.MeterProvider,
+	meterName string,
 	meter metric.Meter,
 	name string,
 	description string,
 	unit string,
 	boundaries []float64,
 ) (*DynamicInt64Histogram, error) {
+	if mp == nil {
+		return nil, fmt.Errorf("meter provider is nil")
+	}
+
+	if meter == nil {
+		meter = mp.Meter(meterName)
+	}
 	opts := []metric.Int64HistogramOption{
 		metric.WithDescription(description),
 		metric.WithUnit(unit),
@@ -142,7 +169,8 @@ func NewDynamicInt64Histogram(
 	}
 	return &DynamicInt64Histogram{
 		histogram:   h,
-		meter:       meter,
+		mp:          mp,
+		meterName:   meterName,
 		name:        name,
 		description: description,
 		unit:        unit,
@@ -166,6 +194,11 @@ func (d *DynamicInt64Histogram) SetBuckets(boundaries []float64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if d.mp == nil {
+		return fmt.Errorf("meter provider is nil")
+	}
+	// Create a new Meter each time buckets change (required for some SDK/provider implementations).
+	meter := d.mp.Meter(d.meterName)
 	opts := []metric.Int64HistogramOption{
 		metric.WithDescription(d.description),
 		metric.WithUnit(d.unit),
@@ -174,7 +207,7 @@ func (d *DynamicInt64Histogram) SetBuckets(boundaries []float64) error {
 		opts = append(opts, metric.WithExplicitBucketBoundaries(boundaries...))
 	}
 
-	h, err := d.meter.Int64Histogram(d.name, opts...)
+	h, err := meter.Int64Histogram(d.name, opts...)
 	if err != nil {
 		return err
 	}
