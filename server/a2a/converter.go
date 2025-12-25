@@ -168,6 +168,14 @@ func (c *defaultEventToA2AMessage) getMetadataTypeKey() string {
 	return ia2a.DataPartMetadataTypeKey
 }
 
+// getThoughtMetadataKey returns the appropriate thought metadata key based on ADK compatibility setting
+func (c *defaultEventToA2AMessage) getThoughtMetadataKey() string {
+	if c.adkCompatibility {
+		return ia2a.GetADKMetadataKey(ia2a.TextPartMetadataThoughtKey)
+	}
+	return ia2a.TextPartMetadataThoughtKey
+}
+
 // ConvertToA2AMessage converts an Agent event to an A2A protocol message.
 // For non-streaming responses, it returns the full content including
 // tool calls.
@@ -283,9 +291,25 @@ func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
 	event *event.Event,
 ) (protocol.UnaryMessageResult, error) {
 	choice := event.Response.Choices[0]
+
+	var parts []protocol.Part
+
+	// Add reasoning content as a separate TextPart with thought metadata
+	// Following ADK pattern: thought content is stored in TextPart metadata
+	if choice.Message.ReasoningContent != "" {
+		reasoningPart := protocol.NewTextPart(choice.Message.ReasoningContent)
+		reasoningPart.Metadata = map[string]any{
+			c.getThoughtMetadataKey(): true,
+		}
+		parts = append(parts, reasoningPart)
+	}
+
+	// Add main content
 	if choice.Message.Content != "" {
-		var parts []protocol.Part
 		parts = append(parts, protocol.NewTextPart(choice.Message.Content))
+	}
+
+	if len(parts) > 0 {
 		msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
 		msg.Metadata = map[string]any{
 			ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
@@ -352,9 +376,24 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 	options EventToA2AStreamingOptions,
 ) (protocol.StreamingMessageResult, error) {
 	choice := event.Response.Choices[0]
-	// Use delta content for streaming updates
+
+	var parts []protocol.Part
+
+	// Add reasoning content as a separate TextPart with thought metadata
+	if choice.Delta.ReasoningContent != "" {
+		reasoningPart := protocol.NewTextPart(choice.Delta.ReasoningContent)
+		reasoningPart.Metadata = map[string]any{
+			c.getThoughtMetadataKey(): true,
+		}
+		parts = append(parts, reasoningPart)
+	}
+
+	// Add main delta content
 	if choice.Delta.Content != "" {
-		parts := []protocol.Part{protocol.NewTextPart(choice.Delta.Content)}
+		parts = append(parts, protocol.NewTextPart(choice.Delta.Content))
+	}
+
+	if len(parts) > 0 {
 		// Send as task artifact update (not status update) for incremental content
 		// This follows ADK pattern: artifacts for content, status for state changes
 		taskArtifact := protocol.NewTaskArtifactUpdateEvent(

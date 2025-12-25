@@ -2238,7 +2238,7 @@ func TestProcessTextAndDataPart_EdgeCases(t *testing.T) {
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			res := &parseResult{}
-			text := processTextPart(tt.part)
+			text, _ := processTextPart(tt.part)
 			processDataPart(tt.part, res)
 			tt.check(t, res, text)
 		})
@@ -2275,5 +2275,175 @@ func TestBuildStreamingResponse_ToolResponses(t *testing.T) {
 	msg := resp.Choices[0].Message
 	if msg.Role != model.RoleTool || msg.ToolID != "tool-1" || msg.ToolName != "tool" || msg.Content != "resp" {
 		t.Fatalf("unexpected tool response message: %+v", msg)
+	}
+}
+
+func TestProcessTextPart_WithThoughtMetadata(t *testing.T) {
+	tests := []struct {
+		name            string
+		part            protocol.Part
+		expectedText    string
+		expectedThought bool
+	}{
+		{
+			name: "regular text part",
+			part: &protocol.TextPart{
+				Text: "Hello world",
+			},
+			expectedText:    "Hello world",
+			expectedThought: false,
+		},
+		{
+			name: "text part with thought=true",
+			part: &protocol.TextPart{
+				Text: "Let me think...",
+				Metadata: map[string]any{
+					ia2a.TextPartMetadataThoughtKey: true,
+				},
+			},
+			expectedText:    "Let me think...",
+			expectedThought: true,
+		},
+		{
+			name: "text part with adk_thought=true",
+			part: &protocol.TextPart{
+				Text: "ADK thinking...",
+				Metadata: map[string]any{
+					ia2a.GetADKMetadataKey(ia2a.TextPartMetadataThoughtKey): true,
+				},
+			},
+			expectedText:    "ADK thinking...",
+			expectedThought: true,
+		},
+		{
+			name: "text part with thought=false",
+			part: &protocol.TextPart{
+				Text: "Not a thought",
+				Metadata: map[string]any{
+					ia2a.TextPartMetadataThoughtKey: false,
+				},
+			},
+			expectedText:    "Not a thought",
+			expectedThought: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			text, isThought := processTextPart(tt.part)
+			if text != tt.expectedText {
+				t.Errorf("expected text %q, got %q", tt.expectedText, text)
+			}
+			if isThought != tt.expectedThought {
+				t.Errorf("expected isThought=%v, got %v", tt.expectedThought, isThought)
+			}
+		})
+	}
+}
+
+func TestParseA2AMessageParts_WithReasoningContent(t *testing.T) {
+	tests := []struct {
+		name              string
+		msg               *protocol.Message
+		expectedText      string
+		expectedReasoning string
+	}{
+		{
+			name: "message with reasoning and content",
+			msg: &protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.TextPart{
+						Text: "Thinking about this...",
+						Metadata: map[string]any{
+							ia2a.TextPartMetadataThoughtKey: true,
+						},
+					},
+					&protocol.TextPart{
+						Text: "Here is the answer",
+					},
+				},
+			},
+			expectedText:      "Here is the answer",
+			expectedReasoning: "Thinking about this...",
+		},
+		{
+			name: "message with only reasoning",
+			msg: &protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.TextPart{
+						Text: "Just thinking...",
+						Metadata: map[string]any{
+							ia2a.TextPartMetadataThoughtKey: true,
+						},
+					},
+				},
+			},
+			expectedText:      "",
+			expectedReasoning: "Just thinking...",
+		},
+		{
+			name: "message with only content",
+			msg: &protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.TextPart{
+						Text: "Just content",
+					},
+				},
+			},
+			expectedText:      "Just content",
+			expectedReasoning: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseA2AMessageParts(tt.msg)
+			if result.textContent != tt.expectedText {
+				t.Errorf("expected textContent %q, got %q", tt.expectedText, result.textContent)
+			}
+			if result.reasoningContent != tt.expectedReasoning {
+				t.Errorf("expected reasoningContent %q, got %q", tt.expectedReasoning, result.reasoningContent)
+			}
+		})
+	}
+}
+
+func TestBuildStreamingResponse_WithReasoningContent(t *testing.T) {
+	resp := buildStreamingResponse("msg-123", &parseResult{
+		textContent:      "Answer",
+		reasoningContent: "Thinking...",
+	})
+	if resp == nil {
+		t.Fatalf("expected response, got nil")
+	}
+	if len(resp.Choices) != 1 {
+		t.Fatalf("expected one choice, got %d", len(resp.Choices))
+	}
+	delta := resp.Choices[0].Delta
+	if delta.Content != "Answer" {
+		t.Errorf("expected content %q, got %q", "Answer", delta.Content)
+	}
+	if delta.ReasoningContent != "Thinking..." {
+		t.Errorf("expected reasoningContent %q, got %q", "Thinking...", delta.ReasoningContent)
+	}
+}
+
+func TestBuildNonStreamingResponse_WithReasoningContent(t *testing.T) {
+	resp := buildNonStreamingResponse("msg-123", &parseResult{
+		textContent:      "Answer",
+		reasoningContent: "Thinking...",
+	})
+	if resp == nil {
+		t.Fatalf("expected response, got nil")
+	}
+	if len(resp.Choices) != 1 {
+		t.Fatalf("expected one choice, got %d", len(resp.Choices))
+	}
+	msg := resp.Choices[0].Message
+	if msg.Content != "Answer" {
+		t.Errorf("expected content %q, got %q", "Answer", msg.Content)
+	}
+	if msg.ReasoningContent != "Thinking..." {
+		t.Errorf("expected reasoningContent %q, got %q", "Thinking...", msg.ReasoningContent)
 	}
 }
