@@ -965,6 +965,154 @@ sess, err := sessionService.GetSession(ctx, key,
     session.WithEventTime(time.Now().Add(-1*time.Hour)))
 ```
 
+#### 直接追加事件到会话
+
+在某些场景下，您可能需要直接将事件追加到会话中，而不调用模型。这在以下场景中很有用：
+
+- 从外部源预加载对话历史
+- 在首次用户查询前插入系统消息或上下文
+- 将用户操作或元数据记录为事件
+- 以编程方式构建对话上下文
+
+**重要提示**：Event 既可以表示用户请求，也可以表示模型响应。当您使用 `Runner.Run()` 时，框架会自动为用户消息和助手回复创建事件。
+
+**示例：追加用户消息**
+
+```go
+import (
+    "context"
+    "github.com/google/uuid"
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+// 获取或创建会话
+sessionKey := session.Key{
+    AppName:   "my-agent",
+    UserID:    "user123",
+    SessionID: "session-123",
+}
+sess, err := sessionService.GetSession(ctx, sessionKey)
+if err != nil {
+    return err
+}
+if sess == nil {
+    sess, err = sessionService.CreateSession(ctx, sessionKey, session.StateMap{})
+    if err != nil {
+        return err
+    }
+}
+
+// 创建用户消息
+message := model.NewUserMessage("你好，我正在学习 Go 编程。")
+
+// 创建事件，必填字段：
+// - invocationID: 唯一标识符（必填）
+// - author: 事件作者，用户消息使用 "user"（必填）
+// - response: *model.Response，包含 Choices 和 Message（必填）
+invocationID := uuid.New().String()
+evt := event.NewResponseEvent(
+    invocationID, // 必填：唯一调用标识符
+    "user",       // 必填：事件作者
+    &model.Response{
+        Done: false, // 推荐：非最终事件设为 false
+        Choices: []model.Choice{
+            {
+                Index:   0,       // 必填：选择索引
+                Message: message, // 必填：包含 Content 或 ContentParts 的消息
+            },
+        },
+    },
+)
+evt.RequestID = uuid.New().String() // 可选：用于追踪
+
+// 追加事件到会话
+if err := sessionService.AppendEvent(ctx, sess, evt); err != nil {
+    return fmt.Errorf("append event failed: %w", err)
+}
+```
+
+**示例：追加系统消息**
+
+```go
+systemMessage := model.Message{
+    Role:    model.RoleSystem,
+    Content: "你是一个专门帮助 Go 编程的助手。",
+}
+
+evt := event.NewResponseEvent(
+    uuid.New().String(),
+    "system", // 系统消息的作者
+    &model.Response{
+        Done:    false,
+        Choices: []model.Choice{{Index: 0, Message: systemMessage}},
+    },
+)
+
+if err := sessionService.AppendEvent(ctx, sess, evt); err != nil {
+    return err
+}
+```
+
+**示例：追加助手消息**
+
+```go
+assistantMessage := model.Message{
+    Role:    model.RoleAssistant,
+    Content: "Go 是一种静态类型、编译型的编程语言。",
+}
+
+evt := event.NewResponseEvent(
+    uuid.New().String(),
+    "assistant", // 助手消息的作者（或使用 agent 名称）
+    &model.Response{
+        Done:    false,
+        Choices: []model.Choice{{Index: 0, Message: assistantMessage}},
+    },
+)
+
+if err := sessionService.AppendEvent(ctx, sess, evt); err != nil {
+    return err
+}
+```
+
+**Event 必填字段**
+
+使用 `event.NewResponseEvent()` 创建事件时，以下字段是必填的：
+
+1. **函数参数**：
+   - `invocationID` (string): 唯一标识符，通常使用 `uuid.New().String()`
+   - `author` (string): 事件作者（`"user"`、`"system"` 或 agent 名称）
+   - `response` (*model.Response): 包含 Choices 的响应对象
+
+2. **Response 字段**：
+   - `Choices` ([]model.Choice): 至少包含一个 Choice，包含 `Index` 和 `Message`
+   - `Message`: 必须包含 `Content` 或 `ContentParts`
+
+3. **自动生成字段**（由 `event.NewResponseEvent()` 自动设置）：
+   - `ID`: 自动生成的 UUID
+   - `Timestamp`: 自动设置为当前时间
+   - `Version`: 自动设置为 `CurrentVersion`
+
+4. **持久化要求**：
+   - `Response != nil`
+   - `!IsPartial`（或包含 `StateDelta`）
+   - `IsValidContent()` 返回 `true`
+
+**与 Runner 配合使用**
+
+当您后续使用 `Runner.Run()` 处理同一会话时：
+
+1. Runner 会自动加载会话（包括所有已追加的事件）
+2. 将会话事件转换为消息
+3. 将所有消息（已追加的 + 当前的）包含在对话上下文中
+4. 一起发送给模型
+
+所有已追加的事件都会成为对话历史的一部分，并在后续交互中可供模型使用。
+
+**示例**：见 `examples/session/appendevent`（[代码](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/appendevent)）
+
 ## 会话摘要
 
 ### 概述
