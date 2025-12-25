@@ -13,7 +13,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -28,7 +27,20 @@ func (s *Service) CreateSessionSummary(
 	filterKey string,
 	force bool,
 ) error {
-	updated, err := isummary.CreateSessionSummary(ctx, s.opts.summarizer, sess, filterKey, force)
+	if s.opts.summarizer == nil {
+		return nil
+	}
+
+	if sess == nil {
+		return session.ErrNilSession
+	}
+
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return fmt.Errorf("check session key failed: %w", err)
+	}
+
+	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil || !updated {
 		return err
 	}
@@ -49,7 +61,6 @@ func (s *Service) CreateSessionSummary(
 		expiresAt = &t
 	}
 
-	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
 	// Try UPDATE first, then INSERT if no rows affected
 	result, err := s.mysqlClient.Exec(ctx,
 		fmt.Sprintf(
@@ -89,7 +100,7 @@ func (s *Service) EnqueueSummaryJob(ctx context.Context, sess *session.Session, 
 	}
 
 	if sess == nil {
-		return errors.New("nil session")
+		return session.ErrNilSession
 	}
 
 	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}

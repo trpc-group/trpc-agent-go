@@ -215,7 +215,7 @@ func TestMemoryService_EnqueueSummaryJob_InvalidSession_Error(t *testing.T) {
 	// Test with nil session
 	err := s.EnqueueSummaryJob(context.Background(), nil, "", false)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "nil session")
+	require.Contains(t, err.Error(), "session is nil")
 
 	// Test with invalid session key
 	invalidSess := &session.Session{ID: "", AppName: "app", UserID: "user"}
@@ -479,7 +479,7 @@ func TestMemoryService_CreateSessionSummary_NilSession(t *testing.T) {
 	s := NewSessionService(WithSummarizer(&fakeSummarizer{allow: true, out: "sum"}))
 	err := s.CreateSessionSummary(context.Background(), nil, "", false)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "nil session")
+	require.Contains(t, err.Error(), "session is nil")
 }
 
 func TestMemoryService_CreateSessionSummary_InvalidKey(t *testing.T) {
