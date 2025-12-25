@@ -19,7 +19,7 @@ require (
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5
 	trpc.group/trpc-go/trpc-agent-go v0.6.0
 	trpc.group/trpc-go/trpc-agent-go/evaluation v0.8.0
-	trpc.group/trpc-go/trpc-agent-go/tool/openapi v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/tool/openapi v0.0.1
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
 
