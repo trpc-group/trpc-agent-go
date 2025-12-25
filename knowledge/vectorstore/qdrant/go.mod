@@ -2,13 +2,17 @@ module trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/qdrant
 
 go 1.22.2
 
+replace (
+	trpc.group/trpc-go/trpc-agent-go/storage/qdrant => ../../../storage/qdrant
+)
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/qdrant/go-client v1.12.0
 	github.com/stretchr/testify v1.10.0
 	google.golang.org/grpc v1.66.0
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
-	trpc.group/trpc-go/trpc-agent-go/storage/qdrant v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/storage/qdrant v0.0.0-20251225192850-ab56b6777963
 )
 
 require (
@@ -21,5 +25,3 @@ require (
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace trpc.group/trpc-go/trpc-agent-go/storage/qdrant => ../../../storage/qdrant
