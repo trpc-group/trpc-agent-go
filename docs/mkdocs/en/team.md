@@ -119,6 +119,102 @@ Notes:
   streaming for both the coordinator and members, then set member tool
   configuration (see below).
 
+## Team Inside Team (Hierarchical Teams)
+
+Because `team.Team` also implements the `agent.Agent` interface, you can
+reuse it like any other Agent: one Team can be a member of another Team.
+
+This “Team of Teams” structure is useful when you want a clear hierarchy,
+for example:
+
+- `project_manager`
+  - `dev_team`
+    - `backend_dev`
+    - `frontend_dev`
+  - `doc_writer`
+
+Minimal example: the outer coordinator Team (`project_manager`) calls the
+inner Team (`dev_team`) as a single member tool.
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/team"
+)
+
+modelInstance := openai.New("deepseek-chat")
+
+backendDev := llmagent.New(
+    "backend_dev",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("Design service interfaces and server-side logic."),
+)
+
+frontendDev := llmagent.New(
+    "frontend_dev",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("Design user interfaces and client-side logic."),
+)
+
+devCoordinator := llmagent.New(
+    "dev_team",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction(
+        "You lead dev_team. Call backend_dev and frontend_dev as tools, "+
+            "then return an integrated technical plan.",
+    ),
+)
+
+devTeam, err := team.New(
+    devCoordinator,
+    []agent.Agent{backendDev, frontendDev},
+)
+if err != nil {
+    panic(err)
+}
+
+docWriter := llmagent.New(
+    "doc_writer",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("Write clear documentation."),
+)
+
+pmCoordinator := llmagent.New(
+    "project_manager",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction(
+        "You are the project manager. Delegate technical work to dev_team "+
+            "and docs to doc_writer, then produce the final answer.",
+    ),
+)
+
+pmTeam, err := team.New(
+    pmCoordinator,
+    []agent.Agent{devTeam, docWriter}, // devTeam is a Team.
+)
+if err != nil {
+    panic(err)
+}
+
+r := runner.NewRunner("app", pmTeam)
+_ = r
+```
+
+Notes:
+
+- Within one Team, member `Info().Name` values must be unique.
+- Prefer names that match `^[a-zA-Z0-9_-]+$` for maximum tool name
+  compatibility across models.
+- Swarm (`team.NewSwarm`) requires every member to support `SetSubAgents`.
+  `team.Team` does not implement `SetSubAgents`, so using a Team as a Swarm
+  member is not supported.
+  - If you want “outer coordination + inner handoffs”, make the outer layer
+    a coordinator Team (`team.New`), and make the inner layer a Swarm Team
+    (`team.NewSwarm`), then use the inner Team as an outer member.
+
 ## Member Tool Configuration (Coordinator Teams)
 
 In a coordinator team, each member is wrapped as an AgentTool and installed on

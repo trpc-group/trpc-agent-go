@@ -37,6 +37,15 @@ const (
 	testDescription = "desc"
 	testToolSetName = "custom_toolset"
 	testToolName    = "tool"
+
+	testAppName     = "app"
+	testSessionID   = "session"
+	testUserID      = "user"
+	testToolArgs    = `{"request":"hi"}`
+	testNestedName  = "dev_team"
+	testNestedLeaf  = "backend_dev"
+	testOuterName   = "project_manager"
+	testOuterMember = "doc_writer"
 )
 
 type testAgent struct {
@@ -367,14 +376,14 @@ func TestNew_MemberToolConfig_HistoryScope(t *testing.T) {
 	callable, ok := tools[0].(tool.CallableTool)
 	require.True(t, ok)
 
-	sess := session.NewSession("app", "user", "session")
+	sess := session.NewSession(testAppName, testUserID, testSessionID)
 	parent := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationEventFilterKey("parent"),
 	)
 	ctx := agent.NewInvocationContext(context.Background(), parent)
 
-	_, err = callable.Call(ctx, []byte(`{"request":"hi"}`))
+	_, err = callable.Call(ctx, []byte(testToolArgs))
 	require.NoError(t, err)
 
 	require.NotEmpty(t, member.seenFilterKey)
@@ -383,6 +392,55 @@ func TestNew_MemberToolConfig_HistoryScope(t *testing.T) {
 		t,
 		strings.HasPrefix(member.seenFilterKey, member.name+"-"),
 	)
+}
+
+func TestNew_NestedTeamMemberTool(t *testing.T) {
+	innerCoord := &testCoordinator{name: testNestedName}
+	inner, err := New(
+		innerCoord,
+		[]agent.Agent{
+			testAgent{name: testNestedLeaf},
+		},
+	)
+	require.NoError(t, err)
+
+	outerCoord := &testCoordinator{name: testOuterName}
+	outer, err := New(
+		outerCoord,
+		[]agent.Agent{
+			inner,
+			testAgent{name: testOuterMember},
+		},
+	)
+	require.NoError(t, err)
+
+	require.Len(t, outerCoord.addedToolSets, 1)
+	tools := itool.NewNamedToolSet(
+		outerCoord.addedToolSets[0],
+	).Tools(context.Background())
+
+	var callable tool.CallableTool
+	for _, tl := range tools {
+		named, ok := tl.(*itool.NamedTool)
+		require.True(t, ok)
+		if named.Original().Declaration().Name != testNestedName {
+			continue
+		}
+		callable, ok = tl.(tool.CallableTool)
+		require.True(t, ok)
+		break
+	}
+	require.NotNil(t, callable)
+
+	sess := session.NewSession(testAppName, testUserID, testSessionID)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(outer),
+		agent.WithInvocationSession(sess),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	_, err = callable.Call(ctx, []byte(testToolArgs))
+	require.NoError(t, err)
+	require.True(t, innerCoord.ran)
 }
 
 func TestTeam_Run_Coordinator(t *testing.T) {

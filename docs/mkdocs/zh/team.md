@@ -118,6 +118,100 @@ _ = r
 - 如果你想把成员（以工具调用）的输出流式展示到父流程里，需要确保协调者和成员都
   使用流式输出，然后通过成员工具配置开启（见下文）。
 
+## Team 嵌套 Team（层级化团队）
+
+因为 `team.Team` 自己也实现了 `agent.Agent` 接口，所以它可以像普通 Agent 一样
+被复用：一个 Team 可以作为另一个 Team 的成员（member）。
+
+这种“Team of Teams（团队套团队）”的结构，适合把复杂系统拆成多层角色，例如：
+
+- `project_manager`（项目经理）
+  - `dev_team`（开发团队：负责技术方案与实现）
+    - `backend_dev`（后端开发）
+    - `frontend_dev`（前端开发）
+  - `doc_writer`（文档编写）
+
+下面是一个最小示例：外层是 `project_manager` 协调者团队，它把 `dev_team`
+（内层团队）当作一个成员来调用。
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/team"
+)
+
+modelInstance := openai.New("deepseek-chat")
+
+backendDev := llmagent.New(
+    "backend_dev",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("Design service interfaces and server-side logic."),
+)
+
+frontendDev := llmagent.New(
+    "frontend_dev",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("Design user interfaces and client-side logic."),
+)
+
+devCoordinator := llmagent.New(
+    "dev_team",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction(
+        "You lead dev_team. Call backend_dev and frontend_dev as tools, "+
+            "then return an integrated technical plan.",
+    ),
+)
+
+devTeam, err := team.New(
+    devCoordinator,
+    []agent.Agent{backendDev, frontendDev},
+)
+if err != nil {
+    panic(err)
+}
+
+docWriter := llmagent.New(
+    "doc_writer",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("Write clear documentation."),
+)
+
+pmCoordinator := llmagent.New(
+    "project_manager",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction(
+        "You are the project manager. Delegate technical work to dev_team "+
+            "and docs to doc_writer, then produce the final answer.",
+    ),
+)
+
+pmTeam, err := team.New(
+    pmCoordinator,
+    []agent.Agent{devTeam, docWriter}, // devTeam is a Team.
+)
+if err != nil {
+    panic(err)
+}
+
+r := runner.NewRunner("app", pmTeam)
+_ = r
+```
+
+注意：
+
+- 同一个 Team 的 `members` 里，成员的 `Info().Name` 必须唯一。
+- 名字最好只用字母、数字、下划线、短横线（`^[a-zA-Z0-9_-]+$`），这样更兼容
+  各家模型对 Tool 名称的限制。
+- Swarm 模式（`team.NewSwarm`）要求每个成员支持 `SetSubAgents`（用于把可交接的
+  Agent 列表注入到成员上）。`team.Team` 本身不实现 `SetSubAgents`，因此
+  “Swarm 里嵌 Team（把 Team 当作 Swarm 成员）”目前不支持。
+  - 如果你需要“外层协调、内层 handoff（交接）”，推荐：外层用协调者团队
+    `team.New`，内层用 Swarm 团队 `team.NewSwarm`，然后把内层 Team 当作外层成员。
+
 ## 成员工具配置（协调者团队）
 
 在协调者团队里，每个成员都会被包装成 AgentTool（把 Agent 包装成 Tool），并作为
