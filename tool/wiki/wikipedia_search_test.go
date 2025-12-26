@@ -7,6 +7,7 @@
 //
 //
 
+// Package wiki provides Wikipedia search tool.
 package wiki
 
 import (

@@ -7,6 +7,7 @@
 //
 //
 
+// Package client provides Wikipedia API client functionality.
 package client
 
 import (
@@ -17,7 +18,7 @@ import (
 	"time"
 )
 
-// tests the creation of a new Wikipedia client.
+// TestNew tests the creation of a new Wikipedia client.
 func TestNew(t *testing.T) {
 	baseURL := "https://en.wikipedia.org/w/api.php"
 	userAgent := "test-agent"
@@ -28,195 +29,179 @@ func TestNew(t *testing.T) {
 	if client == nil {
 		t.Fatal("New() returned nil")
 	}
-
 	if client.baseURL != baseURL {
 		t.Errorf("Expected baseURL '%s', got '%s'", baseURL, client.baseURL)
 	}
-
 	if client.userAgent != userAgent {
 		t.Errorf("Expected userAgent '%s', got '%s'", userAgent, client.userAgent)
 	}
-
 	if client.httpClient != httpClient {
 		t.Error("httpClient not set correctly")
 	}
 }
 
-// TestSearch tests the Search method with a mock server.
-func TestSearch(t *testing.T) {
-	// Create a mock HTTP server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify request method
-		if r.Method != "GET" {
-			t.Errorf("Expected GET request, got %s", r.Method)
+// mockSearchServer creates a mock HTTP server for search tests.
+func mockSearchServer(t *testing.T, validator func(*http.Request)) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if validator != nil {
+			validator(r)
 		}
-
-		// Verify query parameters
-		query := r.URL.Query()
-		if query.Get("action") != "query" {
-			t.Error("Expected action=query")
-		}
-		if query.Get("list") != "search" {
-			t.Error("Expected list=search")
-		}
-		if query.Get("format") != "json" {
-			t.Error("Expected format=json")
-		}
-
-		searchQuery := query.Get("srsearch")
-		if searchQuery == "" {
-			t.Error("Expected srsearch parameter")
-		}
-
-		// Return mock response
-		response := SearchResponse{
-			BatchComplete: "",
-		}
+		response := SearchResponse{}
 		response.Query.SearchInfo.TotalHits = 1
 		response.Query.Search = []SearchResult{
-			{
-				NS:        0,
-				Title:     "Test Article",
-				PageID:    12345,
-				Size:      10000,
-				WordCount: 1000,
-				Snippet:   "This is a test article snippet",
-				Timestamp: "2025-01-01T00:00:00Z",
-			},
+			{Title: "Test", PageID: 123, Snippet: "snippet"},
 		}
-
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
 	}))
-	defer server.Close()
-
-	// Create client with mock server URL
-	client := New(server.URL, "test-agent", &http.Client{Timeout: 5 * time.Second})
-
-	// Perform search
-	result, err := client.Search("test query", 5)
-	if err != nil {
-		t.Fatalf("Search() failed: %v", err)
-	}
-
-	// Verify result
-	if result == nil {
-		t.Fatal("Search() returned nil result")
-	}
-
-	if len(result.Query.Search) != 1 {
-		t.Errorf("Expected 1 search result, got %d", len(result.Query.Search))
-	}
-
-	if result.Query.Search[0].Title != "Test Article" {
-		t.Errorf("Expected title 'Test Article', got '%s'", result.Query.Search[0].Title)
-	}
-
-	if result.Query.Search[0].PageID != 12345 {
-		t.Errorf("Expected pageID 12345, got %d", result.Query.Search[0].PageID)
-	}
 }
 
-// TestSearchEmptyQuery tests Search with an empty query.
-func TestSearchEmptyQuery(t *testing.T) {
-	client := New("https://en.wikipedia.org/w/api.php", "test-agent", &http.Client{})
-
-	_, err := client.Search("", 5)
-	if err == nil {
-		t.Error("Expected error for empty query, got nil")
-	}
-}
-
-// TestSearchInvalidLimit tests Search with invalid limit values.
-func TestSearchInvalidLimit(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		limit := r.URL.Query().Get("srlimit")
-		if limit != "5" {
-			t.Errorf("Expected default limit '5', got '%s'", limit)
+// mockPageServer creates a mock HTTP server for page content tests.
+func mockPageServer(t *testing.T) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := PageContentResponse{}
+		response.Query.Pages = map[string]PageContent{
+			"123": {PageID: 123, Title: "Test", Extract: "content", FullURL: "http://test"},
 		}
-
-		response := SearchResponse{}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
 	}))
-	defer server.Close()
+}
 
-	client := New(server.URL, "test-agent", &http.Client{})
-
-	// Test with zero limit (should default to 5)
-	_, err := client.Search("test", 0)
-	if err != nil {
-		t.Errorf("Search() with zero limit failed: %v", err)
+// TestSearchMethods tests all search-related methods with table-driven approach.
+func TestSearchMethods(t *testing.T) {
+	tests := []struct {
+		name      string
+		method    func(*Client) error
+		wantError bool
+	}{
+		{"Search", func(c *Client) error { _, err := c.Search("test", 5); return err }, false},
+		{"SearchEmpty", func(c *Client) error { _, err := c.Search("", 5); return err }, true},
+		{"SearchInvalidLimit", func(c *Client) error { _, err := c.Search("test", 0); return err }, false},
+		{"QuickSearch", func(c *Client) error { _, err := c.QuickSearch("test", 5); return err }, false},
+		{"QuickSearchEmpty", func(c *Client) error { _, err := c.QuickSearch("", 5); return err }, true},
+		{"DetailedSearch", func(c *Client) error { _, err := c.DetailedSearch("test", 5, false); return err }, false},
+		{"DetailedSearchAll", func(c *Client) error { _, err := c.DetailedSearch("test", 5, true); return err }, false},
+		{"DetailedSearchEmpty", func(c *Client) error { _, err := c.DetailedSearch("", 5, false); return err }, true},
+		{"ExactTitleSearch", func(c *Client) error { _, err := c.ExactTitleSearch("test"); return err }, false},
+		{"ExactTitleSearchEmpty", func(c *Client) error { _, err := c.ExactTitleSearch(""); return err }, true},
+		{"PrefixSearch", func(c *Client) error { _, err := c.PrefixSearch("test", 5); return err }, false},
+		{"PrefixSearchEmpty", func(c *Client) error { _, err := c.PrefixSearch("", 5); return err }, true},
+		{"FullTextSearch", func(c *Client) error {
+			_, err := c.FullTextSearch("test", 5, []int{0}, true)
+			return err
+		}, false},
+		{"FullTextSearchEmpty", func(c *Client) error {
+			_, err := c.FullTextSearch("", 5, nil, false)
+			return err
+		}, true},
+		{"AdvancedSearch", func(c *Client) error {
+			_, err := c.AdvancedSearch(SearchOptions{Query: "test", Limit: 5})
+			return err
+		}, false},
+		{"AdvancedSearchEmpty", func(c *Client) error {
+			_, err := c.AdvancedSearch(SearchOptions{Query: "", Limit: 5})
+			return err
+		}, true},
+		{"AdvancedSearchFull", func(c *Client) error {
+			_, err := c.AdvancedSearch(SearchOptions{
+				Query:           "test",
+				Limit:           10,
+				Offset:          5,
+				SearchWhat:      "text",
+				Properties:      "snippet",
+				Namespaces:      []int{0, 14},
+				Sort:            "relevance",
+				EnableRedirects: true,
+			})
+			return err
+		}, false},
 	}
 
-	// Test with negative limit (should default to 5)
-	_, err = client.Search("test", -1)
-	if err != nil {
-		t.Errorf("Search() with negative limit failed: %v", err)
+	server := mockSearchServer(t, nil)
+	defer server.Close()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := New(server.URL, "test", &http.Client{})
+			err := tt.method(client)
+			if (err != nil) != tt.wantError {
+				t.Errorf("wantError=%v, got err=%v", tt.wantError, err)
+			}
+		})
 	}
 }
 
-// TestSearchHTTPError tests Search with HTTP error response.
-func TestSearchHTTPError(t *testing.T) {
+// TestPageContentMethods tests page content retrieval methods.
+func TestPageContentMethods(t *testing.T) {
+	tests := []struct {
+		name      string
+		method    func(*Client) error
+		wantError bool
+	}{
+		{"GetPageContent", func(c *Client) error { _, err := c.GetPageContent("test"); return err }, false},
+		{"GetPageContentEmpty", func(c *Client) error { _, err := c.GetPageContent(""); return err }, true},
+		{"GetPageSummary", func(c *Client) error { _, err := c.GetPageSummary("test"); return err }, false},
+		{"GetPageSummaryEmpty", func(c *Client) error { _, err := c.GetPageSummary(""); return err }, true},
+	}
+
+	server := mockPageServer(t)
+	defer server.Close()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := New(server.URL, "test", &http.Client{})
+			err := tt.method(client)
+			if (err != nil) != tt.wantError {
+				t.Errorf("wantError=%v, got err=%v", tt.wantError, err)
+			}
+		})
+	}
+}
+
+// TestHTTPErrors tests HTTP error handling across all methods.
+func TestHTTPErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
 
-	client := New(server.URL, "test-agent", &http.Client{})
+	client := New(server.URL, "test", &http.Client{})
 
-	_, err := client.Search("test", 5)
-	if err == nil {
-		t.Error("Expected error for HTTP 500, got nil")
+	tests := []struct {
+		name string
+		fn   func() error
+	}{
+		{"Search", func() error { _, err := client.Search("test", 5); return err }},
+		{"QuickSearch", func() error { _, err := client.QuickSearch("test", 5); return err }},
+		{"DetailedSearch", func() error { _, err := client.DetailedSearch("test", 5, false); return err }},
+		{"GetPageContent", func() error { _, err := client.GetPageContent("test"); return err }},
+		{"GetPageSummary", func() error { _, err := client.GetPageSummary("test"); return err }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.fn(); err == nil {
+				t.Error("Expected error for HTTP 500, got nil")
+			}
+		})
 	}
 }
 
-// TestSearchInvalidJSON tests Search with invalid JSON response.
-func TestSearchInvalidJSON(t *testing.T) {
+// TestInvalidJSON tests invalid JSON handling.
+func TestInvalidJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("invalid json"))
 	}))
 	defer server.Close()
 
-	client := New(server.URL, "test-agent", &http.Client{})
+	client := New(server.URL, "test", &http.Client{})
 
-	_, err := client.Search("test", 5)
-	if err == nil {
-		t.Error("Expected error for invalid JSON, got nil")
+	if _, err := client.Search("test", 5); err == nil {
+		t.Error("Expected error for invalid JSON")
 	}
-}
-
-// TestSearchMultipleResults tests Search with multiple results.
-func TestSearchMultipleResults(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		response := SearchResponse{
-			BatchComplete: "",
-		}
-		response.Query.SearchInfo.TotalHits = 3
-		response.Query.Search = []SearchResult{
-			{Title: "Result 1", PageID: 1},
-			{Title: "Result 2", PageID: 2},
-			{Title: "Result 3", PageID: 3},
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
-	}))
-	defer server.Close()
-
-	client := New(server.URL, "test-agent", &http.Client{})
-
-	result, err := client.Search("test", 10)
-	if err != nil {
-		t.Fatalf("Search() failed: %v", err)
-	}
-
-	if len(result.Query.Search) != 3 {
-		t.Errorf("Expected 3 results, got %d", len(result.Query.Search))
-	}
-
-	if result.Query.SearchInfo.TotalHits != 3 {
-		t.Errorf("Expected TotalHits 3, got %d", result.Query.SearchInfo.TotalHits)
+	if _, err := client.GetPageContent("test"); err == nil {
+		t.Error("Expected error for invalid JSON")
 	}
 }

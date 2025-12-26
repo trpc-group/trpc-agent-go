@@ -56,211 +56,154 @@ type SearchResult struct {
 	Timestamp string `json:"timestamp"`
 }
 
-// Search performs a basic Wikipedia search
-func (c *Client) Search(query string, limit int) (*SearchResponse, error) {
+// validateQuery validates and normalizes query parameters
+func validateQuery(query string) error {
 	if strings.TrimSpace(query) == "" {
-		return nil, fmt.Errorf("query cannot be empty")
+		return fmt.Errorf("query cannot be empty")
 	}
+	return nil
+}
 
+// normalizeLimit ensures limit is positive, returns default if <= 0
+func normalizeLimit(limit, defaultLimit int) int {
 	if limit <= 0 {
-		limit = 5
+		return defaultLimit
 	}
+	return limit
+}
 
+// newSearchParams creates base search parameters
+func newSearchParams(query string, limit int) url.Values {
 	params := url.Values{}
 	params.Set("action", "query")
 	params.Set("list", "search")
 	params.Set("srsearch", query)
 	params.Set("format", "json")
 	params.Set("srlimit", fmt.Sprintf("%d", limit))
-	params.Set("srprop", "snippet|titlesnippet|timestamp|wordcount|size")
+	return params
+}
 
+// formatNamespaces converts namespace slice to API format
+func formatNamespaces(namespaces []int) string {
+	if len(namespaces) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	for i, ns := range namespaces {
+		if i > 0 {
+			builder.WriteByte('|')
+		}
+		fmt.Fprintf(&builder, "%d", ns)
+	}
+	return builder.String()
+}
+
+// Search performs a basic Wikipedia search
+func (c *Client) Search(query string, limit int) (*SearchResponse, error) {
+	if err := validateQuery(query); err != nil {
+		return nil, err
+	}
+	params := newSearchParams(query, normalizeLimit(limit, 5))
+	params.Set("srprop", "snippet|titlesnippet|timestamp|wordcount|size")
 	return c.executeSearch(params)
 }
 
 // QuickSearch performs a fast basic search with minimal metadata
 func (c *Client) QuickSearch(query string, limit int) (*SearchResponse, error) {
-	if strings.TrimSpace(query) == "" {
-		return nil, fmt.Errorf("query cannot be empty")
+	if err := validateQuery(query); err != nil {
+		return nil, err
 	}
-
-	if limit <= 0 {
-		limit = 5
-	}
-
-	params := url.Values{}
-	params.Set("action", "query")
-	params.Set("list", "search")
-	params.Set("srsearch", query)
-	params.Set("format", "json")
-	params.Set("srlimit", fmt.Sprintf("%d", limit))
-	params.Set("srprop", "snippet") // Minimal properties for speed
-
+	params := newSearchParams(query, normalizeLimit(limit, 5))
+	params.Set("srprop", "snippet")
 	return c.executeSearch(params)
 }
 
 // DetailedSearch performs a comprehensive search with all available metadata
 func (c *Client) DetailedSearch(query string, limit int, includeAll bool) (*SearchResponse, error) {
-	if strings.TrimSpace(query) == "" {
-		return nil, fmt.Errorf("query cannot be empty")
+	if err := validateQuery(query); err != nil {
+		return nil, err
 	}
-
-	if limit <= 0 {
-		limit = 5
-	}
-
-	params := url.Values{}
-	params.Set("action", "query")
-	params.Set("list", "search")
-	params.Set("srsearch", query)
-	params.Set("format", "json")
-	params.Set("srlimit", fmt.Sprintf("%d", limit))
-
-	// Include comprehensive metadata
+	params := newSearchParams(query, normalizeLimit(limit, 5))
 	if includeAll {
 		params.Set("srprop", "snippet|titlesnippet|timestamp|wordcount|size|categorysnippet|sectionsnippet|redirectsnippet|redirecttitle|sectiontitle|hasrelated")
 	} else {
 		params.Set("srprop", "snippet|titlesnippet|timestamp|wordcount|size")
 	}
-
 	return c.executeSearch(params)
 }
 
 // ExactTitleSearch searches for an exact article title match
 func (c *Client) ExactTitleSearch(title string) (*SearchResponse, error) {
-	if strings.TrimSpace(title) == "" {
-		return nil, fmt.Errorf("title cannot be empty")
+	if err := validateQuery(title); err != nil {
+		return nil, err
 	}
-
-	params := url.Values{}
-	params.Set("action", "query")
-	params.Set("list", "search")
-	// Use intitle: prefix for exact title matching
-	params.Set("srsearch", fmt.Sprintf("intitle:\"%s\"", title))
-	params.Set("format", "json")
-	params.Set("srlimit", "1")
+	params := newSearchParams(fmt.Sprintf("intitle:\"%s\"", title), 1)
 	params.Set("srprop", "snippet|titlesnippet|timestamp|wordcount|size")
-	params.Set("srwhat", "title") // Search in titles only
-
+	params.Set("srwhat", "title")
 	return c.executeSearch(params)
 }
 
 // PrefixSearch finds articles whose titles start with the given prefix
 func (c *Client) PrefixSearch(prefix string, limit int) (*SearchResponse, error) {
-	if strings.TrimSpace(prefix) == "" {
-		return nil, fmt.Errorf("prefix cannot be empty")
+	if err := validateQuery(prefix); err != nil {
+		return nil, err
 	}
-
-	if limit <= 0 {
-		limit = 10
-	}
-
-	params := url.Values{}
-	params.Set("action", "query")
-	params.Set("list", "search")
-	// Use prefix: operator for prefix matching
-	params.Set("srsearch", fmt.Sprintf("prefix:%s", prefix))
-	params.Set("format", "json")
-	params.Set("srlimit", fmt.Sprintf("%d", limit))
+	params := newSearchParams(fmt.Sprintf("prefix:%s", prefix), normalizeLimit(limit, 10))
 	params.Set("srprop", "snippet")
 	params.Set("srwhat", "title")
-
 	return c.executeSearch(params)
 }
 
 // FullTextSearch performs a deep search across article content
 func (c *Client) FullTextSearch(query string, limit int, namespaces []int, includeSnippet bool) (*SearchResponse, error) {
-	if strings.TrimSpace(query) == "" {
-		return nil, fmt.Errorf("query cannot be empty")
+	if err := validateQuery(query); err != nil {
+		return nil, err
 	}
+	params := newSearchParams(query, normalizeLimit(limit, 5))
+	params.Set("srwhat", "text")
 
-	if limit <= 0 {
-		limit = 5
-	}
-
-	params := url.Values{}
-	params.Set("action", "query")
-	params.Set("list", "search")
-	params.Set("srsearch", query)
-	params.Set("format", "json")
-	params.Set("srlimit", fmt.Sprintf("%d", limit))
-	params.Set("srwhat", "text") // Search in full text, not just titles
-
-	// Set namespaces if specified
-	if len(namespaces) > 0 {
-		nsStr := ""
-		for i, ns := range namespaces {
-			if i > 0 {
-				nsStr += "|"
-			}
-			nsStr += fmt.Sprintf("%d", ns)
-		}
+	if nsStr := formatNamespaces(namespaces); nsStr != "" {
 		params.Set("srnamespace", nsStr)
 	}
 
-	// Include snippet and other metadata
 	if includeSnippet {
 		params.Set("srprop", "snippet|titlesnippet|timestamp|wordcount|size|sectionsnippet")
 	} else {
 		params.Set("srprop", "timestamp|wordcount|size")
 	}
-
 	return c.executeSearch(params)
 }
 
 // AdvancedSearch performs a search with custom parameters
 func (c *Client) AdvancedSearch(options SearchOptions) (*SearchResponse, error) {
-	if strings.TrimSpace(options.Query) == "" {
-		return nil, fmt.Errorf("query cannot be empty")
+	if err := validateQuery(options.Query); err != nil {
+		return nil, err
 	}
 
-	params := url.Values{}
-	params.Set("action", "query")
-	params.Set("list", "search")
-	params.Set("srsearch", options.Query)
-	params.Set("format", "json")
+	params := newSearchParams(options.Query, normalizeLimit(options.Limit, 5))
 
-	// Set limit
-	if options.Limit > 0 {
-		params.Set("srlimit", fmt.Sprintf("%d", options.Limit))
-	} else {
-		params.Set("srlimit", "5")
-	}
-
-	// Set search type
 	if options.SearchWhat != "" {
 		params.Set("srwhat", options.SearchWhat)
 	}
 
-	// Set properties
 	if options.Properties != "" {
 		params.Set("srprop", options.Properties)
 	} else {
 		params.Set("srprop", "snippet|titlesnippet|timestamp|wordcount")
 	}
 
-	// Set namespaces
-	if len(options.Namespaces) > 0 {
-		nsStr := ""
-		for i, ns := range options.Namespaces {
-			if i > 0 {
-				nsStr += "|"
-			}
-			nsStr += fmt.Sprintf("%d", ns)
-		}
+	if nsStr := formatNamespaces(options.Namespaces); nsStr != "" {
 		params.Set("srnamespace", nsStr)
 	}
 
-	// Set sort order
 	if options.Sort != "" {
 		params.Set("srsort", options.Sort)
 	}
 
-	// Set offset for pagination
 	if options.Offset > 0 {
 		params.Set("sroffset", fmt.Sprintf("%d", options.Offset))
 	}
 
-	// Enable/disable redirects
 	if options.EnableRedirects {
 		params.Set("srredirects", "1")
 	}
@@ -322,21 +265,20 @@ func (c *Client) executeSearch(params url.Values) (*SearchResponse, error) {
 	return &response, nil
 }
 
-// GetPageContent retrieves the full content of a Wikipedia page by title
-func (c *Client) GetPageContent(title string) (*PageContentResponse, error) {
-	if strings.TrimSpace(title) == "" {
-		return nil, fmt.Errorf("title cannot be empty")
-	}
-
+// newPageParams creates base page query parameters
+func newPageParams(title string) url.Values {
 	params := url.Values{}
 	params.Set("action", "query")
 	params.Set("prop", "extracts|info")
 	params.Set("titles", title)
 	params.Set("format", "json")
-	params.Set("explaintext", "1") // Plain text extract
-	params.Set("exintro", "0")     // Full article, not just intro
-	params.Set("inprop", "url")    // Include URL
+	params.Set("explaintext", "1")
+	params.Set("inprop", "url")
+	return params
+}
 
+// executePage performs page content request
+func (c *Client) executePage(params url.Values) (*PageContentResponse, error) {
 	reqURL := fmt.Sprintf("%s?%s", c.baseURL, params.Encode())
 
 	req, err := http.NewRequest("GET", reqURL, nil)
@@ -368,6 +310,16 @@ func (c *Client) GetPageContent(title string) (*PageContentResponse, error) {
 	}
 
 	return &response, nil
+}
+
+// GetPageContent retrieves the full content of a Wikipedia page by title
+func (c *Client) GetPageContent(title string) (*PageContentResponse, error) {
+	if err := validateQuery(title); err != nil {
+		return nil, err
+	}
+	params := newPageParams(title)
+	params.Set("exintro", "0") // Full article
+	return c.executePage(params)
 }
 
 // PageContentResponse represents the response from page content API
@@ -388,48 +340,10 @@ type PageContent struct {
 
 // GetPageSummary retrieves a short summary of a Wikipedia page
 func (c *Client) GetPageSummary(title string) (*PageContentResponse, error) {
-	if strings.TrimSpace(title) == "" {
-		return nil, fmt.Errorf("title cannot be empty")
+	if err := validateQuery(title); err != nil {
+		return nil, err
 	}
-
-	params := url.Values{}
-	params.Set("action", "query")
-	params.Set("prop", "extracts|info")
-	params.Set("titles", title)
-	params.Set("format", "json")
-	params.Set("explaintext", "1")
-	params.Set("exintro", "1") // Only introduction section
-	params.Set("inprop", "url")
-
-	reqURL := fmt.Sprintf("%s?%s", c.baseURL, params.Encode())
-
-	req, err := http.NewRequest("GET", reqURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("User-Agent", c.userAgent)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to perform request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	var response PageContentResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &response, nil
+	params := newPageParams(title)
+	params.Set("exintro", "1") // Only introduction
+	return c.executePage(params)
 }
