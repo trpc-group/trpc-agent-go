@@ -214,7 +214,10 @@ func WithMaxRetryDelay(delay time.Duration) Option {
 
 // WithClient sets a pre-created Qdrant client.
 // When provided, connection options (WithHost, WithPort, WithAPIKey, WithTLS) are ignored.
-// This allows reusing a client created via storage/qdrant.
+// This allows reusing a client across multiple qdrant components
+//
+// Ownership: The caller retains ownership of the client. Calling Close() on the
+// VectorStore will not close this client; the caller must close it separately.
 func WithClient(client Client) Option {
 	return func(o *options) {
 		o.client = client

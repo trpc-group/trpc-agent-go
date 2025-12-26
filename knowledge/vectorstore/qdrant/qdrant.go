@@ -29,6 +29,7 @@ var _ vectorstore.VectorStore = (*VectorStore)(nil)
 // VectorStore implements vectorstore.VectorStore using Qdrant.
 type VectorStore struct {
 	client          Client
+	ownsClient      bool // true if we created the client, false if provided via WithClient
 	opts            options
 	filterConverter searchfilter.Converter[*qdrant.Filter]
 	retryCfg        retryConfig
@@ -43,16 +44,19 @@ func New(ctx context.Context, opts ...Option) (*VectorStore, error) {
 
 	// Use pre-created client if provided, otherwise create one
 	client := o.client
+	ownsClient := false
 	if client == nil {
 		var err error
 		client, err = qdrantstorage.GetClientBuilder()(ctx, o.clientBuilderOpts...)
 		if err != nil {
 			return nil, errors.Join(ErrConnectionFailed, err)
 		}
+		ownsClient = true
 	}
 
 	vs := &VectorStore{
 		client:          client,
+		ownsClient:      ownsClient,
 		opts:            o,
 		filterConverter: newFilterConverter(),
 		retryCfg: retryConfig{
@@ -64,7 +68,7 @@ func New(ctx context.Context, opts ...Option) (*VectorStore, error) {
 
 	if err := vs.ensureCollection(ctx); err != nil {
 		// Only close if we created the client
-		if o.client == nil {
+		if ownsClient {
 			_ = client.Close()
 		}
 		return nil, err
@@ -434,9 +438,10 @@ func (vs *VectorStore) buildMetadataFilter(config *vectorstore.GetMetadataConfig
 	return nil, nil
 }
 
-// Close closes the connection.
+// Close closes the connection if it was created by the VectorStore.
+// If the client was provided externally via WithClient, it is not closed.
 func (vs *VectorStore) Close() error {
-	if vs.client == nil {
+	if vs.client == nil || !vs.ownsClient {
 		return nil
 	}
 	return vs.client.Close()

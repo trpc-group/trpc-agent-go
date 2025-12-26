@@ -290,6 +290,7 @@ var testOptions = options{
 func newTestVectorStore(mock *mockClient) *VectorStore {
 	return &VectorStore{
 		client:          mock,
+		ownsClient:      true, // test owns the mock client
 		opts:            testOptions,
 		filterConverter: newFilterConverter(),
 		retryCfg: retryConfig{
@@ -966,6 +967,21 @@ func TestVectorStore_Close(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Equal(t, "close failed", err.Error())
+	})
+
+	t.Run("external client not closed", func(t *testing.T) {
+		// When client is provided externally via WithClient,
+		// Close() should not close it (ownsClient = false)
+		mock := newMockClient()
+		vs := &VectorStore{
+			client:     mock,
+			ownsClient: false, // simulates client provided via WithClient
+		}
+
+		err := vs.Close()
+
+		require.NoError(t, err)
+		assert.Equal(t, 0, mock.closeCalls, "external client should not be closed")
 	})
 }
 
