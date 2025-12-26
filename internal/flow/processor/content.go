@@ -452,7 +452,13 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 
-	// Convert events to messages.
+	// Get current request ID for reasoning content filtering.
+	currentRequestID := ""
+	if inv != nil && inv.RunOptions.RequestID != "" {
+		currentRequestID = inv.RunOptions.RequestID
+	}
+
+	// Convert events to messages with reasoning content handling.
 	var messages []model.Message
 	for _, evt := range resultEvents {
 		// Convert foreign events or keep as-is (consistent with getIncrementMessages).
@@ -462,7 +468,9 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 		}
 		if len(ev.Choices) > 0 {
 			for _, choice := range ev.Choices {
-				messages = append(messages, choice.Message)
+				msg := choice.Message
+				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+				messages = append(messages, msg)
 			}
 		}
 	}
