@@ -49,6 +49,7 @@ const (
 	OperationInvokeAgent     = "invoke_agent"
 	OperationCreateAgent     = "create_agent"
 	OperationEmbeddings      = "embeddings"
+	OperationWorkflow        = "workflow"
 )
 
 // NewChatSpanName creates a new chat span name.
@@ -59,6 +60,31 @@ func NewChatSpanName(requestModel string) string {
 // NewExecuteToolSpanName creates a new execute tool span name.
 func NewExecuteToolSpanName(toolName string) string {
 	return fmt.Sprintf("%s %s", OperationExecuteTool, toolName)
+}
+
+const (
+	// KeyGenAIWorkflowName is the name of the workflow.
+	KeyGenAIWorkflowName = "gen_ai.workflow.name"
+	// KeyGenAIWorkflowID is the id of the workflow.
+	KeyGenAIWorkflowID = "gen_ai.workflow.id"
+)
+
+// Workflow is the workflow information.
+type Workflow struct {
+	Name string
+	ID   string
+}
+
+// NewWorkflowSpanName creates a new workflow span name.
+func NewWorkflowSpanName(workflowName string) string {
+	return fmt.Sprintf("%s %s", OperationWorkflow, workflowName)
+}
+
+// TraceWorkflow traces the workflow.
+func TraceWorkflow(span trace.Span, workflow *Workflow) {
+	span.SetAttributes(attribute.String(KeyGenAIOperationName, OperationWorkflow))
+	span.SetAttributes(attribute.String(KeyGenAIWorkflowName, workflow.Name))
+	span.SetAttributes(attribute.String(KeyGenAIWorkflowID, workflow.ID))
 }
 
 // newInferenceSpanName creates a new inference span name.
@@ -283,7 +309,7 @@ type TokenUsage struct {
 }
 
 // TraceAfterInvokeAgent traces the after invocation of an agent.
-func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *TokenUsage) {
+func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *TokenUsage, timeToFirstToken time.Duration) {
 	if rspEvent == nil {
 		return
 	}
@@ -318,6 +344,9 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *T
 	if e := rsp.Error; e != nil {
 		span.SetStatus(codes.Error, e.Message)
 		span.SetAttributes(attribute.String(KeyErrorType, e.Type), attribute.String(KeyErrorMessage, e.Message))
+	}
+	if timeToFirstToken > 0 {
+		span.SetAttributes(attribute.Float64(KeyTRPCAgentGoClientTimeToFirstToken, timeToFirstToken.Seconds()))
 	}
 }
 

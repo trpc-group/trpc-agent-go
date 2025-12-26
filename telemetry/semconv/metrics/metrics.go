@@ -57,4 +57,6 @@ const (
 	MeterNameChat = "trpc_agent_go.internal.chat"
 	// MeterNameExecuteTool is the meter name for tool execution operations.
 	MeterNameExecuteTool = "trpc_agent_go.internal.execute_tool"
+	// MeterNameInvokeAgent is the meter name for invoke agent operations.
+	MeterNameInvokeAgent = "trpc_agent_go.internal.invoke_agent"
 )

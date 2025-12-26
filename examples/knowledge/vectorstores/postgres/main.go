@@ -36,6 +36,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"strconv"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -72,13 +73,14 @@ func main() {
 	port, _ := strconv.Atoi(portStr)
 	fmt.Printf("📊 Connecting to PostgreSQL: %s:%d/%s table: %s\\n", host, port, database, table)
 
+	encodedUser := url.QueryEscape(user)
+	encodedPassword := url.QueryEscape(password)
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
+		encodedUser, encodedPassword, host, port, database)
+
 	// Create PGVector store
 	vs, err := pgvector.New(
-		pgvector.WithHost(host),
-		pgvector.WithPort(port),
-		pgvector.WithUser(user),
-		pgvector.WithPassword(password),
-		pgvector.WithDatabase(database),
+		pgvector.WithPGVectorClientDSN(dsn),
 		pgvector.WithTable(table),
 	)
 	if err != nil {

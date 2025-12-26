@@ -107,6 +107,27 @@ func hasAttr(attrs []attribute.KeyValue, key string, want any) bool {
 	return false
 }
 
+func TestNewWorkflowSpanName(t *testing.T) {
+	require.Equal(t, "workflow myflow", NewWorkflowSpanName("myflow"))
+}
+
+func TestTraceWorkflow(t *testing.T) {
+	span := newRecordingSpan()
+	wf := &Workflow{Name: "myflow", ID: "wf-123"}
+
+	TraceWorkflow(span, wf)
+
+	if !hasAttr(span.attrs, KeyGenAIOperationName, OperationWorkflow) {
+		t.Fatalf("missing operation name attribute")
+	}
+	if !hasAttr(span.attrs, KeyGenAIWorkflowName, "myflow") {
+		t.Fatalf("missing workflow name attribute")
+	}
+	if !hasAttr(span.attrs, KeyGenAIWorkflowID, "wf-123") {
+		t.Fatalf("missing workflow id attribute")
+	}
+}
+
 func TestTraceFunctions_NoPanics(t *testing.T) {
 	span := newStubSpan()
 
@@ -157,7 +178,7 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	rsp := &model.Response{ID: "rid", Model: "m-1", Usage: &model.Usage{PromptTokens: 1, CompletionTokens: 2}, Choices: []model.Choice{{FinishReason: &stop}, {}}, Error: &model.ResponseError{Message: "oops", Type: "api_error"}}
 	evt := event.New("eid", "alpha", event.WithResponse(rsp))
 	s2 := newRecordingSpan()
-	TraceAfterInvokeAgent(s2, evt, nil)
+	TraceAfterInvokeAgent(s2, evt, nil, 0)
 	if s2.status != codes.Error {
 		t.Fatalf("expected error status")
 	}
@@ -405,7 +426,7 @@ func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			span := newRecordingSpan()
-			TraceAfterInvokeAgent(span, tt.rspEvent, tt.tokenUsage)
+			TraceAfterInvokeAgent(span, tt.rspEvent, tt.tokenUsage, 0)
 
 			if tt.tokenUsage != nil && tt.rspEvent != nil && tt.rspEvent.Response != nil {
 				require.True(t, hasAttr(span.attrs, KeyGenAIUsageInputTokens, int64(tt.tokenUsage.PromptTokens)))
