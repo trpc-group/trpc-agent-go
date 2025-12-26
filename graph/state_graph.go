@@ -743,7 +743,8 @@ func NewLLMNodeFunc(
 		defer span.End()
 		result, err := runner.execute(ctx, state, span)
 		if err != nil {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return nil, fmt.Errorf("failed to run model: %w", err)
 		}
 		return result, nil
@@ -1048,7 +1049,8 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		}
 		result, err := config.ModelCallbacks.RunAfterModel(ctx, args)
 		if err != nil {
-			config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			config.Span.RecordError(err)
+			config.Span.SetStatus(codes.Error, err.Error())
 			return ctx, nil, fmt.Errorf("callback after model error: %w", err)
 		}
 		// Use the context from result if provided for subsequent operations.
@@ -1125,7 +1127,8 @@ func runModel(
 		args := &model.BeforeModelArgs{Request: request}
 		result, err := modelCallbacks.RunBeforeModel(ctx, args)
 		if err != nil {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return ctx, nil, fmt.Errorf("callback before model error: %w", err)
 		}
 		// Use the context from result if provided.
@@ -1142,7 +1145,8 @@ func runModel(
 	// Generate content.
 	responseChan, err := llmModel.GenerateContent(ctx, request)
 	if err != nil {
-		span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return ctx, nil, fmt.Errorf("failed to generate content: %w", err)
 	}
 	return ctx, responseChan, nil
@@ -1339,7 +1343,8 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			// Emit agent execution error event.
 			endTime := time.Now()
 			emitAgentErrorEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime, err)
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			tracker.SetResponseErrorType(itelemetry.ValueDefaultErrorType)
 			return nil, fmt.Errorf("failed to run agent %s: %w", agentName, err)
 		}
@@ -1480,6 +1485,9 @@ func buildAgentInvocationWithStateAndScope(
 	// Clone from parent invocation if available to preserve linkage and filtering.
 	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok &&
 		parentInvocation != nil {
+		runOptions := parentInvocation.RunOptions
+		runOptions.RuntimeState = runtime
+
 		base := util.If(scope != "", scope, targetAgent.Info().Name)
 		parentKey := parentInvocation.GetEventFilterKey()
 		var filterKey string
@@ -1496,9 +1504,7 @@ func buildAgentInvocationWithStateAndScope(
 			agent.WithInvocationMessage(
 				model.NewUserMessage(userInput),
 			),
-			agent.WithInvocationRunOptions(agent.RunOptions{
-				RuntimeState: runtime,
-			}),
+			agent.WithInvocationRunOptions(runOptions),
 			agent.WithInvocationEventFilterKey(filterKey),
 		)
 		return inv
@@ -1687,7 +1693,8 @@ const (
 func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (any, error) {
 	ctx, responseChan, err := runModel(ctx, config.ModelCallbacks, config.LLMModel, config.Request)
 	if err != nil {
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		config.Span.RecordError(err)
+		config.Span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("failed to run model: %w", err)
 	}
 	invocation, ok := agent.InvocationFromContext(ctx)
@@ -1998,14 +2005,16 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		if interruptErr != nil {
 			return model.Message{}, interruptErr
 		}
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		config.Span.RecordError(err)
+		config.Span.SetStatus(codes.Error, err.Error())
 		return model.Message{}, fmt.Errorf("tool %s call failed: %w", name, err)
 	}
 
 	// Marshal result to JSON.
 	content, err := json.Marshal(result)
 	if err != nil {
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		config.Span.RecordError(err)
+		config.Span.SetStatus(codes.Error, err.Error())
 		return model.Message{}, fmt.Errorf("failed to marshal tool result: %w", err)
 	}
 

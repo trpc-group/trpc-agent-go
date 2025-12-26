@@ -12,6 +12,7 @@ package summary
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -664,6 +665,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var calls []string
+			var callsMu sync.Mutex
 			sess := &session.Session{
 				ID:      "test-session",
 				AppName: "test-app",
@@ -671,7 +673,9 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			}
 
 			mockFunc := func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+				callsMu.Lock()
 				calls = append(calls, filterKey)
+				callsMu.Unlock()
 				return tt.createSummaryFunc(ctx, sess, filterKey, force)
 			}
 
@@ -693,12 +697,16 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 	// Test using method value (like s.CreateSessionSummary)
 	type mockService struct {
+		mu        sync.Mutex
 		summaries map[string]string
 	}
 
 	mockSvc := &mockService{}
 
 	createFunc := func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+		mockSvc.mu.Lock()
+		defer mockSvc.mu.Unlock()
+
 		if mockSvc.summaries == nil {
 			mockSvc.summaries = make(map[string]string)
 		}

@@ -56,7 +56,7 @@ var ContextDefault Logger = zap.New(
 		zapLevel,
 	),
 	zap.AddCaller(),
-	zap.AddCallerSkip(2),
+	zap.AddCallerSkip(1),
 ).Sugar()
 
 func init() {
@@ -252,6 +252,13 @@ func Tracef(format string, args ...any) {
 		return
 	}
 	Default.Debugf("[TRACE] "+format, args...)
+}
+
+// TracefContext logs a TRACE log with context and formatting.
+var TracefContext = func(
+	_ context.Context, format string, args ...any,
+) {
+	ContextDefault.Debugf("[TRACE] "+format, args...)
 }
 
 // SetTraceEnabled sets the trace enabled flag.
