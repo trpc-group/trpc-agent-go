@@ -3061,6 +3061,67 @@ func TestContentRequestProcessor_getCurrentInvocationMessages_IsolatedSubagent(t
 	assert.True(t, hasToolResult, "should include tool result message")
 }
 
+func TestContentRequestProcessor_getCurrentInvocationMessages_ReasoningContentDiscardPreviousTurns(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			{
+				Author:       "agent1",
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				Timestamp:    baseTime,
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:             model.RoleAssistant,
+								Content:          "step1",
+								ReasoningContent: "think1",
+							},
+						},
+					},
+				},
+			},
+			{
+				Author:       "agent1",
+				RequestID:    "req2",
+				InvocationID: "inv1",
+				Timestamp:    baseTime.Add(time.Second),
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:             model.RoleAssistant,
+								Content:          "step2",
+								ReasoningContent: "think2",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	p := NewContentRequestProcessor()
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "agent1",
+		Session:      sess,
+		RunOptions: agent.RunOptions{
+			RequestID: "req2",
+		},
+	}
+
+	messages := p.getCurrentInvocationMessages(inv)
+	assert.Len(t, messages, 2)
+	assert.Equal(t, "", messages[0].ReasoningContent, "previous turn reasoning should be discarded")
+	assert.Equal(t, "think2", messages[1].ReasoningContent, "current turn reasoning should be preserved")
+}
+
 func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {
 	tests := []struct {
 		name             string
