@@ -3,6 +3,7 @@ module trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/qdrant
 go 1.22.2
 
 replace (
+	trpc.group/trpc-go/trpc-agent-go => ../../../
 	trpc.group/trpc-go/trpc-agent-go/storage/qdrant => ../../../storage/qdrant
 )
 
