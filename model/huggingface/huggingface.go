@@ -122,14 +122,14 @@ func (m *Model) GenerateContent(ctx context.Context, request *model.Request) (<-
 		return nil, errors.New("request cannot be nil")
 	}
 
+	// Apply token tailoring if enabled (must be done before convertRequest).
+	m.applyTokenTailoring(ctx, request)
+
 	// Convert model.Request to HuggingFace ChatCompletionRequest.
 	hfRequest, err := m.convertRequest(request)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert request: %w", err)
 	}
-
-	// Apply token tailoring if enabled.
-	m.applyTokenTailoring(ctx, request)
 
 	// Create response channel.
 	responseChan := make(chan *model.Response, m.channelBufferSize)

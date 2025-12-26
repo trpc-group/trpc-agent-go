@@ -1194,11 +1194,11 @@ func TestModel_ExtraFields(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		var reqMap map[string]any
 		json.Unmarshal(body, &reqMap)
-		
+
 		// Verify extra fields are present
 		assert.Equal(t, "custom_value", reqMap["custom_field"])
 		assert.Equal(t, float64(123), reqMap["custom_number"])
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{
 			"id": "test-id",
@@ -1222,7 +1222,7 @@ func TestModel_ExtraFields(t *testing.T) {
 		WithAPIKey("test-key"),
 		WithBaseURL(server.URL),
 		WithExtraFields(map[string]any{
-			"custom_field": "custom_value",
+			"custom_field":  "custom_value",
 			"custom_number": 123,
 		}),
 	)
@@ -1498,12 +1498,12 @@ func TestModel_WithTools(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		var reqMap map[string]any
 		json.Unmarshal(body, &reqMap)
-		
+
 		// Verify tools are present
 		tools, ok := reqMap["tools"].([]any)
 		assert.True(t, ok)
 		assert.NotEmpty(t, tools)
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{
 			"id": "test-id",
@@ -1749,7 +1749,7 @@ func TestConvertMessage(t *testing.T) {
 func TestMarshalRequest(t *testing.T) {
 	t.Run("without_extra_fields", func(t *testing.T) {
 		m, _ := New("test-model", WithAPIKey("test-key"))
-		
+
 		hfReq := &ChatCompletionRequest{
 			Model: "test-model",
 			Messages: []ChatMessage{
@@ -1770,7 +1770,7 @@ func TestMarshalRequest(t *testing.T) {
 				"custom_field": "value",
 			}),
 		)
-		
+
 		hfReq := &ChatCompletionRequest{
 			Model: "test-model",
 			Messages: []ChatMessage{
@@ -1780,7 +1780,7 @@ func TestMarshalRequest(t *testing.T) {
 
 		data, err := m.marshalRequest(hfReq)
 		require.NoError(t, err)
-		
+
 		var result map[string]any
 		json.Unmarshal(data, &result)
 		assert.Equal(t, "value", result["custom_field"])
@@ -1788,7 +1788,7 @@ func TestMarshalRequest(t *testing.T) {
 
 	t.Run("with_request_extra_fields", func(t *testing.T) {
 		m, _ := New("test-model", WithAPIKey("test-key"))
-		
+
 		hfReq := &ChatCompletionRequest{
 			Model: "test-model",
 			Messages: []ChatMessage{
@@ -1801,7 +1801,7 @@ func TestMarshalRequest(t *testing.T) {
 
 		data, err := m.marshalRequest(hfReq)
 		require.NoError(t, err)
-		
+
 		var result map[string]any
 		json.Unmarshal(data, &result)
 		assert.Equal(t, "request_value", result["request_field"])
@@ -1922,9 +1922,9 @@ func TestModel_AdditionalOptions(t *testing.T) {
 			body, _ := io.ReadAll(r.Body)
 			var reqMap map[string]any
 			json.Unmarshal(body, &reqMap)
-			
+
 			assert.Equal(t, 0.5, reqMap["presence_penalty"])
-			
+
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
 		}))
@@ -1965,9 +1965,9 @@ func TestModel_AdditionalOptions(t *testing.T) {
 			body, _ := io.ReadAll(r.Body)
 			var reqMap map[string]any
 			json.Unmarshal(body, &reqMap)
-			
+
 			assert.Equal(t, 0.3, reqMap["frequency_penalty"])
-			
+
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
 		}))
@@ -2010,11 +2010,11 @@ func TestModel_RequestWithContentParts(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		var reqMap map[string]any
 		json.Unmarshal(body, &reqMap)
-		
+
 		// Verify messages contain content parts
 		messages := reqMap["messages"].([]any)
 		assert.NotEmpty(t, messages)
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
 	}))
@@ -2066,7 +2066,7 @@ func TestModel_RequestWithContentParts(t *testing.T) {
 func TestModel_StreamingWithMultipleChunks(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		
+
 		chunks := []string{
 			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}` + "\n\n",
 			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}` + "\n\n",
@@ -2142,7 +2142,7 @@ func TestModel_EmptyMessages(t *testing.T) {
 func TestModel_LargeResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		
+
 		// Create a large response
 		largeContent := strings.Repeat("This is a test. ", 1000)
 		response := fmt.Sprintf(`{
@@ -2159,7 +2159,7 @@ func TestModel_LargeResponse(t *testing.T) {
 				"finish_reason": "stop"
 			}]
 		}`, largeContent)
-		
+
 		fmt.Fprint(w, response)
 	}))
 	defer server.Close()
@@ -2292,7 +2292,7 @@ func TestModel_WithExtraHeaders(t *testing.T) {
 		// Verify extra headers are present
 		assert.Equal(t, "custom-value", r.Header.Get("X-Custom-Header"))
 		assert.Equal(t, "another-value", r.Header.Get("X-Another-Header"))
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
 	}))
@@ -2332,7 +2332,7 @@ func TestModel_WithExtraHeaders(t *testing.T) {
 func TestModel_StreamingWithEmptyDelta(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		
+
 		chunks := []string{
 			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"test"},"finish_reason":null}]}` + "\n\n",
 			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n",
@@ -2425,7 +2425,7 @@ func TestModel_StreamingReadError(t *testing.T) {
 		}
 		// Connection will be closed by server shutdown
 	}))
-	
+
 	m, err := New(
 		"test-model",
 		WithAPIKey("test-key"),
@@ -2713,10 +2713,10 @@ func TestModel_RequestWithMaxTokensSet(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		var reqMap map[string]any
 		json.Unmarshal(body, &reqMap)
-		
+
 		// Verify user-specified max_tokens is used
 		assert.Equal(t, float64(200), reqMap["max_tokens"])
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"id":"test","object":"chat.completion","created":1234567890,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}`)
 	}))
@@ -2759,7 +2759,7 @@ func TestModel_RequestWithMaxTokensSet(t *testing.T) {
 func TestModel_StreamingWithToolCalls(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		
+
 		chunks := []string{
 			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}` + "\n\n",
 			`data: {"id":"test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"location\""}}]},"finish_reason":null}]}` + "\n\n",
@@ -2818,10 +2818,10 @@ func TestModel_CustomTokenTailoringConfig(t *testing.T) {
 			Object:  "chat.completion",
 			Created: 1234567890,
 			Model:   "test-model",
-Choices: []ChatCompletionChoice{
+			Choices: []ChatCompletionChoice{
 				{
 					Index: 0,
-Message: ChatMessage{
+					Message: ChatMessage{
 						Role:    "assistant",
 						Content: "Response",
 					},
@@ -2838,7 +2838,7 @@ Message: ChatMessage{
 		WithBaseURL(server.URL),
 		WithAPIKey("test-key"),
 		WithEnableTokenTailoring(true),
-WithTokenTailoringConfig(&model.TokenTailoringConfig{
+		WithTokenTailoringConfig(&model.TokenTailoringConfig{
 			ProtocolOverheadTokens: 100,
 			ReserveOutputTokens:    500,
 			InputTokensFloor:       100,
@@ -2877,10 +2877,10 @@ func TestModel_ChatCallbacks(t *testing.T) {
 			Object:  "chat.completion",
 			Created: 1234567890,
 			Model:   "test-model",
-Choices: []ChatCompletionChoice{
+			Choices: []ChatCompletionChoice{
 				{
 					Index: 0,
-Message: ChatMessage{
+					Message: ChatMessage{
 						Role:    "assistant",
 						Content: "Response",
 					},
@@ -3015,7 +3015,7 @@ func TestModel_TokenTailoringWithMaxTokensSet(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ChatCompletionRequest
 		json.NewDecoder(r.Body).Decode(&req)
-		
+
 		// Verify that MaxTokens is set to user's value
 		assert.NotNil(t, req.MaxTokens)
 		assert.Equal(t, 100, *req.MaxTokens)
@@ -3026,10 +3026,10 @@ func TestModel_TokenTailoringWithMaxTokensSet(t *testing.T) {
 			Object:  "chat.completion",
 			Created: 1234567890,
 			Model:   "test-model",
-Choices: []ChatCompletionChoice{
+			Choices: []ChatCompletionChoice{
 				{
 					Index: 0,
-Message: ChatMessage{
+					Message: ChatMessage{
 						Role:    "assistant",
 						Content: "Response",
 					},
@@ -3076,10 +3076,10 @@ func TestModel_TokenTailoringCountTokensError(t *testing.T) {
 			Object:  "chat.completion",
 			Created: 1234567890,
 			Model:   "test-model",
-Choices: []ChatCompletionChoice{
+			Choices: []ChatCompletionChoice{
 				{
 					Index: 0,
-Message: ChatMessage{
+					Message: ChatMessage{
 						Role:    "assistant",
 						Content: "Response",
 					},
@@ -3093,7 +3093,7 @@ Message: ChatMessage{
 	// Create a mock token counter that returns an error
 	mockCounter := &mockTokenCounter{
 		countTokensRangeFunc: func(ctx context.Context, messages []model.Message, start, end int) (int, error) {
-return 0, fmt.Errorf("count tokens error")
+			return 0, fmt.Errorf("count tokens error")
 		},
 	}
 
@@ -3141,7 +3141,6 @@ func (m *mockTokenCounter) CountTokensRange(ctx context.Context, messages []mode
 	}
 	return 0, nil
 }
-
 
 // TestWithChannelBufferSize tests the WithChannelBufferSize option with various inputs.
 func TestWithChannelBufferSize(t *testing.T) {
@@ -3491,10 +3490,10 @@ func TestGenerateContent_WithExtraFields(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]any
 		json.NewDecoder(r.Body).Decode(&req)
-		
+
 		// Verify extra fields are present
 		assert.Equal(t, "custom_value", req["custom_field"])
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ChatCompletionResponse{
 			ID:      "test-id",
@@ -3611,11 +3610,11 @@ func TestGenerateContent_WithStructuredOutput(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ChatCompletionRequest
 		json.NewDecoder(r.Body).Decode(&req)
-		
+
 		// Verify response format is set
 		assert.NotNil(t, req.ResponseFormat)
 		assert.Equal(t, "json_object", req.ResponseFormat.Type)
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ChatCompletionResponse{
 			ID:      "test-id",
@@ -3666,8 +3665,7 @@ func TestGenerateContent_WithContentParts(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ChatCompletionRequest
 		json.NewDecoder(r.Body).Decode(&req)
-		
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ChatCompletionResponse{
 			ID:      "test-id",
@@ -3772,4 +3770,137 @@ func TestGenerateContent_WithMaxInputTokens(t *testing.T) {
 	for range responseChan {
 		// Consume responses
 	}
+}
+
+func TestGenerateContent_TokenTailoringAppliedToRequest(t *testing.T) {
+	var capturedRequest *ChatCompletionRequest
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		capturedRequest = &ChatCompletionRequest{}
+		err = json.Unmarshal(body, capturedRequest)
+		require.NoError(t, err)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ChatCompletionResponse{
+			ID:      "test-id",
+			Object:  "chat.completion",
+			Created: 1234567890,
+			Model:   "test-model",
+			Choices: []ChatCompletionChoice{
+				{
+					Index: 0,
+					Message: ChatMessage{
+						Role:    "assistant",
+						Content: "Response",
+					},
+					FinishReason: "stop",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(50),
+	)
+	require.NoError(t, err)
+
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: "system", Content: "You are a helpful assistant."},
+			{Role: "user", Content: "This is a very long message that should be tailored because it exceeds the max input tokens limit."},
+			{Role: "assistant", Content: "I understand."},
+			{Role: "user", Content: "Another message."},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	for range responseChan {
+	}
+
+	require.NotNil(t, capturedRequest, "应该捕获到 HTTP 请求")
+
+	t.Logf("原始消息数: %d, 实际发送消息数: %d", len(request.Messages), len(capturedRequest.Messages))
+
+	require.NotNil(t, capturedRequest.MaxTokens, "MaxTokens 应该被自动设置")
+	assert.Greater(t, *capturedRequest.MaxTokens, 0, "MaxTokens 应该大于 0")
+	t.Logf("自动设置的 MaxTokens: %d", *capturedRequest.MaxTokens)
+
+	if len(capturedRequest.Messages) < len(request.Messages) {
+		t.Logf("消息已被裁剪，从 %d 条减少到 %d 条", len(request.Messages), len(capturedRequest.Messages))
+	}
+}
+
+func TestGenerateContent_TokenTailoringWithUserMaxTokens(t *testing.T) {
+	var capturedRequest *ChatCompletionRequest
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		capturedRequest = &ChatCompletionRequest{}
+		err = json.Unmarshal(body, capturedRequest)
+		require.NoError(t, err)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ChatCompletionResponse{
+			ID:      "test-id",
+			Object:  "chat.completion",
+			Created: 1234567890,
+			Model:   "test-model",
+			Choices: []ChatCompletionChoice{
+				{
+					Index: 0,
+					Message: ChatMessage{
+						Role:    "assistant",
+						Content: "Response",
+					},
+					FinishReason: "stop",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(50),
+	)
+	require.NoError(t, err)
+
+	userMaxTokens := 100
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: "user", Content: "Hello"},
+		},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &userMaxTokens,
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, request)
+	require.NoError(t, err)
+
+	for range responseChan {
+	}
+
+	require.NotNil(t, capturedRequest, "应该捕获到 HTTP 请求")
+
+	require.NotNil(t, capturedRequest.MaxTokens, "MaxTokens 不应该为 nil")
+	assert.Equal(t, userMaxTokens, *capturedRequest.MaxTokens, "应该使用用户指定的 MaxTokens")
+	t.Logf("用户指定的 MaxTokens 被正确保留: %d", *capturedRequest.MaxTokens)
 }
