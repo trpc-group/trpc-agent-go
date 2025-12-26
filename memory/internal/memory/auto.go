@@ -61,7 +61,7 @@ type AutoMemoryWorker struct {
 	operator MemoryOperator
 	jobChans []chan *MemoryJob
 	wg       sync.WaitGroup
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	started  bool
 }
 
@@ -143,13 +143,6 @@ func (w *AutoMemoryWorker) EnqueueJob(
 		return nil
 	}
 
-	// If async workers are not started, fall back to synchronous.
-	w.mu.Lock()
-	started := w.started
-	w.mu.Unlock()
-	if !started || len(w.jobChans) == 0 {
-		return w.createAutoMemory(ctx, userKey, messages)
-	}
 	// Create job with detached context.
 	job := &MemoryJob{
 		Ctx:      context.WithoutCancel(ctx),
@@ -168,6 +161,7 @@ func (w *AutoMemoryWorker) EnqueueJob(
 
 // tryEnqueueJob attempts to enqueue a memory job.
 // Returns true if successful, false if should process synchronously.
+// Uses RLock to prevent race with Stop() which closes channels under Lock().
 func (w *AutoMemoryWorker) tryEnqueueJob(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -176,20 +170,15 @@ func (w *AutoMemoryWorker) tryEnqueueJob(
 	if err := ctx.Err(); err != nil {
 		return false
 	}
+	// Hold read lock during channel send to prevent race with Stop().
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if !w.started || len(w.jobChans) == 0 {
+		return false
+	}
 	// Use hash distribution for consistent routing.
 	hash := hashUserKey(userKey)
 	index := hash % len(w.jobChans)
-	// Use a defer-recover pattern to handle potential panic from sending to
-	// closed channel.
-	defer func() {
-		if r := recover(); r != nil {
-			log.WarnfContext(
-				ctx,
-				"memory job channel may be closed, falling back to synchronous processing: %v",
-				r,
-			)
-		}
-	}()
 	select {
 	case w.jobChans[index] <- job:
 		return true

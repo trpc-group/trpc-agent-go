@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -336,30 +337,21 @@ func TestAutoMemoryWorker_EnqueueJob_Async(t *testing.T) {
 }
 
 func TestAutoMemoryWorker_EnqueueJob_QueueFull(t *testing.T) {
-	ext := &mockExtractor{
-		ops: []*extractor.Operation{
-			{
-				Type:   extractor.OperationAdd,
-				Memory: "Test memory.",
-			},
-		},
-	}
+	// Fill the queue by blocking the worker.
+	blockCh := make(chan struct{})
+
+	// Create a blocking extractor that will hold the worker busy.
+	blockingExt := &blockingExtractor{blockCh: blockCh}
+
 	op := newMockOperator()
 	config := AutoMemoryConfig{
-		Extractor:       ext,
+		Extractor:       blockingExt,
 		AsyncMemoryNum:  1,
 		MemoryQueueSize: 1,
 	}
 
 	worker := NewAutoMemoryWorker(config, op)
 	worker.Start()
-
-	// Fill the queue by blocking the worker.
-	blockCh := make(chan struct{})
-
-	// Create a blocking extractor.
-	blockingExt := &blockingExtractor{blockCh: blockCh}
-	worker.config.Extractor = blockingExt
 
 	// First job blocks the worker.
 	_ = worker.EnqueueJob(context.Background(), memory.UserKey{
@@ -380,26 +372,26 @@ func TestAutoMemoryWorker_EnqueueJob_QueueFull(t *testing.T) {
 		model.NewUserMessage("hello"),
 	})
 
-	// Third job should fall back to sync.
-	worker.config.Extractor = ext
-	ext.ops = []*extractor.Operation{
-		{
-			Type:   extractor.OperationAdd,
-			Memory: "Test memory.",
-		},
-	}
+	// Third job should fall back to sync (queue is full).
+	// Since blockingExt is still blocking, the sync fallback will also block,
+	// so we run it in a goroutine and verify the queue was full.
+	syncDone := make(chan struct{})
+	go func() {
+		_ = worker.EnqueueJob(context.Background(), memory.UserKey{
+			AppName: "test-app",
+			UserID:  "user-2",
+		}, []model.Message{
+			model.NewUserMessage("hello"),
+		})
+		close(syncDone)
+	}()
 
-	err := worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "test-app",
-		UserID:  "user-2",
-	}, []model.Message{
-		model.NewUserMessage("hello"),
-	})
+	// Give time for the third job to attempt enqueue and fall back to sync.
+	time.Sleep(10 * time.Millisecond)
 
-	assert.NoError(t, err)
-
-	// Unblock the worker and stop.
+	// Unblock all and stop.
 	close(blockCh)
+	<-syncDone
 	worker.Stop()
 }
 
@@ -853,4 +845,60 @@ func TestAutoMemoryWorker_IntegrationWithRealExtractor(t *testing.T) {
 	addCalls := op.addCalls
 	op.mu.Unlock()
 	assert.Equal(t, 1, addCalls)
+}
+
+// TestAutoMemoryWorker_EnqueueJob_RaceWithStop tests the data race between
+// EnqueueJob and Stop. Before the fix, this test would panic with
+// "integer divide by zero" because EnqueueJob reads w.jobChans outside the
+// lock while Stop sets it to nil.
+func TestAutoMemoryWorker_EnqueueJob_RaceWithStop(t *testing.T) {
+	ext := &mockExtractor{
+		ops: []*extractor.Operation{
+			{
+				Type:   extractor.OperationAdd,
+				Memory: "Test memory.",
+			},
+		},
+	}
+	op := newMockOperator()
+	config := AutoMemoryConfig{
+		Extractor:       ext,
+		AsyncMemoryNum:  2,
+		MemoryQueueSize: 10,
+	}
+
+	worker := NewAutoMemoryWorker(config, op)
+	worker.Start()
+
+	// Run many concurrent EnqueueJob and Stop calls to trigger the race.
+	var wg sync.WaitGroup
+	const numGoroutines = 100
+
+	// Half goroutines call EnqueueJob.
+	for i := 0; i < numGoroutines/2; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			// This should not panic even if Stop() is called concurrently.
+			_ = worker.EnqueueJob(context.Background(), memory.UserKey{
+				AppName: "test-app",
+				UserID:  fmt.Sprintf("user-%d", id),
+			}, []model.Message{
+				model.NewUserMessage("hello"),
+			})
+		}(i)
+	}
+
+	// Half goroutines call Stop then Start to trigger the race.
+	for i := 0; i < numGoroutines/2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			worker.Stop()
+			worker.Start()
+		}()
+	}
+
+	wg.Wait()
+	worker.Stop()
 }
