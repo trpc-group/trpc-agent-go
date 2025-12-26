@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"testing"
@@ -41,6 +42,9 @@ const (
 	contentHello    = "hello"
 	contentMsg      = "msg"
 	echoOK          = "echo ok"
+	cmdEcho         = "echo"
+	cmdLS           = "ls"
+	cmdEchoThenLS   = "echo ok; ls"
 )
 
 // writeSkill creates a minimal skill folder.
@@ -218,6 +222,270 @@ func TestRunTool_ErrorOnMissingSkill(t *testing.T) {
 	require.NoError(t, err)
 	_, err = rt.Call(context.Background(), enc)
 	require.Error(t, err)
+}
+
+func TestRunTool_AllowedCommands_AllowsSingleCommand(t *testing.T) {
+	t.Setenv(envAllowedCommands, cmdEcho)
+
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Contains(t, out.Stdout, "ok")
+}
+
+func TestRunTool_AllowedCommands_AllowsBasenameMatch(t *testing.T) {
+	t.Setenv(envAllowedCommands, cmdEcho+","+cmdLS)
+
+	full, err := exec.LookPath(cmdLS)
+	require.NoError(t, err)
+
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: full,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+}
+
+func TestRunTool_AllowedCommands_RejectsDisallowedCommand(t *testing.T) {
+	t.Setenv(envAllowedCommands, cmdEcho)
+
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: cmdLS,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
+}
+
+func TestRunTool_AllowedCommands_RejectsShellSyntax(t *testing.T) {
+	t.Setenv(envAllowedCommands, cmdEcho)
+
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: cmdEchoThenLS,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
+}
+
+func TestRunTool_DeniedCommands_RejectsDeniedCommand(t *testing.T) {
+	t.Setenv(envDeniedCommands, cmdEcho)
+
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
+}
+
+func TestRunTool_DeniedCommands_AllowsOtherCommand(t *testing.T) {
+	t.Setenv(envDeniedCommands, cmdEcho)
+
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: cmdLS,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+}
+
+func TestRunTool_AllowedAndDenied_DeniedWins(t *testing.T) {
+	t.Setenv(envAllowedCommands, cmdEcho+","+cmdLS)
+	t.Setenv(envDeniedCommands, cmdEcho)
+
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
+}
+
+func TestRunTool_AllowedCommands_OptionOverridesEnv(t *testing.T) {
+	t.Setenv(envAllowedCommands, cmdLS)
+
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec, WithAllowedCommands(cmdEcho))
+
+	allow := runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+		Timeout: timeoutSecSmall,
+	}
+	allowEnc, err := jsonMarshal(allow)
+	require.NoError(t, err)
+	_, err = rt.Call(context.Background(), allowEnc)
+	require.NoError(t, err)
+
+	block := runInput{
+		Skill:   testSkillName,
+		Command: cmdLS,
+		Timeout: timeoutSecSmall,
+	}
+	blockEnc, err := jsonMarshal(block)
+	require.NoError(t, err)
+	_, err = rt.Call(context.Background(), blockEnc)
+	require.Error(t, err)
+}
+
+func TestSplitCommandLine(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "simple",
+			in:   "echo ok",
+			want: []string{"echo", "ok"},
+		},
+		{
+			name: "double_quote",
+			in:   `echo "hi there"`,
+			want: []string{"echo", "hi there"},
+		},
+		{
+			name: "single_quote",
+			in:   "echo 'hi there'",
+			want: []string{"echo", "hi there"},
+		},
+		{
+			name: "escaped_space",
+			in:   "echo hi\\ there",
+			want: []string{"echo", "hi there"},
+		},
+		{
+			name:    "shell_meta",
+			in:      cmdEchoThenLS,
+			wantErr: true,
+		},
+		{
+			name:    "unterminated_quote",
+			in:      `echo "hi`,
+			wantErr: true,
+		},
+		{
+			name:    "trailing_escape",
+			in:      "echo hi\\",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := splitCommandLine(tt.in)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestRunTool_ErrorOnNilExecutor(t *testing.T) {
