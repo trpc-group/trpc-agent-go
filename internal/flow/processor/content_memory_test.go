@@ -60,6 +60,7 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 		name     string
 		memories []*memory.Entry
 		contains []string
+		excludes []string
 	}{
 		{
 			name:     "empty memories",
@@ -101,6 +102,67 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 				"ID: mem-2", "Memory: User works in tech",
 			},
 		},
+		{
+			name: "nil entry is skipped",
+			memories: []*memory.Entry{
+				{
+					ID:      "mem-1",
+					Memory:  &memory.Memory{Memory: "User likes coffee"},
+					AppName: "app",
+					UserID:  "user",
+				},
+				nil,
+				{
+					ID:      "mem-2",
+					Memory:  &memory.Memory{Memory: "User works in tech"},
+					AppName: "app",
+					UserID:  "user",
+				},
+			},
+			contains: []string{
+				"ID: mem-1", "Memory: User likes coffee",
+				"ID: mem-2", "Memory: User works in tech",
+			},
+		},
+		{
+			name: "nil memory field is skipped",
+			memories: []*memory.Entry{
+				{
+					ID:      "mem-1",
+					Memory:  &memory.Memory{Memory: "User likes coffee"},
+					AppName: "app",
+					UserID:  "user",
+				},
+				{
+					ID:      "mem-2",
+					Memory:  nil,
+					AppName: "app",
+					UserID:  "user",
+				},
+				{
+					ID:      "mem-3",
+					Memory:  &memory.Memory{Memory: "User works in tech"},
+					AppName: "app",
+					UserID:  "user",
+				},
+			},
+			contains: []string{
+				"ID: mem-1", "Memory: User likes coffee",
+				"ID: mem-3", "Memory: User works in tech",
+			},
+			excludes: []string{"ID: mem-2"},
+		},
+		{
+			name: "all nil or nil memory returns header only",
+			memories: []*memory.Entry{
+				nil,
+				{ID: "mem-1", Memory: nil, AppName: "app", UserID: "user"},
+			},
+			contains: []string{
+				"## User Memories", "The following are memories about the user:",
+			},
+			excludes: []string{"ID: mem-1"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -108,6 +170,9 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 			result := formatMemoryContent(tt.memories)
 			for _, expected := range tt.contains {
 				assert.Contains(t, result, expected)
+			}
+			for _, excluded := range tt.excludes {
+				assert.NotContains(t, result, excluded)
 			}
 		})
 	}

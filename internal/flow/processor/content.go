@@ -966,6 +966,9 @@ func formatMemoryContent(memories []*memory.Entry) string {
 	sb.WriteString("## User Memories\n\n")
 	sb.WriteString("The following are memories about the user:\n\n")
 	for _, mem := range memories {
+		if mem == nil || mem.Memory == nil {
+			continue
+		}
 		fmt.Fprintf(&sb, "ID: %s\n", mem.ID)
 		fmt.Fprintf(&sb, "Memory: %s\n\n", mem.Memory.Memory)
 	}
