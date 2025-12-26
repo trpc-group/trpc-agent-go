@@ -209,8 +209,6 @@ func (e *emailToolSet) sendMailTool() tool.CallableTool {
 }
 
 func qqHandleError(err error) error {
-	//log.Infof("err: %v %T", err, err)
-
 	var sendErr *gomail.SendError
 	// Check if this is an SMTP RESET error after successful delivery
 	if errors.As(err, &sendErr) {

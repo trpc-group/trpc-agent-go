@@ -361,7 +361,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 
 	// Check if session is expired.
 	if currentExpiresAt.Valid && currentExpiresAt.Time.Before(now) {
-		log.Infof("appending track event to expired session (app=%s, user=%s, session=%s), will extend expires_at",
+		log.InfofContext(ctx, "appending track event to expired session (app=%s, user=%s, session=%s), will extend expires_at",
 			key.AppName, key.UserID, key.SessionID)
 	}
 

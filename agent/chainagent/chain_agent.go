@@ -181,7 +181,7 @@ func (a *ChainAgent) executeSubAgents(
 		// Run the sub-agent.
 		subEventChan, err := subAgent.Run(subAgentCtx, subInvocation)
 		if err != nil {
-			log.Warnf("subEventChan run failed. agent name: %s, err:%v", subInvocation.AgentName, err)
+			log.WarnfContext(ctx, "subEventChan run failed. agent name: %s, err:%v", subInvocation.AgentName, err)
 			e := event.NewErrorEvent(
 				invocation.InvocationID,
 				invocation.AgentName,
@@ -214,7 +214,7 @@ func (a *ChainAgent) executeSubAgents(
 		}
 
 		if err := agent.CheckContextCancelled(ctx); err != nil {
-			log.Warnf("Chain agent %q cancelled execution of sub-agent %q", a.name, subAgent.Info().Name)
+			log.WarnfContext(ctx, "Chain agent %q cancelled execution of sub-agent %q", a.name, subAgent.Info().Name)
 			e := event.NewErrorEvent(
 				invocation.InvocationID,
 				invocation.AgentName,

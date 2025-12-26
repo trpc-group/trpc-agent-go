@@ -242,3 +242,182 @@ func TestAPIKeyPriority(t *testing.T) {
 		}
 	})
 }
+
+// TestGetEmbedding_DimensionsOverflow tests dimensions overflow handling
+func TestGetEmbedding_DimensionsOverflow(t *testing.T) {
+	t.Run("dimensions exceeds MaxInt32", func(t *testing.T) {
+		ctx := context.Background()
+		e, err := New(ctx, WithAPIKey("test-key"), WithDimensions(math.MaxInt32+1))
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+
+		_, err = e.GetEmbedding(ctx, "test")
+		if err == nil {
+			t.Error("Expected error for dimensions exceeding MaxInt32")
+		}
+		if !strings.Contains(err.Error(), "out of range") {
+			t.Errorf("Expected 'out of range' error, got: %v", err)
+		}
+	})
+
+	t.Run("dimensions below MinInt32", func(t *testing.T) {
+		ctx := context.Background()
+		e, err := New(ctx, WithAPIKey("test-key"), WithDimensions(math.MinInt32-1))
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+
+		_, err = e.GetEmbedding(ctx, "test")
+		if err == nil {
+			t.Error("Expected error for dimensions below MinInt32")
+		}
+		if !strings.Contains(err.Error(), "out of range") {
+			t.Errorf("Expected 'out of range' error, got: %v", err)
+		}
+	})
+}
+
+// TestGetEmbedding_EmptyResponse tests handling of empty embedding responses
+func TestGetEmbedding_EmptyResponse(t *testing.T) {
+	t.Run("empty embeddings array", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"embeddings": []map[string]any{},
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		emb, err := New(
+			context.Background(),
+			WithAPIKey("dummy"),
+			WithClientOptions(&genai.ClientConfig{
+				HTTPOptions: genai.HTTPOptions{
+					BaseURL: srv.URL + "/embeddings",
+				},
+			}),
+		)
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+
+		vec, err := emb.GetEmbedding(context.Background(), "test")
+		if err != nil {
+			t.Fatalf("GetEmbedding should not return error for empty embeddings: %v", err)
+		}
+		if len(vec) != 0 {
+			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		}
+	})
+
+	t.Run("empty values array", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"embeddings": []map[string]any{
+					{"values": []float64{}},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		emb, err := New(
+			context.Background(),
+			WithAPIKey("dummy"),
+			WithClientOptions(&genai.ClientConfig{
+				HTTPOptions: genai.HTTPOptions{
+					BaseURL: srv.URL + "/embeddings",
+				},
+			}),
+		)
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+
+		vec, err := emb.GetEmbedding(context.Background(), "test")
+		if err != nil {
+			t.Fatalf("GetEmbedding should not return error for empty values: %v", err)
+		}
+		if len(vec) != 0 {
+			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		}
+	})
+}
+
+// TestGetEmbeddingWithUsage_EmptyResponse tests handling of empty responses with usage.
+func TestGetEmbeddingWithUsage_EmptyResponse(t *testing.T) {
+	t.Run("empty embeddings array with usage", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"embeddings": []map[string]any{},
+				"metadata": map[string]any{
+					"billableCharacterCount": 10,
+				},
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		emb, err := New(
+			context.Background(),
+			WithAPIKey("dummy"),
+			WithClientOptions(&genai.ClientConfig{
+				HTTPOptions: genai.HTTPOptions{
+					BaseURL: srv.URL + "/embeddings",
+				},
+			}),
+		)
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+
+		vec, _, err := emb.GetEmbeddingWithUsage(context.Background(), "test")
+		if err != nil {
+			t.Fatalf("GetEmbeddingWithUsage should not return error: %v", err)
+		}
+		if len(vec) != 0 {
+			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		}
+	})
+
+	t.Run("empty values array with usage", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"embeddings": []map[string]any{
+					{"values": []float64{}},
+				},
+				"metadata": map[string]any{
+					"billableCharacterCount": 10,
+				},
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		emb, err := New(
+			context.Background(),
+			WithAPIKey("dummy"),
+			WithClientOptions(&genai.ClientConfig{
+				HTTPOptions: genai.HTTPOptions{
+					BaseURL: srv.URL + "/embeddings",
+				},
+			}),
+		)
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+
+		vec, _, err := emb.GetEmbeddingWithUsage(context.Background(), "test")
+		if err != nil {
+			t.Fatalf("GetEmbeddingWithUsage should not return error: %v", err)
+		}
+		if len(vec) != 0 {
+			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		}
+	})
+}

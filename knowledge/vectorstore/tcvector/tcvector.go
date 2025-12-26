@@ -471,7 +471,9 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 		return nil, errQueryRequired
 	}
 	if !vs.option.enableTSVector && (query.SearchMode == vectorstore.SearchModeKeyword || query.SearchMode == vectorstore.SearchModeHybrid) {
-		log.Infof("tcvectordb: keyword or hybrid search is not supported when enableTSVector is disabled, use filter/vector search instead")
+		log.InfofContext(ctx,
+			"tcvectordb: keyword or hybrid search is not supported when enableTSVector "+
+				"is disabled, use filter/vector search instead")
 		if len(query.Vector) > 0 {
 			return vs.searchByVector(ctx, query)
 		}
@@ -942,7 +944,7 @@ func (vs *VectorStore) queryMetadataBatch(
 	for _, tcDoc := range queryResult.Documents {
 		doc, _, err := vs.docBuilder(tcDoc)
 		if err != nil {
-			log.Warnf("tcvectordb get metadata batch: %v", err)
+			log.WarnfContext(ctx, "tcvectordb get metadata batch: %v", err)
 			continue
 		}
 		if doc == nil || len(doc.Metadata) == 0 {

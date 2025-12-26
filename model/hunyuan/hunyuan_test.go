@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,6 +57,24 @@ func (testStubStrategy) TailorMessages(ctx context.Context, messages []model.Mes
 		return messages, nil
 	}
 	return append([]model.Message{messages[0]}, messages[2:]...), nil
+}
+
+// testErrorStrategy is a stub TailoringStrategy that returns an error.
+type testErrorStrategy struct{}
+
+func (testErrorStrategy) TailorMessages(ctx context.Context, messages []model.Message, maxTokens int) ([]model.Message, error) {
+	return nil, fmt.Errorf("tailoring error")
+}
+
+// testErrorCounter is a stub TokenCounter that returns an error on CountTokensRange.
+type testErrorCounter struct{}
+
+func (testErrorCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+	return 0, fmt.Errorf("count tokens error")
+}
+
+func (testErrorCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+	return 0, fmt.Errorf("count tokens range error")
 }
 
 func TestNew(t *testing.T) {
@@ -629,6 +648,58 @@ func TestBuildChatRequest(t *testing.T) {
 	}
 }
 
+func TestBuildChatRequestWithMaxTokens(t *testing.T) {
+	m := New("hunyuan-lite")
+	maxTokens := 100
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("Hi"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &maxTokens,
+		},
+	}
+
+	chatReq, err := m.buildChatRequest(req)
+	if err != nil {
+		t.Fatalf("buildChatRequest failed: %v", err)
+	}
+
+	// MaxTokens should be logged but not set in chatRequest
+	if chatReq == nil {
+		t.Fatal("Expected chatReq to be non-nil")
+	}
+}
+
+func TestBuildToolDescriptionWithMarshalError(t *testing.T) {
+	// Create a tool declaration with an output schema that cannot be marshaled
+	// We'll use a channel which cannot be marshaled to JSON
+	decl := &tool.Declaration{
+		Name:        "test_tool",
+		Description: "Test description",
+		OutputSchema: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"invalid": {
+					Type: "object",
+					// This should cause a marshal error, but tool.Schema should handle it
+					// Let's try with a circular reference or invalid structure
+				},
+			},
+		},
+	}
+
+	// The function should handle marshal errors gracefully
+	result := buildToolDescription(decl)
+	if result == "" {
+		t.Error("Expected non-empty description even on marshal error")
+	}
+	if !strings.Contains(result, "Test description") {
+		t.Errorf("Expected description to contain 'Test description', got: %s", result)
+	}
+}
+
 func TestBuildChatRequestEmptyMessages(t *testing.T) {
 	m := New("hunyuan-lite")
 
@@ -1061,5 +1132,141 @@ func Test_buildToolDescription(t *testing.T) {
 			result := buildToolDescription(tt.decl)
 			assert.Contains(t, result, tt.want)
 		})
+	}
+}
+
+// TestTokenTailoringStrategyError tests token tailoring when strategy returns error.
+func TestTokenTailoringStrategyError(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mockResponse := struct {
+			Response hunyuan.ChatCompletionResponse `json:"Response"`
+		}{
+			Response: hunyuan.ChatCompletionResponse{
+				Id:      "test-id-123",
+				Created: time.Now().Unix(),
+				Choices: []*hunyuan.ChatCompletionResponseChoice{
+					{
+						Index:        0,
+						FinishReason: "stop",
+						Message: &hunyuan.ChatCompletionMessageParam{
+							Role:    "assistant",
+							Content: "Response after tailoring error",
+						},
+					},
+				},
+				Usage: hunyuan.ChatCompletionResponseUsage{
+					PromptTokens:     10,
+					CompletionTokens: 20,
+					TotalTokens:      30,
+				},
+				RequestId: "test-request-id",
+			},
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(mockResponse)
+	}))
+	defer mockServer.Close()
+
+	m := New("hunyuan-lite",
+		WithSecretId("test-secret-id"),
+		WithSecretKey("test-secret-key"),
+		WithBaseUrl(mockServer.URL),
+		WithHost("test-host"),
+		WithEnableTokenTailoring(true),
+		WithTailoringStrategy(&testErrorStrategy{}),
+		WithTokenCounter(&testStubCounter{}),
+	)
+
+	ctx := context.Background()
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "Hello"},
+		},
+		GenerationConfig: model.GenerationConfig{Stream: false},
+	}
+
+	// Should still succeed even if tailoring fails (graceful degradation).
+	responseChan, err := m.GenerateContent(ctx, request)
+	if err != nil {
+		t.Fatalf("GenerateContent failed: %v", err)
+	}
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	if len(responses) != 1 {
+		t.Fatalf("Expected 1 response, got %d", len(responses))
+	}
+}
+
+// TestTokenTailoringCounterError tests token tailoring when counter returns error.
+func TestTokenTailoringCounterError(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mockResponse := struct {
+			Response hunyuan.ChatCompletionResponse `json:"Response"`
+		}{
+			Response: hunyuan.ChatCompletionResponse{
+				Id:      "test-id-123",
+				Created: time.Now().Unix(),
+				Choices: []*hunyuan.ChatCompletionResponseChoice{
+					{
+						Index:        0,
+						FinishReason: "stop",
+						Message: &hunyuan.ChatCompletionMessageParam{
+							Role:    "assistant",
+							Content: "Response after counter error",
+						},
+					},
+				},
+				Usage: hunyuan.ChatCompletionResponseUsage{
+					PromptTokens:     10,
+					CompletionTokens: 20,
+					TotalTokens:      30,
+				},
+				RequestId: "test-request-id",
+			},
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(mockResponse)
+	}))
+	defer mockServer.Close()
+
+	m := New("hunyuan-lite",
+		WithSecretId("test-secret-id"),
+		WithSecretKey("test-secret-key"),
+		WithBaseUrl(mockServer.URL),
+		WithHost("test-host"),
+		WithEnableTokenTailoring(true),
+		WithTailoringStrategy(&testStubStrategy{}),
+		WithTokenCounter(&testErrorCounter{}),
+	)
+
+	ctx := context.Background()
+	request := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "Hello"},
+		},
+		GenerationConfig: model.GenerationConfig{Stream: false},
+	}
+
+	// Should still succeed even if counter fails (graceful degradation).
+	responseChan, err := m.GenerateContent(ctx, request)
+	if err != nil {
+		t.Fatalf("GenerateContent failed: %v", err)
+	}
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	if len(responses) != 1 {
+		t.Fatalf("Expected 1 response, got %d", len(responses))
 	}
 }

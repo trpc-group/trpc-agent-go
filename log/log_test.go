@@ -17,6 +17,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -55,7 +56,7 @@ func TestContextHelpersUseContextDefault(t *testing.T) {
 	})
 
 	logger, ok := log.ContextDefault.(*countLogger)
-	require.True(t, ok, "ContextDefault is not *countLogger")
+	require.True(t, ok, "ContextDefault should be *countLogger")
 
 	log.DebugContext(ctx, "test")
 	log.DebugfContext(ctx, "test %s", "value")
@@ -181,6 +182,53 @@ func (c *countLogger) Fatal(args ...any) {
 
 func (c *countLogger) Fatalf(format string, args ...any) {
 	c.fatalfCalls++
+}
+
+// traceLogger captures Debugf calls for TracefContext testing.
+type traceLogger struct {
+	debugfCalls int
+	lastFormat  string
+	lastArgs    []any
+}
+
+func (t *traceLogger) Debug(args ...any) {}
+func (t *traceLogger) Debugf(format string, args ...any) {
+	t.debugfCalls++
+	t.lastFormat = format
+	t.lastArgs = args
+}
+func (t *traceLogger) Info(args ...any)                  {}
+func (t *traceLogger) Infof(format string, args ...any)  {}
+func (t *traceLogger) Warn(args ...any)                  {}
+func (t *traceLogger) Warnf(format string, args ...any)  {}
+func (t *traceLogger) Error(args ...any)                 {}
+func (t *traceLogger) Errorf(format string, args ...any) {}
+func (t *traceLogger) Fatal(args ...any)                 {}
+func (t *traceLogger) Fatalf(format string, args ...any) {}
+
+// TestTracefContext verifies that TracefContext calls ContextDefault.Debugf
+// with the correct format string prefixed with "[TRACE] ".
+func TestTracefContext(t *testing.T) {
+	ctx := context.Background()
+	stub := &traceLogger{}
+	original := log.ContextDefault
+	log.ContextDefault = stub
+	t.Cleanup(func() {
+		log.ContextDefault = original
+	})
+
+	log.TracefContext(ctx, "hello %s", "world")
+
+	assert.Equal(t, 1, stub.debugfCalls, "TracefContext should call Debugf once")
+	assert.True(t, strings.HasPrefix(stub.lastFormat, "[TRACE] "),
+		"TracefContext should prefix format with \"[TRACE] \"; got %q",
+		stub.lastFormat)
+	assert.Equal(t, "[TRACE] hello %s", stub.lastFormat,
+		"TracefContext format should match expected")
+	require.Len(t, stub.lastArgs, 1,
+		"TracefContext should pass args correctly")
+	assert.Equal(t, "world", stub.lastArgs[0],
+		"TracefContext args should match expected")
 }
 
 func wrapLoggerWithObserver(t *testing.T, logger log.Logger) (*observer.ObservedLogs, log.Logger) {

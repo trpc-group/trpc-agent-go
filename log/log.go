@@ -254,6 +254,13 @@ func Tracef(format string, args ...any) {
 	Default.Debugf("[TRACE] "+format, args...)
 }
 
+// TracefContext logs a TRACE log with context and formatting.
+var TracefContext = func(
+	_ context.Context, format string, args ...any,
+) {
+	ContextDefault.Debugf("[TRACE] "+format, args...)
+}
+
 // SetTraceEnabled sets the trace enabled flag.
 func SetTraceEnabled(enabled bool) {
 	traceEnabled = enabled

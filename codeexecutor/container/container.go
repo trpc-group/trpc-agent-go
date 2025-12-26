@@ -439,7 +439,7 @@ func (c *CodeExecutor) buildDockerImage(ctx context.Context) error {
 	// Read build output (optional, for logging)
 	_, err = io.Copy(io.Discard, buildResponse.Body)
 	if err != nil {
-		log.Warnf("Error reading build output: %v", err)
+		log.WarnfContext(ctx, "Error reading build output: %v", err)
 	}
 	return nil
 }
@@ -531,7 +531,7 @@ func (c *CodeExecutor) initContainer() error {
 		State: containerJSON.State.Status,
 	}
 
-	log.Debugf("Container %s started successfully and is running", c.container.ID)
+	log.DebugfContext(ctx, "Container %s started successfully and is running", c.container.ID)
 
 	// Verify python3 installation
 	if err := c.verifyPythonInstallation(ctx); err != nil {
@@ -585,15 +585,15 @@ func (c *CodeExecutor) cleanup() {
 
 	// Stop container
 	if err := c.client.ContainerStop(ctx, c.container.ID, container.StopOptions{}); err != nil {
-		log.Debugf("Failed to stop container: %v", err)
+		log.DebugfContext(ctx, "Failed to stop container: %v", err)
 	}
 
 	// Remove container
 	if err := c.client.ContainerRemove(ctx, c.container.ID, container.RemoveOptions{}); err != nil {
-		log.Debugf("Failed to remove container: %v", err)
+		log.DebugfContext(ctx, "Failed to remove container: %v", err)
 	}
 
-	log.Debugf("Container %s stopped and removed", c.container.ID)
+	log.DebugfContext(ctx, "Container %s stopped and removed", c.container.ID)
 }
 
 // Close manually cleans up resources

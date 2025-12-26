@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -37,9 +38,9 @@ func TestSetLevel(t *testing.T) {
 
 	for _, c := range cases {
 		SetLevel(c.in)
-		if got := zapLevel.Level(); got != c.expected {
-			t.Fatalf("SetLevel(%q) = %v; want %v", c.in, got, c.expected)
-		}
+		got := zapLevel.Level()
+		assert.Equal(t, c.expected, got,
+			"SetLevel(%q) should set level to %v", c.in, c.expected)
 	}
 }
 
@@ -54,15 +55,13 @@ func TestTraceDisabledByDefault(t *testing.T) {
 		traceEnabled = oldTrace
 	})
 
-	if traceEnabled {
-		t.Fatalf("traceEnabled should be false by default")
-	}
+	assert.False(t, traceEnabled,
+		"traceEnabled should be false by default")
 
 	Tracef("hello %s", "world")
 
-	if stub.debugfCalls != 0 {
-		t.Fatalf("Tracef should not log when trace is disabled; got %d calls", stub.debugfCalls)
-	}
+	assert.Equal(t, 0, stub.debugfCalls,
+		"Tracef should not log when trace is disabled")
 }
 
 // TestTracefEnabled makes sure Tracef forwards the call when trace is enabled.
@@ -79,12 +78,11 @@ func TestTracefEnabled(t *testing.T) {
 
 	Tracef("hello %s", "world")
 
-	if stub.debugfCalls != 1 {
-		t.Fatalf("Tracef should log once when trace is enabled; got %d calls", stub.debugfCalls)
-	}
-	if !strings.HasPrefix(stub.lastFormat, "[TRACE] ") {
-		t.Fatalf("Tracef did not prefix message with \"[TRACE] \": got %q", stub.lastFormat)
-	}
+	assert.Equal(t, 1, stub.debugfCalls,
+		"Tracef should log once when trace is enabled")
+	assert.True(t, strings.HasPrefix(stub.lastFormat, "[TRACE] "),
+		"Tracef should prefix message with \"[TRACE] \"; got %q",
+		stub.lastFormat)
 }
 
 // stubLogger is a minimal implementation of Logger that captures
