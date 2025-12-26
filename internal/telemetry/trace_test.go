@@ -222,6 +222,18 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	}
 }
 
+func TestTraceBeforeInvokeAgent_WithSpanAttributes(t *testing.T) {
+	inv := &agent.Invocation{
+		AgentName:    "alpha",
+		InvocationID: "inv-span",
+		Session:      &session.Session{ID: "sess-span", UserID: "user-span"},
+		RunOptions:   agent.RunOptions{SpanAttributes: []attribute.KeyValue{attribute.String("custom.attr", "v1")}},
+	}
+	span := newRecordingSpan()
+	TraceBeforeInvokeAgent(span, inv, "desc", "inst", nil)
+	require.True(t, hasAttr(span.attrs, "custom.attr", "v1"), "custom span attribute should be applied")
+}
+
 func TestNewChatSpanName(t *testing.T) {
 	tests := []struct {
 		name         string

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
@@ -265,6 +266,17 @@ func WithRequestID(requestID string) RunOption {
 	}
 }
 
+// WithSpanAttributes sets custom span attributes for the RunOptions.
+func WithSpanAttributes(attrs ...attribute.KeyValue) RunOption {
+	return func(opts *RunOptions) {
+		if len(attrs) == 0 {
+			opts.SpanAttributes = nil
+			return
+		}
+		opts.SpanAttributes = append([]attribute.KeyValue(nil), attrs...)
+	}
+}
+
 // WithModel sets the model for this specific run.
 // This allows temporarily switching the model for a single request without
 // affecting other requests or the agent's default model configuration.
@@ -445,6 +457,9 @@ type RunOptions struct {
 
 	// RequestID is the request id of the request.
 	RequestID string
+
+	// SpanAttributes carries custom span attributes for this run.
+	SpanAttributes []attribute.KeyValue
 
 	// A2ARequestOptions contains A2A client request options that will be passed to
 	// A2A agent's SendMessage and StreamMessage calls. This allows callers to pass

@@ -40,7 +40,7 @@ On startup you should see a log entry similar to the one below.
 
 ## What Happens During a Request
 
-When a client posts an AG-UI run request, the runner calls a `StartSpan` hook (see `startSpan` in `main.go`) to create an OpenTelemetry span enriched with Langfuse-specific attributes such as `langfuse.session.id`, `langfuse.user.id`, and `langfuse.trace.input`. The span context is propagated through the AG-UI runner so every streamed event shares the same trace.
+When a client sends an AG-UI execution request, the execution program calls `RunOptionResolver` to set attributes for the Span of this execution, adding Langfuse-specific attributes such as `langfuse.session.id`, `langfuse.user.id`, and `langfuse.trace.input`. The span context is propagated through the AG-UI execution program, so each streaming event shares the same tracing information.
 
 After each event is translated for AG-UI delivery, an `AfterTranslate` callback aggregates incremental text deltas and records the final answer in the span attribute `langfuse.trace.output`. This guarantees that both the user prompt and the final model output appear side by side in Langfuse for easy inspection.
 
