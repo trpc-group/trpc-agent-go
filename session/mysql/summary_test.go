@@ -493,7 +493,7 @@ func TestGetSessionSummaryText_FallbackToFullSession(t *testing.T) {
 	fullSummary := session.Summary{Summary: "full summary text"}
 	fullBytes, _ := json.Marshal(fullSummary)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
-		WithArgs(sess.AppName, sess.UserID, sess.ID, session.SummaryFilterKeyAllContents, sqlmock.AnyArg()).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, session.SummaryFilterKeyAllContents, sqlmock.AnyArg(), sess.CreatedAt).
 		WillReturnRows(sqlmock.NewRows([]string{"summary"}).AddRow(fullBytes))
 
 	text, found := s.GetSessionSummaryText(ctx, sess, session.WithSummaryFilterKey("missing-key"))
@@ -524,7 +524,7 @@ func TestGetSessionSummaryText_FallbackQueryError(t *testing.T) {
 
 	// Fallback query fails.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
-		WithArgs(sess.AppName, sess.UserID, sess.ID, session.SummaryFilterKeyAllContents, sqlmock.AnyArg()).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, session.SummaryFilterKeyAllContents, sqlmock.AnyArg(), sess.CreatedAt).
 		WillReturnError(fmt.Errorf("fallback query error"))
 
 	text, found := s.GetSessionSummaryText(ctx, sess, session.WithSummaryFilterKey("missing-key"))
@@ -1268,22 +1268,22 @@ func TestPickSummaryText(t *testing.T) {
 			wantOk:   true,
 		},
 		{
-			name: "all-contents summary exists but empty, should pick other non-empty",
+			name: "all-contents summary exists but empty, should return false",
 			summaries: map[string]*session.Summary{
 				"":        {Summary: ""},
 				"filter1": {Summary: "filtered summary 1"},
 			},
-			wantText: "filtered summary 1",
-			wantOk:   true,
+			wantText: "",
+			wantOk:   false,
 		},
 		{
-			name: "all-contents summary is nil, should pick other non-empty",
+			name: "all-contents summary is nil, should return false",
 			summaries: map[string]*session.Summary{
 				"":        nil,
 				"filter1": {Summary: "filtered summary 1"},
 			},
-			wantText: "filtered summary 1",
-			wantOk:   true,
+			wantText: "",
+			wantOk:   false,
 		},
 		{
 			name: "only all-contents summary exists and is non-empty",
@@ -1310,12 +1310,12 @@ func TestPickSummaryText(t *testing.T) {
 			wantOk:   false,
 		},
 		{
-			name: "no all-contents summary, pick first non-empty",
+			name: "no all-contents summary, should return false",
 			summaries: map[string]*session.Summary{
 				"filter1": {Summary: "filtered summary 1"},
 			},
-			wantText: "filtered summary 1",
-			wantOk:   true,
+			wantText: "",
+			wantOk:   false,
 		},
 		{
 			name: "all summaries are empty",
@@ -1338,20 +1338,20 @@ func TestPickSummaryText(t *testing.T) {
 			wantOk:   false,
 		},
 		{
-			name: "mixed nil and empty summaries, pick first non-empty",
+			name: "mixed nil and empty summaries, should return false",
 			summaries: map[string]*session.Summary{
 				"":        nil,
 				"filter1": {Summary: ""},
 				"filter2": {Summary: "valid summary"},
 			},
-			wantText: "valid summary",
-			wantOk:   true,
+			wantText: "",
+			wantOk:   false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotText, gotOk := isummary.PickSummaryText(tt.summaries, "")
+			gotText, gotOk := isummary.PickSummaryText(tt.summaries, "", time.Time{})
 			if gotText != tt.wantText {
 				t.Errorf("pickSummaryText() text = %v, want %v", gotText, tt.wantText)
 			}

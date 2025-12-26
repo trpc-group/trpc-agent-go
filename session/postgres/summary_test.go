@@ -323,9 +323,10 @@ func TestGetSessionSummaryText_Success(t *testing.T) {
 	defer db.Close()
 
 	sess := &session.Session{
-		ID:      "test-session",
-		AppName: "test-app",
-		UserID:  "test-user",
+		ID:        "test-session",
+		AppName:   "test-app",
+		UserID:    "test-user",
+		CreatedAt: time.Now().Add(-time.Hour),
 	}
 
 	// Mock summary query
@@ -338,7 +339,7 @@ func TestGetSessionSummaryText_Success(t *testing.T) {
 		AddRow(summaryBytes)
 
 	mock.ExpectQuery("SELECT summary FROM session_summaries").
-		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg()).
+		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sess.CreatedAt).
 		WillReturnRows(rows)
 
 	text, ok := s.GetSessionSummaryText(context.Background(), sess)
@@ -367,15 +368,16 @@ func TestGetSessionSummaryText_NoSummary(t *testing.T) {
 	defer db.Close()
 
 	sess := &session.Session{
-		ID:      "test-session",
-		AppName: "test-app",
-		UserID:  "test-user",
+		ID:        "test-session",
+		AppName:   "test-app",
+		UserID:    "test-user",
+		CreatedAt: time.Now().Add(-time.Hour),
 	}
 
 	// Mock empty result
 	rows := sqlmock.NewRows([]string{"summary"})
 	mock.ExpectQuery("SELECT summary FROM session_summaries").
-		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg()).
+		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sess.CreatedAt).
 		WillReturnRows(rows)
 
 	text, ok := s.GetSessionSummaryText(context.Background(), sess)
@@ -419,7 +421,7 @@ func TestGetSessionSummaryText_QueryError(t *testing.T) {
 
 	// Mock query error
 	mock.ExpectQuery("SELECT summary FROM session_summaries").
-		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg()).
+		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sess.CreatedAt).
 		WillReturnError(fmt.Errorf("database error"))
 
 	text, ok := s.GetSessionSummaryText(context.Background(), sess)
@@ -435,9 +437,10 @@ func TestGetSessionSummaryText_EmptySummaryText(t *testing.T) {
 	defer db.Close()
 
 	sess := &session.Session{
-		ID:      "test-session",
-		AppName: "test-app",
-		UserID:  "test-user",
+		ID:        "test-session",
+		AppName:   "test-app",
+		UserID:    "test-user",
+		CreatedAt: time.Now().Add(-time.Hour),
 	}
 
 	// Mock summary with empty text
@@ -450,7 +453,7 @@ func TestGetSessionSummaryText_EmptySummaryText(t *testing.T) {
 		AddRow(summaryBytes)
 
 	mock.ExpectQuery("SELECT summary FROM session_summaries").
-		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg()).
+		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sess.CreatedAt).
 		WillReturnRows(rows)
 
 	text, ok := s.GetSessionSummaryText(context.Background(), sess)
@@ -526,9 +529,10 @@ func TestGetSessionSummaryText_UnmarshalError(t *testing.T) {
 	defer db.Close()
 
 	sess := &session.Session{
-		ID:      "test-session",
-		AppName: "test-app",
-		UserID:  "test-user",
+		ID:        "test-session",
+		AppName:   "test-app",
+		UserID:    "test-user",
+		CreatedAt: time.Now().Add(-time.Hour),
 	}
 
 	// Mock summary with invalid JSON
@@ -536,7 +540,7 @@ func TestGetSessionSummaryText_UnmarshalError(t *testing.T) {
 		AddRow([]byte("invalid json"))
 
 	mock.ExpectQuery("SELECT summary FROM session_summaries").
-		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg()).
+		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sess.CreatedAt).
 		WillReturnRows(rows)
 
 	text, ok := s.GetSessionSummaryText(context.Background(), sess)
@@ -570,7 +574,7 @@ func TestGetSessionSummaryText_WithFilterKey(t *testing.T) {
 
 	// Mock: Query summary with specific filter key
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
-		WithArgs(sess.AppName, sess.UserID, sess.ID, filterKey, sqlmock.AnyArg()).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, filterKey, sqlmock.AnyArg(), sess.CreatedAt).
 		WillReturnRows(sqlmock.NewRows([]string{"summary"}).
 			AddRow(summaryBytes))
 
@@ -596,14 +600,14 @@ func TestGetSessionSummaryText_FallbackToFullSession(t *testing.T) {
 
 	// First query for specific filter key returns no rows.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
-		WithArgs(sess.AppName, sess.UserID, sess.ID, "missing-key", sqlmock.AnyArg()).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, "missing-key", sqlmock.AnyArg(), sess.CreatedAt).
 		WillReturnRows(sqlmock.NewRows([]string{"summary"}))
 
 	// Fallback query for full-session summary returns data.
 	fullSummary := session.Summary{Summary: "full summary text"}
 	fullBytes, _ := json.Marshal(fullSummary)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
-		WithArgs(sess.AppName, sess.UserID, sess.ID, session.SummaryFilterKeyAllContents, sqlmock.AnyArg()).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, session.SummaryFilterKeyAllContents, sqlmock.AnyArg(), sess.CreatedAt).
 		WillReturnRows(sqlmock.NewRows([]string{"summary"}).AddRow(fullBytes))
 
 	text, found := s.GetSessionSummaryText(ctx, sess, session.WithSummaryFilterKey("missing-key"))
@@ -628,12 +632,12 @@ func TestGetSessionSummaryText_FallbackQueryError(t *testing.T) {
 
 	// First query for specific filter key returns no rows.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
-		WithArgs(sess.AppName, sess.UserID, sess.ID, "missing-key", sqlmock.AnyArg()).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, "missing-key", sqlmock.AnyArg(), sess.CreatedAt).
 		WillReturnRows(sqlmock.NewRows([]string{"summary"}))
 
 	// Fallback query fails.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
-		WithArgs(sess.AppName, sess.UserID, sess.ID, session.SummaryFilterKeyAllContents, sqlmock.AnyArg()).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, session.SummaryFilterKeyAllContents, sqlmock.AnyArg(), sess.CreatedAt).
 		WillReturnError(fmt.Errorf("fallback query error"))
 
 	text, found := s.GetSessionSummaryText(ctx, sess, session.WithSummaryFilterKey("missing-key"))

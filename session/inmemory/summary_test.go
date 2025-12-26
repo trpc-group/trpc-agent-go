@@ -470,9 +470,10 @@ func TestMemoryService_GetSessionSummaryText_BranchSummaryFallback(t *testing.T)
 			"branch1": {Summary: "branch-summary", UpdatedAt: time.Now()},
 		},
 	}
+	// Request full-session summary (filterKey=""), but it doesn't exist, should return false.
 	text, ok := s.GetSessionSummaryText(context.Background(), sess)
-	require.True(t, ok)
-	require.Equal(t, "branch-summary", text)
+	require.False(t, ok)
+	require.Empty(t, text)
 }
 
 func TestMemoryService_CreateSessionSummary_NilSession(t *testing.T) {
@@ -785,10 +786,10 @@ func TestMemoryService_GetSessionSummaryText_FilterKeyNotFoundNoFallback(t *test
 		},
 	}
 
-	// Request non-existent filterKey, full-session doesn't exist either, should fallback to any available summary.
+	// Request non-existent filterKey, full-session doesn't exist either, should return false.
 	text, ok := s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey("non-existent"))
-	require.True(t, ok)
-	require.Equal(t, "branch-summary", text)
+	require.False(t, ok)
+	require.Empty(t, text)
 }
 
 func TestMemoryService_GetSessionSummaryText_FilterKeyEmptySummary(t *testing.T) {

@@ -147,8 +147,9 @@ func (s *Service) GetSessionSummaryText(
 	}, fmt.Sprintf(`SELECT summary FROM %s
 		WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND filter_key = $4
 		AND (expires_at IS NULL OR expires_at > $5)
+		AND updated_at >= $6
 		AND deleted_at IS NULL`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, filterKey, time.Now())
+		key.AppName, key.UserID, key.SessionID, filterKey, time.Now(), sess.CreatedAt)
 
 	if err == nil && summaryText != "" {
 		return summaryText, true
@@ -172,8 +173,9 @@ func (s *Service) GetSessionSummaryText(
 		}, fmt.Sprintf(`SELECT summary FROM %s
 			WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND filter_key = $4
 			AND (expires_at IS NULL OR expires_at > $5)
+			AND updated_at >= $6
 			AND deleted_at IS NULL`, s.tableSessionSummaries),
-			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now())
+			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now(), sess.CreatedAt)
 		if err == nil && summaryText != "" {
 			return summaryText, true
 		}

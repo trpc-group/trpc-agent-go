@@ -187,8 +187,9 @@ func (s *Service) GetSessionSummaryText(
 		}, fmt.Sprintf(`SELECT summary FROM %s
 			WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
 			AND (expires_at IS NULL OR expires_at > ?)
+			AND updated_at >= ?
 			AND deleted_at IS NULL`, s.tableSessionSummaries),
-			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now())
+			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now(), sess.CreatedAt)
 
 		if err == nil && summaryText != "" {
 			return summaryText, true

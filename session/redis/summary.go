@@ -126,7 +126,7 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 		return "", false
 	}
 
-	return isummary.PickSummaryText(summaries, isummary.GetFilterKeyFromOptions(opts...))
+	return isummary.PickSummaryText(summaries, isummary.GetFilterKeyFromOptions(opts...), sess.CreatedAt)
 }
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.
