@@ -75,6 +75,47 @@ func TestProcessRequest_IncludeInvocationMessage_WhenNoSession(t *testing.T) {
 	require.True(t, model.MessagesEqual(model.NewUserMessage("hi there"), req.Messages[0]))
 }
 
+func TestProcessRequest_NoDuplicateInvocationToolMessage(t *testing.T) {
+	const (
+		requestID   = "req-tool-message"
+		toolCallID  = "call-1"
+		toolName    = "external_tool"
+		toolContent = `{"status":"ok"}`
+	)
+
+	msg := model.NewToolMessage(toolCallID, toolName, toolContent)
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				RequestID: requestID,
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{Index: 0, Message: msg},
+					},
+				},
+				Author: "user",
+			},
+		},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(msg),
+		agent.WithInvocationRunOptions(
+			agent.RunOptions{RequestID: requestID},
+		),
+	)
+	inv.AgentName = "test-agent"
+
+	req := &model.Request{}
+	p := NewContentRequestProcessor()
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 1)
+	require.True(t, model.MessagesEqual(msg, req.Messages[0]))
+}
+
 // When session exists but has no events for the current branch, the invocation
 // message should still be included so sub agent gets the tool args.
 func TestProcessRequest_IncludeInvocationMessage_WhenNoBranchEvents(t *testing.T) {
