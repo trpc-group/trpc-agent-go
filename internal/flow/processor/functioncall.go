@@ -261,6 +261,9 @@ func (p *FunctionCallResponseProcessor) emitFuncCallRespEventAndWait(
 	functionResponseEvent *event.Event,
 	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
+	if functionResponseEvent == nil {
+		return nil, nil
+	}
 
 	functionResponseEvent.RequiresCompletion = true
 	agent.EmitEvent(ctx, invocation, eventChan, functionResponseEvent)
