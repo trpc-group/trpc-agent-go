@@ -222,9 +222,23 @@ func (m *Model) handleStreamingRequest(
 	defer resp.Body.Close()
 
 	// Read and process streaming response.
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
+	// Use bufio.Reader instead of Scanner to avoid 64KB line limit.
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			streamErr = err
+			responseChan <- &model.Response{
+				Error: &model.ResponseError{
+					Message: fmt.Sprintf("error reading stream: %v", err),
+				},
+			}
+			break
+		}
+
 		line = strings.TrimSpace(line)
 
 		// Skip empty lines and comments.
@@ -255,15 +269,6 @@ func (m *Model) handleStreamingRequest(
 		// Convert chunk to model.Response.
 		response := m.convertChunk(&chunk)
 		responseChan <- response
-	}
-
-	if err := scanner.Err(); err != nil {
-		streamErr = err
-		responseChan <- &model.Response{
-			Error: &model.ResponseError{
-				Message: fmt.Sprintf("error reading stream: %v", err),
-			},
-		}
 	}
 }
 
