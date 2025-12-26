@@ -170,13 +170,13 @@ func (e *Embedder) GetEmbedding(ctx context.Context, text string) ([]float64, er
 
 	// Extract embedding from response.
 	if len(response.Data) == 0 {
-		log.Warn("received empty embedding response from OpenAI API")
+		log.WarnContext(ctx, "received empty embedding response from OpenAI API")
 		return []float64{}, nil
 	}
 
 	embedding := response.Data[0].Embedding
 	if len(embedding) == 0 {
-		log.Warn("received empty embedding vector from OpenAI API")
+		log.WarnContext(ctx, "received empty embedding vector from OpenAI API")
 		return []float64{}, nil
 	}
 
@@ -193,13 +193,13 @@ func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]fl
 
 	// Extract embedding from response.
 	if len(response.Data) == 0 {
-		log.Warn("received empty embedding response from OpenAI API")
+		log.WarnContext(ctx, "received empty embedding response from OpenAI API")
 		return []float64{}, nil, nil
 	}
 
 	embedding := response.Data[0].Embedding
 	if len(embedding) == 0 {
-		log.Warn("received empty embedding vector from OpenAI API")
+		log.WarnContext(ctx, "received empty embedding vector from OpenAI API")
 		return []float64{}, nil, nil
 	}
 
