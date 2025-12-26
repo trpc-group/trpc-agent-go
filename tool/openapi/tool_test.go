@@ -909,10 +909,8 @@ func Test_prepareRequest(t *testing.T) {
 			// Create a mock openAPITool instance
 			o := &openAPITool{
 				operation: tt.args.operation,
-				ts: &openAPIToolSet{
-					config: &config{
-						userAgent: "TestAgent/1.0",
-					},
+				config: &config{
+					userAgent: "TestAgent/1.0",
 				},
 			}
 
@@ -1323,11 +1321,9 @@ func Test_openAPITool_Call(t *testing.T) {
 			// Create openAPITool instance
 			o := &openAPITool{
 				operation: tt.args.operation,
-				ts: &openAPIToolSet{
-					config: &config{
-						userAgent:  "TestAgent/1.0",
-						httpClient: http.DefaultClient,
-					},
+				config: &config{
+					userAgent:  "TestAgent/1.0",
+					httpClient: http.DefaultClient,
 				},
 			}
 

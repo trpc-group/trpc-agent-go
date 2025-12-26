@@ -104,7 +104,7 @@ func (h *MockServerHandler) setupRoutes() {
 			h.mux.HandleFunc("POST "+absPath, h.createHandler(absPath, pathItem.Post))
 		}
 		if pathItem.Put != nil {
-			h.mux.HandleFunc("PUT "+absPath, h.createHandler(absPath, pathItem.Post))
+			h.mux.HandleFunc("PUT "+absPath, h.createHandler(absPath, pathItem.Put))
 		}
 		if pathItem.Delete != nil {
 			h.mux.HandleFunc("DELETE "+absPath, h.createHandler(absPath, pathItem.Delete))

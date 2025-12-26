@@ -95,8 +95,13 @@ func (c *llmAgentChat) setup(_ context.Context) error {
 		Stream:      true,
 	}
 
+	loader, err := openapi.NewFileLoader(c.openAPISpec)
+	if err != nil {
+		return fmt.Errorf("failed to create openapi file loader: %w", err)
+	}
 	openAPIToolSet, err := openapi.NewToolSet(
-		openapi.WithSpecLoader(openapi.NewFileLoader("./petstore3.yaml")),
+		context.Background(),
+		openapi.WithSpecLoader(loader),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create openapi toolset: %w", err)

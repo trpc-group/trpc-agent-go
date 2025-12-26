@@ -38,13 +38,12 @@ type config struct {
 	name      string
 	userAgent string
 
-	specLoader SpecLoader
-	timeout    time.Duration
+	specLoader Loader
 	httpClient *http.Client
 }
 
 // WithSpecLoader sets the spec loader to use.
-func WithSpecLoader(loader SpecLoader) Option {
+func WithSpecLoader(loader Loader) Option {
 	return func(c *config) {
 		c.specLoader = loader
 	}
@@ -73,7 +72,7 @@ func WithName(name string) Option {
 
 // openAPIToolSet is a set of tools.
 type openAPIToolSet struct {
-	spec *specProcessor
+	spec *docProcessor
 	name string
 
 	config *config
@@ -97,7 +96,7 @@ func (ts *openAPIToolSet) Name() string {
 }
 
 // NewToolSet creates a new OpenAPI tool set with the provided options.
-func NewToolSet(opts ...Option) (tool.ToolSet, error) {
+func NewToolSet(ctx context.Context, opts ...Option) (tool.ToolSet, error) {
 	c := &config{
 		userAgent: defaultUserAgent,
 		name:      defaultOpenAPIToolSetName,
@@ -109,27 +108,26 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 		opt(c)
 	}
 
-	specCtx := context.Background()
-	specDoc, err := loadSpec(specCtx, c.specLoader)
+	specDoc, err := loadSpec(ctx, c.specLoader)
 	if err != nil {
 		log.Debugf("load openAPI spec err: %v", err)
 		return nil, err
 	}
-	specProcessor := newSpecProcessor(specDoc)
+	specProcessor := newDocProcessor(specDoc)
 	if err := specProcessor.processOperations(); err != nil {
 		return nil, err
 	}
 
 	toolSet := &openAPIToolSet{config: c}
 	for _, op := range specProcessor.operations {
-		tl := newOpenAPITool(toolSet, op)
+		tl := newOpenAPITool(c, op)
 		toolSet.tools = append(toolSet.tools, tl)
 	}
 
 	return toolSet, nil
 }
 
-func loadSpec(ctx context.Context, loader SpecLoader) (*openapi.T, error) {
+func loadSpec(ctx context.Context, loader Loader) (*openapi.T, error) {
 	if loader == nil {
 		return nil, fmt.Errorf("OpenAPI spec loader not provided")
 	}

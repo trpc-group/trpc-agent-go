@@ -84,21 +84,24 @@ func (o *Operation) collectSpecOperationParameters(params openapi.Parameters) {
 	if len(params) == 0 {
 		return
 	}
-	var ps []*APIParameter
+	var apiParams []*APIParameter
 	for _, param := range params {
 		if param == nil || param.Value == nil {
 			continue
 		}
-		pv := param.Value
-		ps = append(ps, &APIParameter{
-			OriginalName: pv.Name,
-			Description:  pv.Description,
-			Location:     ParameterLocation(pv.In),
-			Required:     pv.Required,
-			schema:       pv.Schema.Value,
-		})
+		v := param.Value
+		param := &APIParameter{
+			OriginalName: v.Name,
+			Description:  v.Description,
+			Required:     v.Required,
+			Location:     ParameterLocation(v.In),
+		}
+		if v.Schema != nil && v.Schema.Value != nil {
+			param.schema = v.Schema.Value
+		}
+		apiParams = append(apiParams, param)
 	}
-	o.collectOperationParameters(ps)
+	o.collectOperationParameters(apiParams)
 }
 
 func (o *Operation) collectSpecRequestParameters(request *openapi.RequestBodyRef) {
@@ -109,13 +112,13 @@ func (o *Operation) collectSpecRequestParameters(request *openapi.RequestBodyRef
 		return
 	}
 	for _, content := range request.Value.Content {
-		var ps []*APIParameter
+		var apiParams []*APIParameter
 		if content.Schema.Value.Type.Is(openapi.TypeObject) {
 			for propName, propSchema := range content.Schema.Value.Properties {
 				if propSchema == nil {
 					continue
 				}
-				ps = append(ps, &APIParameter{
+				apiParams = append(apiParams, &APIParameter{
 					OriginalName: propName,
 					Description:  propSchema.Value.Description,
 					Location:     BodyParameter,
@@ -123,21 +126,21 @@ func (o *Operation) collectSpecRequestParameters(request *openapi.RequestBodyRef
 				})
 			}
 		} else if content.Schema.Value.Type.Is(openapi.TypeArray) {
-			ps = append(ps, &APIParameter{
+			apiParams = append(apiParams, &APIParameter{
 				OriginalName: openapi.TypeArray,
 				Description:  content.Schema.Value.Items.Value.Description,
 				Location:     BodyParameter,
 				schema:       content.Schema.Value.Items.Value,
 			})
 		} else {
-			ps = append(ps, &APIParameter{
+			apiParams = append(apiParams, &APIParameter{
 				OriginalName: "",
 				Description:  content.Schema.Value.Description,
 				Location:     BodyParameter,
 				schema:       content.Schema.Value,
 			})
 		}
-		o.collectOperationParameters(ps)
+		o.collectOperationParameters(apiParams)
 	}
 }
 
@@ -162,7 +165,7 @@ func (o *Operation) collectResponseParameter(responses *openapi.Responses) {
 		if v := responses.Value(validCode); v != nil {
 			if v.Value != nil && len(v.Value.Content) != 0 {
 				for _, c := range v.Value.Content {
-					if c.Schema == nil {
+					if c.Schema == nil || c.Schema.Value == nil {
 						continue
 					}
 					schema = c.Schema.Value

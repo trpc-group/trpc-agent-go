@@ -29,7 +29,7 @@ func Test_urlSpecLoader_Load(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			u := NewURILoader(tt.uri)
+			u, _ := NewURILoader(tt.uri, WithExternalRefs(true))
 			_, gotErr := u.Load(context.Background())
 			if gotErr != nil {
 				if !tt.wantErr {

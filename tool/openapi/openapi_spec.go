@@ -11,84 +11,121 @@ package openapi
 
 import (
 	"context"
-	"io"
 	"net/url"
 
 	openapi "github.com/getkin/kin-openapi/openapi3"
 )
 
-// SpecLoader loads the OpenAPI spec.
-type SpecLoader interface {
+// Loader loads the OpenAPI spec.
+type Loader interface {
 	// Load loads the OpenAPI spec.
 	Load(ctx context.Context) (*openapi.T, error)
 }
 
-type dataSpecLoader struct {
-	r io.Reader
+// LoaderOption is the option for the loader.
+type LoaderOption func(*openapi.Loader)
+
+// WithExternalRefs sets whether to allow external $ref references.
+func WithExternalRefs(allow bool) LoaderOption {
+	return func(l *openapi.Loader) {
+		l.IsExternalRefsAllowed = allow
+	}
+}
+
+// WithReadFromURI sets the function to read from URI.
+func WithReadFromURI(f openapi.ReadFromURIFunc) LoaderOption {
+	return func(l *openapi.Loader) {
+		l.ReadFromURIFunc = f
+	}
+}
+
+type dataLoader struct {
+	loader *openapi.Loader
+	data   []byte
 }
 
 // Load loads the OpenAPI spec from io.Reader.
-func (d *dataSpecLoader) Load(ctx context.Context) (*openapi.T, error) {
-	loader := openapi.Loader{Context: ctx}
-	return loader.LoadFromIoReader(d.r)
+func (d *dataLoader) Load(ctx context.Context) (*openapi.T, error) {
+	d.loader.Context = ctx
+	return d.loader.LoadFromData(d.data)
 }
 
 // NewDataLoader creates a new data spec loader.
-func NewDataLoader(r io.Reader) *dataSpecLoader {
-	return &dataSpecLoader{r: r}
+func NewDataLoader(data []byte, opts ...LoaderOption) (*dataLoader, error) {
+	loader := &openapi.Loader{}
+	for _, opt := range opts {
+		opt(loader)
+	}
+	return &dataLoader{loader: loader, data: data}, nil
 }
 
-type fileSpecLoader struct {
-	path string
+type fileLoader struct {
+	loader *openapi.Loader
+	path   string
 }
 
 // Load loads the OpenAPI spec from file.
-func (f *fileSpecLoader) Load(ctx context.Context) (*openapi.T, error) {
-	loader := openapi.Loader{Context: ctx}
-	return loader.LoadFromFile(f.path)
+func (f *fileLoader) Load(ctx context.Context) (*openapi.T, error) {
+	f.loader.Context = ctx
+	return f.loader.LoadFromFile(f.path)
 }
 
 // NewFileLoader creates a new file spec loader.
-func NewFileLoader(filePath string) *fileSpecLoader {
-	return &fileSpecLoader{path: filePath}
+func NewFileLoader(filePath string, opts ...LoaderOption) (*fileLoader, error) {
+	loader := &openapi.Loader{}
+	for _, opt := range opts {
+		opt(loader)
+	}
+	return &fileLoader{loader: loader, path: filePath}, nil
 }
 
-type urlSpecLoader struct {
-	uri string
+type urlLoader struct {
+	loader   *openapi.Loader
+	location *url.URL
 }
 
 // Load loads the OpenAPI spec from url.
-func (u *urlSpecLoader) Load(ctx context.Context) (*openapi.T, error) {
-	uri, err := url.Parse(u.uri)
-	if err != nil {
-		return nil, err
-	}
+func (u *urlLoader) Load(ctx context.Context) (*openapi.T, error) {
 	loader := openapi.Loader{Context: ctx}
-	return loader.LoadFromURI(uri)
+	return loader.LoadFromURI(u.location)
 }
 
 // NewURILoader creates a new url spec loader.
-func NewURILoader(uri string) *urlSpecLoader {
-	return &urlSpecLoader{uri: uri}
+func NewURILoader(uri string, opts ...LoaderOption) (*urlLoader, error) {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return nil, err
+	}
+	loader := &openapi.Loader{}
+	for _, opt := range opts {
+		opt(loader)
+	}
+	return &urlLoader{loader: loader, location: u}, nil
 }
 
-func newSpecProcessor(doc *openapi.T) *specProcessor {
-	return &specProcessor{doc: doc}
+func newDocProcessor(doc *openapi.T) *docProcessor {
+	return &docProcessor{doc: doc}
 }
 
-type specProcessor struct {
+type docProcessor struct {
 	doc        *openapi.T
 	operations []*Operation
 }
 
 // InfoTitle returns the title of the spec.
-func (s *specProcessor) InfoTitle() string {
+func (s *docProcessor) InfoTitle() string {
+	if s.doc.Info == nil {
+		return ""
+	}
 	return s.doc.Info.Title
 }
 
 const defaultBaseURL = "/"
 
-func (s *specProcessor) processOperations() error {
+// processOperations processes the operations in the spec.
+// Currently, only the first server URL is used as the base URL.
+// And variables are not supported.
+func (s *docProcessor) processOperations() error {
 	baseURL := defaultBaseURL
 	if len(s.doc.Servers) != 0 {
 		baseURL = s.doc.Servers[0].URL

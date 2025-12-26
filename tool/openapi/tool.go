@@ -31,13 +31,13 @@ type openAPITool struct {
 	outputSchema *tool.Schema
 
 	operation *Operation
-	ts        *openAPIToolSet
+	config    *config
 }
 
-func newOpenAPITool(ts *openAPIToolSet, operation *Operation) tool.CallableTool {
+func newOpenAPITool(config *config, operation *Operation) tool.CallableTool {
 	o := &openAPITool{
 		operation: operation,
-		ts:        ts,
+		config:    config,
 	}
 	o.inputSchema = operation.toolInputSchema()
 	o.outputSchema = operation.toolOutputSchema()
@@ -65,7 +65,7 @@ func (o *openAPITool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 		return nil, err
 	}
 
-	resp, err := o.ts.config.httpClient.Do(req)
+	resp, err := o.config.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,6 @@ func (o *openAPITool) prepareRequest(ctx context.Context, args map[string]any) (
 		case CookieParameter:
 			cookieParams[param.OriginalName] = argValue
 		case BodyParameter:
-			log.Debugf("boday param, key: %v, v: %v", param.OriginalName, argValue)
 			bodyParams[param.OriginalName] = argValue
 		default:
 		}
@@ -142,7 +141,7 @@ func (o *openAPITool) prepareRequest(ctx context.Context, args map[string]any) (
 		req.Header.Add(name, value)
 	}
 	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("User-Agent", o.ts.config.userAgent)
+	req.Header.Add("User-Agent", o.config.userAgent)
 	return req, nil
 }
 

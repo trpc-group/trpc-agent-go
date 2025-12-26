@@ -11,12 +11,13 @@
 package openapi
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"testing"
 	"time"
+
+	openapi "github.com/getkin/kin-openapi/openapi3"
 )
 
 const (
@@ -68,6 +69,10 @@ paths:
 )
 
 func TestNewToolSet(t *testing.T) {
+	invalidSpecNoServerProvidedLoader, _ := NewDataLoader([]byte(invalidSpecNoServerProvided))
+	invalidSpecLoader, _ := NewDataLoader([]byte(invalidSpec))
+	petStoreSpecLoader, _ := NewFileLoader("../../examples/openapitool/petstore3.yaml")
+	petStoreSpecLoaderJSON, _ := NewFileLoader("../../examples/openapitool/petstore3.json")
 	type args struct {
 		opts []Option
 	}
@@ -80,7 +85,7 @@ func TestNewToolSet(t *testing.T) {
 			name: "invalid_spec_no_server_provided",
 			args: args{
 				opts: []Option{
-					WithSpecLoader(NewDataLoader(bytes.NewReader([]byte(invalidSpecNoServerProvided)))),
+					WithSpecLoader(invalidSpecNoServerProvidedLoader),
 				},
 			},
 			wantErr: true,
@@ -89,7 +94,7 @@ func TestNewToolSet(t *testing.T) {
 			name: "invalid_spec_cannot_resolve_reference",
 			args: args{
 				opts: []Option{
-					WithSpecLoader(NewDataLoader(bytes.NewReader([]byte(invalidSpec)))),
+					WithSpecLoader(invalidSpecLoader),
 				},
 			},
 			wantErr: true,
@@ -98,7 +103,7 @@ func TestNewToolSet(t *testing.T) {
 			name: "create_toolset_ok_yaml",
 			args: args{
 				opts: []Option{
-					WithSpecLoader(NewFileLoader("../../examples/openapitool/petstore3.yaml")),
+					WithSpecLoader(petStoreSpecLoader),
 				},
 			},
 			wantErr: false,
@@ -107,7 +112,7 @@ func TestNewToolSet(t *testing.T) {
 			name: "create_toolset_ok_json",
 			args: args{
 				opts: []Option{
-					WithSpecLoader(NewFileLoader("../../examples/openapitool/petstore3.json")),
+					WithSpecLoader(petStoreSpecLoaderJSON),
 				},
 			},
 			wantErr: false,
@@ -116,7 +121,7 @@ func TestNewToolSet(t *testing.T) {
 			name: "create_toolset_with_opts",
 			args: args{
 				opts: []Option{
-					WithSpecLoader(NewFileLoader("../../examples/openapitool/petstore3.json")),
+					WithSpecLoader(petStoreSpecLoaderJSON),
 					WithUserAgent("trpc-agent-go-test"),
 					WithName("trpc-agent-go-test"),
 					WithHTTPClient(http.DefaultClient),
@@ -127,7 +132,7 @@ func TestNewToolSet(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewToolSet(tt.args.opts...)
+			_, err := NewToolSet(context.Background(), tt.args.opts...)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewToolSet() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -137,9 +142,10 @@ func TestNewToolSet(t *testing.T) {
 }
 
 func TestOpenAPIToolSet_NameWithDefault(t *testing.T) {
+	loader, _ := NewFileLoader("../../examples/openapitool/petstore3.json")
 	// Test with default name
-	toolSet, err := NewToolSet(
-		WithSpecLoader(NewFileLoader("../../examples/openapitool/petstore3.json")),
+	toolSet, err := NewToolSet(context.Background(),
+		WithSpecLoader(loader),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create toolset: %v", err)
@@ -152,8 +158,9 @@ func TestOpenAPIToolSet_NameWithDefault(t *testing.T) {
 }
 
 func TestOpenAPIToolSet_ToolsContext(t *testing.T) {
-	toolSet, err := NewToolSet(
-		WithSpecLoader(NewFileLoader("../../examples/openapitool/petstore3.json")),
+	loader, _ := NewFileLoader("../../examples/openapitool/petstore3.json")
+	toolSet, err := NewToolSet(context.Background(),
+		WithSpecLoader(loader),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create toolset: %v", err)
@@ -191,8 +198,9 @@ func TestOpenAPIToolSet_ToolsContext(t *testing.T) {
 }
 
 func TestOpenAPITool_Declaration(t *testing.T) {
-	toolSet, err := NewToolSet(
-		WithSpecLoader(NewFileLoader("../../examples/openapitool/petstore3.json")),
+	loader, _ := NewFileLoader("../../examples/openapitool/petstore3.json")
+	toolSet, err := NewToolSet(context.Background(),
+		WithSpecLoader(loader),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create toolset: %v", err)
@@ -235,6 +243,48 @@ func TestOpenAPITool_Declaration(t *testing.T) {
 
 			if declaration.OutputSchema == nil {
 				t.Error("Declaration output schema is nil")
+			}
+		})
+	}
+}
+
+func TestDocProcessor_InfoTitle(t *testing.T) {
+	tests := []struct {
+		name     string
+		doc      *openapi.T
+		expected string
+	}{
+		{
+			name:     "nil_info_returns_empty_string",
+			doc:      &openapi.T{Info: nil},
+			expected: "",
+		},
+		{
+			name: "valid_info_returns_title",
+			doc: &openapi.T{
+				Info: &openapi.Info{
+					Title: "Test API",
+				},
+			},
+			expected: "Test API",
+		},
+		{
+			name: "empty_title_returns_empty_string",
+			doc: &openapi.T{
+				Info: &openapi.Info{
+					Title: "",
+				},
+			},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			processor := newDocProcessor(tt.doc)
+			result := processor.InfoTitle()
+			if result != tt.expected {
+				t.Errorf("InfoTitle() = %q, want %q", result, tt.expected)
 			}
 		})
 	}
