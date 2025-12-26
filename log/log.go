@@ -56,7 +56,7 @@ var ContextDefault Logger = zap.New(
 		zapLevel,
 	),
 	zap.AddCaller(),
-	zap.AddCallerSkip(2),
+	zap.AddCallerSkip(1),
 ).Sugar()
 
 func init() {

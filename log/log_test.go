@@ -11,12 +11,27 @@ package log_test
 
 import (
 	"context"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
+	"runtime"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 func TestLog(t *testing.T) {
+	original := log.Default
+	t.Cleanup(func() {
+		log.Default = original
+	})
 	log.Default = &noopLogger{}
 	log.Debug("test")
 	log.Debugf("test")
@@ -40,9 +55,7 @@ func TestContextHelpersUseContextDefault(t *testing.T) {
 	})
 
 	logger, ok := log.ContextDefault.(*countLogger)
-	if !ok {
-		t.Fatalf("ContextDefault is not *countLogger")
-	}
+	require.True(t, ok, "ContextDefault is not *countLogger")
 
 	log.DebugContext(ctx, "test")
 	log.DebugfContext(ctx, "test %s", "value")
@@ -55,66 +68,50 @@ func TestContextHelpersUseContextDefault(t *testing.T) {
 	log.FatalContext(ctx, "test")
 	log.FatalfContext(ctx, "test %s", "value")
 
-	if logger.debugCalls != 1 {
-		t.Fatalf(
-			"DebugContext should call Debug once; got %d",
-			logger.debugCalls,
-		)
-	}
-	if logger.debugfCalls != 1 {
-		t.Fatalf(
-			"DebugfContext should call Debugf once; got %d",
-			logger.debugfCalls,
-		)
-	}
-	if logger.infoCalls != 1 {
-		t.Fatalf(
-			"InfoContext should call Info once; got %d",
-			logger.infoCalls,
-		)
-	}
-	if logger.infofCalls != 1 {
-		t.Fatalf(
-			"InfofContext should call Infof once; got %d",
-			logger.infofCalls,
-		)
-	}
-	if logger.warnCalls != 1 {
-		t.Fatalf(
-			"WarnContext should call Warn once; got %d",
-			logger.warnCalls,
-		)
-	}
-	if logger.warnfCalls != 1 {
-		t.Fatalf(
-			"WarnfContext should call Warnf once; got %d",
-			logger.warnfCalls,
-		)
-	}
-	if logger.errorCalls != 1 {
-		t.Fatalf(
-			"ErrorContext should call Error once; got %d",
-			logger.errorCalls,
-		)
-	}
-	if logger.errorfCalls != 1 {
-		t.Fatalf(
-			"ErrorfContext should call Errorf once; got %d",
-			logger.errorfCalls,
-		)
-	}
-	if logger.fatalCalls != 1 {
-		t.Fatalf(
-			"FatalContext should call Fatal once; got %d",
-			logger.fatalCalls,
-		)
-	}
-	if logger.fatalfCalls != 1 {
-		t.Fatalf(
-			"FatalfContext should call Fatalf once; got %d",
-			logger.fatalfCalls,
-		)
-	}
+	assert.Equal(t, 1, logger.debugCalls, "DebugContext should call Debug once")
+	assert.Equal(t, 1, logger.debugfCalls, "DebugfContext should call Debugf once")
+	assert.Equal(t, 1, logger.infoCalls, "InfoContext should call Info once")
+	assert.Equal(t, 1, logger.infofCalls, "InfofContext should call Infof once")
+	assert.Equal(t, 1, logger.warnCalls, "WarnContext should call Warn once")
+	assert.Equal(t, 1, logger.warnfCalls, "WarnfContext should call Warnf once")
+	assert.Equal(t, 1, logger.errorCalls, "ErrorContext should call Error once")
+	assert.Equal(t, 1, logger.errorfCalls, "ErrorfContext should call Errorf once")
+	assert.Equal(t, 1, logger.fatalCalls, "FatalContext should call Fatal once")
+	assert.Equal(t, 1, logger.fatalfCalls, "FatalfContext should call Fatalf once")
+}
+
+func TestInfofCallerReportsCallSite(t *testing.T) {
+	original := log.Default
+	observed, wrapped := wrapLoggerWithObserver(t, log.Default)
+	log.Default = wrapped
+	t.Cleanup(func() {
+		log.Default = original
+	})
+
+	format := "infof caller check %s"
+	expectedMessage := fmt.Sprintf(format, "ok")
+	expectedFile, expectedLine := captureInfofCall(t, format, "ok")
+
+	entries := observed.FilterMessage(expectedMessage).All()
+	require.Len(t, entries, 1)
+	assertCallerMatches(t, entries[0].Entry.Caller, expectedFile, expectedLine)
+}
+
+func TestContextInfofCallerReportsCallSite(t *testing.T) {
+	original := log.ContextDefault
+	observed, wrapped := wrapLoggerWithObserver(t, log.ContextDefault)
+	log.ContextDefault = wrapped
+	t.Cleanup(func() {
+		log.ContextDefault = original
+	})
+
+	format := "context infof caller check %s"
+	expectedMessage := fmt.Sprintf(format, "ok")
+	expectedFile, expectedLine := captureContextInfofCall(t, context.Background(), format, "ok")
+
+	entries := observed.FilterMessage(expectedMessage).All()
+	require.Len(t, entries, 1)
+	assertCallerMatches(t, entries[0].Entry.Caller, expectedFile, expectedLine)
 }
 
 type noopLogger struct{}
@@ -184,4 +181,90 @@ func (c *countLogger) Fatal(args ...any) {
 
 func (c *countLogger) Fatalf(format string, args ...any) {
 	c.fatalfCalls++
+}
+
+func wrapLoggerWithObserver(t *testing.T, logger log.Logger) (*observer.ObservedLogs, log.Logger) {
+	t.Helper()
+	sugar, ok := logger.(*zap.SugaredLogger)
+	require.True(t, ok, "Logger is not *zap.SugaredLogger")
+	core, observed := observer.New(zapcore.DebugLevel)
+	wrapped := sugar.Desugar().WithOptions(zap.WrapCore(func(existing zapcore.Core) zapcore.Core {
+		return zapcore.NewTee(existing, core)
+	}))
+	return observed, wrapped.Sugar()
+}
+
+func captureInfofCall(t *testing.T, format string, args ...any) (string, int) {
+	t.Helper()
+	file := currentTestFile(t)
+	line := findLogCallLine(t, file, "captureInfofCall", "Infof")
+	log.Infof(format, args...)
+	return file, line
+}
+
+func captureContextInfofCall(t *testing.T, ctx context.Context, format string, args ...any) (string, int) {
+	t.Helper()
+	file := currentTestFile(t)
+	line := findLogCallLine(t, file, "captureContextInfofCall", "InfofContext")
+	log.InfofContext(ctx, format, args...)
+	return file, line
+}
+
+func assertCallerMatches(t *testing.T, caller zapcore.EntryCaller, expectedFile string, expectedLine int) {
+	t.Helper()
+	require.True(t, caller.Defined, "Caller should be defined")
+	assert.Equal(t, filepath.Base(expectedFile), filepath.Base(caller.File))
+	assert.Equal(t, expectedLine, caller.Line)
+}
+
+func currentTestFile(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	require.True(t, ok, "runtime.Caller failed")
+	return file
+}
+
+// findLogCallLine locates the line of log.<selector> in the named helper function.
+func findLogCallLine(t *testing.T, file string, funcName string, selector string) int {
+	t.Helper()
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, file, nil, 0)
+	require.NoError(t, err, "parse file failed")
+
+	var line int
+	ast.Inspect(node, func(n ast.Node) bool {
+		if line != 0 {
+			return false
+		}
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != funcName {
+			return true
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if line != 0 {
+				return false
+			}
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if pkg.Name == "log" && sel.Sel.Name == selector {
+				line = fset.Position(call.Pos()).Line
+				return false
+			}
+			return true
+		})
+		return false
+	})
+
+	require.NotZero(t, line, "log call not found")
+	return line
 }
