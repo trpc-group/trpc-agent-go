@@ -32,7 +32,6 @@ import (
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
-	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -73,7 +72,7 @@ func main() {
 		agui.WithAGUIRunnerOptions(
 			aguirunner.WithUserIDResolver(userIDResolver),
 			aguirunner.WithTranslateCallbacks(callbacks),
-			aguirunner.WithStartSpan(startSpan),
+			aguirunner.WithRunOptionResolver(runOptionResolver),
 		),
 	)
 	if err != nil {
@@ -86,22 +85,22 @@ func main() {
 	}
 }
 
-// startSpan starts a span for the agent.
-func startSpan(ctx context.Context, input *adapter.RunAgentInput) (context.Context, trace.Span, error) {
+// runOptionResolver resolves the run options for the agent.
+func runOptionResolver(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
 	userID, err := userIDResolver(ctx, input)
 	if err != nil {
-		return nil, nil, fmt.Errorf("userIDResolver: %w", err)
+		return nil, fmt.Errorf("userIDResolver: %w", err)
 	}
-	commonAttrs := []attribute.KeyValue{
-		attribute.String("agentName", agentName),
-		attribute.String("modelName", *modelName),
-		attribute.String("langfuse.environment", "development"),
-		attribute.String("langfuse.session.id", input.ThreadID),
-		attribute.String("langfuse.user.id", userID),
-		attribute.String("langfuse.trace.input", input.Messages[len(input.Messages)-1].Content),
-	}
-	ctx, span := atrace.Tracer.Start(ctx, agentName, trace.WithAttributes(commonAttrs...))
-	return ctx, span, nil
+	return []agent.RunOption{
+		agent.WithSpanAttributes(
+			attribute.String("agentName", agentName),
+			attribute.String("modelName", *modelName),
+			attribute.String("langfuse.environment", "development"),
+			attribute.String("langfuse.session.id", input.ThreadID),
+			attribute.String("langfuse.user.id", userID),
+			attribute.String("langfuse.trace.input", input.Messages[len(input.Messages)-1].Content),
+		),
+	}, nil
 }
 
 // langfuseCallback is a callback that sends the output to Langfuse.
