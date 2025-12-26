@@ -189,13 +189,13 @@ func (e *Embedder) GetEmbedding(ctx context.Context, text string) ([]float64, er
 		return nil, err
 	}
 	if len(response.Embeddings) == 0 {
-		log.Warn("received empty embedding response from Ollaama API")
+		log.WarnContext(ctx, "received empty embedding response from Ollama API")
 		return []float64{}, nil
 	}
 
 	embedding := response.Embeddings[0]
 	if len(embedding) == 0 {
-		log.Warn("received empty embedding vector from Ollaama API")
+		log.WarnContext(ctx, "received empty embedding vector from Ollama API")
 		return []float64{}, nil
 	}
 	return embedding, nil
@@ -210,13 +210,13 @@ func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]fl
 	}
 
 	if len(response.Embeddings) == 0 {
-		log.Warn("received empty embedding response from Ollama API")
+		log.WarnContext(ctx, "received empty embedding response from Ollama API")
 		return []float64{}, nil, nil
 	}
 
 	embedding := response.Embeddings[0]
 	if len(embedding) == 0 {
-		log.Warn("received empty embedding vector from Ollama API")
+		log.WarnContext(ctx, "received empty embedding vector from Ollama API")
 		return []float64{}, nil, nil
 	}
 
