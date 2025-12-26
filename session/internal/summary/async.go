@@ -34,7 +34,7 @@ type AsyncSummaryWorker struct {
 	config   AsyncSummaryConfig
 	jobChans []chan *summaryJob
 	wg       sync.WaitGroup
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	started  bool
 }
 
@@ -123,14 +123,6 @@ func (w *AsyncSummaryWorker) EnqueueJob(
 		return fmt.Errorf("check session key failed: %w", err)
 	}
 
-	// If async workers are not started, fall back to synchronous.
-	w.mu.Lock()
-	started := w.started
-	w.mu.Unlock()
-	if !started || len(w.jobChans) == 0 {
-		return CreateSessionSummaryWithCascade(ctx, sess, filterKey, force, w.config.CreateSummaryFunc)
-	}
-
 	// Create job with detached context.
 	job := &summaryJob{
 		ctx:       context.WithoutCancel(ctx),
@@ -150,24 +142,21 @@ func (w *AsyncSummaryWorker) EnqueueJob(
 }
 
 // tryEnqueueJob attempts to enqueue a summary job.
+// Uses RLock to prevent race with Stop() which closes channels under Lock().
 func (w *AsyncSummaryWorker) tryEnqueueJob(ctx context.Context, job *summaryJob) bool {
 	if ctx.Err() != nil {
 		return false
 	}
 
+	// Hold read lock during channel send to prevent race with Stop().
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if !w.started || len(w.jobChans) == 0 {
+		return false
+	}
+
 	// Select a channel using hash distribution.
 	index := job.session.Hash % len(w.jobChans)
-
-	// Use a defer-recover pattern to handle potential panic from sending to closed channel.
-	defer func() {
-		if r := recover(); r != nil {
-			log.WarnfContext(
-				ctx,
-				"summary job channel may be closed, falling back to synchronous processing: %v",
-				r,
-			)
-		}
-	}()
 
 	select {
 	case w.jobChans[index] <- job:

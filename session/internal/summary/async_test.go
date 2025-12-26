@@ -231,6 +231,7 @@ func TestAsyncSummaryWorker_Stop(t *testing.T) {
 func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 	t.Run("enqueue successfully", func(t *testing.T) {
 		summarizer := &mockSummarizer{shouldSummarize: true, summaryText: "test"}
+		var mu sync.Mutex
 		var createSummaryCalled bool
 		config := AsyncSummaryConfig{
 			Summarizer:        summarizer,
@@ -238,7 +239,9 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 			SummaryQueueSize:  10,
 			SummaryJobTimeout: time.Second,
 			CreateSummaryFunc: func(context.Context, *session.Session, string, bool) error {
+				mu.Lock()
 				createSummaryCalled = true
+				mu.Unlock()
 				return nil
 			},
 		}
@@ -258,7 +261,9 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 
 		// Wait for async processing
 		time.Sleep(50 * time.Millisecond)
+		mu.Lock()
 		assert.True(t, createSummaryCalled)
+		mu.Unlock()
 	})
 
 	t.Run("enqueue with nil summarizer", func(t *testing.T) {
@@ -327,6 +332,7 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 
 	t.Run("enqueue when not started - fallback to sync", func(t *testing.T) {
 		summarizer := &mockSummarizer{shouldSummarize: true, summaryText: "test"}
+		var mu sync.Mutex
 		var createSummaryCalled bool
 		config := AsyncSummaryConfig{
 			Summarizer:        summarizer,
@@ -334,7 +340,9 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 			SummaryQueueSize:  10,
 			SummaryJobTimeout: time.Second,
 			CreateSummaryFunc: func(context.Context, *session.Session, string, bool) error {
+				mu.Lock()
 				createSummaryCalled = true
+				mu.Unlock()
 				return nil
 			},
 		}
@@ -350,11 +358,14 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 
 		err := worker.EnqueueJob(context.Background(), sess, "", false)
 		require.NoError(t, err)
+		mu.Lock()
 		assert.True(t, createSummaryCalled, "Should fallback to synchronous processing")
+		mu.Unlock()
 	})
 
 	t.Run("enqueue when queue full - fallback to sync", func(t *testing.T) {
 		summarizer := &mockSummarizer{shouldSummarize: true, summaryText: "test"}
+		var mu sync.Mutex
 		var syncCalled bool
 		config := AsyncSummaryConfig{
 			Summarizer:        summarizer,
@@ -362,7 +373,9 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 			SummaryQueueSize:  1, // Small queue
 			SummaryJobTimeout: time.Second,
 			CreateSummaryFunc: func(context.Context, *session.Session, string, bool) error {
+				mu.Lock()
 				syncCalled = true
+				mu.Unlock()
 				time.Sleep(10 * time.Millisecond) // Block to fill queue
 				return nil
 			},
@@ -382,10 +395,14 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 		_ = worker.EnqueueJob(context.Background(), sess, "", false)
 
 		// This should fallback to sync
+		mu.Lock()
 		syncCalled = false
+		mu.Unlock()
 		err := worker.EnqueueJob(context.Background(), sess, "", false)
 		require.NoError(t, err)
+		mu.Lock()
 		assert.True(t, syncCalled, "Should fallback to synchronous processing when queue is full")
+		mu.Unlock()
 	})
 
 	t.Run("enqueue with cancelled context", func(t *testing.T) {
@@ -422,6 +439,7 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 
 	t.Run("enqueue with filter key", func(t *testing.T) {
 		summarizer := &mockSummarizer{shouldSummarize: true, summaryText: "test"}
+		var mu sync.Mutex
 		var receivedFilterKey string
 		config := AsyncSummaryConfig{
 			Summarizer:        summarizer,
@@ -429,7 +447,9 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 			SummaryQueueSize:  10,
 			SummaryJobTimeout: time.Second,
 			CreateSummaryFunc: func(_ context.Context, _ *session.Session, fk string, _ bool) error {
+				mu.Lock()
 				receivedFilterKey = fk
+				mu.Unlock()
 				return nil
 			},
 		}
@@ -451,13 +471,16 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 		// Should create both branch1 and full-session summary (cascade)
 		// receivedFilterKey will be set to either "branch1" or "" depending on processing order
+		mu.Lock()
 		assert.NotEmpty(t, receivedFilterKey, "CreateSummaryFunc should have been called with a filterKey")
+		mu.Unlock()
 	})
 }
 
 func TestAsyncSummaryWorker_ProcessJob(t *testing.T) {
 	t.Run("process job successfully", func(t *testing.T) {
 		summarizer := &mockSummarizer{shouldSummarize: true, summaryText: "test"}
+		var mu sync.Mutex
 		var createSummaryCalled bool
 		config := AsyncSummaryConfig{
 			Summarizer:        summarizer,
@@ -465,7 +488,9 @@ func TestAsyncSummaryWorker_ProcessJob(t *testing.T) {
 			SummaryQueueSize:  10,
 			SummaryJobTimeout: time.Second,
 			CreateSummaryFunc: func(context.Context, *session.Session, string, bool) error {
+				mu.Lock()
 				createSummaryCalled = true
+				mu.Unlock()
 				return nil
 			},
 		}
@@ -484,7 +509,9 @@ func TestAsyncSummaryWorker_ProcessJob(t *testing.T) {
 		require.NoError(t, err)
 
 		time.Sleep(50 * time.Millisecond)
+		mu.Lock()
 		assert.True(t, createSummaryCalled)
+		mu.Unlock()
 	})
 
 	t.Run("process job with error", func(t *testing.T) {
@@ -552,6 +579,7 @@ func TestAsyncSummaryWorker_ProcessJob(t *testing.T) {
 
 	t.Run("process job with nil context", func(t *testing.T) {
 		summarizer := &mockSummarizer{shouldSummarize: true, summaryText: "test"}
+		var mu sync.Mutex
 		var createSummaryCalled bool
 		config := AsyncSummaryConfig{
 			Summarizer:        summarizer,
@@ -559,7 +587,9 @@ func TestAsyncSummaryWorker_ProcessJob(t *testing.T) {
 			SummaryQueueSize:  10,
 			SummaryJobTimeout: time.Second,
 			CreateSummaryFunc: func(context.Context, *session.Session, string, bool) error {
+				mu.Lock()
 				createSummaryCalled = true
+				mu.Unlock()
 				return nil
 			},
 		}
@@ -584,7 +614,9 @@ func TestAsyncSummaryWorker_ProcessJob(t *testing.T) {
 		worker.jobChans[0] <- job
 
 		time.Sleep(50 * time.Millisecond)
+		mu.Lock()
 		assert.True(t, createSummaryCalled)
+		mu.Unlock()
 	})
 }
 
@@ -634,14 +666,20 @@ func TestAsyncSummaryWorker_ConcurrentEnqueue(t *testing.T) {
 	mu.Unlock()
 }
 
-func TestAsyncSummaryWorker_ChannelClosed(t *testing.T) {
+func TestAsyncSummaryWorker_EnqueueJob_RaceWithStop(t *testing.T) {
 	summarizer := &mockSummarizer{shouldSummarize: true, summaryText: "test"}
+	var mu sync.Mutex
+	callCount := 0
+
 	config := AsyncSummaryConfig{
 		Summarizer:        summarizer,
 		AsyncSummaryNum:   1,
 		SummaryQueueSize:  10,
 		SummaryJobTimeout: time.Second,
-		CreateSummaryFunc: func(context.Context, *session.Session, string, bool) error {
+		CreateSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+			mu.Lock()
+			callCount++
+			mu.Unlock()
 			return nil
 		},
 	}
@@ -655,18 +693,21 @@ func TestAsyncSummaryWorker_ChannelClosed(t *testing.T) {
 		UserID:  "test-user",
 	}
 
-	// Close channel manually to simulate closed channel
-	close(worker.jobChans[0])
-
-	// Should not panic, should fallback to sync
-	require.NotPanics(t, func() {
-		err := worker.EnqueueJob(context.Background(), sess, "", false)
-		require.NoError(t, err)
-	})
-
-	// Mark as not started to avoid closing already closed channel
-	worker.mu.Lock()
-	worker.started = false
-	worker.jobChans = nil
-	worker.mu.Unlock()
+	// Concurrent EnqueueJob and Stop calls.
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = worker.EnqueueJob(context.Background(), sess, "", false)
+		}()
+		go func() {
+			defer wg.Done()
+			worker.Stop()
+		}()
+		// Restart for next iteration.
+		time.Sleep(1 * time.Millisecond)
+		worker.Start()
+	}
+	wg.Wait()
 }
