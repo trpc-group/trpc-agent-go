@@ -494,7 +494,7 @@ vs, err := vectorqdrant.New(ctx,
 2. **Use storage module**: Create a client and pass it for reuse across multiple vectorstores
 
 ```go
-client, err := qdrantstorage.GetClientBuilder()(ctx,
+client, err := qdrantstorage.NewClient(ctx,
     qdrantstorage.WithHost("localhost"),
     qdrantstorage.WithPort(6334),
 )

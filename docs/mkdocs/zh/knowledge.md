@@ -495,7 +495,7 @@ vs, err := vectorqdrant.New(ctx,
 2. **使用 storage 模块**：创建客户端，实现多个向量存储共享
 
 ```go
-client, err := qdrantstorage.GetClientBuilder()(ctx,
+client, err := qdrantstorage.NewClient(ctx,
     qdrantstorage.WithHost("localhost"),
     qdrantstorage.WithPort(6334),
 )
