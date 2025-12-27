@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -121,6 +122,18 @@ func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.U
 
 func (m *mockMemoryService) Tools() []tool.Tool {
 	return []tool.Tool{}
+}
+
+func (m *mockMemoryService) EnqueueAutoMemoryJob(
+	_ context.Context,
+	_ memory.UserKey,
+	_ []model.Message,
+) error {
+	return nil
+}
+
+func (m *mockMemoryService) Close() error {
+	return nil
 }
 
 func (m *mockMemoryService) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
@@ -1042,6 +1055,18 @@ func (m *mockMemoryServiceWithError) SearchMemories(ctx context.Context, userKey
 
 func (m *mockMemoryServiceWithError) Tools() []tool.Tool {
 	return []tool.Tool{}
+}
+
+func (m *mockMemoryServiceWithError) EnqueueAutoMemoryJob(
+	_ context.Context,
+	_ memory.UserKey,
+	_ []model.Message,
+) error {
+	return nil
+}
+
+func (m *mockMemoryServiceWithError) Close() error {
+	return nil
 }
 
 func (m *mockMemoryServiceWithError) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {

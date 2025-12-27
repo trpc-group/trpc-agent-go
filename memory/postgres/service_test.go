@@ -22,46 +22,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
-
-func TestGenerateMemoryID(t *testing.T) {
-	tests := []struct {
-		name   string
-		memory *memory.Memory
-	}{
-		{
-			name: "memory with content only",
-			memory: &memory.Memory{
-				Memory: "test content",
-			},
-		},
-		{
-			name: "memory with content and topics",
-			memory: &memory.Memory{
-				Memory: "test content",
-				Topics: []string{"topic1", "topic2"},
-			},
-		},
-		{
-			name: "memory with empty topics",
-			memory: &memory.Memory{
-				Memory: "test content",
-				Topics: []string{},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			id := generateMemoryID(tt.memory)
-			assert.NotEmpty(t, id, "Generated memory ID should not be empty")
-			// The ID is a hex encoding, so it should be even length.
-			assert.Equal(t, 0, len(id)%2, "Generated memory ID should have even length")
-		})
-	}
-}
 
 func TestServiceOpts_Defaults(t *testing.T) {
 	opts := ServiceOpts{}
@@ -2252,27 +2218,6 @@ func TestService_WithSchema(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// Test generateMemoryID with different inputs
-func TestGenerateMemoryID_DifferentContent(t *testing.T) {
-	mem1 := &memory.Memory{Memory: "content1"}
-	mem2 := &memory.Memory{Memory: "content2"}
-
-	id1 := generateMemoryID(mem1)
-	id2 := generateMemoryID(mem2)
-
-	assert.NotEqual(t, id1, id2, "Different content should generate different IDs")
-}
-
-func TestGenerateMemoryID_DifferentTopics(t *testing.T) {
-	mem1 := &memory.Memory{Memory: "content", Topics: []string{"topic1"}}
-	mem2 := &memory.Memory{Memory: "content", Topics: []string{"topic2"}}
-
-	id1 := generateMemoryID(mem1)
-	id2 := generateMemoryID(mem2)
-
-	assert.NotEqual(t, id1, id2, "Different topics should generate different IDs")
-}
-
 // Test parseTableName.
 func TestParseTableName(t *testing.T) {
 	tests := []struct {
@@ -3220,4 +3165,140 @@ func TestNewService_WithCustomTableName(t *testing.T) {
 
 	require.NoError(t, mock.ExpectationsWereMet())
 	service.Close()
+}
+
+// mockExtractor is a mock implementation of extractor.MemoryExtractor.
+type mockExtractor struct {
+	extractCalled bool
+}
+
+func (m *mockExtractor) Extract(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*extractor.Operation, error) {
+	m.extractCalled = true
+	return nil, nil
+}
+
+func (m *mockExtractor) SetPrompt(prompt string) {}
+
+func (m *mockExtractor) SetModel(mdl model.Model) {}
+
+func (m *mockExtractor) Metadata() map[string]any {
+	return map[string]any{}
+}
+
+func TestWithExtractor(t *testing.T) {
+	ext := &mockExtractor{}
+	opts := defaultOptions.clone()
+	WithExtractor(ext)(&opts)
+	assert.Equal(t, ext, opts.extractor)
+}
+
+func TestWithAsyncMemoryNum(t *testing.T) {
+	t.Run("valid value", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithAsyncMemoryNum(5)(&opts)
+		assert.Equal(t, 5, opts.asyncMemoryNum)
+	})
+
+	t.Run("invalid value uses default", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithAsyncMemoryNum(0)(&opts)
+		assert.Equal(t, imemory.DefaultAsyncMemoryNum, opts.asyncMemoryNum)
+	})
+}
+
+func TestWithMemoryQueueSize(t *testing.T) {
+	t.Run("valid value", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithMemoryQueueSize(200)(&opts)
+		assert.Equal(t, 200, opts.memoryQueueSize)
+	})
+
+	t.Run("invalid value uses default", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithMemoryQueueSize(0)(&opts)
+		assert.Equal(t, imemory.DefaultMemoryQueueSize, opts.memoryQueueSize)
+	})
+}
+
+func TestWithMemoryJobTimeout(t *testing.T) {
+	opts := defaultOptions.clone()
+	WithMemoryJobTimeout(time.Minute)(&opts)
+	assert.Equal(t, time.Minute, opts.memoryJobTimeout)
+}
+
+func TestWithMaxExistingMemories(t *testing.T) {
+	t.Run("valid value", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithMaxExistingMemories(100)(&opts)
+		assert.Equal(t, 100, opts.maxExistingMemories)
+	})
+
+	t.Run("invalid value uses default", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithMaxExistingMemories(0)(&opts)
+		assert.Equal(t, imemory.DefaultMaxExistingMemories, opts.maxExistingMemories)
+	})
+}
+
+func TestEnqueueAutoMemoryJob_NoWorker(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db, mock)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	// Should return nil when no worker is configured.
+	err := s.EnqueueAutoMemoryJob(ctx, userKey, []model.Message{
+		model.NewUserMessage("hello"),
+	})
+	assert.NoError(t, err)
+}
+
+func TestClose_NoWorker(t *testing.T) {
+	db, mock := setupMockDB(t)
+	s := setupMockService(t, db, mock)
+
+	// Expect db.Close() to be called.
+	mock.ExpectClose()
+
+	err := s.Close()
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTools_AutoMemoryMode(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db, mock)
+
+	// Enable auto memory mode.
+	s.opts.extractor = &mockExtractor{}
+	s.opts.toolCreators = imemory.AllToolCreators
+	s.opts.enabledTools = imemory.DefaultEnabledTools
+	// Re-compute tools list after changing opts to simulate auto memory mode.
+	s.precomputedTools = imemory.BuildToolsList(
+		s.opts.extractor,
+		s.opts.toolCreators,
+		s.opts.enabledTools,
+		s.cachedTools,
+	)
+
+	tools := s.Tools()
+
+	// In auto memory mode, only search and clear tools should be returned.
+	assert.Len(t, tools, 2)
+	toolNames := make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	assert.True(t, toolNames[memory.SearchToolName])
+	assert.True(t, toolNames[memory.ClearToolName])
 }
