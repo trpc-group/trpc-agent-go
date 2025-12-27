@@ -1,0 +1,142 @@
+{
+  "evalSetResultId": "knowledge-recall-app_knowledge-recall-basic_e656d265-483c-4841-a3d7-3055d3e7cf0d",
+  "evalSetResultName": "knowledge-recall-app_knowledge-recall-basic_e656d265-483c-4841-a3d7-3055d3e7cf0d",
+  "evalSetId": "knowledge-recall-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "knowledge-recall-basic",
+      "evalId": "knowledge-recall",
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "llm_rubric_knowledge_recall",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 0.9,
+          "criterion": {
+            "llmJudge": {
+              "rubrics": [
+                {
+                  "id": "1",
+                  "content": {
+                    "text": "Evaluate the relevance of the knowledge recall. A knowledge recall can be considered relevant if it enhances or clarifies the response, adding value to the user's comprehension of the topic in question. Relevance is determined by the extent to which the provided information addresses the specific question asked, staying focused on the subject without straying into unrelated areas or providing extraneous details."
+                  },
+                  "description": "The knowledge recall is relevant to the user's prompt.",
+                  "type": "KNOWLEDGE_RELEVANCE"
+                }
+              ],
+              "judgeModel": {
+                "providerName": "openai",
+                "modelName": "deepseek-chat",
+                "numSamples": 3,
+                "generationConfig": {
+                  "max_tokens": 512,
+                  "temperature": 1,
+                  "stream": false
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1,
+            "rubricScores": [
+              {
+                "id": "1",
+                "reason": "The retrieved knowledge directly answers the user's question \"What is trpc-agent-go?\" by providing its definition, purpose, and key characteristics. It is focused on the subject, does not stray into unrelated areas, and provides the core information needed to understand the topic.",
+                "score": 1
+              }
+            ]
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "e7f0a4ca-b3a9-4508-b870-e21490a15ee2",
+            "userContent": {
+              "role": "user",
+              "content": "What is trpc-agent-go?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Based on the information found, **tRPC-Agent-Go** is a powerful Go framework designed for building intelligent agent systems. It transforms how developers create AI applications by enabling the construction of autonomous agents that can:\n\n- **Think** - Process information and make decisions\n- **Remember** - Maintain state and learn from interactions  \n- **Collaborate** - Work together with other agents or systems\n- **Act** - Execute tasks and perform actions\n\nThe framework aims to make building sophisticated AI applications with autonomous agent capabilities much easier and more accessible for Go developers. It appears to be focused on creating agent-based systems that can operate autonomously while interacting with their environment and other systems."
+            },
+            "tools": [
+              {
+                "id": "call_00_rCWMAOJQ37jADkJZGNeyrGa4",
+                "name": "knowledge_search",
+                "arguments": {
+                  "query": "trpc-agent-go"
+                },
+                "result": {
+                  "documents": [
+                    {
+                      "metadata": {
+                        "trpc_agent_go_chunk_index": 1
+                      },
+                      "score": 0.9089502126782587,
+                      "text": "tRPC-Agent-Go is a powerful Go framework for building intelligent agent systems that transforms how you create AI applications. Build autonomous agents that think, remember, collaborate, and act with unprecedented ease."
+                    }
+                  ],
+                  "message": "Found 1 relevant document(s)"
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "knowledge-recall-1",
+            "userContent": {
+              "role": "user",
+              "content": "What is trpc-agent-go?"
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "llm_rubric_knowledge_recall",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 0.9,
+              "criterion": {
+                "llmJudge": {
+                  "rubrics": [
+                    {
+                      "id": "1",
+                      "content": {
+                        "text": "Evaluate the relevance of the knowledge recall. A knowledge recall can be considered relevant if it enhances or clarifies the response, adding value to the user's comprehension of the topic in question. Relevance is determined by the extent to which the provided information addresses the specific question asked, staying focused on the subject without straying into unrelated areas or providing extraneous details."
+                      },
+                      "description": "The knowledge recall is relevant to the user's prompt.",
+                      "type": "KNOWLEDGE_RELEVANCE"
+                    }
+                  ],
+                  "judgeModel": {
+                    "providerName": "openai",
+                    "modelName": "deepseek-chat",
+                    "numSamples": 3,
+                    "generationConfig": {
+                      "max_tokens": 512,
+                      "temperature": 1,
+                      "stream": false
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1,
+                "rubricScores": [
+                  {
+                    "id": "1",
+                    "reason": "The retrieved knowledge directly answers the user's question \"What is trpc-agent-go?\" by providing its definition, purpose, and key characteristics. It is focused on the subject, does not stray into unrelated areas, and provides the core information needed to understand the topic.",
+                    "score": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "af3f425e-5e23-4e00-8064-ac79d63433ef",
+      "userId": "demo-user"
+    }
+  ],
+  "creationTimestamp": 1766505583.56396
+}

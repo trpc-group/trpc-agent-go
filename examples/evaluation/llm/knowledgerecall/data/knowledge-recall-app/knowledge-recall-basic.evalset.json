@@ -1,0 +1,22 @@
+{
+  "evalSetId": "knowledge-recall-basic",
+  "name": "knowledge-recall-basic",
+  "evalCases": [
+    {
+      "evalId": "knowledge-recall",
+      "conversation": [
+        {
+          "invocationId": "knowledge-recall-1",
+          "userContent": {
+            "role": "user",
+            "content": "What is trpc-agent-go?"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "knowledge-recall-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}
