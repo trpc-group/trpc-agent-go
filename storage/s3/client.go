@@ -5,8 +5,10 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
-//
 
+// Package s3 provides a reusable S3 client for storage operations.
+// It supports AWS S3 and S3-compatible services like MinIO, DigitalOcean Spaces,
+// and Cloudflare R2.
 package s3
 
 import (
@@ -22,9 +24,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-// storage defines the internal interface for S3 operations.
-// This interface is decoupled from the AWS SDK to facilitate testing.
-type storage interface {
+// Client defines the interface for S3 client operations.
+// This allows for mocking in tests and provides a clean abstraction
+// over the AWS SDK.
+type Client interface {
 	// PutObject uploads an object to the bucket.
 	PutObject(ctx context.Context, key string, data []byte, contentType string) error
 
@@ -37,9 +40,12 @@ type storage interface {
 
 	// DeleteObjects deletes multiple objects in a single request (batch delete).
 	DeleteObjects(ctx context.Context, keys []string) error
+
+	// Close releases any resources held by the client.
+	Close() error
 }
 
-// s3API defines the subset of AWS S3 API operations used by storageClient.
+// s3API defines the subset of AWS S3 API operations used by the client.
 // This interface allows mocking the AWS SDK in unit tests.
 type s3API interface {
 	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
@@ -48,14 +54,33 @@ type s3API interface {
 	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
 
-// storageClient implements storage using AWS SDK v2.
-type storageClient struct {
+// client implements the Client interface using AWS SDK v2.
+type client struct {
 	s3     s3API
 	bucket string
 }
 
-// newStorageClient creates a new storage client from the given configuration.
-func newStorageClient(cfg *Config) (*storageClient, error) {
+// NewClient creates a new S3 client with the given options.
+//
+// Example:
+//
+//	client, err := s3.NewClient(ctx,
+//	    s3.WithBucket("my-bucket"),
+//	    s3.WithRegion("us-west-2"),
+//	)
+func NewClient(ctx context.Context, opts ...ClientBuilderOpt) (Client, error) {
+	cfg := &ClientBuilderOpts{
+		Region:     defaultRegion,
+		MaxRetries: defaultMaxRetries,
+	}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	if cfg.Bucket == "" {
+		return nil, ErrEmptyBucket
+	}
+
 	// Build AWS config options
 	var awsOpts []func(*config.LoadOptions) error
 
@@ -65,7 +90,7 @@ func newStorageClient(cfg *Config) (*storageClient, error) {
 	}
 
 	// Load default AWS config
-	awsCfg, err := config.LoadDefaultConfig(context.Background(), awsOpts...)
+	awsCfg, err := config.LoadDefaultConfig(ctx, awsOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -105,14 +130,14 @@ func newStorageClient(cfg *Config) (*storageClient, error) {
 		})
 	}
 
-	return &storageClient{
+	return &client{
 		s3:     s3.NewFromConfig(awsCfg, s3Opts...),
 		bucket: cfg.Bucket,
 	}, nil
 }
 
 // PutObject uploads an object to S3.
-func (c *storageClient) PutObject(ctx context.Context, key string, data []byte, contentType string) error {
+func (c *client) PutObject(ctx context.Context, key string, data []byte, contentType string) error {
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
@@ -132,7 +157,7 @@ func (c *storageClient) PutObject(ctx context.Context, key string, data []byte, 
 }
 
 // GetObject downloads an object from S3.
-func (c *storageClient) GetObject(ctx context.Context, key string) ([]byte, string, error) {
+func (c *client) GetObject(ctx context.Context, key string) ([]byte, string, error) {
 	resp, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
@@ -156,7 +181,7 @@ func (c *storageClient) GetObject(ctx context.Context, key string) ([]byte, stri
 }
 
 // ListObjects lists object keys with the given prefix.
-func (c *storageClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+func (c *client) ListObjects(ctx context.Context, prefix string) ([]string, error) {
 	var keys []string
 	var continuationToken *string
 
@@ -185,7 +210,7 @@ func (c *storageClient) ListObjects(ctx context.Context, prefix string) ([]strin
 
 // DeleteObjects deletes multiple objects in a single batch request.
 // S3 allows up to 1000 objects per DeleteObjects request.
-func (c *storageClient) DeleteObjects(ctx context.Context, keys []string) error {
+func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -219,6 +244,12 @@ func (c *storageClient) DeleteObjects(ctx context.Context, keys []string) error 
 		}
 	}
 
+	return nil
+}
+
+// Close releases any resources held by the client.
+// For the S3 client, this is a no-op as the AWS SDK doesn't require explicit cleanup.
+func (c *client) Close() error {
 	return nil
 }
 

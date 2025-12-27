@@ -5,7 +5,6 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
-//
 
 // Package s3 provides an S3-compatible artifact storage service implementation.
 // It supports AWS S3, MinIO, DigitalOcean Spaces, Cloudflare R2, and other
@@ -22,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	iartifact "trpc.group/trpc-go/trpc-agent-go/internal/artifact"
+	s3storage "trpc.group/trpc-go/trpc-agent-go/storage/s3"
 )
 
 // Service is an S3-compatible implementation of the artifact service.
@@ -34,7 +34,8 @@ import (
 //   - For regular session-scoped files:
 //     {app_name}/{user_id}/{session_id}/{filename}/{version}
 type Service struct {
-	storage storage
+	client     s3storage.Client
+	ownsClient bool // true if we created the client, false if provided via WithClient
 }
 
 // NewService creates a new S3 artifact service with optional configurations.
@@ -50,7 +51,7 @@ type Service struct {
 //	service, err := s3.NewService("artifacts",
 //	    s3.WithEndpoint("http://localhost:9000"),
 //	    s3.WithCredentials("minioadmin", "minioadmin"),
-//	    s3.WithPathStyle(),
+//	    s3.WithPathStyle(true),
 //	)
 //
 //	// DigitalOcean Spaces
@@ -64,34 +65,56 @@ type Service struct {
 //	service, err := s3.NewService("my-bucket",
 //	    s3.WithEndpoint("https://ACCOUNT_ID.r2.cloudflarestorage.com"),
 //	    s3.WithCredentials(accessKey, secretKey),
-//	    s3.WithPathStyle(),
+//	    s3.WithPathStyle(true),
 //	)
+//
+//	// Using a pre-created client
+//	client, err := s3storage.GetClientBuilder()(ctx,
+//	    s3storage.WithBucket("my-bucket"),
+//	    s3storage.WithRegion("us-west-2"),
+//	)
+//	service, err := s3.NewService("my-bucket", s3.WithClient(client))
 func NewService(bucket string, opts ...Option) (*Service, error) {
-	cfg := newConfig(bucket)
+	o := &options{
+		bucket: bucket,
+	}
 
 	// Apply options
 	for _, opt := range opts {
-		opt(cfg)
+		opt(o)
 	}
 
-	// Validate configuration
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
+	// Use pre-created client if provided, otherwise create one
+	client := o.client
+	ownsClient := false
+	if client == nil {
+		// Build client builder options
+		builderOpts := []s3storage.ClientBuilderOpt{
+			s3storage.WithBucket(bucket),
+		}
+		builderOpts = append(builderOpts, o.clientBuilderOpts...)
 
-	// Use injected storage or create a new one
-	storage := cfg.storage
-	if storage == nil {
 		var err error
-		storage, err = newStorageClient(cfg)
+		client, err = s3storage.NewClient(context.Background(), builderOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create storage client: %w", err)
 		}
+		ownsClient = true
 	}
 
 	return &Service{
-		storage: storage,
+		client:     client,
+		ownsClient: ownsClient,
 	}, nil
+}
+
+// Close releases any resources held by the service.
+// If the client was provided externally via WithClient, it is not closed.
+func (s *Service) Close() error {
+	if s.client == nil || !s.ownsClient {
+		return nil
+	}
+	return s.client.Close()
 }
 
 // SaveArtifact saves an artifact to S3.
@@ -120,7 +143,7 @@ func (s *Service) SaveArtifact(
 		contentType = "application/octet-stream"
 	}
 
-	if err := s.storage.PutObject(ctx, objectKey, art.Data, contentType); err != nil {
+	if err := s.client.PutObject(ctx, objectKey, art.Data, contentType); err != nil {
 		return 0, fmt.Errorf("failed to upload artifact: %w", err)
 	}
 
@@ -155,9 +178,9 @@ func (s *Service) LoadArtifact(
 	objectKey := iartifact.BuildObjectName(sessionInfo, filename, targetVersion)
 
 	// Download the artifact
-	data, contentType, err := s.storage.GetObject(ctx, objectKey)
+	data, contentType, err := s.client.GetObject(ctx, objectKey)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, s3storage.ErrNotFound) {
 			return nil, nil // Artifact not found
 		}
 		return nil, fmt.Errorf("failed to download artifact: %w", err)
@@ -184,8 +207,8 @@ func (s *Service) ListArtifactKeys(
 
 	// List session-scoped artifacts
 	sessionPrefix := iartifact.BuildSessionPrefix(sessionInfo)
-	sessionKeys, err := s.storage.ListObjects(ctx, sessionPrefix)
-	if err != nil && !errors.Is(err, ErrNotFound) {
+	sessionKeys, err := s.client.ListObjects(ctx, sessionPrefix)
+	if err != nil && !errors.Is(err, s3storage.ErrNotFound) {
 		return nil, fmt.Errorf("failed to list session artifacts: %w", err)
 	}
 
@@ -198,8 +221,8 @@ func (s *Service) ListArtifactKeys(
 
 	// List user-namespaced artifacts
 	userPrefix := iartifact.BuildUserNamespacePrefix(sessionInfo)
-	userKeys, err := s.storage.ListObjects(ctx, userPrefix)
-	if err != nil && !errors.Is(err, ErrNotFound) {
+	userKeys, err := s.client.ListObjects(ctx, userPrefix)
+	if err != nil && !errors.Is(err, s3storage.ErrNotFound) {
 		return nil, fmt.Errorf("failed to list user artifacts: %w", err)
 	}
 
@@ -228,9 +251,9 @@ func (s *Service) DeleteArtifact(
 ) error {
 	// Get all versions of the artifact
 	prefix := iartifact.BuildObjectNamePrefix(sessionInfo, filename)
-	keys, err := s.storage.ListObjects(ctx, prefix)
+	keys, err := s.client.ListObjects(ctx, prefix)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, s3storage.ErrNotFound) {
 			return nil // Nothing to delete
 		}
 		return fmt.Errorf("failed to list artifact versions: %w", err)
@@ -241,7 +264,7 @@ func (s *Service) DeleteArtifact(
 	}
 
 	// Batch delete
-	if err := s.storage.DeleteObjects(ctx, keys); err != nil {
+	if err := s.client.DeleteObjects(ctx, keys); err != nil {
 		return fmt.Errorf("failed to delete artifact: %w", err)
 	}
 
@@ -255,9 +278,9 @@ func (s *Service) ListVersions(
 	filename string,
 ) ([]int, error) {
 	prefix := iartifact.BuildObjectNamePrefix(sessionInfo, filename)
-	keys, err := s.storage.ListObjects(ctx, prefix)
+	keys, err := s.client.ListObjects(ctx, prefix)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, s3storage.ErrNotFound) {
 			return []int{}, nil
 		}
 		return nil, fmt.Errorf("failed to list versions: %w", err)
@@ -280,10 +303,10 @@ func (s *Service) ListVersions(
 }
 
 // maxVersion returns the maximum version from a slice of versions.
-// Returns -1 if the slice is empty.
+// Returns 0 if the slice is empty (so that the first version will be 1).
 func maxVersion(versions []int) int {
 	if len(versions) == 0 {
-		return -1
+		return 0
 	}
 	max := versions[0]
 	for _, v := range versions[1:] {
