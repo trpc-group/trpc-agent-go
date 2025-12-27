@@ -47,7 +47,7 @@ func New(ctx context.Context, opts ...Option) (*VectorStore, error) {
 	ownsClient := false
 	if client == nil {
 		var err error
-		client, err = qdrantstorage.GetClientBuilder()(ctx, o.clientBuilderOpts...)
+		client, err = qdrantstorage.NewClient(ctx, o.clientBuilderOpts...)
 		if err != nil {
 			return nil, errors.Join(ErrConnectionFailed, err)
 		}

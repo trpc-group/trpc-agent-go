@@ -11,7 +11,6 @@ package qdrant
 
 import (
 	"context"
-	"sync"
 
 	"github.com/qdrant/go-client/qdrant"
 )
@@ -30,48 +29,32 @@ type Client interface {
 	Close() error
 }
 
-// ClientBuilder is a function that creates a new Qdrant client.
-type ClientBuilder func(ctx context.Context, opts ...ClientBuilderOpt) (Client, error)
-
-var (
-	builderMu     sync.RWMutex
-	globalBuilder ClientBuilder = defaultClientBuilder
-)
-
-// SetClientBuilder sets the global Qdrant client builder.
-// This can be used for testing or to provide a custom client implementation.
-func SetClientBuilder(builder ClientBuilder) {
-	builderMu.Lock()
-	defer builderMu.Unlock()
-	globalBuilder = builder
-}
-
-// GetClientBuilder returns the global Qdrant client builder.
-func GetClientBuilder() ClientBuilder {
-	builderMu.RLock()
-	defer builderMu.RUnlock()
-	return globalBuilder
-}
-
-// defaultClientBuilder is the default client builder for Qdrant.
-func defaultClientBuilder(_ context.Context, builderOpts ...ClientBuilderOpt) (Client, error) {
-	opts := &ClientBuilderOpts{
+// NewClient creates a new Qdrant client with the given options.
+//
+// Example:
+//
+//	client, err := qdrant.NewClient(ctx,
+//	    qdrant.WithHost("localhost"),
+//	    qdrant.WithPort(6334),
+//	)
+func NewClient(_ context.Context, opts ...ClientBuilderOpt) (Client, error) {
+	cfg := &ClientBuilderOpts{
 		Host: defaultHost,
 		Port: defaultPort,
 	}
-	for _, opt := range builderOpts {
-		opt(opts)
+	for _, opt := range opts {
+		opt(cfg)
 	}
 
-	if opts.Host == "" {
+	if cfg.Host == "" {
 		return nil, ErrEmptyHost
 	}
 
 	config := &qdrant.Config{
-		Host:   opts.Host,
-		Port:   opts.Port,
-		APIKey: opts.APIKey,
-		UseTLS: opts.UseTLS,
+		Host:   cfg.Host,
+		Port:   cfg.Port,
+		APIKey: cfg.APIKey,
+		UseTLS: cfg.UseTLS,
 	}
 
 	return qdrant.NewClient(config)
