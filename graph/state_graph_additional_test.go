@@ -394,10 +394,10 @@ func TestBuildAgentInvocationWithStateAndScope_ParentAndScope(t *testing.T) {
 
 	key := inv.GetEventFilterKey()
 	parts := strings.Split(key, event.FilterKeyDelimiter)
-	require.Len(t, parts, 3)
+	// FilterKey is now stable without UUID: "root/scope"
+	require.Len(t, parts, 2)
 	require.Equal(t, "root", parts[0])
 	require.Equal(t, "scope", parts[1])
-	require.NotEmpty(t, parts[2])
 }
 
 func TestBuildAgentInvocationWithStateAndScope_ParentNoScope(t *testing.T) {
@@ -417,10 +417,10 @@ func TestBuildAgentInvocationWithStateAndScope_ParentNoScope(t *testing.T) {
 
 	key := inv.GetEventFilterKey()
 	parts := strings.Split(key, event.FilterKeyDelimiter)
-	require.Len(t, parts, 3)
+	// FilterKey is now stable without UUID: "root/child"
+	require.Len(t, parts, 2)
 	require.Equal(t, "root", parts[0])
 	require.Equal(t, "child", parts[1])
-	require.NotEmpty(t, parts[2])
 }
 
 func TestBuildAgentInvocationWithStateAndScope_NoParentKey(t *testing.T) {
@@ -438,8 +438,6 @@ func TestBuildAgentInvocationWithStateAndScope_NoParentKey(t *testing.T) {
 	)
 
 	key := inv.GetEventFilterKey()
-	parts := strings.Split(key, event.FilterKeyDelimiter)
-	require.Len(t, parts, 2)
-	require.Equal(t, "scope", parts[0])
-	require.NotEmpty(t, parts[1])
+	// FilterKey is now stable without UUID: just "scope"
+	require.Equal(t, "scope", key)
 }
