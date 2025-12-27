@@ -152,11 +152,12 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 	responseProcessors = append(responseProcessors, toolcallProcessor)
 
-	// Add transfer response processor if sub-agents are configured.
-	if len(options.SubAgents) > 0 {
-		transferResponseProcessor := processor.NewTransferResponseProcessor(options.EndInvocationAfterTransfer)
-		responseProcessors = append(responseProcessors, transferResponseProcessor)
-	}
+	// Always install the transfer processor so dynamic sub-agent updates
+	// (for example, via SubAgentSetter) can enable transfer_to_agent later.
+	transferResponseProcessor := processor.NewTransferResponseProcessor(
+		options.EndInvocationAfterTransfer,
+	)
+	responseProcessors = append(responseProcessors, transferResponseProcessor)
 
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{

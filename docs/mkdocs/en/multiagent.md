@@ -20,6 +20,7 @@ The Multi-Agent System is built on the SubAgent concept, implementing various co
 
 - **Agent Tool (AgentTool)** - Wraps Agents as tools for other Agents to call
 - **Agent Transfer** - Implements task delegation between Agents through the `transfer_to_agent` tool
+- **Team** - A high-level wrapper for coordinator teams and swarm-style handoffs (`team` package)
 
 ## SubAgent Basics
 
