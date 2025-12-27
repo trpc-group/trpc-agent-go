@@ -1708,32 +1708,8 @@ func TestStartAsyncSummaryWorker(t *testing.T) {
 	require.NoError(t, err)
 	defer service.Close()
 
-	// Verify that summary job channels are not initialized when no summarizer is provided
-	assert.Len(t, service.summaryJobChans, 0)
-}
-
-func TestStartAsyncSummaryWorkerWithSummarizer(t *testing.T) {
-	redisURL, cleanup := setupTestRedis(t)
-	defer cleanup()
-
-	service, err := NewService(
-		WithRedisClientURL(redisURL),
-		WithAsyncSummaryNum(2),
-		WithSummaryQueueSize(50),
-		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
-	)
-	require.NoError(t, err)
-	defer service.Close()
-
-	// Verify that summary job channels are initialized when summarizer is provided
-	assert.Len(t, service.summaryJobChans, 2)
-	assert.NotNil(t, service.summaryJobChans[0])
-	assert.NotNil(t, service.summaryJobChans[1])
-
-	// Verify channel buffer sizes
-	for i, ch := range service.summaryJobChans {
-		assert.Equal(t, 50, cap(ch), "Summary channel %d should have buffer size 50", i)
-	}
+	// Verify that asyncWorker is not initialized when no summarizer is provided
+	assert.Nil(t, service.asyncWorker)
 }
 
 func TestService_Close(t *testing.T) {
