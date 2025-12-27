@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -1460,6 +1459,16 @@ func processAgentEventStream(
 
 // buildAgentInvocationWithStateAndScope builds an invocation for the target agent
 // using a custom runtime state and an optional event filter scope segment.
+//
+// FilterKey Strategy:
+// The FilterKey is built using a stable, deterministic pattern based on the agent
+// hierarchy rather than random UUIDs. This ensures that:
+//  1. Multi-turn conversations work correctly with BranchFilterModePrefix
+//  2. Child agent responses from previous requests are visible in subsequent requests
+//  3. The prefix matching in event.Filter() works as expected across requests
+//
+// Format: parentKey/agentName (without UUID)
+// Example: "input/knowledge" instead of "input/knowledge/random-uuid"
 func buildAgentInvocationWithStateAndScope(
 	ctx context.Context,
 	parentState State,
@@ -1490,14 +1499,12 @@ func buildAgentInvocationWithStateAndScope(
 
 		base := util.If(scope != "", scope, targetAgent.Info().Name)
 		parentKey := parentInvocation.GetEventFilterKey()
+		// Build a stable FilterKey without UUID to ensure multi-turn conversations
 		var filterKey string
 		if parentKey == "" {
-			filterKey = base + agent.EventFilterKeyDelimiter +
-				uuid.NewString()
+			filterKey = base
 		} else {
-			filterKey = parentKey + agent.EventFilterKeyDelimiter +
-				base + agent.EventFilterKeyDelimiter +
-				uuid.NewString()
+			filterKey = parentKey + agent.EventFilterKeyDelimiter + base
 		}
 		inv := parentInvocation.Clone(
 			agent.WithInvocationAgent(targetAgent),
@@ -1515,8 +1522,8 @@ func buildAgentInvocationWithStateAndScope(
 		agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: runtime}),
 		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
 		agent.WithInvocationSession(sessionData),
-		// Unify format with clone branch: <agentName>/<uuid>
-		agent.WithInvocationEventFilterKey(targetAgent.Info().Name+agent.EventFilterKeyDelimiter+uuid.NewString()),
+		// Use stable FilterKey based on agent name only (no UUID).
+		agent.WithInvocationEventFilterKey(targetAgent.Info().Name),
 	)
 	return inv
 }
