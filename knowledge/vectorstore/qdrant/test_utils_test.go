@@ -82,18 +82,18 @@ type mockClient struct {
 	documents map[string]*mockDoc
 
 	// Function overrides
-	CollectionExistsFn   func(ctx context.Context, name string) (bool, error)
-	GetCollectionInfoFn  func(ctx context.Context, name string) (*qdrant.CollectionInfo, error)
-	CreateCollectionFn   func(ctx context.Context, req *qdrant.CreateCollection) error
-	DeleteCollectionFn   func(ctx context.Context, name string) error
-	UpsertFn             func(ctx context.Context, req *qdrant.UpsertPoints) (*qdrant.UpdateResult, error)
-	GetFn                func(ctx context.Context, req *qdrant.GetPoints) ([]*qdrant.RetrievedPoint, error)
-	DeleteFn             func(ctx context.Context, req *qdrant.DeletePoints) (*qdrant.UpdateResult, error)
-	SetPayloadFn         func(ctx context.Context, req *qdrant.SetPayloadPoints) (*qdrant.UpdateResult, error)
-	QueryFn              func(ctx context.Context, req *qdrant.QueryPoints) ([]*qdrant.ScoredPoint, error)
-	CountFn              func(ctx context.Context, req *qdrant.CountPoints) (uint64, error)
-	ScrollFn             func(ctx context.Context, req *qdrant.ScrollPoints) ([]*qdrant.RetrievedPoint, error)
-	CloseFn              func() error
+	CollectionExistsFn  func(ctx context.Context, name string) (bool, error)
+	GetCollectionInfoFn func(ctx context.Context, name string) (*qdrant.CollectionInfo, error)
+	CreateCollectionFn  func(ctx context.Context, req *qdrant.CreateCollection) error
+	DeleteCollectionFn  func(ctx context.Context, name string) error
+	UpsertFn            func(ctx context.Context, req *qdrant.UpsertPoints) (*qdrant.UpdateResult, error)
+	GetFn               func(ctx context.Context, req *qdrant.GetPoints) ([]*qdrant.RetrievedPoint, error)
+	DeleteFn            func(ctx context.Context, req *qdrant.DeletePoints) (*qdrant.UpdateResult, error)
+	SetPayloadFn        func(ctx context.Context, req *qdrant.SetPayloadPoints) (*qdrant.UpdateResult, error)
+	QueryFn             func(ctx context.Context, req *qdrant.QueryPoints) ([]*qdrant.ScoredPoint, error)
+	CountFn             func(ctx context.Context, req *qdrant.CountPoints) (uint64, error)
+	ScrollFn            func(ctx context.Context, req *qdrant.ScrollPoints) ([]*qdrant.RetrievedPoint, error)
+	CloseFn             func() error
 
 	// Call counters
 	upsertCalls           int
@@ -425,4 +425,3 @@ func (m *mockLoggerImpl) Error(args ...any)                 {}
 func (m *mockLoggerImpl) Errorf(format string, args ...any) {}
 func (m *mockLoggerImpl) Fatal(args ...any)                 {}
 func (m *mockLoggerImpl) Fatalf(format string, args ...any) {}
-
