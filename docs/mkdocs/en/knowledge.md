@@ -503,6 +503,33 @@ vs, err := vectorqdrant.New(ctx, vectorqdrant.WithClient(client))
 
 The storage module also provides a **registry pattern** to register named instances (e.g., "test", "prod") at startup and retrieve them by name throughout your application.
 
+**Hybrid Search with BM25**
+
+Qdrant supports hybrid search combining dense vector similarity and BM25 keyword matching using Reciprocal Rank Fusion (RRF):
+
+```go
+qdrantVS, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("localhost"),
+    vectorqdrant.WithPort(6334),
+    vectorqdrant.WithCollectionName("my_documents"),
+    vectorqdrant.WithDimension(1536),
+    vectorqdrant.WithBM25(true),  // Enable BM25 hybrid search
+)
+```
+
+When BM25 is enabled, the vectorstore creates a collection with both dense and sparse vectors. You can then use different search modes:
+
+- **Vector search** (default): Dense vector similarity search
+- **Keyword search**: BM25 sparse vector search (requires `WithBM25(true)`)
+- **Hybrid search**: Combines dense and sparse results using RRF fusion (requires `WithBM25(true)`)
+- **Filter search**: Metadata-only filtering without vector similarity
+
+> **Important Notes on BM25 Collections:**
+>
+> - **Collection compatibility**: BM25-enabled and non-BM25 collections have different vector configurations. You cannot create a vectorstore with `WithBM25(true)` on an existing non-BM25 collection, or vice versa. The vectorstore validates the collection configuration on startup and returns an error if there's a mismatch.
+> - **Fallback behavior**: If you attempt keyword or hybrid search without BM25 enabled, keyword search will return an error, and hybrid search will fall back to vector-only search (with a warning log if a logger is configured).
+> - **Consistent configuration**: Always use the same BM25 setting when connecting to an existing collection. If you indexed documents with `WithBM25(true)`, you must use `WithBM25(true)` when creating a new vectorstore instance on that collection.
+
 **Configuration Options**
 
 | Option | Default | Description |
@@ -516,6 +543,8 @@ The storage module also provides a **registry pattern** to register named instan
 | `WithDimension(dim)` | `1536` | Vector dimension (must match embedding model) |
 | `WithDistance(d)` | `DistanceCosine` | Distance metric (Cosine, Euclid, Dot, Manhattan) |
 | `WithMaxResults(max)` | `10` | Default number of search results |
+| `WithBM25(enabled)` | `false` | Enable BM25 sparse vectors for hybrid/keyword search |
+| `WithPrefetchMultiplier(n)` | `3` | Prefetch multiplier for hybrid search fusion |
 | `WithOnDiskVectors(enabled)` | `false` | Store vectors on disk (for large datasets) |
 | `WithOnDiskPayload(enabled)` | `false` | Store payloads on disk |
 | `WithHNSWConfig(m, efConstruct)` | `16, 128` | HNSW index parameters (higher = better recall, more memory) |

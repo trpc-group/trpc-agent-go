@@ -504,6 +504,33 @@ vs, err := vectorqdrant.New(ctx, vectorqdrant.WithClient(client))
 
 storage 模块还提供**注册表模式**，可在启动时注册命名实例（如 "test"、"prod"），在应用中通过名称获取。
 
+**BM25 混合检索**
+
+Qdrant 支持混合检索，结合稠密向量相似度和 BM25 关键词匹配，使用 Reciprocal Rank Fusion (RRF) 进行结果融合：
+
+```go
+qdrantVS, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("localhost"),
+    vectorqdrant.WithPort(6334),
+    vectorqdrant.WithCollectionName("my_documents"),
+    vectorqdrant.WithDimension(1536),
+    vectorqdrant.WithBM25(true),  // 启用 BM25 混合检索
+)
+```
+
+启用 BM25 后，向量存储会创建同时包含稠密向量和稀疏向量的集合。支持以下搜索模式：
+
+- **向量检索**（默认）：稠密向量相似度搜索
+- **关键词检索**：BM25 稀疏向量搜索（需要 `WithBM25(true)`）
+- **混合检索**：使用 RRF 融合稠密和稀疏结果（需要 `WithBM25(true)`）
+- **过滤检索**：仅基于元数据过滤，不使用向量相似度
+
+> **BM25 集合重要说明：**
+>
+> - **集合兼容性**：启用 BM25 和未启用 BM25 的集合具有不同的向量配置。您不能在已有的非 BM25 集合上创建 `WithBM25(true)` 的向量存储，反之亦然。向量存储在启动时会验证集合配置，如果不匹配将返回错误。
+> - **降级行为**：如果在未启用 BM25 的情况下尝试关键词或混合检索，关键词检索将返回错误，混合检索将降级为仅向量检索（如果配置了日志记录器，会输出警告日志）。
+> - **配置一致性**：连接到现有集合时，请始终使用相同的 BM25 设置。如果您使用 `WithBM25(true)` 索引了文档，则在该集合上创建新的向量存储实例时也必须使用 `WithBM25(true)`。
+
 **配置选项**
 
 | 选项 | 默认值 | 说明 |
@@ -517,6 +544,8 @@ storage 模块还提供**注册表模式**，可在启动时注册命名实例�
 | `WithDimension(dim)` | `1536` | 向量维度（必须与 embedding 模型匹配） |
 | `WithDistance(d)` | `DistanceCosine` | 距离度量（Cosine、Euclid、Dot、Manhattan） |
 | `WithMaxResults(max)` | `10` | 默认搜索结果数量 |
+| `WithBM25(enabled)` | `false` | 启用 BM25 稀疏向量用于混合/关键词检索 |
+| `WithPrefetchMultiplier(n)` | `3` | 混合检索融合的预取倍数 |
 | `WithOnDiskVectors(enabled)` | `false` | 将向量存储在磁盘上（适用于大数据集） |
 | `WithOnDiskPayload(enabled)` | `false` | 将负载存储在磁盘上 |
 | `WithHNSWConfig(m, efConstruct)` | `16, 128` | HNSW 索引参数（越高 = 召回率越好，内存越多） |
