@@ -24,14 +24,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
-// qdrantNamespace is a dedicated UUID namespace for generating deterministic UUIDs
-// from document IDs. This ensures no collision with other systems using UUID v5.
-// This value must never change to maintain consistency with existing data.
+// qdrantNamespace is a randomly generated UUID namespace for deterministic UUID v5 generation
+// from document IDs. Using a dedicated namespace prevents collisions with other systems.
 var qdrantNamespace = uuid.MustParse("a3f2b8c1-7d4e-4f5a-9b6c-8e1d2f3a4b5c")
 
 // idToUUID converts a document ID to a UUID.
 // If the ID is already a valid UUID, it returns it as-is.
-// Otherwise, it generates a deterministic UUID v5 from the ID using our dedicated namespace.
+// Otherwise, it generates a deterministic UUID v5 from the ID.
 func idToUUID(id string) string {
 	if _, err := uuid.Parse(id); err == nil {
 		return id
@@ -53,11 +52,11 @@ func ptr[T any](v T) *T {
 	return &v
 }
 
-// Convenience aliases for common types (improves readability at call sites).
 var (
 	ptrBool   = ptr[bool]
 	ptrUint32 = ptr[uint32]
 	ptrUint64 = ptr[uint64]
+	ptrString = ptr[string]
 )
 
 // ptrFloat32If returns a pointer to the float32 value if the condition is true, otherwise nil.
@@ -85,7 +84,6 @@ func pointIDToStr(id *qdrant.PointId) string {
 }
 
 // stringsToPointIDs converts a slice of string IDs to Qdrant PointId pointers.
-// Each ID is converted to a UUID using idToUUID.
 func stringsToPointIDs(ids []string) []*qdrant.PointId {
 	result := make([]*qdrant.PointId, len(ids))
 	for i, id := range ids {
@@ -186,21 +184,6 @@ func convertValueToAny(v *qdrant.Value) any {
 	}
 }
 
-// extractVector extracts a float64 vector from Qdrant Vectors.
-func extractVector(vectors *qdrant.Vectors) []float64 {
-	if vectors == nil {
-		return nil
-	}
-	if v, ok := vectors.VectorsOptions.(*qdrant.Vectors_Vector); ok && v.Vector != nil {
-		f64 := make([]float64, len(v.Vector.Data))
-		for i, val := range v.Vector.Data {
-			f64[i] = float64(val)
-		}
-		return f64
-	}
-	return nil
-}
-
 // metadataToCondition converts a metadata filter map to a UniversalFilterCondition.
 func metadataToCondition(filter map[string]any) *searchfilter.UniversalFilterCondition {
 	if len(filter) == 0 {
@@ -278,6 +261,7 @@ func sanitizeValue(v any) any {
 }
 
 // toPoint converts a Document and embedding to a Qdrant PointStruct for storage.
+// Note: For BM25 mode, the caller should override point.Vectors with named vectors.
 func toPoint(doc *document.Document, emb []float64) *qdrant.PointStruct {
 	now := time.Now().Unix()
 	createdAt := now
@@ -320,11 +304,6 @@ func payloadToDocument(id *qdrant.PointId, payload map[string]*qdrant.Value) *do
 	}
 }
 
-// fromRetrievedPoint converts a Qdrant RetrievedPoint to a Document and vector.
-func fromRetrievedPoint(pt *qdrant.RetrievedPoint) (*document.Document, []float64, error) {
-	return payloadToDocument(pt.Id, pt.Payload), extractVector(pt.Vectors), nil
-}
-
 // toSearchResult converts Qdrant ScoredPoints to a SearchResult.
 func toSearchResult(results []*qdrant.ScoredPoint) *vectorstore.SearchResult {
 	searchResult := &vectorstore.SearchResult{
@@ -337,4 +316,75 @@ func toSearchResult(results []*qdrant.ScoredPoint) *vectorstore.SearchResult {
 		})
 	}
 	return searchResult
+}
+
+// toFilterSearchResult converts Qdrant RetrievedPoints to a SearchResult.
+// Used for filter-only searches where there is no similarity score.
+func toFilterSearchResult(points []*qdrant.RetrievedPoint) *vectorstore.SearchResult {
+	searchResult := &vectorstore.SearchResult{
+		Results: make([]*vectorstore.ScoredDocument, 0, len(points)),
+	}
+	for _, pt := range points {
+		searchResult.Results = append(searchResult.Results, &vectorstore.ScoredDocument{
+			Document: payloadToDocument(pt.Id, pt.Payload),
+			Score:    0, // No similarity score for filter-only search
+		})
+	}
+	return searchResult
+}
+
+// extractVectorData extracts float64 data from a VectorOutput.
+func extractVectorData(v *qdrant.VectorOutput) []float64 {
+	if v == nil {
+		return nil
+	}
+	dense, ok := v.GetVector().(*qdrant.VectorOutput_Dense)
+	if !ok || dense.Dense == nil {
+		return nil
+	}
+	f64 := make([]float64, len(dense.Dense.Data))
+	for i, val := range dense.Dense.Data {
+		f64[i] = float64(val)
+	}
+	return f64
+}
+
+// anyToQdrantValue converts a Go value to a Qdrant Value.
+func anyToQdrantValue(v any) *qdrant.Value {
+	if v == nil {
+		return &qdrant.Value{Kind: &qdrant.Value_NullValue{}}
+	}
+	switch val := v.(type) {
+	case string:
+		return &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: val}}
+	case int:
+		return &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: int64(val)}}
+	case int32:
+		return &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: int64(val)}}
+	case int64:
+		return &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: val}}
+	case float32:
+		return &qdrant.Value{Kind: &qdrant.Value_DoubleValue{DoubleValue: float64(val)}}
+	case float64:
+		return &qdrant.Value{Kind: &qdrant.Value_DoubleValue{DoubleValue: val}}
+	case bool:
+		return &qdrant.Value{Kind: &qdrant.Value_BoolValue{BoolValue: val}}
+	case time.Time:
+		return &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: val.Unix()}}
+	case []any:
+		values := make([]*qdrant.Value, len(val))
+		for i, item := range val {
+			values[i] = anyToQdrantValue(item)
+		}
+		return &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: values}}}
+	case map[string]any:
+		fields := make(map[string]*qdrant.Value, len(val))
+		for k, item := range val {
+			fields[k] = anyToQdrantValue(item)
+		}
+		return &qdrant.Value{Kind: &qdrant.Value_StructValue{StructValue: &qdrant.Struct{Fields: fields}}}
+	default:
+		// Fallback: convert to string
+		return &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: ""}}
+	}
 }

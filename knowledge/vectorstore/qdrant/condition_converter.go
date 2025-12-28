@@ -74,7 +74,7 @@ func (c *qdrantFilterConverter) convertOr(cond *searchfilter.UniversalFilterCond
 func (c *qdrantFilterConverter) convertLogicalConditions(cond *searchfilter.UniversalFilterCondition, op string) ([]*qdrant.Condition, error) {
 	subconds, ok := cond.Value.([]*searchfilter.UniversalFilterCondition)
 	if !ok {
-		return nil, fmt.Errorf("qdrant: %s operator requires array of conditions", op)
+		return nil, fmt.Errorf("%w: %s operator requires array of conditions", ErrInvalidFilter, op)
 	}
 
 	result := make([]*qdrant.Condition, 0, len(subconds))
@@ -144,6 +144,9 @@ func (c *qdrantFilterConverter) convertCondition(cond *searchfilter.UniversalFil
 		if err != nil {
 			return nil, err
 		}
+		if inCond == nil {
+			return nil, nil
+		}
 		return &qdrant.Condition{
 			ConditionOneOf: &qdrant.Condition_Filter{
 				Filter: &qdrant.Filter{
@@ -169,12 +172,12 @@ func (c *qdrantFilterConverter) convertCondition(cond *searchfilter.UniversalFil
 	case searchfilter.OperatorBetween:
 		values, ok := cond.Value.([]any)
 		if !ok || len(values) != 2 {
-			return nil, fmt.Errorf("qdrant: between operator requires array of 2 values")
+			return nil, fmt.Errorf("%w: between operator requires array of 2 values", ErrInvalidFilter)
 		}
 		return c.newRangeCondition(field, toFloat64Ptr(values[0]), nil, toFloat64Ptr(values[1]), nil), nil
 
 	default:
-		return nil, fmt.Errorf("qdrant: unsupported operator: %s", cond.Operator)
+		return nil, fmt.Errorf("%w: unsupported operator: %s", ErrInvalidFilter, cond.Operator)
 	}
 }
 
@@ -295,7 +298,7 @@ func (c *qdrantFilterConverter) convertInConditionFromAnySlice(field string, val
 func (c *qdrantFilterConverter) convertInConditionReflect(field string, value any) (*qdrant.Condition, error) {
 	v := reflect.ValueOf(value)
 	if v.Kind() != reflect.Slice {
-		return nil, fmt.Errorf("qdrant: in operator requires array value")
+		return nil, fmt.Errorf("%w: in operator requires array value", ErrInvalidFilter)
 	}
 
 	if v.Len() == 0 {
@@ -317,10 +320,17 @@ func (c *qdrantFilterConverter) newMatchCondition(field string, value any) *qdra
 		match = &qdrant.Match{MatchValue: &qdrant.Match_Keyword{Keyword: v}}
 	case int:
 		match = &qdrant.Match{MatchValue: &qdrant.Match_Integer{Integer: int64(v)}}
+	case int32:
+		match = &qdrant.Match{MatchValue: &qdrant.Match_Integer{Integer: int64(v)}}
 	case int64:
 		match = &qdrant.Match{MatchValue: &qdrant.Match_Integer{Integer: v}}
 	case bool:
 		match = &qdrant.Match{MatchValue: &qdrant.Match_Boolean{Boolean: v}}
+	case float32:
+		f := float64(v)
+		return c.newRangeCondition(field, &f, nil, &f, nil)
+	case float64:
+		return c.newRangeCondition(field, &v, nil, &v, nil)
 	default:
 		match = &qdrant.Match{MatchValue: &qdrant.Match_Keyword{Keyword: fmt.Sprintf("%v", v)}}
 	}

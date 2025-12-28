@@ -458,34 +458,32 @@ func TestConvertStructToMap(t *testing.T) {
 	}
 }
 
-func TestExtractVector(t *testing.T) {
+func TestExtractVectorData(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
-		vectors  *qdrant.Vectors
+		vector   *qdrant.VectorOutput
 		expected []float64
 	}{
 		{
-			name:     "nil vectors",
-			vectors:  nil,
+			name:     "nil vector",
+			vector:   nil,
 			expected: nil,
 		},
 		{
-			name: "valid vector",
-			vectors: &qdrant.Vectors{
-				VectorsOptions: &qdrant.Vectors_Vector{
-					Vector: &qdrant.Vector{
-						Data: []float32{1.0, 2.0, 3.0},
-					},
+			name: "valid dense vector",
+			vector: &qdrant.VectorOutput{
+				Vector: &qdrant.VectorOutput_Dense{
+					Dense: &qdrant.DenseVector{Data: []float32{1.0, 2.0, 3.0}},
 				},
 			},
 			expected: []float64{1.0, 2.0, 3.0},
 		},
 		{
-			name: "nil inner vector",
-			vectors: &qdrant.Vectors{
-				VectorsOptions: &qdrant.Vectors_Vector{
-					Vector: nil,
+			name: "nil dense data",
+			vector: &qdrant.VectorOutput{
+				Vector: &qdrant.VectorOutput_Dense{
+					Dense: nil,
 				},
 			},
 			expected: nil,
@@ -494,7 +492,7 @@ func TestExtractVector(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := extractVector(tt.vectors)
+			result := extractVectorData(tt.vector)
 			if tt.expected == nil {
 				assert.Nil(t, result)
 			} else {
@@ -744,64 +742,49 @@ func TestToPoint(t *testing.T) {
 	})
 }
 
-func TestFromRetrievedPoint(t *testing.T) {
+func TestPayloadToDocument(t *testing.T) {
 	t.Parallel()
-	t.Run("complete point", func(t *testing.T) {
+	t.Run("complete payload", func(t *testing.T) {
 		createdAt := int64(1704067200)
 		updatedAt := int64(1717200000)
 
-		pt := &qdrant.RetrievedPoint{
-			Id: qdrant.NewID("test-id"),
-			Payload: map[string]*qdrant.Value{
-				fieldName:      {Kind: &qdrant.Value_StringValue{StringValue: "test-name"}},
-				fieldContent:   {Kind: &qdrant.Value_StringValue{StringValue: "test-content"}},
-				fieldCreatedAt: {Kind: &qdrant.Value_IntegerValue{IntegerValue: createdAt}},
-				fieldUpdatedAt: {Kind: &qdrant.Value_IntegerValue{IntegerValue: updatedAt}},
-				fieldMetadata: {
-					Kind: &qdrant.Value_StructValue{
-						StructValue: &qdrant.Struct{
-							Fields: map[string]*qdrant.Value{
-								"category": {Kind: &qdrant.Value_StringValue{StringValue: "docs"}},
-							},
+		payload := map[string]*qdrant.Value{
+			fieldID:        {Kind: &qdrant.Value_StringValue{StringValue: "original-id"}},
+			fieldName:      {Kind: &qdrant.Value_StringValue{StringValue: "test-name"}},
+			fieldContent:   {Kind: &qdrant.Value_StringValue{StringValue: "test-content"}},
+			fieldCreatedAt: {Kind: &qdrant.Value_IntegerValue{IntegerValue: createdAt}},
+			fieldUpdatedAt: {Kind: &qdrant.Value_IntegerValue{IntegerValue: updatedAt}},
+			fieldMetadata: {
+				Kind: &qdrant.Value_StructValue{
+					StructValue: &qdrant.Struct{
+						Fields: map[string]*qdrant.Value{
+							"category": {Kind: &qdrant.Value_StringValue{StringValue: "docs"}},
 						},
 					},
 				},
 			},
-			Vectors: &qdrant.Vectors{
-				VectorsOptions: &qdrant.Vectors_Vector{
-					Vector: &qdrant.Vector{Data: []float32{1.0, 2.0, 3.0}},
-				},
-			},
 		}
 
-		doc, vec, err := fromRetrievedPoint(pt)
+		doc := payloadToDocument(qdrant.NewID("point-id"), payload)
 
-		require.NoError(t, err)
 		require.NotNil(t, doc)
-		assert.Equal(t, "test-id", doc.ID)
+		assert.Equal(t, "original-id", doc.ID) // Uses original ID from payload
 		assert.Equal(t, "test-name", doc.Name)
 		assert.Equal(t, "test-content", doc.Content)
 		assert.Equal(t, time.Unix(createdAt, 0), doc.CreatedAt)
 		assert.Equal(t, time.Unix(updatedAt, 0), doc.UpdatedAt)
 		assert.Equal(t, "docs", doc.Metadata["category"])
-		require.Len(t, vec, 3)
-		assert.InDelta(t, 1.0, vec[0], 0.001)
 	})
 
-	t.Run("minimal point", func(t *testing.T) {
-		pt := &qdrant.RetrievedPoint{
-			Id:      qdrant.NewID("test-id"),
-			Payload: map[string]*qdrant.Value{},
-		}
+	t.Run("minimal payload uses point ID", func(t *testing.T) {
+		payload := map[string]*qdrant.Value{}
 
-		doc, vec, err := fromRetrievedPoint(pt)
+		doc := payloadToDocument(qdrant.NewID("point-id"), payload)
 
-		require.NoError(t, err)
 		require.NotNil(t, doc)
-		assert.Equal(t, "test-id", doc.ID)
+		assert.Equal(t, "point-id", doc.ID) // Falls back to point ID
 		assert.Empty(t, doc.Name)
 		assert.Empty(t, doc.Content)
-		assert.Nil(t, vec)
 	})
 }
 
@@ -1011,19 +994,11 @@ func TestConvertValueToAny_NilKind(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-func TestExtractVector_NonVectorType(t *testing.T) {
+func TestExtractVectorData_NonDenseType(t *testing.T) {
 	t.Parallel()
-	// Named vectors case
-	vectors := &qdrant.Vectors{
-		VectorsOptions: &qdrant.Vectors_Vectors{
-			Vectors: &qdrant.NamedVectors{
-				Vectors: map[string]*qdrant.Vector{
-					"default": {Data: []float32{1.0, 2.0}},
-				},
-			},
-		},
-	}
-	result := extractVector(vectors)
+	// Test with empty vector output (no data, no dense vector)
+	vector := &qdrant.VectorOutput{}
+	result := extractVectorData(vector)
 	assert.Nil(t, result)
 }
 
@@ -1038,4 +1013,107 @@ func TestPayloadToDocument_NoOriginalID(t *testing.T) {
 	doc := payloadToDocument(qdrant.NewID("uuid-point-id"), payload)
 
 	assert.Equal(t, "uuid-point-id", doc.ID)
+}
+
+func TestAnyToQdrantValue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil value", func(t *testing.T) {
+		result := anyToQdrantValue(nil)
+		require.NotNil(t, result)
+		_, ok := result.Kind.(*qdrant.Value_NullValue)
+		assert.True(t, ok)
+	})
+
+	t.Run("string value", func(t *testing.T) {
+		result := anyToQdrantValue("hello")
+		require.NotNil(t, result)
+		sv, ok := result.Kind.(*qdrant.Value_StringValue)
+		require.True(t, ok)
+		assert.Equal(t, "hello", sv.StringValue)
+	})
+
+	t.Run("int value", func(t *testing.T) {
+		result := anyToQdrantValue(42)
+		require.NotNil(t, result)
+		iv, ok := result.Kind.(*qdrant.Value_IntegerValue)
+		require.True(t, ok)
+		assert.Equal(t, int64(42), iv.IntegerValue)
+	})
+
+	t.Run("int32 value", func(t *testing.T) {
+		result := anyToQdrantValue(int32(42))
+		require.NotNil(t, result)
+		iv, ok := result.Kind.(*qdrant.Value_IntegerValue)
+		require.True(t, ok)
+		assert.Equal(t, int64(42), iv.IntegerValue)
+	})
+
+	t.Run("int64 value", func(t *testing.T) {
+		result := anyToQdrantValue(int64(42))
+		require.NotNil(t, result)
+		iv, ok := result.Kind.(*qdrant.Value_IntegerValue)
+		require.True(t, ok)
+		assert.Equal(t, int64(42), iv.IntegerValue)
+	})
+
+	t.Run("float32 value", func(t *testing.T) {
+		result := anyToQdrantValue(float32(3.14))
+		require.NotNil(t, result)
+		dv, ok := result.Kind.(*qdrant.Value_DoubleValue)
+		require.True(t, ok)
+		assert.InDelta(t, 3.14, dv.DoubleValue, 0.001)
+	})
+
+	t.Run("float64 value", func(t *testing.T) {
+		result := anyToQdrantValue(3.14)
+		require.NotNil(t, result)
+		dv, ok := result.Kind.(*qdrant.Value_DoubleValue)
+		require.True(t, ok)
+		assert.InDelta(t, 3.14, dv.DoubleValue, 0.001)
+	})
+
+	t.Run("bool value", func(t *testing.T) {
+		result := anyToQdrantValue(true)
+		require.NotNil(t, result)
+		bv, ok := result.Kind.(*qdrant.Value_BoolValue)
+		require.True(t, ok)
+		assert.True(t, bv.BoolValue)
+	})
+
+	t.Run("time.Time value", func(t *testing.T) {
+		ts := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
+		result := anyToQdrantValue(ts)
+		require.NotNil(t, result)
+		iv, ok := result.Kind.(*qdrant.Value_IntegerValue)
+		require.True(t, ok)
+		assert.Equal(t, ts.Unix(), iv.IntegerValue)
+	})
+
+	t.Run("slice value", func(t *testing.T) {
+		result := anyToQdrantValue([]any{"a", "b", "c"})
+		require.NotNil(t, result)
+		lv, ok := result.Kind.(*qdrant.Value_ListValue)
+		require.True(t, ok)
+		require.NotNil(t, lv.ListValue)
+		assert.Len(t, lv.ListValue.Values, 3)
+	})
+
+	t.Run("map value", func(t *testing.T) {
+		result := anyToQdrantValue(map[string]any{"key": "value"})
+		require.NotNil(t, result)
+		sv, ok := result.Kind.(*qdrant.Value_StructValue)
+		require.True(t, ok)
+		require.NotNil(t, sv.StructValue)
+		assert.Len(t, sv.StructValue.Fields, 1)
+	})
+
+	t.Run("unsupported type returns empty string", func(t *testing.T) {
+		type CustomType struct{}
+		result := anyToQdrantValue(CustomType{})
+		require.NotNil(t, result)
+		sv, ok := result.Kind.(*qdrant.Value_StringValue)
+		require.True(t, ok)
+		assert.Equal(t, "", sv.StringValue)
+	})
 }

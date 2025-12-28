@@ -19,10 +19,14 @@ import (
 // This allows for mocking in tests.
 type Client interface {
 	CollectionExists(ctx context.Context, collectionName string) (bool, error)
+	GetCollectionInfo(ctx context.Context, collectionName string) (*qdrant.CollectionInfo, error)
 	CreateCollection(ctx context.Context, req *qdrant.CreateCollection) error
+	DeleteCollection(ctx context.Context, collectionName string) error
+	CreateFieldIndex(ctx context.Context, req *qdrant.CreateFieldIndexCollection) (*qdrant.UpdateResult, error)
 	Upsert(ctx context.Context, req *qdrant.UpsertPoints) (*qdrant.UpdateResult, error)
 	Get(ctx context.Context, req *qdrant.GetPoints) ([]*qdrant.RetrievedPoint, error)
 	Delete(ctx context.Context, req *qdrant.DeletePoints) (*qdrant.UpdateResult, error)
+	SetPayload(ctx context.Context, req *qdrant.SetPayloadPoints) (*qdrant.UpdateResult, error)
 	Query(ctx context.Context, req *qdrant.QueryPoints) ([]*qdrant.ScoredPoint, error)
 	Count(ctx context.Context, req *qdrant.CountPoints) (uint64, error)
 	Scroll(ctx context.Context, req *qdrant.ScrollPoints) ([]*qdrant.RetrievedPoint, error)

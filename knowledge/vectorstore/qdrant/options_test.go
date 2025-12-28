@@ -28,6 +28,7 @@ func TestDefaultOptions(t *testing.T) {
 	assert.Equal(t, 3, opts.maxRetries)
 	assert.Equal(t, 100*time.Millisecond, opts.baseRetryDelay)
 	assert.Equal(t, 5*time.Second, opts.maxRetryDelay)
+	assert.Equal(t, 2, opts.prefetchMultiplier)
 	assert.False(t, opts.onDiskVectors)
 	assert.False(t, opts.onDiskPayload)
 	assert.Empty(t, opts.clientBuilderOpts)
@@ -240,11 +241,28 @@ func TestWithClient(t *testing.T) {
 	t.Parallel()
 	opts := defaultOptions
 
-	// Create a mock client (nil is valid for testing the option)
-	var mockClient Client = nil
-	WithClient(mockClient)(&opts)
-
+	WithClient(nil)(&opts)
 	assert.Nil(t, opts.client)
+}
 
-	// Test with non-nil would require a real client implementation
+func TestWithPrefetchMultiplier(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sets valid multiplier", func(t *testing.T) {
+		opts := defaultOptions
+		WithPrefetchMultiplier(5)(&opts)
+		assert.Equal(t, 5, opts.prefetchMultiplier)
+	})
+
+	t.Run("ignores zero", func(t *testing.T) {
+		opts := defaultOptions
+		WithPrefetchMultiplier(0)(&opts)
+		assert.Equal(t, 2, opts.prefetchMultiplier)
+	})
+
+	t.Run("ignores negative", func(t *testing.T) {
+		opts := defaultOptions
+		WithPrefetchMultiplier(-1)(&opts)
+		assert.Equal(t, 2, opts.prefetchMultiplier)
+	})
 }

@@ -428,9 +428,11 @@ func TestFilterConverter_MatchConditionTypes(t *testing.T) {
 	}{
 		{"string", "test"},
 		{"int", 42},
+		{"int32", int32(42)},
 		{"int64", int64(42)},
 		{"bool_true", true},
 		{"bool_false", false},
+		{"float32", float32(3.14)},
 		{"float64", 3.14},
 	}
 
@@ -445,6 +447,48 @@ func TestFilterConverter_MatchConditionTypes(t *testing.T) {
 			filter, err := converter.Convert(cond)
 			require.NoError(t, err)
 			require.NotNil(t, filter)
+		})
+	}
+}
+
+// TestFilterConverter_FloatEqualityUsesRange verifies that float equality
+// uses Range condition (gte=lte) instead of Match, since Qdrant's Match
+// doesn't support float values.
+func TestFilterConverter_FloatEqualityUsesRange(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{"float32", float32(3.14)},
+		{"float64", float64(3.14)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cond := &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorEqual,
+				Field:    "metadata.price",
+				Value:    tt.value,
+			}
+
+			filter, err := converter.Convert(cond)
+			require.NoError(t, err)
+			require.NotNil(t, filter)
+			require.Len(t, filter.Must, 1)
+
+			// Verify it uses Range condition, not Match
+			fieldCond := filter.Must[0].GetField()
+			require.NotNil(t, fieldCond, "expected Field condition")
+			require.NotNil(t, fieldCond.Range, "expected Range condition for float equality")
+			require.Nil(t, fieldCond.Match, "expected no Match condition for float")
+
+			// Verify gte == lte (equality via range)
+			require.NotNil(t, fieldCond.Range.Gte)
+			require.NotNil(t, fieldCond.Range.Lte)
+			assert.Equal(t, *fieldCond.Range.Gte, *fieldCond.Range.Lte)
 		})
 	}
 }
@@ -744,4 +788,34 @@ func TestFilterConverter_AndWithNilConditionResult(t *testing.T) {
 	require.NotNil(t, filter)
 	// Only the non-nil condition should be in the result
 	assert.Len(t, filter.Must, 1)
+}
+
+func TestFilterConverter_NotInOperatorEmptySlice(t *testing.T) {
+	t.Parallel()
+	converter := newFilterConverter()
+
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{"empty []string", []string{}},
+		{"empty []int", []int{}},
+		{"empty []int64", []int64{}},
+		{"empty []any", []any{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cond := &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorNotIn,
+				Field:    "metadata.field",
+				Value:    tt.value,
+			}
+
+			filter, err := converter.Convert(cond)
+			require.NoError(t, err)
+			// NotIn with empty slice should return nil (no filter needed)
+			assert.Nil(t, filter, "NotIn with empty slice should return nil")
+		})
+	}
 }

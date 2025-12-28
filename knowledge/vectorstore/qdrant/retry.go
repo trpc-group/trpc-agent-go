@@ -33,7 +33,7 @@ func isTransientError(err error) bool {
 		return false
 	}
 	switch st.Code() {
-	case codes.Unavailable, codes.ResourceExhausted, codes.Aborted:
+	case codes.Unavailable, codes.ResourceExhausted, codes.Aborted, codes.DeadlineExceeded:
 		return true
 	default:
 		return false
