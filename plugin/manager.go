@@ -21,8 +21,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-const (
-	errNilPlugin = "plugin is nil"
+var (
+	errNilPlugin = errors.New("plugin is nil")
+	errEmptyName = errors.New("plugin name is empty")
 )
 
 // Plugin registers hooks into a Runner.
@@ -200,11 +201,11 @@ func NewManager(plugins ...Plugin) (*Manager, error) {
 	seen := make(map[string]struct{})
 	for _, p := range plugins {
 		if p == nil {
-			return nil, errors.New(errNilPlugin)
+			return nil, errNilPlugin
 		}
 		name := p.Name()
 		if name == "" {
-			return nil, errors.New("plugin name is empty")
+			return nil, errEmptyName
 		}
 		if _, ok := seen[name]; ok {
 			return nil, fmt.Errorf("duplicate plugin %q", name)
@@ -301,16 +302,23 @@ func (m *Manager) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var firstErr error
+	var errs []error
 	for i := len(m.plugins) - 1; i >= 0; i-- {
 		p := m.plugins[i]
 		c, ok := p.(Closer)
 		if !ok {
 			continue
 		}
-		if err := c.Close(ctx); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("plugin %q: %w", p.Name(), err)
+		if err := c.Close(ctx); err != nil {
+			errs = append(
+				errs,
+				fmt.Errorf(
+					"plugin %q: %w",
+					p.Name(),
+					err,
+				),
+			)
 		}
 	}
-	return firstErr
+	return errors.Join(errs...)
 }

@@ -115,20 +115,33 @@ func TestManager_NilReceiver_IsSafe(t *testing.T) {
 	require.NoError(t, m.Close(nil))
 }
 
-func TestManager_Close_ReverseOrderAndFirstError(t *testing.T) {
+func TestManager_Close_ReverseOrderAndJoinErrors(t *testing.T) {
+	const (
+		errCloseP2 = "close err p2"
+		errCloseP3 = "close err p3"
+	)
 	var closeOrder []string
 	p1 := &closerPlugin{name: "p1", closeOrder: &closeOrder}
-	p2 := &closerPlugin{name: "p2", closeOrder: &closeOrder}
+	p2Err := errors.New(errCloseP2)
+	p2 := &closerPlugin{
+		name:       "p2",
+		closeOrder: &closeOrder,
+		closeErr:   p2Err,
+	}
+	p3Err := errors.New(errCloseP3)
 	p3 := &closerPlugin{
 		name:       "p3",
 		closeOrder: &closeOrder,
-		closeErr:   errors.New("close err"),
+		closeErr:   p3Err,
 	}
 
 	m := plugin.MustNewManager(p1, p2, p3)
 	err := m.Close(nil)
 	require.Error(t, err)
+	require.ErrorIs(t, err, p2Err)
+	require.ErrorIs(t, err, p3Err)
 	require.Contains(t, err.Error(), "plugin")
+	require.Contains(t, err.Error(), "p2")
 	require.Contains(t, err.Error(), "p3")
 
 	require.Equal(t, []string{"p3", "p2", "p1"}, closeOrder)
