@@ -100,12 +100,14 @@ func SummarizeSession(
 	// Get previous summary info.
 	var prevText string
 	var prevAt time.Time
+	base.SummariesMu.RLock()
 	if base.Summaries != nil {
 		if s := base.Summaries[filterKey]; s != nil {
 			prevText = s.Summary
 			prevAt = s.UpdatedAt
 		}
 	}
+	base.SummariesMu.RUnlock()
 
 	// Compute delta events with both time and filterKey filtering in one pass.
 	delta, latestTs := computeDeltaSince(base, prevAt, filterKey)
@@ -158,10 +160,10 @@ func selectUpdatedAt(tmp *session.Session, prevAt, latestTs time.Time, hasDelta 
 const lastIncludedTsKey = "summary:last_included_ts"
 
 func readLastIncludedTimestamp(tmp *session.Session) time.Time {
-	if tmp == nil || tmp.State == nil {
+	if tmp == nil {
 		return time.Time{}
 	}
-	raw, ok := tmp.State[lastIncludedTsKey]
+	raw, ok := tmp.GetState(lastIncludedTsKey)
 	if !ok || len(raw) == 0 {
 		return time.Time{}
 	}
@@ -215,6 +217,8 @@ func GetSummaryTextFromSession(sess *session.Session, opts ...session.SummaryOpt
 	}
 
 	// Prefer local in-memory session summaries when available.
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
 	if len(sess.Summaries) > 0 {
 		return PickSummaryText(sess.Summaries, options.FilterKey)
 	}

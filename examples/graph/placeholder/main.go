@@ -206,7 +206,7 @@ func (d *demo) handleShowState(ctx context.Context) {
 		return
 	}
 	fmt.Println("📋 Current Session State:")
-	for k, v := range sess.State {
+	for k, v := range sess.SnapshotState() {
 		fmt.Printf("   - %s: %s\n", k, string(v))
 	}
 }

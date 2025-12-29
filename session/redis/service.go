@@ -135,7 +135,13 @@ func (s *Service) CreateSession(
 		CreatedAt: time.Now(),
 	}
 	for k, v := range state {
-		sessState.State[k] = v
+		if v == nil {
+			sessState.State[k] = nil
+			continue
+		}
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		sessState.State[k] = copiedValue
 	}
 
 	// Use pipeline to store session and query states
@@ -397,7 +403,13 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 
 	// Merge new state into current state (allow temp: prefix and unprefixed keys)
 	for k, v := range state {
-		sessState.State[k] = v
+		if v == nil {
+			sessState.State[k] = nil
+			continue
+		}
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		sessState.State[k] = copiedValue
 	}
 
 	// Update timestamp
@@ -1182,7 +1194,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 	if err := sess.AppendTrackEvent(trackEvent); err != nil {
 		return err
 	}
-	sessState.State = sess.State
+	sessState.State = sess.SnapshotState()
 	sessState.UpdatedAt = sess.UpdatedAt
 
 	updatedStateBytes, err := json.Marshal(sessState)
@@ -1336,10 +1348,10 @@ func (s *Service) startAsyncPersistWorker() {
 
 func mergeState(appState, userState session.StateMap, sess *session.Session) *session.Session {
 	for k, v := range appState {
-		sess.State[session.StateAppPrefix+k] = v
+		sess.SetState(session.StateAppPrefix+k, v)
 	}
 	for k, v := range userState {
-		sess.State[session.StateUserPrefix+k] = v
+		sess.SetState(session.StateUserPrefix+k, v)
 	}
 	return sess
 }
