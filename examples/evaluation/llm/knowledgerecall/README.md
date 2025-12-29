@@ -6,11 +6,15 @@ This example measures how well the agent recalls provided knowledge. The agent u
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | API key for the agent and judge models (required) | `` |
+| `OPENAI_API_KEY` | API key for the agent model (required) | `` |
 | `OPENAI_BASE_URL` | Optional custom endpoint for OpenAI-compatible chat APIs | `https://api.openai.com/v1` |
+| `JUDGE_MODEL_API_KEY` | API key for the judge model (required) | `` |
+| `JUDGE_MODEL_BASE_URL` | Optional custom endpoint for the judge model | `https://api.openai.com/v1` |
 | `OPENAI_EMBEDDING_API_KEY` | API key for the embedding model (required for retrieval) | `` |
 | `OPENAI_EMBEDDING_BASE_URL` | Optional custom endpoint for embeddings | `https://api.openai.com/v1` |
 | `OPENAI_EMBEDDING_MODEL` | Embedding model name | `text-embedding-3-small` |
+
+The metric configuration in `data/` references the judge settings via `${JUDGE_MODEL_API_KEY}` and `${JUDGE_MODEL_BASE_URL}` placeholders.
 
 ## Flags
 
@@ -27,6 +31,7 @@ This example measures how well the agent recalls provided knowledge. The agent u
 ```bash
 cd examples/evaluation/llm/knowledgerecall
 OPENAI_API_KEY=sk-... \
+JUDGE_MODEL_API_KEY=sk-... \
 OPENAI_EMBEDDING_API_KEY=sk-... \
 go run . \
   -model "deepseek-chat" \
