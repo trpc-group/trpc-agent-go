@@ -20,6 +20,7 @@
 
 - **Agent 工具 (AgentTool)** - 将 Agent 包装成工具，供其他 Agent 调用
 - **Agent 委托 (Agent Transfer)** - 通过 `transfer_to_agent` 工具实现 Agent 间的任务委托
+- **Team** - 更高层的团队编排封装，支持协调者团队与 Swarm（见 `team` 包）
 
 ## SubAgent 基础
 

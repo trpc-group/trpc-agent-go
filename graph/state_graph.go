@@ -1032,95 +1032,166 @@ type modelResponseConfig struct {
 	NodeID string
 }
 
-// processModelResponse processes a single model response.
-func processModelResponse(ctx context.Context, config modelResponseConfig) (context.Context, *event.Event, error) {
-	var modelErr error
-	if config.Response != nil && config.Response.Error != nil {
-		modelErr = fmt.Errorf(
-			"%s: %s",
-			config.Response.Error.Type,
-			config.Response.Error.Message,
+func responseModelError(rsp *model.Response) error {
+	if rsp == nil || rsp.Error == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %s", rsp.Error.Type, rsp.Error.Message)
+}
+
+func applyAfterModelPluginCallbacks(
+	ctx context.Context,
+	args *model.AfterModelArgs,
+	span oteltrace.Span,
+) (context.Context, bool, *model.Response, error) {
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if !ok || invocation == nil || invocation.Plugins == nil {
+		return ctx, false, nil, nil
+	}
+
+	callbacks := invocation.Plugins.ModelCallbacks()
+	if callbacks == nil {
+		return ctx, false, nil, nil
+	}
+
+	result, err := callbacks.RunAfterModel(ctx, args)
+	if err != nil {
+		span.SetAttributes(
+			attribute.String("trpc.go.agent.error", err.Error()),
+		)
+		return ctx, false, nil, fmt.Errorf(
+			"callback after model error: %w",
+			err,
 		)
 	}
 
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result != nil && result.CustomResponse != nil {
+		return ctx, true, result.CustomResponse, nil
+	}
+	return ctx, false, nil, nil
+}
+
+func applyAfterModelCallbacks(
+	ctx context.Context,
+	callbacks *model.Callbacks,
+	args *model.AfterModelArgs,
+	span oteltrace.Span,
+) (context.Context, *model.Response, error) {
+	if callbacks == nil {
+		return ctx, nil, nil
+	}
+
+	result, err := callbacks.RunAfterModel(ctx, args)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		span.SetAttributes(
+			attribute.String("trpc.go.agent.error", err.Error()),
+		)
+		return ctx, nil, fmt.Errorf(
+			"callback after model error: %w",
+			err,
+		)
+	}
+
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result != nil && result.CustomResponse != nil {
+		return ctx, result.CustomResponse, nil
+	}
+	return ctx, nil, nil
+}
+
+func modelResponseAuthor(config modelResponseConfig) string {
+	if config.NodeID != "" {
+		return config.NodeID
+	}
+	return config.LLMModel.Info().Name
+}
+
+func emitModelResponseEvent(
+	ctx context.Context,
+	config modelResponseConfig,
+	ev *event.Event,
+) error {
+	if config.EventChan == nil || !shouldEmitModelResponse(config.Response) {
+		return nil
+	}
+
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if !ok {
+		invocation = agent.NewInvocation(
+			agent.WithInvocationID(config.InvocationID),
+			agent.WithInvocationModel(config.LLMModel),
+			agent.WithInvocationSession(
+				&session.Session{ID: config.SessionID},
+			),
+		)
+	}
+	return agent.EmitEvent(ctx, invocation, config.EventChan, ev)
+}
+
+// processModelResponse processes a single model response.
+func processModelResponse(ctx context.Context, config modelResponseConfig) (context.Context, *event.Event, error) {
 	args := &model.AfterModelArgs{
 		Request:  config.Request,
 		Response: config.Response,
-		Error:    modelErr,
+		Error:    responseModelError(config.Response),
 	}
 
-	pluginOverride := false
-	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
-		invocation != nil && invocation.Plugins != nil {
-		callbacks := invocation.Plugins.ModelCallbacks()
-		if callbacks != nil {
-			result, err := callbacks.RunAfterModel(ctx, args)
-			if err != nil {
-				config.Span.SetAttributes(
-					attribute.String("trpc.go.agent.error", err.Error()),
-				)
-				return ctx, nil, fmt.Errorf(
-					"callback after model error: %w",
-					err,
-				)
-			}
-			if result != nil && result.Context != nil {
-				ctx = result.Context
-			}
-			if result != nil && result.CustomResponse != nil {
-				config.Response = result.CustomResponse
-				args.Response = config.Response
-				pluginOverride = true
-			}
-		}
+	ctx, pluginOverride, customResponse, err := applyAfterModelPluginCallbacks(
+		ctx,
+		args,
+		config.Span,
+	)
+	if err != nil {
+		return ctx, nil, err
+	}
+	if pluginOverride {
+		config.Response = customResponse
+		args.Response = config.Response
 	}
 
-	if !pluginOverride && config.ModelCallbacks != nil {
-		result, err := config.ModelCallbacks.RunAfterModel(ctx, args)
+	if !pluginOverride {
+		ctx, customResponse, err = applyAfterModelCallbacks(
+			ctx,
+			config.ModelCallbacks,
+			args,
+			config.Span,
+		)
 		if err != nil {
-			config.Span.RecordError(err)
-			config.Span.SetStatus(codes.Error, err.Error())
-			config.Span.SetAttributes(
-				attribute.String(
-					"trpc.go.agent.error",
-					err.Error(),
-				),
-			)
-			return ctx, nil, fmt.Errorf(
-				"callback after model error: %w",
-				err,
-			)
-		}
-		if result != nil && result.Context != nil {
-			ctx = result.Context
-		}
-		if result != nil && result.CustomResponse != nil {
-			config.Response = result.CustomResponse
-		}
-	}
-	var llmEvent *event.Event
-	author := config.LLMModel.Info().Name
-	if config.NodeID != "" {
-		author = config.NodeID
-	}
-	llmEvent = event.NewResponseEvent(config.InvocationID, author, config.Response)
-	if config.EventChan != nil && shouldEmitModelResponse(config.Response) {
-		invocation, ok := agent.InvocationFromContext(ctx)
-		if !ok {
-			invocation = agent.NewInvocation(
-				agent.WithInvocationID(config.InvocationID),
-				agent.WithInvocationModel(config.LLMModel),
-				agent.WithInvocationSession(&session.Session{ID: config.SessionID}),
-			)
-		}
-
-		if err := agent.EmitEvent(ctx, invocation, config.EventChan, llmEvent); err != nil {
 			return ctx, nil, err
 		}
+		if customResponse != nil {
+			config.Response = customResponse
+		}
 	}
+
+	llmEvent := event.NewResponseEvent(
+		config.InvocationID,
+		modelResponseAuthor(config),
+		config.Response,
+	)
+
+	if err := emitModelResponseEvent(ctx, config, llmEvent); err != nil {
+		return ctx, nil, err
+	}
+
 	if config.Response.Error != nil {
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", config.Response.Error.Message))
-		return ctx, nil, fmt.Errorf("model API error: %s", config.Response.Error.Message)
+		config.Span.SetAttributes(
+			attribute.String(
+				"trpc.go.agent.error",
+				config.Response.Error.Message,
+			),
+		)
+		return ctx, nil, fmt.Errorf(
+			"model API error: %s",
+			config.Response.Error.Message,
+		)
 	}
 	return ctx, llmEvent, nil
 }
@@ -1593,6 +1664,164 @@ func buildAgentInvocationWithStateAndScope(
 	return inv
 }
 
+const (
+	errCallbackBeforeTool = "callback before tool error: %w"
+	errCallbackAfterTool  = "callback after tool error: %w"
+)
+
+func runBeforeToolPluginCallbacks(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	decl *tool.Declaration,
+) (context.Context, model.ToolCall, any, error) {
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if !ok || invocation == nil || invocation.Plugins == nil {
+		return ctx, toolCall, nil, nil
+	}
+
+	callbacks := invocation.Plugins.ToolCallbacks()
+	if callbacks == nil {
+		return ctx, toolCall, nil, nil
+	}
+
+	args := &tool.BeforeToolArgs{
+		ToolName:    toolCall.Function.Name,
+		Declaration: decl,
+		Arguments:   toolCall.Function.Arguments,
+	}
+	result, err := callbacks.RunBeforeTool(ctx, args)
+	if err != nil {
+		return ctx, toolCall, nil,
+			fmt.Errorf(errCallbackBeforeTool, err)
+	}
+
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result != nil && result.CustomResult != nil {
+		return ctx, toolCall, result.CustomResult, nil
+	}
+	if result != nil && result.ModifiedArguments != nil {
+		toolCall.Function.Arguments = result.ModifiedArguments
+	}
+	return ctx, toolCall, nil, nil
+}
+
+func runBeforeToolCallbacks(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	decl *tool.Declaration,
+	toolCallbacks *tool.Callbacks,
+) (context.Context, model.ToolCall, any, error) {
+	if toolCallbacks == nil {
+		return ctx, toolCall, nil, nil
+	}
+
+	args := &tool.BeforeToolArgs{
+		ToolName:    toolCall.Function.Name,
+		Declaration: decl,
+		Arguments:   toolCall.Function.Arguments,
+	}
+	result, err := toolCallbacks.RunBeforeTool(ctx, args)
+	if err != nil {
+		return ctx, toolCall, nil,
+			fmt.Errorf(errCallbackBeforeTool, err)
+	}
+
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result != nil && result.CustomResult != nil {
+		return ctx, toolCall, result.CustomResult, nil
+	}
+	if result != nil && result.ModifiedArguments != nil {
+		toolCall.Function.Arguments = result.ModifiedArguments
+	}
+	return ctx, toolCall, nil, nil
+}
+
+func ensureCallableTool(
+	t tool.Tool,
+	toolName string,
+) (tool.CallableTool, error) {
+	callableTool, ok := t.(tool.CallableTool)
+	if !ok {
+		return nil, fmt.Errorf("tool %s is not callable", toolName)
+	}
+	return callableTool, nil
+}
+
+func runAfterToolPluginCallbacks(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	decl *tool.Declaration,
+	result any,
+	runErr error,
+) (context.Context, any, error) {
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if !ok || invocation == nil || invocation.Plugins == nil {
+		return ctx, nil, nil
+	}
+
+	callbacks := invocation.Plugins.ToolCallbacks()
+	if callbacks == nil {
+		return ctx, nil, nil
+	}
+
+	args := &tool.AfterToolArgs{
+		ToolName:    toolCall.Function.Name,
+		Declaration: decl,
+		Arguments:   toolCall.Function.Arguments,
+		Result:      result,
+		Error:       runErr,
+	}
+	afterResult, err := callbacks.RunAfterTool(ctx, args)
+	if err != nil {
+		return ctx, nil, fmt.Errorf(errCallbackAfterTool, err)
+	}
+
+	if afterResult != nil && afterResult.Context != nil {
+		ctx = afterResult.Context
+	}
+	if afterResult != nil && afterResult.CustomResult != nil {
+		return ctx, afterResult.CustomResult, nil
+	}
+	return ctx, nil, nil
+}
+
+func runAfterToolCallbacks(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	decl *tool.Declaration,
+	result any,
+	runErr error,
+	toolCallbacks *tool.Callbacks,
+) (context.Context, any, error) {
+	if toolCallbacks == nil {
+		return ctx, nil, nil
+	}
+
+	args := &tool.AfterToolArgs{
+		ToolName:    toolCall.Function.Name,
+		Declaration: decl,
+		Arguments:   toolCall.Function.Arguments,
+		Result:      result,
+		Error:       runErr,
+	}
+	afterResult, err := toolCallbacks.RunAfterTool(ctx, args)
+	if err != nil {
+		return ctx, nil, fmt.Errorf(errCallbackAfterTool, err)
+	}
+
+	if afterResult != nil && afterResult.Context != nil {
+		ctx = afterResult.Context
+	}
+	if afterResult != nil && afterResult.CustomResult != nil {
+		return ctx, afterResult.CustomResult, nil
+	}
+	return ctx, nil, nil
+}
+
 // runTool executes a tool with before/after callbacks and returns the result.
 // Parameters:
 //   - ctx: context for cancellation and tracing
@@ -1615,120 +1844,72 @@ func runTool(
 
 	decl := t.Declaration()
 
-	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
-		invocation != nil && invocation.Plugins != nil {
-		callbacks := invocation.Plugins.ToolCallbacks()
-		if callbacks != nil {
-			args := &tool.BeforeToolArgs{
-				ToolName:    toolCall.Function.Name,
-				Declaration: decl,
-				Arguments:   toolCall.Function.Arguments,
-			}
-			result, err := callbacks.RunBeforeTool(ctx, args)
-			if err != nil {
-				return ctx, nil, toolCall.Function.Arguments,
-					fmt.Errorf("callback before tool error: %w", err)
-			}
-			if result != nil && result.Context != nil {
-				ctx = result.Context
-			}
-			if result != nil && result.CustomResult != nil {
-				return ctx, result.CustomResult,
-					toolCall.Function.Arguments, nil
-			}
-			if result != nil && result.ModifiedArguments != nil {
-				toolCall.Function.Arguments = result.ModifiedArguments
-			}
-		}
-	}
-
-	if toolCallbacks != nil {
-		args := &tool.BeforeToolArgs{
-			ToolName:    toolCall.Function.Name,
-			Declaration: decl,
-			Arguments:   toolCall.Function.Arguments,
-		}
-		result, err := toolCallbacks.RunBeforeTool(ctx, args)
-		if err != nil {
-			return ctx, nil, toolCall.Function.Arguments,
-				fmt.Errorf("callback before tool error: %w", err)
-		}
-		if result != nil && result.Context != nil {
-			ctx = result.Context
-		}
-		if result != nil && result.CustomResult != nil {
-			return ctx, result.CustomResult,
-				toolCall.Function.Arguments, nil
-		}
-		if result != nil && result.ModifiedArguments != nil {
-			toolCall.Function.Arguments = result.ModifiedArguments
-		}
-	}
-
-	callableTool, ok := t.(tool.CallableTool)
-	if !ok {
-		return ctx, nil, toolCall.Function.Arguments,
-			fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
-	}
-
-	result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
-
-	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
-		invocation != nil && invocation.Plugins != nil {
-		callbacks := invocation.Plugins.ToolCallbacks()
-		if callbacks != nil {
-			args := &tool.AfterToolArgs{
-				ToolName:    toolCall.Function.Name,
-				Declaration: decl,
-				Arguments:   toolCall.Function.Arguments,
-				Result:      result,
-				Error:       err,
-			}
-			afterResult, afterErr := callbacks.RunAfterTool(ctx, args)
-			if afterErr != nil {
-				return ctx, nil, toolCall.Function.Arguments,
-					fmt.Errorf("callback after tool error: %w", afterErr)
-			}
-			if afterResult != nil && afterResult.Context != nil {
-				ctx = afterResult.Context
-			}
-			if afterResult != nil && afterResult.CustomResult != nil {
-				return ctx, afterResult.CustomResult,
-					toolCall.Function.Arguments, nil
-			}
-		}
-	}
-
-	// Run after tool callbacks if they exist.
-	// If the tool returns an error, the callback function will still execute to
-	// allow the user to handle the error.
-	if toolCallbacks != nil {
-		args := &tool.AfterToolArgs{
-			ToolName:    toolCall.Function.Name,
-			Declaration: decl,
-			Arguments:   toolCall.Function.Arguments,
-			Result:      result,
-			Error:       err,
-		}
-		afterResult, afterErr := toolCallbacks.RunAfterTool(ctx, args)
-		if afterErr != nil {
-			return ctx, nil, toolCall.Function.Arguments,
-				fmt.Errorf("callback after tool error: %w", afterErr)
-		}
-		if afterResult != nil && afterResult.Context != nil {
-			ctx = afterResult.Context
-		}
-		if afterResult != nil && afterResult.CustomResult != nil {
-			return ctx, afterResult.CustomResult,
-				toolCall.Function.Arguments, nil
-		}
-	}
-
+	ctx, toolCall, customResult, err := runBeforeToolPluginCallbacks(
+		ctx,
+		toolCall,
+		decl,
+	)
 	if err != nil {
+		return ctx, nil, toolCall.Function.Arguments, err
+	}
+	if customResult != nil {
+		return ctx, customResult, toolCall.Function.Arguments, nil
+	}
+
+	ctx, toolCall, customResult, err = runBeforeToolCallbacks(
+		ctx,
+		toolCall,
+		decl,
+		toolCallbacks,
+	)
+	if err != nil {
+		return ctx, nil, toolCall.Function.Arguments, err
+	}
+	if customResult != nil {
+		return ctx, customResult, toolCall.Function.Arguments, nil
+	}
+
+	callableTool, err := ensureCallableTool(t, toolCall.Function.Name)
+	if err != nil {
+		return ctx, nil, toolCall.Function.Arguments, err
+	}
+
+	result, toolErr := callableTool.Call(ctx, toolCall.Function.Arguments)
+
+	ctx, customResult, err = runAfterToolPluginCallbacks(
+		ctx,
+		toolCall,
+		decl,
+		result,
+		toolErr,
+	)
+	if err != nil {
+		return ctx, nil, toolCall.Function.Arguments, err
+	}
+	if customResult != nil {
+		return ctx, customResult, toolCall.Function.Arguments, nil
+	}
+
+	ctx, customResult, err = runAfterToolCallbacks(
+		ctx,
+		toolCall,
+		decl,
+		result,
+		toolErr,
+		toolCallbacks,
+	)
+	if err != nil {
+		return ctx, nil, toolCall.Function.Arguments, err
+	}
+	if customResult != nil {
+		return ctx, customResult, toolCall.Function.Arguments, nil
+	}
+
+	if toolErr != nil {
 		return ctx, nil, toolCall.Function.Arguments, fmt.Errorf(
 			"tool %s call failed: %w",
 			toolCall.Function.Name,
-			err,
+			toolErr,
 		)
 	}
 	return ctx, result, toolCall.Function.Arguments, nil
