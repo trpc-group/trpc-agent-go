@@ -323,7 +323,12 @@ func (f *Flow) handleAfterModelCallbacks(
 	response *model.Response,
 	eventChan chan<- *event.Event,
 ) (*model.Response, error) {
-	ctx, customResp, err := f.runAfterModelCallbacks(ctx, llmRequest, response)
+	ctx, customResp, err := f.runAfterModelCallbacks(
+		ctx,
+		invocation,
+		llmRequest,
+		response,
+	)
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
 			return nil, err
@@ -375,35 +380,73 @@ func collectLongRunningToolIDs(ToolCalls []model.ToolCall, tools map[string]tool
 
 func (f *Flow) runAfterModelCallbacks(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	req *model.Request,
 	response *model.Response,
 ) (context.Context, *model.Response, error) {
-	if f.modelCallbacks == nil {
-		return ctx, response, nil
+	var (
+		override bool
+		err      error
+	)
+	if invocation != nil && invocation.Plugins != nil {
+		callbacks := invocation.Plugins.ModelCallbacks()
+		ctx, response, override, err = runAfterModelCallbackSet(
+			ctx,
+			callbacks,
+			req,
+			response,
+		)
+		if err != nil {
+			return ctx, nil, err
+		}
+		if override {
+			return ctx, response, nil
+		}
 	}
 
-	// Convert response.Error to Go error for callback.
+	ctx, response, _, err = runAfterModelCallbackSet(
+		ctx,
+		f.modelCallbacks,
+		req,
+		response,
+	)
+	return ctx, response, err
+}
+
+func runAfterModelCallbackSet(
+	ctx context.Context,
+	callbacks *model.Callbacks,
+	req *model.Request,
+	response *model.Response,
+) (context.Context, *model.Response, bool, error) {
+	if callbacks == nil {
+		return ctx, response, false, nil
+	}
+
 	var modelErr error
 	if response != nil && response.Error != nil {
-		modelErr = fmt.Errorf("%s: %s", response.Error.Type, response.Error.Message)
+		modelErr = fmt.Errorf(
+			"%s: %s",
+			response.Error.Type,
+			response.Error.Message,
+		)
 	}
 
-	result, err := f.modelCallbacks.RunAfterModel(ctx, &model.AfterModelArgs{
+	result, err := callbacks.RunAfterModel(ctx, &model.AfterModelArgs{
 		Request:  req,
 		Response: response,
 		Error:    modelErr,
 	})
 	if err != nil {
-		return ctx, nil, err
+		return ctx, nil, false, err
 	}
-	// Use the context from result if provided for subsequent operations.
 	if result != nil && result.Context != nil {
 		ctx = result.Context
 	}
 	if result != nil && result.CustomResponse != nil {
-		return ctx, result.CustomResponse, nil
+		return ctx, result.CustomResponse, true, nil
 	}
-	return ctx, response, nil
+	return ctx, response, false, nil
 }
 
 // preprocess handles pre-LLM call preparation using request processors.
@@ -542,6 +585,34 @@ func (f *Flow) callLLM(
 	}
 
 	// Run before model callbacks if they exist.
+	if invocation.Plugins != nil {
+		callbacks := invocation.Plugins.ModelCallbacks()
+		if callbacks != nil {
+			result, err := callbacks.RunBeforeModel(
+				ctx,
+				&model.BeforeModelArgs{Request: llmRequest},
+			)
+			if err != nil {
+				log.ErrorfContext(
+					ctx,
+					"Before model plugin failed for agent %s: %v",
+					invocation.AgentName,
+					err,
+				)
+				return nil, err
+			}
+			if result != nil && result.Context != nil {
+				ctx = result.Context
+			}
+			if result != nil && result.CustomResponse != nil {
+				responseChan := make(chan *model.Response, 1)
+				responseChan <- result.CustomResponse
+				close(responseChan)
+				return responseChan, nil
+			}
+		}
+	}
+
 	if f.modelCallbacks != nil {
 		result, err := f.modelCallbacks.RunBeforeModel(ctx, &model.BeforeModelArgs{
 			Request: llmRequest,
