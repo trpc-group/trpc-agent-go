@@ -58,7 +58,7 @@ type ChatStreamCompleteCallbackFunc func(
 type options struct {
 	// API key for the HuggingFace client.
 	APIKey string
-	// Base URL for the HuggingFace API. Default is https://api-inference.huggingface.co.
+	// Base URL for the HuggingFace API. Default is https://router.huggingface.co.
 	BaseURL string
 	// Buffer size for response channels (default: 256).
 	ChannelBufferSize int

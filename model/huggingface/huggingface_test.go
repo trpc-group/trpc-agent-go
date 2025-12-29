@@ -636,7 +636,7 @@ func TestModel_TokenTailoring(t *testing.T) {
 }
 
 func TestModel_TokenTailoring_Integration(t *testing.T) {
-	// 创建 mock HTTP server
+	// create mock HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
 			http.Error(w, "not found", http.StatusNotFound)
