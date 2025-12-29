@@ -70,3 +70,9 @@ func TestJudgeModelEnvExpansionPartialAPIKey(t *testing.T) {
 	require.NotNil(t, decoded.JudgeModel)
 	assert.Equal(t, "prefix-secret-suffix", decoded.JudgeModel.APIKey)
 }
+
+func TestJudgeModelUnmarshalJSONFails(t *testing.T) {
+	var opts JudgeModelOptions
+	err := opts.UnmarshalJSON([]byte(`{"providerName":123}`))
+	require.Error(t, err)
+}
