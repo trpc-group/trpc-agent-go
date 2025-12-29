@@ -37,9 +37,9 @@ func (fixedDeadlineContext) Err() error { return nil }
 // errAfterFirstCallContext returns nil on the first Err call and a fixed error afterwards.
 type errAfterFirstCallContext struct {
 	context.Context
-	deadline  time.Time
-	err       error
-	errCalls  int32
+	deadline time.Time
+	err      error
+	errCalls int32
 }
 
 func (c *errAfterFirstCallContext) Deadline() (time.Time, bool) { return c.deadline, true }
