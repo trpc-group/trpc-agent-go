@@ -390,7 +390,8 @@ or higher.
 
 ## Example
 
-See `examples/team` for a runnable demo of both modes.
+See `examples/team/coord` (Coordinator Team) and `examples/team/swarm` (Swarm)
+for runnable demos.
 
 ## Design Notes
 

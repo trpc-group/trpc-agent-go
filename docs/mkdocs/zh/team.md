@@ -369,7 +369,8 @@ transfer。它是一种比较粗略但高效的判断：只看最近 N 次的“
 
 ## 示例
 
-可以直接参考 `examples/team`，它包含两个模式的可运行示例。
+可以直接参考 `examples/team/coord`（协调者团队）和 `examples/team/swarm`
+（Swarm），它们分别提供可运行示例。
 
 ## 设计说明
 
