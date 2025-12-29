@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
 
@@ -51,12 +52,11 @@ type SessionState struct {
 type Service struct {
 	opts            ServiceOpts
 	redisClient     redis.UniversalClient
-	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
-	trackEventChans []chan *trackEventPair   // channel for track events to persistence.
-	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
-	persistWg       sync.WaitGroup           // wait group for persist workers
-	summaryWg       sync.WaitGroup           // wait group for summary workers
-	once            sync.Once                // ensure Close is called only once
+	eventPairChans  []chan *sessionEventPair     // channel for session events to persistence
+	trackEventChans []chan *trackEventPair       // channel for track events to persistence.
+	asyncWorker     *isummary.AsyncSummaryWorker // async summary worker
+	persistWg       sync.WaitGroup               // wait group for persist workers
+	once            sync.Once                    // ensure Close is called only once
 }
 
 type sessionEventPair struct {
@@ -67,14 +67,6 @@ type sessionEventPair struct {
 type trackEventPair struct {
 	key   session.Key
 	event *session.TrackEvent
-}
-
-// summaryJob represents a summary job to be processed asynchronously.
-type summaryJob struct {
-	ctx       context.Context // Detached context preserving values but not cancel.
-	filterKey string
-	force     bool
-	session   *session.Session
 }
 
 // NewService creates a new redis session service.
@@ -108,9 +100,19 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if opts.enableAsyncPersist {
 		s.startAsyncPersistWorker()
 	}
-	if opts.summarizer != nil {
-		s.startAsyncSummaryWorker()
+
+	// Start async summary workers if summarizer is configured
+	if opts.summarizer != nil && opts.asyncSummaryNum > 0 {
+		s.asyncWorker = isummary.NewAsyncSummaryWorker(isummary.AsyncSummaryConfig{
+			Summarizer:        opts.summarizer,
+			AsyncSummaryNum:   opts.asyncSummaryNum,
+			SummaryQueueSize:  opts.summaryQueueSize,
+			SummaryJobTimeout: opts.summaryJobTimeout,
+			CreateSummaryFunc: s.CreateSessionSummary,
+		})
+		s.asyncWorker.Start()
 	}
+
 	return s, nil
 }
 
@@ -589,10 +591,9 @@ func (s *Service) Close() error {
 		s.persistWg.Wait()
 
 		// Close summary job channels and wait for summary workers.
-		for _, ch := range s.summaryJobChans {
-			close(ch)
+		if s.asyncWorker != nil {
+			s.asyncWorker.Stop()
 		}
-		s.summaryWg.Wait()
 	})
 
 	return nil
