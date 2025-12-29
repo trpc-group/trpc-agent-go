@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 )
 
@@ -208,6 +209,216 @@ func TestNodeRetry_NoPolicy_NoRetry(t *testing.T) {
 
 	require.Equal(t, int32(1), atomic.LoadInt32(&attempts), "should not retry without policy")
 	require.Equal(t, int32(0), atomic.LoadInt32(&sinkRuns), "downstream should not run")
+}
+
+func TestNodeRetry_NoPolicy_BarrierWaitTimeoutStopsGraph(t *testing.T) {
+	t.Parallel()
+
+	schema := NewStateSchema()
+	var attempts int32
+
+	unstable := func(ctx context.Context, state State) (any, error) {
+		atomic.AddInt32(&attempts, 1)
+		return nil, fmt.Errorf("always fails")
+	}
+
+	sg := NewStateGraph(schema)
+	sg.AddNode("unstable", unstable)
+	sg.SetEntryPoint("unstable")
+	sg.SetFinishPoint("unstable")
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-no-retry-barrier-timeout"))
+	barrier.Enable(inv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	err = exec.executeGraph(ctx, State{}, inv, make(chan *event.Event, 128), time.Now())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "node barrier")
+	require.Equal(t, int32(1), atomic.LoadInt32(&attempts))
+}
+
+func TestNodeRetry_AttemptBudgetExhausted_BarrierWaitTimeoutStopsGraph(t *testing.T) {
+	t.Parallel()
+
+	schema := NewStateSchema()
+	var attempts int32
+
+	unstable := func(ctx context.Context, state State) (any, error) {
+		atomic.AddInt32(&attempts, 1)
+		return nil, fmt.Errorf("always fails")
+	}
+
+	policy := RetryPolicy{
+		MaxAttempts:     1,
+		InitialInterval: 0,
+		BackoffFactor:   1.0,
+		MaxInterval:     0,
+		Jitter:          false,
+		RetryOn:         []RetryCondition{RetryConditionFunc(func(error) bool { return true })},
+	}
+
+	sg := NewStateGraph(schema)
+	sg.AddNode("unstable", unstable, WithRetryPolicy(policy))
+	sg.SetEntryPoint("unstable")
+	sg.SetFinishPoint("unstable")
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-retry-attempt-budget-timeout"))
+	barrier.Enable(inv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	err = exec.executeGraph(ctx, State{}, inv, make(chan *event.Event, 128), time.Now())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "node barrier")
+	require.Equal(t, int32(1), atomic.LoadInt32(&attempts))
+}
+
+func TestNodeRetry_ElapsedBudgetExhausted_BarrierWaitTimeoutStopsGraph(t *testing.T) {
+	t.Parallel()
+
+	schema := NewStateSchema()
+	var attempts int32
+
+	unstable := func(ctx context.Context, state State) (any, error) {
+		atomic.AddInt32(&attempts, 1)
+		return nil, fmt.Errorf("always fails")
+	}
+
+	policy := RetryPolicy{
+		MaxAttempts:     2,
+		MaxElapsedTime:  time.Nanosecond,
+		InitialInterval: 0,
+		BackoffFactor:   1.0,
+		MaxInterval:     0,
+		Jitter:          false,
+		RetryOn:         []RetryCondition{RetryConditionFunc(func(error) bool { return true })},
+	}
+
+	sg := NewStateGraph(schema)
+	sg.AddNode("unstable", unstable, WithRetryPolicy(policy))
+	sg.SetEntryPoint("unstable")
+	sg.SetFinishPoint("unstable")
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-retry-elapsed-budget-timeout"))
+	barrier.Enable(inv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	err = exec.executeGraph(ctx, State{}, inv, make(chan *event.Event, 128), time.Now())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "node barrier")
+	require.Equal(t, int32(1), atomic.LoadInt32(&attempts))
+}
+
+func TestNodeRetry_BarrierWaitTimeoutBeforeRetryStopsGraph(t *testing.T) {
+	t.Parallel()
+
+	schema := NewStateSchema()
+	var attempts int32
+
+	unstable := func(ctx context.Context, state State) (any, error) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n == 1 {
+			return nil, fmt.Errorf("simulated failure")
+		}
+		return State{"ok": true}, nil
+	}
+
+	policy := RetryPolicy{
+		MaxAttempts:     2,
+		InitialInterval: 0,
+		BackoffFactor:   1.0,
+		MaxInterval:     0,
+		Jitter:          false,
+		RetryOn:         []RetryCondition{RetryConditionFunc(func(error) bool { return true })},
+	}
+
+	sg := NewStateGraph(schema)
+	sg.AddNode("unstable", unstable, WithRetryPolicy(policy))
+	sg.SetEntryPoint("unstable")
+	sg.SetFinishPoint("unstable")
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-retry-before-retry-timeout"))
+	barrier.Enable(inv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	err = exec.executeGraph(ctx, State{}, inv, make(chan *event.Event, 128), time.Now())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "node barrier")
+	require.Equal(t, int32(1), atomic.LoadInt32(&attempts))
+}
+
+func TestNodeRetry_StepDeadlineExceeded_BarrierWaitErrorStopsGraph(t *testing.T) {
+	t.Parallel()
+
+	schema := NewStateSchema()
+	var attempts int32
+
+	unstable := func(ctx context.Context, state State) (any, error) {
+		atomic.AddInt32(&attempts, 1)
+		return nil, fmt.Errorf("simulated failure")
+	}
+
+	policy := RetryPolicy{
+		MaxAttempts:     2,
+		InitialInterval: 0,
+		BackoffFactor:   1.0,
+		MaxInterval:     0,
+		Jitter:          false,
+		RetryOn:         []RetryCondition{RetryConditionFunc(func(error) bool { return true })},
+	}
+
+	sg := NewStateGraph(schema)
+	sg.AddNode("unstable", unstable, WithRetryPolicy(policy))
+	sg.SetEntryPoint("unstable")
+	sg.SetFinishPoint("unstable")
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-retry-step-deadline-timeout"))
+	barrier.Enable(inv)
+
+	expiredCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Millisecond))
+	defer cancel()
+
+	err = exec.executeGraph(expiredCtx, State{}, inv, make(chan *event.Event, 128), time.Now())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "node barrier")
+	require.Equal(t, int32(1), atomic.LoadInt32(&attempts))
 }
 
 // Test that interrupts are not retried even if a retry policy is present.
