@@ -32,7 +32,7 @@ func ExtractRubrics(rubrics []*llm.Rubric) string {
 	}
 	var text strings.Builder
 	for _, rubric := range rubrics {
-		if rubric.Content == nil {
+		if rubric == nil || rubric.Content == nil {
 			continue
 		}
 		text.WriteString(rubric.ID)

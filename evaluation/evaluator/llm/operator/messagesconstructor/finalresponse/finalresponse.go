@@ -26,7 +26,7 @@ import (
 var (
 	// finalResponsePrompt is the template fed to the judge model.
 	finalResponsePrompt = `
-You are an expert evaluator for an AI agent (Agent: a model that executes tasks). Your job is to **only** judge whether the agent’s **final answer** matches the reference answer, and to output a fixed-format JSON (JavaScript Object Notation, a structured data text format).
+You are an expert evaluator for an AI agent (Agent: a model that executes tasks). Your job is to **only** judge whether the agent’s **final answer** matches the reference answer, and to output a fixed-format plain-text report.
 
 ### Core scoring rules
 

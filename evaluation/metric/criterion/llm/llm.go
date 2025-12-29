@@ -10,7 +10,11 @@
 // Package llm defines criteria for LLM-based judging.
 package llm
 
-import "trpc.group/trpc-go/trpc-agent-go/model"
+import (
+	"encoding/json"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
 
 // LLMCriterion configures an LLM judge for evaluation.
 type LLMCriterion struct {
@@ -45,6 +49,14 @@ type JudgeModelOptions struct {
 	NumSamples *int `json:"numSamples,omitempty"`
 	// Generation holds generation parameters for the judge.
 	Generation *model.GenerationConfig `json:"generationConfig,omitempty"`
+}
+
+// MarshalJSON omits APIKey from JSON output while still allowing JSON input to populate it.
+func (j JudgeModelOptions) MarshalJSON() ([]byte, error) {
+	type judgeModelOptionsAlias JudgeModelOptions
+	alias := judgeModelOptionsAlias(j)
+	alias.APIKey = ""
+	return json.Marshal(alias)
 }
 
 // New builds an LlmCriterion with judge model settings.

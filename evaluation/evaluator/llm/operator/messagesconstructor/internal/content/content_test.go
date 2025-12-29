@@ -25,6 +25,8 @@ func TestExtractTextFromContent(t *testing.T) {
 func TestExtractRubrics(t *testing.T) {
 	rubrics := []*llm.Rubric{
 		{ID: "1", Content: &llm.RubricContent{Text: "foo"}},
+		nil,
+		{ID: "skip", Content: nil},
 		{ID: "2", Content: &llm.RubricContent{Text: "bar"}},
 	}
 	assert.Equal(t, "1: foo\n2: bar\n", ExtractRubrics(rubrics))
