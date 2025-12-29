@@ -429,7 +429,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 示例：[examples/evaluation](examples/evaluation)
 
 - 通过可复用的 EvalSet 与可插拔的 Metric 对 agent 进行评测。
-- 包含本地文件（local）与内存（inmemory）两种模式，并提供 Debug + 评测服务端示例。
+- 包含本地文件（local）与内存（inmemory）两种模式。
 
 ### 11. Agent Skills
 
@@ -478,19 +478,19 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 
 | Package     | 职责                                                               |
 | ----------- | ------------------------------------------------------------------ |
-| `agent`     | 核心执行单元，负责处理用户输入并生成响应。                         |
-| `runner`    | agent 执行器，负责管理执行流程并连接 Session/Memory Service 能力。 |
-| `model`     | 支持多种 LLM 模型（OpenAI、DeepSeek 等）。                         |
-| `tool`      | 提供多种工具能力（Function、MCP、DuckDuckGo 等）。                 |
-| `session`   | 管理用户会话状态与事件。                                           |
-| `memory`    | 记录用户长期记忆与个性化信息。                                     |
-| `knowledge` | 实现 RAG 知识检索能力。                                            |
-| `planner`   | 提供 agent 的规划与推理能力。                                      |
-| `artifact`  | 存储并读取工具/agent 产出的版本化文件（图片、报告等）。            |
-| `skill`     | 管理并执行以 `SKILL.md` 定义的可复用 Agent Skills。                 |
-| `event`     | 定义 Runner 与各类服务使用的事件结构与流式载荷。                   |
-| `evaluation`| 提供 EvalSet/Metric 驱动的评测框架并管理评测结果。                 |
-| `server`    | 提供 Debug、AG-UI、A2A 等 HTTP 服务端能力。                        |
+| `agent`     | 核心执行单元，负责处理用户输入并生成响应。                                |
+| `runner`    | agent 执行器，负责管理执行流程并连接 Session/Memory Service 能力。       |
+| `model`     | 支持多种 LLM 模型（OpenAI、DeepSeek 等）。                             |
+| `tool`      | 提供多种工具能力（Function、MCP、DuckDuckGo 等）。                      |
+| `session`   | 管理用户会话状态与事件。                                              |
+| `memory`    | 记录用户长期记忆与个性化信息。                                         |
+| `knowledge` | 实现 RAG 知识检索能力。                                              |
+| `planner`   | 提供 agent 的规划与推理能力。                                         |
+| `artifact`  | 存储并读取工具/agent 产出的版本化文件（图片、报告等）。                    |
+| `skill`     | 管理并执行以 `SKILL.md` 定义的可复用 Agent Skills。                   |
+| `event`     | 定义 Runner 与各类服务使用的事件结构与流式载荷。                        |
+| `evaluation`| 提供 EvalSet/Metric 驱动的评测框架并管理评测结果。                     |
+| `server`    | 提供 AG-UI、A2A 等 HTTP 服务端能力。                                |
 | `telemetry` | OpenTelemetry 的 tracing/metrics 采集与接入。                      |
 
 ## 使用内置 Agents
