@@ -2,8 +2,7 @@
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights
-// reserved.
+// Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -39,6 +38,13 @@ const (
 
 	dirPerm  = 0o755
 	filePerm = 0o644
+
+	bytesPerMiB = 1 << 20
+
+	maxDownloadBytes = 64 * bytesPerMiB
+
+	maxExtractFileBytes  = 64 * bytesPerMiB
+	maxExtractTotalBytes = 256 * bytesPerMiB
 )
 
 // EnvSkillsCacheDir overrides where URL-based skills roots are cached.
@@ -78,10 +84,7 @@ func fileURLPath(u *url.URL) (string, error) {
 }
 
 func cacheURLRoot(u *url.URL) (string, error) {
-	cacheDir, err := skillsCacheDir()
-	if err != nil {
-		return "", err
-	}
+	cacheDir := skillsCacheDir()
 	key := sha256Hex(u.String())
 	destDir := filepath.Join(cacheDir, key)
 	ready := filepath.Join(destDir, cacheReadyFile)
@@ -127,15 +130,15 @@ func cacheURLRoot(u *url.URL) (string, error) {
 	return destDir, nil
 }
 
-func skillsCacheDir() (string, error) {
+func skillsCacheDir() string {
 	if d := strings.TrimSpace(os.Getenv(EnvSkillsCacheDir)); d != "" {
-		return d, nil
+		return d
 	}
 	uc, err := os.UserCacheDir()
 	if err == nil && uc != "" {
-		return filepath.Join(uc, cacheAppDir, cacheSkillsDir), nil
+		return filepath.Join(uc, cacheAppDir, cacheSkillsDir)
 	}
-	return filepath.Join(os.TempDir(), cacheAppDir, cacheSkillsDir), nil
+	return filepath.Join(os.TempDir(), cacheAppDir, cacheSkillsDir)
 }
 
 func downloadURLToFile(u *url.URL, path string) error {
@@ -148,13 +151,23 @@ func downloadURLToFile(u *url.URL, path string) error {
 		resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("download skills root: %s", resp.Status)
 	}
+	if resp.ContentLength > maxDownloadBytes {
+		return fmt.Errorf("download skills root: too large")
+	}
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
+	lr := io.LimitReader(resp.Body, maxDownloadBytes+1)
+	n, err := io.Copy(f, lr)
+	if err != nil {
+		return err
+	}
+	if n > maxDownloadBytes {
+		return fmt.Errorf("download skills root: too large")
+	}
+	return nil
 }
 
 func extractURLPayload(u *url.URL, srcPath string, destDir string) error {
@@ -230,15 +243,16 @@ func extractZip(srcPath string, destDir string) error {
 		return err
 	}
 	defer zr.Close()
+	var total int64
 	for _, f := range zr.File {
-		if err := extractZipFile(f, destDir); err != nil {
+		if err := extractZipFile(f, destDir, &total); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func extractZipFile(f *zip.File, destDir string) error {
+func extractZipFile(f *zip.File, destDir string, total *int64) error {
 	if f == nil {
 		return fmt.Errorf("nil zip entry")
 	}
@@ -254,11 +268,11 @@ func extractZipFile(f *zip.File, destDir string) error {
 		return fmt.Errorf("unsupported zip entry: %q", f.Name)
 	}
 	target := filepath.Join(destDir, filepath.FromSlash(clean))
-	if !isWithinDir(destDir, target) {
-		return fmt.Errorf("zip entry outside root: %q", f.Name)
-	}
 	if info.IsDir() {
 		return os.MkdirAll(target, dirPerm)
+	}
+	if err := validateZipEntrySize(f); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(target), dirPerm); err != nil {
 		return err
@@ -278,8 +292,18 @@ func extractZipFile(f *zip.File, destDir string) error {
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, rc)
-	return err
+	lr := io.LimitReader(rc, maxExtractFileBytes+1)
+	n, err := io.Copy(out, lr)
+	if err != nil {
+		return err
+	}
+	if n > maxExtractFileBytes {
+		return fmt.Errorf("zip entry too large: %q", f.Name)
+	}
+	if err := addExtractedBytes(total, n); err != nil {
+		return err
+	}
+	return nil
 }
 
 func extractTar(srcPath string, destDir string) error {
@@ -306,6 +330,7 @@ func extractTarGZ(srcPath string, destDir string) error {
 }
 
 func extractTarReader(tr *tar.Reader, destDir string) error {
+	var total int64
 	for {
 		h, err := tr.Next()
 		if err != nil {
@@ -322,9 +347,6 @@ func extractTarReader(tr *tar.Reader, destDir string) error {
 			continue
 		}
 		target := filepath.Join(destDir, filepath.FromSlash(clean))
-		if !isWithinDir(destDir, target) {
-			return fmt.Errorf("tar entry outside root: %q", h.Name)
-		}
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, dirPerm); err != nil {
@@ -334,7 +356,13 @@ func extractTarReader(tr *tar.Reader, destDir string) error {
 			if err := os.MkdirAll(filepath.Dir(target), dirPerm); err != nil {
 				return err
 			}
-			mode := sanitizePerm(os.FileMode(h.Mode).Perm())
+			if err := validateTarSize(h.Size); err != nil {
+				return err
+			}
+			if err := addExtractedBytes(&total, h.Size); err != nil {
+				return err
+			}
+			mode := tarHeaderPerm(h.Mode)
 			out, err := os.OpenFile(
 				target,
 				os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
@@ -343,7 +371,7 @@ func extractTarReader(tr *tar.Reader, destDir string) error {
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(out, tr); err != nil {
+			if _, err := io.CopyN(out, tr, h.Size); err != nil {
 				out.Close()
 				return err
 			}
@@ -357,6 +385,13 @@ func extractTarReader(tr *tar.Reader, destDir string) error {
 }
 
 func writeSingleSkillFile(srcPath string, destDir string) error {
+	st, err := os.Stat(srcPath)
+	if err != nil {
+		return err
+	}
+	if st.Size() > maxExtractFileBytes {
+		return fmt.Errorf("skill file too large")
+	}
 	b, err := os.ReadFile(srcPath)
 	if err != nil {
 		return err
@@ -374,19 +409,10 @@ func cleanArchivePath(name string) (string, error) {
 		strings.HasPrefix(name, "../") {
 		return "", fmt.Errorf("invalid archive path: %q", name)
 	}
+	if strings.Contains(name, ":") {
+		return "", fmt.Errorf("invalid archive path: %q", name)
+	}
 	return strings.TrimPrefix(name, "./"), nil
-}
-
-func isWithinDir(base string, target string) bool {
-	rel, err := filepath.Rel(base, target)
-	if err != nil {
-		return false
-	}
-	if rel == ".." {
-		return false
-	}
-	pref := ".." + string(os.PathSeparator)
-	return !strings.HasPrefix(rel, pref)
 }
 
 func sanitizePerm(m os.FileMode) os.FileMode {
@@ -394,6 +420,15 @@ func sanitizePerm(m os.FileMode) os.FileMode {
 		return filePerm
 	}
 	return m & 0o777
+}
+
+const tarPermMask = 0o777
+
+func tarHeaderPerm(mode int64) os.FileMode {
+	if mode < 0 {
+		return filePerm
+	}
+	return sanitizePerm(os.FileMode(mode & tarPermMask))
 }
 
 func fileExists(path string) bool {
@@ -404,4 +439,38 @@ func fileExists(path string) bool {
 func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+func validateTarSize(size int64) error {
+	if size < 0 {
+		return fmt.Errorf("tar entry has negative size")
+	}
+	if size > maxExtractFileBytes {
+		return fmt.Errorf("tar entry too large")
+	}
+	return nil
+}
+
+func validateZipEntrySize(f *zip.File) error {
+	if f == nil {
+		return fmt.Errorf("nil zip entry")
+	}
+	if f.UncompressedSize64 > uint64(maxExtractFileBytes) {
+		return fmt.Errorf("zip entry too large: %q", f.Name)
+	}
+	return nil
+}
+
+func addExtractedBytes(total *int64, n int64) error {
+	if total == nil {
+		return nil
+	}
+	if n < 0 {
+		return fmt.Errorf("negative extract size")
+	}
+	if *total > maxExtractTotalBytes-n {
+		return fmt.Errorf("skills root archive too large")
+	}
+	*total += n
+	return nil
 }

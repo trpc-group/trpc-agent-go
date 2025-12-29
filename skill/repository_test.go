@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -453,8 +454,7 @@ func TestSkillsCacheDir_DefaultsToUserCache(t *testing.T) {
 	uc, err := os.UserCacheDir()
 	require.NoError(t, err)
 	want := filepath.Join(uc, cacheAppDir, cacheSkillsDir)
-	got, err := skillsCacheDir()
-	require.NoError(t, err)
+	got := skillsCacheDir()
 	require.Equal(t, want, got)
 }
 
@@ -557,6 +557,144 @@ func TestFSRepository_URLRoot_DownloadNon2xxFails(t *testing.T) {
 
 	_, err := NewFSRepository(srv.URL + "/skills.zip")
 	require.Error(t, err)
+}
+
+func TestFSRepository_URLRoot_UnsupportedPayloadFails(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(EnvSkillsCacheDir, cacheDir)
+
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("not-archive"))
+		},
+	))
+	defer srv.Close()
+
+	_, err := NewFSRepository(srv.URL + "/skills.bin")
+	require.Error(t, err)
+}
+
+func TestResolveSkillsRoot_EmptyAndInvalid(t *testing.T) {
+	p, err := resolveSkillsRoot("")
+	require.NoError(t, err)
+	require.Empty(t, p)
+
+	_, err = resolveSkillsRoot("http://[::1")
+	require.Error(t, err)
+
+	_, err = fileURLPath(nil)
+	require.Error(t, err)
+}
+
+func TestArchiveExtract_Errors(t *testing.T) {
+	dir := t.TempDir()
+
+	srcZip := filepath.Join(dir, "bad.zip")
+	require.NoError(t, os.WriteFile(srcZip, []byte("nope"), filePerm))
+	require.Error(t, extractZip(srcZip, filepath.Join(dir, "out1")))
+
+	srcTGZ := filepath.Join(dir, "bad.tgz")
+	require.NoError(t, os.WriteFile(srcTGZ, []byte("nope"), filePerm))
+	require.Error(t, extractTarGZ(srcTGZ, filepath.Join(dir, "out2")))
+
+	err := extractTarReader(
+		tar.NewReader(strings.NewReader("bad")),
+		filepath.Join(dir, "out3"),
+	)
+	require.Error(t, err)
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	hdr := &tar.Header{
+		Name: "trunc.txt",
+		Mode: filePerm,
+		Size: int64(len("hello")),
+	}
+	require.NoError(t, tw.WriteHeader(hdr))
+	_, err = tw.Write([]byte("hi"))
+	require.NoError(t, err)
+	_ = tw.Close()
+
+	err = extractTarReader(tar.NewReader(bytes.NewReader(buf.Bytes())),
+		filepath.Join(t.TempDir(), "out"))
+	require.Error(t, err)
+}
+
+func TestURLRootHelpers(t *testing.T) {
+	t.Setenv(EnvSkillsCacheDir, "")
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("HOME", "")
+
+	got := skillsCacheDir()
+	want := filepath.Join(os.TempDir(), cacheAppDir, cacheSkillsDir)
+	require.Equal(t, want, got)
+
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set(
+				"Content-Length",
+				strconv.FormatInt(maxDownloadBytes+1, 10),
+			)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("x"))
+		},
+	))
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	err = downloadURLToFile(
+		u,
+		filepath.Join(t.TempDir(), "dl"),
+	)
+	require.Error(t, err)
+	clean, err := cleanArchivePath(".")
+	require.NoError(t, err)
+	require.Empty(t, clean)
+	_, err = cleanArchivePath("/x")
+	require.Error(t, err)
+
+	clean, err = cleanArchivePath("a\\b\\c.txt")
+	require.NoError(t, err)
+	require.Equal(t, "a/b/c.txt", clean)
+
+	_, err = cleanArchivePath("c:/evil")
+	require.Error(t, err)
+
+	require.Equal(t, os.FileMode(filePerm), sanitizePerm(0))
+	require.Equal(t, os.FileMode(0o755), sanitizePerm(0o1755))
+
+	require.Equal(t, os.FileMode(filePerm), tarHeaderPerm(-1))
+	require.Equal(t, os.FileMode(0o777), tarHeaderPerm(0o777))
+
+	require.Error(t, validateTarSize(-1))
+	require.NoError(t, validateTarSize(0))
+	require.Error(t, validateTarSize(maxExtractFileBytes+1))
+
+	require.Error(t, validateZipEntrySize(nil))
+	require.NoError(t, validateZipEntrySize(&zip.File{}))
+	require.Error(t, validateZipEntrySize(&zip.File{
+		FileHeader: zip.FileHeader{
+			Name:               "big",
+			UncompressedSize64: uint64(maxExtractFileBytes) + 1,
+		},
+	}))
+
+	f := &zip.File{
+		FileHeader: zip.FileHeader{
+			Name:               "big.txt",
+			UncompressedSize64: uint64(maxExtractFileBytes) + 1,
+		},
+	}
+	err = extractZipFile(f, t.TempDir(), new(int64))
+	require.Error(t, err)
+
+	require.NoError(t, addExtractedBytes(nil, 1))
+	var total int64
+	require.Error(t, addExtractedBytes(&total, -1))
+	total = maxExtractTotalBytes
+	require.Error(t, addExtractedBytes(&total, 1))
 }
 
 func TestFSRepository_URLRoot_RejectsZipSymlinkEntry(t *testing.T) {
