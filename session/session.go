@@ -214,9 +214,6 @@ func NewSession(appName, userID, sessionID string, options ...SessionOptions) *S
 // GetState returns a copy of the state value for the given key.
 // The returned slice is copied to avoid callers mutating shared memory.
 func (sess *Session) GetState(key string) ([]byte, bool) {
-	if sess == nil {
-		return nil, false
-	}
 	sess.stateMu.RLock()
 	defer sess.stateMu.RUnlock()
 	if sess.State == nil {
@@ -237,9 +234,6 @@ func (sess *Session) GetState(key string) ([]byte, bool) {
 // SetState sets the state value for the given key.
 // The provided slice is copied to avoid retaining caller-owned memory.
 func (sess *Session) SetState(key string, value []byte) {
-	if sess == nil {
-		return
-	}
 	sess.stateMu.Lock()
 	defer sess.stateMu.Unlock()
 	if sess.State == nil {
@@ -256,9 +250,6 @@ func (sess *Session) SetState(key string, value []byte) {
 
 // DeleteState deletes a key from the session state.
 func (sess *Session) DeleteState(key string) {
-	if sess == nil {
-		return
-	}
 	sess.stateMu.Lock()
 	defer sess.stateMu.Unlock()
 	if sess.State == nil {
@@ -270,9 +261,6 @@ func (sess *Session) DeleteState(key string) {
 // SnapshotState returns a deep copy of the current session state.
 // This is safe to iterate without holding locks.
 func (sess *Session) SnapshotState() StateMap {
-	if sess == nil {
-		return nil
-	}
 	sess.stateMu.RLock()
 	defer sess.stateMu.RUnlock()
 	if sess.State == nil {
