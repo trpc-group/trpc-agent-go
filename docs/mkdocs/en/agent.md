@@ -92,15 +92,15 @@ llmAgent := llmagent.New(
 
 LLMAgent automatically injects session state into `Instruction` and the optional `SystemPrompt` via placeholder variables. Supported patterns:
 
-- `{key}`: Replace with the string value of `session.State["key"]`
+- `{key}`: Replaced with the string value corresponding to the key `key` in the session state (write via `invocation.Session.SetState("key", ...)` or SessionService)
 - `{key?}`: Optional; if missing, replaced with an empty string
 - `{user:subkey}` / `{app:subkey}` / `{temp:subkey}`: Use user/app/temp scoped keys (session services merge app/user state into session with these prefixes)
-- `{invocation:subkey}:` Replaces with the value of fmt.Sprintf("%+v", `invocation.state["subkey"]`). (The state can be set via invocation.SetState(k, v))
+- `{invocation:subkey}`: Replaces with the value of fmt.Sprintf("%+v", `invocation.state["subkey"]`). (The state can be set via invocation.SetState(k, v))
 
 Notes:
 
 - If a non-optional key is not found, the original `{key}` is preserved (helps the LLM notice missing context)
-- Values are read from `invocation.Session.State` (Runner + SessionService set/merge this automatically)
+- Values are read from session state (Runner + SessionService set/merge this automatically)
 
 Example:
 
@@ -757,11 +757,8 @@ Example: per‑turn temp value via a before‑agent callback
 callbacks := agent.NewCallbacks()
 callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
   if args.Invocation != nil && args.Invocation.Session != nil {
-    if args.Invocation.Session.State == nil {
-      args.Invocation.Session.State = make(map[string][]byte)
-    }
     // Write a one-off instruction for this turn only
-    args.Invocation.Session.State["temp:sys"] = []byte("Translate to French.")
+    args.Invocation.Session.SetState("temp:sys", []byte("Translate to French."))
   }
   return nil, nil
 })
@@ -775,5 +772,5 @@ llm := llmagent.New(
 
 Caveats
 
-- In-memory `UpdateUserState` intentionally forbids `temp:*` updates; write `temp:*` directly to `invocation.Session.State` (e.g., via a callback) when you need ephemeral, per‑turn values.
+- In-memory `UpdateUserState` intentionally forbids `temp:*` updates; write `temp:*` via `invocation.Session.SetState` (e.g., via a callback) when you need ephemeral, per‑turn values.
 - Placeholders are resolved at request time; changing the stored value updates behavior on the next model request without recreating the agent.
