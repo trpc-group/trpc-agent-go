@@ -30,7 +30,7 @@ if err != nil {
 }
 ```
 
-- 可参考样例： trpc-agent-go/examples/wiki/main.go`
+- 可参考样例： `trpc-agent-go/examples/wiki/main.go`
 
 ## 配置选项
 

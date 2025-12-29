@@ -30,7 +30,7 @@ if err != nil {
 }
 ```
 
-- See example: `trpc-agent-go/tool/wikipedia/example.go`
+- See example: `trpc-agent-go/examples/wiki/main.go`
 
 ## Configuration Options
 
