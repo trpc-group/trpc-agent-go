@@ -145,7 +145,11 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		targetAgent.Info().Name,
 	)
 	targetCtx := agent.NewInvocationContext(ctx, targetInvocation)
-	targetEventChan, err := targetAgent.Run(targetCtx, targetInvocation)
+	targetEventChan, err := agent.RunWithPlugins(
+		targetCtx,
+		targetInvocation,
+		targetAgent,
+	)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,

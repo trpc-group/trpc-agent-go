@@ -839,7 +839,6 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 	createFunc := func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
 		mockSvc.mu.Lock()
 		defer mockSvc.mu.Unlock()
-
 		if mockSvc.summaries == nil {
 			mockSvc.summaries = make(map[string]string)
 		}

@@ -1034,25 +1034,63 @@ type modelResponseConfig struct {
 
 // processModelResponse processes a single model response.
 func processModelResponse(ctx context.Context, config modelResponseConfig) (context.Context, *event.Event, error) {
-	if config.ModelCallbacks != nil {
-		// Convert response.Error to Go error for callback.
-		var modelErr error
-		if config.Response != nil && config.Response.Error != nil {
-			modelErr = fmt.Errorf("%s: %s", config.Response.Error.Type, config.Response.Error.Message)
-		}
+	var modelErr error
+	if config.Response != nil && config.Response.Error != nil {
+		modelErr = fmt.Errorf(
+			"%s: %s",
+			config.Response.Error.Type,
+			config.Response.Error.Message,
+		)
+	}
 
-		args := &model.AfterModelArgs{
-			Request:  config.Request,
-			Response: config.Response,
-			Error:    modelErr,
+	args := &model.AfterModelArgs{
+		Request:  config.Request,
+		Response: config.Response,
+		Error:    modelErr,
+	}
+
+	pluginOverride := false
+	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
+		invocation != nil && invocation.Plugins != nil {
+		callbacks := invocation.Plugins.ModelCallbacks()
+		if callbacks != nil {
+			result, err := callbacks.RunAfterModel(ctx, args)
+			if err != nil {
+				config.Span.SetAttributes(
+					attribute.String("trpc.go.agent.error", err.Error()),
+				)
+				return ctx, nil, fmt.Errorf(
+					"callback after model error: %w",
+					err,
+				)
+			}
+			if result != nil && result.Context != nil {
+				ctx = result.Context
+			}
+			if result != nil && result.CustomResponse != nil {
+				config.Response = result.CustomResponse
+				args.Response = config.Response
+				pluginOverride = true
+			}
 		}
+	}
+
+	if !pluginOverride && config.ModelCallbacks != nil {
 		result, err := config.ModelCallbacks.RunAfterModel(ctx, args)
 		if err != nil {
 			config.Span.RecordError(err)
 			config.Span.SetStatus(codes.Error, err.Error())
-			return ctx, nil, fmt.Errorf("callback after model error: %w", err)
+			config.Span.SetAttributes(
+				attribute.String(
+					"trpc.go.agent.error",
+					err.Error(),
+				),
+			)
+			return ctx, nil, fmt.Errorf(
+				"callback after model error: %w",
+				err,
+			)
 		}
-		// Use the context from result if provided for subsequent operations.
 		if result != nil && result.Context != nil {
 			ctx = result.Context
 		}
@@ -1121,6 +1159,33 @@ func runModel(
 	span.SetAttributes(
 		attribute.String("trpc.go.agent.model_name", llmModel.Info().Name),
 	)
+
+	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
+		invocation != nil && invocation.Plugins != nil {
+		callbacks := invocation.Plugins.ModelCallbacks()
+		if callbacks != nil {
+			args := &model.BeforeModelArgs{Request: request}
+			result, err := callbacks.RunBeforeModel(ctx, args)
+			if err != nil {
+				span.SetAttributes(
+					attribute.String("trpc.go.agent.error", err.Error()),
+				)
+				return ctx, nil, fmt.Errorf(
+					"callback before model error: %w",
+					err,
+				)
+			}
+			if result != nil && result.Context != nil {
+				ctx = result.Context
+			}
+			if result != nil && result.CustomResponse != nil {
+				responseChan := make(chan *model.Response, 1)
+				responseChan <- result.CustomResponse
+				close(responseChan)
+				return ctx, responseChan, nil
+			}
+		}
+	}
 
 	if modelCallbacks != nil {
 		args := &model.BeforeModelArgs{Request: request}
@@ -1546,57 +1611,127 @@ func runTool(
 	toolCallbacks *tool.Callbacks,
 	t tool.Tool,
 ) (context.Context, any, []byte, error) {
+	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
+
+	decl := t.Declaration()
+
+	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
+		invocation != nil && invocation.Plugins != nil {
+		callbacks := invocation.Plugins.ToolCallbacks()
+		if callbacks != nil {
+			args := &tool.BeforeToolArgs{
+				ToolName:    toolCall.Function.Name,
+				Declaration: decl,
+				Arguments:   toolCall.Function.Arguments,
+			}
+			result, err := callbacks.RunBeforeTool(ctx, args)
+			if err != nil {
+				return ctx, nil, toolCall.Function.Arguments,
+					fmt.Errorf("callback before tool error: %w", err)
+			}
+			if result != nil && result.Context != nil {
+				ctx = result.Context
+			}
+			if result != nil && result.CustomResult != nil {
+				return ctx, result.CustomResult,
+					toolCall.Function.Arguments, nil
+			}
+			if result != nil && result.ModifiedArguments != nil {
+				toolCall.Function.Arguments = result.ModifiedArguments
+			}
+		}
+	}
+
 	if toolCallbacks != nil {
 		args := &tool.BeforeToolArgs{
 			ToolName:    toolCall.Function.Name,
-			Declaration: t.Declaration(),
+			Declaration: decl,
 			Arguments:   toolCall.Function.Arguments,
 		}
 		result, err := toolCallbacks.RunBeforeTool(ctx, args)
 		if err != nil {
-			return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("callback before tool error: %w", err)
+			return ctx, nil, toolCall.Function.Arguments,
+				fmt.Errorf("callback before tool error: %w", err)
 		}
-		// Use the context from result if provided.
 		if result != nil && result.Context != nil {
 			ctx = result.Context
 		}
 		if result != nil && result.CustomResult != nil {
-			return ctx, result.CustomResult, toolCall.Function.Arguments, nil
+			return ctx, result.CustomResult,
+				toolCall.Function.Arguments, nil
 		}
 		if result != nil && result.ModifiedArguments != nil {
 			toolCall.Function.Arguments = result.ModifiedArguments
 		}
 	}
-	if callableTool, ok := t.(tool.CallableTool); ok {
-		result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
-		// Run after tool callbacks if they exist.
-		// If the tool returns an error, the callback function will still execute to allow the user to handle the error.
-		if toolCallbacks != nil {
+
+	callableTool, ok := t.(tool.CallableTool)
+	if !ok {
+		return ctx, nil, toolCall.Function.Arguments,
+			fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
+	}
+
+	result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
+
+	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
+		invocation != nil && invocation.Plugins != nil {
+		callbacks := invocation.Plugins.ToolCallbacks()
+		if callbacks != nil {
 			args := &tool.AfterToolArgs{
 				ToolName:    toolCall.Function.Name,
-				Declaration: t.Declaration(),
+				Declaration: decl,
 				Arguments:   toolCall.Function.Arguments,
 				Result:      result,
 				Error:       err,
 			}
-			afterResult, afterErr := toolCallbacks.RunAfterTool(ctx, args)
+			afterResult, afterErr := callbacks.RunAfterTool(ctx, args)
 			if afterErr != nil {
-				return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("callback after tool error: %w", afterErr)
+				return ctx, nil, toolCall.Function.Arguments,
+					fmt.Errorf("callback after tool error: %w", afterErr)
 			}
-			// Use the context from result if provided for subsequent operations.
 			if afterResult != nil && afterResult.Context != nil {
 				ctx = afterResult.Context
 			}
 			if afterResult != nil && afterResult.CustomResult != nil {
-				return ctx, afterResult.CustomResult, toolCall.Function.Arguments, nil
+				return ctx, afterResult.CustomResult,
+					toolCall.Function.Arguments, nil
 			}
 		}
-		if err != nil {
-			return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
-		}
-		return ctx, result, toolCall.Function.Arguments, nil
 	}
-	return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
+
+	// Run after tool callbacks if they exist.
+	// If the tool returns an error, the callback function will still execute to
+	// allow the user to handle the error.
+	if toolCallbacks != nil {
+		args := &tool.AfterToolArgs{
+			ToolName:    toolCall.Function.Name,
+			Declaration: decl,
+			Arguments:   toolCall.Function.Arguments,
+			Result:      result,
+			Error:       err,
+		}
+		afterResult, afterErr := toolCallbacks.RunAfterTool(ctx, args)
+		if afterErr != nil {
+			return ctx, nil, toolCall.Function.Arguments,
+				fmt.Errorf("callback after tool error: %w", afterErr)
+		}
+		if afterResult != nil && afterResult.Context != nil {
+			ctx = afterResult.Context
+		}
+		if afterResult != nil && afterResult.CustomResult != nil {
+			return ctx, afterResult.CustomResult,
+				toolCall.Function.Arguments, nil
+		}
+	}
+
+	if err != nil {
+		return ctx, nil, toolCall.Function.Arguments, fmt.Errorf(
+			"tool %s call failed: %w",
+			toolCall.Function.Name,
+			err,
+		)
+	}
+	return ctx, result, toolCall.Function.Arguments, nil
 }
 
 // extractModelInput extracts the model input from state and instruction.

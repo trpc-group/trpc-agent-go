@@ -179,7 +179,11 @@ func (a *ChainAgent) executeSubAgents(
 		subAgentCtx := agent.NewInvocationContext(ctx, subInvocation)
 
 		// Run the sub-agent.
-		subEventChan, err := subAgent.Run(subAgentCtx, subInvocation)
+		subEventChan, err := agent.RunWithPlugins(
+			subAgentCtx,
+			subInvocation,
+			subAgent,
+		)
 		if err != nil {
 			log.WarnfContext(ctx, "subEventChan run failed. agent name: %s, err:%v", subInvocation.AgentName, err)
 			e := event.NewErrorEvent(
