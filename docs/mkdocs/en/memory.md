@@ -30,15 +30,15 @@ Memory supports two modes for creating and managing memories. Choose based on yo
 | Aspect              | Agentic Mode (Tools)                           | Auto Mode (Extractor)                                     |
 | ------------------- | ---------------------------------------------- | --------------------------------------------------------- |
 | **How it works**    | Agent decides when to call memory tools        | System extracts memories automatically from conversations |
-| **User experience** | Explicit - user sees tool calls                | Transparent - memories created silently in background     |
+| **User experience** | Visible - user sees tool calls                 | Transparent - memories created silently in background     |
 | **Control**         | Agent has full control over what to remember   | Extractor decides based on conversation analysis          |
-| **Available tools** | All 6 tools                                    | Read-only tool (search)                                   |
+| **Available tools** | All 6 tools                                    | Search and clear tools (search, clear)                    |
 | **Processing**      | Synchronous - during response generation       | Asynchronous - background workers after response          |
 | **Best for**        | Precise control, user-driven memory management | Natural conversations, hands-off memory building          |
 
 **Selection Guide**:
 
-- **Agentic Mode**: User wants explicit control ("Remember that I..."), need precise decisions on what to store, interactive memory management
+- **Agentic Mode**: Agent automatically decides when to call memory tools based on conversation content (e.g., when user mentions personal information or preferences), user sees tool calls, suitable for scenarios requiring precise control over memory content
 - **Auto Mode**: Natural conversation flow, system passively learns about users, simplified UX
 
 ## Core Values
@@ -117,8 +117,8 @@ export OPENAI_BASE_URL="your-openai-base-url"
 
 ### Agentic Mode Configuration (Default)
 
-In Agentic mode, the Agent uses memory tools to explicitly manage memories.
-Configuration involves three steps:
+In Agentic mode, the Agent automatically decides when to call memory tools
+based on conversation content to manage memories. Configuration involves three steps:
 
 ```go
 package main
@@ -282,7 +282,7 @@ Agent: Nice to meet you, Alice! It's great to connect with someone from TechCorp
 | **Step 2**          | `WithTools(memoryService.Tools())`  | `WithTools(memoryService.Tools())`     |
 | **Step 3**          | `WithMemoryService(memoryService)`  | `WithMemoryService(memoryService)`     |
 | **Available tools** | add/update/delete/clear/search/load | search                                 |
-| **Memory creation** | Agent explicitly calls tools        | Background auto extraction             |
+| **Memory creation** | Agent actively calls tools          | Background auto extraction             |
 
 ## Core Concepts
 
