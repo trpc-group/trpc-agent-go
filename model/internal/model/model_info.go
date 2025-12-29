@@ -208,6 +208,9 @@ var ModelContextWindows = map[string]int{
 	"hunyuan-t1":           65536,
 	"hunyuan-turbos":       32768,
 	"hunyuan-a13b":         229376,
+
+	//huggingface models
+	"zai-org/glm-4.7": 131072,
 }
 
 // ResolveContextWindow returns the context window size for a given model name.
