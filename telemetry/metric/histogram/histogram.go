@@ -52,7 +52,7 @@ func NewDynamicFloat64Histogram(
 	}
 
 	if meter == nil {
-		meter = mp.Meter(meterName)
+		meter = mp.Meter(meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMeterName, meterName)))
 	}
 	opts := []metric.Float64HistogramOption{
 		metric.WithDescription(description),
@@ -97,7 +97,7 @@ func (d *DynamicFloat64Histogram) SetBuckets(boundaries []float64) error {
 		return fmt.Errorf("meter provider is nil")
 	}
 	// Create a new Meter each time buckets change (required for some SDK/provider implementations).
-	meter := d.mp.Meter(d.meterName)
+	meter := d.mp.Meter(d.meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMeterName, d.meterName)))
 	opts := []metric.Float64HistogramOption{
 		metric.WithDescription(d.description),
 		metric.WithUnit(d.unit),
@@ -156,7 +156,7 @@ func NewDynamicInt64Histogram(
 	}
 
 	if meter == nil {
-		meter = mp.Meter(meterName)
+		meter = mp.Meter(meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMeterName, meterName)))
 	}
 	opts := []metric.Int64HistogramOption{
 		metric.WithDescription(description),
