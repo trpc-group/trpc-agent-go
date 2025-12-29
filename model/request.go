@@ -371,12 +371,6 @@ type ToolCall struct {
 	// This must be preserved and sent back to the model in subsequent requests.
 	// See: https://cloud.google.com/vertex-ai/generative-ai/docs/thought-signatures
 	ThoughtSignature string `json:"thought_signature,omitempty"`
-
-	// ThoughtSignatureFormat indicates where the thought_signature was found in the response.
-	// This is used to send it back in the same format.
-	// Values: "top_level" (tool_calls[].thought_signature)
-	// or "extra_content" (tool_calls[].extra_content.google.thought_signature)
-	ThoughtSignatureFormat string `json:"-"`
 }
 
 // FunctionDefinitionParam represents the parameters for a function definition in tool calls.

@@ -4796,16 +4796,14 @@ func TestBuildThinkingOption(t *testing.T) {
 // TestExtractThoughtSignature tests the extractThoughtSignature function.
 func TestExtractThoughtSignature(t *testing.T) {
 	t.Run("returns empty when extraFields is nil", func(t *testing.T) {
-		sig, format := extractThoughtSignature(nil)
+		sig := extractThoughtSignature(nil)
 		assert.Equal(t, "", sig)
-		assert.Equal(t, "", format)
 	})
 
 	t.Run("returns empty when thought_signature key is missing", func(t *testing.T) {
 		extraFields := make(map[string]respjson.Field)
-		sig, format := extractThoughtSignature(extraFields)
+		sig := extractThoughtSignature(extraFields)
 		assert.Equal(t, "", sig)
-		assert.Equal(t, "", format)
 	})
 
 	t.Run("returns empty when field value cannot be unquoted", func(t *testing.T) {
@@ -4814,12 +4812,11 @@ func TestExtractThoughtSignature(t *testing.T) {
 		extraFields := map[string]respjson.Field{
 			"thought_signature": invalidField,
 		}
-		sig, format := extractThoughtSignature(extraFields)
+		sig := extractThoughtSignature(extraFields)
 		assert.Equal(t, "", sig)
-		assert.Equal(t, "", format)
 	})
 
-	t.Run("returns top_level format when valid quoted string", func(t *testing.T) {
+	t.Run("returns signature from top_level format", func(t *testing.T) {
 		// Use json.Unmarshal to properly populate ExtraFields via SDK.
 		extraFields := parseToolCallExtraFields(t, `{
 			"id": "call_123",
@@ -4827,9 +4824,8 @@ func TestExtractThoughtSignature(t *testing.T) {
 			"function": {"name": "test", "arguments": "{}"},
 			"thought_signature": "test_signature_123"
 		}`)
-		sig, format := extractThoughtSignature(extraFields)
+		sig := extractThoughtSignature(extraFields)
 		assert.Equal(t, "test_signature_123", sig)
-		assert.Equal(t, ThoughtSignatureFormatTopLevel, format)
 	})
 
 	t.Run("returns empty when thought_signature is null", func(t *testing.T) {
@@ -4839,21 +4835,19 @@ func TestExtractThoughtSignature(t *testing.T) {
 			"function": {"name": "test", "arguments": "{}"},
 			"thought_signature": null
 		}`)
-		sig, format := extractThoughtSignature(extraFields)
+		sig := extractThoughtSignature(extraFields)
 		assert.Equal(t, "", sig)
-		assert.Equal(t, "", format)
 	})
 
-	t.Run("returns extra_content format when nested google.thought_signature exists", func(t *testing.T) {
+	t.Run("returns signature from extra_content format", func(t *testing.T) {
 		extraFields := parseToolCallExtraFields(t, `{
 			"id": "call_123",
 			"type": "function",
 			"function": {"name": "test", "arguments": "{}"},
 			"extra_content": {"google": {"thought_signature": "nested_sig_456"}}
 		}`)
-		sig, format := extractThoughtSignature(extraFields)
+		sig := extractThoughtSignature(extraFields)
 		assert.Equal(t, "nested_sig_456", sig)
-		assert.Equal(t, ThoughtSignatureFormatExtraContent, format)
 	})
 
 	t.Run("returns empty when extra_content.google.thought_signature is empty", func(t *testing.T) {
@@ -4863,9 +4857,8 @@ func TestExtractThoughtSignature(t *testing.T) {
 			"function": {"name": "test", "arguments": "{}"},
 			"extra_content": {"google": {"thought_signature": ""}}
 		}`)
-		sig, format := extractThoughtSignature(extraFields)
+		sig := extractThoughtSignature(extraFields)
 		assert.Equal(t, "", sig)
-		assert.Equal(t, "", format)
 	})
 
 	t.Run("returns empty when extra_content has empty google object", func(t *testing.T) {
@@ -4875,9 +4868,20 @@ func TestExtractThoughtSignature(t *testing.T) {
 			"function": {"name": "test", "arguments": "{}"},
 			"extra_content": {"google": {}}
 		}`)
-		sig, format := extractThoughtSignature(extraFields)
+		sig := extractThoughtSignature(extraFields)
 		assert.Equal(t, "", sig)
-		assert.Equal(t, "", format)
+	})
+
+	t.Run("prefers top_level over extra_content when both exist", func(t *testing.T) {
+		extraFields := parseToolCallExtraFields(t, `{
+			"id": "call_123",
+			"type": "function",
+			"function": {"name": "test", "arguments": "{}"},
+			"thought_signature": "top_level_sig",
+			"extra_content": {"google": {"thought_signature": "nested_sig"}}
+		}`)
+		sig := extractThoughtSignature(extraFields)
+		assert.Equal(t, "top_level_sig", sig)
 	})
 }
 
@@ -4891,9 +4895,9 @@ func parseToolCallExtraFields(t *testing.T, jsonStr string) map[string]respjson.
 	return toolCall.JSON.ExtraFields
 }
 
-// TestConvertToolCalls_ThoughtSignatureFormat tests that convertToolCalls
-// correctly handles different thought_signature formats.
-func TestConvertToolCalls_ThoughtSignatureFormat(t *testing.T) {
+// TestConvertToolCalls_ThoughtSignature tests that convertToolCalls
+// correctly handles thought_signature with dual-write strategy.
+func TestConvertToolCalls_ThoughtSignature(t *testing.T) {
 	m := New("test-model")
 
 	t.Run("no thought_signature", func(t *testing.T) {
@@ -4915,7 +4919,7 @@ func TestConvertToolCalls_ThoughtSignatureFormat(t *testing.T) {
 		assert.Equal(t, "test_func", result[0].Function.Name)
 	})
 
-	t.Run("top_level format thought_signature", func(t *testing.T) {
+	t.Run("with thought_signature uses dual-write", func(t *testing.T) {
 		toolCalls := []model.ToolCall{
 			{
 				ID:   "call-1",
@@ -4924,62 +4928,19 @@ func TestConvertToolCalls_ThoughtSignatureFormat(t *testing.T) {
 					Name:      "test_func",
 					Arguments: []byte(`{}`),
 				},
-				ThoughtSignature:       "sig123",
-				ThoughtSignatureFormat: ThoughtSignatureFormatTopLevel,
+				ThoughtSignature: "sig123",
 			},
 		}
 
 		result := m.convertToolCalls(toolCalls)
 
 		require.Len(t, result, 1)
-		// Verify the extra fields are set correctly for top-level format
-		// The SetExtraFields method sets internal state that we can't easily inspect,
-		// but we can verify the function doesn't panic and returns valid results.
+		// Verify the function doesn't panic and returns valid results.
+		// The dual-write sets both top-level and extra_content positions.
 		assert.Equal(t, "call-1", result[0].ID)
 	})
 
-	t.Run("extra_content format thought_signature", func(t *testing.T) {
-		toolCalls := []model.ToolCall{
-			{
-				ID:   "call-1",
-				Type: "function",
-				Function: model.FunctionDefinitionParam{
-					Name:      "test_func",
-					Arguments: []byte(`{}`),
-				},
-				ThoughtSignature:       "sig456",
-				ThoughtSignatureFormat: ThoughtSignatureFormatExtraContent,
-			},
-		}
-
-		result := m.convertToolCalls(toolCalls)
-
-		require.Len(t, result, 1)
-		// Verify the extra fields are set correctly for extra_content format
-		assert.Equal(t, "call-1", result[0].ID)
-	})
-
-	t.Run("default format when ThoughtSignatureFormat is empty", func(t *testing.T) {
-		toolCalls := []model.ToolCall{
-			{
-				ID:   "call-1",
-				Type: "function",
-				Function: model.FunctionDefinitionParam{
-					Name:      "test_func",
-					Arguments: []byte(`{}`),
-				},
-				ThoughtSignature:       "sig789",
-				ThoughtSignatureFormat: "", // Empty format should default to top-level
-			},
-		}
-
-		result := m.convertToolCalls(toolCalls)
-
-		require.Len(t, result, 1)
-		assert.Equal(t, "call-1", result[0].ID)
-	})
-
-	t.Run("multiple tool calls with different formats", func(t *testing.T) {
+	t.Run("multiple tool calls with and without thought_signature", func(t *testing.T) {
 		toolCalls := []model.ToolCall{
 			{
 				ID:   "call-1",
@@ -4988,8 +4949,7 @@ func TestConvertToolCalls_ThoughtSignatureFormat(t *testing.T) {
 					Name:      "func1",
 					Arguments: []byte(`{}`),
 				},
-				ThoughtSignature:       "sig1",
-				ThoughtSignatureFormat: ThoughtSignatureFormatTopLevel,
+				ThoughtSignature: "sig1",
 			},
 			{
 				ID:   "call-2",
@@ -4998,8 +4958,7 @@ func TestConvertToolCalls_ThoughtSignatureFormat(t *testing.T) {
 					Name:      "func2",
 					Arguments: []byte(`{}`),
 				},
-				ThoughtSignature:       "sig2",
-				ThoughtSignatureFormat: ThoughtSignatureFormatExtraContent,
+				ThoughtSignature: "sig2",
 			},
 			{
 				ID:   "call-3",
@@ -5019,10 +4978,4 @@ func TestConvertToolCalls_ThoughtSignatureFormat(t *testing.T) {
 		assert.Equal(t, "call-2", result[1].ID)
 		assert.Equal(t, "call-3", result[2].ID)
 	})
-}
-
-// TestThoughtSignatureFormatConstants tests that the format constants are defined correctly.
-func TestThoughtSignatureFormatConstants(t *testing.T) {
-	assert.Equal(t, "top_level", ThoughtSignatureFormatTopLevel)
-	assert.Equal(t, "extra_content", ThoughtSignatureFormatExtraContent)
 }
