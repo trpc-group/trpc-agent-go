@@ -1439,19 +1439,33 @@ type JudgeModelOptions struct {
 
 出于安全考虑，建议不要把 `judgeModel.apiKey` / `judgeModel.baseURL` 明文写入指标配置文件或者代码。
 
-框架支持在 `.metrics.json` 中对 `llmJudge.judgeModel.providerName`、`llmJudge.judgeModel.modelName`、`llmJudge.judgeModel.apiKey` 和 `llmJudge.judgeModel.baseURL` 使用环境变量占位符，加载配置时会自动展开为对应的环境变量值。
+框架支持在 `.metrics.json` 中对 `judgeModel.providerName`、`judgeModel.modelName`、`judgeModel.apiKey` 和 `judgeModel.baseURL` 使用环境变量占位符，加载配置时会自动展开为对应的环境变量值。
 
 例如：
 
 ```json
-{
-  "judgeModel": {
-    "providerName": "${JUDGE_MODEL_PROVIDER_NAME}",
-    "modelName": "${JUDGE_MODEL_NAME}",
-    "baseURL": "${JUDGE_MODEL_BASE_URL}",
-    "apiKey": "${JUDGE_MODEL_API_KEY}"
+[
+  {
+    "metricName": "llm_final_response",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "${JUDGE_MODEL_PROVIDER_NAME}",
+          "modelName":  "${JUDGE_MODEL_NAME}",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
+          "numSamples": 3,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 1.0,
+            "stream": false
+          }
+        }
+      }
+    }
   }
-}
+]
 ```
 
 可通过 `criterion.WithLLMJudge` 传入自定义配置，例如：

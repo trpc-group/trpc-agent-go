@@ -1450,19 +1450,33 @@ type JudgeModelOptions struct {
 
 For security reasons, it is recommended not to write `judgeModel.apiKey` / `judgeModel.baseURL` in plaintext in metric config files or code.
 
-The framework supports environment variable placeholders for `llmJudge.judgeModel.providerName`, `llmJudge.judgeModel.modelName`, `llmJudge.judgeModel.apiKey` and `llmJudge.judgeModel.baseURL` in `.metrics.json`. When loading the config, the placeholders are automatically expanded to the corresponding environment variable values.
+The framework supports environment variable placeholders for `judgeModel.providerName`, `judgeModel.modelName`, `judgeModel.apiKey` and `judgeModel.baseURL` in `.metrics.json`. When loading the config, the placeholders are automatically expanded to the corresponding environment variable values.
 
 For example:
 
 ```json
-{
-  "judgeModel": {
-    "providerName": "${JUDGE_MODEL_PROVIDER_NAME}",
-    "modelName": "${JUDGE_MODEL_NAME}",
-    "baseURL": "${JUDGE_MODEL_BASE_URL}",
-    "apiKey": "${JUDGE_MODEL_API_KEY}"
+[
+  {
+    "metricName": "llm_final_response",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "${JUDGE_MODEL_PROVIDER_NAME}",
+          "modelName":  "${JUDGE_MODEL_NAME}",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
+          "numSamples": 3,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 1.0,
+            "stream": false
+          }
+        }
+      }
+    }
   }
-}
+]
 ```
 
 You can pass a custom configuration via `criterion.WithLLMJudge`, for example:
