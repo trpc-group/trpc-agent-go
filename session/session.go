@@ -32,6 +32,8 @@ var (
 	ErrUserIDRequired = errors.New("userID is required")
 	// ErrSessionIDRequired is the error for session id required.
 	ErrSessionIDRequired = errors.New("sessionID is required")
+	// ErrNilSession is the error for session is nil.
+	ErrNilSession = errors.New("session is nil")
 )
 
 // SummaryFilterKeyAllContents is the filter key representing
