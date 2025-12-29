@@ -175,7 +175,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	)
 	targetCtx := agent.NewInvocationContext(ctx, targetInvocation)
 
-	runCtx := targetCtx
+	var runCtx context.Context = targetCtx
 	if nodeTimeout > 0 {
 		var cancel context.CancelFunc
 		runCtx, cancel = context.WithTimeout(runCtx, nodeTimeout)
