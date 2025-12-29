@@ -39,11 +39,11 @@ const (
 	appName  = "team-swarm-example"
 	teamName = "team"
 
-	agentCoder      = "coder"
-	agentResearcher = "researcher"
-	agentReviewer   = "reviewer"
+	agentFacilitator   = "facilitator"
+	agentDevilAdvocate = "devil_advocate"
+	agentSummarizer    = "summarizer"
 
-	entryAgentName = agentResearcher
+	entryAgentName = agentFacilitator
 
 	defaultModelName = "deepseek-chat"
 	defaultVariant   = "openai"
@@ -134,42 +134,53 @@ func buildRunner(
 		Stream:      streaming,
 	}
 
-	coder := llmagent.New(
-		agentCoder,
-		llmagent.WithModel(modelInstance),
-		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithDescription("Writes Go code and fixes bugs."),
-		llmagent.WithInstruction(
-			"Write Go code. If another agent is a better fit, "+
-				"transfer control.",
-		),
-	)
-
-	researcher := llmagent.New(
-		agentResearcher,
+	facilitator := llmagent.New(
+		agentFacilitator,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithDescription(
-			"Finds background info and clarifies goals.",
+			"Facilitates a discussion and keeps it on track.",
 		),
 		llmagent.WithInstruction(
-			"Gather context and clarify requirements. If another "+
-				"agent is a better fit, transfer control.",
+			"Facilitate a discussion. Ask clarifying questions, "+
+				"invite other agents to contribute, then decide "+
+				"whether to transfer control or to wrap up.",
 		),
 	)
 
-	reviewer := llmagent.New(
-		agentReviewer,
+	devilAdvocate := llmagent.New(
+		agentDevilAdvocate,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithDescription("Reviews plans and checks for mistakes."),
+		llmagent.WithDescription(
+			"Challenges assumptions and points out risks.",
+		),
 		llmagent.WithInstruction(
-			"Review work for correctness and clarity. If another "+
-				"agent is a better fit, transfer control.",
+			"Challenge the current proposal. Point out risks, "+
+				"missing cases, and counterarguments. If another "+
+				"agent should respond next, transfer control.",
 		),
 	)
 
-	members := []agent.Agent{coder, researcher, reviewer}
+	summarizer := llmagent.New(
+		agentSummarizer,
+		llmagent.WithModel(modelInstance),
+		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithDescription(
+			"Summarizes the discussion and proposes next steps.",
+		),
+		llmagent.WithInstruction(
+			"Summarize key points, tradeoffs, and a clear "+
+				"decision with next steps. Do not transfer "+
+				"control.",
+		),
+	)
+
+	members := []agent.Agent{
+		facilitator,
+		devilAdvocate,
+		summarizer,
+	}
 	teamInstance, err := team.NewSwarm(teamName, entryAgentName, members)
 	if err != nil {
 		return nil, err

@@ -10,6 +10,20 @@ In a Swarm Team, Agents can hand off control to each other using the
 Use a Swarm Team when you want peer-to-peer handoffs, where each Agent decides
 who should act next.
 
+This mode works well for “group discussion” tasks, for example:
+
+- brainstorming options
+- debating tradeoffs
+- converging on a decision and next steps
+
+## Member roles in this example
+
+This example uses three member roles:
+
+- `facilitator`: drives the discussion and invites others
+- `devil_advocate`: challenges assumptions and raises risks
+- `summarizer`: produces the final decision and next steps
+
 ## Prerequisites
 
 - Go 1.21 or later
@@ -45,11 +59,16 @@ export OPENAI_API_KEY="your-api-key"
 go run .
 ```
 
+Try a prompt like:
+
+> We need to choose between REST and gRPC for an internal service. Discuss
+> tradeoffs, then give a recommendation with next steps.
+
 Notes:
 
 - You do not need to tell the system which Agent to transfer to. Agents can
   decide the next handoff based on the task.
-- The console output includes an Agent name prefix (for example, `[coder]`)
+- The console output includes an Agent name prefix (for example, `[facilitator]`)
   so you can see who is responding.
 
 For a coordinator Team example, see `examples/team/coord`.

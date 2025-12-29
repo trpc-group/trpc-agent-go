@@ -38,9 +38,9 @@ const (
 	appName  = "team-coordinator-example"
 	teamName = "team"
 
-	agentCoder      = "coder"
-	agentResearcher = "researcher"
-	agentReviewer   = "reviewer"
+	agentRequirementsAnalyst = "requirements_analyst"
+	agentSolutionDesigner    = "solution_designer"
+	agentQualityReviewer     = "quality_reviewer"
 
 	memberHistoryParent   = "parent"
 	memberHistoryIsolated = "isolated"
@@ -168,37 +168,47 @@ func buildRunner(
 		Stream:      streaming,
 	}
 
-	coder := llmagent.New(
-		agentCoder,
-		llmagent.WithModel(modelInstance),
-		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithDescription("Writes Go code and fixes bugs."),
-		llmagent.WithInstruction("Write Go code."),
-	)
-
-	researcher := llmagent.New(
-		agentResearcher,
+	requirementsAnalyst := llmagent.New(
+		agentRequirementsAnalyst,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithDescription(
-			"Finds background info and clarifies goals.",
+			"Clarifies goals, constraints, and acceptance criteria.",
 		),
 		llmagent.WithInstruction(
-			"Gather context and clarify requirements.",
+			"Clarify requirements, constraints, and success criteria.",
 		),
 	)
 
-	reviewer := llmagent.New(
-		agentReviewer,
+	solutionDesigner := llmagent.New(
+		agentSolutionDesigner,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithDescription("Reviews plans and checks for mistakes."),
+		llmagent.WithDescription(
+			"Proposes solution options and recommends a design.",
+		),
 		llmagent.WithInstruction(
-			"Review work for correctness and clarity.",
+			"Propose a design with tradeoffs and a clear plan.",
 		),
 	)
 
-	members := []agent.Agent{coder, researcher, reviewer}
+	qualityReviewer := llmagent.New(
+		agentQualityReviewer,
+		llmagent.WithModel(modelInstance),
+		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithDescription(
+			"Reviews for risks, edge cases, and missing details.",
+		),
+		llmagent.WithInstruction(
+			"Find risks and gaps. Suggest concrete improvements.",
+		),
+	)
+
+	members := []agent.Agent{
+		requirementsAnalyst,
+		solutionDesigner,
+		qualityReviewer,
+	}
 
 	coordinatorOpts := []llmagent.Option{
 		llmagent.WithModel(modelInstance),

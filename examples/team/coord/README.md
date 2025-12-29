@@ -10,6 +10,21 @@ produces the final answer.
 Use a coordinator Team when you want one Agent to combine multiple specialist
 outputs into a single final response.
 
+This mode works best for “deliverables” where you want one coherent result,
+for example:
+
+- a technical plan
+- a decision summary
+- a checklist of risks and next steps
+
+## Member roles in this example
+
+This example uses three member roles:
+
+- `requirements_analyst`: clarifies goals, constraints, and acceptance criteria
+- `solution_designer`: proposes design options and recommends a plan
+- `quality_reviewer`: finds risks, edge cases, and missing details
+
 ## Prerequisites
 
 - Go 1.21 or later
@@ -48,6 +63,11 @@ cd examples/team/coord
 export OPENAI_API_KEY="your-api-key"
 go run .
 ```
+
+Try a prompt like:
+
+> Design a simple “export data” feature for a web app: define requirements,
+> propose an API and a backend design, then list risks and next steps.
 
 Notes:
 
