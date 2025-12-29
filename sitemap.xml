@@ -155,6 +155,13 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/skill/"/>
     </url>
     <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/team/</loc>
+        <lastmod>2025-12-29</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/team/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/team/"/>
+    </url>
+    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/tool/</loc>
         <lastmod>2025-12-29</lastmod>
         <changefreq>daily</changefreq>
@@ -314,6 +321,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/skill/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/skill/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/team/</loc>
+        <lastmod>2025-12-29</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/team/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/team/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/tool/</loc>
