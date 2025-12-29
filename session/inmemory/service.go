@@ -190,7 +190,7 @@ func (s *SessionService) CreateSession(
 
 	// Set initial state if provided
 	for k, v := range state {
-		sess.State[k] = v
+		sess.SetState(k, v)
 	}
 
 	app.mu.Lock()
@@ -531,9 +531,7 @@ func (s *SessionService) UpdateSessionState(ctx context.Context, key session.Key
 
 	// Update session state (allow temp: prefix and unprefixed keys)
 	for k, v := range state {
-		copiedValue := make([]byte, len(v))
-		copy(copiedValue, v)
-		sessWithTTL.session.State[k] = copiedValue
+		sessWithTTL.session.SetState(k, v)
 	}
 
 	// Update timestamp
@@ -827,10 +825,10 @@ func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Eve
 // mergeState merges app-level and user-level state into the session state.
 func mergeState(appState, userState session.StateMap, sess *session.Session) *session.Session {
 	for k, v := range appState {
-		sess.State[session.StateAppPrefix+k] = v
+		sess.SetState(session.StateAppPrefix+k, v)
 	}
 	for k, v := range userState {
-		sess.State[session.StateUserPrefix+k] = v
+		sess.SetState(session.StateUserPrefix+k, v)
 	}
 	return sess
 }

@@ -177,7 +177,8 @@ func (p *SkillsRequestProcessor) getLoadedSkills(
 	inv *agent.Invocation,
 ) []string {
 	var names []string
-	for k, v := range inv.Session.State {
+	state := inv.Session.SnapshotState()
+	for k, v := range state {
 		if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
 			continue
 		}
@@ -194,7 +195,7 @@ func (p *SkillsRequestProcessor) getDocsSelection(
 	inv *agent.Invocation, name string,
 ) []string {
 	key := skill.StateKeyDocsPrefix + name
-	v, ok := inv.Session.State[key]
+	v, ok := inv.Session.GetState(key)
 	if !ok || len(v) == 0 {
 		return nil
 	}

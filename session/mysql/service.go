@@ -217,7 +217,13 @@ func (s *Service) CreateSession(
 		CreatedAt: now,
 	}
 	for k, v := range state {
-		sessState.State[k] = v
+		if v == nil {
+			sessState.State[k] = nil
+			continue
+		}
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		sessState.State[k] = copiedValue
 	}
 
 	sessBytes, err := json.Marshal(sessState)
@@ -617,7 +623,13 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		sessState.State = make(session.StateMap)
 	}
 	for k, v := range state {
-		sessState.State[k] = v
+		if v == nil {
+			sessState.State[k] = nil
+			continue
+		}
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		sessState.State[k] = copiedValue
 	}
 	now := time.Now()
 	sessState.UpdatedAt = now
@@ -1168,16 +1180,12 @@ func mergeState(appState, userState session.StateMap, sess *session.Session) *se
 	if sess == nil {
 		return nil
 	}
-	if sess.State == nil {
-		sess.State = make(session.StateMap)
-	}
-
 	// Merge with priority: session state > user state > app state
 	for k, v := range appState {
-		sess.State[session.StateAppPrefix+k] = v
+		sess.SetState(session.StateAppPrefix+k, v)
 	}
 	for k, v := range userState {
-		sess.State[session.StateUserPrefix+k] = v
+		sess.SetState(session.StateUserPrefix+k, v)
 	}
 	return sess
 }
