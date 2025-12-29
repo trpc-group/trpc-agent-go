@@ -712,6 +712,212 @@ func TestFunctionCallResponseProcessor_NoWaitWithoutAppender(t *testing.T) {
 	}
 }
 
+func TestFunctionCallResponseProcessor_HandleFunctionCallsAndSendEvent_NilEvent(
+	t *testing.T,
+) {
+	const (
+		toolName = "echo"
+		callID   = "call-1"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "test-agent"}),
+		agent.WithInvocationModel(&mockModel{}),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ToolExecutionFilter: tool.NewExcludeToolNamesFilter(
+				toolName,
+			),
+		}),
+	)
+
+	tools := map[string]tool.Tool{
+		toolName: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "ok", nil
+			},
+		},
+	}
+
+	rsp := &model.Response{
+		Model: "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   callID,
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      toolName,
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	got, err := p.handleFunctionCallsAndSendEvent(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		eventChan,
+	)
+	require.NoError(t, err)
+	require.Nil(t, got)
+
+	select {
+	case <-eventChan:
+		t.Fatalf("unexpected tool.response event")
+	default:
+	}
+}
+
+func TestFunctionCallResponseProcessor_HandleFunctionCallsAndSendEvent_Canceled(
+	t *testing.T,
+) {
+	const (
+		toolName = "echo"
+		callID   = "call-1"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "test-agent"}),
+		agent.WithInvocationModel(&mockModel{}),
+	)
+	appender.Attach(inv, func(context.Context, *event.Event) error {
+		return nil
+	})
+
+	tools := map[string]tool.Tool{
+		toolName: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "ok", nil
+			},
+		},
+	}
+
+	rsp := &model.Response{
+		Model: "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   callID,
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      toolName,
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+
+	eventSeen := make(chan struct{})
+	eventChan := make(chan *event.Event)
+	go func() {
+		defer close(eventSeen)
+		evt := <-eventChan
+		require.NotNil(t, evt)
+		require.True(t, evt.RequiresCompletion)
+		cancel()
+	}()
+
+	got, err := p.handleFunctionCallsAndSendEvent(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		eventChan,
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, got)
+
+	select {
+	case <-eventSeen:
+	case <-time.After(time.Second):
+		t.Fatalf("timeout waiting for tool.response event")
+	}
+}
+
+func TestFunctionCallResponseProcessor_HandleFunctionCallsAndSendEvent_Warns(
+	t *testing.T,
+) {
+	const (
+		toolName = "echo"
+		callID   = "call-1"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := &agent.Invocation{
+		InvocationID: "test-123",
+		AgentName:    "test-agent",
+		Model:        &mockModel{},
+	}
+	appender.Attach(inv, func(context.Context, *event.Event) error {
+		return nil
+	})
+
+	tools := map[string]tool.Tool{
+		toolName: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "ok", nil
+			},
+		},
+	}
+
+	rsp := &model.Response{
+		Model: "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   callID,
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      toolName,
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	got, err := p.handleFunctionCallsAndSendEvent(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		eventChan,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.True(t, got.RequiresCompletion)
+
+	select {
+	case evt := <-eventChan:
+		require.NotNil(t, evt)
+		require.True(t, evt.RequiresCompletion)
+	default:
+		t.Fatalf("expected tool.response event to be emitted")
+	}
+}
+
 func TestFuncRespWaitTimeout_DefaultsWithoutDeadline(t *testing.T) {
 	require.Equal(
 		t,
