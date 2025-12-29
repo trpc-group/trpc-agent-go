@@ -47,7 +47,7 @@ func New(modelName string) (*Counter, error) {
 }
 
 // CountTokens returns the token count for a single message using tiktoken-go.
-// It encodes Message.Content, Message.ReasoningContent, and text ContentParts.
+// It encodes Message.Content, Message.ReasoningContent, text ContentParts, and ToolCalls.
 func (c *Counter) CountTokens(_ context.Context, message model.Message) (int, error) {
 	total := 0
 
@@ -75,6 +75,68 @@ func (c *Counter) CountTokens(_ context.Context, message model.Message) (int, er
 			}
 			total += len(toks)
 		}
+	}
+
+	// Count tokens for tool calls.
+	for _, toolCall := range message.ToolCalls {
+		toolCallTokens, err := c.countToolCallTokens(toolCall)
+		if err != nil {
+			return 0, fmt.Errorf("encode tool call failed: %w", err)
+		}
+		total += toolCallTokens
+	}
+
+	return total, nil
+}
+
+// countToolCallTokens calculates the token count for a single tool call.
+// It encodes the tool call's type, ID, function name, description, and arguments.
+func (c *Counter) countToolCallTokens(toolCall model.ToolCall) (int, error) {
+	total := 0
+
+	// Count tokens for tool call type (e.g., "function").
+	if toolCall.Type != "" {
+		toks, _, err := c.encoding.Encode(toolCall.Type)
+		if err != nil {
+			return 0, fmt.Errorf("encode tool call type failed: %w", err)
+		}
+		total += len(toks)
+	}
+
+	// Count tokens for tool call ID.
+	if toolCall.ID != "" {
+		toks, _, err := c.encoding.Encode(toolCall.ID)
+		if err != nil {
+			return 0, fmt.Errorf("encode tool call ID failed: %w", err)
+		}
+		total += len(toks)
+	}
+
+	// Count tokens for function name.
+	if toolCall.Function.Name != "" {
+		toks, _, err := c.encoding.Encode(toolCall.Function.Name)
+		if err != nil {
+			return 0, fmt.Errorf("encode function name failed: %w", err)
+		}
+		total += len(toks)
+	}
+
+	// Count tokens for function description.
+	if toolCall.Function.Description != "" {
+		toks, _, err := c.encoding.Encode(toolCall.Function.Description)
+		if err != nil {
+			return 0, fmt.Errorf("encode function description failed: %w", err)
+		}
+		total += len(toks)
+	}
+
+	// Count tokens for function arguments (JSON string).
+	if len(toolCall.Function.Arguments) > 0 {
+		toks, _, err := c.encoding.Encode(string(toolCall.Function.Arguments))
+		if err != nil {
+			return 0, fmt.Errorf("encode function arguments failed: %w", err)
+		}
+		total += len(toks)
 	}
 
 	return total, nil

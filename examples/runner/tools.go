@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"math"
 	"strings"
 	"time"
 )
@@ -32,6 +33,8 @@ func (c *multiTurnChat) calculate(ctx context.Context, args calculatorArgs) (cal
 		} else {
 			result = 0 // Handle division by zero.
 		}
+	case "power", "^":
+		result = math.Pow(args.A, args.B)
 	default:
 		result = 0
 	}
@@ -78,7 +81,7 @@ func (c *multiTurnChat) getCurrentTime(_ context.Context, args timeArgs) (timeRe
 
 // calculatorArgs represents arguments for the calculator tool.
 type calculatorArgs struct {
-	Operation string  `json:"operation" jsonschema:"description=The operation to perform,enum=add,enum=subtract,enum=multiply,enum=divide"`
+	Operation string  `json:"operation" jsonschema:"description=The operation to perform,enum=add,enum=subtract,enum=multiply,enum=divide,enum=power"`
 	A         float64 `json:"a" jsonschema:"description=First number"`
 	B         float64 `json:"b" jsonschema:"description=Second number"`
 }

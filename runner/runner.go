@@ -602,7 +602,7 @@ func (r *runner) handleEventPersistence(
 	if err := r.sessionService.EnqueueSummaryJob(
 		ctx, sess, agentEvent.FilterKey, false,
 	); err != nil {
-		log.Debugf("Auto summarize after append skipped or failed: %v.", err)
+		log.DebugfContext(ctx, "Auto summarize after append skipped or failed: %v.", err)
 	}
 	// Do not enqueue full-session summary here. The worker will cascade
 	// a full-session summarization after a branch update when appropriate.

@@ -127,11 +127,17 @@ func InjectSessionState(template string, invocation *agent.Invocation) (string, 
 // It preserves JSON semantics while avoiding scientific notation and precision
 // issues for numeric literals by decoding them into json.Number.
 func renderStateValue(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	if !json.Valid(raw) {
+		return string(raw)
+	}
+
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var jsonValue any
 	if err := dec.Decode(&jsonValue); err != nil {
-		// Not valid JSON, treat as plain string.
 		return string(raw)
 	}
 	switch v := jsonValue.(type) {

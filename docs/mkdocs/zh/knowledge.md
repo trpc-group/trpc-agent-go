@@ -253,7 +253,7 @@ llmAgent := llmagent.New(
 trpc-agent-go 支持多种向量存储实现：
 
 - **Memory**：内存向量存储，适用于测试和小规模数据
-- **PgVector**：基于 PostgreSQL + pgvector 扩展的向量存储，支持混合检索 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/postgres)
+- **PGVector**：基于 PostgreSQL + pgvector 扩展的向量存储，支持混合检索 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/postgres)
 - **TcVector**：腾讯云向量数据库，支持远程 embedding 计算和混合检索 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/tcvector)
 - **Elasticsearch**：支持 v7/v8/v9 多版本的 Elasticsearch 向量存储 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/elasticsearch)
 - **Milvus**：高性能向量数据库，支持十亿级向量搜索 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/milvus)
@@ -276,7 +276,7 @@ kb := knowledge.New(
 )
 ```
 
-##### PgVector（PostgreSQL + pgvector）
+##### PGVector（PostgreSQL + pgvector）
 
 ```go
 import (
@@ -285,11 +285,7 @@ import (
 
 // PostgreSQL + pgvector
 pgVS, err := vectorpgvector.New(
-    vectorpgvector.WithHost("127.0.0.1"),
-    vectorpgvector.WithPort(5432),
-    vectorpgvector.WithUser("postgres"),
-    vectorpgvector.WithPassword("your-password"),
-    vectorpgvector.WithDatabase("your-database"),
+    vectorpgvector.WithPGVectorClientDSN("postgres://postgres:your-password@127.0.0.1:5432/your-database?sslmode=disable"),
     // 根据 embedding 模型设置索引维度（text-embedding-3-small 为 1536）
     vectorpgvector.WithIndexDimension(1536),
     // 启用/关闭文本检索向量，配合混合检索权重使用
@@ -496,10 +492,14 @@ kb := knowledge.New(
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/source"
     filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
     dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
     urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
     autosource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto"
+    vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 )
 
 // 文件源：单个文件处理，支持 .txt, .md, .go, .json 等格式
@@ -555,8 +555,13 @@ autoSrc := autosource.New(
 // 组合使用
 sources := []source.Source{fileSrc, dirSrc, urlSrc, autoSrc}
 
+embedder := openaiembedder.New(openaiembedder.WithModel("text-embedding-3-small"))
+vectorStore := vectorinmemory.New()
+
 // 传递给 Knowledge
 kb := knowledge.New(
+    knowledge.WithEmbedder(embedder),
+    knowledge.WithVectorStore(vectorStore),
     knowledge.WithSources(sources),
 )
 

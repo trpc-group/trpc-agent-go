@@ -438,21 +438,27 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 	inv.Session.EventMu.RUnlock()
 
 	// insert invocation message if not already included
-	var hasUserMessage bool
+	var hasInvocationMessage bool
 	for _, evt := range events {
-		if evt.IsUserMessage() && len(evt.Choices) > 0 && evt.Choices[0].Message.Content == inv.Message.Content {
-			hasUserMessage = true
+		if invocationMessageEqual(inv.Message, evt.Choices[0].Message) {
+			hasInvocationMessage = true
 			break
 		}
 	}
-	if !hasUserMessage && inv.Message.Content != "" {
+	if !hasInvocationMessage && inv.Message.Content != "" {
 		events = p.insertInvocationMessage(events, inv)
 	}
 
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 
-	// Convert events to messages.
+	// Get current request ID for reasoning content filtering.
+	currentRequestID := ""
+	if inv != nil && inv.RunOptions.RequestID != "" {
+		currentRequestID = inv.RunOptions.RequestID
+	}
+
+	// Convert events to messages with reasoning content handling.
 	var messages []model.Message
 	for _, evt := range resultEvents {
 		// Convert foreign events or keep as-is (consistent with getIncrementMessages).
@@ -462,7 +468,9 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 		}
 		if len(ev.Choices) > 0 {
 			for _, choice := range ev.Choices {
-				messages = append(messages, choice.Message)
+				msg := choice.Message
+				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+				messages = append(messages, msg)
 			}
 		}
 	}
@@ -561,7 +569,9 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 	}
 
 	// check is invocation message
-	if inv.RunOptions.RequestID == evt.RequestID && evt.IsUserMessage() && evt.Choices[0].Message.Content == inv.Message.Content {
+	if inv.RunOptions.RequestID == evt.RequestID &&
+		len(evt.Choices) > 0 &&
+		invocationMessageEqual(inv.Message, evt.Choices[0].Message) {
 		return true, true
 	}
 
@@ -598,6 +608,16 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 	}
 
 	return true, false
+}
+
+func invocationMessageEqual(invMsg model.Message, evtMsg model.Message) bool {
+	if invMsg.Role == "" {
+		if evtMsg.Role != model.RoleUser {
+			return false
+		}
+		return invMsg.Content == evtMsg.Content
+	}
+	return model.MessagesEqual(invMsg, evtMsg)
 }
 
 // isOtherAgentReply checks whether the event is a reply from another agent.
