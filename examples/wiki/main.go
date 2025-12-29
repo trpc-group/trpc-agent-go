@@ -174,7 +174,7 @@ func (c *wikiChat) startChat(ctx context.Context) error {
 
 		// Handle special commands
 		switch strings.ToLower(userInput) {
-		case "exit", "/exit", "quit":
+		case "exit", "/exit", "exit()", "quit":
 			fmt.Println("👋 Goodbye!")
 			return nil
 		case "help", "/help":

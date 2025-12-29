@@ -8,7 +8,7 @@
 //
 
 // Package wiki provides Wikipedia Search API tools for AI agents.
-package wiki
+package wikipedia
 
 import (
 	"context"
@@ -166,7 +166,7 @@ func createWikiSearchTool(wikiClient *client.Client, cfg *config) tool.CallableT
 	searchFunc := func(ctx context.Context, req wikiSearchRequest) (wikiSearchResponse, error) {
 		limit := req.Limit
 		if limit <= 0 || limit > cfg.maxResults {
-			limit = cfg.maxResults // 使用配置的最大值作为上限
+			limit = cfg.maxResults // use configured max as upper bound
 		}
 
 		startTime := time.Now()

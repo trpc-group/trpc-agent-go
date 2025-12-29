@@ -187,14 +187,14 @@ func main() {
     // 创建模型
     model := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
     
-    // 创建 Wikipedia 工具
-    wikiTool := wiki.NewWikiSearchTool(
+    // 创建 Wikipedia ToolSet
+    wikiToolSet, err := wiki.NewToolSet(
         wiki.WithLanguage("zh"),  // 使用中文版本
         wiki.WithMaxResults(3),
     )
-    
-    // 获取工具
-    searchTool := wikiTool.NewTool()
+    if err != nil {
+        // 处理错误
+    }
     
     // 创建 Agent
     agent := llmagent.New(
@@ -202,7 +202,7 @@ func main() {
         llmagent.WithModel(model),
         llmagent.WithDescription("具有 Wikipedia 访问能力的 AI 助手"),
         llmagent.WithInstruction("使用 Wikipedia 提供准确的信息"),
-        llmagent.WithTools([]tool.Tool{searchTool}),
+        llmagent.WithToolSets([]tool.ToolSet{wikiToolSet}),
     )
     
     // 使用 agent...
