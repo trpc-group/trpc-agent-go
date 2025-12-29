@@ -173,9 +173,12 @@ func WithReasoningContentMode(mode string) ContentOption {
 }
 
 // WithPreloadMemory sets the number of memories to preload into system prompt.
-// Set to 0 to disable preloading (use tools instead).
-// Set to -1 (default) to load all memories.
-// Set to N (N > 0) to load the most recent N memories.
+//   - Set to 0 to disable preloading (use tools instead).
+//   - Set to -1 (default) to load all memories.
+//     WARNING: Loading all memories may significantly increase token usage
+//     and API costs, especially for users with many stored memories.
+//     Consider using a positive limit (e.g., 10-50) for production use.
+//   - Set to N (N > 0) to load the most recent N memories.
 func WithPreloadMemory(limit int) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.PreloadMemory = limit

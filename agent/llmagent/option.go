@@ -27,6 +27,17 @@ import (
 
 const (
 	defaultChannelBufferSize = 256
+
+	// defaultPreloadMemory is the default value for PreloadMemory.
+	// PreloadMemory configuration values:
+	//   - 0: Disable preloading (use tools instead).
+	//   - N > 0: Load the most recent N memories.
+	//   - -1 (default): Load all memories.
+	//     WARNING: Loading all memories may significantly increase token usage
+	//     and API costs, especially for users with many stored memories.
+	//     Consider using a positive limit (e.g., 10-50) for production use.
+	defaultPreloadMemory = -1
+
 	// defaultModelName is the model name used when only WithModel is set
 	// without WithModels.
 	defaultModelName = "__default__"
@@ -79,12 +90,6 @@ const (
 	IsolatedInvocation
 )
 
-const (
-	// preloadMemoryDefault is the default value for PreloadMemory.
-	// -1 means load all memories.
-	preloadMemoryDefault = -1
-)
-
 var (
 	defaultOptions = Options{
 		ChannelBufferSize:          defaultChannelBufferSize,
@@ -94,7 +99,7 @@ var (
 		// explicitly opted into preserving assistant/tool roles.
 		PreserveSameBranch: false,
 		// Default to preload all memories.
-		PreloadMemory: preloadMemoryDefault,
+		PreloadMemory: defaultPreloadMemory,
 	}
 )
 
@@ -638,9 +643,12 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 }
 
 // WithPreloadMemory sets the number of memories to preload into system prompt.
-// Set to 0 to disable preloading (use tools instead).
-// Set to -1 (default) to load all memories.
-// Set to N (N > 0) to load the most recent N memories.
+//   - Set to 0 to disable preloading (use tools instead).
+//   - Set to -1 (default) to load all memories.
+//     WARNING: Loading all memories may significantly increase token usage
+//     and API costs, especially for users with many stored memories.
+//     Consider using a positive limit (e.g., 10-50) for production use.
+//   - Set to N (N > 0) to load the most recent N memories.
 func WithPreloadMemory(limit int) Option {
 	return func(opts *Options) {
 		opts.PreloadMemory = limit

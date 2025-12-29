@@ -1167,14 +1167,21 @@ llmAgent := llmagent.New(
     llmagent.WithTools(memoryService.Tools()),
     // Preload options:
     // llmagent.WithPreloadMemory(-1),  // Load all (default).
+    //                                  // ⚠️ WARNING: Loading all memories may significantly
+    //                                  //     increase token usage and API costs, especially
+    //                                  //     for users with many stored memories. Consider
+    //                                  //     using a positive limit for production use.
     // llmagent.WithPreloadMemory(0),   // Disable preloading.
-    // llmagent.WithPreloadMemory(10),  // Load 10 most recent.
+    // llmagent.WithPreloadMemory(10),  // Load 10 most recent (recommended for production).
 )
 ```
 
 When preloading is enabled, memories are automatically injected into the
 system prompt, giving the Agent context about the user without explicit
 tool calls.
+
+**⚠️ Important Note**: The default configuration (`-1`) loads all memories,
+which may significantly increase **Token Usage** and **API Costs**.
 
 ### Hybrid Approach
 
