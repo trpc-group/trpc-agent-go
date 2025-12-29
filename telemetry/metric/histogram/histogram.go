@@ -15,7 +15,10 @@ import (
 	"fmt"
 	"sync"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
 // DynamicFloat64Histogram wraps a Float64Histogram with dynamic bucket configuration.
@@ -198,7 +201,7 @@ func (d *DynamicInt64Histogram) SetBuckets(boundaries []float64) error {
 		return fmt.Errorf("meter provider is nil")
 	}
 	// Create a new Meter each time buckets change (required for some SDK/provider implementations).
-	meter := d.mp.Meter(d.meterName)
+	meter := d.mp.Meter(d.meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMeterName, d.meterName)))
 	opts := []metric.Int64HistogramOption{
 		metric.WithDescription(d.description),
 		metric.WithUnit(d.unit),
