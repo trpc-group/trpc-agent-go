@@ -33,5 +33,7 @@ pnpm-lock.yaml
 .gomodcache
 next-env.d.ts
 .codebuddy
+go.work
+go.work.sum
 examples/**/*.evalset_result.json
 !examples/evaluation/**/*.evalset_result.json
