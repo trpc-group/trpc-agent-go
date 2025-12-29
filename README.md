@@ -41,9 +41,9 @@ English | [中文](README.zh_CN.md)
 
 <table>
 <tr>
-<td width="50%">
+<td width="50%" valign="top">
 
-### **Multi-Agent Orchestration**
+### Multi-Agent Orchestration
 
 ```go
 // Chain agents for complex workflows
@@ -58,9 +58,9 @@ parallel := parallelagent.New("concurrent",
 ```
 
 </td>
-<td width="50%">
+<td width="50%" valign="top">
 
-### **Advanced Memory System**
+### Advanced Memory System
 
 ```go
 // Persistent memory with search
@@ -79,9 +79,9 @@ runner := runner.NewRunner("app", agent,
 </td>
 </tr>
 <tr>
-<td>
+<td valign="top">
 
-### **Rich Tool Integration**
+### Rich Tool Integration
 
 ```go
 // Any function becomes a tool
@@ -95,9 +95,9 @@ mcpTool := mcptool.New(serverConn)
 ```
 
 </td>
-<td>
+<td valign="top">
 
-### **Production Observability**
+### Production Observability
 
 ```go
 // Start Langfuse integration
@@ -117,9 +117,9 @@ events, _ := runner.Run(ctx, "user-1", "session-1",
 </td>
 </tr>
 <tr>
-<td>
+<td valign="top">
 
-### **Agent Skills**
+### Agent Skills
 
 ```go
 // Skills are folders with a SKILL.md spec.
@@ -133,9 +133,9 @@ tools := []tool.Tool{
 ```
 
 </td>
-<td>
+<td valign="top">
 
-### **Evaluation & Benchmarks**
+### Evaluation & Benchmarks
 
 ```go
 evaluator, _ := evaluation.New("app", runner,

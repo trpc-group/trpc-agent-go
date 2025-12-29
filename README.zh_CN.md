@@ -41,9 +41,9 @@
 
 <table>
 <tr>
-<td width="50%">
+<td width="50%" valign="top">
 
-### **多 Agent 编排**
+### 多 Agent 编排
 
 ```go
 // Chain agent 构建复杂工作流
@@ -58,9 +58,9 @@ parallel := parallelagent.New("concurrent",
 ```
 
 </td>
-<td width="50%">
+<td width="50%" valign="top">
 
-### **先进的 Memory 系统**
+### 先进的 Memory 系统
 
 ```go
 // 带搜索的持久化 memory
@@ -79,9 +79,9 @@ runner := runner.NewRunner("app", agent,
 </td>
 </tr>
 <tr>
-<td>
+<td valign="top">
 
-### **丰富的 Tool 集成**
+### 丰富的 Tool 集成
 
 ```go
 // 任何函数都可以成为 tool
@@ -95,9 +95,9 @@ mcpTool := mcptool.New(serverConn)
 ```
 
 </td>
-<td>
+<td valign="top">
 
-### **生产可观测性**
+### 生产可观测性
 
 ```go
 // 启动 Langfuse 集成
@@ -117,9 +117,9 @@ events, _ := runner.Run(ctx, "user-1", "session-1",
 </td>
 </tr>
 <tr>
-<td>
+<td valign="top">
 
-### **Agent Skills**
+### Agent Skills
 
 ```go
 // Skills 是一个包含 SKILL.md 的文件夹。
@@ -133,9 +133,9 @@ tools := []tool.Tool{
 ```
 
 </td>
-<td>
+<td valign="top">
 
-### **评测与基准**
+### 评测与基准
 
 ```go
 evaluator, _ := evaluation.New("app", runner,
