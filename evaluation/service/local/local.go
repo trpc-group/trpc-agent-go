@@ -198,6 +198,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		result, err := s.evaluateMetric(ctx, evalMetric, inferenceResult.Inferences, evalCase.Conversation)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
+				// Skip metrics whose evaluator or artifacts are intentionally absent.
 				continue
 			}
 			return nil, fmt.Errorf("run evaluation for metric %s: %w", evalMetric.MetricName, err)
@@ -207,6 +208,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 				len(result.PerInvocationResults), len(perInvocation))
 		}
 		reasons := make([]string, 0, len(result.PerInvocationResults))
+		rubricScores := make([]*evalresult.RubricScore, 0, len(result.PerInvocationResults))
 		for i, invocationResult := range result.PerInvocationResults {
 			// Record the metric outcome for the corresponding invocation.
 			evalMetricResult := &evalresult.EvalMetricResult{
@@ -218,10 +220,12 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 			}
 			if invocationResult.Details != nil {
 				evalMetricResult.Details = &evalresult.EvalMetricResultDetails{
-					Reason: invocationResult.Details.Reason,
-					Score:  invocationResult.Details.Score,
+					Reason:       invocationResult.Details.Reason,
+					Score:        invocationResult.Details.Score,
+					RubricScores: invocationResult.Details.RubricScores,
 				}
 				reasons = append(reasons, invocationResult.Details.Reason)
+				rubricScores = append(rubricScores, invocationResult.Details.RubricScores...)
 			}
 			perInvocation[i].EvalMetricResults = append(perInvocation[i].EvalMetricResults, evalMetricResult)
 		}
@@ -232,8 +236,9 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 			Score:      result.OverallScore,
 			EvalStatus: result.OverallStatus,
 			Details: &evalresult.EvalMetricResultDetails{
-				Reason: strings.Join(reasons, reasonSeparator),
-				Score:  result.OverallScore,
+				Reason:       strings.Join(reasons, reasonSeparator),
+				Score:        result.OverallScore,
+				RubricScores: rubricScores,
 			},
 		})
 	}

@@ -10,18 +10,24 @@
 // Package criterion provides configurable evaluation criteria.
 package criterion
 
-import "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+)
 
 // Criterion encapsulates multiple evaluation criteria for comprehensive model behavior assessment.
 type Criterion struct {
 	// ToolTrajectory configures checks for tool call and response sequences.
 	ToolTrajectory *tooltrajectory.ToolTrajectoryCriterion `json:"toolTrajectory,omitempty"`
+	// LLMJudge configures the LLM-based judge criterion.
+	LLMJudge *llm.LLMCriterion `json:"llmJudge,omitempty"`
 }
 
 // New creates a Criterion with the provided options.
 func New(opt ...Option) *Criterion {
 	opts := newOptions(opt...)
 	return &Criterion{
-		ToolTrajectory: opts.ToolTrajectory,
+		ToolTrajectory: opts.toolTrajectory,
+		LLMJudge:       opts.llmJudge,
 	}
 }

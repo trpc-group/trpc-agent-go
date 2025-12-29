@@ -1,0 +1,140 @@
+{
+  "evalSetResultId": "final-response-app_final-response-basic_d1660756-fbba-43e6-89f1-b5de1b2ad59e",
+  "evalSetResultName": "final-response-app_final-response-basic_d1660756-fbba-43e6-89f1-b5de1b2ad59e",
+  "evalSetId": "final-response-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "final-response-basic",
+      "evalId": "qa_paris",
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "llm_final_response",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 0.9,
+          "criterion": {
+            "llmJudge": {
+              "judgeModel": {
+                "providerName": "openai",
+                "modelName": "deepseek-chat",
+                "numSamples": 3,
+                "generationConfig": {
+                  "max_tokens": 512,
+                  "temperature": 1,
+                  "stream": false
+                }
+              }
+            }
+          },
+          "details": {
+            "reason": "The agent's final answer includes the profit amount of $16,449.40, which matches the reference answer of \"16,449.40 dollars\" in both numerical value and unit (dollars). The additional formatting and explanatory text in the agent's response do not change the core answer.",
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "c0799e62-bd2a-47ea-89f6-2db4c7733dcb",
+            "userContent": {
+              "role": "user",
+              "content": "With a principal of 1000 dollars and a compound annual interest rate of 10%, what will the profit be after 30 years?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "With a principal of $1,000 and a compound annual interest rate of 10%, after 30 years:\n\n- **Total amount**: $17,449.40\n- **Profit**: $16,449.40\n\nThe profit after 30 years would be approximately **$16,449.40**."
+            },
+            "tools": [
+              {
+                "id": "call_00_wHP78cnz8Mikwg6uPrsWfiyY",
+                "name": "calculator",
+                "arguments": {
+                  "a": 1.1,
+                  "b": 30,
+                  "operation": "power"
+                },
+                "result": {
+                  "a": 1.1,
+                  "b": 30,
+                  "operation": "power",
+                  "result": 17.449402268886445
+                }
+              },
+              {
+                "id": "call_00_svr0lJHw1LctL9HSYXjJpW4L",
+                "name": "calculator",
+                "arguments": {
+                  "a": 1000,
+                  "b": 17.449402268886445,
+                  "operation": "multiply"
+                },
+                "result": {
+                  "a": 1000,
+                  "b": 17.449402268886445,
+                  "operation": "multiply",
+                  "result": 17449.402268886446
+                }
+              },
+              {
+                "id": "call_00_IozaXDosjufUrAd7hdIsfzaR",
+                "name": "calculator",
+                "arguments": {
+                  "a": 17449.402268886446,
+                  "b": 1000,
+                  "operation": "subtract"
+                },
+                "result": {
+                  "a": 17449.402268886446,
+                  "b": 1000,
+                  "operation": "subtract",
+                  "result": 16449.402268886446
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "qa_paris-1",
+            "userContent": {
+              "role": "user",
+              "content": "With a principal of 1000 dollars and a compound annual interest rate of 10%, what will the profit be after 30 years?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "16,449.40 dollars"
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "llm_final_response",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 0.9,
+              "criterion": {
+                "llmJudge": {
+                  "judgeModel": {
+                    "providerName": "openai",
+                    "modelName": "deepseek-chat",
+                    "numSamples": 3,
+                    "generationConfig": {
+                      "max_tokens": 512,
+                      "temperature": 1,
+                      "stream": false
+                    }
+                  }
+                }
+              },
+              "details": {
+                "reason": "The agent's final answer includes the profit amount of $16,449.40, which matches the reference answer of \"16,449.40 dollars\" in both numerical value and unit (dollars). The additional formatting and explanatory text in the agent's response do not change the core answer.",
+                "score": 1
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "6cd691d1-857c-4608-9658-95d3cf89e385",
+      "userId": "demo-user"
+    }
+  ],
+  "creationTimestamp": 1766511189.9821882
+}

@@ -7,6 +7,7 @@
 //
 //
 
+// Package evaluation orchestrates agent evaluation runs and aggregates their results.
 package evaluation
 
 import (
@@ -202,6 +203,7 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 	aggregatedMetrics := make(map[string]*aggregatedMetric)
 	for _, run := range runs {
 		for _, metric := range run.OverallEvalMetricResults {
+			// Skip metrics that did not run to avoid diluting averaged scores.
 			if metric.EvalStatus == status.EvalStatusNotEvaluated {
 				continue
 			}

@@ -316,7 +316,7 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 		result: &evaluator.EvaluateResult{
 			OverallScore:  0.8,
 			OverallStatus: status.EvalStatusPassed,
-			PerInvocationResults: []evaluator.PerInvocationResult{
+			PerInvocationResults: []*evaluator.PerInvocationResult{
 				{Score: 0.8, Status: status.EvalStatusPassed},
 			},
 		},
@@ -466,7 +466,7 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 					result: &evaluator.EvaluateResult{
 						OverallScore:         1,
 						OverallStatus:        status.EvalStatusPassed,
-						PerInvocationResults: []evaluator.PerInvocationResult{},
+						PerInvocationResults: []*evaluator.PerInvocationResult{},
 					},
 				}
 				assert.NoError(t, reg.Register(metricName, fakeEval))
@@ -490,7 +490,7 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 					result: &evaluator.EvaluateResult{
 						OverallScore:         0,
 						OverallStatus:        status.EvalStatusUnknown,
-						PerInvocationResults: []evaluator.PerInvocationResult{{Score: 0, Status: status.EvalStatusNotEvaluated}},
+						PerInvocationResults: []*evaluator.PerInvocationResult{{Score: 0, Status: status.EvalStatusNotEvaluated}},
 					},
 				}
 				assert.NoError(t, reg.Register(metricName, fakeEval))

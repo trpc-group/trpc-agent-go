@@ -527,6 +527,7 @@ During the evaluation process, the evaluator compares the actual conversation wi
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 )
 
@@ -540,6 +541,7 @@ type EvalMetric struct {
 // Criterion aggregates various evaluation criteria.
 type Criterion struct {
 	ToolTrajectory *tooltrajectory.ToolTrajectoryCriterion // Tool trajectory evaluation criterion.
+	LLMJudge       *llm.LLMCriterion                       // LLM evaluation criterion.
 }
 ```
 
@@ -597,6 +599,7 @@ The Evaluator interface is defined as follows:
 
 ```go
 import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -615,17 +618,25 @@ type Evaluator interface {
 
 // EvaluateResult represents the aggregated results of the evaluator across multiple sessions.
 type EvaluateResult struct {
-	OverallScore         float64               // Overall score.
-	OverallStatus        status.EvalStatus     // Overall status, categorized as passed/failed/not evaluated.
-	PerInvocationResults []PerInvocationResult // Evaluation results for a single session.
+	OverallScore         float64                // Overall score.
+	OverallStatus        status.EvalStatus      // Overall status, categorized as passed/failed/not evaluated.
+	PerInvocationResults []*PerInvocationResult // Evaluation results for a single session.
 }
 
 // PerInvocationResult represents the evaluation results for a single session.
 type PerInvocationResult struct {
-	ActualInvocation   *evalset.Invocation // Actual session.
-	ExpectedInvocation *evalset.Invocation // Expected session.
-	Score              float64             // Current session score.
-	Status             status.EvalStatus   // Current session status.
+	ActualInvocation   *evalset.Invocation   // Actual session.
+	ExpectedInvocation *evalset.Invocation   // Expected session.
+	Score              float64               // Current session score.
+	Status             status.EvalStatus     // Current session status.
+	Details            *PerInvocationDetails // Additional information such as reason and score.
+}
+
+// PerInvocationDetails represents additional information for a single evaluation round.
+type PerInvocationDetails struct {
+	Reason       string                    // Scoring reason.
+	Score        float64                   // Evaluation score.
+	RubricScores []*evalresult.RubricScore // Results of each rubric item.
 }
 ```
 
@@ -652,11 +663,10 @@ type Registry interface {
 
 The framework registers the following evaluators by default:
 
-- `tool_trajectory_avg_score` tool trajectory consistency evaluator.
-  - For a single session:
-    - If the actual tool call sequence is exactly the same as the expected one, a score of 1 is assigned;
-    - If not, a score of 0 is assigned.
-- For multiple sessions: The final score is calculated by averaging the scores from each session.
+- `tool_trajectory_avg_score` tool trajectory consistency evaluator, requires expected outputs.
+- `llm_final_response` LLM final response evaluator, requires expected outputs.
+- `llm_rubric_response` LLM rubric response evaluator, requires EvalSet to provide conversation input and configure LLMJudge/rubrics.
+- `llm_rubric_knowledge_recall` LLM rubric knowledge recall evaluator, requires EvalSet to provide conversation input and configure LLMJudge/rubrics.
 
 ### EvalResult
 
@@ -703,12 +713,33 @@ import (
 
 // EvalMetricResult represents the evaluation result of a single metric.
 type EvalMetricResult struct {
-	MetricName string               // Metric name.
-	Score      float64              // Actual score.
-	EvalStatus status.EvalStatus    // Evaluation status.
-	Threshold  float64              // Score threshold.
-	Criterion  *criterion.Criterion // Evaluation criterion.
-	Details    map[string]any       // Additional information, such as scoring process, error description, etc.
+	MetricName string                   // Metric name.
+	Score      float64                  // Actual score.
+	EvalStatus status.EvalStatus        // Evaluation status.
+	Threshold  float64                  // Score threshold.
+	Criterion  *criterion.Criterion     // Evaluation criterion.
+	Details    *EvalMetricResultDetails // Additional information, such as scoring process, error description, etc.
+}
+
+// EvalMetricResultDetails represents additional information for metric evaluation.
+type EvalMetricResultDetails struct {
+	Reason       string         // Scoring reason.
+	Score        float64        // Evaluation score.
+	RubricScores []*RubricScore // Results of each rubric item.
+}
+
+// RubricScore represents the result of a single rubric item.
+type RubricScore struct {
+	ID     string  // Rubric ID.
+	Reason string  // Scoring reason.
+	Score  float64 // Evaluation score.
+}
+
+// ScoreResult represents the scoring result of a single metric.
+type ScoreResult struct {
+	Reason       string         // Scoring reason.
+	Score        float64        // Evaluation score.
+	RubricScores []*RubricScore // Results of each rubric item.
 }
 ```
 
@@ -1114,6 +1145,7 @@ The framework has the following built-in types of evaluation criteria:
 | TextCriterion           | Text string                                           |
 | JSONCriterion           | JSON object, usually used to compare `map[string]any` |
 | ToolTrajectoryCriterion | Tool invocation trajectory                            |
+| LLMCriterion            | Evaluation based on an LLM judge model                |
 | Criterion               | Aggregation of multiple criteria                      |
 
 #### TextCriterion
@@ -1375,6 +1407,90 @@ Assume `A`, `B`, `C`, and `D` each denote one tool call. Matching examples:
 | On | Off | `[C, D]` | `[A, B, C]` | Mismatch | Actual tool sequence missing D |
 | Any | Any | `[A, A]` | `[A]` | Mismatch | Actual calls insufficient; a single call cannot be reused |
 
+
+#### LLMCriterion
+
+LLMCriterion is used to configure an LLM-based evaluation criterion for scenarios where a model produces the judgment.
+
+```go
+// LLMCriterion configures the judge model.
+type LLMCriterion struct {
+	Rubrics    []*Rubric          // Rubric configuration.
+	JudgeModel *JudgeModelOptions // Judge model configuration.
+}
+
+// Rubric defines a rubric item.
+type Rubric struct {
+	ID          string         // Unique rubric ID.
+	Description string         // Human-readable description.
+	Type        string         // Rubric type.
+	Content     *RubricContent // Rubric content for the judge model.
+}
+
+// RubricContent defines rubric content.
+type RubricContent struct {
+	Text string // Concrete rubric content.
+}
+
+// JudgeModelOptions defines judge model parameters.
+type JudgeModelOptions struct {
+	ProviderName string                  // Model provider name.
+	ModelName    string                  // Judge model name.
+	BaseURL      string                  // Model base URL.
+	APIKey       string                  // Model API key.
+	ExtraFields  map[string]any          // Extra request fields.
+	NumSamples   int                     // Number of evaluation samples.
+	Generation   *model.GenerationConfig // Generation config for the judge model.
+}
+```
+
+- `Rubrics` defines rubric items and is only used in rubric-style evaluators. Expected outputs are not needed; the judge model evaluates each rubric.
+- `NumSamples` controls how many times the judge model is called, defaulting to 1 when not set.
+- `Generation` defaults to `MaxTokens=2000`, `Temperature=0.8`, and `Stream=false`.
+
+You can pass a custom configuration via `criterion.WithLLMJudge`, for example:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+criterion := criterion.New(
+	criterion.WithLLMJudge(
+		llm.New(
+			"openai",
+			"deepseek-chat",
+			llm.WithNumSamples(3),
+			llm.WithGeneration(&model.GenerationConfig{
+				MaxTokens:   floatPtr(512),
+				Temperature: floatPtr(1.0),
+				Stream:      false,
+			}),
+			llm.WithRubrics([]*llm.Rubric{
+				{
+					ID:          "1",
+					Type:        "FINAL_RESPONSE_QUALITY",
+					Description: "The final answer is correct.",
+					Content: &llm.RubricContent{
+						Text: "The final answer directly addresses the user question, provides the required result, and is consistent with the facts given.",
+					},
+				},
+				{
+					ID:          "2",
+					Type:        "CONTEXT_RELEVANCE",
+					Description: "The final answer is relevant to the user prompt.",
+					Content: &llm.RubricContent{
+						Text: "The final answer stays on topic and does not include unrelated or missing key points from the user prompt.",
+					},
+				},
+			}),
+		),
+	),
+)
+```
+
 ### Evaluator
 
 #### Tool Trajectory Evaluator
@@ -1409,4 +1525,275 @@ evalMetric := &metric.EvalMetric{
 }
 ```
 
+An example of the corresponding metric config file:
+
+```json
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {}
+    }
+  }
+]
+```
+
 For a complete example, see [examples/evaluation/tooltrajectory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/tooltrajectory).
+
+#### LLM Final Response Evaluator
+
+The metric name for the LLM final response evaluator is `llm_final_response`. It uses a judge model to determine whether the Agent’s final answer is valid. The judge prompt includes the user input, reference answer, and the Agent’s final answer, making it suitable for automatically checking the final text output.
+
+Evaluation logic:
+
+- Use the `JudgeModel` in `LLMCriterion` to call the judge model, sampling multiple times according to `NumSamples`.
+- The judge model must return the field `is_the_agent_response_valid` with values `valid` or `invalid` (case-insensitive); `valid` scores 1, `invalid` scores 0. Other results or parse failures produce an error.
+- With multiple samples, use majority voting to aggregate, then compare the final score against `EvalMetric.Threshold` to get the evaluation result.
+
+A typical configuration looks like this:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+evalMetric := &metric.EvalMetric{
+	MetricName: "llm_final_response",
+	Threshold:  0.9,
+	Criterion: criterion.New(
+		criterion.WithLLMJudge(
+			cllm.New(
+				"openai",
+				"gpt-4o",
+				cllm.WithNumSamples(3),
+				cllm.WithGeneration(&model.GenerationConfig{
+					MaxTokens:   ptr(512),
+					Temperature: ptr(1.0),
+					Stream:      false,
+				}),
+			),
+		),
+	),
+}
+```
+
+An example metric config file:
+
+```json
+[
+  {
+    "metricName": "llm_final_response",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "gpt-4o",
+          "numSamples": 3,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 1.0,
+            "stream": false
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+See the complete example at [examples/evaluation/llm/finalresponse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/finalresponse).
+
+#### LLM Rubric Response Evaluator
+
+The metric name for the LLM rubric response evaluator is `llm_rubric_response`. It checks whether the Agent’s final answer meets each rubric requirement.
+
+Evaluation logic:
+
+- Use `Rubrics` in `LLMCriterion` to build the prompt, and the judge model returns `yes`/`no` for each rubric.
+- The score for a single sample is the average of all rubric scores (`yes`=1, `no`=0).
+- With multiple samples, pick the representative result via majority voting, then compare against `EvalMetric.Threshold` to determine pass/fail.
+
+Typical configuration:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+evalMetric := &metric.EvalMetric{
+	MetricName: "llm_rubric_response",
+	Threshold:  0.9,
+	Criterion: criterion.New(
+		criterion.WithLLMJudge(
+			cllm.New(
+				"openai",
+				"deepseek-chat",
+				cllm.WithNumSamples(3),
+				cllm.WithGeneration(&model.GenerationConfig{
+					MaxTokens:   ptr(512),
+					Temperature: ptr(1.0),
+					Stream:      false,
+				}),
+				cllm.WithRubrics([]*cllm.Rubric{
+					{
+						ID:          "1",
+						Type:        "FINAL_RESPONSE_QUALITY",
+						Description: "The final answer is correct.",
+						Content: &cllm.RubricContent{
+							Text: "The final answer is correct and consistent with the user request.",
+						},
+					},
+					{
+						ID:          "2",
+						Type:        "CONTEXT_RELEVANCE",
+						Description: "The final answer is relevant to the user prompt.",
+						Content: &cllm.RubricContent{
+							Text: "The final answer is relevant to the user prompt without unrelated content.",
+						},
+					},
+				}),
+			),
+		),
+	),
+}
+```
+
+An example metric config file:
+
+```json
+[
+  {
+    "metricName": "llm_rubric_response",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "deepseek-chat",
+          "numSamples": 3,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 1.0,
+            "stream": false
+          }
+        },
+        "rubrics": [
+          {
+            "id": "1",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "description": "The final answer is correct.",
+            "content": {
+              "text": "The final answer is correct and consistent with the user request."
+            }
+          },
+          {
+            "id": "2",
+            "type": "CONTEXT_RELEVANCE",
+            "description": "The final answer is relevant to the user prompt.",
+            "content": {
+              "text": "The final answer is relevant to the user prompt without unrelated content."
+            }
+          }
+        ]
+      }
+    }
+  }
+]
+```
+
+See the complete example at [examples/evaluation/llm/rubricresponse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/rubricresponse).
+
+#### LLM Rubric Knowledge Recall Evaluator
+
+The metric name for the LLM rubric knowledge recall evaluator is `llm_rubric_knowledge_recall`. It determines whether the retrieved knowledge supports the key information in the user question.
+
+Evaluation logic:
+
+- Extract responses from the `knowledge_search`/`knowledge_search_with_agentic_filter` tools in `IntermediateData.ToolResponses` as retrieval results.
+- Combine `Rubrics` to build the prompt. The judge model returns `yes`/`no` for each rubric, and the score for a single sample is the average.
+- With multiple samples, use majority voting to pick the representative result, then compare with the threshold for the final conclusion.
+
+Typical configuration:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+evalMetric := &metric.EvalMetric{
+	MetricName: "llm_rubric_knowledge_recall",
+	Threshold:  0.9,
+	Criterion: criterion.New(
+		criterion.WithLLMJudge(
+			cllm.New(
+				"openai",
+				"deepseek-chat",
+				cllm.WithNumSamples(3),
+				cllm.WithGeneration(&model.GenerationConfig{
+					MaxTokens:   ptr(512),
+					Temperature: ptr(1.0),
+					Stream:      false,
+				}),
+				cllm.WithRubrics([]*cllm.Rubric{
+					{
+						ID:          "1",
+						Type:        "KNOWLEDGE_RELEVANCE",
+						Description: "The recalled knowledge is relevant to the user's prompt.",
+						Content: &cllm.RubricContent{
+							Text: "The retrieved knowledge directly supports the user prompt and includes key facts.",
+						},
+					},
+				}),
+			),
+		),
+	),
+}
+```
+
+An example metric config file:
+
+```json
+[
+  {
+    "metricName": "llm_rubric_knowledge_recall",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "deepseek-chat",
+          "numSamples": 3,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 1.0,
+            "stream": false
+          }
+        },
+        "rubrics": [
+          {
+            "id": "1",
+            "type": "KNOWLEDGE_RELEVANCE",
+            "description": "The recalled knowledge is relevant to the user's prompt.",
+            "content": {
+              "text": "The retrieved knowledge directly supports the user prompt and includes key facts."
+            }
+          }
+        ]
+      }
+    }
+  }
+]
+```
+
+This evaluator requires the Agent’s tool calls to return retrieval results. See the complete example at [examples/evaluation/llm/knowledgerecall](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/knowledgerecall).
