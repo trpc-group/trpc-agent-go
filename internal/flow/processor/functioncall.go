@@ -12,6 +12,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -41,6 +43,10 @@ const (
 	// ErrorMarshalResult is the error message for failed to marshal result.
 	ErrorMarshalResult = "Error: failed to marshal result"
 )
+
+// funcRespCompletionTimeout is the default wait duration for ensuring a
+// tool.response event has been processed by the session persistence layer.
+const funcRespCompletionTimeout = 5 * time.Second
 
 // summarizationSkipper is implemented by tools that can indicate whether
 // the flow should skip a post-tool summarization step. This allows tools
@@ -240,8 +246,41 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 		))
 		return nil, err
 	}
+
+	if functionResponseEvent == nil {
+		return nil, nil
+	}
+
+	functionResponseEvent.RequiresCompletion = true
 	agent.EmitEvent(ctx, invocation, eventChan, functionResponseEvent)
+
+	if !appender.IsAttached(invocation) {
+		return functionResponseEvent, nil
+	}
+
+	completionID :=
+		agent.GetAppendEventNoticeKey(functionResponseEvent.ID)
+	timeout := funcRespWaitTimeout(ctx)
+	err = invocation.AddNoticeChannelAndWait(ctx, completionID, timeout)
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return nil, err
+	}
+	if err != nil {
+		log.WarnfContext(
+			ctx,
+			"Wait for tool response persistence failed: %v",
+			err,
+		)
+	}
 	return functionResponseEvent, nil
+}
+
+func funcRespWaitTimeout(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		return time.Until(deadline)
+	}
+	return funcRespCompletionTimeout
 }
 
 // handleFunctionCalls executes tool calls and returns a merged response event.

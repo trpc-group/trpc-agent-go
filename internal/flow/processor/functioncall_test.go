@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
@@ -541,6 +542,182 @@ func TestFunctionCallResponseProcessor_ToolExecutionFilter_AllDeferred(
 	default:
 	}
 	require.True(t, inv.EndInvocation)
+}
+
+func TestFunctionCallResponseProcessor_WaitsForToolResponseCompletion(
+	t *testing.T,
+) {
+	const (
+		toolName = "echo"
+		callID   = "call-1"
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	sess := session.NewSession("app", "user", "session")
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "test-agent"}),
+		agent.WithInvocationModel(&mockModel{}),
+	)
+	sess.UpdateUserSession(event.NewResponseEvent(
+		inv.InvocationID,
+		inv.AgentName,
+		&model.Response{
+			Done: false,
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage(toolName),
+			}},
+		},
+	))
+	appender.Attach(inv, func(context.Context, *event.Event) error {
+		return nil
+	})
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			toolName: &mockCallableTool{
+				declaration: &tool.Declaration{Name: toolName},
+				callFn: func(context.Context, []byte) (any, error) {
+					return "ok", nil
+				},
+			},
+		},
+	}
+	rsp := &model.Response{
+		Model: "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   callID,
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      toolName,
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+
+	allowComplete := make(chan struct{})
+	eventSeen := make(chan struct{})
+	eventChan := make(chan *event.Event, 1)
+
+	go func() {
+		evt := <-eventChan
+		require.NotNil(t, evt)
+		require.True(t, evt.RequiresCompletion)
+		sess.UpdateUserSession(evt)
+		close(eventSeen)
+
+		<-allowComplete
+		completionID := agent.GetAppendEventNoticeKey(evt.ID)
+		require.NoError(t, inv.NotifyCompletion(ctx, completionID))
+	}()
+
+	done := make(chan struct{})
+	p := NewFunctionCallResponseProcessor(false, nil)
+	go func() {
+		p.ProcessResponse(ctx, inv, req, rsp, eventChan)
+		close(done)
+	}()
+
+	select {
+	case <-eventSeen:
+	case <-ctx.Done():
+		t.Fatalf("timeout waiting for tool.response event")
+	}
+
+	const noReturnWindow = 50 * time.Millisecond
+	select {
+	case <-done:
+		t.Fatalf("ProcessResponse returned before completion")
+	case <-time.After(noReturnWindow):
+	}
+
+	close(allowComplete)
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("timeout waiting for ProcessResponse to return")
+	}
+	require.Len(t, sess.Events, 2)
+}
+
+func TestFunctionCallResponseProcessor_NoWaitWithoutAppender(t *testing.T) {
+	const (
+		toolName = "echo"
+		callID   = "call-1"
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "test-agent"}),
+		agent.WithInvocationModel(&mockModel{}),
+	)
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			toolName: &mockCallableTool{
+				declaration: &tool.Declaration{Name: toolName},
+				callFn: func(context.Context, []byte) (any, error) {
+					return "ok", nil
+				},
+			},
+		},
+	}
+	rsp := &model.Response{
+		Model: "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   callID,
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      toolName,
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	done := make(chan struct{})
+	p := NewFunctionCallResponseProcessor(false, nil)
+	go func() {
+		p.ProcessResponse(ctx, inv, req, rsp, eventChan)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("timeout waiting for ProcessResponse to return")
+	}
+
+	select {
+	case evt := <-eventChan:
+		require.NotNil(t, evt)
+		require.True(t, evt.RequiresCompletion)
+	default:
+		t.Fatalf("expected tool.response event to be emitted")
+	}
+}
+
+func TestFuncRespWaitTimeout_DefaultsWithoutDeadline(t *testing.T) {
+	require.Equal(
+		t,
+		funcRespCompletionTimeout,
+		funcRespWaitTimeout(context.Background()),
+	)
 }
 
 func TestFunctionCallResponseProcessor_ToolExecutionDecision(t *testing.T) {
