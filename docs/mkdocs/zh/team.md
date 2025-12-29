@@ -48,6 +48,11 @@ flowchart LR
 - **适合场景**：handoff（交接）链条：A 处理一部分后，决定交给 B；B 再决定交给 C……
 - **工作方式**：entry（入口）成员先开始，之后每个成员可以使用
   `transfer_to_agent` 把控制权交给下一位成员；最后一个成员给用户最终回复。
+- **退出条件**：当某个成员不再调用 `transfer_to_agent`，而是直接输出最终回复时，
+  Swarm 就结束。最后一个成员的回复就是这次运行的最终结果。
+- **是否会自动总结**：Swarm 不会额外执行一次“统一总结”。如果你希望最终输出包含
+  总结/结论/下一步，可以在成员的 `instruction`（指令）里明确要求，或增加一个专门
+  “收尾（finalizer）”的成员并在最后 transfer 给它。
 
 ```mermaid
 sequenceDiagram
@@ -91,7 +96,7 @@ coordinator := llmagent.New(
     "team",
     llmagent.WithModel(modelInstance),
     llmagent.WithInstruction(
-        "You are the coordinator. Call member agents as tools, "+
+        "You are the coordinator. Consult the right specialists, "+
             "then produce the final answer.",
     ),
 )
@@ -115,6 +120,9 @@ _ = r
   `coordinator.Info().Name`），这样同一次会话（session）的事件（event）里不会出现
   两套作者名。
 - 协调者需要支持动态 ToolSet（工具集，ToolSet）（LLMAgent 支持）。
+- 一般不需要在协调者的 `instruction`（指令）里强调“把成员当作工具调用”。Team 会
+  自动把 `members` 包装成工具并注入到协调者；更推荐把 `instruction` 写成“职责 +
+  输出要求”，例如“你负责协调并产出最终答案”。
 - 如果你想把成员（以工具调用）的输出流式展示到父流程里，需要确保协调者和成员都
   使用流式输出，然后通过成员工具配置开启（见下文）。
 
@@ -161,7 +169,7 @@ devCoordinator := llmagent.New(
     "dev_team",
     llmagent.WithModel(modelInstance),
     llmagent.WithInstruction(
-        "You lead dev_team. Call backend_dev and frontend_dev as tools, "+
+        "You lead dev_team. Collect input from your members when needed, "+
             "then return an integrated technical plan.",
     ),
 )

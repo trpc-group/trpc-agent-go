@@ -48,6 +48,13 @@ flowchart LR
   next.
 - **How it works**: an entry Agent starts, then Agents transfer control to the
   next Agent using `transfer_to_agent`. The final Agent replies to the user.
+- **When it ends**: a Swarm ends when an Agent stops calling
+  `transfer_to_agent` and returns a normal final answer. The last Agent's
+  reply is the result for that run.
+- **Is there an automatic summary?**: Swarm does not run an extra
+  “global summary” step. If you want a structured wrap-up (summary, decisions,
+  next steps), require it in member `instruction`s, or add a dedicated
+  “finalizer” Agent and transfer to it at the end.
 
 ```mermaid
 sequenceDiagram
@@ -91,7 +98,7 @@ coordinator := llmagent.New(
     "team",
     llmagent.WithModel(modelInstance),
     llmagent.WithInstruction(
-        "You are the coordinator. Call member agents as tools, "+
+        "You are the coordinator. Consult the right specialists, "+
             "then produce the final answer.",
     ),
 )
@@ -115,6 +122,10 @@ Notes:
   `team.New` reuses `coordinator.Info().Name`), so the same session history
   and events don't end up with two different Agent author names.
 - The coordinator must support dynamic ToolSets (LLMAgent does).
+- In most cases, you do not need to say “call members as tools” in the
+  coordinator `instruction`. Team automatically wraps `members` as tools and
+  injects them into the coordinator; prefer describing responsibilities and the
+  expected output.
 - If you want to stream member output in the parent transcript, enable
   streaming for both the coordinator and members, then set member tool
   configuration (see below).
@@ -163,7 +174,7 @@ devCoordinator := llmagent.New(
     "dev_team",
     llmagent.WithModel(modelInstance),
     llmagent.WithInstruction(
-        "You lead dev_team. Call backend_dev and frontend_dev as tools, "+
+        "You lead dev_team. Collect input from your members when needed, "+
             "then return an integrated technical plan.",
     ),
 )
