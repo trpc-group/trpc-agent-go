@@ -31,18 +31,25 @@ var ModelContextWindows = map[string]int{
 	"o3":         200000,
 	"o4-mini":    200000,
 
+	// OpenAI GPT-5.1
+	"gpt-5.1":           400000,
+	"gpt-5.1-instant":   400000,
+	"gpt-5.1-codex-max": 400000,
+	"gpt-5.1-mini":      400000,
+	"gpt-5.1-nano":      400000,
+
 	// OpenAI GPT-5
 	"gpt-5":      400000,
 	"gpt-5-mini": 400000,
 	"gpt-5-nano": 400000,
 
+	// OpenAI GPT-4.5
+	"gpt-4.5-preview": 128000,
+
 	// OpenAI GPT-4.1
 	"gpt-4.1":      1047576,
 	"gpt-4.1-mini": 1047576,
 	"gpt-4.1-nano": 1047576,
-
-	// OpenAI GPT-4.5
-	"gpt-4.5-preview": 128000,
 
 	// OpenAI GPT-4o
 	"gpt-4o":      128000,
@@ -73,6 +80,14 @@ var ModelContextWindows = map[string]int{
 	"curie":            2049,
 	"davinci":          2049,
 
+	// Anthropic Claude
+	// ref: https://platform.claude.com/docs/en/build-with-claude/context-windows
+
+	// Anthropic Claude 4.5
+	"claude-4.5-opus":   200000,
+	"claude-4.5-sonnet": 200000,
+	"claude-4.5-haiku":  200000,
+
 	// Anthropic Claude 4
 	"claude-4-opus":   200000,
 	"claude-4-sonnet": 200000,
@@ -93,6 +108,10 @@ var ModelContextWindows = map[string]int{
 	"claude-2.1":         200000,
 	"claude-2.0":         100000,
 	"claude-instant-1.2": 100000,
+
+	// Google Gemini 3.0
+	"gemini-3.0-pro":   2097152,
+	"gemini-3.0-flash": 1048576,
 
 	// Google Gemini 2.5
 	"gemini-2.5-pro":   2097152,
@@ -189,6 +208,9 @@ var ModelContextWindows = map[string]int{
 	"hunyuan-t1":           65536,
 	"hunyuan-turbos":       32768,
 	"hunyuan-a13b":         229376,
+
+	//huggingface models
+	"zai-org/glm-4.7": 131072,
 }
 
 // ResolveContextWindow returns the context window size for a given model name.

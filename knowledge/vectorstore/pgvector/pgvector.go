@@ -398,7 +398,9 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 	if !vs.option.enableTSVector &&
 		(query.SearchMode == vectorstore.SearchModeKeyword ||
 			query.SearchMode == vectorstore.SearchModeHybrid) {
-		log.Infof("pgvector: keyword or hybrid search is not supported when enableTSVector is disabled, use filter/vector search instead")
+		log.InfofContext(ctx,
+			"pgvector: keyword or hybrid search is not supported when enableTSVector "+
+				"is disabled, use filter/vector search instead")
 		if len(query.Vector) > 0 {
 			return vs.searchByVector(ctx, query)
 		}
@@ -540,7 +542,9 @@ func (vs *VectorStore) executeSearch(ctx context.Context, query string, args []a
 				id = scoredDoc.Document.ID
 				result.Results = append(result.Results, scoredDoc)
 			}
-			log.Debugf("pgvector search result: score: %v id: %v searchMode: %v, query: %v", score, id, searchMode, query)
+			log.DebugfContext(ctx,
+				"pgvector search result: score: %v id: %v searchMode: %v, query: %v",
+				score, id, searchMode, query)
 		}
 		return nil
 	}, query, args...)
@@ -583,7 +587,7 @@ func (vs *VectorStore) deleteAll(ctx context.Context) error {
 	if _, err := vs.client.ExecContext(ctx, truncateSQL); err != nil {
 		return fmt.Errorf("pgvector delete all documents: %w", err)
 	}
-	log.Infof("pgvector truncated all documents from table %s", vs.option.table)
+	log.InfofContext(ctx, "pgvector truncated all documents from table %s", vs.option.table)
 	return nil
 }
 
@@ -610,7 +614,7 @@ func (vs *VectorStore) deleteByFilter(ctx context.Context, config *vectorstore.D
 	if err != nil {
 		return fmt.Errorf("pgvector get rows affected: %w", err)
 	}
-	log.Infof("pgvector deleted %d documents by filter", rowsAffected)
+	log.InfofContext(ctx, "pgvector deleted %d documents by filter", rowsAffected)
 	return nil
 }
 

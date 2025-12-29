@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -743,7 +742,8 @@ func NewLLMNodeFunc(
 		defer span.End()
 		result, err := runner.execute(ctx, state, span)
 		if err != nil {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return nil, fmt.Errorf("failed to run model: %w", err)
 		}
 		return result, nil
@@ -1034,24 +1034,63 @@ type modelResponseConfig struct {
 
 // processModelResponse processes a single model response.
 func processModelResponse(ctx context.Context, config modelResponseConfig) (context.Context, *event.Event, error) {
-	if config.ModelCallbacks != nil {
-		// Convert response.Error to Go error for callback.
-		var modelErr error
-		if config.Response != nil && config.Response.Error != nil {
-			modelErr = fmt.Errorf("%s: %s", config.Response.Error.Type, config.Response.Error.Message)
-		}
+	var modelErr error
+	if config.Response != nil && config.Response.Error != nil {
+		modelErr = fmt.Errorf(
+			"%s: %s",
+			config.Response.Error.Type,
+			config.Response.Error.Message,
+		)
+	}
 
-		args := &model.AfterModelArgs{
-			Request:  config.Request,
-			Response: config.Response,
-			Error:    modelErr,
+	args := &model.AfterModelArgs{
+		Request:  config.Request,
+		Response: config.Response,
+		Error:    modelErr,
+	}
+
+	pluginOverride := false
+	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
+		invocation != nil && invocation.Plugins != nil {
+		callbacks := invocation.Plugins.ModelCallbacks()
+		if callbacks != nil {
+			result, err := callbacks.RunAfterModel(ctx, args)
+			if err != nil {
+				config.Span.SetAttributes(
+					attribute.String("trpc.go.agent.error", err.Error()),
+				)
+				return ctx, nil, fmt.Errorf(
+					"callback after model error: %w",
+					err,
+				)
+			}
+			if result != nil && result.Context != nil {
+				ctx = result.Context
+			}
+			if result != nil && result.CustomResponse != nil {
+				config.Response = result.CustomResponse
+				args.Response = config.Response
+				pluginOverride = true
+			}
 		}
+	}
+
+	if !pluginOverride && config.ModelCallbacks != nil {
 		result, err := config.ModelCallbacks.RunAfterModel(ctx, args)
 		if err != nil {
-			config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-			return ctx, nil, fmt.Errorf("callback after model error: %w", err)
+			config.Span.RecordError(err)
+			config.Span.SetStatus(codes.Error, err.Error())
+			config.Span.SetAttributes(
+				attribute.String(
+					"trpc.go.agent.error",
+					err.Error(),
+				),
+			)
+			return ctx, nil, fmt.Errorf(
+				"callback after model error: %w",
+				err,
+			)
 		}
-		// Use the context from result if provided for subsequent operations.
 		if result != nil && result.Context != nil {
 			ctx = result.Context
 		}
@@ -1121,11 +1160,39 @@ func runModel(
 		attribute.String("trpc.go.agent.model_name", llmModel.Info().Name),
 	)
 
+	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
+		invocation != nil && invocation.Plugins != nil {
+		callbacks := invocation.Plugins.ModelCallbacks()
+		if callbacks != nil {
+			args := &model.BeforeModelArgs{Request: request}
+			result, err := callbacks.RunBeforeModel(ctx, args)
+			if err != nil {
+				span.SetAttributes(
+					attribute.String("trpc.go.agent.error", err.Error()),
+				)
+				return ctx, nil, fmt.Errorf(
+					"callback before model error: %w",
+					err,
+				)
+			}
+			if result != nil && result.Context != nil {
+				ctx = result.Context
+			}
+			if result != nil && result.CustomResponse != nil {
+				responseChan := make(chan *model.Response, 1)
+				responseChan <- result.CustomResponse
+				close(responseChan)
+				return ctx, responseChan, nil
+			}
+		}
+	}
+
 	if modelCallbacks != nil {
 		args := &model.BeforeModelArgs{Request: request}
 		result, err := modelCallbacks.RunBeforeModel(ctx, args)
 		if err != nil {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return ctx, nil, fmt.Errorf("callback before model error: %w", err)
 		}
 		// Use the context from result if provided.
@@ -1142,7 +1209,8 @@ func runModel(
 	// Generate content.
 	responseChan, err := llmModel.GenerateContent(ctx, request)
 	if err != nil {
-		span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return ctx, nil, fmt.Errorf("failed to generate content: %w", err)
 	}
 	return ctx, responseChan, nil
@@ -1339,7 +1407,8 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			// Emit agent execution error event.
 			endTime := time.Now()
 			emitAgentErrorEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime, err)
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			tracker.SetResponseErrorType(itelemetry.ValueDefaultErrorType)
 			return nil, fmt.Errorf("failed to run agent %s: %w", agentName, err)
 		}
@@ -1455,6 +1524,16 @@ func processAgentEventStream(
 
 // buildAgentInvocationWithStateAndScope builds an invocation for the target agent
 // using a custom runtime state and an optional event filter scope segment.
+//
+// FilterKey Strategy:
+// The FilterKey is built using a stable, deterministic pattern based on the agent
+// hierarchy rather than random UUIDs. This ensures that:
+//  1. Multi-turn conversations work correctly with BranchFilterModePrefix
+//  2. Child agent responses from previous requests are visible in subsequent requests
+//  3. The prefix matching in event.Filter() works as expected across requests
+//
+// Format: parentKey/agentName (without UUID)
+// Example: "input/knowledge" instead of "input/knowledge/random-uuid"
 func buildAgentInvocationWithStateAndScope(
 	ctx context.Context,
 	parentState State,
@@ -1485,14 +1564,12 @@ func buildAgentInvocationWithStateAndScope(
 
 		base := util.If(scope != "", scope, targetAgent.Info().Name)
 		parentKey := parentInvocation.GetEventFilterKey()
+		// Build a stable FilterKey without UUID to ensure multi-turn conversations
 		var filterKey string
 		if parentKey == "" {
-			filterKey = base + agent.EventFilterKeyDelimiter +
-				uuid.NewString()
+			filterKey = base
 		} else {
-			filterKey = parentKey + agent.EventFilterKeyDelimiter +
-				base + agent.EventFilterKeyDelimiter +
-				uuid.NewString()
+			filterKey = parentKey + agent.EventFilterKeyDelimiter + base
 		}
 		inv := parentInvocation.Clone(
 			agent.WithInvocationAgent(targetAgent),
@@ -1510,8 +1587,8 @@ func buildAgentInvocationWithStateAndScope(
 		agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: runtime}),
 		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
 		agent.WithInvocationSession(sessionData),
-		// Unify format with clone branch: <agentName>/<uuid>
-		agent.WithInvocationEventFilterKey(targetAgent.Info().Name+agent.EventFilterKeyDelimiter+uuid.NewString()),
+		// Use stable FilterKey based on agent name only (no UUID).
+		agent.WithInvocationEventFilterKey(targetAgent.Info().Name),
 	)
 	return inv
 }
@@ -1534,57 +1611,127 @@ func runTool(
 	toolCallbacks *tool.Callbacks,
 	t tool.Tool,
 ) (context.Context, any, []byte, error) {
+	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
+
+	decl := t.Declaration()
+
+	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
+		invocation != nil && invocation.Plugins != nil {
+		callbacks := invocation.Plugins.ToolCallbacks()
+		if callbacks != nil {
+			args := &tool.BeforeToolArgs{
+				ToolName:    toolCall.Function.Name,
+				Declaration: decl,
+				Arguments:   toolCall.Function.Arguments,
+			}
+			result, err := callbacks.RunBeforeTool(ctx, args)
+			if err != nil {
+				return ctx, nil, toolCall.Function.Arguments,
+					fmt.Errorf("callback before tool error: %w", err)
+			}
+			if result != nil && result.Context != nil {
+				ctx = result.Context
+			}
+			if result != nil && result.CustomResult != nil {
+				return ctx, result.CustomResult,
+					toolCall.Function.Arguments, nil
+			}
+			if result != nil && result.ModifiedArguments != nil {
+				toolCall.Function.Arguments = result.ModifiedArguments
+			}
+		}
+	}
+
 	if toolCallbacks != nil {
 		args := &tool.BeforeToolArgs{
 			ToolName:    toolCall.Function.Name,
-			Declaration: t.Declaration(),
+			Declaration: decl,
 			Arguments:   toolCall.Function.Arguments,
 		}
 		result, err := toolCallbacks.RunBeforeTool(ctx, args)
 		if err != nil {
-			return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("callback before tool error: %w", err)
+			return ctx, nil, toolCall.Function.Arguments,
+				fmt.Errorf("callback before tool error: %w", err)
 		}
-		// Use the context from result if provided.
 		if result != nil && result.Context != nil {
 			ctx = result.Context
 		}
 		if result != nil && result.CustomResult != nil {
-			return ctx, result.CustomResult, toolCall.Function.Arguments, nil
+			return ctx, result.CustomResult,
+				toolCall.Function.Arguments, nil
 		}
 		if result != nil && result.ModifiedArguments != nil {
 			toolCall.Function.Arguments = result.ModifiedArguments
 		}
 	}
-	if callableTool, ok := t.(tool.CallableTool); ok {
-		result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
-		// Run after tool callbacks if they exist.
-		// If the tool returns an error, the callback function will still execute to allow the user to handle the error.
-		if toolCallbacks != nil {
+
+	callableTool, ok := t.(tool.CallableTool)
+	if !ok {
+		return ctx, nil, toolCall.Function.Arguments,
+			fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
+	}
+
+	result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
+
+	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
+		invocation != nil && invocation.Plugins != nil {
+		callbacks := invocation.Plugins.ToolCallbacks()
+		if callbacks != nil {
 			args := &tool.AfterToolArgs{
 				ToolName:    toolCall.Function.Name,
-				Declaration: t.Declaration(),
+				Declaration: decl,
 				Arguments:   toolCall.Function.Arguments,
 				Result:      result,
 				Error:       err,
 			}
-			afterResult, afterErr := toolCallbacks.RunAfterTool(ctx, args)
+			afterResult, afterErr := callbacks.RunAfterTool(ctx, args)
 			if afterErr != nil {
-				return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("callback after tool error: %w", afterErr)
+				return ctx, nil, toolCall.Function.Arguments,
+					fmt.Errorf("callback after tool error: %w", afterErr)
 			}
-			// Use the context from result if provided for subsequent operations.
 			if afterResult != nil && afterResult.Context != nil {
 				ctx = afterResult.Context
 			}
 			if afterResult != nil && afterResult.CustomResult != nil {
-				return ctx, afterResult.CustomResult, toolCall.Function.Arguments, nil
+				return ctx, afterResult.CustomResult,
+					toolCall.Function.Arguments, nil
 			}
 		}
-		if err != nil {
-			return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
-		}
-		return ctx, result, toolCall.Function.Arguments, nil
 	}
-	return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
+
+	// Run after tool callbacks if they exist.
+	// If the tool returns an error, the callback function will still execute to
+	// allow the user to handle the error.
+	if toolCallbacks != nil {
+		args := &tool.AfterToolArgs{
+			ToolName:    toolCall.Function.Name,
+			Declaration: decl,
+			Arguments:   toolCall.Function.Arguments,
+			Result:      result,
+			Error:       err,
+		}
+		afterResult, afterErr := toolCallbacks.RunAfterTool(ctx, args)
+		if afterErr != nil {
+			return ctx, nil, toolCall.Function.Arguments,
+				fmt.Errorf("callback after tool error: %w", afterErr)
+		}
+		if afterResult != nil && afterResult.Context != nil {
+			ctx = afterResult.Context
+		}
+		if afterResult != nil && afterResult.CustomResult != nil {
+			return ctx, afterResult.CustomResult,
+				toolCall.Function.Arguments, nil
+		}
+	}
+
+	if err != nil {
+		return ctx, nil, toolCall.Function.Arguments, fmt.Errorf(
+			"tool %s call failed: %w",
+			toolCall.Function.Name,
+			err,
+		)
+	}
+	return ctx, result, toolCall.Function.Arguments, nil
 }
 
 // extractModelInput extracts the model input from state and instruction.
@@ -1688,7 +1835,8 @@ const (
 func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (any, error) {
 	ctx, responseChan, err := runModel(ctx, config.ModelCallbacks, config.LLMModel, config.Request)
 	if err != nil {
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		config.Span.RecordError(err)
+		config.Span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("failed to run model: %w", err)
 	}
 	invocation, ok := agent.InvocationFromContext(ctx)
@@ -1999,14 +2147,16 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		if interruptErr != nil {
 			return model.Message{}, interruptErr
 		}
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		config.Span.RecordError(err)
+		config.Span.SetStatus(codes.Error, err.Error())
 		return model.Message{}, fmt.Errorf("tool %s call failed: %w", name, err)
 	}
 
 	// Marshal result to JSON.
 	content, err := json.Marshal(result)
 	if err != nil {
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		config.Span.RecordError(err)
+		config.Span.SetStatus(codes.Error, err.Error())
 		return model.Message{}, fmt.Errorf("failed to marshal tool result: %w", err)
 	}
 

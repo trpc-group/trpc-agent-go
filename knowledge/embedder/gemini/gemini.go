@@ -197,7 +197,7 @@ func (e *Embedder) GetEmbedding(ctx context.Context, text string) ([]float64, er
 	}
 	// Extract embedding from response.
 	if len(response.Embeddings) == 0 || len(response.Embeddings[0].Values) == 0 {
-		log.Warn("received empty embedding response from Gemini API")
+		log.WarnContext(ctx, "received empty embedding response from Gemini API")
 		return []float64{}, nil
 	}
 	embedding := make([]float64, len(response.Embeddings[0].Values))
@@ -220,7 +220,7 @@ func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]fl
 	}
 	// Extract embedding from response.
 	if len(response.Embeddings) == 0 || len(response.Embeddings[0].Values) == 0 {
-		log.Warn("received empty embedding response from Gemini API")
+		log.WarnContext(ctx, "received empty embedding response from Gemini API")
 		return []float64{}, nil, nil
 	}
 	embedding := make([]float64, len(response.Embeddings[0].Values))
