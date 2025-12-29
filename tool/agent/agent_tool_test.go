@@ -1034,6 +1034,90 @@ func TestTool_StreamableCall_NotifiesCompletion(t *testing.T) {
 	require.Contains(t, contents, "done")
 }
 
+func TestTool_StreamableCall_DefersCompletionToRunner(t *testing.T) {
+	const toolCallID = "call-1"
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	appender.Attach(parent, func(_ context.Context, evt *event.Event) error {
+		if evt == nil {
+			return nil
+		}
+		parent.Session.UpdateUserSession(evt)
+		return nil
+	})
+
+	at := NewTool(&completionWaitAgent{name: "waiter"}, WithStreamInner(true))
+
+	toolCtx := agent.NewInvocationContext(ctx, parent)
+	ctxWithToolCallID := context.WithValue(
+		toolCtx,
+		tool.ContextKeyToolCallID{},
+		toolCallID,
+	)
+
+	reader, err := at.StreamableCall(
+		ctxWithToolCallID,
+		[]byte(`{"request":"payload"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	first, err := reader.Recv()
+	require.NoError(t, err)
+	barrierEvt, ok := first.Content.(*event.Event)
+	require.True(t, ok)
+	require.True(t, barrierEvt.RequiresCompletion)
+
+	completionID := agent.GetAppendEventNoticeKey(barrierEvt.ID)
+	noticeCh := parent.AddNoticeChannel(ctx, completionID)
+	select {
+	case <-noticeCh:
+		t.Fatalf("expected completion to be deferred to runner")
+	default:
+	}
+
+	require.Len(t, parent.Session.Events, 0)
+	require.NoError(t, parent.NotifyCompletion(ctx, completionID))
+
+	var contents []string
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		ev, ok := chunk.Content.(*event.Event)
+		require.True(t, ok)
+		require.Nil(t, ev.Error)
+		if ev.Response != nil && len(ev.Response.Choices) > 0 {
+			msg := ev.Response.Choices[0].Message
+			if msg.Content != "" {
+				contents = append(contents, msg.Content)
+			}
+		}
+	}
+	require.Contains(t, contents, "done")
+	require.Len(t, parent.Session.Events, 0)
+}
+
+func TestShouldDeferStreamCompletion_NoSession(t *testing.T) {
+	ctxWithID := context.WithValue(
+		context.Background(),
+		tool.ContextKeyToolCallID{},
+		"call-1",
+	)
+	require.False(t, shouldDeferStreamCompletion(ctxWithID, nil))
+
+	inv := agent.NewInvocation()
+	require.False(t, shouldDeferStreamCompletion(ctxWithID, inv))
+}
+
 func TestTool_wrapWithCompletion_NilInvocation(t *testing.T) {
 	at := NewTool(&mockAgent{name: "wrap", description: "wrap"})
 	src := make(chan *event.Event, 1)

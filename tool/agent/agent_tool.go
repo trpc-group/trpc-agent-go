@@ -265,6 +265,31 @@ func (at *Tool) wrapWithCallSemantics(
 	return out
 }
 
+func (at *Tool) wrapWithStreamSemantics(
+	ctx context.Context,
+	inv *agent.Invocation,
+	src <-chan *event.Event,
+) <-chan *event.Event {
+	if shouldDeferStreamCompletion(ctx, inv) {
+		return src
+	}
+	return at.wrapWithCallSemantics(ctx, inv, src)
+}
+
+func shouldDeferStreamCompletion(
+	ctx context.Context,
+	inv *agent.Invocation,
+) bool {
+	if inv == nil || inv.Session == nil {
+		return false
+	}
+	callID, ok := ctx.Value(tool.ContextKeyToolCallID{}).(string)
+	if !ok || callID == "" {
+		return false
+	}
+	return appender.IsAttached(inv)
+}
+
 func (at *Tool) ensureUserMessageForCall(
 	ctx context.Context,
 	inv *agent.Invocation,
@@ -453,7 +478,7 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 				_ = stream.Writer.Send(tool.StreamChunk{Content: fmt.Sprintf("agent tool run error: %v", err)}, nil)
 				return
 			}
-			wrapped := at.wrapWithCompletion(subCtx, subInv, evCh)
+			wrapped := at.wrapWithStreamSemantics(subCtx, subInv, evCh)
 
 			for ev := range wrapped {
 				if stream.Writer.Send(tool.StreamChunk{Content: ev}, nil) {
