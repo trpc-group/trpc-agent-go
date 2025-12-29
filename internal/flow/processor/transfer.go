@@ -174,16 +174,19 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		targetAgent.Info().Name,
 	)
 	targetCtx := agent.NewInvocationContext(ctx, targetInvocation)
-	var runCtx context.Context = targetCtx
+
+	runCtx := targetCtx
 	if nodeTimeout > 0 {
 		var cancel context.CancelFunc
-		runCtx, cancel = context.WithTimeout(
-			runCtx,
-			nodeTimeout,
-		)
+		runCtx, cancel = context.WithTimeout(runCtx, nodeTimeout)
 		defer cancel()
 	}
-	targetEventChan, err := targetAgent.Run(runCtx, targetInvocation)
+
+	targetEventChan, err := agent.RunWithPlugins(
+		runCtx,
+		targetInvocation,
+		targetAgent,
+	)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,

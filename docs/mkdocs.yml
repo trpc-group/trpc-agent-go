@@ -18,6 +18,7 @@ nav:
       - Runner: runner.md
       - Model: model.md
       - Callbacks: callbacks.md
+      - Plugins: plugin.md
       - Memory: memory.md
       - Artifact: artifact.md
       - Skill: skill.md
@@ -59,6 +60,7 @@ plugins:
                 - Runner: runner.md
                 - Model: model.md
                 - Callbacks: callbacks.md
+                - 插件: plugin.md
                 - Memory: memory.md
                 - Artifact: artifact.md
                 - Skill: skill.md
