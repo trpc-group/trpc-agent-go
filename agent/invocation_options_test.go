@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -241,6 +242,25 @@ func TestGetRuntimeStateValue(t *testing.T) {
 		assert.Equal(t, ctx.RoomID, retrieved.RoomID)
 		assert.Equal(t, ctx.Metadata, retrieved.Metadata)
 	})
+}
+
+func TestWithSpanAttributes(t *testing.T) {
+	opts := &RunOptions{}
+	attrs := []attribute.KeyValue{
+		attribute.String("k1", "v1"),
+		attribute.Int("k2", 2),
+	}
+
+	WithSpanAttributes(attrs...)(opts)
+	require.Len(t, opts.SpanAttributes, 2)
+	expected := attribute.String("k1", "v1")
+	assert.Equal(t, expected, opts.SpanAttributes[0])
+
+	attrs[0] = attribute.String("k1", "mutated")
+	assert.Equal(t, expected, opts.SpanAttributes[0])
+
+	WithSpanAttributes()(opts)
+	assert.Nil(t, opts.SpanAttributes)
 }
 
 func TestWithInvocationTransferInfo(t *testing.T) {

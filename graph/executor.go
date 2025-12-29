@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -208,14 +209,15 @@ func (e *Executor) Execute(
 	if invocation == nil {
 		return nil, errors.New("invocation is nil")
 	}
-	ctx, span := trace.Tracer.Start(ctx, "execute_graph")
-	defer span.End()
 	startTime := time.Now()
 	// Create event channel.
 	eventChan := make(chan *event.Event, e.channelBufferSize)
 	// Start execution in a goroutine.
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
+		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_graph %s", invocation.AgentName)))
+		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: fmt.Sprintf("execute_graph %s", invocation.AgentName), ID: invocation.AgentName})
+		defer span.End()
 		defer func() {
 			if r := recover(); r != nil {
 				stack := debug.Stack()

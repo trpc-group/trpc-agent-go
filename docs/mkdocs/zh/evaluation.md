@@ -1162,10 +1162,11 @@ JSONCriterion 用于对比结构化 JSON 数据，可配置是否忽略比较以
 ```go
 // JSONCriterion 定义 JSON 对象的匹配方式。
 type JSONCriterion struct {
-	Ignore        bool                                                // 是否跳过匹配
-	IgnoreTree    map[string]any                                      // 忽略的字段树，值为 true 时跳过该字段及其子树
-	MatchStrategy JSONMatchStrategy                                   // 匹配策略
-	Compare       func(actual, expected map[string]any) (bool, error) // 自定义比较
+	Ignore          bool                                                // 是否跳过匹配
+	IgnoreTree      map[string]any                                      // 忽略的字段树，值为 true 时跳过该字段及其子树
+	MatchStrategy   JSONMatchStrategy                                   // 匹配策略
+	NumberTolerance *float64                                            // 数值容差，默认 1e-6，对叶子上的数字做近似比较
+	Compare         func(actual, expected map[string]any) (bool, error) // 自定义比较
 }
 ```
 
@@ -1186,6 +1187,7 @@ criterion := &json.JSONCriterion{
 			"updatedAt": true,
 		},
 	},
+	NumberTolerance: 1e-6,
 }
 ```
 
@@ -1204,10 +1206,12 @@ criterion := &json.JSONCriterion{
             "matchStrategy": "exact"
           },
           "arguments": {
-            "matchStrategy": "exact"
+            "matchStrategy": "exact",
+            "numberTolerance": 1e-6,
           },
           "result": {
             "matchStrategy": "exact",
+            "numberTolerance": 1e-6,
             "ignoreTree": {
               "metadata": {
                 "updatedAt": true
