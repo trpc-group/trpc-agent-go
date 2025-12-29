@@ -5,11 +5,9 @@ go 1.24.4
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
 	trpc.group/trpc-go/trpc-agent-go/evaluation => ../evaluation
-	trpc.group/trpc-go/trpc-agent-go/tool/openapi => ../tool/openapi
 )
 
 require (
-	github.com/getkin/kin-openapi v0.133.0
 	github.com/go-openapi/testify/v2 v2.0.2
 	github.com/google/uuid v1.6.0
 	github.com/openai/openai-go v1.12.0
@@ -17,17 +15,12 @@ require (
 	go.opentelemetry.io/otel/metric v1.38.0
 	go.opentelemetry.io/otel/trace v1.38.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5
-	trpc.group/trpc-go/trpc-agent-go v0.8.0
+	trpc.group/trpc-go/trpc-agent-go v0.6.0
 	trpc.group/trpc-go/trpc-agent-go/evaluation v0.8.0
-	trpc.group/trpc-go/trpc-agent-go/tool/openapi v0.0.1
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
 
 require (
-	cloud.google.com/go v0.123.0 // indirect
-	cloud.google.com/go/auth v0.17.0 // indirect
-	cloud.google.com/go/compute/metadata v0.9.0 // indirect
-	github.com/anthropics/anthropic-sdk-go v1.16.0 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect

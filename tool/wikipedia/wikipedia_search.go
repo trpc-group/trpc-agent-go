@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -184,7 +185,7 @@ func createWikipediaSearchTool(wikipediaClient *client.Client, cfg *config) tool
 			}
 			item := wikipediaResultItem{
 				Title:       page.Title,
-				URL:         fmt.Sprintf("https://%s.wikipedia.org/wiki/%s", cfg.language, strings.ReplaceAll(page.Title, " ", "_")),
+				URL:         fmt.Sprintf("https://%s.wikipedia.org/wiki/%s", cfg.language, strings.ReplaceAll(url.PathEscape(page.Title), "%20", "_")),
 				Description: snippetContent,
 				PageID:      page.PageID,
 				WordCount:   page.WordCount,
