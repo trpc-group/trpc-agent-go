@@ -44,3 +44,35 @@ func TestJudgeModelAPIKeyOmittedFromJSON(t *testing.T) {
 	require.NotNil(t, decoded.JudgeModel)
 	assert.Equal(t, "secret", decoded.JudgeModel.APIKey)
 }
+
+func TestJudgeModelEnvExpansion(t *testing.T) {
+	t.Setenv("TEST_JUDGE_API_KEY", "secret")
+	t.Setenv("TEST_JUDGE_BASE_URL", "https://example.com")
+	t.Setenv("TEST_JUDGE_PROVIDER_NAME", "env-provider")
+	t.Setenv("TEST_JUDGE_MODEL_NAME", "env-model")
+
+	var decoded LLMCriterion
+	err := json.Unmarshal([]byte(`{"judgeModel":{"providerName":"${TEST_JUDGE_PROVIDER_NAME}","modelName":"${TEST_JUDGE_MODEL_NAME}","apiKey":"${TEST_JUDGE_API_KEY}","baseURL":"${TEST_JUDGE_BASE_URL}"}}`), &decoded)
+	require.NoError(t, err)
+	require.NotNil(t, decoded.JudgeModel)
+	assert.Equal(t, "env-provider", decoded.JudgeModel.ProviderName)
+	assert.Equal(t, "env-model", decoded.JudgeModel.ModelName)
+	assert.Equal(t, "secret", decoded.JudgeModel.APIKey)
+	assert.Equal(t, "https://example.com", decoded.JudgeModel.BaseURL)
+}
+
+func TestJudgeModelEnvExpansionPartialAPIKey(t *testing.T) {
+	t.Setenv("TEST_JUDGE_API_KEY_PARTIAL", "secret")
+
+	var decoded LLMCriterion
+	err := json.Unmarshal([]byte(`{"judgeModel":{"providerName":"p","modelName":"m","apiKey":"prefix-${TEST_JUDGE_API_KEY_PARTIAL}-suffix"}}`), &decoded)
+	require.NoError(t, err)
+	require.NotNil(t, decoded.JudgeModel)
+	assert.Equal(t, "prefix-secret-suffix", decoded.JudgeModel.APIKey)
+}
+
+func TestJudgeModelUnmarshalJSONFails(t *testing.T) {
+	var opts JudgeModelOptions
+	err := opts.UnmarshalJSON([]byte(`{"providerName":123}`))
+	require.Error(t, err)
+}
