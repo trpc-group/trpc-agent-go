@@ -192,11 +192,8 @@ func (s *sessionSummarizer) recordLastIncludedTimestamp(sess *session.Session, e
 	if sess == nil || len(events) == 0 {
 		return
 	}
-	if sess.State == nil {
-		sess.State = make(session.StateMap)
-	}
 	last := events[len(events)-1].Timestamp.UTC()
-	sess.State[lastIncludedTsKey] = []byte(last.Format(time.RFC3339Nano))
+	sess.SetState(lastIncludedTsKey, []byte(last.Format(time.RFC3339Nano)))
 }
 
 // filterEventsForSummary filters events for summarization, excluding recent events

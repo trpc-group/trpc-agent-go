@@ -32,6 +32,8 @@ var (
 	ErrUserIDRequired = errors.New("userID is required")
 	// ErrSessionIDRequired is the error for session id required.
 	ErrSessionIDRequired = errors.New("sessionID is required")
+	// ErrNilSession is the error for session is nil.
+	ErrNilSession = errors.New("session is nil")
 )
 
 // SummaryFilterKeyAllContents is the filter key representing
@@ -59,6 +61,8 @@ type Session struct {
 	// "appName:userID:sessionID" and remains immutable throughout the session's lifecycle.
 	// This field is computed once during session creation and never modified.
 	Hash int `json:"-"`
+
+	stateMu sync.RWMutex `json:"-"` // stateMu is the read-write mutex for State.
 }
 
 // Clone returns a copy of the session.
@@ -96,13 +100,19 @@ func (sess *Session) Clone() *Session {
 	sess.TracksMu.RUnlock()
 
 	// Copy state.
+	sess.stateMu.RLock()
 	if sess.State != nil {
 		for k, v := range sess.State {
-			copiedValue := make([]byte, len(v))
-			copy(copiedValue, v)
-			copiedSess.State[k] = copiedValue
+			if v == nil {
+				copiedSess.State[k] = nil
+				continue
+			}
+			val := make([]byte, len(v))
+			copy(val, v)
+			copiedSess.State[k] = val
 		}
 	}
+	sess.stateMu.RUnlock()
 
 	// Copy summaries.
 	sess.SummariesMu.RLock()
@@ -142,7 +152,26 @@ func WithSessionSummaries(summaries map[string]*Summary) SessionOptions {
 // WithSessionState is the option for the session state.
 func WithSessionState(state StateMap) SessionOptions {
 	return func(sess *Session) {
-		sess.State = state
+		if sess == nil {
+			return
+		}
+		sess.stateMu.Lock()
+		defer sess.stateMu.Unlock()
+		if state == nil {
+			sess.State = nil
+			return
+		}
+		copied := make(StateMap, len(state))
+		for k, v := range state {
+			if v == nil {
+				copied[k] = nil
+				continue
+			}
+			val := make([]byte, len(v))
+			copy(val, v)
+			copied[k] = val
+		}
+		sess.State = copied
 	}
 }
 
@@ -184,6 +213,74 @@ func NewSession(appName, userID, sessionID string, options ...SessionOptions) *S
 	return sess
 }
 
+// GetState returns a copy of the state value for the given key.
+// The returned slice is copied to avoid callers mutating shared memory.
+func (sess *Session) GetState(key string) ([]byte, bool) {
+	sess.stateMu.RLock()
+	defer sess.stateMu.RUnlock()
+	if sess.State == nil {
+		return nil, false
+	}
+	v, ok := sess.State[key]
+	if !ok {
+		return nil, false
+	}
+	if v == nil {
+		return nil, true
+	}
+	val := make([]byte, len(v))
+	copy(val, v)
+	return val, true
+}
+
+// SetState sets the state value for the given key.
+// The provided slice is copied to avoid retaining caller-owned memory.
+func (sess *Session) SetState(key string, value []byte) {
+	sess.stateMu.Lock()
+	defer sess.stateMu.Unlock()
+	if sess.State == nil {
+		sess.State = make(StateMap)
+	}
+	if value == nil {
+		sess.State[key] = nil
+		return
+	}
+	val := make([]byte, len(value))
+	copy(val, value)
+	sess.State[key] = val
+}
+
+// DeleteState deletes a key from the session state.
+func (sess *Session) DeleteState(key string) {
+	sess.stateMu.Lock()
+	defer sess.stateMu.Unlock()
+	if sess.State == nil {
+		return
+	}
+	delete(sess.State, key)
+}
+
+// SnapshotState returns a deep copy of the current session state.
+// This is safe to iterate without holding locks.
+func (sess *Session) SnapshotState() StateMap {
+	sess.stateMu.RLock()
+	defer sess.stateMu.RUnlock()
+	if sess.State == nil {
+		return nil
+	}
+	out := make(StateMap, len(sess.State))
+	for k, v := range sess.State {
+		if v == nil {
+			out[k] = nil
+			continue
+		}
+		val := make([]byte, len(v))
+		copy(val, v)
+		out[k] = val
+	}
+	return out
+}
+
 // GetEvents returns the session events.
 func (sess *Session) GetEvents() []event.Event {
 	sess.EventMu.RLock()
@@ -210,12 +307,16 @@ func (sess *Session) AppendTrackEvent(event *TrackEvent, opts ...Option) error {
 	if event == nil {
 		return fmt.Errorf("track event is nil")
 	}
+	// Track index is stored in session state; protect it with the state mutex.
+	sess.stateMu.Lock()
 	if sess.State == nil {
 		sess.State = make(StateMap)
 	}
 	if err := ensureTrackExists(sess.State, event.Track); err != nil {
+		sess.stateMu.Unlock()
 		return fmt.Errorf("ensure track indexed: %w", err)
 	}
+	sess.stateMu.Unlock()
 	sess.TracksMu.Lock()
 	defer sess.TracksMu.Unlock()
 	if sess.Tracks == nil {
@@ -295,9 +396,6 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 	}
 
 	sess.UpdatedAt = time.Now()
-	if sess.State == nil {
-		sess.State = make(StateMap)
-	}
 	sess.ApplyEventStateDelta(event)
 }
 
@@ -357,11 +455,20 @@ func (sess *Session) ApplyEventStateDelta(e *event.Event) {
 		log.Info("session or event is nil")
 		return
 	}
+	sess.stateMu.Lock()
+	defer sess.stateMu.Unlock()
 	if sess.State == nil {
 		sess.State = make(StateMap)
 	}
 	for key, value := range e.StateDelta {
-		sess.State[key] = value
+		// Copy to avoid retaining caller-owned memory.
+		if value == nil {
+			sess.State[key] = nil
+			continue
+		}
+		val := make([]byte, len(value))
+		copy(val, value)
+		sess.State[key] = val
 	}
 }
 
@@ -373,7 +480,14 @@ func ApplyEventStateDeltaMap(state StateMap, e *event.Event) {
 	}
 
 	for key, value := range e.StateDelta {
-		state[key] = value
+		// Copy to avoid retaining caller-owned memory.
+		if value == nil {
+			state[key] = nil
+			continue
+		}
+		val := make([]byte, len(value))
+		copy(val, value)
+		state[key] = val
 	}
 }
 
