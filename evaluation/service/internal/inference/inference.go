@@ -7,6 +7,7 @@
 //
 //
 
+// Package inference runs agent sessions to generate invocations for evaluation.
 package inference
 
 import (

@@ -48,6 +48,12 @@ func TestEpochTimeUnmarshalJSON(t *testing.T) {
 	assert.WithinDuration(t, expected, timestamp.Time, time.Microsecond)
 }
 
+func TestEpochTimeUnmarshalJSONError(t *testing.T) {
+	var timestamp EpochTime
+	err := timestamp.UnmarshalJSON([]byte(`"bad"`))
+	assert.Error(t, err)
+}
+
 func TestEpochTimeUnmarshalJSONInvalid(t *testing.T) {
 	var timestamp EpochTime
 	err := timestamp.UnmarshalJSON([]byte(`"invalid"`))

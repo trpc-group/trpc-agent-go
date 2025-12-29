@@ -17,8 +17,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -79,6 +81,78 @@ func TestLocalManagerStoreValidation(t *testing.T) {
 	mgr := New(evalresult.WithBaseDir(dir)).(*manager)
 
 	err := mgr.store("app", nil)
+	assert.Error(t, err)
+}
+
+func TestLocalManagerLegacyLoad(t *testing.T) {
+	dir := t.TempDir()
+	mgr := New(evalresult.WithBaseDir(dir)).(*manager)
+	id := "legacy-id"
+	legacyResult := &evalresult.EvalSetResult{
+		EvalSetID:       "set",
+		EvalSetResultID: id,
+	}
+	payload, err := json.Marshal(legacyResult)
+	require.NoError(t, err)
+	legacyWrapper, err := json.Marshal(string(payload))
+	require.NoError(t, err)
+
+	path := mgr.evalSetResultPath("app", id)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, legacyWrapper, 0o644))
+
+	loaded, err := mgr.Get(context.Background(), "app", id)
+	require.NoError(t, err)
+	assert.Equal(t, id, loaded.EvalSetResultID)
+	assert.Equal(t, "set", loaded.EvalSetID)
+}
+
+func TestLocalManagerSaveUsesProvidedID(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	mgr := New(evalresult.WithBaseDir(dir)).(*manager)
+	provided := &evalresult.EvalSetResult{
+		EvalSetID:         "set",
+		EvalSetResultID:   "custom-id",
+		EvalSetResultName: "provided-name",
+		CreationTimestamp: &epochtime.EpochTime{Time: time.Now()},
+	}
+	id, err := mgr.Save(ctx, "app", provided)
+	require.NoError(t, err)
+	assert.Equal(t, "custom-id", id)
+
+	loaded, err := mgr.Get(ctx, "app", "custom-id")
+	require.NoError(t, err)
+	assert.Equal(t, "provided-name", loaded.EvalSetResultName)
+}
+
+func TestLocalManagerGetInvalidContent(t *testing.T) {
+	dir := t.TempDir()
+	mgr := New(evalresult.WithBaseDir(dir)).(*manager)
+	path := mgr.evalSetResultPath("app", "bad")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("{bad json"), 0o644))
+
+	_, err := mgr.Get(context.Background(), "app", "bad")
+	assert.Error(t, err)
+}
+
+type failingLocator struct{}
+
+func (f failingLocator) Build(baseDir, appName, evalSetResultID string) string {
+	return filepath.Join(baseDir, appName, evalSetResultID+".json")
+}
+
+func (f failingLocator) List(baseDir, appName string) ([]string, error) {
+	return nil, assert.AnError
+}
+
+func TestLocalManagerListLocatorError(t *testing.T) {
+	dir := t.TempDir()
+	mgr := New(evalresult.WithBaseDir(dir)).(*manager)
+	mgr.locator = failingLocator{}
+
+	_, err := mgr.List(context.Background(), "app")
 	assert.Error(t, err)
 }
 
