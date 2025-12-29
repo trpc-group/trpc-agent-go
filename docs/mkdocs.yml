@@ -11,6 +11,7 @@ nav:
       - Agent:
           - Agent: agent.md
           - Multi Agent: multiagent.md
+          - Team: team.md
           - Graph Agent: graph.md
           - Custom Agent: custom-agent.md
           - Dify Agent: dify.md
@@ -52,6 +53,7 @@ plugins:
                 - Agent:
                     - Agent: agent.md
                     - Multi Agent: multiagent.md
+                    - Team: team.md
                     - Graph Agent: graph.md
                     - 自定义 Agent: custom-agent.md
                     - Dify Agent: dify.md
