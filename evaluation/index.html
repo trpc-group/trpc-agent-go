@@ -1298,6 +1298,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#llmcriterion" class="md-nav__link">
+    <span class="md-ellipsis">
+      LLMCriterion
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1317,6 +1326,33 @@
   <a href="#tool-trajectory-evaluator" class="md-nav__link">
     <span class="md-ellipsis">
       Tool Trajectory Evaluator
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#llm-final-response-evaluator" class="md-nav__link">
+    <span class="md-ellipsis">
+      LLM Final Response Evaluator
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#llm-rubric-response-evaluator" class="md-nav__link">
+    <span class="md-ellipsis">
+      LLM Rubric Response Evaluator
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#llm-rubric-knowledge-recall-evaluator" class="md-nav__link">
+    <span class="md-ellipsis">
+      LLM Rubric Knowledge Recall Evaluator
     </span>
   </a>
   
@@ -1811,6 +1847,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#llmcriterion" class="md-nav__link">
+    <span class="md-ellipsis">
+      LLMCriterion
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1830,6 +1875,33 @@
   <a href="#tool-trajectory-evaluator" class="md-nav__link">
     <span class="md-ellipsis">
       Tool Trajectory Evaluator
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#llm-final-response-evaluator" class="md-nav__link">
+    <span class="md-ellipsis">
+      LLM Final Response Evaluator
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#llm-rubric-response-evaluator" class="md-nav__link">
+    <span class="md-ellipsis">
+      LLM Rubric Response Evaluator
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#llm-rubric-knowledge-recall-evaluator" class="md-nav__link">
+    <span class="md-ellipsis">
+      LLM Rubric Knowledge Recall Evaluator
     </span>
   </a>
   
@@ -2792,22 +2864,26 @@
 <span class="normal"><a href="#__codelineno-9-13">13</a></span>
 <span class="normal"><a href="#__codelineno-9-14">14</a></span>
 <span class="normal"><a href="#__codelineno-9-15">15</a></span>
-<span class="normal"><a href="#__codelineno-9-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-9-16">16</a></span>
+<span class="normal"><a href="#__codelineno-9-17">17</a></span>
+<span class="normal"><a href="#__codelineno-9-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion&quot;</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory&quot;</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="p">)</span>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="c1">// EvalMetric represents a single metric used to evaluate an EvalCase.</span>
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EvalMetric</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span><span class="w">               </span><span class="c1">// Metric name.</span>
-</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">    </span><span class="nx">Threshold</span><span class="w">  </span><span class="kt">float64</span><span class="w">              </span><span class="c1">// Score threshold.</span>
-</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="w">    </span><span class="nx">Criterion</span><span class="w">  </span><span class="o">*</span><span class="nx">criterion</span><span class="p">.</span><span class="nx">Criterion</span><span class="w"> </span><span class="c1">// Evaluation criterion.</span>
-</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="p">}</span>
-</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a>
-</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="c1">// Criterion aggregates various evaluation criteria.</span>
-</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Criterion</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a><span class="w">    </span><span class="nx">ToolTrajectory</span><span class="w"> </span><span class="o">*</span><span class="nx">tooltrajectory</span><span class="p">.</span><span class="nx">ToolTrajectoryCriterion</span><span class="w"> </span><span class="c1">// Tool trajectory evaluation criterion.</span>
-</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a><span class="p">}</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm&quot;</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory&quot;</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a><span class="p">)</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="c1">// EvalMetric represents a single metric used to evaluate an EvalCase.</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EvalMetric</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span><span class="w">               </span><span class="c1">// Metric name.</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="w">    </span><span class="nx">Threshold</span><span class="w">  </span><span class="kt">float64</span><span class="w">              </span><span class="c1">// Score threshold.</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="w">    </span><span class="nx">Criterion</span><span class="w">  </span><span class="o">*</span><span class="nx">criterion</span><span class="p">.</span><span class="nx">Criterion</span><span class="w"> </span><span class="c1">// Evaluation criterion.</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="p">}</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="c1">// Criterion aggregates various evaluation criteria.</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Criterion</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a><span class="w">    </span><span class="nx">ToolTrajectory</span><span class="w"> </span><span class="o">*</span><span class="nx">tooltrajectory</span><span class="p">.</span><span class="nx">ToolTrajectoryCriterion</span><span class="w"> </span><span class="c1">// Tool trajectory evaluation criterion.</span>
+</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17"></a><span class="w">    </span><span class="nx">LLMJudge</span><span class="w">       </span><span class="o">*</span><span class="nx">llm</span><span class="p">.</span><span class="nx">LLMCriterion</span><span class="w">                       </span><span class="c1">// LLM evaluation criterion.</span>
+</span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>The Metric Manager is responsible for managing evaluation metrics.</p>
 <p>Each EvalSet can have multiple evaluation metrics, identified by <code>MetricName</code>.</p>
@@ -2893,37 +2969,55 @@
 <span class="normal"><a href="#__codelineno-11-28">28</a></span>
 <span class="normal"><a href="#__codelineno-11-29">29</a></span>
 <span class="normal"><a href="#__codelineno-11-30">30</a></span>
-<span class="normal"><a href="#__codelineno-11-31">31</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset&quot;</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/status&quot;</span>
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="p">)</span>
-</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a>
-</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a><span class="c1">// Evaluator defines the general interface for evaluators.</span>
-</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Evaluator</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9"></a><span class="w">    </span><span class="c1">// Name returns the evaluator name.</span>
-</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10"></a><span class="w">    </span><span class="nx">Name</span><span class="p">()</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11"></a><span class="w">    </span><span class="c1">// Description returns the evaluator description.</span>
-</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12"></a><span class="w">    </span><span class="nx">Description</span><span class="p">()</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13"></a><span class="w">    </span><span class="c1">// Evaluate executes the evaluation logic, compares the actual and expected sessions, and returns the result.</span>
-</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14"></a><span class="w">    </span><span class="nx">Evaluate</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">actuals</span><span class="p">,</span><span class="w"> </span><span class="nx">expecteds</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
-</span><span id="__span-11-15"><a id="__codelineno-11-15" name="__codelineno-11-15"></a><span class="w">        </span><span class="nx">evalMetric</span><span class="w"> </span><span class="o">*</span><span class="nx">metric</span><span class="p">.</span><span class="nx">EvalMetric</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">EvaluateResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</span><span id="__span-11-16"><a id="__codelineno-11-16" name="__codelineno-11-16"></a><span class="p">}</span>
-</span><span id="__span-11-17"><a id="__codelineno-11-17" name="__codelineno-11-17"></a>
-</span><span id="__span-11-18"><a id="__codelineno-11-18" name="__codelineno-11-18"></a><span class="c1">// EvaluateResult represents the aggregated results of the evaluator across multiple sessions.</span>
-</span><span id="__span-11-19"><a id="__codelineno-11-19" name="__codelineno-11-19"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EvaluateResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-11-20"><a id="__codelineno-11-20" name="__codelineno-11-20"></a><span class="w">    </span><span class="nx">OverallScore</span><span class="w">         </span><span class="kt">float64</span><span class="w">               </span><span class="c1">// Overall score.</span>
-</span><span id="__span-11-21"><a id="__codelineno-11-21" name="__codelineno-11-21"></a><span class="w">    </span><span class="nx">OverallStatus</span><span class="w">        </span><span class="nx">status</span><span class="p">.</span><span class="nx">EvalStatus</span><span class="w">     </span><span class="c1">// Overall status, categorized as passed/failed/not evaluated.</span>
-</span><span id="__span-11-22"><a id="__codelineno-11-22" name="__codelineno-11-22"></a><span class="w">    </span><span class="nx">PerInvocationResults</span><span class="w"> </span><span class="p">[]</span><span class="nx">PerInvocationResult</span><span class="w"> </span><span class="c1">// Evaluation results for a single session.</span>
-</span><span id="__span-11-23"><a id="__codelineno-11-23" name="__codelineno-11-23"></a><span class="p">}</span>
-</span><span id="__span-11-24"><a id="__codelineno-11-24" name="__codelineno-11-24"></a>
-</span><span id="__span-11-25"><a id="__codelineno-11-25" name="__codelineno-11-25"></a><span class="c1">// PerInvocationResult represents the evaluation results for a single session.</span>
-</span><span id="__span-11-26"><a id="__codelineno-11-26" name="__codelineno-11-26"></a><span class="kd">type</span><span class="w"> </span><span class="nx">PerInvocationResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-11-27"><a id="__codelineno-11-27" name="__codelineno-11-27"></a><span class="w">    </span><span class="nx">ActualInvocation</span><span class="w">   </span><span class="o">*</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">Invocation</span><span class="w"> </span><span class="c1">// Actual session.</span>
-</span><span id="__span-11-28"><a id="__codelineno-11-28" name="__codelineno-11-28"></a><span class="w">    </span><span class="nx">ExpectedInvocation</span><span class="w"> </span><span class="o">*</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">Invocation</span><span class="w"> </span><span class="c1">// Expected session.</span>
-</span><span id="__span-11-29"><a id="__codelineno-11-29" name="__codelineno-11-29"></a><span class="w">    </span><span class="nx">Score</span><span class="w">              </span><span class="kt">float64</span><span class="w">             </span><span class="c1">// Current session score.</span>
-</span><span id="__span-11-30"><a id="__codelineno-11-30" name="__codelineno-11-30"></a><span class="w">    </span><span class="nx">Status</span><span class="w">             </span><span class="nx">status</span><span class="p">.</span><span class="nx">EvalStatus</span><span class="w">   </span><span class="c1">// Current session status.</span>
-</span><span id="__span-11-31"><a id="__codelineno-11-31" name="__codelineno-11-31"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-11-31">31</a></span>
+<span class="normal"><a href="#__codelineno-11-32">32</a></span>
+<span class="normal"><a href="#__codelineno-11-33">33</a></span>
+<span class="normal"><a href="#__codelineno-11-34">34</a></span>
+<span class="normal"><a href="#__codelineno-11-35">35</a></span>
+<span class="normal"><a href="#__codelineno-11-36">36</a></span>
+<span class="normal"><a href="#__codelineno-11-37">37</a></span>
+<span class="normal"><a href="#__codelineno-11-38">38</a></span>
+<span class="normal"><a href="#__codelineno-11-39">39</a></span>
+<span class="normal"><a href="#__codelineno-11-40">40</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult&quot;</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset&quot;</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/status&quot;</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a><span class="p">)</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="c1">// Evaluator defines the general interface for evaluators.</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Evaluator</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10"></a><span class="w">    </span><span class="c1">// Name returns the evaluator name.</span>
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11"></a><span class="w">    </span><span class="nx">Name</span><span class="p">()</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12"></a><span class="w">    </span><span class="c1">// Description returns the evaluator description.</span>
+</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13"></a><span class="w">    </span><span class="nx">Description</span><span class="p">()</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14"></a><span class="w">    </span><span class="c1">// Evaluate executes the evaluation logic, compares the actual and expected sessions, and returns the result.</span>
+</span><span id="__span-11-15"><a id="__codelineno-11-15" name="__codelineno-11-15"></a><span class="w">    </span><span class="nx">Evaluate</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">actuals</span><span class="p">,</span><span class="w"> </span><span class="nx">expecteds</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
+</span><span id="__span-11-16"><a id="__codelineno-11-16" name="__codelineno-11-16"></a><span class="w">        </span><span class="nx">evalMetric</span><span class="w"> </span><span class="o">*</span><span class="nx">metric</span><span class="p">.</span><span class="nx">EvalMetric</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">EvaluateResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-11-17"><a id="__codelineno-11-17" name="__codelineno-11-17"></a><span class="p">}</span>
+</span><span id="__span-11-18"><a id="__codelineno-11-18" name="__codelineno-11-18"></a>
+</span><span id="__span-11-19"><a id="__codelineno-11-19" name="__codelineno-11-19"></a><span class="c1">// EvaluateResult represents the aggregated results of the evaluator across multiple sessions.</span>
+</span><span id="__span-11-20"><a id="__codelineno-11-20" name="__codelineno-11-20"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EvaluateResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-21"><a id="__codelineno-11-21" name="__codelineno-11-21"></a><span class="w">    </span><span class="nx">OverallScore</span><span class="w">         </span><span class="kt">float64</span><span class="w">                </span><span class="c1">// Overall score.</span>
+</span><span id="__span-11-22"><a id="__codelineno-11-22" name="__codelineno-11-22"></a><span class="w">    </span><span class="nx">OverallStatus</span><span class="w">        </span><span class="nx">status</span><span class="p">.</span><span class="nx">EvalStatus</span><span class="w">      </span><span class="c1">// Overall status, categorized as passed/failed/not evaluated.</span>
+</span><span id="__span-11-23"><a id="__codelineno-11-23" name="__codelineno-11-23"></a><span class="w">    </span><span class="nx">PerInvocationResults</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">PerInvocationResult</span><span class="w"> </span><span class="c1">// Evaluation results for a single session.</span>
+</span><span id="__span-11-24"><a id="__codelineno-11-24" name="__codelineno-11-24"></a><span class="p">}</span>
+</span><span id="__span-11-25"><a id="__codelineno-11-25" name="__codelineno-11-25"></a>
+</span><span id="__span-11-26"><a id="__codelineno-11-26" name="__codelineno-11-26"></a><span class="c1">// PerInvocationResult represents the evaluation results for a single session.</span>
+</span><span id="__span-11-27"><a id="__codelineno-11-27" name="__codelineno-11-27"></a><span class="kd">type</span><span class="w"> </span><span class="nx">PerInvocationResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-28"><a id="__codelineno-11-28" name="__codelineno-11-28"></a><span class="w">    </span><span class="nx">ActualInvocation</span><span class="w">   </span><span class="o">*</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">Invocation</span><span class="w">   </span><span class="c1">// Actual session.</span>
+</span><span id="__span-11-29"><a id="__codelineno-11-29" name="__codelineno-11-29"></a><span class="w">    </span><span class="nx">ExpectedInvocation</span><span class="w"> </span><span class="o">*</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">Invocation</span><span class="w">   </span><span class="c1">// Expected session.</span>
+</span><span id="__span-11-30"><a id="__codelineno-11-30" name="__codelineno-11-30"></a><span class="w">    </span><span class="nx">Score</span><span class="w">              </span><span class="kt">float64</span><span class="w">               </span><span class="c1">// Current session score.</span>
+</span><span id="__span-11-31"><a id="__codelineno-11-31" name="__codelineno-11-31"></a><span class="w">    </span><span class="nx">Status</span><span class="w">             </span><span class="nx">status</span><span class="p">.</span><span class="nx">EvalStatus</span><span class="w">     </span><span class="c1">// Current session status.</span>
+</span><span id="__span-11-32"><a id="__codelineno-11-32" name="__codelineno-11-32"></a><span class="w">    </span><span class="nx">Details</span><span class="w">            </span><span class="o">*</span><span class="nx">PerInvocationDetails</span><span class="w"> </span><span class="c1">// Additional information such as reason and score.</span>
+</span><span id="__span-11-33"><a id="__codelineno-11-33" name="__codelineno-11-33"></a><span class="p">}</span>
+</span><span id="__span-11-34"><a id="__codelineno-11-34" name="__codelineno-11-34"></a>
+</span><span id="__span-11-35"><a id="__codelineno-11-35" name="__codelineno-11-35"></a><span class="c1">// PerInvocationDetails represents additional information for a single evaluation round.</span>
+</span><span id="__span-11-36"><a id="__codelineno-11-36" name="__codelineno-11-36"></a><span class="kd">type</span><span class="w"> </span><span class="nx">PerInvocationDetails</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-37"><a id="__codelineno-11-37" name="__codelineno-11-37"></a><span class="w">    </span><span class="nx">Reason</span><span class="w">       </span><span class="kt">string</span><span class="w">                    </span><span class="c1">// Scoring reason.</span>
+</span><span id="__span-11-38"><a id="__codelineno-11-38" name="__codelineno-11-38"></a><span class="w">    </span><span class="nx">Score</span><span class="w">        </span><span class="kt">float64</span><span class="w">                   </span><span class="c1">// Evaluation score.</span>
+</span><span id="__span-11-39"><a id="__codelineno-11-39" name="__codelineno-11-39"></a><span class="w">    </span><span class="nx">RubricScores</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">evalresult</span><span class="p">.</span><span class="nx">RubricScore</span><span class="w"> </span><span class="c1">// Results of each rubric item.</span>
+</span><span id="__span-11-40"><a id="__codelineno-11-40" name="__codelineno-11-40"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="registry">Registry</h3>
 <p>Registry is used to centrally manage and access various evaluators.</p>
@@ -2952,15 +3046,10 @@
 </span></code></pre></div></td></tr></table></div>
 <p>The framework registers the following evaluators by default:</p>
 <ul>
-<li><code>tool_trajectory_avg_score</code> tool trajectory consistency evaluator.<ul>
-<li>For a single session:<ul>
-<li>If the actual tool call sequence is exactly the same as the expected one, a score of 1 is assigned;</li>
-<li>If not, a score of 0 is assigned.</li>
-</ul>
-</li>
-</ul>
-</li>
-<li>For multiple sessions: The final score is calculated by averaging the scores from each session.</li>
+<li><code>tool_trajectory_avg_score</code> tool trajectory consistency evaluator, requires expected outputs.</li>
+<li><code>llm_final_response</code> LLM final response evaluator, requires expected outputs.</li>
+<li><code>llm_rubric_response</code> LLM rubric response evaluator, requires EvalSet to provide conversation input and configure LLMJudge/rubrics.</li>
+<li><code>llm_rubric_knowledge_recall</code> LLM rubric knowledge recall evaluator, requires EvalSet to provide conversation input and configure LLMJudge/rubrics.</li>
 </ul>
 <h3 id="evalresult">EvalResult</h3>
 <p>The EvalResult module is used to record and manage evaluation result data.</p>
@@ -3024,20 +3113,62 @@ EvalCaseResult represents the evaluation result of a single evaluation case, inc
 <span class="normal"><a href="#__codelineno-15-11">11</a></span>
 <span class="normal"><a href="#__codelineno-15-12">12</a></span>
 <span class="normal"><a href="#__codelineno-15-13">13</a></span>
-<span class="normal"><a href="#__codelineno-15-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-15-14">14</a></span>
+<span class="normal"><a href="#__codelineno-15-15">15</a></span>
+<span class="normal"><a href="#__codelineno-15-16">16</a></span>
+<span class="normal"><a href="#__codelineno-15-17">17</a></span>
+<span class="normal"><a href="#__codelineno-15-18">18</a></span>
+<span class="normal"><a href="#__codelineno-15-19">19</a></span>
+<span class="normal"><a href="#__codelineno-15-20">20</a></span>
+<span class="normal"><a href="#__codelineno-15-21">21</a></span>
+<span class="normal"><a href="#__codelineno-15-22">22</a></span>
+<span class="normal"><a href="#__codelineno-15-23">23</a></span>
+<span class="normal"><a href="#__codelineno-15-24">24</a></span>
+<span class="normal"><a href="#__codelineno-15-25">25</a></span>
+<span class="normal"><a href="#__codelineno-15-26">26</a></span>
+<span class="normal"><a href="#__codelineno-15-27">27</a></span>
+<span class="normal"><a href="#__codelineno-15-28">28</a></span>
+<span class="normal"><a href="#__codelineno-15-29">29</a></span>
+<span class="normal"><a href="#__codelineno-15-30">30</a></span>
+<span class="normal"><a href="#__codelineno-15-31">31</a></span>
+<span class="normal"><a href="#__codelineno-15-32">32</a></span>
+<span class="normal"><a href="#__codelineno-15-33">33</a></span>
+<span class="normal"><a href="#__codelineno-15-34">34</a></span>
+<span class="normal"><a href="#__codelineno-15-35">35</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion&quot;</span>
 </span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/status&quot;</span>
 </span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a><span class="p">)</span>
 </span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5"></a>
 </span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6"></a><span class="c1">// EvalMetricResult represents the evaluation result of a single metric.</span>
 </span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EvalMetricResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span><span class="w">               </span><span class="c1">// Metric name.</span>
-</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9"></a><span class="w">    </span><span class="nx">Score</span><span class="w">      </span><span class="kt">float64</span><span class="w">              </span><span class="c1">// Actual score.</span>
-</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10"></a><span class="w">    </span><span class="nx">EvalStatus</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">EvalStatus</span><span class="w">    </span><span class="c1">// Evaluation status.</span>
-</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11"></a><span class="w">    </span><span class="nx">Threshold</span><span class="w">  </span><span class="kt">float64</span><span class="w">              </span><span class="c1">// Score threshold.</span>
-</span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12"></a><span class="w">    </span><span class="nx">Criterion</span><span class="w">  </span><span class="o">*</span><span class="nx">criterion</span><span class="p">.</span><span class="nx">Criterion</span><span class="w"> </span><span class="c1">// Evaluation criterion.</span>
-</span><span id="__span-15-13"><a id="__codelineno-15-13" name="__codelineno-15-13"></a><span class="w">    </span><span class="nx">Details</span><span class="w">    </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w">       </span><span class="c1">// Additional information, such as scoring process, error description, etc.</span>
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span><span class="w">                   </span><span class="c1">// Metric name.</span>
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9"></a><span class="w">    </span><span class="nx">Score</span><span class="w">      </span><span class="kt">float64</span><span class="w">                  </span><span class="c1">// Actual score.</span>
+</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10"></a><span class="w">    </span><span class="nx">EvalStatus</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">EvalStatus</span><span class="w">        </span><span class="c1">// Evaluation status.</span>
+</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11"></a><span class="w">    </span><span class="nx">Threshold</span><span class="w">  </span><span class="kt">float64</span><span class="w">                  </span><span class="c1">// Score threshold.</span>
+</span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12"></a><span class="w">    </span><span class="nx">Criterion</span><span class="w">  </span><span class="o">*</span><span class="nx">criterion</span><span class="p">.</span><span class="nx">Criterion</span><span class="w">     </span><span class="c1">// Evaluation criterion.</span>
+</span><span id="__span-15-13"><a id="__codelineno-15-13" name="__codelineno-15-13"></a><span class="w">    </span><span class="nx">Details</span><span class="w">    </span><span class="o">*</span><span class="nx">EvalMetricResultDetails</span><span class="w"> </span><span class="c1">// Additional information, such as scoring process, error description, etc.</span>
 </span><span id="__span-15-14"><a id="__codelineno-15-14" name="__codelineno-15-14"></a><span class="p">}</span>
+</span><span id="__span-15-15"><a id="__codelineno-15-15" name="__codelineno-15-15"></a>
+</span><span id="__span-15-16"><a id="__codelineno-15-16" name="__codelineno-15-16"></a><span class="c1">// EvalMetricResultDetails represents additional information for metric evaluation.</span>
+</span><span id="__span-15-17"><a id="__codelineno-15-17" name="__codelineno-15-17"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EvalMetricResultDetails</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-15-18"><a id="__codelineno-15-18" name="__codelineno-15-18"></a><span class="w">    </span><span class="nx">Reason</span><span class="w">       </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Scoring reason.</span>
+</span><span id="__span-15-19"><a id="__codelineno-15-19" name="__codelineno-15-19"></a><span class="w">    </span><span class="nx">Score</span><span class="w">        </span><span class="kt">float64</span><span class="w">        </span><span class="c1">// Evaluation score.</span>
+</span><span id="__span-15-20"><a id="__codelineno-15-20" name="__codelineno-15-20"></a><span class="w">    </span><span class="nx">RubricScores</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">RubricScore</span><span class="w"> </span><span class="c1">// Results of each rubric item.</span>
+</span><span id="__span-15-21"><a id="__codelineno-15-21" name="__codelineno-15-21"></a><span class="p">}</span>
+</span><span id="__span-15-22"><a id="__codelineno-15-22" name="__codelineno-15-22"></a>
+</span><span id="__span-15-23"><a id="__codelineno-15-23" name="__codelineno-15-23"></a><span class="c1">// RubricScore represents the result of a single rubric item.</span>
+</span><span id="__span-15-24"><a id="__codelineno-15-24" name="__codelineno-15-24"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RubricScore</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-15-25"><a id="__codelineno-15-25" name="__codelineno-15-25"></a><span class="w">    </span><span class="nx">ID</span><span class="w">     </span><span class="kt">string</span><span class="w">  </span><span class="c1">// Rubric ID.</span>
+</span><span id="__span-15-26"><a id="__codelineno-15-26" name="__codelineno-15-26"></a><span class="w">    </span><span class="nx">Reason</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="c1">// Scoring reason.</span>
+</span><span id="__span-15-27"><a id="__codelineno-15-27" name="__codelineno-15-27"></a><span class="w">    </span><span class="nx">Score</span><span class="w">  </span><span class="kt">float64</span><span class="w"> </span><span class="c1">// Evaluation score.</span>
+</span><span id="__span-15-28"><a id="__codelineno-15-28" name="__codelineno-15-28"></a><span class="p">}</span>
+</span><span id="__span-15-29"><a id="__codelineno-15-29" name="__codelineno-15-29"></a>
+</span><span id="__span-15-30"><a id="__codelineno-15-30" name="__codelineno-15-30"></a><span class="c1">// ScoreResult represents the scoring result of a single metric.</span>
+</span><span id="__span-15-31"><a id="__codelineno-15-31" name="__codelineno-15-31"></a><span class="kd">type</span><span class="w"> </span><span class="nx">ScoreResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-15-32"><a id="__codelineno-15-32" name="__codelineno-15-32"></a><span class="w">    </span><span class="nx">Reason</span><span class="w">       </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Scoring reason.</span>
+</span><span id="__span-15-33"><a id="__codelineno-15-33" name="__codelineno-15-33"></a><span class="w">    </span><span class="nx">Score</span><span class="w">        </span><span class="kt">float64</span><span class="w">        </span><span class="c1">// Evaluation score.</span>
+</span><span id="__span-15-34"><a id="__codelineno-15-34" name="__codelineno-15-34"></a><span class="w">    </span><span class="nx">RubricScores</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">RubricScore</span><span class="w"> </span><span class="c1">// Results of each rubric item.</span>
+</span><span id="__span-15-35"><a id="__codelineno-15-35" name="__codelineno-15-35"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>EvalMetricResultPerInvocation represents the metric-by-metric evaluation result of a single conversation turn, used to analyze the performance differences of a specific conversation under different metrics.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1">1</a></span>
@@ -3593,6 +3724,10 @@ EvalCaseResult represents the evaluation result of a single evaluation case, inc
 <td>Tool invocation trajectory</td>
 </tr>
 <tr>
+<td>LLMCriterion</td>
+<td>Evaluation based on an LLM judge model</td>
+</tr>
+<tr>
 <td>Criterion</td>
 <td>Aggregation of multiple criteria</td>
 </tr>
@@ -4057,16 +4192,8 @@ EvalCaseResult represents the evaluation result of a single evaluation case, inc
 </tr>
 </tbody>
 </table>
-<h3 id="evaluator_1">Evaluator</h3>
-<h4 id="tool-trajectory-evaluator">Tool Trajectory Evaluator</h4>
-<p>The metric name corresponding to the tool trajectory evaluator is <code>tool_trajectory_avg_score</code>. It is used to evaluate whether the Agent’s use of tools across multiple conversations conforms to expectations.</p>
-<p>In a single conversation, the evaluator compares the actual tool invocation trajectory with the expected trajectory using <code>ToolTrajectoryCriterion</code>:</p>
-<ul>
-<li>If the entire tool invocation trajectory satisfies the evaluation criterion, the score of this conversation on this metric is 1.</li>
-<li>If any step of the invocation does not satisfy the evaluation criterion, the score of this conversation on this metric is 0.</li>
-</ul>
-<p>In the scenario of multiple conversations, the evaluator takes the average of the scores of all conversations on this metric as the final <code>tool_trajectory_avg_score</code>, and compares it with <code>EvalMetric.Threshold</code> to determine whether the result is pass or fail.</p>
-<p>A typical way to combine the tool trajectory evaluator with Metric and Criterion is as follows:</p>
+<h4 id="llmcriterion">LLMCriterion</h4>
+<p>LLMCriterion is used to configure an LLM-based evaluation criterion for scenarios where a model produces the judgment.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-45-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-45-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-45-3"> 3</a></span>
@@ -4082,24 +4209,608 @@ EvalCaseResult represents the evaluation result of a single evaluation case, inc
 <span class="normal"><a href="#__codelineno-45-13">13</a></span>
 <span class="normal"><a href="#__codelineno-45-14">14</a></span>
 <span class="normal"><a href="#__codelineno-45-15">15</a></span>
-<span class="normal"><a href="#__codelineno-45-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
-</span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion&quot;</span>
-</span><span id="__span-45-4"><a id="__codelineno-45-4" name="__codelineno-45-4"></a><span class="w">    </span><span class="nx">ctooltrajectory</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory&quot;</span>
-</span><span id="__span-45-5"><a id="__codelineno-45-5" name="__codelineno-45-5"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-45-16">16</a></span>
+<span class="normal"><a href="#__codelineno-45-17">17</a></span>
+<span class="normal"><a href="#__codelineno-45-18">18</a></span>
+<span class="normal"><a href="#__codelineno-45-19">19</a></span>
+<span class="normal"><a href="#__codelineno-45-20">20</a></span>
+<span class="normal"><a href="#__codelineno-45-21">21</a></span>
+<span class="normal"><a href="#__codelineno-45-22">22</a></span>
+<span class="normal"><a href="#__codelineno-45-23">23</a></span>
+<span class="normal"><a href="#__codelineno-45-24">24</a></span>
+<span class="normal"><a href="#__codelineno-45-25">25</a></span>
+<span class="normal"><a href="#__codelineno-45-26">26</a></span>
+<span class="normal"><a href="#__codelineno-45-27">27</a></span>
+<span class="normal"><a href="#__codelineno-45-28">28</a></span>
+<span class="normal"><a href="#__codelineno-45-29">29</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1"></a><span class="c1">// LLMCriterion configures the judge model.</span>
+</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">LLMCriterion</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3"></a><span class="w">    </span><span class="nx">Rubrics</span><span class="w">    </span><span class="p">[]</span><span class="o">*</span><span class="nx">Rubric</span><span class="w">          </span><span class="c1">// Rubric configuration.</span>
+</span><span id="__span-45-4"><a id="__codelineno-45-4" name="__codelineno-45-4"></a><span class="w">    </span><span class="nx">JudgeModel</span><span class="w"> </span><span class="o">*</span><span class="nx">JudgeModelOptions</span><span class="w"> </span><span class="c1">// Judge model configuration.</span>
+</span><span id="__span-45-5"><a id="__codelineno-45-5" name="__codelineno-45-5"></a><span class="p">}</span>
 </span><span id="__span-45-6"><a id="__codelineno-45-6" name="__codelineno-45-6"></a>
-</span><span id="__span-45-7"><a id="__codelineno-45-7" name="__codelineno-45-7"></a><span class="nx">evalMetric</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">metric</span><span class="p">.</span><span class="nx">EvalMetric</span><span class="p">{</span>
-</span><span id="__span-45-8"><a id="__codelineno-45-8" name="__codelineno-45-8"></a><span class="w">    </span><span class="nx">MetricName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;tool_trajectory_avg_score&quot;</span><span class="p">,</span>
-</span><span id="__span-45-9"><a id="__codelineno-45-9" name="__codelineno-45-9"></a><span class="w">    </span><span class="nx">Threshold</span><span class="p">:</span><span class="w">  </span><span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-45-10"><a id="__codelineno-45-10" name="__codelineno-45-10"></a><span class="w">    </span><span class="nx">Criterion</span><span class="p">:</span><span class="w"> </span><span class="nx">criterion</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-45-11"><a id="__codelineno-45-11" name="__codelineno-45-11"></a><span class="w">        </span><span class="nx">criterion</span><span class="p">.</span><span class="nx">WithToolTrajectory</span><span class="p">(</span>
-</span><span id="__span-45-12"><a id="__codelineno-45-12" name="__codelineno-45-12"></a><span class="w">            </span><span class="c1">// Use the default evaluation criterion; tool name, arguments, and result must be strictly identical.</span>
-</span><span id="__span-45-13"><a id="__codelineno-45-13" name="__codelineno-45-13"></a><span class="w">            </span><span class="nx">ctooltrajectory</span><span class="p">.</span><span class="nx">New</span><span class="p">(),</span>
-</span><span id="__span-45-14"><a id="__codelineno-45-14" name="__codelineno-45-14"></a><span class="w">        </span><span class="p">),</span>
-</span><span id="__span-45-15"><a id="__codelineno-45-15" name="__codelineno-45-15"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-45-16"><a id="__codelineno-45-16" name="__codelineno-45-16"></a><span class="p">}</span>
+</span><span id="__span-45-7"><a id="__codelineno-45-7" name="__codelineno-45-7"></a><span class="c1">// Rubric defines a rubric item.</span>
+</span><span id="__span-45-8"><a id="__codelineno-45-8" name="__codelineno-45-8"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Rubric</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-9"><a id="__codelineno-45-9" name="__codelineno-45-9"></a><span class="w">    </span><span class="nx">ID</span><span class="w">          </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Unique rubric ID.</span>
+</span><span id="__span-45-10"><a id="__codelineno-45-10" name="__codelineno-45-10"></a><span class="w">    </span><span class="nx">Description</span><span class="w"> </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Human-readable description.</span>
+</span><span id="__span-45-11"><a id="__codelineno-45-11" name="__codelineno-45-11"></a><span class="w">    </span><span class="nx">Type</span><span class="w">        </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Rubric type.</span>
+</span><span id="__span-45-12"><a id="__codelineno-45-12" name="__codelineno-45-12"></a><span class="w">    </span><span class="nx">Content</span><span class="w">     </span><span class="o">*</span><span class="nx">RubricContent</span><span class="w"> </span><span class="c1">// Rubric content for the judge model.</span>
+</span><span id="__span-45-13"><a id="__codelineno-45-13" name="__codelineno-45-13"></a><span class="p">}</span>
+</span><span id="__span-45-14"><a id="__codelineno-45-14" name="__codelineno-45-14"></a>
+</span><span id="__span-45-15"><a id="__codelineno-45-15" name="__codelineno-45-15"></a><span class="c1">// RubricContent defines rubric content.</span>
+</span><span id="__span-45-16"><a id="__codelineno-45-16" name="__codelineno-45-16"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RubricContent</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-17"><a id="__codelineno-45-17" name="__codelineno-45-17"></a><span class="w">    </span><span class="nx">Text</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="c1">// Concrete rubric content.</span>
+</span><span id="__span-45-18"><a id="__codelineno-45-18" name="__codelineno-45-18"></a><span class="p">}</span>
+</span><span id="__span-45-19"><a id="__codelineno-45-19" name="__codelineno-45-19"></a>
+</span><span id="__span-45-20"><a id="__codelineno-45-20" name="__codelineno-45-20"></a><span class="c1">// JudgeModelOptions defines judge model parameters.</span>
+</span><span id="__span-45-21"><a id="__codelineno-45-21" name="__codelineno-45-21"></a><span class="kd">type</span><span class="w"> </span><span class="nx">JudgeModelOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-22"><a id="__codelineno-45-22" name="__codelineno-45-22"></a><span class="w">    </span><span class="nx">ProviderName</span><span class="w"> </span><span class="kt">string</span><span class="w">                  </span><span class="c1">// Model provider name.</span>
+</span><span id="__span-45-23"><a id="__codelineno-45-23" name="__codelineno-45-23"></a><span class="w">    </span><span class="nx">ModelName</span><span class="w">    </span><span class="kt">string</span><span class="w">                  </span><span class="c1">// Judge model name.</span>
+</span><span id="__span-45-24"><a id="__codelineno-45-24" name="__codelineno-45-24"></a><span class="w">    </span><span class="nx">BaseURL</span><span class="w">      </span><span class="kt">string</span><span class="w">                  </span><span class="c1">// Model base URL.</span>
+</span><span id="__span-45-25"><a id="__codelineno-45-25" name="__codelineno-45-25"></a><span class="w">    </span><span class="nx">APIKey</span><span class="w">       </span><span class="kt">string</span><span class="w">                  </span><span class="c1">// Model API key.</span>
+</span><span id="__span-45-26"><a id="__codelineno-45-26" name="__codelineno-45-26"></a><span class="w">    </span><span class="nx">ExtraFields</span><span class="w">  </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w">          </span><span class="c1">// Extra request fields.</span>
+</span><span id="__span-45-27"><a id="__codelineno-45-27" name="__codelineno-45-27"></a><span class="w">    </span><span class="nx">NumSamples</span><span class="w">   </span><span class="kt">int</span><span class="w">                     </span><span class="c1">// Number of evaluation samples.</span>
+</span><span id="__span-45-28"><a id="__codelineno-45-28" name="__codelineno-45-28"></a><span class="w">    </span><span class="nx">Generation</span><span class="w">   </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="w"> </span><span class="c1">// Generation config for the judge model.</span>
+</span><span id="__span-45-29"><a id="__codelineno-45-29" name="__codelineno-45-29"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<ul>
+<li><code>Rubrics</code> defines rubric items and is only used in rubric-style evaluators. Expected outputs are not needed; the judge model evaluates each rubric.</li>
+<li><code>NumSamples</code> controls how many times the judge model is called, defaulting to 1 when not set.</li>
+<li><code>Generation</code> defaults to <code>MaxTokens=2000</code>, <code>Temperature=0.8</code>, and <code>Stream=false</code>.</li>
+</ul>
+<p>You can pass a custom configuration via <code>criterion.WithLLMJudge</code>, for example:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-46-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-46-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-46-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-46-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-46-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-46-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-46-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-46-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-46-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-46-10">10</a></span>
+<span class="normal"><a href="#__codelineno-46-11">11</a></span>
+<span class="normal"><a href="#__codelineno-46-12">12</a></span>
+<span class="normal"><a href="#__codelineno-46-13">13</a></span>
+<span class="normal"><a href="#__codelineno-46-14">14</a></span>
+<span class="normal"><a href="#__codelineno-46-15">15</a></span>
+<span class="normal"><a href="#__codelineno-46-16">16</a></span>
+<span class="normal"><a href="#__codelineno-46-17">17</a></span>
+<span class="normal"><a href="#__codelineno-46-18">18</a></span>
+<span class="normal"><a href="#__codelineno-46-19">19</a></span>
+<span class="normal"><a href="#__codelineno-46-20">20</a></span>
+<span class="normal"><a href="#__codelineno-46-21">21</a></span>
+<span class="normal"><a href="#__codelineno-46-22">22</a></span>
+<span class="normal"><a href="#__codelineno-46-23">23</a></span>
+<span class="normal"><a href="#__codelineno-46-24">24</a></span>
+<span class="normal"><a href="#__codelineno-46-25">25</a></span>
+<span class="normal"><a href="#__codelineno-46-26">26</a></span>
+<span class="normal"><a href="#__codelineno-46-27">27</a></span>
+<span class="normal"><a href="#__codelineno-46-28">28</a></span>
+<span class="normal"><a href="#__codelineno-46-29">29</a></span>
+<span class="normal"><a href="#__codelineno-46-30">30</a></span>
+<span class="normal"><a href="#__codelineno-46-31">31</a></span>
+<span class="normal"><a href="#__codelineno-46-32">32</a></span>
+<span class="normal"><a href="#__codelineno-46-33">33</a></span>
+<span class="normal"><a href="#__codelineno-46-34">34</a></span>
+<span class="normal"><a href="#__codelineno-46-35">35</a></span>
+<span class="normal"><a href="#__codelineno-46-36">36</a></span>
+<span class="normal"><a href="#__codelineno-46-37">37</a></span>
+<span class="normal"><a href="#__codelineno-46-38">38</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-46-2"><a id="__codelineno-46-2" name="__codelineno-46-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion&quot;</span>
+</span><span id="__span-46-3"><a id="__codelineno-46-3" name="__codelineno-46-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm&quot;</span>
+</span><span id="__span-46-4"><a id="__codelineno-46-4" name="__codelineno-46-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-46-5"><a id="__codelineno-46-5" name="__codelineno-46-5"></a><span class="p">)</span>
+</span><span id="__span-46-6"><a id="__codelineno-46-6" name="__codelineno-46-6"></a>
+</span><span id="__span-46-7"><a id="__codelineno-46-7" name="__codelineno-46-7"></a><span class="nx">criterion</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">criterion</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-46-8"><a id="__codelineno-46-8" name="__codelineno-46-8"></a><span class="w">    </span><span class="nx">criterion</span><span class="p">.</span><span class="nx">WithLLMJudge</span><span class="p">(</span>
+</span><span id="__span-46-9"><a id="__codelineno-46-9" name="__codelineno-46-9"></a><span class="w">        </span><span class="nx">llm</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-46-10"><a id="__codelineno-46-10" name="__codelineno-46-10"></a><span class="w">            </span><span class="s">&quot;openai&quot;</span><span class="p">,</span>
+</span><span id="__span-46-11"><a id="__codelineno-46-11" name="__codelineno-46-11"></a><span class="w">            </span><span class="s">&quot;deepseek-chat&quot;</span><span class="p">,</span>
+</span><span id="__span-46-12"><a id="__codelineno-46-12" name="__codelineno-46-12"></a><span class="w">            </span><span class="nx">llm</span><span class="p">.</span><span class="nx">WithNumSamples</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+</span><span id="__span-46-13"><a id="__codelineno-46-13" name="__codelineno-46-13"></a><span class="w">            </span><span class="nx">llm</span><span class="p">.</span><span class="nx">WithGeneration</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
+</span><span id="__span-46-14"><a id="__codelineno-46-14" name="__codelineno-46-14"></a><span class="w">                </span><span class="nx">MaxTokens</span><span class="p">:</span><span class="w">   </span><span class="nx">floatPtr</span><span class="p">(</span><span class="mi">512</span><span class="p">),</span>
+</span><span id="__span-46-15"><a id="__codelineno-46-15" name="__codelineno-46-15"></a><span class="w">                </span><span class="nx">Temperature</span><span class="p">:</span><span class="w"> </span><span class="nx">floatPtr</span><span class="p">(</span><span class="mf">1.0</span><span class="p">),</span>
+</span><span id="__span-46-16"><a id="__codelineno-46-16" name="__codelineno-46-16"></a><span class="w">                </span><span class="nx">Stream</span><span class="p">:</span><span class="w">      </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-46-17"><a id="__codelineno-46-17" name="__codelineno-46-17"></a><span class="w">            </span><span class="p">}),</span>
+</span><span id="__span-46-18"><a id="__codelineno-46-18" name="__codelineno-46-18"></a><span class="w">            </span><span class="nx">llm</span><span class="p">.</span><span class="nx">WithRubrics</span><span class="p">([]</span><span class="o">*</span><span class="nx">llm</span><span class="p">.</span><span class="nx">Rubric</span><span class="p">{</span>
+</span><span id="__span-46-19"><a id="__codelineno-46-19" name="__codelineno-46-19"></a><span class="w">                </span><span class="p">{</span>
+</span><span id="__span-46-20"><a id="__codelineno-46-20" name="__codelineno-46-20"></a><span class="w">                    </span><span class="nx">ID</span><span class="p">:</span><span class="w">          </span><span class="s">&quot;1&quot;</span><span class="p">,</span>
+</span><span id="__span-46-21"><a id="__codelineno-46-21" name="__codelineno-46-21"></a><span class="w">                    </span><span class="nx">Type</span><span class="p">:</span><span class="w">        </span><span class="s">&quot;FINAL_RESPONSE_QUALITY&quot;</span><span class="p">,</span>
+</span><span id="__span-46-22"><a id="__codelineno-46-22" name="__codelineno-46-22"></a><span class="w">                    </span><span class="nx">Description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;The final answer is correct.&quot;</span><span class="p">,</span>
+</span><span id="__span-46-23"><a id="__codelineno-46-23" name="__codelineno-46-23"></a><span class="w">                    </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">llm</span><span class="p">.</span><span class="nx">RubricContent</span><span class="p">{</span>
+</span><span id="__span-46-24"><a id="__codelineno-46-24" name="__codelineno-46-24"></a><span class="w">                        </span><span class="nx">Text</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;The final answer directly addresses the user question, provides the required result, and is consistent with the facts given.&quot;</span><span class="p">,</span>
+</span><span id="__span-46-25"><a id="__codelineno-46-25" name="__codelineno-46-25"></a><span class="w">                    </span><span class="p">},</span>
+</span><span id="__span-46-26"><a id="__codelineno-46-26" name="__codelineno-46-26"></a><span class="w">                </span><span class="p">},</span>
+</span><span id="__span-46-27"><a id="__codelineno-46-27" name="__codelineno-46-27"></a><span class="w">                </span><span class="p">{</span>
+</span><span id="__span-46-28"><a id="__codelineno-46-28" name="__codelineno-46-28"></a><span class="w">                    </span><span class="nx">ID</span><span class="p">:</span><span class="w">          </span><span class="s">&quot;2&quot;</span><span class="p">,</span>
+</span><span id="__span-46-29"><a id="__codelineno-46-29" name="__codelineno-46-29"></a><span class="w">                    </span><span class="nx">Type</span><span class="p">:</span><span class="w">        </span><span class="s">&quot;CONTEXT_RELEVANCE&quot;</span><span class="p">,</span>
+</span><span id="__span-46-30"><a id="__codelineno-46-30" name="__codelineno-46-30"></a><span class="w">                    </span><span class="nx">Description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;The final answer is relevant to the user prompt.&quot;</span><span class="p">,</span>
+</span><span id="__span-46-31"><a id="__codelineno-46-31" name="__codelineno-46-31"></a><span class="w">                    </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">llm</span><span class="p">.</span><span class="nx">RubricContent</span><span class="p">{</span>
+</span><span id="__span-46-32"><a id="__codelineno-46-32" name="__codelineno-46-32"></a><span class="w">                        </span><span class="nx">Text</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;The final answer stays on topic and does not include unrelated or missing key points from the user prompt.&quot;</span><span class="p">,</span>
+</span><span id="__span-46-33"><a id="__codelineno-46-33" name="__codelineno-46-33"></a><span class="w">                    </span><span class="p">},</span>
+</span><span id="__span-46-34"><a id="__codelineno-46-34" name="__codelineno-46-34"></a><span class="w">                </span><span class="p">},</span>
+</span><span id="__span-46-35"><a id="__codelineno-46-35" name="__codelineno-46-35"></a><span class="w">            </span><span class="p">}),</span>
+</span><span id="__span-46-36"><a id="__codelineno-46-36" name="__codelineno-46-36"></a><span class="w">        </span><span class="p">),</span>
+</span><span id="__span-46-37"><a id="__codelineno-46-37" name="__codelineno-46-37"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-46-38"><a id="__codelineno-46-38" name="__codelineno-46-38"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="evaluator_1">Evaluator</h3>
+<h4 id="tool-trajectory-evaluator">Tool Trajectory Evaluator</h4>
+<p>The metric name corresponding to the tool trajectory evaluator is <code>tool_trajectory_avg_score</code>. It is used to evaluate whether the Agent’s use of tools across multiple conversations conforms to expectations.</p>
+<p>In a single conversation, the evaluator compares the actual tool invocation trajectory with the expected trajectory using <code>ToolTrajectoryCriterion</code>:</p>
+<ul>
+<li>If the entire tool invocation trajectory satisfies the evaluation criterion, the score of this conversation on this metric is 1.</li>
+<li>If any step of the invocation does not satisfy the evaluation criterion, the score of this conversation on this metric is 0.</li>
+</ul>
+<p>In the scenario of multiple conversations, the evaluator takes the average of the scores of all conversations on this metric as the final <code>tool_trajectory_avg_score</code>, and compares it with <code>EvalMetric.Threshold</code> to determine whether the result is pass or fail.</p>
+<p>A typical way to combine the tool trajectory evaluator with Metric and Criterion is as follows:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-47-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-47-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-47-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-47-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-47-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-47-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-47-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-47-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-47-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-47-10">10</a></span>
+<span class="normal"><a href="#__codelineno-47-11">11</a></span>
+<span class="normal"><a href="#__codelineno-47-12">12</a></span>
+<span class="normal"><a href="#__codelineno-47-13">13</a></span>
+<span class="normal"><a href="#__codelineno-47-14">14</a></span>
+<span class="normal"><a href="#__codelineno-47-15">15</a></span>
+<span class="normal"><a href="#__codelineno-47-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
+</span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion&quot;</span>
+</span><span id="__span-47-4"><a id="__codelineno-47-4" name="__codelineno-47-4"></a><span class="w">    </span><span class="nx">ctooltrajectory</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory&quot;</span>
+</span><span id="__span-47-5"><a id="__codelineno-47-5" name="__codelineno-47-5"></a><span class="p">)</span>
+</span><span id="__span-47-6"><a id="__codelineno-47-6" name="__codelineno-47-6"></a>
+</span><span id="__span-47-7"><a id="__codelineno-47-7" name="__codelineno-47-7"></a><span class="nx">evalMetric</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">metric</span><span class="p">.</span><span class="nx">EvalMetric</span><span class="p">{</span>
+</span><span id="__span-47-8"><a id="__codelineno-47-8" name="__codelineno-47-8"></a><span class="w">    </span><span class="nx">MetricName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;tool_trajectory_avg_score&quot;</span><span class="p">,</span>
+</span><span id="__span-47-9"><a id="__codelineno-47-9" name="__codelineno-47-9"></a><span class="w">    </span><span class="nx">Threshold</span><span class="p">:</span><span class="w">  </span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-47-10"><a id="__codelineno-47-10" name="__codelineno-47-10"></a><span class="w">    </span><span class="nx">Criterion</span><span class="p">:</span><span class="w"> </span><span class="nx">criterion</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-47-11"><a id="__codelineno-47-11" name="__codelineno-47-11"></a><span class="w">        </span><span class="nx">criterion</span><span class="p">.</span><span class="nx">WithToolTrajectory</span><span class="p">(</span>
+</span><span id="__span-47-12"><a id="__codelineno-47-12" name="__codelineno-47-12"></a><span class="w">            </span><span class="c1">// Use the default evaluation criterion; tool name, arguments, and result must be strictly identical.</span>
+</span><span id="__span-47-13"><a id="__codelineno-47-13" name="__codelineno-47-13"></a><span class="w">            </span><span class="nx">ctooltrajectory</span><span class="p">.</span><span class="nx">New</span><span class="p">(),</span>
+</span><span id="__span-47-14"><a id="__codelineno-47-14" name="__codelineno-47-14"></a><span class="w">        </span><span class="p">),</span>
+</span><span id="__span-47-15"><a id="__codelineno-47-15" name="__codelineno-47-15"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-47-16"><a id="__codelineno-47-16" name="__codelineno-47-16"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>An example of the corresponding metric config file:</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1">1</a></span>
+<span class="normal"><a href="#__codelineno-48-2">2</a></span>
+<span class="normal"><a href="#__codelineno-48-3">3</a></span>
+<span class="normal"><a href="#__codelineno-48-4">4</a></span>
+<span class="normal"><a href="#__codelineno-48-5">5</a></span>
+<span class="normal"><a href="#__codelineno-48-6">6</a></span>
+<span class="normal"><a href="#__codelineno-48-7">7</a></span>
+<span class="normal"><a href="#__codelineno-48-8">8</a></span>
+<span class="normal"><a href="#__codelineno-48-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a><span class="p">[</span>
+</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a><span class="w">  </span><span class="p">{</span>
+</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a><span class="w">    </span><span class="nt">&quot;metricName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_trajectory_avg_score&quot;</span><span class="p">,</span>
+</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a><span class="w">    </span><span class="nt">&quot;threshold&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5"></a><span class="w">    </span><span class="nt">&quot;criterion&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6"></a><span class="w">      </span><span class="nt">&quot;toolTrajectory&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span>
+</span><span id="__span-48-7"><a id="__codelineno-48-7" name="__codelineno-48-7"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-48-8"><a id="__codelineno-48-8" name="__codelineno-48-8"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-48-9"><a id="__codelineno-48-9" name="__codelineno-48-9"></a><span class="p">]</span>
 </span></code></pre></div></td></tr></table></div>
 <p>For a complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/tooltrajectory">examples/evaluation/tooltrajectory</a>.</p>
+<h4 id="llm-final-response-evaluator">LLM Final Response Evaluator</h4>
+<p>The metric name for the LLM final response evaluator is <code>llm_final_response</code>. It uses a judge model to determine whether the Agent’s final answer is valid. The judge prompt includes the user input, reference answer, and the Agent’s final answer, making it suitable for automatically checking the final text output.</p>
+<p>Evaluation logic:</p>
+<ul>
+<li>Use the <code>JudgeModel</code> in <code>LLMCriterion</code> to call the judge model, sampling multiple times according to <code>NumSamples</code>.</li>
+<li>The judge model must return the field <code>is_the_agent_response_valid</code> with values <code>valid</code> or <code>invalid</code> (case-insensitive); <code>valid</code> scores 1, <code>invalid</code> scores 0. Other results or parse failures produce an error.</li>
+<li>With multiple samples, use majority voting to aggregate, then compare the final score against <code>EvalMetric.Threshold</code> to get the evaluation result.</li>
+</ul>
+<p>A typical configuration looks like this:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-49-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-49-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-49-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-49-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-49-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-49-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-49-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-49-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-49-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-49-10">10</a></span>
+<span class="normal"><a href="#__codelineno-49-11">11</a></span>
+<span class="normal"><a href="#__codelineno-49-12">12</a></span>
+<span class="normal"><a href="#__codelineno-49-13">13</a></span>
+<span class="normal"><a href="#__codelineno-49-14">14</a></span>
+<span class="normal"><a href="#__codelineno-49-15">15</a></span>
+<span class="normal"><a href="#__codelineno-49-16">16</a></span>
+<span class="normal"><a href="#__codelineno-49-17">17</a></span>
+<span class="normal"><a href="#__codelineno-49-18">18</a></span>
+<span class="normal"><a href="#__codelineno-49-19">19</a></span>
+<span class="normal"><a href="#__codelineno-49-20">20</a></span>
+<span class="normal"><a href="#__codelineno-49-21">21</a></span>
+<span class="normal"><a href="#__codelineno-49-22">22</a></span>
+<span class="normal"><a href="#__codelineno-49-23">23</a></span>
+<span class="normal"><a href="#__codelineno-49-24">24</a></span>
+<span class="normal"><a href="#__codelineno-49-25">25</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
+</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion&quot;</span>
+</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4"></a><span class="w">    </span><span class="nx">cllm</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm&quot;</span>
+</span><span id="__span-49-5"><a id="__codelineno-49-5" name="__codelineno-49-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-49-6"><a id="__codelineno-49-6" name="__codelineno-49-6"></a><span class="p">)</span>
+</span><span id="__span-49-7"><a id="__codelineno-49-7" name="__codelineno-49-7"></a>
+</span><span id="__span-49-8"><a id="__codelineno-49-8" name="__codelineno-49-8"></a><span class="nx">evalMetric</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">metric</span><span class="p">.</span><span class="nx">EvalMetric</span><span class="p">{</span>
+</span><span id="__span-49-9"><a id="__codelineno-49-9" name="__codelineno-49-9"></a><span class="w">    </span><span class="nx">MetricName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;llm_final_response&quot;</span><span class="p">,</span>
+</span><span id="__span-49-10"><a id="__codelineno-49-10" name="__codelineno-49-10"></a><span class="w">    </span><span class="nx">Threshold</span><span class="p">:</span><span class="w">  </span><span class="mf">0.9</span><span class="p">,</span>
+</span><span id="__span-49-11"><a id="__codelineno-49-11" name="__codelineno-49-11"></a><span class="w">    </span><span class="nx">Criterion</span><span class="p">:</span><span class="w"> </span><span class="nx">criterion</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-49-12"><a id="__codelineno-49-12" name="__codelineno-49-12"></a><span class="w">        </span><span class="nx">criterion</span><span class="p">.</span><span class="nx">WithLLMJudge</span><span class="p">(</span>
+</span><span id="__span-49-13"><a id="__codelineno-49-13" name="__codelineno-49-13"></a><span class="w">            </span><span class="nx">cllm</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-49-14"><a id="__codelineno-49-14" name="__codelineno-49-14"></a><span class="w">                </span><span class="s">&quot;openai&quot;</span><span class="p">,</span>
+</span><span id="__span-49-15"><a id="__codelineno-49-15" name="__codelineno-49-15"></a><span class="w">                </span><span class="s">&quot;gpt-4o&quot;</span><span class="p">,</span>
+</span><span id="__span-49-16"><a id="__codelineno-49-16" name="__codelineno-49-16"></a><span class="w">                </span><span class="nx">cllm</span><span class="p">.</span><span class="nx">WithNumSamples</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+</span><span id="__span-49-17"><a id="__codelineno-49-17" name="__codelineno-49-17"></a><span class="w">                </span><span class="nx">cllm</span><span class="p">.</span><span class="nx">WithGeneration</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
+</span><span id="__span-49-18"><a id="__codelineno-49-18" name="__codelineno-49-18"></a><span class="w">                    </span><span class="nx">MaxTokens</span><span class="p">:</span><span class="w">   </span><span class="nx">ptr</span><span class="p">(</span><span class="mi">512</span><span class="p">),</span>
+</span><span id="__span-49-19"><a id="__codelineno-49-19" name="__codelineno-49-19"></a><span class="w">                    </span><span class="nx">Temperature</span><span class="p">:</span><span class="w"> </span><span class="nx">ptr</span><span class="p">(</span><span class="mf">1.0</span><span class="p">),</span>
+</span><span id="__span-49-20"><a id="__codelineno-49-20" name="__codelineno-49-20"></a><span class="w">                    </span><span class="nx">Stream</span><span class="p">:</span><span class="w">      </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-49-21"><a id="__codelineno-49-21" name="__codelineno-49-21"></a><span class="w">                </span><span class="p">}),</span>
+</span><span id="__span-49-22"><a id="__codelineno-49-22" name="__codelineno-49-22"></a><span class="w">            </span><span class="p">),</span>
+</span><span id="__span-49-23"><a id="__codelineno-49-23" name="__codelineno-49-23"></a><span class="w">        </span><span class="p">),</span>
+</span><span id="__span-49-24"><a id="__codelineno-49-24" name="__codelineno-49-24"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-49-25"><a id="__codelineno-49-25" name="__codelineno-49-25"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>An example metric config file:</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-50-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-50-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-50-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-50-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-50-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-50-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-50-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-50-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-50-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-50-10">10</a></span>
+<span class="normal"><a href="#__codelineno-50-11">11</a></span>
+<span class="normal"><a href="#__codelineno-50-12">12</a></span>
+<span class="normal"><a href="#__codelineno-50-13">13</a></span>
+<span class="normal"><a href="#__codelineno-50-14">14</a></span>
+<span class="normal"><a href="#__codelineno-50-15">15</a></span>
+<span class="normal"><a href="#__codelineno-50-16">16</a></span>
+<span class="normal"><a href="#__codelineno-50-17">17</a></span>
+<span class="normal"><a href="#__codelineno-50-18">18</a></span>
+<span class="normal"><a href="#__codelineno-50-19">19</a></span>
+<span class="normal"><a href="#__codelineno-50-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1"></a><span class="p">[</span>
+</span><span id="__span-50-2"><a id="__codelineno-50-2" name="__codelineno-50-2"></a><span class="w">  </span><span class="p">{</span>
+</span><span id="__span-50-3"><a id="__codelineno-50-3" name="__codelineno-50-3"></a><span class="w">    </span><span class="nt">&quot;metricName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;llm_final_response&quot;</span><span class="p">,</span>
+</span><span id="__span-50-4"><a id="__codelineno-50-4" name="__codelineno-50-4"></a><span class="w">    </span><span class="nt">&quot;threshold&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.9</span><span class="p">,</span>
+</span><span id="__span-50-5"><a id="__codelineno-50-5" name="__codelineno-50-5"></a><span class="w">    </span><span class="nt">&quot;criterion&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-50-6"><a id="__codelineno-50-6" name="__codelineno-50-6"></a><span class="w">      </span><span class="nt">&quot;llmJudge&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-50-7"><a id="__codelineno-50-7" name="__codelineno-50-7"></a><span class="w">        </span><span class="nt">&quot;judgeModel&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-50-8"><a id="__codelineno-50-8" name="__codelineno-50-8"></a><span class="w">          </span><span class="nt">&quot;providerName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;openai&quot;</span><span class="p">,</span>
+</span><span id="__span-50-9"><a id="__codelineno-50-9" name="__codelineno-50-9"></a><span class="w">          </span><span class="nt">&quot;modelName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;gpt-4o&quot;</span><span class="p">,</span>
+</span><span id="__span-50-10"><a id="__codelineno-50-10" name="__codelineno-50-10"></a><span class="w">          </span><span class="nt">&quot;numSamples&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+</span><span id="__span-50-11"><a id="__codelineno-50-11" name="__codelineno-50-11"></a><span class="w">          </span><span class="nt">&quot;generationConfig&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-50-12"><a id="__codelineno-50-12" name="__codelineno-50-12"></a><span class="w">            </span><span class="nt">&quot;max_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">512</span><span class="p">,</span>
+</span><span id="__span-50-13"><a id="__codelineno-50-13" name="__codelineno-50-13"></a><span class="w">            </span><span class="nt">&quot;temperature&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-50-14"><a id="__codelineno-50-14" name="__codelineno-50-14"></a><span class="w">            </span><span class="nt">&quot;stream&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+</span><span id="__span-50-15"><a id="__codelineno-50-15" name="__codelineno-50-15"></a><span class="w">          </span><span class="p">}</span>
+</span><span id="__span-50-16"><a id="__codelineno-50-16" name="__codelineno-50-16"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-50-17"><a id="__codelineno-50-17" name="__codelineno-50-17"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-50-18"><a id="__codelineno-50-18" name="__codelineno-50-18"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-50-19"><a id="__codelineno-50-19" name="__codelineno-50-19"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-50-20"><a id="__codelineno-50-20" name="__codelineno-50-20"></a><span class="p">]</span>
+</span></code></pre></div></td></tr></table></div>
+<p>See the complete example at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/finalresponse">examples/evaluation/llm/finalresponse</a>.</p>
+<h4 id="llm-rubric-response-evaluator">LLM Rubric Response Evaluator</h4>
+<p>The metric name for the LLM rubric response evaluator is <code>llm_rubric_response</code>. It checks whether the Agent’s final answer meets each rubric requirement.</p>
+<p>Evaluation logic:</p>
+<ul>
+<li>Use <code>Rubrics</code> in <code>LLMCriterion</code> to build the prompt, and the judge model returns <code>yes</code>/<code>no</code> for each rubric.</li>
+<li>The score for a single sample is the average of all rubric scores (<code>yes</code>=1, <code>no</code>=0).</li>
+<li>With multiple samples, pick the representative result via majority voting, then compare against <code>EvalMetric.Threshold</code> to determine pass/fail.</li>
+</ul>
+<p>Typical configuration:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-51-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-51-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-51-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-51-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-51-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-51-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-51-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-51-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-51-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-51-10">10</a></span>
+<span class="normal"><a href="#__codelineno-51-11">11</a></span>
+<span class="normal"><a href="#__codelineno-51-12">12</a></span>
+<span class="normal"><a href="#__codelineno-51-13">13</a></span>
+<span class="normal"><a href="#__codelineno-51-14">14</a></span>
+<span class="normal"><a href="#__codelineno-51-15">15</a></span>
+<span class="normal"><a href="#__codelineno-51-16">16</a></span>
+<span class="normal"><a href="#__codelineno-51-17">17</a></span>
+<span class="normal"><a href="#__codelineno-51-18">18</a></span>
+<span class="normal"><a href="#__codelineno-51-19">19</a></span>
+<span class="normal"><a href="#__codelineno-51-20">20</a></span>
+<span class="normal"><a href="#__codelineno-51-21">21</a></span>
+<span class="normal"><a href="#__codelineno-51-22">22</a></span>
+<span class="normal"><a href="#__codelineno-51-23">23</a></span>
+<span class="normal"><a href="#__codelineno-51-24">24</a></span>
+<span class="normal"><a href="#__codelineno-51-25">25</a></span>
+<span class="normal"><a href="#__codelineno-51-26">26</a></span>
+<span class="normal"><a href="#__codelineno-51-27">27</a></span>
+<span class="normal"><a href="#__codelineno-51-28">28</a></span>
+<span class="normal"><a href="#__codelineno-51-29">29</a></span>
+<span class="normal"><a href="#__codelineno-51-30">30</a></span>
+<span class="normal"><a href="#__codelineno-51-31">31</a></span>
+<span class="normal"><a href="#__codelineno-51-32">32</a></span>
+<span class="normal"><a href="#__codelineno-51-33">33</a></span>
+<span class="normal"><a href="#__codelineno-51-34">34</a></span>
+<span class="normal"><a href="#__codelineno-51-35">35</a></span>
+<span class="normal"><a href="#__codelineno-51-36">36</a></span>
+<span class="normal"><a href="#__codelineno-51-37">37</a></span>
+<span class="normal"><a href="#__codelineno-51-38">38</a></span>
+<span class="normal"><a href="#__codelineno-51-39">39</a></span>
+<span class="normal"><a href="#__codelineno-51-40">40</a></span>
+<span class="normal"><a href="#__codelineno-51-41">41</a></span>
+<span class="normal"><a href="#__codelineno-51-42">42</a></span>
+<span class="normal"><a href="#__codelineno-51-43">43</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-51-2"><a id="__codelineno-51-2" name="__codelineno-51-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
+</span><span id="__span-51-3"><a id="__codelineno-51-3" name="__codelineno-51-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion&quot;</span>
+</span><span id="__span-51-4"><a id="__codelineno-51-4" name="__codelineno-51-4"></a><span class="w">    </span><span class="nx">cllm</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm&quot;</span>
+</span><span id="__span-51-5"><a id="__codelineno-51-5" name="__codelineno-51-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-51-6"><a id="__codelineno-51-6" name="__codelineno-51-6"></a><span class="p">)</span>
+</span><span id="__span-51-7"><a id="__codelineno-51-7" name="__codelineno-51-7"></a>
+</span><span id="__span-51-8"><a id="__codelineno-51-8" name="__codelineno-51-8"></a><span class="nx">evalMetric</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">metric</span><span class="p">.</span><span class="nx">EvalMetric</span><span class="p">{</span>
+</span><span id="__span-51-9"><a id="__codelineno-51-9" name="__codelineno-51-9"></a><span class="w">    </span><span class="nx">MetricName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;llm_rubric_response&quot;</span><span class="p">,</span>
+</span><span id="__span-51-10"><a id="__codelineno-51-10" name="__codelineno-51-10"></a><span class="w">    </span><span class="nx">Threshold</span><span class="p">:</span><span class="w">  </span><span class="mf">0.9</span><span class="p">,</span>
+</span><span id="__span-51-11"><a id="__codelineno-51-11" name="__codelineno-51-11"></a><span class="w">    </span><span class="nx">Criterion</span><span class="p">:</span><span class="w"> </span><span class="nx">criterion</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-51-12"><a id="__codelineno-51-12" name="__codelineno-51-12"></a><span class="w">        </span><span class="nx">criterion</span><span class="p">.</span><span class="nx">WithLLMJudge</span><span class="p">(</span>
+</span><span id="__span-51-13"><a id="__codelineno-51-13" name="__codelineno-51-13"></a><span class="w">            </span><span class="nx">cllm</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-51-14"><a id="__codelineno-51-14" name="__codelineno-51-14"></a><span class="w">                </span><span class="s">&quot;openai&quot;</span><span class="p">,</span>
+</span><span id="__span-51-15"><a id="__codelineno-51-15" name="__codelineno-51-15"></a><span class="w">                </span><span class="s">&quot;deepseek-chat&quot;</span><span class="p">,</span>
+</span><span id="__span-51-16"><a id="__codelineno-51-16" name="__codelineno-51-16"></a><span class="w">                </span><span class="nx">cllm</span><span class="p">.</span><span class="nx">WithNumSamples</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+</span><span id="__span-51-17"><a id="__codelineno-51-17" name="__codelineno-51-17"></a><span class="w">                </span><span class="nx">cllm</span><span class="p">.</span><span class="nx">WithGeneration</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
+</span><span id="__span-51-18"><a id="__codelineno-51-18" name="__codelineno-51-18"></a><span class="w">                    </span><span class="nx">MaxTokens</span><span class="p">:</span><span class="w">   </span><span class="nx">ptr</span><span class="p">(</span><span class="mi">512</span><span class="p">),</span>
+</span><span id="__span-51-19"><a id="__codelineno-51-19" name="__codelineno-51-19"></a><span class="w">                    </span><span class="nx">Temperature</span><span class="p">:</span><span class="w"> </span><span class="nx">ptr</span><span class="p">(</span><span class="mf">1.0</span><span class="p">),</span>
+</span><span id="__span-51-20"><a id="__codelineno-51-20" name="__codelineno-51-20"></a><span class="w">                    </span><span class="nx">Stream</span><span class="p">:</span><span class="w">      </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-51-21"><a id="__codelineno-51-21" name="__codelineno-51-21"></a><span class="w">                </span><span class="p">}),</span>
+</span><span id="__span-51-22"><a id="__codelineno-51-22" name="__codelineno-51-22"></a><span class="w">                </span><span class="nx">cllm</span><span class="p">.</span><span class="nx">WithRubrics</span><span class="p">([]</span><span class="o">*</span><span class="nx">cllm</span><span class="p">.</span><span class="nx">Rubric</span><span class="p">{</span>
+</span><span id="__span-51-23"><a id="__codelineno-51-23" name="__codelineno-51-23"></a><span class="w">                    </span><span class="p">{</span>
+</span><span id="__span-51-24"><a id="__codelineno-51-24" name="__codelineno-51-24"></a><span class="w">                        </span><span class="nx">ID</span><span class="p">:</span><span class="w">          </span><span class="s">&quot;1&quot;</span><span class="p">,</span>
+</span><span id="__span-51-25"><a id="__codelineno-51-25" name="__codelineno-51-25"></a><span class="w">                        </span><span class="nx">Type</span><span class="p">:</span><span class="w">        </span><span class="s">&quot;FINAL_RESPONSE_QUALITY&quot;</span><span class="p">,</span>
+</span><span id="__span-51-26"><a id="__codelineno-51-26" name="__codelineno-51-26"></a><span class="w">                        </span><span class="nx">Description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;The final answer is correct.&quot;</span><span class="p">,</span>
+</span><span id="__span-51-27"><a id="__codelineno-51-27" name="__codelineno-51-27"></a><span class="w">                        </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">cllm</span><span class="p">.</span><span class="nx">RubricContent</span><span class="p">{</span>
+</span><span id="__span-51-28"><a id="__codelineno-51-28" name="__codelineno-51-28"></a><span class="w">                            </span><span class="nx">Text</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;The final answer is correct and consistent with the user request.&quot;</span><span class="p">,</span>
+</span><span id="__span-51-29"><a id="__codelineno-51-29" name="__codelineno-51-29"></a><span class="w">                        </span><span class="p">},</span>
+</span><span id="__span-51-30"><a id="__codelineno-51-30" name="__codelineno-51-30"></a><span class="w">                    </span><span class="p">},</span>
+</span><span id="__span-51-31"><a id="__codelineno-51-31" name="__codelineno-51-31"></a><span class="w">                    </span><span class="p">{</span>
+</span><span id="__span-51-32"><a id="__codelineno-51-32" name="__codelineno-51-32"></a><span class="w">                        </span><span class="nx">ID</span><span class="p">:</span><span class="w">          </span><span class="s">&quot;2&quot;</span><span class="p">,</span>
+</span><span id="__span-51-33"><a id="__codelineno-51-33" name="__codelineno-51-33"></a><span class="w">                        </span><span class="nx">Type</span><span class="p">:</span><span class="w">        </span><span class="s">&quot;CONTEXT_RELEVANCE&quot;</span><span class="p">,</span>
+</span><span id="__span-51-34"><a id="__codelineno-51-34" name="__codelineno-51-34"></a><span class="w">                        </span><span class="nx">Description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;The final answer is relevant to the user prompt.&quot;</span><span class="p">,</span>
+</span><span id="__span-51-35"><a id="__codelineno-51-35" name="__codelineno-51-35"></a><span class="w">                        </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">cllm</span><span class="p">.</span><span class="nx">RubricContent</span><span class="p">{</span>
+</span><span id="__span-51-36"><a id="__codelineno-51-36" name="__codelineno-51-36"></a><span class="w">                            </span><span class="nx">Text</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;The final answer is relevant to the user prompt without unrelated content.&quot;</span><span class="p">,</span>
+</span><span id="__span-51-37"><a id="__codelineno-51-37" name="__codelineno-51-37"></a><span class="w">                        </span><span class="p">},</span>
+</span><span id="__span-51-38"><a id="__codelineno-51-38" name="__codelineno-51-38"></a><span class="w">                    </span><span class="p">},</span>
+</span><span id="__span-51-39"><a id="__codelineno-51-39" name="__codelineno-51-39"></a><span class="w">                </span><span class="p">}),</span>
+</span><span id="__span-51-40"><a id="__codelineno-51-40" name="__codelineno-51-40"></a><span class="w">            </span><span class="p">),</span>
+</span><span id="__span-51-41"><a id="__codelineno-51-41" name="__codelineno-51-41"></a><span class="w">        </span><span class="p">),</span>
+</span><span id="__span-51-42"><a id="__codelineno-51-42" name="__codelineno-51-42"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-51-43"><a id="__codelineno-51-43" name="__codelineno-51-43"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>An example metric config file:</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-52-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-52-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-52-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-52-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-52-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-52-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-52-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-52-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-52-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-52-10">10</a></span>
+<span class="normal"><a href="#__codelineno-52-11">11</a></span>
+<span class="normal"><a href="#__codelineno-52-12">12</a></span>
+<span class="normal"><a href="#__codelineno-52-13">13</a></span>
+<span class="normal"><a href="#__codelineno-52-14">14</a></span>
+<span class="normal"><a href="#__codelineno-52-15">15</a></span>
+<span class="normal"><a href="#__codelineno-52-16">16</a></span>
+<span class="normal"><a href="#__codelineno-52-17">17</a></span>
+<span class="normal"><a href="#__codelineno-52-18">18</a></span>
+<span class="normal"><a href="#__codelineno-52-19">19</a></span>
+<span class="normal"><a href="#__codelineno-52-20">20</a></span>
+<span class="normal"><a href="#__codelineno-52-21">21</a></span>
+<span class="normal"><a href="#__codelineno-52-22">22</a></span>
+<span class="normal"><a href="#__codelineno-52-23">23</a></span>
+<span class="normal"><a href="#__codelineno-52-24">24</a></span>
+<span class="normal"><a href="#__codelineno-52-25">25</a></span>
+<span class="normal"><a href="#__codelineno-52-26">26</a></span>
+<span class="normal"><a href="#__codelineno-52-27">27</a></span>
+<span class="normal"><a href="#__codelineno-52-28">28</a></span>
+<span class="normal"><a href="#__codelineno-52-29">29</a></span>
+<span class="normal"><a href="#__codelineno-52-30">30</a></span>
+<span class="normal"><a href="#__codelineno-52-31">31</a></span>
+<span class="normal"><a href="#__codelineno-52-32">32</a></span>
+<span class="normal"><a href="#__codelineno-52-33">33</a></span>
+<span class="normal"><a href="#__codelineno-52-34">34</a></span>
+<span class="normal"><a href="#__codelineno-52-35">35</a></span>
+<span class="normal"><a href="#__codelineno-52-36">36</a></span>
+<span class="normal"><a href="#__codelineno-52-37">37</a></span>
+<span class="normal"><a href="#__codelineno-52-38">38</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-52-1"><a id="__codelineno-52-1" name="__codelineno-52-1"></a><span class="p">[</span>
+</span><span id="__span-52-2"><a id="__codelineno-52-2" name="__codelineno-52-2"></a><span class="w">  </span><span class="p">{</span>
+</span><span id="__span-52-3"><a id="__codelineno-52-3" name="__codelineno-52-3"></a><span class="w">    </span><span class="nt">&quot;metricName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;llm_rubric_response&quot;</span><span class="p">,</span>
+</span><span id="__span-52-4"><a id="__codelineno-52-4" name="__codelineno-52-4"></a><span class="w">    </span><span class="nt">&quot;threshold&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.9</span><span class="p">,</span>
+</span><span id="__span-52-5"><a id="__codelineno-52-5" name="__codelineno-52-5"></a><span class="w">    </span><span class="nt">&quot;criterion&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-52-6"><a id="__codelineno-52-6" name="__codelineno-52-6"></a><span class="w">      </span><span class="nt">&quot;llmJudge&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-52-7"><a id="__codelineno-52-7" name="__codelineno-52-7"></a><span class="w">        </span><span class="nt">&quot;judgeModel&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-52-8"><a id="__codelineno-52-8" name="__codelineno-52-8"></a><span class="w">          </span><span class="nt">&quot;providerName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;openai&quot;</span><span class="p">,</span>
+</span><span id="__span-52-9"><a id="__codelineno-52-9" name="__codelineno-52-9"></a><span class="w">          </span><span class="nt">&quot;modelName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;deepseek-chat&quot;</span><span class="p">,</span>
+</span><span id="__span-52-10"><a id="__codelineno-52-10" name="__codelineno-52-10"></a><span class="w">          </span><span class="nt">&quot;numSamples&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+</span><span id="__span-52-11"><a id="__codelineno-52-11" name="__codelineno-52-11"></a><span class="w">          </span><span class="nt">&quot;generationConfig&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-52-12"><a id="__codelineno-52-12" name="__codelineno-52-12"></a><span class="w">            </span><span class="nt">&quot;max_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">512</span><span class="p">,</span>
+</span><span id="__span-52-13"><a id="__codelineno-52-13" name="__codelineno-52-13"></a><span class="w">            </span><span class="nt">&quot;temperature&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-52-14"><a id="__codelineno-52-14" name="__codelineno-52-14"></a><span class="w">            </span><span class="nt">&quot;stream&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+</span><span id="__span-52-15"><a id="__codelineno-52-15" name="__codelineno-52-15"></a><span class="w">          </span><span class="p">}</span>
+</span><span id="__span-52-16"><a id="__codelineno-52-16" name="__codelineno-52-16"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-52-17"><a id="__codelineno-52-17" name="__codelineno-52-17"></a><span class="w">        </span><span class="nt">&quot;rubrics&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-52-18"><a id="__codelineno-52-18" name="__codelineno-52-18"></a><span class="w">          </span><span class="p">{</span>
+</span><span id="__span-52-19"><a id="__codelineno-52-19" name="__codelineno-52-19"></a><span class="w">            </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1&quot;</span><span class="p">,</span>
+</span><span id="__span-52-20"><a id="__codelineno-52-20" name="__codelineno-52-20"></a><span class="w">            </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;FINAL_RESPONSE_QUALITY&quot;</span><span class="p">,</span>
+</span><span id="__span-52-21"><a id="__codelineno-52-21" name="__codelineno-52-21"></a><span class="w">            </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;The final answer is correct.&quot;</span><span class="p">,</span>
+</span><span id="__span-52-22"><a id="__codelineno-52-22" name="__codelineno-52-22"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-52-23"><a id="__codelineno-52-23" name="__codelineno-52-23"></a><span class="w">              </span><span class="nt">&quot;text&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;The final answer is correct and consistent with the user request.&quot;</span>
+</span><span id="__span-52-24"><a id="__codelineno-52-24" name="__codelineno-52-24"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-52-25"><a id="__codelineno-52-25" name="__codelineno-52-25"></a><span class="w">          </span><span class="p">},</span>
+</span><span id="__span-52-26"><a id="__codelineno-52-26" name="__codelineno-52-26"></a><span class="w">          </span><span class="p">{</span>
+</span><span id="__span-52-27"><a id="__codelineno-52-27" name="__codelineno-52-27"></a><span class="w">            </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2&quot;</span><span class="p">,</span>
+</span><span id="__span-52-28"><a id="__codelineno-52-28" name="__codelineno-52-28"></a><span class="w">            </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;CONTEXT_RELEVANCE&quot;</span><span class="p">,</span>
+</span><span id="__span-52-29"><a id="__codelineno-52-29" name="__codelineno-52-29"></a><span class="w">            </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;The final answer is relevant to the user prompt.&quot;</span><span class="p">,</span>
+</span><span id="__span-52-30"><a id="__codelineno-52-30" name="__codelineno-52-30"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-52-31"><a id="__codelineno-52-31" name="__codelineno-52-31"></a><span class="w">              </span><span class="nt">&quot;text&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;The final answer is relevant to the user prompt without unrelated content.&quot;</span>
+</span><span id="__span-52-32"><a id="__codelineno-52-32" name="__codelineno-52-32"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-52-33"><a id="__codelineno-52-33" name="__codelineno-52-33"></a><span class="w">          </span><span class="p">}</span>
+</span><span id="__span-52-34"><a id="__codelineno-52-34" name="__codelineno-52-34"></a><span class="w">        </span><span class="p">]</span>
+</span><span id="__span-52-35"><a id="__codelineno-52-35" name="__codelineno-52-35"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-52-36"><a id="__codelineno-52-36" name="__codelineno-52-36"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-52-37"><a id="__codelineno-52-37" name="__codelineno-52-37"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-52-38"><a id="__codelineno-52-38" name="__codelineno-52-38"></a><span class="p">]</span>
+</span></code></pre></div></td></tr></table></div>
+<p>See the complete example at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/rubricresponse">examples/evaluation/llm/rubricresponse</a>.</p>
+<h4 id="llm-rubric-knowledge-recall-evaluator">LLM Rubric Knowledge Recall Evaluator</h4>
+<p>The metric name for the LLM rubric knowledge recall evaluator is <code>llm_rubric_knowledge_recall</code>. It determines whether the retrieved knowledge supports the key information in the user question.</p>
+<p>Evaluation logic:</p>
+<ul>
+<li>Extract responses from the <code>knowledge_search</code>/<code>knowledge_search_with_agentic_filter</code> tools in <code>IntermediateData.ToolResponses</code> as retrieval results.</li>
+<li>Combine <code>Rubrics</code> to build the prompt. The judge model returns <code>yes</code>/<code>no</code> for each rubric, and the score for a single sample is the average.</li>
+<li>With multiple samples, use majority voting to pick the representative result, then compare with the threshold for the final conclusion.</li>
+</ul>
+<p>Typical configuration:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-53-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-53-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-53-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-53-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-53-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-53-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-53-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-53-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-53-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-53-10">10</a></span>
+<span class="normal"><a href="#__codelineno-53-11">11</a></span>
+<span class="normal"><a href="#__codelineno-53-12">12</a></span>
+<span class="normal"><a href="#__codelineno-53-13">13</a></span>
+<span class="normal"><a href="#__codelineno-53-14">14</a></span>
+<span class="normal"><a href="#__codelineno-53-15">15</a></span>
+<span class="normal"><a href="#__codelineno-53-16">16</a></span>
+<span class="normal"><a href="#__codelineno-53-17">17</a></span>
+<span class="normal"><a href="#__codelineno-53-18">18</a></span>
+<span class="normal"><a href="#__codelineno-53-19">19</a></span>
+<span class="normal"><a href="#__codelineno-53-20">20</a></span>
+<span class="normal"><a href="#__codelineno-53-21">21</a></span>
+<span class="normal"><a href="#__codelineno-53-22">22</a></span>
+<span class="normal"><a href="#__codelineno-53-23">23</a></span>
+<span class="normal"><a href="#__codelineno-53-24">24</a></span>
+<span class="normal"><a href="#__codelineno-53-25">25</a></span>
+<span class="normal"><a href="#__codelineno-53-26">26</a></span>
+<span class="normal"><a href="#__codelineno-53-27">27</a></span>
+<span class="normal"><a href="#__codelineno-53-28">28</a></span>
+<span class="normal"><a href="#__codelineno-53-29">29</a></span>
+<span class="normal"><a href="#__codelineno-53-30">30</a></span>
+<span class="normal"><a href="#__codelineno-53-31">31</a></span>
+<span class="normal"><a href="#__codelineno-53-32">32</a></span>
+<span class="normal"><a href="#__codelineno-53-33">33</a></span>
+<span class="normal"><a href="#__codelineno-53-34">34</a></span>
+<span class="normal"><a href="#__codelineno-53-35">35</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-53-2"><a id="__codelineno-53-2" name="__codelineno-53-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
+</span><span id="__span-53-3"><a id="__codelineno-53-3" name="__codelineno-53-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion&quot;</span>
+</span><span id="__span-53-4"><a id="__codelineno-53-4" name="__codelineno-53-4"></a><span class="w">    </span><span class="nx">cllm</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm&quot;</span>
+</span><span id="__span-53-5"><a id="__codelineno-53-5" name="__codelineno-53-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-53-6"><a id="__codelineno-53-6" name="__codelineno-53-6"></a><span class="p">)</span>
+</span><span id="__span-53-7"><a id="__codelineno-53-7" name="__codelineno-53-7"></a>
+</span><span id="__span-53-8"><a id="__codelineno-53-8" name="__codelineno-53-8"></a><span class="nx">evalMetric</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">metric</span><span class="p">.</span><span class="nx">EvalMetric</span><span class="p">{</span>
+</span><span id="__span-53-9"><a id="__codelineno-53-9" name="__codelineno-53-9"></a><span class="w">    </span><span class="nx">MetricName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;llm_rubric_knowledge_recall&quot;</span><span class="p">,</span>
+</span><span id="__span-53-10"><a id="__codelineno-53-10" name="__codelineno-53-10"></a><span class="w">    </span><span class="nx">Threshold</span><span class="p">:</span><span class="w">  </span><span class="mf">0.9</span><span class="p">,</span>
+</span><span id="__span-53-11"><a id="__codelineno-53-11" name="__codelineno-53-11"></a><span class="w">    </span><span class="nx">Criterion</span><span class="p">:</span><span class="w"> </span><span class="nx">criterion</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-53-12"><a id="__codelineno-53-12" name="__codelineno-53-12"></a><span class="w">        </span><span class="nx">criterion</span><span class="p">.</span><span class="nx">WithLLMJudge</span><span class="p">(</span>
+</span><span id="__span-53-13"><a id="__codelineno-53-13" name="__codelineno-53-13"></a><span class="w">            </span><span class="nx">cllm</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-53-14"><a id="__codelineno-53-14" name="__codelineno-53-14"></a><span class="w">                </span><span class="s">&quot;openai&quot;</span><span class="p">,</span>
+</span><span id="__span-53-15"><a id="__codelineno-53-15" name="__codelineno-53-15"></a><span class="w">                </span><span class="s">&quot;deepseek-chat&quot;</span><span class="p">,</span>
+</span><span id="__span-53-16"><a id="__codelineno-53-16" name="__codelineno-53-16"></a><span class="w">                </span><span class="nx">cllm</span><span class="p">.</span><span class="nx">WithNumSamples</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+</span><span id="__span-53-17"><a id="__codelineno-53-17" name="__codelineno-53-17"></a><span class="w">                </span><span class="nx">cllm</span><span class="p">.</span><span class="nx">WithGeneration</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
+</span><span id="__span-53-18"><a id="__codelineno-53-18" name="__codelineno-53-18"></a><span class="w">                    </span><span class="nx">MaxTokens</span><span class="p">:</span><span class="w">   </span><span class="nx">ptr</span><span class="p">(</span><span class="mi">512</span><span class="p">),</span>
+</span><span id="__span-53-19"><a id="__codelineno-53-19" name="__codelineno-53-19"></a><span class="w">                    </span><span class="nx">Temperature</span><span class="p">:</span><span class="w"> </span><span class="nx">ptr</span><span class="p">(</span><span class="mf">1.0</span><span class="p">),</span>
+</span><span id="__span-53-20"><a id="__codelineno-53-20" name="__codelineno-53-20"></a><span class="w">                    </span><span class="nx">Stream</span><span class="p">:</span><span class="w">      </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-53-21"><a id="__codelineno-53-21" name="__codelineno-53-21"></a><span class="w">                </span><span class="p">}),</span>
+</span><span id="__span-53-22"><a id="__codelineno-53-22" name="__codelineno-53-22"></a><span class="w">                </span><span class="nx">cllm</span><span class="p">.</span><span class="nx">WithRubrics</span><span class="p">([]</span><span class="o">*</span><span class="nx">cllm</span><span class="p">.</span><span class="nx">Rubric</span><span class="p">{</span>
+</span><span id="__span-53-23"><a id="__codelineno-53-23" name="__codelineno-53-23"></a><span class="w">                    </span><span class="p">{</span>
+</span><span id="__span-53-24"><a id="__codelineno-53-24" name="__codelineno-53-24"></a><span class="w">                        </span><span class="nx">ID</span><span class="p">:</span><span class="w">          </span><span class="s">&quot;1&quot;</span><span class="p">,</span>
+</span><span id="__span-53-25"><a id="__codelineno-53-25" name="__codelineno-53-25"></a><span class="w">                        </span><span class="nx">Type</span><span class="p">:</span><span class="w">        </span><span class="s">&quot;KNOWLEDGE_RELEVANCE&quot;</span><span class="p">,</span>
+</span><span id="__span-53-26"><a id="__codelineno-53-26" name="__codelineno-53-26"></a><span class="w">                        </span><span class="nx">Description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;The recalled knowledge is relevant to the user&#39;s prompt.&quot;</span><span class="p">,</span>
+</span><span id="__span-53-27"><a id="__codelineno-53-27" name="__codelineno-53-27"></a><span class="w">                        </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">cllm</span><span class="p">.</span><span class="nx">RubricContent</span><span class="p">{</span>
+</span><span id="__span-53-28"><a id="__codelineno-53-28" name="__codelineno-53-28"></a><span class="w">                            </span><span class="nx">Text</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;The retrieved knowledge directly supports the user prompt and includes key facts.&quot;</span><span class="p">,</span>
+</span><span id="__span-53-29"><a id="__codelineno-53-29" name="__codelineno-53-29"></a><span class="w">                        </span><span class="p">},</span>
+</span><span id="__span-53-30"><a id="__codelineno-53-30" name="__codelineno-53-30"></a><span class="w">                    </span><span class="p">},</span>
+</span><span id="__span-53-31"><a id="__codelineno-53-31" name="__codelineno-53-31"></a><span class="w">                </span><span class="p">}),</span>
+</span><span id="__span-53-32"><a id="__codelineno-53-32" name="__codelineno-53-32"></a><span class="w">            </span><span class="p">),</span>
+</span><span id="__span-53-33"><a id="__codelineno-53-33" name="__codelineno-53-33"></a><span class="w">        </span><span class="p">),</span>
+</span><span id="__span-53-34"><a id="__codelineno-53-34" name="__codelineno-53-34"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-53-35"><a id="__codelineno-53-35" name="__codelineno-53-35"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>An example metric config file:</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-54-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-54-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-54-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-54-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-54-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-54-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-54-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-54-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-54-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-54-10">10</a></span>
+<span class="normal"><a href="#__codelineno-54-11">11</a></span>
+<span class="normal"><a href="#__codelineno-54-12">12</a></span>
+<span class="normal"><a href="#__codelineno-54-13">13</a></span>
+<span class="normal"><a href="#__codelineno-54-14">14</a></span>
+<span class="normal"><a href="#__codelineno-54-15">15</a></span>
+<span class="normal"><a href="#__codelineno-54-16">16</a></span>
+<span class="normal"><a href="#__codelineno-54-17">17</a></span>
+<span class="normal"><a href="#__codelineno-54-18">18</a></span>
+<span class="normal"><a href="#__codelineno-54-19">19</a></span>
+<span class="normal"><a href="#__codelineno-54-20">20</a></span>
+<span class="normal"><a href="#__codelineno-54-21">21</a></span>
+<span class="normal"><a href="#__codelineno-54-22">22</a></span>
+<span class="normal"><a href="#__codelineno-54-23">23</a></span>
+<span class="normal"><a href="#__codelineno-54-24">24</a></span>
+<span class="normal"><a href="#__codelineno-54-25">25</a></span>
+<span class="normal"><a href="#__codelineno-54-26">26</a></span>
+<span class="normal"><a href="#__codelineno-54-27">27</a></span>
+<span class="normal"><a href="#__codelineno-54-28">28</a></span>
+<span class="normal"><a href="#__codelineno-54-29">29</a></span>
+<span class="normal"><a href="#__codelineno-54-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-54-1"><a id="__codelineno-54-1" name="__codelineno-54-1"></a><span class="p">[</span>
+</span><span id="__span-54-2"><a id="__codelineno-54-2" name="__codelineno-54-2"></a><span class="w">  </span><span class="p">{</span>
+</span><span id="__span-54-3"><a id="__codelineno-54-3" name="__codelineno-54-3"></a><span class="w">    </span><span class="nt">&quot;metricName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;llm_rubric_knowledge_recall&quot;</span><span class="p">,</span>
+</span><span id="__span-54-4"><a id="__codelineno-54-4" name="__codelineno-54-4"></a><span class="w">    </span><span class="nt">&quot;threshold&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.9</span><span class="p">,</span>
+</span><span id="__span-54-5"><a id="__codelineno-54-5" name="__codelineno-54-5"></a><span class="w">    </span><span class="nt">&quot;criterion&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-54-6"><a id="__codelineno-54-6" name="__codelineno-54-6"></a><span class="w">      </span><span class="nt">&quot;llmJudge&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-54-7"><a id="__codelineno-54-7" name="__codelineno-54-7"></a><span class="w">        </span><span class="nt">&quot;judgeModel&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-54-8"><a id="__codelineno-54-8" name="__codelineno-54-8"></a><span class="w">          </span><span class="nt">&quot;providerName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;openai&quot;</span><span class="p">,</span>
+</span><span id="__span-54-9"><a id="__codelineno-54-9" name="__codelineno-54-9"></a><span class="w">          </span><span class="nt">&quot;modelName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;deepseek-chat&quot;</span><span class="p">,</span>
+</span><span id="__span-54-10"><a id="__codelineno-54-10" name="__codelineno-54-10"></a><span class="w">          </span><span class="nt">&quot;numSamples&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+</span><span id="__span-54-11"><a id="__codelineno-54-11" name="__codelineno-54-11"></a><span class="w">          </span><span class="nt">&quot;generationConfig&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-54-12"><a id="__codelineno-54-12" name="__codelineno-54-12"></a><span class="w">            </span><span class="nt">&quot;max_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">512</span><span class="p">,</span>
+</span><span id="__span-54-13"><a id="__codelineno-54-13" name="__codelineno-54-13"></a><span class="w">            </span><span class="nt">&quot;temperature&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-54-14"><a id="__codelineno-54-14" name="__codelineno-54-14"></a><span class="w">            </span><span class="nt">&quot;stream&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+</span><span id="__span-54-15"><a id="__codelineno-54-15" name="__codelineno-54-15"></a><span class="w">          </span><span class="p">}</span>
+</span><span id="__span-54-16"><a id="__codelineno-54-16" name="__codelineno-54-16"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-54-17"><a id="__codelineno-54-17" name="__codelineno-54-17"></a><span class="w">        </span><span class="nt">&quot;rubrics&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-54-18"><a id="__codelineno-54-18" name="__codelineno-54-18"></a><span class="w">          </span><span class="p">{</span>
+</span><span id="__span-54-19"><a id="__codelineno-54-19" name="__codelineno-54-19"></a><span class="w">            </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1&quot;</span><span class="p">,</span>
+</span><span id="__span-54-20"><a id="__codelineno-54-20" name="__codelineno-54-20"></a><span class="w">            </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;KNOWLEDGE_RELEVANCE&quot;</span><span class="p">,</span>
+</span><span id="__span-54-21"><a id="__codelineno-54-21" name="__codelineno-54-21"></a><span class="w">            </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;The recalled knowledge is relevant to the user&#39;s prompt.&quot;</span><span class="p">,</span>
+</span><span id="__span-54-22"><a id="__codelineno-54-22" name="__codelineno-54-22"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-54-23"><a id="__codelineno-54-23" name="__codelineno-54-23"></a><span class="w">              </span><span class="nt">&quot;text&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;The retrieved knowledge directly supports the user prompt and includes key facts.&quot;</span>
+</span><span id="__span-54-24"><a id="__codelineno-54-24" name="__codelineno-54-24"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-54-25"><a id="__codelineno-54-25" name="__codelineno-54-25"></a><span class="w">          </span><span class="p">}</span>
+</span><span id="__span-54-26"><a id="__codelineno-54-26" name="__codelineno-54-26"></a><span class="w">        </span><span class="p">]</span>
+</span><span id="__span-54-27"><a id="__codelineno-54-27" name="__codelineno-54-27"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-54-28"><a id="__codelineno-54-28" name="__codelineno-54-28"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-54-29"><a id="__codelineno-54-29" name="__codelineno-54-29"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-54-30"><a id="__codelineno-54-30" name="__codelineno-54-30"></a><span class="p">]</span>
+</span></code></pre></div></td></tr></table></div>
+<p>This evaluator requires the Agent’s tool calls to return retrieval results. See the complete example at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/knowledgerecall">examples/evaluation/llm/knowledgerecall</a>.</p>
 
 
 
@@ -4122,7 +4833,7 @@ EvalCaseResult represents the evaluation result of a single evaluation case, inc
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 24, 2025 06:17:05 UTC">2025-12-24 06:17:05</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 29, 2025 08:01:55 UTC">2025-12-29 08:01:55</span>
   </span>
 
     
