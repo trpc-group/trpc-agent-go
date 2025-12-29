@@ -1756,15 +1756,15 @@
 <h3 id="placeholder-variables-session-state-injection">Placeholder Variables (Session State Injection)</h3>
 <p>LLMAgent automatically injects session state into <code>Instruction</code> and the optional <code>SystemPrompt</code> via placeholder variables. Supported patterns:</p>
 <ul>
-<li><code>{key}</code>: Replace with the string value of <code>session.State["key"]</code></li>
+<li><code>{key}</code>: Replaced with the string value corresponding to the key <code>key</code> in the session state (write via <code>invocation.Session.SetState("key", ...)</code> or SessionService)</li>
 <li><code>{key?}</code>: Optional; if missing, replaced with an empty string</li>
 <li><code>{user:subkey}</code> / <code>{app:subkey}</code> / <code>{temp:subkey}</code>: Use user/app/temp scoped keys (session services merge app/user state into session with these prefixes)</li>
-<li><code>{invocation:subkey}:</code> Replaces with the value of fmt.Sprintf("%+v", <code>invocation.state["subkey"]</code>). (The state can be set via invocation.SetState(k, v))</li>
+<li><code>{invocation:subkey}</code>: Replaces with the value of fmt.Sprintf("%+v", <code>invocation.state["subkey"]</code>). (The state can be set via invocation.SetState(k, v))</li>
 </ul>
 <p>Notes:</p>
 <ul>
 <li>If a non-optional key is not found, the original <code>{key}</code> is preserved (helps the LLM notice missing context)</li>
-<li>Values are read from <code>invocation.Session.State</code> (Runner + SessionService set/merge this automatically)</li>
+<li>Values are read from session state (Runner + SessionService set/merge this automatically)</li>
 </ul>
 <p>Example:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
@@ -2695,31 +2695,25 @@ The structured callback API (recommended) requires <strong>trpc-agent-go &gt;= 0
 <span class="normal"><a href="#__codelineno-24-12">12</a></span>
 <span class="normal"><a href="#__codelineno-24-13">13</a></span>
 <span class="normal"><a href="#__codelineno-24-14">14</a></span>
-<span class="normal"><a href="#__codelineno-24-15">15</a></span>
-<span class="normal"><a href="#__codelineno-24-16">16</a></span>
-<span class="normal"><a href="#__codelineno-24-17">17</a></span>
-<span class="normal"><a href="#__codelineno-24-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1"></a><span class="c1">// Note: Structured callback API requires trpc-agent-go &gt;= 0.6.0</span>
+<span class="normal"><a href="#__codelineno-24-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1"></a><span class="c1">// Note: Structured callback API requires trpc-agent-go &gt;= 0.6.0</span>
 </span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2"></a><span class="nx">callbacks</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">()</span>
 </span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3"></a><span class="nx">callbacks</span><span class="p">.</span><span class="nx">RegisterBeforeAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">.</span><span class="nx">Session</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">.</span><span class="nx">Session</span><span class="p">.</span><span class="nx">State</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6"></a><span class="w">      </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">.</span><span class="nx">Session</span><span class="p">.</span><span class="nx">State</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">make</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">][]</span><span class="kt">byte</span><span class="p">)</span>
-</span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-24-8"><a id="__codelineno-24-8" name="__codelineno-24-8"></a><span class="w">    </span><span class="c1">// Write a one-off instruction for this turn only</span>
-</span><span id="__span-24-9"><a id="__codelineno-24-9" name="__codelineno-24-9"></a><span class="w">    </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">.</span><span class="nx">Session</span><span class="p">.</span><span class="nx">State</span><span class="p">[</span><span class="s">&quot;temp:sys&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="s">&quot;Translate to French.&quot;</span><span class="p">)</span>
-</span><span id="__span-24-10"><a id="__codelineno-24-10" name="__codelineno-24-10"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-24-11"><a id="__codelineno-24-11" name="__codelineno-24-11"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-24-12"><a id="__codelineno-24-12" name="__codelineno-24-12"></a><span class="p">})</span>
-</span><span id="__span-24-13"><a id="__codelineno-24-13" name="__codelineno-24-13"></a>
-</span><span id="__span-24-14"><a id="__codelineno-24-14" name="__codelineno-24-14"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-24-15"><a id="__codelineno-24-15" name="__codelineno-24-15"></a><span class="w">  </span><span class="s">&quot;temp-agent&quot;</span><span class="p">,</span>
-</span><span id="__span-24-16"><a id="__codelineno-24-16" name="__codelineno-24-16"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;{temp:sys}&quot;</span><span class="p">),</span>
-</span><span id="__span-24-17"><a id="__codelineno-24-17" name="__codelineno-24-17"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">callbacks</span><span class="p">),</span><span class="w"> </span><span class="c1">// requires trpc-agent-go &gt;= 0.6.0</span>
-</span><span id="__span-24-18"><a id="__codelineno-24-18" name="__codelineno-24-18"></a><span class="p">)</span>
+</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5"></a><span class="w">    </span><span class="c1">// Write a one-off instruction for this turn only</span>
+</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6"></a><span class="w">    </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">.</span><span class="nx">Session</span><span class="p">.</span><span class="nx">SetState</span><span class="p">(</span><span class="s">&quot;temp:sys&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="s">&quot;Translate to French.&quot;</span><span class="p">))</span>
+</span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-24-8"><a id="__codelineno-24-8" name="__codelineno-24-8"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-24-9"><a id="__codelineno-24-9" name="__codelineno-24-9"></a><span class="p">})</span>
+</span><span id="__span-24-10"><a id="__codelineno-24-10" name="__codelineno-24-10"></a>
+</span><span id="__span-24-11"><a id="__codelineno-24-11" name="__codelineno-24-11"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-24-12"><a id="__codelineno-24-12" name="__codelineno-24-12"></a><span class="w">  </span><span class="s">&quot;temp-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-24-13"><a id="__codelineno-24-13" name="__codelineno-24-13"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;{temp:sys}&quot;</span><span class="p">),</span>
+</span><span id="__span-24-14"><a id="__codelineno-24-14" name="__codelineno-24-14"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">callbacks</span><span class="p">),</span><span class="w"> </span><span class="c1">// requires trpc-agent-go &gt;= 0.6.0</span>
+</span><span id="__span-24-15"><a id="__codelineno-24-15" name="__codelineno-24-15"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Caveats</p>
 <ul>
-<li>In-memory <code>UpdateUserState</code> intentionally forbids <code>temp:*</code> updates; write <code>temp:*</code> directly to <code>invocation.Session.State</code> (e.g., via a callback) when you need ephemeral, per‑turn values.</li>
+<li>In-memory <code>UpdateUserState</code> intentionally forbids <code>temp:*</code> updates; write <code>temp:*</code> via <code>invocation.Session.SetState</code> (e.g., via a callback) when you need ephemeral, per‑turn values.</li>
 <li>Placeholders are resolved at request time; changing the stored value updates behavior on the next model request without recreating the agent.</li>
 </ul>
 
@@ -2744,7 +2738,7 @@ The structured callback API (recommended) requires <strong>trpc-agent-go &gt;= 0
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 22, 2025 02:46:50 UTC">2025-12-22 02:46:50</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 29, 2025 08:00:28 UTC">2025-12-29 08:00:28</span>
   </span>
 
     
