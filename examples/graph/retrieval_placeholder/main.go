@@ -87,11 +87,8 @@ func run(ctx context.Context, modelName string) error {
 		// Write ephemeral keys into the session temp namespace so LLM placeholders can read them.
 		if sessVal, ok := st[graph.StateKeySession]; ok {
 			if sess, ok := sessVal.(*session.Session); ok && sess != nil {
-				if sess.State == nil {
-					sess.State = make(session.StateMap)
-				}
-				sess.State[session.StateTempPrefix+"retrieved_context"] = []byte(contextText)
-				sess.State[session.StateTempPrefix+"user_input"] = []byte(input)
+				sess.SetState(session.StateTempPrefix+"retrieved_context", []byte(contextText))
+				sess.SetState(session.StateTempPrefix+"user_input", []byte(input))
 			}
 		}
 

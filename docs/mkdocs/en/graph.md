@@ -956,7 +956,7 @@ Tool-call pairing and second entry into LLM:
 
 LLM nodes support placeholder injection in their `instruction` string (same rules as LLMAgent). Both native `{key}` and Mustache `{{key}}` syntaxes are accepted (Mustache is normalized to the native form automatically):
 
-- `{key}` / `{{key}}` → replaced by `session.State["key"]`
+- `{key}` / `{{key}}` → Replaced with the string value corresponding to the key `key` in the session state (write via `sess.SetState("key", ...)` or SessionService).
 - `{key?}` / `{{key?}}` → optional; missing values become empty
 - `{user:subkey}`, `{app:subkey}`, `{temp:subkey}` (and their Mustache forms) → access user/app/temp scopes (session services merge app/user state into session with these prefixes)
 
@@ -992,9 +992,8 @@ sg.AddNode("retrieve", func(ctx context.Context, s graph.State) (any, error) {
     var input string
     if v, ok := s[graph.StateKeyUserInput].(string); ok { input = v }
     if sess, _ := s[graph.StateKeySession].(*session.Session); sess != nil {
-        if sess.State == nil { sess.State = make(session.StateMap) }
-        sess.State[session.StateTempPrefix+"retrieved_context"] = []byte(retrieved)
-        sess.State[session.StateTempPrefix+"user_input"] = []byte(input)
+        sess.SetState(session.StateTempPrefix+"retrieved_context", []byte(retrieved))
+        sess.SetState(session.StateTempPrefix+"user_input", []byte(input))
     }
     return graph.State{}, nil
 })
@@ -1009,8 +1008,8 @@ Example: `examples/graph/retrieval_placeholder`.
 
 Best practices for placeholders and session state
 
-- Ephemeral vs persistent: write per‑turn values to `temp:*` on `session.State` (session state). Persistent configuration should go through `SessionService` with `user:*`/`app:*`.
-- Why direct write is OK: LLM nodes expand placeholders from the session object present in graph state; see [graph/state_graph.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/state_graph.go). GraphAgent puts the session into state; see [agent/graphagent/graph_agent.go](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/graphagent/graph_agent.go).
+- Ephemeral vs persistent: write per‑turn values to `temp:*` on session state (recommended via `sess.SetState`). Persistent configuration should go through `SessionService` with `user:*`/`app:*`.
+- Why `SetState` is recommended: LLM nodes expand placeholders from the session object present in graph state; using `sess.SetState` avoids unsafe concurrent map access.
 - Service guardrails: the in‑memory service intentionally disallows writing `temp:*` (and `app:*` via user updater); see [session/inmemory/service.go](https://github.com/trpc-group/trpc-agent-go/blob/main/session/inmemory/service.go).
 - Concurrency: when multiple branches run in parallel, avoid multiple nodes mutating the same `session.State` keys. Prefer composing in a single node before the LLM, or store intermediate values in graph state then write once to `temp:*`.
 - Observability: if you want parts of the prompt to appear in completion events, also store a compact summary in graph state (e.g., under `metadata`). The final event serializes non‑internal final state; see [graph/events.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go).

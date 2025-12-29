@@ -10,6 +10,7 @@
 package mysql
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
@@ -157,7 +158,14 @@ func (m *sessionStateJSONMatcher) Match(v driver.Value) bool {
 			m.t.Errorf("state missing key %s", key)
 			return false
 		}
-		if string(got) != string(expected) {
+		if expected == nil {
+			if got != nil {
+				m.t.Errorf("state mismatch for key %s", key)
+				return false
+			}
+			continue
+		}
+		if got == nil || !bytes.Equal(got, expected) {
 			m.t.Errorf("state mismatch for key %s", key)
 			return false
 		}
@@ -217,6 +225,74 @@ func TestCreateSession_Success(t *testing.T) {
 	assert.NotNil(t, sess)
 	assert.Equal(t, key.SessionID, sess.ID)
 	assert.Equal(t, state, sess.State)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateSession_CopiesStateValueAndKeepsNil(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSessionTTL(1*time.Hour))
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	input := []byte(`"value"`)
+	state := session.StateMap{
+		"nilKey": nil,
+		"key":    input,
+	}
+
+	// Mock: Check if session exists (should return no rows)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
+
+	// Mock: Insert new session
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_states")).
+		WithArgs(
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+			sqlmock.AnyArg(), // state (JSON)
+			sqlmock.AnyArg(), // created_at
+			sqlmock.AnyArg(), // updated_at
+			sqlmock.AnyArg(), // expires_at
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Mock: List app states (empty)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
+		WithArgs(key.AppName, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+	// Mock: List user states (empty)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
+		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+	sess, err := s.CreateSession(ctx, key, state)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	raw, ok := sess.State["nilKey"]
+	require.True(t, ok)
+	assert.Nil(t, raw)
+
+	got, ok := sess.GetState("key")
+	require.True(t, ok)
+	require.Equal(t, []byte(`"value"`), got)
+
+	input[0] = 'x'
+	got2, ok := sess.GetState("key")
+	require.True(t, ok)
+	assert.Equal(t, []byte(`"value"`), got2)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -1461,6 +1537,65 @@ func TestUpdateSessionState_UnmarshalNilState(t *testing.T) {
 
 	err = s.UpdateSessionState(ctx, key, session.StateMap{
 		"only": []byte("value"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateSessionState_CopiesStateValueAndKeepsNil(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+	createdAt := time.Date(2024, 10, 10, 10, 10, 10, 0, time.UTC)
+	updatedAt := createdAt.Add(time.Minute)
+
+	existing := &SessionState{
+		ID:        key.SessionID,
+		State:     session.StateMap{"existing": []byte("old")},
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}
+	stateBytes, err := json.Marshal(existing)
+	require.NoError(t, err)
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT state FROM session_states WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL")).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(stateBytes))
+
+	expectedState := session.StateMap{
+		"existing": []byte("old"),
+		"nilKey":   nil,
+		"copied":   []byte("fresh"),
+	}
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = ?, updated_at = ?, expires_at = ?")).
+		WithArgs(
+			&sessionStateJSONMatcher{
+				t:             t,
+				expectedID:    key.SessionID,
+				expectedState: expectedState,
+				createdAt:     createdAt,
+				previousAt:    updatedAt,
+			},
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err = s.UpdateSessionState(ctx, key, session.StateMap{
+		"nilKey": nil,
+		"copied": []byte("fresh"),
 	})
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())

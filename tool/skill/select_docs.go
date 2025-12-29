@@ -198,7 +198,7 @@ func (t *SelectDocsTool) previousSelection(
 		return nil, false
 	}
 	key := skill.StateKeyDocsPrefix + skillName
-	v, found := inv.Session.State[key]
+	v, found := inv.Session.GetState(key)
 	if !found || len(v) == 0 {
 		return nil, false
 	}

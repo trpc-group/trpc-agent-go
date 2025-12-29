@@ -375,7 +375,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 	if err := sess.AppendTrackEvent(trackEvent); err != nil {
 		return err
 	}
-	sessState.State = sess.State
+	sessState.State = sess.SnapshotState()
 	sessState.UpdatedAt = sess.UpdatedAt
 
 	updatedStateBytes, err := json.Marshal(sessState)

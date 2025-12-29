@@ -488,6 +488,14 @@ func TestSessionAppendTrackEvent(t *testing.T) {
 		assert.Contains(t, err.Error(), "track event is nil")
 	})
 
+	t.Run("invalid track index returns error", func(t *testing.T) {
+		sess := &Session{State: StateMap{tracksStateKey: []byte("not-json")}}
+		err := sess.AppendTrackEvent(&TrackEvent{Track: "alpha"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ensure track indexed")
+		assert.Nil(t, sess.Tracks)
+	})
+
 	t.Run("append initializes state and stores copy", func(t *testing.T) {
 		sess := &Session{}
 		first := &TrackEvent{
@@ -1136,6 +1144,141 @@ func TestApplyEventStateDeltaMap(t *testing.T) {
 	}
 }
 
+func TestApplyEventStateDeltaMap_CopiesValues(t *testing.T) {
+	state := make(StateMap)
+	delta := StateMap{
+		"key":   []byte("value"),
+		"nilKV": nil,
+	}
+	ev := createTestEvent(model.RoleUser, "test", time.Now(), delta)
+
+	ApplyEventStateDeltaMap(state, ev)
+
+	require.Equal(t, []byte("value"), state["key"])
+	assert.Nil(t, state["nilKV"])
+
+	delta["key"][0] = 'x'
+	require.Equal(t, []byte("value"), state["key"])
+}
+
+func TestSession_StateAccessors_CopyAndNil(t *testing.T) {
+	sess := NewSession("app", "user", "sid")
+
+	input := []byte("value")
+	sess.SetState("key", input)
+	input[0] = 'x'
+
+	got, ok := sess.GetState("key")
+	require.True(t, ok)
+	require.Equal(t, []byte("value"), got)
+
+	got[0] = 'y'
+	got2, ok := sess.GetState("key")
+	require.True(t, ok)
+	require.Equal(t, []byte("value"), got2)
+
+	sess.SetState("nilKey", nil)
+	nilVal, ok := sess.GetState("nilKey")
+	require.True(t, ok)
+	assert.Nil(t, nilVal)
+
+	snap := sess.SnapshotState()
+	require.NotNil(t, snap)
+	assert.Equal(t, []byte("value"), snap["key"])
+	assert.Nil(t, snap["nilKey"])
+
+	snap["key"][0] = 'z'
+	got3, ok := sess.GetState("key")
+	require.True(t, ok)
+	require.Equal(t, []byte("value"), got3)
+
+	delete(snap, "key")
+	got4, ok := sess.GetState("key")
+	require.True(t, ok)
+	require.Equal(t, []byte("value"), got4)
+
+	sess.DeleteState("key")
+	_, ok = sess.GetState("key")
+	assert.False(t, ok)
+}
+
+func TestWithSessionState_DeepCopy(t *testing.T) {
+	input := StateMap{
+		"key":   []byte("value"),
+		"nilKV": nil,
+	}
+	sess := NewSession("app", "user", "sid", WithSessionState(input))
+
+	input["key"][0] = 'x'
+	got, ok := sess.GetState("key")
+	require.True(t, ok)
+	require.Equal(t, []byte("value"), got)
+
+	input["key"] = []byte("changed")
+	got2, ok := sess.GetState("key")
+	require.True(t, ok)
+	require.Equal(t, []byte("value"), got2)
+
+	input["newKey"] = []byte("newValue")
+	_, ok = sess.GetState("newKey")
+	assert.False(t, ok)
+
+	nilVal, ok := sess.GetState("nilKV")
+	require.True(t, ok)
+	assert.Nil(t, nilVal)
+}
+
+func TestWithSessionState_NilSessionAndNilState(t *testing.T) {
+	t.Run("nil session is no-op", func(t *testing.T) {
+		opt := WithSessionState(StateMap{"key": []byte("value")})
+		require.NotPanics(t, func() { opt(nil) })
+	})
+
+	t.Run("nil state overwrites to nil", func(t *testing.T) {
+		sess := NewSession("app", "user", "sid")
+		require.NotNil(t, sess.State)
+
+		opt := WithSessionState(nil)
+		opt(sess)
+		assert.Nil(t, sess.State)
+	})
+}
+
+func TestSession_GetState_NilStateMap(t *testing.T) {
+	sess := NewSession("app", "user", "sid")
+	sess.State = nil
+
+	val, ok := sess.GetState("key")
+	assert.False(t, ok)
+	assert.Nil(t, val)
+}
+
+func TestSession_SetState_NilStateMap(t *testing.T) {
+	sess := NewSession("app", "user", "sid")
+	sess.State = nil
+
+	sess.SetState("key", []byte("value"))
+	got, ok := sess.GetState("key")
+	require.True(t, ok)
+	require.Equal(t, []byte("value"), got)
+}
+
+func TestSession_DeleteState_NilStateMap(t *testing.T) {
+	sess := NewSession("app", "user", "sid")
+	sess.State = nil
+
+	sess.DeleteState("key")
+	assert.Nil(t, sess.State)
+}
+
+func TestSession_SnapshotState_NilStateMap(t *testing.T) {
+	sess := NewSession("app", "user", "sid")
+	sess.State = nil
+
+	snap := sess.SnapshotState()
+	assert.Nil(t, snap)
+}
+
 func TestUpdateUserSession(t *testing.T) {
 	now := time.Now()
 	baseTime := now.Add(-5 * time.Minute)
@@ -1616,6 +1759,22 @@ func TestSession_Clone(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSession_Clone_CopiesNilStateValue(t *testing.T) {
+	original := &Session{
+		ID:      "session-nil-value",
+		AppName: "test-app",
+		UserID:  "user-123",
+		State: StateMap{
+			"nilKey": nil,
+		},
+	}
+
+	cloned := original.Clone()
+	val, ok := cloned.State["nilKey"]
+	require.True(t, ok)
+	assert.Nil(t, val)
 }
 
 // Additional test for concurrent access during clone

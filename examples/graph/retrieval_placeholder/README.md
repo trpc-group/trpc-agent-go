@@ -6,8 +6,8 @@ Key idea: write transient values into the session's `temp:` namespace inside the
 
 ## Highlights
 
-- Retrieval node writes context to `session.State["temp:retrieved_context"]`
-- User input is mirrored to `session.State["temp:user_input"]` for use in the instruction
+- Retrieval node writes context to session state key `temp:retrieved_context` (via `Session.SetState`)
+- User input is mirrored to session state key `temp:user_input` (via `Session.SetState`) for use in the instruction
 - LLM node instruction uses `{temp:retrieved_context}` and `{temp:user_input}` placeholders
 - No custom plumbing in `AddLLMNode`; uses built‑in placeholder expansion
 
@@ -49,12 +49,12 @@ This pattern is ideal when retrieval results are per‑turn ephemeral and should
 
 - `main.go`: the complete runnable example
 
-## Why Write `temp:` Keys Directly on `session.State`
+## Why Write `temp:` Keys via `Session.SetState`
 
 - Placeholder expansion for LLM (Large Language Model) nodes reads from the session’s state, see [graph/state_graph.go](graph/state_graph.go).
 - GraphAgent injects the current `*session.Session` into graph state, see [agent/graphagent/graph_agent.go](agent/graphagent/graph_agent.go).
 - Templates can use both `{key}` and `{{key}}` styles (Mustache is normalized automatically).
-- For per‑turn data used only to build this round’s prompt, writing `temp:*` directly on `session.State` is appropriate and simple. It won’t be persisted.
+- For per‑turn data used only to build this round’s prompt, writing `temp:*` via `Session.SetState` is appropriate and simple. It won’t be persisted.
 
 ## When to Use `SessionService` Instead
 
@@ -63,7 +63,7 @@ This pattern is ideal when retrieval results are per‑turn ephemeral and should
 
 ## Concurrency Tips
 
-- A single straight‑line flow (retrieve → llm) is safe to update `session.State` in the retrieval node.
+- A single straight‑line flow (retrieve → llm) is safe to update session state via `Session.SetState` in the retrieval node.
 - If you have parallel branches that might write the same keys, fan‑in to a single node to compose the values and then write once.
 
 ## Exposing Data to Observability
