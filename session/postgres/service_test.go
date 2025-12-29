@@ -348,11 +348,8 @@ func setupMockService(t *testing.T, opts *TestServiceOpts) (*Service, sqlmock.Sq
 		}
 	}
 
-	// Initialize summary job channels
-	s.summaryJobChans = make([]chan *summaryJob, opts.asyncSummaryNum)
-	for i := range s.summaryJobChans {
-		s.summaryJobChans[i] = make(chan *summaryJob, opts.summaryQueueSize)
-	}
+	// Note: summaryJobChans is now handled by asyncWorker in session/internal/summary
+	// The asyncWorker is initialized in NewService if summarizer and asyncSummaryNum are set
 
 	return s, mock, db
 }
@@ -2901,8 +2898,9 @@ func TestNewService_NoSummarizer_NoAsyncWorker(t *testing.T) {
 	require.NotNil(t, svc)
 	defer svc.Close()
 
-	// Verify that summary job channels are not initialized when no summarizer is provided
-	assert.Len(t, svc.summaryJobChans, 0)
+	// Note: summaryJobChans is now handled by asyncWorker in session/internal/summary
+	// Verify that asyncWorker is not initialized when no summarizer is provided
+	assert.Nil(t, svc.asyncWorker)
 }
 
 func TestNewService_WithSummarizer_StartsAsyncWorker(t *testing.T) {
@@ -2934,12 +2932,9 @@ func TestNewService_WithSummarizer_StartsAsyncWorker(t *testing.T) {
 	require.NotNil(t, svc)
 	defer svc.Close()
 
-	// Verify that summary job channels are initialized when summarizer is provided
-	assert.Len(t, svc.summaryJobChans, 2)
-	for i, ch := range svc.summaryJobChans {
-		assert.NotNil(t, ch, "Channel %d should not be nil", i)
-		assert.Equal(t, 10, cap(ch), "Channel %d should have capacity 10", i)
-	}
+	// Note: summaryJobChans is now handled by asyncWorker in session/internal/summary
+	// Verify that asyncWorker is initialized when summarizer is provided
+	assert.NotNil(t, svc.asyncWorker)
 }
 
 func TestNewService_InstanceNotFound(t *testing.T) {
