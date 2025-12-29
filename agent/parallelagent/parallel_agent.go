@@ -163,7 +163,11 @@ func (a *ParallelAgent) startSubAgents(
 			branchAgentCtx := agent.NewInvocationContext(ctx, branchInvocation)
 
 			// Run the sub-agent.
-			subEventChan, err := sa.Run(branchAgentCtx, branchInvocation)
+			subEventChan, err := agent.RunWithPlugins(
+				branchAgentCtx,
+				branchInvocation,
+				sa,
+			)
 			if err != nil {
 				// Send error event.
 				agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(

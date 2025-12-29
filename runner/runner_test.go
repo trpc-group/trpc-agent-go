@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -167,6 +168,183 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	agentEvent := sess.Events[1]
 	assert.Equal(t, "test-agent", agentEvent.Author)
 	assert.Contains(t, agentEvent.Response.Choices[0].Message.Content, "Hello, world!")
+}
+
+type testPlugin struct {
+	name string
+	reg  func(r *plugin.Registry)
+}
+
+func (p *testPlugin) Name() string { return p.name }
+
+func (p *testPlugin) Register(r *plugin.Registry) {
+	if p.reg != nil {
+		p.reg(r)
+	}
+}
+
+func TestRunner_WithPlugins_AppliesHooks(t *testing.T) {
+	beforeCalled := false
+	const tagged = "tagged"
+
+	p := &testPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.BeforeAgent(func(
+				ctx context.Context,
+				args *agent.BeforeAgentArgs,
+			) (*agent.BeforeAgentResult, error) {
+				beforeCalled = true
+				return nil, nil
+			})
+			r.OnEvent(func(
+				ctx context.Context,
+				inv *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				if e != nil {
+					e.Tag = tagged
+				}
+				return nil, nil
+			})
+		},
+	}
+
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &mockAgent{name: "test-agent"}
+	r := NewRunner(
+		"test-app",
+		ag,
+		WithSessionService(sessionService),
+		WithPlugins(p),
+	)
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+	)
+	require.NoError(t, err)
+
+	var events []*event.Event
+	for evt := range ch {
+		events = append(events, evt)
+	}
+
+	require.True(t, beforeCalled)
+	require.NotEmpty(t, events)
+	for _, evt := range events {
+		require.Equal(t, tagged, evt.Tag)
+	}
+}
+
+func TestRunner_applyEventPlugins_ReplacesEventAndCopiesFields(t *testing.T) {
+	const (
+		reqID    = "req"
+		invID    = "inv"
+		parentID = "parent"
+		branch   = "branch"
+		filter   = "filter"
+		tag      = "tag"
+	)
+	p := &testPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				ctx context.Context,
+				inv *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				updated := &event.Event{
+					Tag:    tag,
+					Author: "plugin",
+				}
+				return updated, nil
+			})
+		},
+	}
+
+	ag := &mockAgent{name: "test-agent"}
+	run := NewRunner("test-app", ag, WithPlugins(p)).(*runner)
+
+	inv := &agent.Invocation{Plugins: plugin.MustNewManager(p)}
+	orig := &event.Event{
+		Response:           &model.Response{Done: true},
+		RequestID:          reqID,
+		InvocationID:       invID,
+		ParentInvocationID: parentID,
+		Branch:             branch,
+		FilterKey:          filter,
+		Author:             "a",
+	}
+
+	out := run.applyEventPlugins(context.Background(), inv, orig)
+	require.NotNil(t, out)
+	require.Equal(t, tag, out.Tag)
+	require.Equal(t, reqID, out.RequestID)
+	require.Equal(t, invID, out.InvocationID)
+	require.Equal(t, parentID, out.ParentInvocationID)
+	require.Equal(t, branch, out.Branch)
+	require.Equal(t, filter, out.FilterKey)
+}
+
+func TestRunner_applyEventPlugins_ErrorKeepsOriginal(t *testing.T) {
+	p := &testPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				ctx context.Context,
+				inv *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				return nil, errors.New("boom")
+			})
+		},
+	}
+
+	ag := &mockAgent{name: "test-agent"}
+	run := NewRunner("test-app", ag, WithPlugins(p)).(*runner)
+
+	inv := &agent.Invocation{Plugins: plugin.MustNewManager(p)}
+	orig := &event.Event{Response: &model.Response{Done: true}}
+	out := run.applyEventPlugins(context.Background(), inv, orig)
+	require.Same(t, orig, out)
+}
+
+type closePlugin struct {
+	name     string
+	closed   bool
+	closeErr error
+}
+
+func (p *closePlugin) Name() string { return p.name }
+
+func (p *closePlugin) Register(r *plugin.Registry) {}
+
+func (p *closePlugin) Close(ctx context.Context) error {
+	p.closed = true
+	return p.closeErr
+}
+
+func TestRunner_Close_ClosesPlugins(t *testing.T) {
+	p := &closePlugin{name: "p"}
+	ag := &mockAgent{name: "test-agent"}
+	run := NewRunner("test-app", ag, WithPlugins(p)).(*runner)
+
+	err := run.Close()
+	require.NoError(t, err)
+	require.True(t, p.closed)
+}
+
+func TestRunner_Close_PropagatesPluginCloseError(t *testing.T) {
+	p := &closePlugin{name: "p", closeErr: errors.New("boom")}
+	ag := &mockAgent{name: "test-agent"}
+	run := NewRunner("test-app", ag, WithPlugins(p)).(*runner)
+
+	err := run.Close()
+	require.Error(t, err)
+	require.True(t, p.closed)
 }
 
 func TestRunner_SessionCreateIfMissing(t *testing.T) {
