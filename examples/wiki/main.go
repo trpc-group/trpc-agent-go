@@ -27,7 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
-	"trpc.group/trpc-go/trpc-agent-go/tool/wiki"
+	"trpc.group/trpc-go/trpc-agent-go/tool/wikipedia"
 )
 
 var (
@@ -81,10 +81,10 @@ func (c *wikiChat) setup(_ context.Context) error {
 	modelInstance := openai.New(c.modelName)
 
 	// Create Wikipedia tool set
-	wikiToolSet, err := wiki.NewToolSet(
-		wiki.WithLanguage(c.language),
-		wiki.WithMaxResults(c.maxResults),
-		wiki.WithUserAgent("trpc-agent-go-wiki-search"),
+	wikiToolSet, err := wikipedia.NewToolSet(
+		wikipedia.WithLanguage(c.language),
+		wikipedia.WithMaxResults(c.maxResults),
+		wikipedia.WithUserAgent("trpc-agent-go-wiki-search"),
 	)
 	if err != nil {
 		return fmt.Errorf("create wiki tool set: %w", err)

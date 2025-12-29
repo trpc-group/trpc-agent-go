@@ -7,8 +7,8 @@
 //
 //
 
-// Package wiki provides Wikipedia search tool.
-package wiki
+// Package wikipedia provides Wikipedia search tool.
+package wikipedia
 
 import (
 	"context"
@@ -19,9 +19,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"trpc.group/trpc-go/trpc-agent-go/tool/wiki/internal/client"
+	"trpc.group/trpc-go/trpc-agent-go/tool/wikipedia/internal/client"
 )
 
 func TestWikiSearchTool_Search_Success(t *testing.T) {
@@ -70,10 +71,10 @@ func TestWikiSearchTool_Search_Success(t *testing.T) {
 		maxResults: 5,
 	}
 
-	searchFunc := createWikiSearchTool(testClient, cfg)
+	searchFunc := createWikipediaSearchTool(testClient, cfg)
 
 	// Prepare request
-	reqData := wikiSearchRequest{
+	reqData := wikipediaSearchRequest{
 		Query: "artificial intelligence",
 		Limit: 3,
 	}
@@ -85,8 +86,8 @@ func TestWikiSearchTool_Search_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	// Validate results
-	resp, ok := result.(wikiSearchResponse)
-	require.True(t, ok, "Expected wikiSearchResponse type")
+	resp, ok := result.(wikipediaSearchResponse)
+	require.True(t, ok, "Expected wikipediaSearchResponse type")
 
 	if resp.Query != "artificial intelligence" {
 		t.Errorf("Expected query 'artificial intelligence', got '%s'", resp.Query)
@@ -127,9 +128,9 @@ func TestWikiSearchTool_EmptyQuery(t *testing.T) {
 		maxResults: 5,
 	}
 
-	searchFunc := createWikiSearchTool(testClient, cfg)
+	searchFunc := createWikipediaSearchTool(testClient, cfg)
 
-	reqData := wikiSearchRequest{Query: ""}
+	reqData := wikipediaSearchRequest{Query: ""}
 	reqJSON, _ := json.Marshal(reqData)
 
 	_, err := searchFunc.Call(context.Background(), reqJSON)
@@ -164,15 +165,15 @@ func TestWikiSearchTool_NoResults(t *testing.T) {
 		maxResults: 5,
 	}
 
-	searchFunc := createWikiSearchTool(testClient, cfg)
+	searchFunc := createWikipediaSearchTool(testClient, cfg)
 
-	reqData := wikiSearchRequest{Query: "nonexistent_query_12345"}
+	reqData := wikipediaSearchRequest{Query: "nonexistent_query_12345"}
 	reqJSON, _ := json.Marshal(reqData)
 
 	result, err := searchFunc.Call(context.Background(), reqJSON)
 	require.NoError(t, err)
 
-	resp, ok := result.(wikiSearchResponse)
+	resp, ok := result.(wikipediaSearchResponse)
 	require.True(t, ok)
 
 	if len(resp.Results) != 0 {
@@ -210,7 +211,7 @@ func TestWikiSearchTool_LimitValidation(t *testing.T) {
 		maxResults: 5,
 	}
 
-	searchFunc := createWikiSearchTool(testClient, cfg)
+	searchFunc := createWikipediaSearchTool(testClient, cfg)
 
 	testCases := []struct {
 		name          string
@@ -225,13 +226,13 @@ func TestWikiSearchTool_LimitValidation(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			reqData := wikiSearchRequest{Query: "test", Limit: tc.limit}
+			reqData := wikipediaSearchRequest{Query: "test", Limit: tc.limit}
 			reqJSON, _ := json.Marshal(reqData)
 
 			result, err := searchFunc.Call(context.Background(), reqJSON)
 			require.NoError(t, err)
 
-			resp, ok := result.(wikiSearchResponse)
+			resp, ok := result.(wikipediaSearchResponse)
 			require.True(t, ok)
 
 			// Just verify it doesn't crash - actual limit is handled by client
@@ -358,14 +359,14 @@ func TestWikiToolSet_Tools(t *testing.T) {
 	if decl == nil {
 		t.Fatal("Declaration() returned nil")
 	}
-	if decl.Name != "wiki_search" {
-		t.Errorf("Expected tool name 'wiki_search', got '%s'", decl.Name)
+	if decl.Name != "wikipedia_search" {
+		t.Errorf("Expected tool name 'wikipedia_search', got '%s'", decl.Name)
 	}
 	if decl.Description == "" {
 		t.Error("Expected non-empty description")
 	}
-	if !strings.Contains(decl.Description, "WIKI SEARCH") {
-		t.Errorf("Expected description to contain 'WIKI SEARCH', got: %s", decl.Description)
+	if !strings.Contains(decl.Description, "WIKIPEDIA SEARCH") {
+		t.Errorf("Expected description to contain 'WIKIPEDIA SEARCH', got: %s", decl.Description)
 	}
 	if decl.InputSchema == nil {
 		t.Error("Expected non-nil InputSchema")
@@ -390,9 +391,9 @@ func TestWikiSearchTool_ServerError(t *testing.T) {
 		maxResults: 5,
 	}
 
-	searchFunc := createWikiSearchTool(testClient, cfg)
+	searchFunc := createWikipediaSearchTool(testClient, cfg)
 
-	reqData := wikiSearchRequest{Query: "test query"}
+	reqData := wikipediaSearchRequest{Query: "test query"}
 	reqJSON, _ := json.Marshal(reqData)
 
 	result, err := searchFunc.Call(context.Background(), reqJSON)
@@ -400,7 +401,7 @@ func TestWikiSearchTool_ServerError(t *testing.T) {
 		t.Error("Expected error for server error response")
 	}
 
-	resp, ok := result.(wikiSearchResponse)
+	resp, ok := result.(wikipediaSearchResponse)
 	if ok && !strings.Contains(resp.Summary, "Error") {
 		t.Errorf("Expected error message in summary, got: %s", resp.Summary)
 	}
@@ -463,15 +464,15 @@ func TestWikiSearchTool_URLGeneration(t *testing.T) {
 				maxResults: 5,
 			}
 
-			searchFunc := createWikiSearchTool(testClient, cfg)
+			searchFunc := createWikipediaSearchTool(testClient, cfg)
 
-			reqData := wikiSearchRequest{Query: "machine learning"}
+			reqData := wikipediaSearchRequest{Query: "machine learning"}
 			reqJSON, _ := json.Marshal(reqData)
 
 			result, err := searchFunc.Call(context.Background(), reqJSON)
 			require.NoError(t, err)
 
-			resp, ok := result.(wikiSearchResponse)
+			resp, ok := result.(wikipediaSearchResponse)
 			require.True(t, ok)
 			require.Greater(t, len(resp.Results), 0)
 
@@ -515,10 +516,10 @@ func TestWikiSearchTool_IncludeAll(t *testing.T) {
 		maxResults: 5,
 	}
 
-	searchFunc := createWikiSearchTool(testClient, cfg)
+	searchFunc := createWikipediaSearchTool(testClient, cfg)
 
 	// Test with IncludeAll = true
-	reqData := wikiSearchRequest{
+	reqData := wikipediaSearchRequest{
 		Query:      "test",
 		Limit:      5,
 		IncludeAll: true,
@@ -528,7 +529,7 @@ func TestWikiSearchTool_IncludeAll(t *testing.T) {
 	result, err := searchFunc.Call(context.Background(), reqJSON)
 	require.NoError(t, err)
 
-	resp, ok := result.(wikiSearchResponse)
+	resp, ok := result.(wikipediaSearchResponse)
 	require.True(t, ok)
 	require.Greater(t, len(resp.Results), 0)
 
@@ -539,4 +540,52 @@ func TestWikiSearchTool_IncludeAll(t *testing.T) {
 	if !strings.Contains(resp.Results[0].Description, "HTML") {
 		t.Error("Expected text content to remain after HTML cleaning")
 	}
+}
+
+func TestConvertHTMLToMarkdown(t *testing.T) {
+	htmlContent := `
+		<html>
+		<head>
+			<title>Test Page</title>
+			<style>body { color: red; }</style>
+		</head>
+		<body>
+			<h1>Header</h1>
+			<h2>Subheader</h2>
+			<script>console.log("ignore");</script>
+			<p>Paragraph text.</p>
+			<ul>
+				<li>Item 1</li>
+				<li>Item 2</li>
+			</ul>
+			<p>Check <a href="http://example.com">this link</a>.</p>
+			<p><b>Bold</b> and <i>Italic</i></p>
+		</body>
+		</html>
+	`
+	// Mock reader
+	result, err := convertHTMLToMarkdown(strings.NewReader(htmlContent))
+	require.NoError(t, err)
+
+	// Debug output if test fails
+	t.Logf("Converted Markdown:%s", result)
+
+	// Check expected markdown content
+	expectedParts := []string{
+		"# Header",
+		"## Subheader",
+		"Paragraph text.",
+		"- Item 1",
+		"- Item 2",
+		"Check [this link](http://example.com).",
+		"**Bold**",
+		"*Italic*",
+	}
+
+	for _, part := range expectedParts {
+		assert.Contains(t, result, part)
+	}
+
+	assert.NotContains(t, result, "console.log")
+	assert.NotContains(t, result, "color: red")
 }

@@ -14,23 +14,23 @@ The Wikipedia Search Tool for trpc-agent-go provides detailed article informatio
 ## Installation
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/tool/wiki"
+import "trpc.group/trpc-go/trpc-agent-go/tool/wikipedia"
 ```
 
 ## Quick Start
 
 ```go
 // Create Wikipedia tool set
-wikiToolSet, err := wiki.NewToolSet(
-    wiki.WithLanguage("zh"),  // Use Chinese Wikipedia
-    wiki.WithMaxResults(5),
+wikipediaToolSet, err := wikipedia.NewToolSet(
+    wikipedia.WithLanguage("zh"),  // Use Chinese Wikipedia
+    wikipedia.WithMaxResults(5),
 )
 if err != nil {
     // Handle error
 }
 ```
 
-- See example: `trpc-agent-go/tool/wiki/example.go`
+- See example: `trpc-agent-go/tool/wikipedia/example.go`
 
 ## Configuration Options
 
@@ -39,13 +39,13 @@ Set the Wikipedia language edition to search.
 
 ```go
 // English Wikipedia (default)
-wiki.WithLanguage("en")
+wikipedia.WithLanguage("en")
 
 // Chinese Wikipedia
-wiki.WithLanguage("zh")
+wikipedia.WithLanguage("zh")
 
 // Spanish Wikipedia
-wiki.WithLanguage("es")
+wikipedia.WithLanguage("es")
 ```
 
 ### WithMaxResults(maxResults int)
@@ -53,7 +53,7 @@ Set the maximum number of search results to return.
 
 ```go
 // Return up to 10 results
-wiki.WithMaxResults(10)
+wikipedia.WithMaxResults(10)
 ```
 
 ### WithTimeout(timeout time.Duration)
@@ -61,14 +61,14 @@ Set the HTTP request timeout.
 
 ```go
 // 30 second timeout
-wiki.WithTimeout(30 * time.Second)
+wikipedia.WithTimeout(30 * time.Second)
 ```
 
 ### WithUserAgent(userAgent string)
 Set a custom User-Agent string.
 
 ```go
-wiki.WithUserAgent("MyApp/1.0")
+wikipedia.WithUserAgent("MyApp/1.0")
 ```
 
 ## Tool Input Parameters
@@ -180,7 +180,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
     "trpc.group/trpc-go/trpc-agent-go/tool"
-    "trpc.group/trpc-go/trpc-agent-go/tool/wiki"
+    "trpc.group/trpc-go/trpc-agent-go/tool/wikipedia"
 )
 
 func main() {
@@ -188,9 +188,9 @@ func main() {
     model := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
     
     // Create Wikipedia tool set
-    wikiToolSet, err := wiki.NewToolSet(
-        wiki.WithLanguage("zh"),  // Use Chinese edition
-        wiki.WithMaxResults(3),
+    wikipediaToolSet, err := wikipedia.NewToolSet(
+        wikipedia.WithLanguage("zh"),  // Use Chinese edition
+        wikipedia.WithMaxResults(3),
     )
     if err != nil {
         // Handle error
@@ -198,11 +198,11 @@ func main() {
     
     // Create Agent
     agent := llmagent.New(
-        "wiki-agent",
+        "wikipedia-agent",
         llmagent.WithModel(model),
         llmagent.WithDescription("AI assistant with Wikipedia access"),
         llmagent.WithInstruction("Use Wikipedia to provide accurate information"),
-        llmagent.WithToolSets([]tool.ToolSet{wikiToolSet}),
+        llmagent.WithToolSets([]tool.ToolSet{wikipediaToolSet}),
     )
     
     // Use agent...

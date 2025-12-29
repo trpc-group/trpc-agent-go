@@ -7,40 +7,43 @@
 //
 //
 
-// Package wiki provides Wikipedia Search API tools for AI agents.
+// Package wikipedia provides Wikipedia Search API tools for AI agents.
 package wikipedia
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
-	"trpc.group/trpc-go/trpc-agent-go/tool/wiki/internal/client"
+	"trpc.group/trpc-go/trpc-agent-go/tool/wikipedia/internal/client"
 )
 
 // Default configuration constants
 const (
 	defaultBaseURL   = "https://en.wikipedia.org/w/api.php"
-	defaultUserAgent = "trpc-agent-go-wiki/1.0"
+	defaultUserAgent = "trpc-agent-go-wikipedia/1.0"
 	defaultTimeout   = 30 * time.Second
 	defaultLanguage  = "en"
 	maxResults       = 5
-	defaultName      = "wiki"
+	defaultName      = "wikipedia"
 )
 
 // config holds the configuration for the Wikipedia search tool set
 type config struct {
-	baseURL       string
-	userAgent     string
-	httpClient    *http.Client
-	language      string
-	maxResults    int
-	searchEnabled bool
+	baseURL    string
+	userAgent  string
+	httpClient *http.Client
+	language   string
+	maxResults int
 }
 
 // Option is a functional option for configuring the Wikipedia tool set
@@ -76,24 +79,23 @@ func WithUserAgent(userAgent string) Option {
 	}
 }
 
-// wikiToolSet implements the ToolSet interface for Wikipedia operations.
-type wikiToolSet struct {
-	searchEnabled bool
-	tools         []tool.Tool
+// wikipediaToolSet implements the ToolSet interface for Wikipedia operations.
+type wikipediaToolSet struct {
+	tools []tool.Tool
 }
 
 // Tools implements the ToolSet interface.
-func (w *wikiToolSet) Tools(_ context.Context) []tool.Tool {
+func (w *wikipediaToolSet) Tools(_ context.Context) []tool.Tool {
 	return w.tools
 }
 
 // Name implements the ToolSet interface.
-func (w *wikiToolSet) Name() string {
+func (w *wikipediaToolSet) Name() string {
 	return defaultName
 }
 
 // Close implements the ToolSet interface.
-func (w *wikiToolSet) Close() error {
+func (w *wikipediaToolSet) Close() error {
 	// No resources to clean up for Wikipedia tools.
 	return nil
 }
@@ -107,9 +109,8 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 		httpClient: &http.Client{
 			Timeout: defaultTimeout,
 		},
-		language:      defaultLanguage,
-		maxResults:    maxResults,
-		searchEnabled: true,
+		language:   defaultLanguage,
+		maxResults: maxResults,
 	}
 
 	// Apply user-provided options
@@ -117,39 +118,32 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 		opt(cfg)
 	}
 
-	// Create function tools based on enabled features.
-	var tools []tool.Tool
-	if cfg.searchEnabled {
-		// Create the client
-		wikiClient := client.New(cfg.baseURL, cfg.userAgent, cfg.httpClient)
-		tools = append(tools, createWikiSearchTool(wikiClient, cfg))
-	}
+	// Create the client
+	wikipediaClient := client.New(cfg.baseURL, cfg.userAgent, cfg.httpClient)
+	tools := []tool.Tool{createWikipediaSearchTool(wikipediaClient, cfg)}
 
-	wikiToolSet := &wikiToolSet{
-		searchEnabled: cfg.searchEnabled,
-		tools:         tools,
-	}
-
-	return wikiToolSet, nil
+	return &wikipediaToolSet{
+		tools: tools,
+	}, nil
 }
 
-// ===== Wiki Search Tool =====
+// ===== Wikipedia Search Tool =====
 
-type wikiSearchRequest struct {
+type wikipediaSearchRequest struct {
 	Query      string `json:"query" jsonschema:"description=Search query for Wikipedia"`
 	Limit      int    `json:"limit,omitempty" jsonschema:"description=Maximum number of results (default: 5)"`
 	IncludeAll bool   `json:"include_all,omitempty" jsonschema:"description=Include all available metadata"`
 }
 
-type wikiSearchResponse struct {
-	Query      string           `json:"query"`
-	Results    []wikiResultItem `json:"results"`
-	TotalHits  int              `json:"total_hits"`
-	Summary    string           `json:"summary"`
-	SearchTime string           `json:"search_time,omitempty"`
+type wikipediaSearchResponse struct {
+	Query      string                `json:"query"`
+	Results    []wikipediaResultItem `json:"results"`
+	TotalHits  int                   `json:"total_hits"`
+	Summary    string                `json:"summary"`
+	SearchTime string                `json:"search_time,omitempty"`
 }
 
-type wikiResultItem struct {
+type wikipediaResultItem struct {
 	Title       string   `json:"title"`
 	URL         string   `json:"url"`
 	Description string   `json:"description"`
@@ -162,31 +156,36 @@ type wikiResultItem struct {
 	Relevance   float64  `json:"relevance_score,omitempty"`
 }
 
-func createWikiSearchTool(wikiClient *client.Client, cfg *config) tool.CallableTool {
-	searchFunc := func(ctx context.Context, req wikiSearchRequest) (wikiSearchResponse, error) {
+func createWikipediaSearchTool(wikipediaClient *client.Client, cfg *config) tool.CallableTool {
+	searchFunc := func(ctx context.Context, req wikipediaSearchRequest) (wikipediaSearchResponse, error) {
 		limit := req.Limit
 		if limit <= 0 || limit > cfg.maxResults {
 			limit = cfg.maxResults // use configured max as upper bound
 		}
 
 		startTime := time.Now()
-		response, err := wikiClient.DetailedSearch(req.Query, limit, req.IncludeAll)
+		response, err := wikipediaClient.DetailedSearch(req.Query, limit, req.IncludeAll)
 		searchDuration := time.Since(startTime)
 
 		if err != nil {
-			return wikiSearchResponse{
+			return wikipediaSearchResponse{
 				Query:   req.Query,
-				Results: []wikiResultItem{},
+				Results: []wikipediaResultItem{},
 				Summary: fmt.Sprintf("Error: %v", err),
 			}, err
 		}
 
-		var results []wikiResultItem
+		var results []wikipediaResultItem
 		for _, page := range response.Query.Search {
-			item := wikiResultItem{
+			snippetContent, processErr := convertHTMLToMarkdown(strings.NewReader(page.Snippet))
+			// convert to plain text if markdown conversion fails
+			if processErr != nil {
+				snippetContent = cleanHTMLTags(page.Snippet)
+			}
+			item := wikipediaResultItem{
 				Title:       page.Title,
 				URL:         fmt.Sprintf("https://%s.wikipedia.org/wiki/%s", cfg.language, strings.ReplaceAll(page.Title, " ", "_")),
-				Description: cleanHTMLTags(page.Snippet),
+				Description: snippetContent,
 				PageID:      page.PageID,
 				WordCount:   page.WordCount,
 				Size:        page.Size,
@@ -196,7 +195,7 @@ func createWikiSearchTool(wikiClient *client.Client, cfg *config) tool.CallableT
 			results = append(results, item)
 		}
 
-		return wikiSearchResponse{
+		return wikipediaSearchResponse{
 			Query:      req.Query,
 			Results:    results,
 			TotalHits:  response.Query.SearchInfo.TotalHits,
@@ -207,13 +206,35 @@ func createWikiSearchTool(wikiClient *client.Client, cfg *config) tool.CallableT
 
 	return function.NewFunctionTool(
 		searchFunc,
-		function.WithName("wiki_search"),
-		function.WithDescription(fmt.Sprintf("🔍 WIKI SEARCH - Comprehensive Wikipedia search with rich metadata. "+
+		function.WithName("wikipedia_search"),
+		function.WithDescription(fmt.Sprintf("🔍 WIKIPEDIA SEARCH - Comprehensive Wikipedia search with rich metadata. "+
 			"Use when: you need detailed information about any topic, want article statistics, or need to research a subject. "+
 			"Returns: title, URL, description, page ID, word count, page size, last modified date, namespace, and more. "+
 			"Best for: research, fact-checking, getting comprehensive information about topics, academic use. "+
 			"Default limit: %d results.", cfg.maxResults)),
 	)
+}
+
+// convert wikipedia search API response html to markdown
+func convertHTMLToMarkdown(r io.Reader) (string, error) {
+	conv := converter.NewConverter(
+		converter.WithPlugins(
+			base.NewBasePlugin(),
+			commonmark.NewCommonmarkPlugin(),
+		),
+	)
+
+	bodyBytes, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+
+	markdown, err := conv.ConvertString(string(bodyBytes))
+	if err != nil {
+		return "", err
+	}
+
+	return markdown, nil
 }
 
 // cleanHTMLTags removes HTML tags from text

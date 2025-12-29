@@ -14,23 +14,23 @@ trpc-agent-go 的 Wikipedia 搜索工具,提供详细的文章信息和元数据
 ## 安装
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/tool/wiki"
+import "trpc.group/trpc-go/trpc-agent-go/tool/wikipedia"
 ```
 
 ## 快速开始
 
 ```go
 // 创建 Wikipedia 工具集
-wikiToolSet, err := wiki.NewToolSet(
-    wiki.WithLanguage("zh"),  // 使用中文 Wikipedia
-    wiki.WithMaxResults(5),
+wikipediaToolSet, err := wikipedia.NewToolSet(
+    wikipedia.WithLanguage("zh"),  // 使用中文 Wikipedia
+    wikipedia.WithMaxResults(5),
 )
 if err != nil {
     // 处理错误
 }
 ```
 
-- 可参考样例： `trpc-agent-go/tool/wiki/example.go`
+- 可参考样例： `trpc-agent-go/tool/wikipedia/example.go`
 
 ## 配置选项
 
@@ -39,13 +39,13 @@ if err != nil {
 
 ```go
 // 英文 Wikipedia (默认)
-wiki.WithLanguage("en")
+wikipedia.WithLanguage("en")
 
 // 中文 Wikipedia
-wiki.WithLanguage("zh")
+wikipedia.WithLanguage("zh")
 
 // 西班牙语 Wikipedia
-wiki.WithLanguage("es")
+wikipedia.WithLanguage("es")
 ```
 
 ### WithMaxResults(maxResults int)
@@ -53,7 +53,7 @@ wiki.WithLanguage("es")
 
 ```go
 // 返回最多 10 条结果
-wiki.WithMaxResults(10)
+wikipedia.WithMaxResults(10)
 ```
 
 ### WithTimeout(timeout time.Duration)
@@ -61,14 +61,14 @@ wiki.WithMaxResults(10)
 
 ```go
 // 30 秒超时
-wiki.WithTimeout(30 * time.Second)
+wikipedia.WithTimeout(30 * time.Second)
 ```
 
 ### WithUserAgent(userAgent string)
 设置自定义的 User-Agent 字符串。
 
 ```go
-wiki.WithUserAgent("MyApp/1.0")
+wikipedia.WithUserAgent("MyApp/1.0")
 ```
 
 ## 工具输入参数
@@ -180,7 +180,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
     "trpc.group/trpc-go/trpc-agent-go/tool"
-    "trpc.group/trpc-go/trpc-agent-go/tool/wiki"
+    "trpc.group/trpc-go/trpc-agent-go/tool/wikipedia"
 )
 
 func main() {
@@ -188,9 +188,9 @@ func main() {
     model := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
     
     // 创建 Wikipedia ToolSet
-    wikiToolSet, err := wiki.NewToolSet(
-        wiki.WithLanguage("zh"),  // 使用中文版本
-        wiki.WithMaxResults(3),
+    wikipediaToolSet, err := wikipedia.NewToolSet(
+        wikipedia.WithLanguage("zh"),  // 使用中文版本
+        wikipedia.WithMaxResults(3),
     )
     if err != nil {
         // 处理错误
@@ -198,11 +198,11 @@ func main() {
     
     // 创建 Agent
     agent := llmagent.New(
-        "wiki-agent",
+        "wikipedia-agent",
         llmagent.WithModel(model),
         llmagent.WithDescription("具有 Wikipedia 访问能力的 AI 助手"),
         llmagent.WithInstruction("使用 Wikipedia 提供准确的信息"),
-        llmagent.WithToolSets([]tool.ToolSet{wikiToolSet}),
+        llmagent.WithToolSets([]tool.ToolSet{wikipediaToolSet}),
     )
     
     // 使用 agent...
