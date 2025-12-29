@@ -39,11 +39,12 @@ const (
 	appName  = "team-swarm-example"
 	teamName = "team"
 
-	agentFacilitator   = "facilitator"
-	agentDevilAdvocate = "devil_advocate"
-	agentSummarizer    = "summarizer"
+	agentOptimist   = "optimist"
+	agentSkeptic    = "skeptic"
+	agentPragmatist = "pragmatist"
+	agentSummarizer = "summarizer"
 
-	entryAgentName = agentFacilitator
+	entryAgentName = agentOptimist
 
 	defaultModelName = "deepseek-chat"
 	defaultVariant   = "openai"
@@ -134,31 +135,49 @@ func buildRunner(
 		Stream:      streaming,
 	}
 
-	facilitator := llmagent.New(
-		agentFacilitator,
+	optimist := llmagent.New(
+		agentOptimist,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithDescription(
-			"Facilitates a discussion and keeps it on track.",
+			"Optimistic and creative. Suggests options and upsides.",
 		),
 		llmagent.WithInstruction(
-			"Facilitate a discussion. Ask clarifying questions, "+
-				"invite other agents to contribute, then decide "+
-				"whether to transfer control or to wrap up.",
+			"Discuss the topic from an optimistic, creative angle. "+
+				"Suggest options and potential benefits. When you want "+
+				"another perspective, transfer control. When the "+
+				"discussion is ready to conclude, transfer to "+
+				agentSummarizer+".",
 		),
 	)
 
-	devilAdvocate := llmagent.New(
-		agentDevilAdvocate,
+	skeptic := llmagent.New(
+		agentSkeptic,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithDescription(
-			"Challenges assumptions and points out risks.",
+			"Skeptical and detail-oriented. Challenges assumptions.",
 		),
 		llmagent.WithInstruction(
-			"Challenge the current proposal. Point out risks, "+
-				"missing cases, and counterarguments. If another "+
-				"agent should respond next, transfer control.",
+			"Challenge assumptions and point out risks, edge cases, "+
+				"and downsides. When you want another perspective, "+
+				"transfer control. When the discussion is ready to "+
+				"conclude, transfer to "+agentSummarizer+".",
+		),
+	)
+
+	pragmatist := llmagent.New(
+		agentPragmatist,
+		llmagent.WithModel(modelInstance),
+		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithDescription(
+			"Pragmatic and execution-focused. Grounds ideas in reality.",
+		),
+		llmagent.WithInstruction(
+			"Focus on practical constraints, costs, and execution. "+
+				"Propose a workable plan. When you want another "+
+				"perspective, transfer control. When the discussion is "+
+				"ready to conclude, transfer to "+agentSummarizer+".",
 		),
 	)
 
@@ -170,15 +189,16 @@ func buildRunner(
 			"Summarizes the discussion and proposes next steps.",
 		),
 		llmagent.WithInstruction(
-			"Summarize key points, tradeoffs, and a clear "+
-				"decision with next steps. Do not transfer "+
-				"control.",
+			"Summarize the discussion. Present options, tradeoffs, "+
+				"and a clear recommendation with next steps. Do not "+
+				"transfer control.",
 		),
 	)
 
 	members := []agent.Agent{
-		facilitator,
-		devilAdvocate,
+		optimist,
+		skeptic,
+		pragmatist,
 		summarizer,
 	}
 	teamInstance, err := team.NewSwarm(teamName, entryAgentName, members)

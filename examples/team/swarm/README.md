@@ -18,11 +18,12 @@ This mode works well for “group discussion” tasks, for example:
 
 ## Member roles in this example
 
-This example uses three member roles:
+This example uses three discussion roles plus one summary role:
 
-- `facilitator`: drives the discussion and invites others
-- `devil_advocate`: challenges assumptions and raises risks
-- `summarizer`: produces the final decision and next steps
+- `optimist`: proposes options and highlights upsides
+- `skeptic`: challenges assumptions and raises risks
+- `pragmatist`: focuses on constraints and execution details
+- `summarizer`: produces the final recommendation and next steps
 
 ## Prerequisites
 
@@ -61,14 +62,14 @@ go run .
 
 Try a prompt like:
 
-> We need to choose between REST and gRPC for an internal service. Discuss
+> We need to choose between REST and gRPC for an internal service. Discuss the
 > tradeoffs, then give a recommendation with next steps.
 
 Notes:
 
 - You do not need to tell the system which Agent to transfer to. Agents can
   decide the next handoff based on the task.
-- The console output includes an Agent name prefix (for example, `[facilitator]`)
+- The console output includes an Agent name prefix (for example, `[optimist]`)
   so you can see who is responding.
 
 For a coordinator Team example, see `examples/team/coord`.
