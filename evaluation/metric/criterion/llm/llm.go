@@ -12,6 +12,7 @@ package llm
 
 import (
 	"encoding/json"
+	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -57,6 +58,21 @@ func (j JudgeModelOptions) MarshalJSON() ([]byte, error) {
 	alias := judgeModelOptionsAlias(j)
 	alias.APIKey = ""
 	return json.Marshal(alias)
+}
+
+// UnmarshalJSON expands environment variables for ProviderName, ModelName, BaseURL and APIKey.
+func (j *JudgeModelOptions) UnmarshalJSON(data []byte) error {
+	type judgeModelOptionsAlias JudgeModelOptions
+	var alias judgeModelOptionsAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+	alias.ProviderName = os.ExpandEnv(alias.ProviderName)
+	alias.ModelName = os.ExpandEnv(alias.ModelName)
+	alias.BaseURL = os.ExpandEnv(alias.BaseURL)
+	alias.APIKey = os.ExpandEnv(alias.APIKey)
+	*j = JudgeModelOptions(alias)
+	return nil
 }
 
 // New builds an LlmCriterion with judge model settings.

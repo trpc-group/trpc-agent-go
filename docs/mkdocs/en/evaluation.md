@@ -1448,6 +1448,37 @@ type JudgeModelOptions struct {
 - `NumSamples` controls how many times the judge model is called, defaulting to 1 when not set.
 - `Generation` defaults to `MaxTokens=2000`, `Temperature=0.8`, and `Stream=false`.
 
+For security reasons, it is recommended not to write `judgeModel.apiKey` / `judgeModel.baseURL` in plaintext in metric config files or code.
+
+The framework supports environment variable placeholders for `judgeModel.providerName`, `judgeModel.modelName`, `judgeModel.apiKey` and `judgeModel.baseURL` in `.metrics.json`. When loading the config, the placeholders are automatically expanded to the corresponding environment variable values.
+
+For example:
+
+```json
+[
+  {
+    "metricName": "llm_final_response",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "${JUDGE_MODEL_PROVIDER_NAME}",
+          "modelName":  "${JUDGE_MODEL_NAME}",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
+          "numSamples": 3,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 1.0,
+            "stream": false
+          }
+        }
+      }
+    }
+  }
+]
+```
+
 You can pass a custom configuration via `criterion.WithLLMJudge`, for example:
 
 ```go
@@ -1569,6 +1600,8 @@ evalMetric := &metric.EvalMetric{
 			cllm.New(
 				"openai",
 				"gpt-4o",
+				cllm.WithBaseURL(os.Getenv("JUDGE_MODEL_BASE_URL")),
+				cllm.WithAPIKey(os.Getenv("JUDGE_MODEL_API_KEY")),
 				cllm.WithNumSamples(3),
 				cllm.WithGeneration(&model.GenerationConfig{
 					MaxTokens:   ptr(512),
@@ -1593,6 +1626,8 @@ An example metric config file:
         "judgeModel": {
           "providerName": "openai",
           "modelName": "gpt-4o",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
           "generationConfig": {
             "max_tokens": 512,
@@ -1636,6 +1671,8 @@ evalMetric := &metric.EvalMetric{
 			cllm.New(
 				"openai",
 				"deepseek-chat",
+				cllm.WithBaseURL(os.Getenv("JUDGE_MODEL_BASE_URL")),
+				cllm.WithAPIKey(os.Getenv("JUDGE_MODEL_API_KEY")),
 				cllm.WithNumSamples(3),
 				cllm.WithGeneration(&model.GenerationConfig{
 					MaxTokens:   ptr(512),
@@ -1678,6 +1715,8 @@ An example metric config file:
         "judgeModel": {
           "providerName": "openai",
           "modelName": "deepseek-chat",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
           "generationConfig": {
             "max_tokens": 512,
@@ -1739,6 +1778,8 @@ evalMetric := &metric.EvalMetric{
 			cllm.New(
 				"openai",
 				"deepseek-chat",
+				cllm.WithBaseURL(os.Getenv("JUDGE_MODEL_BASE_URL")),
+				cllm.WithAPIKey(os.Getenv("JUDGE_MODEL_API_KEY")),
 				cllm.WithNumSamples(3),
 				cllm.WithGeneration(&model.GenerationConfig{
 					MaxTokens:   ptr(512),
@@ -1773,6 +1814,8 @@ An example metric config file:
         "judgeModel": {
           "providerName": "openai",
           "modelName": "deepseek-chat",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
           "generationConfig": {
             "max_tokens": 512,
