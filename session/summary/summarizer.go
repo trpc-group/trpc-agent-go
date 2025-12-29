@@ -50,6 +50,19 @@ const (
 	authorUnknown = "unknown"
 )
 
+// validatePrompt validates that the prompt contains required placeholders.
+// conversationTextPlaceholder is always required.
+// maxSummaryWordsPlaceholder is required when maxSummaryWords > 0.
+func validatePrompt(prompt string, maxSummaryWords int) error {
+	if !strings.Contains(prompt, conversationTextPlaceholder) {
+		return fmt.Errorf("prompt must include %s placeholder", conversationTextPlaceholder)
+	}
+	if maxSummaryWords > 0 && !strings.Contains(prompt, maxSummaryWordsPlaceholder) {
+		return fmt.Errorf("prompt must include %s placeholder when maxSummaryWords > 0", maxSummaryWordsPlaceholder)
+	}
+	return nil
+}
+
 // getDefaultSummarizerPrompt returns the default prompt for summarization.
 // If maxWords > 0, includes word count instruction placeholder; otherwise, omits it.
 func getDefaultSummarizerPrompt(maxWords int) string {
@@ -231,12 +244,17 @@ func (s *sessionSummarizer) filterEventsForSummary(events []event.Event) []event
 // SetPrompt updates the summarizer's prompt dynamically.
 // The prompt must include the placeholder {conversation_text}, which will be
 // replaced with the extracted conversation when generating the summary.
+// If maxSummaryWords > 0, the prompt must also include {max_summary_words}.
 // If an empty prompt is provided, it will be ignored and the current prompt
 // will remain unchanged.
 func (s *sessionSummarizer) SetPrompt(prompt string) {
-	if prompt != "" {
-		s.prompt = prompt
+	if prompt == "" {
+		return
 	}
+	if err := validatePrompt(prompt, s.maxSummaryWords); err != nil {
+		panic(fmt.Errorf("invalid prompt: %w", err))
+	}
+	s.prompt = prompt
 }
 
 // SetModel updates the summarizer's model dynamically.

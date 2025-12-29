@@ -717,6 +717,62 @@ func TestSessionSummarizer_SetPrompt(t *testing.T) {
 			}
 		})
 	})
+
+	t.Run("SetPrompt validates conversationTextPlaceholder", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{})
+
+		invalidPrompt := "Prompt without placeholder"
+		assert.Panics(t, func() {
+			s.(*sessionSummarizer).SetPrompt(invalidPrompt)
+		})
+	})
+
+	t.Run("SetPrompt validates maxSummaryWordsPlaceholder when maxSummaryWords > 0", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{}, WithMaxSummaryWords(50))
+
+		invalidPrompt := "Prompt with {conversation_text} but no max words placeholder"
+		assert.Panics(t, func() {
+			s.(*sessionSummarizer).SetPrompt(invalidPrompt)
+		})
+	})
+
+	t.Run("SetPrompt accepts valid prompt without maxSummaryWordsPlaceholder when maxSummaryWords = 0", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{})
+
+		validPrompt := "Prompt with {conversation_text} only"
+		s.(*sessionSummarizer).SetPrompt(validPrompt)
+		assert.Equal(t, validPrompt, s.(*sessionSummarizer).prompt)
+	})
+
+	t.Run("NewSummarizer accepts any prompt with WithPrompt", func(t *testing.T) {
+		t.Run("accepts invalid prompt", func(t *testing.T) {
+			assert.NotPanics(t, func() {
+				s := NewSummarizer(&fakeModel{}, WithPrompt("invalid prompt"))
+				assert.NotNil(t, s)
+				// The invalid prompt is set but will be validated when SetPrompt is called later
+				assert.Equal(t, "invalid prompt", s.(*sessionSummarizer).prompt)
+			})
+		})
+
+		t.Run("accepts valid prompt", func(t *testing.T) {
+			assert.NotPanics(t, func() {
+				s := NewSummarizer(&fakeModel{}, WithPrompt("prompt with {conversation_text}"))
+				assert.NotNil(t, s)
+				assert.Equal(t, "prompt with {conversation_text}", s.(*sessionSummarizer).prompt)
+			})
+		})
+	})
+
+	t.Run("SetPrompt validates invalid prompt from WithPrompt", func(t *testing.T) {
+		// Create summarizer with invalid prompt via WithPrompt
+		s := NewSummarizer(&fakeModel{}, WithPrompt("invalid prompt without placeholders"))
+		assert.NotNil(t, s)
+
+		// Setting a new prompt should validate
+		assert.Panics(t, func() {
+			s.(*sessionSummarizer).SetPrompt("another invalid prompt")
+		})
+	})
 }
 
 func TestSessionSummarizer_SetModel(t *testing.T) {
