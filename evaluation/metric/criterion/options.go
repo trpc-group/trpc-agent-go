@@ -9,18 +9,23 @@
 
 package criterion
 
-import "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+)
 
 // options aggregates configurable parts of Criterion.
 type options struct {
 	// ToolTrajectory sets the default tool trajectory criterion.
-	ToolTrajectory *tooltrajectory.ToolTrajectoryCriterion
+	toolTrajectory *tooltrajectory.ToolTrajectoryCriterion
+	// llmJudge sets the LLM judge criterion.
+	llmJudge *llm.LLMCriterion
 }
 
 // newOptions creates a Options with the provided options.
 func newOptions(opt ...Option) *options {
 	opts := &options{
-		ToolTrajectory: tooltrajectory.New(),
+		toolTrajectory: tooltrajectory.New(),
 	}
 	for _, o := range opt {
 		o(opts)
@@ -34,6 +39,13 @@ type Option func(*options)
 // WithToolTrajectory sets the tool trajectory criterion.
 func WithToolTrajectory(toolTrajectory *tooltrajectory.ToolTrajectoryCriterion) Option {
 	return func(o *options) {
-		o.ToolTrajectory = toolTrajectory
+		o.toolTrajectory = toolTrajectory
+	}
+}
+
+// WithLLMJudge sets the LLM judge criterion.
+func WithLLMJudge(llmJudge *llm.LLMCriterion) Option {
+	return func(o *options) {
+		o.llmJudge = llmJudge
 	}
 }
