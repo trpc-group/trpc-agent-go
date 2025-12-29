@@ -73,6 +73,8 @@ type EvalMetricResultDetails struct {
 	Reason string `json:"reason,omitempty"`
 	// Score is the score for the metric evaluation result.
 	Score float64 `json:"score,omitempty"`
+	// RubricScores contains the scores for the rubric items.
+	RubricScores []*RubricScore `json:"rubricScores,omitempty"`
 }
 
 // EvalMetricResultPerInvocation represents metric results for a single invocation.
@@ -83,6 +85,13 @@ type EvalMetricResultPerInvocation struct {
 	ExpectedInvocation *evalset.Invocation `json:"expectedInvocation,omitempty"`
 	// EvalMetricResults contains results for each metric for this invocation.
 	EvalMetricResults []*EvalMetricResult `json:"evalMetricResults,omitempty"`
+}
+
+// RubricScore captures an individual rubric item score returned by judge models.
+type RubricScore struct {
+	ID     string  `json:"id,omitempty"`     // ID identifies the rubric item.
+	Reason string  `json:"reason,omitempty"` // Reason explains why the rubric was scored this way.
+	Score  float64 `json:"score,omitempty"`  // Score is the numeric rubric score.
 }
 
 // Manager defines the interface for managing evaluation results.
