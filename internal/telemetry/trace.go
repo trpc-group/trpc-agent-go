@@ -256,6 +256,9 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 
 // TraceBeforeInvokeAgent traces the before invocation of an agent.
 func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDescription, instructions string, genConfig *model.GenerationConfig) {
+	if invoke != nil && len(invoke.RunOptions.SpanAttributes) > 0 {
+		span.SetAttributes(invoke.RunOptions.SpanAttributes...)
+	}
 	if bts, err := json.Marshal(&model.Request{Messages: []model.Message{invoke.Message}}); err == nil {
 		span.SetAttributes(
 			attribute.String(KeyGenAIInputMessages, string(bts)),

@@ -197,46 +197,32 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 ### 可观测平台上报
 
-AG-UI Runner 提供 `WithStartSpan`，用于在每次 run 开始时统一创建追踪 span 并写入请求相关属性。
+在 `RunOptionResolver` 里附加自定义 span 属性，框架会在 Agent 入口 span 处自动打标：
 
 ```go
 import (
     "go.opentelemetry.io/otel/attribute"
-    "go.opentelemetry.io/otel/trace"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
     aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
     "trpc.group/trpc-go/trpc-agent-go/runner"
-    atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+    "trpc.group/trpc-go/trpc-agent-go/agent"
 )
 
-// 自定义 StartSpan，设置 threadId/userId/input 等属性
-func startSpan(ctx context.Context, input *adapter.RunAgentInput) (context.Context, trace.Span, error) {
-    userID, err := userIDResolver(ctx, input)
-    if err != nil {
-        return nil, nil, err
-    }
+runOptionResolver := func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
     attrs := []attribute.KeyValue{
-        attribute.String("session.id", input.ThreadID),
-        attribute.String("user.id", userID),
         attribute.String("trace.input", input.Messages[len(input.Messages)-1].Content),
     }
-    ctx, span := atrace.Tracer.Start(ctx, "agui-run", trace.WithAttributes(attrs...))
-    return ctx, span, nil
-}
-
-func userIDResolver(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
-    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
-        return user, nil
+    if scenario, ok := input.ForwardedProps["scenario"].(string); ok {
+        attrs = append(attrs, attribute.String("conversation.scenario", scenario))
     }
-    return "anonymous", nil
+    return []agent.RunOption{agent.WithSpanAttributes(attrs...)}, nil
 }
 
 r := runner.NewRunner(agent.Info().Name, agent)
 server, err := agui.New(r,
     agui.WithAGUIRunnerOptions(
-        aguirunner.WithUserIDResolver(userIDResolver),
-        aguirunner.WithStartSpan(startSpan),
+        aguirunner.WithRunOptionResolver(runOptionResolver),
     ),
 )
 ```

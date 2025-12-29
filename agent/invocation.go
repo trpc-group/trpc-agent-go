@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
@@ -82,6 +83,9 @@ type Invocation struct {
 	RunOptions RunOptions
 	// TransferInfo contains information about a pending agent transfer.
 	TransferInfo *TransferInfo
+
+	// Plugins provides runner-scoped hooks applied to this invocation.
+	Plugins PluginManager
 
 	// StructuredOutput defines how the model should produce structured output for this invocation.
 	StructuredOutput *model.StructuredOutput
@@ -262,6 +266,17 @@ func WithResume(enabled bool) RunOption {
 func WithRequestID(requestID string) RunOption {
 	return func(opts *RunOptions) {
 		opts.RequestID = requestID
+	}
+}
+
+// WithSpanAttributes sets custom span attributes for the RunOptions.
+func WithSpanAttributes(attrs ...attribute.KeyValue) RunOption {
+	return func(opts *RunOptions) {
+		if len(attrs) == 0 {
+			opts.SpanAttributes = nil
+			return
+		}
+		opts.SpanAttributes = append([]attribute.KeyValue(nil), attrs...)
 	}
 }
 
@@ -446,6 +461,9 @@ type RunOptions struct {
 	// RequestID is the request id of the request.
 	RequestID string
 
+	// SpanAttributes carries custom span attributes for this run.
+	SpanAttributes []attribute.KeyValue
+
 	// A2ARequestOptions contains A2A client request options that will be passed to
 	// A2A agent's SendMessage and StreamMessage calls. This allows callers to pass
 	// dynamic HTTP headers or other request-specific options for each run.
@@ -547,6 +565,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		RunOptions:      inv.RunOptions,
 		MemoryService:   inv.MemoryService,
 		ArtifactService: inv.ArtifactService,
+		Plugins:         inv.Plugins,
 		noticeMu:        inv.noticeMu,
 		noticeChannels:  inv.noticeChannels,
 		eventFilterKey:  inv.eventFilterKey,

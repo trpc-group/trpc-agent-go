@@ -190,12 +190,12 @@ func (at *Tool) callWithParentInvocation(
 	)
 
 	// Run the agent and collect response.
-	evCh, err := at.agent.Run(agent.NewInvocationContext(ctx, subInv), subInv)
+	subCtx := agent.NewInvocationContext(ctx, subInv)
+	evCh, err := agent.RunWithPlugins(subCtx, subInv, at.agent)
 	if err != nil {
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
-	childCtx := agent.NewInvocationContext(ctx, subInv)
-	return at.collectResponse(at.wrapWithCallSemantics(childCtx, subInv, evCh))
+	return at.collectResponse(at.wrapWithCallSemantics(subCtx, subInv, evCh))
 }
 
 // wrapWithCompletion consumes events, notifies completion when required, and forwards to a new channel.
@@ -448,7 +448,7 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 			)
 
 			subCtx := agent.NewInvocationContext(ctx, subInv)
-			evCh, err := at.agent.Run(subCtx, subInv)
+			evCh, err := agent.RunWithPlugins(subCtx, subInv, at.agent)
 			if err != nil {
 				_ = stream.Writer.Send(tool.StreamChunk{Content: fmt.Sprintf("agent tool run error: %v", err)}, nil)
 				return
