@@ -113,7 +113,7 @@ stdioToolSet := mcp.NewMCPToolSet(
         Args:      []string{"run", "./stdioserver/main.go"},
         Timeout:   10 * time.Second,
     },
-    mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")),
+    mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("echo", "add")),
 )
 ```
 
@@ -132,7 +132,7 @@ sseToolSet := mcp.NewMCPToolSet(
             "User-Agent": "trpc-agent-go/1.0.0",
         },
     },
-    mcp.WithToolFilter(mcp.NewIncludeFilter("sse_recipe", "sse_health_tip")),
+    mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("sse_recipe", "sse_health_tip")),
     mcp.WithMCPOptions(
         // WithRetry: Custom retry configuration for fine-tuned control
         // Retry sequence: 1s -> 1.5s -> 2.25s -> 3.375s -> 5.0625s (capped at 15s)
@@ -162,7 +162,7 @@ streamableToolSet := mcp.NewMCPToolSet(
         ServerURL: "http://localhost:3000/mcp",
         Timeout:   10 * time.Second,
     },
-    mcp.WithToolFilter(mcp.NewIncludeFilter("get_weather", "get_news")),
+    mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("get_weather", "get_news")),
     mcp.WithMCPOptions(
         // WithSimpleRetry(3): Uses default settings with 3 retry attempts
         // - MaxRetries: 3 (range: 0-10)

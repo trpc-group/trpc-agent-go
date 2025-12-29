@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -384,15 +383,22 @@ func WithModelCallbacks(callbacks *model.Callbacks) Option {
 // The name and description of the node can be set with the options.
 // This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *StateGraph {
+	f := func(ctx context.Context, state State) (any, error) {
+		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
+		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", id), ID: id})
+		defer span.End()
+		return function(ctx, state)
+	}
 	node := &Node{
 		ID:       id,
 		Name:     id,
-		Function: function,
+		Function: f,
 		Type:     NodeTypeFunction, // Default to function type
 	}
 	for _, opt := range opts {
 		opt(node)
 	}
+
 	sg.graph.addNode(node)
 
 	// Automatically set up Pregel-style configuration
@@ -736,7 +742,8 @@ func NewLLMNodeFunc(
 		defer span.End()
 		result, err := runner.execute(ctx, state, span)
 		if err != nil {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return nil, fmt.Errorf("failed to run model: %w", err)
 		}
 		return result, nil
@@ -1041,7 +1048,8 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		}
 		result, err := config.ModelCallbacks.RunAfterModel(ctx, args)
 		if err != nil {
-			config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			config.Span.RecordError(err)
+			config.Span.SetStatus(codes.Error, err.Error())
 			return ctx, nil, fmt.Errorf("callback after model error: %w", err)
 		}
 		// Use the context from result if provided for subsequent operations.
@@ -1058,7 +1066,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		author = config.NodeID
 	}
 	llmEvent = event.NewResponseEvent(config.InvocationID, author, config.Response)
-	if config.EventChan != nil && !config.Response.Done {
+	if config.EventChan != nil && shouldEmitModelResponse(config.Response) {
 		invocation, ok := agent.InvocationFromContext(ctx)
 		if !ok {
 			invocation = agent.NewInvocation(
@@ -1079,6 +1087,27 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 	return ctx, llmEvent, nil
 }
 
+func shouldEmitModelResponse(rsp *model.Response) bool {
+	if rsp == nil {
+		return false
+	}
+	if rsp.Error != nil {
+		return true
+	}
+	if rsp.IsValidContent() {
+		return true
+	}
+	for _, choice := range rsp.Choices {
+		if choice.Message.ReasoningContent != "" {
+			return true
+		}
+		if choice.Delta.ReasoningContent != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func runModel(
 	ctx context.Context,
 	modelCallbacks *model.Callbacks,
@@ -1097,7 +1126,8 @@ func runModel(
 		args := &model.BeforeModelArgs{Request: request}
 		result, err := modelCallbacks.RunBeforeModel(ctx, args)
 		if err != nil {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return ctx, nil, fmt.Errorf("callback before model error: %w", err)
 		}
 		// Use the context from result if provided.
@@ -1114,7 +1144,8 @@ func runModel(
 	// Generate content.
 	responseChan, err := llmModel.GenerateContent(ctx, request)
 	if err != nil {
-		span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return ctx, nil, fmt.Errorf("failed to generate content: %w", err)
 	}
 	return ctx, responseChan, nil
@@ -1145,7 +1176,8 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 	parallel := node.enableParallelTools
 
 	return func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, "execute_tools_node")
+		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
+		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: "execute_tools_node", ID: "execute_tools_node"})
 		defer span.End()
 
 		// Extract and validate messages from state.
@@ -1289,7 +1321,13 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		// Build invocation for the target agent with custom runtime state and scope.
 		invocation := buildAgentInvocationWithStateAndScope(ctx, parentForInput, childState, targetAgent, scope)
 
-		itelemetry.TraceBeforeInvokeAgent(span, invocation, targetAgent.Info().Description, "", nil)
+		itelemetry.TraceBeforeInvokeAgent(span, invocation, targetAgent.Info().Description, "", dummyNode.llmGenerationConfig)
+		var stream bool
+		if dummyNode.llmGenerationConfig != nil {
+			stream = dummyNode.llmGenerationConfig.Stream
+		}
+		tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &err)
+		defer tracker.RecordMetrics()()
 
 		// Emit agent execution start event.
 		startTime := time.Now()
@@ -1304,18 +1342,21 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			// Emit agent execution error event.
 			endTime := time.Now()
 			emitAgentErrorEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime, err)
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			tracker.SetResponseErrorType(itelemetry.ValueDefaultErrorType)
 			return nil, fmt.Errorf("failed to run agent %s: %w", agentName, err)
 		}
 
 		// Process agent event stream and capture completion state.
-		lastResponse, finalState, rawDelta, fullRespEvent, err := processAgentEventStream(
-			ctx, agentEventChan, nodeCallbacks, nodeID, state, eventChan, agentName,
+		lastResponse, finalState, rawDelta, fullRespEvent, tokenUsage, err := processAgentEventStream(
+			ctx, agentEventChan, nodeCallbacks, nodeID, state, eventChan, agentName, tracker,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process agent event stream: %w", err)
 		}
-		itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, nil)
+
+		itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
 		// Emit agent execution complete event.
 		endTime := time.Now()
 		emitAgentCompleteEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime)
@@ -1345,11 +1386,13 @@ func processAgentEventStream(
 	state State,
 	eventChan chan<- *event.Event,
 	agentName string,
-) (string, State, map[string][]byte, *event.Event, error) {
+	tracker *itelemetry.InvokeAgentTracker,
+) (string, State, map[string][]byte, *event.Event, *itelemetry.TokenUsage, error) {
 	var lastResponse string
 	var finalState State
 	var rawDelta map[string][]byte
 	var fullRespEvent *event.Event
+	tokenUsage := &itelemetry.TokenUsage{}
 
 	for agentEvent := range agentEventChan {
 		// Run node callbacks for this event.
@@ -1364,7 +1407,7 @@ func processAgentEventStream(
 
 		// Forward the event to the parent event channel.
 		if err := event.EmitEvent(ctx, eventChan, agentEvent); err != nil {
-			return "", nil, nil, fullRespEvent, err
+			return "", nil, nil, fullRespEvent, tokenUsage, err
 		}
 
 		// Track the last response for state update.
@@ -1374,7 +1417,13 @@ func processAgentEventStream(
 		}
 
 		if agentEvent.Response != nil {
+			tracker.TrackResponse(agentEvent.Response)
 			if !agentEvent.Response.IsPartial {
+				if agentEvent.Response.Usage != nil {
+					tokenUsage.PromptTokens += agentEvent.Response.Usage.PromptTokens
+					tokenUsage.CompletionTokens += agentEvent.Response.Usage.CompletionTokens
+					tokenUsage.TotalTokens += agentEvent.Response.Usage.TotalTokens
+				}
 				fullRespEvent = agentEvent
 			}
 		}
@@ -1405,11 +1454,21 @@ func processAgentEventStream(
 		}
 	}
 
-	return lastResponse, finalState, rawDelta, fullRespEvent, nil
+	return lastResponse, finalState, rawDelta, fullRespEvent, tokenUsage, nil
 }
 
 // buildAgentInvocationWithStateAndScope builds an invocation for the target agent
 // using a custom runtime state and an optional event filter scope segment.
+//
+// FilterKey Strategy:
+// The FilterKey is built using a stable, deterministic pattern based on the agent
+// hierarchy rather than random UUIDs. This ensures that:
+//  1. Multi-turn conversations work correctly with BranchFilterModePrefix
+//  2. Child agent responses from previous requests are visible in subsequent requests
+//  3. The prefix matching in event.Filter() works as expected across requests
+//
+// Format: parentKey/agentName (without UUID)
+// Example: "input/knowledge" instead of "input/knowledge/random-uuid"
 func buildAgentInvocationWithStateAndScope(
 	ctx context.Context,
 	parentState State,
@@ -1435,25 +1494,24 @@ func buildAgentInvocationWithStateAndScope(
 	// Clone from parent invocation if available to preserve linkage and filtering.
 	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok &&
 		parentInvocation != nil {
+		runOptions := parentInvocation.RunOptions
+		runOptions.RuntimeState = runtime
+
 		base := util.If(scope != "", scope, targetAgent.Info().Name)
 		parentKey := parentInvocation.GetEventFilterKey()
+		// Build a stable FilterKey without UUID to ensure multi-turn conversations
 		var filterKey string
 		if parentKey == "" {
-			filterKey = base + agent.EventFilterKeyDelimiter +
-				uuid.NewString()
+			filterKey = base
 		} else {
-			filterKey = parentKey + agent.EventFilterKeyDelimiter +
-				base + agent.EventFilterKeyDelimiter +
-				uuid.NewString()
+			filterKey = parentKey + agent.EventFilterKeyDelimiter + base
 		}
 		inv := parentInvocation.Clone(
 			agent.WithInvocationAgent(targetAgent),
 			agent.WithInvocationMessage(
 				model.NewUserMessage(userInput),
 			),
-			agent.WithInvocationRunOptions(agent.RunOptions{
-				RuntimeState: runtime,
-			}),
+			agent.WithInvocationRunOptions(runOptions),
 			agent.WithInvocationEventFilterKey(filterKey),
 		)
 		return inv
@@ -1464,8 +1522,8 @@ func buildAgentInvocationWithStateAndScope(
 		agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: runtime}),
 		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
 		agent.WithInvocationSession(sessionData),
-		// Unify format with clone branch: <agentName>/<uuid>
-		agent.WithInvocationEventFilterKey(targetAgent.Info().Name+agent.EventFilterKeyDelimiter+uuid.NewString()),
+		// Use stable FilterKey based on agent name only (no UUID).
+		agent.WithInvocationEventFilterKey(targetAgent.Info().Name),
 	)
 	return inv
 }
@@ -1642,7 +1700,8 @@ const (
 func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (any, error) {
 	ctx, responseChan, err := runModel(ctx, config.ModelCallbacks, config.LLMModel, config.Request)
 	if err != nil {
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		config.Span.RecordError(err)
+		config.Span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("failed to run model: %w", err)
 	}
 	invocation, ok := agent.InvocationFromContext(ctx)
@@ -1953,14 +2012,16 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		if interruptErr != nil {
 			return model.Message{}, interruptErr
 		}
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		config.Span.RecordError(err)
+		config.Span.SetStatus(codes.Error, err.Error())
 		return model.Message{}, fmt.Errorf("tool %s call failed: %w", name, err)
 	}
 
 	// Marshal result to JSON.
 	content, err := json.Marshal(result)
 	if err != nil {
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		config.Span.RecordError(err)
+		config.Span.SetStatus(codes.Error, err.Error())
 		return model.Message{}, fmt.Errorf("failed to marshal tool result: %w", err)
 	}
 

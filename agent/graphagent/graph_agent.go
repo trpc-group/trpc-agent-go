@@ -14,14 +14,19 @@ import (
 	"context"
 	"fmt"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -77,8 +82,9 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 
 // Run executes the graph with the provided invocation.
 func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	// Setup invocation.
+	// Setup invocation
 	ga.setupInvocation(invocation)
+
 	out := make(chan *event.Event, ga.channelBufferSize)
 	runCtx := agent.CloneContext(ctx)
 	go ga.runWithBarrier(runCtx, invocation, out)
@@ -88,12 +94,17 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 // runWithBarrier emits a start barrier, waits for completion, then runs the graph with callbacks
 // pipeline and forwards all events to the provided output channel.
 func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invocation, out chan<- *event.Event) {
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName))
+	itelemetry.TraceBeforeInvokeAgent(span, invocation, ga.description, "", nil)
+	defer span.End()
 	defer close(out)
 	// Emit a barrier event and wait for completion in a dedicated goroutine so that the runner can append all prior
 	// events before GraphAgent reads history.
 	if err := ga.emitStartBarrierAndWait(ctx, invocation, out); err != nil {
 		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
 			model.ErrorTypeFlowError, err.Error())
+		span.SetStatus(codes.Error, err.Error())
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, model.ErrorTypeFlowError))
 		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
 			log.Errorf("graphagent: emit error event failed: %v", emitErr)
 		}
@@ -103,6 +114,8 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	if err != nil {
 		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
 			model.ErrorTypeFlowError, err.Error())
+		span.SetStatus(codes.Error, err.Error())
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, model.ErrorTypeFlowError))
 		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
 			log.Errorf("graphagent: emit error event failed: %v.", emitErr)
 		}
@@ -110,6 +123,8 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	}
 	for evt := range innerChan {
 		if err := event.EmitEvent(ctx, out, evt); err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String(itelemetry.KeyErrorType, model.ErrorTypeFlowError))
 			log.Errorf("graphagent: emit event failed: %v.", err)
 			return
 		}
@@ -213,6 +228,7 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 			processor.WithMaxHistoryRuns(ga.options.MaxHistoryRuns),
 			processor.WithPreserveSameBranch(true),
 			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
+			processor.WithReasoningContentMode(ga.options.ReasoningContentMode),
 		)
 		// We only need messages side effect; no output channel needed.
 		p.ProcessRequest(ctx, invocation, req, nil)

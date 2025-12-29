@@ -49,6 +49,7 @@ const (
 	OperationInvokeAgent     = "invoke_agent"
 	OperationCreateAgent     = "create_agent"
 	OperationEmbeddings      = "embeddings"
+	OperationWorkflow        = "workflow"
 )
 
 // NewChatSpanName creates a new chat span name.
@@ -59,6 +60,31 @@ func NewChatSpanName(requestModel string) string {
 // NewExecuteToolSpanName creates a new execute tool span name.
 func NewExecuteToolSpanName(toolName string) string {
 	return fmt.Sprintf("%s %s", OperationExecuteTool, toolName)
+}
+
+const (
+	// KeyGenAIWorkflowName is the name of the workflow.
+	KeyGenAIWorkflowName = "gen_ai.workflow.name"
+	// KeyGenAIWorkflowID is the id of the workflow.
+	KeyGenAIWorkflowID = "gen_ai.workflow.id"
+)
+
+// Workflow is the workflow information.
+type Workflow struct {
+	Name string
+	ID   string
+}
+
+// NewWorkflowSpanName creates a new workflow span name.
+func NewWorkflowSpanName(workflowName string) string {
+	return fmt.Sprintf("%s %s", OperationWorkflow, workflowName)
+}
+
+// TraceWorkflow traces the workflow.
+func TraceWorkflow(span trace.Span, workflow *Workflow) {
+	span.SetAttributes(attribute.String(KeyGenAIOperationName, OperationWorkflow))
+	span.SetAttributes(attribute.String(KeyGenAIWorkflowName, workflow.Name))
+	span.SetAttributes(attribute.String(KeyGenAIWorkflowID, workflow.ID))
 }
 
 // newInferenceSpanName creates a new inference span name.
@@ -125,6 +151,7 @@ var (
 	KeyGenAISystemInstructions      = semconvtrace.KeyGenAISystemInstructions
 	KeyGenAITokenType               = semconvtrace.KeyGenAITokenType
 	KeyGenAIRequestThinkingEnabled  = semconvtrace.KeyGenAIRequestThinkingEnabled
+	KeyGenAIRequestToolDefinitions  = "gen_ai.request.tool.definitions"
 
 	KeyGenAIToolName          = semconvtrace.KeyGenAIToolName
 	KeyGenAIToolDescription   = semconvtrace.KeyGenAIToolDescription
@@ -229,6 +256,9 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 
 // TraceBeforeInvokeAgent traces the before invocation of an agent.
 func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDescription, instructions string, genConfig *model.GenerationConfig) {
+	if invoke != nil && len(invoke.RunOptions.SpanAttributes) > 0 {
+		span.SetAttributes(invoke.RunOptions.SpanAttributes...)
+	}
 	if bts, err := json.Marshal(&model.Request{Messages: []model.Message{invoke.Message}}); err == nil {
 		span.SetAttributes(
 			attribute.String(KeyGenAIInputMessages, string(bts)),
@@ -282,7 +312,7 @@ type TokenUsage struct {
 }
 
 // TraceAfterInvokeAgent traces the after invocation of an agent.
-func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *TokenUsage) {
+func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *TokenUsage, timeToFirstToken time.Duration) {
 	if rspEvent == nil {
 		return
 	}
@@ -317,6 +347,9 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *T
 	if e := rsp.Error; e != nil {
 		span.SetStatus(codes.Error, e.Message)
 		span.SetAttributes(attribute.String(KeyErrorType, e.Type), attribute.String(KeyErrorMessage, e.Message))
+	}
+	if timeToFirstToken > 0 {
+		span.SetAttributes(attribute.Float64(KeyTRPCAgentGoClientTimeToFirstToken, timeToFirstToken.Seconds()))
 	}
 }
 
@@ -414,6 +447,25 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 		attrs = append(attrs, attribute.String(KeyLLMRequest, string(bts)))
 	} else {
 		attrs = append(attrs, attribute.String(KeyLLMRequest, "<not json serializable>"))
+	}
+
+	// Add tool definitions as best-effort structured array (JSON string fallback)
+	if len(req.Tools) > 0 {
+		definitions := make([]*tool.Declaration, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			if t == nil {
+				continue
+			}
+			if decl := t.Declaration(); decl != nil {
+				definitions = append(definitions, decl)
+			}
+		}
+
+		if len(definitions) > 0 {
+			if bts, err := json.Marshal(definitions); err == nil {
+				attrs = append(attrs, attribute.String(KeyGenAIRequestToolDefinitions, string(bts)))
+			}
+		}
 	}
 
 	// Add messages

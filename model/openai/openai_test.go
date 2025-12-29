@@ -315,6 +315,106 @@ func TestModel_convertMessages(t *testing.T) {
 	require.NotEmpty(t, assistantUnion.GetToolCalls(), "assistant message should contain tool calls")
 }
 
+// TestModel_convertMessages_ReasoningContent verifies that reasoning_content
+// is passed to the OpenAI API via SetExtraFields for assistant messages.
+func TestModel_convertMessages_ReasoningContent(t *testing.T) {
+	m := New("dummy-model")
+
+	const testReasoningContent = "This is my step-by-step reasoning process."
+
+	t.Run("assistant message with reasoning_content", func(t *testing.T) {
+		msgs := []model.Message{
+			{
+				Role:             model.RoleAssistant,
+				Content:          "The answer is 42.",
+				ReasoningContent: testReasoningContent,
+			},
+		}
+
+		converted := m.convertMessages(msgs)
+		require.Len(t, converted, 1)
+		require.NotNil(t, converted[0].OfAssistant)
+
+		// Verify reasoning_content is included by marshaling to JSON.
+		data, err := json.Marshal(converted[0].OfAssistant)
+		require.NoError(t, err)
+
+		var parsed map[string]any
+		err = json.Unmarshal(data, &parsed)
+		require.NoError(t, err)
+
+		reasoningValue, ok := parsed[model.ReasoningContentKey]
+		require.True(t, ok, "reasoning_content should be present in serialized JSON")
+		assert.Equal(t, testReasoningContent, reasoningValue)
+	})
+
+	t.Run("assistant message without reasoning_content", func(t *testing.T) {
+		msgs := []model.Message{
+			{
+				Role:    model.RoleAssistant,
+				Content: "Simple response without reasoning.",
+			},
+		}
+
+		converted := m.convertMessages(msgs)
+		require.Len(t, converted, 1)
+		require.NotNil(t, converted[0].OfAssistant)
+
+		// Verify reasoning_content is NOT included when empty.
+		data, err := json.Marshal(converted[0].OfAssistant)
+		require.NoError(t, err)
+
+		var parsed map[string]any
+		err = json.Unmarshal(data, &parsed)
+		require.NoError(t, err)
+
+		_, ok := parsed[model.ReasoningContentKey]
+		assert.False(t, ok, "reasoning_content should NOT be present when empty")
+	})
+
+	t.Run("assistant message with tool calls and reasoning_content", func(t *testing.T) {
+		msgs := []model.Message{
+			{
+				Role:             model.RoleAssistant,
+				Content:          "",
+				ReasoningContent: "I need to call the calculator tool.",
+				ToolCalls: []model.ToolCall{
+					{
+						ID:   "call-123",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "calculator",
+							Arguments: []byte(`{"expression":"2+2"}`),
+						},
+					},
+				},
+			},
+		}
+
+		converted := m.convertMessages(msgs)
+		require.Len(t, converted, 1)
+		require.NotNil(t, converted[0].OfAssistant)
+
+		// Verify both reasoning_content and tool_calls are present.
+		data, err := json.Marshal(converted[0].OfAssistant)
+		require.NoError(t, err)
+
+		var parsed map[string]any
+		err = json.Unmarshal(data, &parsed)
+		require.NoError(t, err)
+
+		// Check reasoning_content.
+		reasoningValue, ok := parsed[model.ReasoningContentKey]
+		require.True(t, ok, "reasoning_content should be present")
+		assert.Equal(t, "I need to call the calculator tool.", reasoningValue)
+
+		// Check tool_calls.
+		toolCalls, ok := parsed["tool_calls"]
+		require.True(t, ok, "tool_calls should be present")
+		require.NotNil(t, toolCalls)
+	})
+}
+
 // TestModel_convertTools ensures that tool declarations are mapped to the
 // expected OpenAI function definitions.
 func TestModel_convertTools(t *testing.T) {
@@ -4691,4 +4791,320 @@ func TestBuildThinkingOption(t *testing.T) {
 			assert.Len(t, opts, len(tt.wantKeys), "expected %d opts", len(tt.wantKeys))
 		})
 	}
+}
+
+// TestFixToolCallIndices_ParallelToolCallsWithZeroIndex verifies that
+// fixToolCallIndices correctly assigns sequential indices to parallel tool
+// calls when the provider returns all indices as 0.
+func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
+	t.Run("fix indices for parallel tool calls with same index 0", func(t *testing.T) {
+		idToIndexMap := make(map[string]int)
+		nextIndex := 0
+
+		// First tool call chunk with ID "call_1" and index 0.
+		chunk1 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_1",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name: "tool_a",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		fixed1 := fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
+		assert.Equal(t, int64(0), fixed1.Choices[0].Delta.ToolCalls[0].Index)
+		assert.Equal(t, 0, idToIndexMap["call_1"])
+		assert.Equal(t, 1, nextIndex)
+
+		// Second tool call chunk with ID "call_2" and index 0 (should be fixed to 1).
+		chunk2 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_2",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name: "tool_b",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
+		assert.Equal(t, int64(1), fixed2.Choices[0].Delta.ToolCalls[0].Index)
+		assert.Equal(t, 1, idToIndexMap["call_2"])
+		assert.Equal(t, 2, nextIndex)
+	})
+
+	t.Run("preserve correct indices when provider sets them properly", func(t *testing.T) {
+		idToIndexMap := make(map[string]int)
+		nextIndex := 0
+
+		// First tool call with correct index 0.
+		chunk1 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_1",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name: "tool_a",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		fixed1 := fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
+		assert.Equal(t, int64(0), fixed1.Choices[0].Delta.ToolCalls[0].Index)
+
+		// Second tool call with correct index 1.
+		chunk2 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 1,
+								ID:    "call_2",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name: "tool_b",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
+		// Should preserve the original index 1.
+		assert.Equal(t, int64(1), fixed2.Choices[0].Delta.ToolCalls[0].Index)
+	})
+
+	t.Run("handle continuation chunks without ID", func(t *testing.T) {
+		idToIndexMap := make(map[string]int)
+		nextIndex := 0
+
+		// First chunk with ID.
+		chunk1 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_1",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name: "tool_a",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
+
+		// Continuation chunk without ID (arguments streaming).
+		chunk2 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Arguments: `{"arg": "value"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
+		// Should preserve index 0 for continuation.
+		assert.Equal(t, int64(0), fixed2.Choices[0].Delta.ToolCalls[0].Index)
+	})
+
+	t.Run("empty choices returns unchanged chunk", func(t *testing.T) {
+		idToIndexMap := make(map[string]int)
+		nextIndex := 0
+
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{},
+		}
+
+		fixed := fixToolCallIndices(chunk, idToIndexMap, &nextIndex)
+		assert.Equal(t, chunk, fixed)
+	})
+
+	t.Run("no tool calls returns unchanged chunk", func(t *testing.T) {
+		idToIndexMap := make(map[string]int)
+		nextIndex := 0
+
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						Content: "Hello",
+					},
+				},
+			},
+		}
+
+		fixed := fixToolCallIndices(chunk, idToIndexMap, &nextIndex)
+		assert.Equal(t, "Hello", fixed.Choices[0].Delta.Content)
+	})
+}
+
+// TestAccumulatorWithFixedIndices verifies that the OpenAI SDK accumulator
+// correctly handles tool calls after index fixing.
+func TestAccumulatorWithFixedIndices(t *testing.T) {
+	t.Run("accumulator separates tool calls with different indices", func(t *testing.T) {
+		acc := openai.ChatCompletionAccumulator{}
+		idToIndexMap := make(map[string]int)
+		nextIndex := 0
+
+		// First tool call chunk with ID "call_1" and index 0.
+		chunk1 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_1",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_a",
+									Arguments: `{"arg": "value1"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		fixed1 := fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
+		t.Logf("fixed1 index: %d, nextIndex: %d", fixed1.Choices[0].Delta.ToolCalls[0].Index, nextIndex)
+		acc.AddChunk(fixed1)
+
+		// Second tool call chunk with ID "call_2" and index 0 (should be fixed to 1).
+		chunk2 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_2",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_b",
+									Arguments: `{"arg": "value2"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
+		t.Logf("fixed2 index: %d, nextIndex: %d", fixed2.Choices[0].Delta.ToolCalls[0].Index, nextIndex)
+		acc.AddChunk(fixed2)
+
+		// Verify accumulator has two separate tool calls.
+		t.Logf("Accumulated tool calls: %d", len(acc.Choices[0].Message.ToolCalls))
+		for i, tc := range acc.Choices[0].Message.ToolCalls {
+			t.Logf("Tool call %d: ID=%s, Name=%s, Args=%s", i, tc.ID, tc.Function.Name, tc.Function.Arguments)
+		}
+
+		assert.Len(t, acc.Choices, 1)
+		assert.Len(t, acc.Choices[0].Message.ToolCalls, 2)
+		assert.Equal(t, "tool_a", acc.Choices[0].Message.ToolCalls[0].Function.Name)
+		assert.Equal(t, "tool_b", acc.Choices[0].Message.ToolCalls[1].Function.Name)
+		assert.Equal(t, `{"arg": "value1"}`, acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
+		assert.Equal(t, `{"arg": "value2"}`, acc.Choices[0].Message.ToolCalls[1].Function.Arguments)
+	})
+
+	t.Run("without fix, accumulator concatenates tool calls with same index", func(t *testing.T) {
+		acc := openai.ChatCompletionAccumulator{}
+
+		// First tool call chunk with ID "call_1" and index 0.
+		chunk1 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_1",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_a",
+									Arguments: `{"arg": "value1"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		acc.AddChunk(chunk1)
+
+		// Second tool call chunk with ID "call_2" and index 0 (NOT fixed).
+		chunk2 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_2",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_b",
+									Arguments: `{"arg": "value2"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		acc.AddChunk(chunk2)
+
+		// Without fix, accumulator should concatenate names and arguments.
+		assert.Len(t, acc.Choices, 1)
+		// The accumulator concatenates the second tool call onto the first.
+		assert.Len(t, acc.Choices[0].Message.ToolCalls, 1)
+		// Names and arguments are concatenated.
+		assert.Equal(t, "tool_atool_b", acc.Choices[0].Message.ToolCalls[0].Function.Name)
+		assert.Equal(t, `{"arg": "value1"}{"arg": "value2"}`, acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
+	})
 }

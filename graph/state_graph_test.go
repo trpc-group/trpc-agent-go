@@ -23,7 +23,9 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -344,7 +346,7 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 	}
 	close(agentEvents)
 
-	last, final, raw, _, err := processAgentEventStream(
+	last, final, raw, _, _, err := processAgentEventStream(
 		ctx,
 		agentEvents,
 		nil,
@@ -352,11 +354,63 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 		State{},
 		parentEventChan,
 		"agent",
+		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "", last)
 	require.NotNil(t, final)
 	require.Len(t, raw, 1)
+}
+
+func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
+	ctx := context.Background()
+	agentEvents := make(chan *event.Event, 2)
+	parentEventChan := make(chan *event.Event, 2)
+
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			IsPartial: true,
+			Usage: &model.Usage{
+				PromptTokens:     1,
+				CompletionTokens: 2,
+				TotalTokens:      3,
+			},
+			Choices: []model.Choice{{Message: model.NewAssistantMessage("partial")}},
+		},
+	}
+
+	finalUsage := &model.Usage{
+		PromptTokens:     10,
+		CompletionTokens: 20,
+		TotalTokens:      30,
+	}
+	finalEvent := &event.Event{
+		Response: &model.Response{
+			IsPartial: false,
+			Usage:     finalUsage,
+			Choices:   []model.Choice{{Message: model.NewAssistantMessage("final")}},
+		},
+	}
+	agentEvents <- finalEvent
+	close(agentEvents)
+
+	last, _, _, fullRespEvent, tokenUsage, err := processAgentEventStream(
+		ctx,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		&itelemetry.InvokeAgentTracker{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "final", last)
+	require.Equal(t, finalUsage.PromptTokens, tokenUsage.PromptTokens)
+	require.Equal(t, finalUsage.CompletionTokens, tokenUsage.CompletionTokens)
+	require.Equal(t, finalUsage.TotalTokens, tokenUsage.TotalTokens)
+	require.Equal(t, finalEvent, fullRespEvent)
+	require.Len(t, parentEventChan, 2)
 }
 
 func TestProcessToolCalls_ParallelCancelOnFirstError(t *testing.T) {
@@ -1184,6 +1238,67 @@ func TestStateGraph_AddSubgraphNode(t *testing.T) {
 	if n.Type != NodeTypeAgent {
 		t.Fatalf("expected NodeTypeAgent, got %v", n.Type)
 	}
+}
+
+func TestBuildAgentInvocationWithStateAndScope_PreservesRequestID(
+	t *testing.T,
+) {
+	const (
+		parentKey = "test_app"
+		requestID = "req-123"
+		userInput = "hi"
+	)
+
+	sess := &session.Session{}
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationAgent(&messageEchoAgent{name: "parent"}),
+		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ModelName: "model-x",
+			RequestID: requestID,
+			Resume:    true,
+		}),
+		agent.WithInvocationEventFilterKey(parentKey),
+		agent.WithInvocationSession(sess),
+	)
+	evt := event.NewResponseEvent(
+		parentInv.InvocationID,
+		"user",
+		&model.Response{
+			Done: false,
+			Choices: []model.Choice{
+				{
+					Index:   0,
+					Message: model.NewUserMessage(userInput),
+				},
+			},
+		},
+	)
+	agent.InjectIntoEvent(parentInv, evt)
+	sess.Events = []event.Event{*evt}
+
+	parentState := State{
+		StateKeyUserInput: userInput,
+		StateKeySession:   sess,
+	}
+	runtime := State{"x": 1}
+
+	ctx := agent.NewInvocationContext(context.Background(), parentInv)
+	childInv := buildAgentInvocationWithStateAndScope(
+		ctx,
+		parentState,
+		runtime,
+		&messageEchoAgent{name: "child"},
+		"",
+	)
+	require.Equal(t, requestID, childInv.RunOptions.RequestID)
+	require.Equal(t, "model-x", childInv.RunOptions.ModelName)
+	require.True(t, childInv.RunOptions.Resume)
+	require.Equal(t, map[string]any(runtime), childInv.RunOptions.RuntimeState)
+	require.Equal(t, userInput, childInv.Message.Content)
+	require.Equal(t, "child", childInv.AgentName)
+
+	require.NotEmpty(t, childInv.GetEventFilterKey())
 }
 
 func TestOptionBranches_EmptyPoliciesAndCallbacks(t *testing.T) {

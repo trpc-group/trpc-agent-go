@@ -27,12 +27,12 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
     {
       "evalSetId": "greeting-set",
       "evalId": "case-1",
-      "finalEvalStatus": 1,
+      "finalEvalStatus": "passed",
       "overallEvalMetricResults": [
         {
           "metricName": "tool_trajectory_avg_score",
           "score": 0.9,
-          "evalStatus": 1,
+          "evalStatus": "passed",
           "threshold": 0.8,
           "details": {
             "reason": "trajectory matched"
@@ -45,92 +45,77 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
             "invocationId": "invocation-actual",
             "userContent": {
               "role": "user",
-              "parts": [
-                {
-                  "text": "calculate 1 + 2."
-                }
-              ]
+              "content": "calculate 1 + 2."
             },
             "finalResponse": {
               "role": "assistant",
-              "parts": [
-                {
-                  "text": "final: 1+2=3."
-                }
-              ]
+              "content": "final: 1+2=3."
             },
-            "intermediateData": {
-              "toolUses": [
-                {
-                  "id": "tool-call-1",
-                  "name": "calculator",
-                  "args": {
-                    "operation": "add",
-                    "a": 1,
-                    "b": 2
-                  }
+            "tools": [
+              {
+                "id": "tool-call-1",
+                "name": "calculator",
+                "arguments": {
+                  "operation": "add",
+                  "a": 1,
+                  "b": 2
+                },
+                "result": {
+                  "a": 1,
+                  "b": 2,
+                  "operation": "add",
+                  "result": 3
                 }
-              ],
-              "intermediateResponses": [
-                [
-                  "assistant",
-                  [
-                    {
-                      "text": "thinking..."
-                    }
-                  ]
-                ]
-              ]
-            },
+              }
+            ],
+            "intermediateResponses": [
+              {
+                "role": "assistant",
+                "content": "thinking..."
+              }
+            ],
             "creationTimestamp": 1700000000
           },
           "expectedInvocation": {
             "invocationId": "invocation-expected",
             "userContent": {
               "role": "user",
-              "parts": [
-                {
-                  "text": "calculate 1 + 2."
-                }
-              ]
+              "content": "calculate 1 + 2."
             },
             "finalResponse": {
               "role": "assistant",
-              "parts": [
-                {
-                  "text": "final: 1+2=3."
-                }
-              ]
+              "content": "final: 1+2=3."
             },
-            "intermediateData": {
-              "toolUses": [
-                {
-                  "name": "calculator",
-                  "args": {
-                    "operation": "add",
-                    "a": 1,
-                    "b": 2
-                  }
+            "tools": [
+              {
+                "id": "tool-call-1",
+                "name": "calculator",
+                "arguments": {
+                  "operation": "add",
+                  "a": 1,
+                  "b": 2
+                },
+                "result": {
+                  "a": 1,
+                  "b": 2,
+                  "operation": "add",
+                  "result": 3
                 }
-              ],
-              "intermediateResponses": [
-                [
-                  "assistant",
-                  [
-                    {
-                      "text": "thinking..."
-                    }
-                  ]
-                ]
-              ]
-            },
+              }
+            ],
+            "intermediateResponses": [
+              {
+                "role": "assistant",
+                "content": "thinking..."
+              }
+            ],
             "creationTimestamp": 1700000000
           },
           "evalMetricResults": [
             {
               "metricName": "tool_trajectory_avg_score",
               "score": 0.9,
-              "evalStatus": 1,
+              "evalStatus": "passed",
               "threshold": 0.8,
               "details": {
                 "reason": "per invocation matched"

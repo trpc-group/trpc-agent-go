@@ -75,6 +75,47 @@ func TestProcessRequest_IncludeInvocationMessage_WhenNoSession(t *testing.T) {
 	require.True(t, model.MessagesEqual(model.NewUserMessage("hi there"), req.Messages[0]))
 }
 
+func TestProcessRequest_NoDuplicateInvocationToolMessage(t *testing.T) {
+	const (
+		requestID   = "req-tool-message"
+		toolCallID  = "call-1"
+		toolName    = "external_tool"
+		toolContent = `{"status":"ok"}`
+	)
+
+	msg := model.NewToolMessage(toolCallID, toolName, toolContent)
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				RequestID: requestID,
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{Index: 0, Message: msg},
+					},
+				},
+				Author: "user",
+			},
+		},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(msg),
+		agent.WithInvocationRunOptions(
+			agent.RunOptions{RequestID: requestID},
+		),
+	)
+	inv.AgentName = "test-agent"
+
+	req := &model.Request{}
+	p := NewContentRequestProcessor()
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 1)
+	require.True(t, model.MessagesEqual(msg, req.Messages[0]))
+}
+
 // When session exists but has no events for the current branch, the invocation
 // message should still be included so sub agent gets the tool args.
 func TestProcessRequest_IncludeInvocationMessage_WhenNoBranchEvents(t *testing.T) {
@@ -281,7 +322,7 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 	require.Equal(t, model.RoleSystem, req1.Messages[0].Role)
 	require.Equal(t, "existing system prompt", req1.Messages[0].Content)
 	require.Equal(t, model.RoleSystem, req1.Messages[1].Role)
-	require.Equal(t, "Session summary content", req1.Messages[1].Content)
+	require.Equal(t, formatSummaryContent("Session summary content"), req1.Messages[1].Content)
 	require.Equal(t, model.RoleUser, req1.Messages[2].Role)
 	require.Equal(t, "user question", req1.Messages[2].Content)
 	require.Equal(t, model.RoleUser, req1.Messages[3].Role)
@@ -307,7 +348,7 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 	// Should have 3 messages: summary system, user, current request
 	require.Equal(t, 3, len(req2.Messages))
 	require.Equal(t, model.RoleSystem, req2.Messages[0].Role)
-	require.Equal(t, "Session summary content", req2.Messages[0].Content)
+	require.Equal(t, formatSummaryContent("Session summary content"), req2.Messages[0].Content)
 	require.Equal(t, model.RoleUser, req2.Messages[1].Role)
 	require.Equal(t, "user question", req2.Messages[1].Content)
 	require.Equal(t, model.RoleUser, req2.Messages[2].Role)
@@ -337,7 +378,7 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 	require.Equal(t, model.RoleSystem, req3.Messages[0].Role)
 	require.Equal(t, "system 1", req3.Messages[0].Content)
 	require.Equal(t, model.RoleSystem, req3.Messages[1].Role)
-	require.Equal(t, "Session summary content", req3.Messages[1].Content)
+	require.Equal(t, formatSummaryContent("Session summary content"), req3.Messages[1].Content)
 	require.Equal(t, model.RoleSystem, req3.Messages[2].Role)
 	require.Equal(t, "system 2", req3.Messages[2].Content)
 	require.Equal(t, model.RoleUser, req3.Messages[3].Role)
@@ -376,7 +417,7 @@ func TestProcessRequest_SessionSummary_EdgeCases(t *testing.T) {
 	// Should have 2 messages: summary system, current request
 	require.Equal(t, 2, len(req1.Messages))
 	require.Equal(t, model.RoleSystem, req1.Messages[0].Role)
-	require.Equal(t, "Session summary content", req1.Messages[0].Content)
+	require.Equal(t, formatSummaryContent("Session summary content"), req1.Messages[0].Content)
 	require.Equal(t, model.RoleUser, req1.Messages[1].Role)
 	require.Equal(t, "current request", req1.Messages[1].Content)
 
@@ -402,7 +443,7 @@ func TestProcessRequest_SessionSummary_EdgeCases(t *testing.T) {
 	require.Equal(t, model.RoleSystem, req2.Messages[0].Role)
 	require.Equal(t, "system prompt", req2.Messages[0].Content)
 	require.Equal(t, model.RoleSystem, req2.Messages[1].Role)
-	require.Equal(t, "Session summary content", req2.Messages[1].Content)
+	require.Equal(t, formatSummaryContent("Session summary content"), req2.Messages[1].Content)
 	require.Equal(t, model.RoleUser, req2.Messages[2].Role)
 	require.Equal(t, "current request", req2.Messages[2].Content)
 }

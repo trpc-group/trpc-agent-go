@@ -18,6 +18,7 @@ const (
 	ErrorTypeStreamError = "stream_error"
 	ErrorTypeAPIError    = "api_error"
 	ErrorTypeFlowError   = "flow_error"
+	ErrorTypeRunError    = "run_error"
 )
 
 // Object type constants for Response.Object field.

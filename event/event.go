@@ -285,13 +285,13 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		return err
 	}
 
-	log.Tracef("[EmitEventWithTimeout]queue monitoring: RequestID: %s, channel capacity: %d, current length: %d, branch: %s",
+	log.TracefContext(ctx, "[EmitEventWithTimeout]queue monitoring: RequestID: %s, channel capacity: %d, current length: %d, branch: %s",
 		e.RequestID, cap(ch), len(ch), e.Branch)
 
 	if timeout == EmitWithoutTimeout {
 		select {
 		case ch <- e:
-			log.Tracef("EmitEventWithTimeout: event sent, event: %+v", *e)
+			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
 		case <-ctx.Done():
 			log.WarnfContext(
 				ctx,
@@ -305,7 +305,7 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 
 	select {
 	case ch <- e:
-		log.Tracef("EmitEventWithTimeout: event sent, event: %+v", *e)
+		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
 	case <-ctx.Done():
 		log.WarnfContext(
 			ctx,

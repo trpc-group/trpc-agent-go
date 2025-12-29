@@ -195,6 +195,42 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 若返回错误，则会发送 `RunError` 事件；返回 `nil` 则表示不追加任何 `RunOption`。
 
+### 可观测平台上报
+
+在 `RunOptionResolver` 里附加自定义 span 属性，框架会在 Agent 入口 span 处自动打标：
+
+```go
+import (
+    "go.opentelemetry.io/otel/attribute"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+)
+
+runOptionResolver := func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+    attrs := []attribute.KeyValue{
+        attribute.String("trace.input", input.Messages[len(input.Messages)-1].Content),
+    }
+    if scenario, ok := input.ForwardedProps["scenario"].(string); ok {
+        attrs = append(attrs, attribute.String("conversation.scenario", scenario))
+    }
+    return []agent.RunOption{agent.WithSpanAttributes(attrs...)}, nil
+}
+
+r := runner.NewRunner(agent.Info().Name, agent)
+server, err := agui.New(r,
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithRunOptionResolver(runOptionResolver),
+    ),
+)
+```
+
+配合事件翻译回调 `AfterTranslate`，可在累积输出并写入 `trace.output`。这样前端流式事件与后端 trace 对齐，便于在可观测平台中同时查看输入和最终输出。 
+
+与 Langfuse 可观测平台的结合示例可参考 [examples/agui/server/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse)。
+
 ### 事件翻译回调
 
 AG-UI 提供了事件翻译的回调机制，便于在事件翻译流程的前后插入自定义逻辑。

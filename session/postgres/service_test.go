@@ -2874,6 +2874,115 @@ func TestNewService_DSNPriority(t *testing.T) {
 	_ = svc.Close()
 }
 
+func TestNewService_NoSummarizer_NoAsyncWorker(t *testing.T) {
+	db, _, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockPostgresClient{db: db}, nil
+	})
+
+	// Register instance
+	instanceName := "test-instance-nosum"
+	storage.RegisterPostgresInstance(instanceName,
+		storage.WithClientConnString("test:test@tcp(localhost:5432)/testdb"),
+	)
+
+	svc, err := NewService(
+		WithPostgresInstance(instanceName),
+		WithSkipDBInit(true),
+		// No summarizer provided - should not start async summary workers
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	defer svc.Close()
+
+	// Verify that summary job channels are not initialized when no summarizer is provided
+	assert.Len(t, svc.summaryJobChans, 0)
+}
+
+func TestNewService_WithSummarizer_StartsAsyncWorker(t *testing.T) {
+	db, _, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockPostgresClient{db: db}, nil
+	})
+
+	// Register instance
+	instanceName := "test-instance-withsum"
+	storage.RegisterPostgresInstance(instanceName,
+		storage.WithClientConnString("test:test@tcp(localhost:5432)/testdb"),
+	)
+
+	svc, err := NewService(
+		WithPostgresInstance(instanceName),
+		WithSkipDBInit(true),
+		WithSummarizer(&mockSummarizerImpl{summaryText: "test", shouldSummarize: true}),
+		WithAsyncSummaryNum(2),
+		WithSummaryQueueSize(10),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	defer svc.Close()
+
+	// Verify that summary job channels are initialized when summarizer is provided
+	assert.Len(t, svc.summaryJobChans, 2)
+	for i, ch := range svc.summaryJobChans {
+		assert.NotNil(t, ch, "Channel %d should not be nil", i)
+		assert.Equal(t, 10, cap(ch), "Channel %d should have capacity 10", i)
+	}
+}
+
+func TestNewService_InstanceNotFound(t *testing.T) {
+	svc, err := NewService(
+		WithPostgresInstance("non-existent-instance"),
+		WithSkipDBInit(true),
+	)
+	assert.Error(t, err)
+	assert.Nil(t, svc)
+	assert.Contains(t, err.Error(), "postgres instance non-existent-instance not found")
+}
+
+func TestNewService_DefaultCleanupInterval(t *testing.T) {
+	db, _, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockPostgresClient{db: db}, nil
+	})
+
+	// Register instance
+	instanceName := "test-instance-cleanup"
+	storage.RegisterPostgresInstance(instanceName,
+		storage.WithClientConnString("test:test@tcp(localhost:5432)/testdb"),
+	)
+
+	svc, err := NewService(
+		WithPostgresInstance(instanceName),
+		WithSkipDBInit(true),
+		WithSessionTTL(time.Hour), // This should trigger default cleanup interval
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	defer svc.Close()
+
+	// Verify that default cleanup interval was set
+	assert.Equal(t, defaultCleanupIntervalSecond, svc.opts.cleanupInterval)
+}
+
 func TestAppendEventHook(t *testing.T) {
 	t.Run("hook modifies event before storage (skip db)", func(t *testing.T) {
 		db, _, err := sqlmock.New()

@@ -21,11 +21,16 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -371,6 +376,63 @@ func TestA2AAgent_GetAgentCard(t *testing.T) {
 			agentCard := tc.agent.GetAgentCard()
 			tc.validateFunc(t, agentCard)
 		})
+	}
+}
+
+func TestWrapEventChannelWithTelemetry_AccumulatesTokenUsage(t *testing.T) {
+	spanRecorder := tracetest.NewSpanRecorder()
+	tp := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(spanRecorder))
+	ctx, span := tp.Tracer("test").Start(context.Background(), "wrap")
+	sdkSpan := span
+
+	originalChan := make(chan *event.Event, 2)
+	wrappedChan := (&A2AAgent{}).wrapEventChannelWithTelemetry(ctx, &agent.Invocation{}, originalChan, sdkSpan, &itelemetry.InvokeAgentTracker{})
+
+	partialEvent := &event.Event{
+		Response: &model.Response{
+			IsPartial: true,
+			Usage: &model.Usage{
+				PromptTokens:     1,
+				CompletionTokens: 2,
+				TotalTokens:      3,
+			},
+		},
+	}
+	finalEvent := &event.Event{
+		Response: &model.Response{
+			IsPartial: false,
+			Usage: &model.Usage{
+				PromptTokens:     10,
+				CompletionTokens: 20,
+				TotalTokens:      30,
+			},
+		},
+	}
+
+	originalChan <- partialEvent
+	originalChan <- finalEvent
+	close(originalChan)
+
+	var received []*event.Event
+	for evt := range wrappedChan {
+		received = append(received, evt)
+	}
+
+	if len(received) != 2 || received[0] != partialEvent || received[1] != finalEvent {
+		t.Fatalf("wrapped channel did not preserve events")
+	}
+
+	spans := spanRecorder.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("expected one ended span, got %d", len(spans))
+	}
+
+	attrs := spans[0].Attributes()
+	if !hasAttr(attrs, attribute.Int(itelemetry.KeyGenAIUsageInputTokens, finalEvent.Response.Usage.PromptTokens)) {
+		t.Fatalf("expected input token usage to be recorded, attrs=%v", attrs)
+	}
+	if !hasAttr(attrs, attribute.Int(itelemetry.KeyGenAIUsageOutputTokens, finalEvent.Response.Usage.CompletionTokens)) {
+		t.Fatalf("expected output token usage to be recorded, attrs=%v", attrs)
 	}
 }
 
@@ -1632,4 +1694,13 @@ func (stubInvocationConverter) ConvertToA2AMessage(
 		[]protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "test message"}},
 	)
 	return &msg, nil
+}
+
+func hasAttr(attrs []attribute.KeyValue, target attribute.KeyValue) bool {
+	for _, attr := range attrs {
+		if attr.Key == target.Key && attr.Value == target.Value {
+			return true
+		}
+	}
+	return false
 }

@@ -156,8 +156,11 @@ func (r *A2AAgent) validateA2ARequestOptions(invocation *agent.Invocation) error
 
 // Run implements the Agent interface
 func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	var err error
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, r.name))
 	itelemetry.TraceBeforeInvokeAgent(span, invocation, r.description, "", nil)
+	useStreaming := r.shouldUseStreaming()
+	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, useStreaming, &err)
 
 	if r.a2aClient == nil {
 		span.SetStatus(codes.Error, "A2A client is nil")
@@ -174,10 +177,8 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 		return nil, err
 	}
 
-	useStreaming := r.shouldUseStreaming()
 	var (
 		eventChan <-chan *event.Event
-		err       error
 	)
 	if useStreaming {
 		eventChan, err = r.runStreaming(ctx, invocation)
@@ -191,7 +192,7 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 		return nil, err
 	}
 
-	return r.wrapEventChannelWithTelemetry(ctx, invocation, eventChan, span), nil
+	return r.wrapEventChannelWithTelemetry(ctx, invocation, eventChan, span, tracker), nil
 }
 
 // shouldUseStreaming determines whether to use streaming protocol
@@ -437,24 +438,41 @@ func (r *A2AAgent) wrapEventChannelWithTelemetry(
 	invocation *agent.Invocation,
 	originalChan <-chan *event.Event,
 	span sdktrace.Span,
+	tracker *itelemetry.InvokeAgentTracker,
 ) <-chan *event.Event {
 	wrappedChan := make(chan *event.Event, cap(originalChan))
 
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
+		var responseErrorType string
+		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
 			if fullRespEvent != nil {
-				log.Debug("fullRespEvent is not ni")
-				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, nil)
+				log.DebugContext(ctx, "fullRespEvent is not ni")
+				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
 			}
+
+			tracker.SetResponseErrorType(responseErrorType)
+			tracker.RecordMetrics()()
 			span.End()
 			close(wrappedChan)
 		}()
 
 		for evt := range originalChan {
-			if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
-				fullRespEvent = evt
+			if evt != nil && evt.Response != nil {
+				tracker.TrackResponse(evt.Response)
+				if !evt.Response.IsPartial {
+					if evt.Response.Usage != nil {
+						tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
+						tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
+						tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
+					}
+					fullRespEvent = evt
+				}
+			}
+			if evt != nil && evt.Error != nil {
+				responseErrorType = evt.Error.Type
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return

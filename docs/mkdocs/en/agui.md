@@ -192,6 +192,42 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 `RunOptionResolver` executes for every incoming `RunAgentInput`. Its return value is forwarded to `runner.Run` in order. Returning an error surfaces a `RunError` to the client, while returning `nil` means no extra options are added.
 
+### Observability Reporting
+
+Attach custom span attributes in `RunOptionResolver`; the framework will stamp them onto the agent entry span automatically:
+
+```go
+import (
+    "go.opentelemetry.io/otel/attribute"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+)
+
+runOptionResolver := func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+    attrs := []attribute.KeyValue{
+        attribute.String("trace.input", input.Messages[len(input.Messages)-1].Content),
+    }
+    if scenario, ok := input.ForwardedProps["scenario"].(string); ok {
+        attrs = append(attrs, attribute.String("conversation.scenario", scenario))
+    }
+    return []agent.RunOption{agent.WithSpanAttributes(attrs...)}, nil
+}
+
+r := runner.NewRunner(agent.Info().Name, agent)
+server, err := agui.New(r,
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithRunOptionResolver(runOptionResolver),
+    ),
+)
+```
+
+Pair this with an `AfterTranslate` callback to accumulate output and write it to `trace.output`. This keeps streaming events aligned with backend traces so you can inspect both input and final output in your observability platform. 
+
+For a Langfuse-specific example, see [examples/agui/server/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse).
+
 ### Event Translation Callback
 
 AG-UI provides an event translation callback mechanism, allowing custom logic to be inserted before and after the event translation process.

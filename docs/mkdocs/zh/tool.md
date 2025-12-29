@@ -255,7 +255,7 @@ mcpToolSet := mcp.NewMCPToolSet(
         Args:      []string{"run", "./stdio_server/main.go"},
         Timeout:   10 * time.Second,
     },
-    mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")), // 可选：工具过滤
+    mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("echo", "add")), // 可选：工具过滤
 )
 
 // （可选但推荐）显式初始化 MCP：建立连接 + 初始化会话 + 列工具
@@ -754,6 +754,47 @@ runner.Run(ctx, userID, sessionID, message,
 #### 注意事项
 
 ⚠️ **安全提示：** 运行时工具过滤是"软约束"，主要用于优化和用户体验。工具内部仍需实现自己的鉴权逻辑：
+
+### 手动执行工具（中断 tool_calls）
+
+默认情况下，当模型返回 `tool_calls` 时，框架会自动执行工具，然后把工具结果再发回给模型继续推理。
+
+在一些系统里，你可能希望由调用方（例如客户端、上游服务，或外部工具运行时，例如
+Model Context Protocol (MCP)）来执行工具。此时可以使用
+`agent.WithToolExecutionFilter(...)` 来中断工具的自动执行。
+
+**核心区别：**
+
+- `agent.WithToolFilter(...)` 控制**工具可见性**（模型能看到/能调用哪些工具）
+- `agent.WithToolExecutionFilter(...)` 控制**工具执行**（模型请求后，框架是否自动执行）
+
+#### 基本流程
+
+1. 使用 `WithToolExecutionFilter` 发起一次 `runner.Run`，让框架**不执行**指定工具
+2. 从事件里读取模型返回的 `tool_calls`
+3. 调用方在外部执行工具
+4. 通过 `role=tool` 的消息把结果回填，模型继续输出最终答案
+
+```go
+execFilter := tool.NewExcludeToolNamesFilter("external_search")
+
+// 第一步：模型会返回 tool_calls，但工具不会被框架执行。
+ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("search ..."),
+    agent.WithToolExecutionFilter(execFilter),
+)
+
+// 第二步：从事件里提取 tool_call_id + arguments（此处省略）。
+toolCallID := "call_123"
+toolResultJSON := `{"status":"ok","data":"..."}`
+
+// 第三/四步：用 role=tool 回填工具结果，模型继续输出。
+toolMsg := model.NewToolMessage(toolCallID, "external_search", toolResultJSON)
+ch, err = r.Run(ctx, userID, sessionID, toolMsg,
+    agent.WithToolExecutionFilter(execFilter),
+)
+```
+
+**完整示例：** `examples/toolinterrupt/`
 
 ```go
 func sensitiveOperation(ctx context.Context, req Request) (Result, error) {

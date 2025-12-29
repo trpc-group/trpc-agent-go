@@ -549,11 +549,19 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 				},
 			}
 		case model.RoleAssistant:
+			assistantMsg := &openai.ChatCompletionAssistantMessageParam{
+				Content:   m.convertAssistantMessageContent(msg),
+				ToolCalls: m.convertToolCalls(msg.ToolCalls),
+			}
+			// Pass reasoning_content to API if present (required by DeepSeek for
+			// tool call scenarios within the same request turn).
+			if msg.ReasoningContent != "" {
+				assistantMsg.SetExtraFields(map[string]any{
+					model.ReasoningContentKey: msg.ReasoningContent,
+				})
+			}
 			result[i] = openai.ChatCompletionMessageParamUnion{
-				OfAssistant: &openai.ChatCompletionAssistantMessageParam{
-					Content:   m.convertAssistantMessageContent(msg),
-					ToolCalls: m.convertToolCalls(msg.ToolCalls),
-				},
+				OfAssistant: assistantMsg,
 			}
 		case model.RoleTool:
 			result[i] = openai.ChatCompletionMessageParamUnion{
@@ -824,6 +832,8 @@ func (m *Model) handleStreamingResponse(
 	idToIndexMap := make(map[string]int)
 	// Aggregate reasoning deltas for final message fallback (some providers don't retain it in accumulator).
 	var reasoningBuf bytes.Buffer
+	// Track next available index for tool calls (for providers that don't set correct indices).
+	nextToolCallIndex := 0
 
 	for stream.Next() {
 		chunk := stream.Current()
@@ -832,6 +842,10 @@ func (m *Model) handleStreamingResponse(
 		if m.shouldSkipEmptyChunk(chunk) {
 			continue
 		}
+
+		// Fix tool call indices for providers that return all indices as 0.
+		// This must be done before updateToolCallIndexMapping and accumulation.
+		chunk = fixToolCallIndices(chunk, idToIndexMap, &nextToolCallIndex)
 
 		// Track ID -> Index mapping when ID is present (first chunk of each tool call).
 		m.updateToolCallIndexMapping(chunk, idToIndexMap)
@@ -843,14 +857,12 @@ func (m *Model) handleStreamingResponse(
 			// avoid known panics when JSON.ToolCalls is marked present but the
 			// typed ToolCalls slice is empty, especially on finish_reason chunks.
 			sanitizedChunk := sanitizeChunkForAccumulator(chunk)
-
 			acc.AddChunk(sanitizedChunk)
 			if m.accumulateChunkUsage != nil {
 				accUsage, chunkUsage := completionUsageToModelUsage(acc.Usage), completionUsageToModelUsage(chunk.Usage)
 				usage := inverseOPENAISKDAddChunkUsage(accUsage, chunkUsage)
 				usage = m.accumulateChunkUsage(usage, chunkUsage)
 				acc.Usage = modelUsageToCompletionUsage(usage)
-
 			}
 		}
 
@@ -932,6 +944,94 @@ func sanitizeChunkForAccumulator(chunk openai.ChatCompletionChunk) openai.ChatCo
 	sanitized.Choices[0].Delta.JSON.ToolCalls = respjson.Field{}
 
 	return sanitized
+}
+
+// fixToolCallIndices fixes tool call indices for providers that return all
+// indices as 0 when making parallel tool calls. The OpenAI SDK accumulator
+// uses the index field to distinguish different tool calls, so if all tool
+// calls have index 0, their names and arguments get concatenated together.
+//
+// This function detects new tool calls by their ID and assigns them correct
+// sequential indices. It modifies the chunk in place and returns it.
+func fixToolCallIndices(
+	chunk openai.ChatCompletionChunk,
+	idToIndexMap map[string]int,
+	nextIndex *int,
+) openai.ChatCompletionChunk {
+	if len(chunk.Choices) == 0 {
+		return chunk
+	}
+
+	delta := chunk.Choices[0].Delta
+	if len(delta.ToolCalls) == 0 {
+		return chunk
+	}
+
+	// Check if we need to fix indices. We need to create a copy of the chunk
+	// to avoid modifying the original.
+	needsFix := false
+	for _, tc := range delta.ToolCalls {
+		// If this tool call has an ID we haven't seen before, and its index
+		// is 0, it might need fixing.
+		if tc.ID != "" {
+			if _, exists := idToIndexMap[tc.ID]; !exists {
+				// New tool call ID. Check if index is 0 and we already have
+				// other tool calls (which would indicate incorrect indices).
+				if tc.Index == 0 && *nextIndex > 0 {
+					needsFix = true
+					break
+				}
+			}
+		}
+	}
+
+	if !needsFix {
+		// Update nextIndex based on the indices we see.
+		for _, tc := range delta.ToolCalls {
+			if tc.ID != "" {
+				if _, exists := idToIndexMap[tc.ID]; !exists {
+					// First time seeing this ID, record its index.
+					idToIndexMap[tc.ID] = int(tc.Index)
+					if int(tc.Index) >= *nextIndex {
+						*nextIndex = int(tc.Index) + 1
+					}
+				}
+			}
+		}
+		return chunk
+	}
+
+	// Create a deep copy of the chunk to modify tool call indices.
+	fixedChunk := chunk
+	fixedChunk.Choices = make([]openai.ChatCompletionChunkChoice, len(chunk.Choices))
+	copy(fixedChunk.Choices, chunk.Choices)
+
+	// Deep copy the tool calls slice.
+	fixedChunk.Choices[0].Delta.ToolCalls = make(
+		[]openai.ChatCompletionChunkChoiceDeltaToolCall,
+		len(delta.ToolCalls),
+	)
+	copy(fixedChunk.Choices[0].Delta.ToolCalls, delta.ToolCalls)
+
+	// Fix indices for tool calls.
+	for i := range fixedChunk.Choices[0].Delta.ToolCalls {
+		tc := &fixedChunk.Choices[0].Delta.ToolCalls[i]
+		if tc.ID == "" {
+			// No ID means this is a continuation chunk, keep original index.
+			continue
+		}
+		if existingIndex, exists := idToIndexMap[tc.ID]; exists {
+			// Use the existing index for this ID.
+			tc.Index = int64(existingIndex)
+		} else {
+			// New tool call ID with index 0, assign next available index.
+			tc.Index = int64(*nextIndex)
+			idToIndexMap[tc.ID] = *nextIndex
+			*nextIndex++
+		}
+	}
+
+	return fixedChunk
 }
 
 // updateToolCallIndexMapping updates the tool call index mapping.

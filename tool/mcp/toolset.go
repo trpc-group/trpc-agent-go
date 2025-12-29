@@ -97,8 +97,8 @@ func (ts *ToolSet) Init(ctx context.Context) error {
 // Tools implements the ToolSet interface.
 func (ts *ToolSet) Tools(ctx context.Context) []tool.Tool {
 	if err := ts.listTools(ctx); err != nil {
-		log.Error("Failed to refresh tools", err)
-		// Return cached tools if refresh fails
+		log.ErrorContext(ctx, "Failed to refresh tools", err)
+		// Return cached tools if refresh fails.
 	}
 
 	ts.mu.RLock()
@@ -138,7 +138,7 @@ func (ts *ToolSet) Name() string {
 
 // listTools connects to the MCP server and refreshes the tool list.
 func (ts *ToolSet) listTools(ctx context.Context) error {
-	log.Debug("Refreshing MCP tools")
+	log.DebugContext(ctx, "Refreshing MCP tools")
 
 	// Ensure connection.
 	if !ts.sessionManager.isConnected() {
@@ -153,7 +153,7 @@ func (ts *ToolSet) listTools(ctx context.Context) error {
 		return fmt.Errorf("failed to list tools from MCP server: %w", err)
 	}
 
-	log.Debug("Retrieved tools from MCP server", "count", len(mcpTools))
+	log.DebugContext(ctx, "Retrieved tools from MCP server", "count", len(mcpTools))
 
 	// Convert MCP tools to standard tool format.
 	tools := make([]tool.Tool, 0, len(mcpTools))
@@ -172,7 +172,7 @@ func (ts *ToolSet) listTools(ctx context.Context) error {
 	ts.tools = tools
 	ts.mu.Unlock()
 
-	log.Debug("Successfully refreshed MCP tools", "count", len(tools))
+	log.DebugContext(ctx, "Successfully refreshed MCP tools", "count", len(tools))
 	return nil
 }
 
@@ -208,7 +208,7 @@ func (m *mcpSessionManager) connect(ctx context.Context) error {
 		return nil
 	}
 
-	log.Debug("Connecting to MCP server", "transport", m.config.Transport)
+	log.DebugContext(ctx, "Connecting to MCP server", "transport", m.config.Transport)
 
 	client, err := m.createClient()
 	if err != nil {
@@ -222,12 +222,13 @@ func (m *mcpSessionManager) connect(ctx context.Context) error {
 	if err := m.initialize(ctx); err != nil {
 		m.connected = false
 		if closeErr := client.Close(); closeErr != nil {
-			log.Error("Failed to close client after initialization failure", "client_close_error", closeErr, "error", err)
+			log.ErrorContext(ctx, "Failed to close client after initialization failure",
+				"client_close_error", closeErr, "error", err)
 		}
 		return fmt.Errorf("failed to initialize MCP session: %w", err)
 	}
 
-	log.Debug("Successfully connected to MCP server")
+	log.DebugContext(ctx, "Successfully connected to MCP server")
 	return nil
 }
 
@@ -302,7 +303,7 @@ func (m *mcpSessionManager) createTimeoutContext(ctx context.Context, operation 
 	if m.config.Timeout > 0 {
 		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 			timeoutCtx, cancel := context.WithTimeout(ctx, m.config.Timeout)
-			log.Debug("Applied MCP timeout", "timeout", m.config.Timeout, "operation", operation)
+			log.DebugContext(ctx, "Applied MCP timeout", "timeout", m.config.Timeout, "operation", operation)
 			return timeoutCtx, cancel
 		}
 	}
@@ -315,7 +316,7 @@ func (m *mcpSessionManager) initialize(ctx context.Context) error {
 		return nil
 	}
 
-	log.Debug("Initializing MCP session")
+	log.DebugContext(ctx, "Initializing MCP session")
 
 	initCtx, cancel := m.createTimeoutContext(ctx, "initialize")
 	defer cancel()
@@ -325,7 +326,7 @@ func (m *mcpSessionManager) initialize(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize MCP session: %w", err)
 	}
 
-	log.Debug("MCP session initialized",
+	log.DebugContext(ctx, "MCP session initialized",
 		"server_name", initResp.ServerInfo.Name,
 		"server_version", initResp.ServerInfo.Version,
 		"protocol_version", initResp.ProtocolVersion)
@@ -347,7 +348,7 @@ func (m *mcpSessionManager) listTools(ctx context.Context) ([]mcp.Tool, error) {
 			return fmt.Errorf("transport is closed")
 		}
 
-		log.Debug("Listing tools from MCP server")
+		log.DebugContext(ctx, "Listing tools from MCP server")
 
 		listCtx, cancel := m.createTimeoutContext(ctx, "listTools")
 		defer cancel()
@@ -357,7 +358,7 @@ func (m *mcpSessionManager) listTools(ctx context.Context) ([]mcp.Tool, error) {
 			return fmt.Errorf("failed to list tools: %w", listErr)
 		}
 
-		log.Debug("Listed tools from MCP server", "count", len(listResp.Tools))
+		log.DebugContext(ctx, "Listed tools from MCP server", "count", len(listResp.Tools))
 		result = listResp.Tools
 		return nil
 	})
@@ -378,7 +379,7 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 			return fmt.Errorf("transport is closed")
 		}
 
-		log.Debug("Calling tool", "name", name, "arguments", arguments)
+		log.DebugContext(ctx, "Calling tool", "name", name, "arguments", arguments)
 
 		toolCtx, cancel := m.createTimeoutContext(ctx, "callTool")
 		defer cancel()
@@ -390,13 +391,13 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 		if callErr != nil {
 			// Enhanced error with parameter information.
 			enhancedErr := fmt.Errorf("failed to call tool %s: %w", name, callErr)
-			log.Errorf("Tool call failed (name=%s, error=%v)", name, callErr)
+			log.ErrorfContext(ctx, "Tool call failed (name=%s, error=%v)", name, callErr)
 			return enhancedErr
 		}
 
-		log.Debug("Tool call completed", "name", name, "content_count", len(callResp.Content))
+		log.DebugContext(ctx, "Tool call completed", "name", name, "content_count", len(callResp.Content))
 		result = callResp.Content
-		if callResp.StructuredContent != nil {
+		if len(result) == 0 && callResp.StructuredContent != nil {
 			structuredBytes, err := json.Marshal(callResp.StructuredContent)
 			if err != nil {
 				return fmt.Errorf("marshal structured content: %w", err)
@@ -462,54 +463,59 @@ func (m *mcpSessionManager) executeWithSessionReconnect(ctx context.Context, ope
 
 	// Per-operation reconnection attempts
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		// Check if context is already cancelled or timed out
+		// Check if context is already cancelled or timed out.
 		if ctx.Err() != nil {
-			log.Debugf("Context cancelled or timed out, stopping reconnection attempts (attempt=%d, error=%v)", attempt, ctx.Err())
+			log.DebugfContext(ctx, "Context cancelled or timed out, stopping reconnection attempts "+
+				"(attempt=%d, error=%v)", attempt, ctx.Err())
 			return fmt.Errorf("reconnection aborted: %w", ctx.Err())
 		}
 
-		log.Debugf("Session expired error detected, attempting session reconnection (attempt=%d/%d)", attempt, maxAttempts)
+		log.DebugfContext(ctx,
+			"Session expired error detected, attempting session reconnection (attempt=%d/%d)",
+			attempt, maxAttempts)
 
-		// Attempt session reconnection
+		// Attempt session reconnection.
 		if reconnectErr := m.recreateSession(ctx); reconnectErr != nil {
-			log.Errorf("Session reconnection failed (attempt=%d/%d, reconnect_error=%v, original_error=%v)",
-				attempt, maxAttempts, reconnectErr, err)
+			log.ErrorfContext(ctx, "Session reconnection failed (attempt=%d/%d, reconnect_error=%v, "+
+				"original_error=%v)", attempt, maxAttempts, reconnectErr, err)
 
-			// If this was the last attempt, return the original error
+			// If this was the last attempt, return the original error.
 			if attempt >= maxAttempts {
-				log.Warnf("Max session reconnect attempts reached for this operation, giving up (attempts=%d/%d)",
-					attempt, maxAttempts)
+				log.WarnfContext(ctx, "Max session reconnect attempts reached for this operation, "+
+					"giving up (attempts=%d/%d)", attempt, maxAttempts)
 				return err
 			}
 
-			// Continue to next attempt
+			// Continue to next attempt.
 			continue
 		}
 
-		log.Debugf("Session reconnection successful, retrying operation (attempt=%d)", attempt)
+		log.DebugfContext(ctx, "Session reconnection successful, retrying operation (attempt=%d)",
+			attempt)
 
-		// Retry the operation after successful reconnection
+		// Retry the operation after successful reconnection.
 		err = operation()
 		if err == nil {
-			log.Debugf("Operation succeeded after session reconnection (attempt=%d)", attempt)
+			log.DebugfContext(ctx, "Operation succeeded after session reconnection (attempt=%d)",
+				attempt)
 			return nil
 		}
 
-		// If operation still fails, check if we should retry reconnection
+		// If operation still fails, check if we should retry reconnection.
 		if !m.shouldAttemptSessionReconnect(err) {
-			// Different error type, don't retry
+			// Different error type, don't retry.
 			return err
 		}
 
-		// If we have more attempts, continue the loop
+		// If we have more attempts, continue the loop.
 		if attempt < maxAttempts {
-			log.Debugf("Operation failed after reconnection, will retry (attempt=%d/%d, error=%v)",
+			log.DebugfContext(ctx, "Operation failed after reconnection, will retry (attempt=%d/%d, error=%v)",
 				attempt, maxAttempts, err)
 		}
 	}
 
-	// All attempts exhausted
-	log.Warnf("All reconnection attempts exhausted for this operation (max_attempts=%d)", maxAttempts)
+	// All attempts exhausted.
+	log.WarnfContext(ctx, "All reconnection attempts exhausted for this operation (max_attempts=%d)", maxAttempts)
 	return err
 }
 
@@ -555,21 +561,21 @@ func (m *mcpSessionManager) doRecreateSession(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	log.Debug("Recreating MCP session")
+	log.DebugContext(ctx, "Recreating MCP session")
 
-	// Close existing client if any
+	// Close existing client if any.
 	if m.client != nil {
 		if closeErr := m.client.Close(); closeErr != nil {
-			log.Warn("Failed to close old client during session recreation", "error", closeErr)
+			log.WarnContext(ctx, "Failed to close old client during session recreation", "error", closeErr)
 		}
 		m.client = nil
 	}
 
-	// Reset connection state (will be set to true on success)
+	// Reset connection state (will be set to true on success).
 	m.connected = false
 	m.initialized = false
 
-	// Create new client
+	// Create new client.
 	client, err := m.createClient()
 	if err != nil {
 		return fmt.Errorf("failed to create new MCP client during session recreation: %w", err)
@@ -578,16 +584,17 @@ func (m *mcpSessionManager) doRecreateSession(ctx context.Context) error {
 	m.client = client
 	m.connected = true
 
-	// Re-initialize the session
+	// Re-initialize the session.
 	if err := m.initialize(ctx); err != nil {
 		m.connected = false
 		if closeErr := client.Close(); closeErr != nil {
-			log.Error("Failed to close client after re-initialization failure", "close_error", closeErr, "init_error", err)
+			log.ErrorContext(ctx, "Failed to close client after re-initialization failure",
+				"close_error", closeErr, "init_error", err)
 		}
 		m.client = nil
 		return fmt.Errorf("failed to re-initialize MCP session: %w", err)
 	}
 
-	log.Debug("MCP session recreation completed successfully")
+	log.DebugContext(ctx, "MCP session recreation completed successfully")
 	return nil
 }

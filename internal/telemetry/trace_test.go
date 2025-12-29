@@ -107,6 +107,27 @@ func hasAttr(attrs []attribute.KeyValue, key string, want any) bool {
 	return false
 }
 
+func TestNewWorkflowSpanName(t *testing.T) {
+	require.Equal(t, "workflow myflow", NewWorkflowSpanName("myflow"))
+}
+
+func TestTraceWorkflow(t *testing.T) {
+	span := newRecordingSpan()
+	wf := &Workflow{Name: "myflow", ID: "wf-123"}
+
+	TraceWorkflow(span, wf)
+
+	if !hasAttr(span.attrs, KeyGenAIOperationName, OperationWorkflow) {
+		t.Fatalf("missing operation name attribute")
+	}
+	if !hasAttr(span.attrs, KeyGenAIWorkflowName, "myflow") {
+		t.Fatalf("missing workflow name attribute")
+	}
+	if !hasAttr(span.attrs, KeyGenAIWorkflowID, "wf-123") {
+		t.Fatalf("missing workflow id attribute")
+	}
+}
+
 func TestTraceFunctions_NoPanics(t *testing.T) {
 	span := newStubSpan()
 
@@ -157,7 +178,7 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	rsp := &model.Response{ID: "rid", Model: "m-1", Usage: &model.Usage{PromptTokens: 1, CompletionTokens: 2}, Choices: []model.Choice{{FinishReason: &stop}, {}}, Error: &model.ResponseError{Message: "oops", Type: "api_error"}}
 	evt := event.New("eid", "alpha", event.WithResponse(rsp))
 	s2 := newRecordingSpan()
-	TraceAfterInvokeAgent(s2, evt, nil)
+	TraceAfterInvokeAgent(s2, evt, nil, 0)
 	if s2.status != codes.Error {
 		t.Fatalf("expected error status")
 	}
@@ -199,6 +220,18 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	if s7.status != codes.Error {
 		t.Fatalf("embedding expected error status")
 	}
+}
+
+func TestTraceBeforeInvokeAgent_WithSpanAttributes(t *testing.T) {
+	inv := &agent.Invocation{
+		AgentName:    "alpha",
+		InvocationID: "inv-span",
+		Session:      &session.Session{ID: "sess-span", UserID: "user-span"},
+		RunOptions:   agent.RunOptions{SpanAttributes: []attribute.KeyValue{attribute.String("custom.attr", "v1")}},
+	}
+	span := newRecordingSpan()
+	TraceBeforeInvokeAgent(span, inv, "desc", "inst", nil)
+	require.True(t, hasAttr(span.attrs, "custom.attr", "v1"), "custom span attribute should be applied")
 }
 
 func TestNewChatSpanName(t *testing.T) {
@@ -405,7 +438,7 @@ func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			span := newRecordingSpan()
-			TraceAfterInvokeAgent(span, tt.rspEvent, tt.tokenUsage)
+			TraceAfterInvokeAgent(span, tt.rspEvent, tt.tokenUsage, 0)
 
 			if tt.tokenUsage != nil && tt.rspEvent != nil && tt.rspEvent.Response != nil {
 				require.True(t, hasAttr(span.attrs, KeyGenAIUsageInputTokens, int64(tt.tokenUsage.PromptTokens)))
@@ -540,6 +573,44 @@ func TestBuildRequestAttributes(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildRequestAttributes_ToolDefinitions(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+		Tools: map[string]tool.Tool{
+			"alpha": testTool{decl: &tool.Declaration{Name: "alpha", Description: "first"}},
+			"beta":  testTool{decl: &tool.Declaration{Name: "beta", Description: "second"}},
+			"skip":  nil, // ensure nil entries are ignored
+		},
+	}
+
+	attrs := buildRequestAttributes(req)
+	require.NotNil(t, attrs)
+
+	var toolAttr *attribute.KeyValue
+	for i := range attrs {
+		if string(attrs[i].Key) == KeyGenAIRequestToolDefinitions {
+			toolAttr = &attrs[i]
+			break
+		}
+	}
+	require.NotNil(t, toolAttr, "expected tool definitions attribute")
+
+	var defs []tool.Declaration
+	require.NoError(t, json.Unmarshal([]byte(toolAttr.Value.AsString()), &defs))
+	require.Len(t, defs, 2)
+
+	names := map[string]struct{}{}
+	for _, d := range defs {
+		names[d.Name] = struct{}{}
+	}
+	require.Contains(t, names, "alpha")
+	require.Contains(t, names, "beta")
+}
+
+type testTool struct{ decl *tool.Declaration }
+
+func (t testTool) Declaration() *tool.Declaration { return t.decl }
 
 func TestBuildResponseAttributes(t *testing.T) {
 	tests := []struct {
