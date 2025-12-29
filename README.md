@@ -156,12 +156,11 @@ _ = result.OverallStatus
   - [Knowledge](#6-knowledge)
   - [Telemetry & Tracing](#7-telemetry--tracing)
   - [MCP Integration](#8-mcp-integration)
-  - [Debug Web Demo](#9-debug-web-demo)
-  - [AG-UI Demo](#10-ag-ui-demo)
-  - [Evaluation](#11-evaluation)
-  - [Agent Skills](#12-agent-skills)
-  - [Artifacts](#13-artifacts)
-  - [A2A Interop](#14-a2a-interop)
+  - [AG-UI Demo](#9-ag-ui-demo)
+  - [Evaluation](#10-evaluation)
+  - [Agent Skills](#11-agent-skills)
+  - [Artifacts](#12-artifacts)
+  - [A2A Interop](#13-a2a-interop)
 - [Architecture Overview](#architecture-overview)
 - [Using Built-in Agents](#using-built-in-agents)
 - [Future Enhancements](#future-enhancements)
@@ -412,8 +411,7 @@ Example: [examples/agui](examples/agui)
 Example: [examples/evaluation](examples/evaluation)
 
 - Evaluate an agent with repeatable eval sets and pluggable metrics.
-- Includes local file-backed runs and in-memory runs, plus a debug +
-  evaluation server demo.
+- Includes local file-backed runs and in-memory runs.
 
 ### 11. Agent Skills
 
@@ -471,11 +469,11 @@ Key packages:
 | `memory`    | Records user long-term memory and personalized information.                                                 |
 | `knowledge` | Implements RAG knowledge retrieval capabilities.                                                            |
 | `planner`   | Provides Agent planning and reasoning capabilities.                                                         |
-| `artifact`  | Stores and retrieves versioned files produced by agents and tools (images, reports, etc.).                 |
+| `artifact`  | Stores and retrieves versioned files produced by agents and tools (images, reports, etc.).                  |
 | `skill`     | Loads and executes reusable Agent Skills defined by `SKILL.md`.                                             |
 | `event`     | Defines event types and streaming payloads used across Runner and servers.                                  |
 | `evaluation` | Evaluates agents on eval sets using pluggable metrics and stores results.                                  |
-| `server`    | Exposes HTTP servers (Debug, AG-UI, A2A) for integration and UIs.                                           |
+| `server`    | Exposes HTTP servers (AG-UI, A2A) for integration and UIs.                                                  |
 | `telemetry` | OpenTelemetry tracing and metrics instrumentation.                                                          |
 
 
