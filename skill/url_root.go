@@ -422,13 +422,53 @@ func sanitizePerm(m os.FileMode) os.FileMode {
 	return m & 0o777
 }
 
-const tarPermMask = 0o777
+const (
+	tarPermUserRead  = 0o400
+	tarPermUserWrite = 0o200
+	tarPermUserExec  = 0o100
+
+	tarPermGroupRead  = 0o040
+	tarPermGroupWrite = 0o020
+	tarPermGroupExec  = 0o010
+
+	tarPermOtherRead  = 0o004
+	tarPermOtherWrite = 0o002
+	tarPermOtherExec  = 0o001
+)
 
 func tarHeaderPerm(mode int64) os.FileMode {
 	if mode < 0 {
 		return filePerm
 	}
-	return sanitizePerm(os.FileMode(mode & tarPermMask))
+	var perm os.FileMode
+	if mode&tarPermUserRead != 0 {
+		perm |= tarPermUserRead
+	}
+	if mode&tarPermUserWrite != 0 {
+		perm |= tarPermUserWrite
+	}
+	if mode&tarPermUserExec != 0 {
+		perm |= tarPermUserExec
+	}
+	if mode&tarPermGroupRead != 0 {
+		perm |= tarPermGroupRead
+	}
+	if mode&tarPermGroupWrite != 0 {
+		perm |= tarPermGroupWrite
+	}
+	if mode&tarPermGroupExec != 0 {
+		perm |= tarPermGroupExec
+	}
+	if mode&tarPermOtherRead != 0 {
+		perm |= tarPermOtherRead
+	}
+	if mode&tarPermOtherWrite != 0 {
+		perm |= tarPermOtherWrite
+	}
+	if mode&tarPermOtherExec != 0 {
+		perm |= tarPermOtherExec
+	}
+	return sanitizePerm(perm)
 }
 
 func fileExists(path string) bool {
