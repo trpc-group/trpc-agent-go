@@ -40,9 +40,6 @@ type Model struct {
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
 	extraHeaders               map[string]string
 	extraFields                map[string]any
-	useTRPC                    bool
-	trpcServiceName            string
-	trpcTimeout                int
 	enableTokenTailoring       bool
 	maxInputTokens             int
 	tokenCounter               model.TokenCounter
@@ -103,9 +100,6 @@ func New(modelName string, opts ...Option) (*Model, error) {
 		chatStreamCompleteCallback: options.ChatStreamCompleteCallback,
 		extraHeaders:               options.ExtraHeaders,
 		extraFields:                options.ExtraFields,
-		useTRPC:                    options.UseTRPC,
-		trpcServiceName:            options.TRPCServiceName,
-		trpcTimeout:                options.TRPCTimeout,
 		enableTokenTailoring:       options.EnableTokenTailoring || options.MaxInputTokens > 0,
 		maxInputTokens:             options.MaxInputTokens,
 		tokenCounter:               options.TokenCounter,
@@ -274,11 +268,6 @@ func (m *Model) handleStreamingRequest(
 
 // makeRequest makes a non-streaming HTTP request to the HuggingFace API.
 func (m *Model) makeRequest(ctx context.Context, hfRequest *ChatCompletionRequest) (*ChatCompletionResponse, error) {
-	// TODO: Implement tRPC client support.
-	if m.useTRPC {
-		return nil, errors.New("tRPC client support not yet implemented")
-	}
-
 	// Marshal request to JSON.
 	requestBody, err := m.marshalRequest(hfRequest)
 	if err != nil {
@@ -329,11 +318,6 @@ func (m *Model) makeRequest(ctx context.Context, hfRequest *ChatCompletionReques
 
 // makeStreamingRequest makes a streaming HTTP request to the HuggingFace API.
 func (m *Model) makeStreamingRequest(ctx context.Context, hfRequest *ChatCompletionRequest) (*http.Response, error) {
-	// TODO: Implement tRPC client support.
-	if m.useTRPC {
-		return nil, errors.New("tRPC client support not yet implemented")
-	}
-
 	// Marshal request to JSON.
 	requestBody, err := m.marshalRequest(hfRequest)
 	if err != nil {

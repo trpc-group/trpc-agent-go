@@ -120,18 +120,6 @@ func TestWithOptions(t *testing.T) {
 				assert.Equal(t, "custom-value", m.extraHeaders["X-Custom-Header"])
 			},
 		},
-		{
-			name: "WithTRPC",
-			opts: []Option{
-				WithAPIKey("test-key"),
-				WithTRPC("test-service", 5000),
-			},
-			validate: func(t *testing.T, m *Model) {
-				assert.True(t, m.useTRPC)
-				assert.Equal(t, "test-service", m.trpcServiceName)
-				assert.Equal(t, 5000, m.trpcTimeout)
-			},
-		},
 	}
 
 	for _, tt := range tests {

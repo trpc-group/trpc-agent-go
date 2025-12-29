@@ -76,12 +76,6 @@ type options struct {
 	ExtraHeaders map[string]string
 	// Extra fields to be added to the HTTP request body.
 	ExtraFields map[string]any
-	// UseTRPC indicates whether to use tRPC client for requests.
-	UseTRPC bool
-	// TRPCServiceName is the tRPC service name for routing.
-	TRPCServiceName string
-	// TRPCTimeout is the timeout for tRPC requests.
-	TRPCTimeout int
 	// EnableTokenTailoring enables automatic token tailoring based on model context window.
 	EnableTokenTailoring bool
 	// TokenCounter count tokens for token tailoring.
@@ -197,15 +191,6 @@ func WithExtraFields(extraFields map[string]any) Option {
 		for k, v := range extraFields {
 			opts.ExtraFields[k] = v
 		}
-	}
-}
-
-// WithTRPC enables tRPC client for making requests.
-func WithTRPC(serviceName string, timeout int) Option {
-	return func(opts *options) {
-		opts.UseTRPC = true
-		opts.TRPCServiceName = serviceName
-		opts.TRPCTimeout = timeout
 	}
 }
 
