@@ -92,22 +92,29 @@ func (t *StateAccessTool) Call(ctx context.Context, jsonArgs []byte) (any, error
 	}
 
 	// Extract data from session state.
-	if sessionData.State == nil {
+	if sessionData == nil {
 		return map[string]any{
 			"result": "No data found in session state",
 		}, nil
 	}
 
 	// Look for the specific key in the state.
-	if data, exists := sessionData.State[key]; exists {
+	if data, exists := sessionData.GetState(key); exists {
 		return map[string]any{
 			"result": fmt.Sprintf("Found data for key '%s': %s", key, string(data)),
 		}, nil
 	}
 
 	// If key not found, return available keys.
-	availableKeys := make([]string, 0, len(sessionData.State))
-	for k := range sessionData.State {
+	state := sessionData.SnapshotState()
+	if len(state) == 0 {
+		return map[string]any{
+			"result": "No data found in session state",
+		}, nil
+	}
+
+	availableKeys := make([]string, 0, len(state))
+	for k := range state {
 		availableKeys = append(availableKeys, k)
 	}
 
