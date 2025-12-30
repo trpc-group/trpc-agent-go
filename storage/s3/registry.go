@@ -29,7 +29,7 @@ var (
 //	// Later, retrieve and use the instance
 //	opts, ok := s3.GetS3Instance("production")
 //	if ok {
-//	    client, err := s3.GetClientBuilder()(ctx, opts...)
+//	    client, err := s3.NewClient(ctx, opts...)
 //	}
 func RegisterS3Instance(name string, opts ...ClientBuilderOpt) {
 	registryMu.Lock()

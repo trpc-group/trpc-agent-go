@@ -75,10 +75,15 @@ func WithBucket(bucket string) ClientBuilderOpt {
 // WithCredentials sets the AWS access key ID and secret access key.
 // If not provided, credentials are loaded from environment variables
 // (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) or the default AWS credential chain.
+//
+// Both accessKeyID and secretAccessKey must be non-empty to take effect.
+// If either is empty, the default credential chain is used instead.
 func WithCredentials(accessKeyID, secretAccessKey string) ClientBuilderOpt {
 	return func(o *ClientBuilderOpts) {
-		o.AccessKeyID = accessKeyID
-		o.SecretAccessKey = secretAccessKey
+		if accessKeyID != "" && secretAccessKey != "" {
+			o.AccessKeyID = accessKeyID
+			o.SecretAccessKey = secretAccessKey
+		}
 	}
 }
 

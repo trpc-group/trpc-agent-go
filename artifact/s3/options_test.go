@@ -180,7 +180,7 @@ func TestOptionChaining(t *testing.T) {
 func TestNewServiceWithOptions(t *testing.T) {
 	t.Run("with client option uses provided client", func(t *testing.T) {
 		mockClient := &mockTestClient{}
-		svc, err := NewService("my-bucket", WithClient(mockClient))
+		svc, err := NewService(context.Background(), "my-bucket", WithClient(mockClient))
 
 		require.NoError(t, err)
 		assert.NotNil(t, svc)
@@ -190,7 +190,7 @@ func TestNewServiceWithOptions(t *testing.T) {
 
 	t.Run("with all connection options", func(t *testing.T) {
 		mockClient := &mockTestClient{}
-		svc, err := NewService("my-bucket",
+		svc, err := NewService(context.Background(), "my-bucket",
 			WithEndpoint("http://localhost:9000"),
 			WithRegion("us-west-2"),
 			WithCredentials("access", "secret"),
@@ -209,7 +209,7 @@ func TestNewServiceWithOptions(t *testing.T) {
 func TestServiceClose(t *testing.T) {
 	t.Run("Close does not close externally provided client", func(t *testing.T) {
 		mockClient := &mockTestClient{}
-		svc, err := NewService("my-bucket", WithClient(mockClient))
+		svc, err := NewService(context.Background(), "my-bucket", WithClient(mockClient))
 		require.NoError(t, err)
 
 		err = svc.Close()
@@ -271,7 +271,7 @@ func (m *mockTestClient) Close() error {
 func TestMinIOConfiguration(t *testing.T) {
 	t.Run("typical MinIO setup", func(t *testing.T) {
 		mockClient := &mockTestClient{}
-		svc, err := NewService("my-bucket",
+		svc, err := NewService(context.Background(), "my-bucket",
 			WithEndpoint("http://localhost:9000"),
 			WithCredentials("minioadmin", "minioadmin"),
 			WithPathStyle(true),
@@ -286,7 +286,7 @@ func TestMinIOConfiguration(t *testing.T) {
 func TestDigitalOceanSpacesConfiguration(t *testing.T) {
 	t.Run("typical DigitalOcean Spaces setup", func(t *testing.T) {
 		mockClient := &mockTestClient{}
-		svc, err := NewService("my-space",
+		svc, err := NewService(context.Background(), "my-space",
 			WithEndpoint("https://nyc3.digitaloceanspaces.com"),
 			WithRegion("nyc3"),
 			WithCredentials("DO_ACCESS_KEY", "DO_SECRET_KEY"),
@@ -301,7 +301,7 @@ func TestDigitalOceanSpacesConfiguration(t *testing.T) {
 func TestCloudflareR2Configuration(t *testing.T) {
 	t.Run("typical Cloudflare R2 setup", func(t *testing.T) {
 		mockClient := &mockTestClient{}
-		svc, err := NewService("my-bucket",
+		svc, err := NewService(context.Background(), "my-bucket",
 			WithEndpoint("https://account123.r2.cloudflarestorage.com"),
 			WithCredentials("R2_ACCESS_KEY", "R2_SECRET_KEY"),
 			WithPathStyle(true),
@@ -316,7 +316,7 @@ func TestCloudflareR2Configuration(t *testing.T) {
 func TestAWSS3Configuration(t *testing.T) {
 	t.Run("AWS S3 with static credentials", func(t *testing.T) {
 		mockClient := &mockTestClient{}
-		svc, err := NewService("my-bucket",
+		svc, err := NewService(context.Background(), "my-bucket",
 			WithRegion("us-west-2"),
 			WithCredentials("AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG"),
 			WithRetries(5),
@@ -329,7 +329,7 @@ func TestAWSS3Configuration(t *testing.T) {
 
 	t.Run("AWS S3 with temporary credentials (STS)", func(t *testing.T) {
 		mockClient := &mockTestClient{}
-		svc, err := NewService("my-bucket",
+		svc, err := NewService(context.Background(), "my-bucket",
 			WithRegion("us-west-2"),
 			WithCredentials("ASIAXXX", "secretXXX"),
 			WithSessionToken("FwoGZXIvYXdzEBYaDH..."),
@@ -344,7 +344,7 @@ func TestAWSS3Configuration(t *testing.T) {
 func TestClientOwnership(t *testing.T) {
 	t.Run("WithClient sets ownsClient to false", func(t *testing.T) {
 		mockClient := &mockTestClient{}
-		svc, err := NewService("my-bucket", WithClient(mockClient))
+		svc, err := NewService(context.Background(), "my-bucket", WithClient(mockClient))
 
 		require.NoError(t, err)
 		assert.False(t, svc.ownsClient)

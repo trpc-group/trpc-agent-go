@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -172,12 +173,7 @@ func (c *client) GetObject(ctx context.Context, key string) ([]byte, string, err
 		return nil, "", err
 	}
 
-	contentType := ""
-	if resp.ContentType != nil {
-		contentType = *resp.ContentType
-	}
-
-	return data, contentType, nil
+	return data, aws.ToString(resp.ContentType), nil
 }
 
 // ListObjects lists object keys with the given prefix.
@@ -186,6 +182,11 @@ func (c *client) ListObjects(ctx context.Context, prefix string) ([]string, erro
 	var continuationToken *string
 
 	for {
+		// Check for context cancellation between pagination requests
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		output, err := c.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 			Bucket:            aws.String(c.bucket),
 			Prefix:            aws.String(prefix),
@@ -219,6 +220,11 @@ func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 	const maxBatchSize = 1000
 
 	for i := 0; i < len(keys); i += maxBatchSize {
+		// Check for context cancellation between batch requests
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		end := i + maxBatchSize
 		if end > len(keys) {
 			end = len(keys)
@@ -232,7 +238,7 @@ func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 			}
 		}
 
-		_, err := c.s3.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		output, err := c.s3.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 			Bucket: aws.String(c.bucket),
 			Delete: &types.Delete{
 				Objects: objectIDs,
@@ -241,6 +247,13 @@ func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 		})
 		if err != nil {
 			return wrapError(err)
+		}
+
+		// Check for partial failures (S3 returns individual errors even on success)
+		if len(output.Errors) > 0 {
+			firstErr := output.Errors[0]
+			return fmt.Errorf("failed to delete %d objects, first error: %s (key: %s)",
+				len(output.Errors), aws.ToString(firstErr.Message), aws.ToString(firstErr.Key))
 		}
 	}
 

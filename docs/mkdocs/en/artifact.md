@@ -106,17 +106,18 @@ import "trpc.group/trpc-go/trpc-agent-go/artifact/s3"
 #### Usage
 
 ```go
-// Create the service
-service, err := s3.NewService(os.Getenv("S3_BUCKET"))
+// Create the service (S3 client is automatically created internally)
+service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"))
 if err != nil {
     log.Fatal(err)
 }
+defer service.Close()
 
 // With custom endpoint (for S3-compatible services)
-service, err := s3.NewService(os.Getenv("S3_BUCKET"),
+service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"),
     s3.WithEndpoint(os.Getenv("S3_ENDPOINT")),
     s3.WithCredentials(os.Getenv("S3_ACCESS_KEY"), os.Getenv("S3_SECRET_KEY")),
-    s3.WithPathStyle(),  // Required for MinIO and some S3-compatible services
+    s3.WithPathStyle(true),  // Required for MinIO and some S3-compatible services
 )
 ```
 
@@ -130,8 +131,9 @@ service, err := s3.NewService(os.Getenv("S3_BUCKET"),
 | `WithRegion(region)` | AWS region | `AWS_REGION` env or `us-east-1` |
 | `WithCredentials(key, secret)` | Static credentials | AWS credential chain |
 | `WithSessionToken(token)` | STS session token for temporary credentials | - |
-| `WithPathStyle()` | Use path-style URLs (required for MinIO, R2) | Virtual-hosted |
+| `WithPathStyle(bool)` | Use path-style URLs (required for MinIO, R2) | Virtual-hosted |
 | `WithRetries(n)` | Max retry attempts | 3 |
+| `WithClient(client)` | Use a pre-created S3 client (advanced) | Auto-created |
 
 #### Credential Resolution Order
 
@@ -140,6 +142,45 @@ When no explicit credentials are provided via `WithCredentials()`, the AWS SDK r
 1. **Environment variables**: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
 2. **Shared credentials file**: `~/.aws/credentials` (with optional `AWS_PROFILE`)
 3. **IAM role**: EC2 instance profile, ECS task role, Lambda execution role, etc.
+
+#### Advanced: Client Management
+
+For advanced use cases, the `storage/s3` package provides a reusable S3 client that can be shared across multiple services. This is useful when you need to:
+
+- Share a single client across multiple artifact services
+- Reuse the same client for other S3 operations (e.g., vector stores)
+- Have fine-grained control over client lifecycle
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/artifact/s3"
+    s3storage "trpc.group/trpc-go/trpc-agent-go/storage/s3"
+)
+
+// Create a reusable S3 client
+client, err := s3storage.NewClient(ctx,
+    s3storage.WithBucket("my-bucket"),
+    s3storage.WithRegion("us-west-2"),
+    s3storage.WithEndpoint("http://localhost:9000"),
+    s3storage.WithCredentials("access-key", "secret-key"),
+    s3storage.WithPathStyle(true),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer client.Close()
+
+// Share the client across multiple services
+artifactService, _ := s3.NewService(ctx, "my-bucket", s3.WithClient(client))
+// The client can also be used with other services like vector stores
+
+// Note: When using WithClient, the service does NOT close the client
+// You are responsible for closing the client when done
+```
+
+> **Note**: When using `WithClient`, the artifact service does not own the client.
+> You must close the client yourself when done. If no client is provided,
+> one is automatically created and managed by the service.
 
 ## Usage in Agents
 

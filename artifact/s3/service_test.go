@@ -98,7 +98,7 @@ func (m *mockStorage) Close() error {
 
 func newTestService(t *testing.T) (*Service, *mockStorage) {
 	mock := newMockClient()
-	svc, err := NewService("test-bucket",
+	svc, err := NewService(context.Background(), "test-bucket",
 		WithClient(mock),
 	)
 	require.NoError(t, err)
@@ -118,7 +118,7 @@ func testSessionInfo() artifact.SessionInfo {
 func TestNewService(t *testing.T) {
 	t.Run("with valid config", func(t *testing.T) {
 		mock := newMockClient()
-		svc, err := NewService("my-bucket",
+		svc, err := NewService(context.Background(), "my-bucket",
 			WithClient(mock),
 		)
 		require.NoError(t, err)
@@ -127,7 +127,7 @@ func TestNewService(t *testing.T) {
 
 	t.Run("with all options and client", func(t *testing.T) {
 		mock := newMockClient()
-		svc, err := NewService("my-bucket",
+		svc, err := NewService(context.Background(), "my-bucket",
 			WithEndpoint("http://localhost:9000"),
 			WithRegion("us-east-1"),
 			WithCredentials("access", "secret"),
@@ -155,7 +155,7 @@ func TestSaveArtifact(t *testing.T) {
 
 		version, err := svc.SaveArtifact(ctx, info, "test.txt", art)
 		require.NoError(t, err)
-		assert.Equal(t, 1, version)
+		assert.Equal(t, 0, version) // First version is 0 per interface contract
 	})
 
 	t.Run("save multiple versions", func(t *testing.T) {
@@ -163,8 +163,14 @@ func TestSaveArtifact(t *testing.T) {
 		ctx := context.Background()
 		info := testSessionInfo()
 
+		// Save version 0 (first)
+		art := &artifact.Artifact{Data: []byte("v0"), MimeType: "text/plain"}
+		v0, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
+		require.NoError(t, err)
+		assert.Equal(t, 0, v0)
+
 		// Save version 1
-		art := &artifact.Artifact{Data: []byte("v1"), MimeType: "text/plain"}
+		art.Data = []byte("v1")
 		v1, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
 		require.NoError(t, err)
 		assert.Equal(t, 1, v1)
@@ -174,12 +180,6 @@ func TestSaveArtifact(t *testing.T) {
 		v2, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
 		require.NoError(t, err)
 		assert.Equal(t, 2, v2)
-
-		// Save version 3
-		art.Data = []byte("v3")
-		v3, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
-		require.NoError(t, err)
-		assert.Equal(t, 3, v3)
 	})
 
 	t.Run("save with user namespace", func(t *testing.T) {
@@ -190,7 +190,64 @@ func TestSaveArtifact(t *testing.T) {
 		art := &artifact.Artifact{Data: []byte("user data"), MimeType: "text/plain"}
 		version, err := svc.SaveArtifact(ctx, info, "user:profile.txt", art)
 		require.NoError(t, err)
-		assert.Equal(t, 1, version)
+		assert.Equal(t, 0, version) // First version is 0 per interface contract
+	})
+
+	t.Run("save with empty filename returns error", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+		info := testSessionInfo()
+
+		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
+		_, err := svc.SaveArtifact(ctx, info, "", art)
+		assert.ErrorIs(t, err, ErrEmptyFilename)
+	})
+
+	t.Run("save with invalid filename returns error", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+		info := testSessionInfo()
+		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
+
+		invalidNames := []string{
+			"path/to/file.txt",   // contains /
+			"..\\etc\\passwd",    // contains \ and ..
+			"../parent.txt",      // path traversal
+			"file\x00name.txt",   // null byte
+		}
+
+		for _, name := range invalidNames {
+			_, err := svc.SaveArtifact(ctx, info, name, art)
+			assert.ErrorIs(t, err, ErrInvalidFilename, "filename: %q", name)
+		}
+	})
+
+	t.Run("save with nil artifact returns error", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+		info := testSessionInfo()
+
+		_, err := svc.SaveArtifact(ctx, info, "test.txt", nil)
+		assert.ErrorIs(t, err, ErrNilArtifact)
+	})
+
+	t.Run("save with empty session info returns error", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+
+		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
+
+		// Empty AppName
+		_, err := svc.SaveArtifact(ctx, artifact.SessionInfo{UserID: "u", SessionID: "s"}, "test.txt", art)
+		assert.ErrorIs(t, err, ErrEmptySessionInfo)
+
+		// Empty UserID
+		_, err = svc.SaveArtifact(ctx, artifact.SessionInfo{AppName: "a", SessionID: "s"}, "test.txt", art)
+		assert.ErrorIs(t, err, ErrEmptySessionInfo)
+
+		// Empty SessionID
+		_, err = svc.SaveArtifact(ctx, artifact.SessionInfo{AppName: "a", UserID: "u"}, "test.txt", art)
+		assert.ErrorIs(t, err, ErrEmptySessionInfo)
 	})
 }
 
@@ -222,8 +279,8 @@ func TestLoadArtifact(t *testing.T) {
 		ctx := context.Background()
 		info := testSessionInfo()
 
-		// Save multiple versions (1, 2, 3)
-		for i := 1; i <= 3; i++ {
+		// Save multiple versions (0, 1, 2)
+		for i := 0; i <= 2; i++ {
 			art := &artifact.Artifact{
 				Data:     []byte("version " + string(rune('0'+i))),
 				MimeType: "text/plain",
@@ -232,12 +289,12 @@ func TestLoadArtifact(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		// Load version 2
-		version := 2
+		// Load version 1
+		version := 1
 		loaded, err := svc.LoadArtifact(ctx, info, "doc.txt", &version)
 		require.NoError(t, err)
 		require.NotNil(t, loaded)
-		assert.Equal(t, []byte("version 2"), loaded.Data)
+		assert.Equal(t, []byte("version 1"), loaded.Data)
 	})
 
 	t.Run("load latest version", func(t *testing.T) {
@@ -245,8 +302,8 @@ func TestLoadArtifact(t *testing.T) {
 		ctx := context.Background()
 		info := testSessionInfo()
 
-		// Save multiple versions (1, 2, 3)
-		for i := 1; i <= 3; i++ {
+		// Save multiple versions (0, 1, 2)
+		for i := 0; i <= 2; i++ {
 			art := &artifact.Artifact{
 				Data:     []byte("version " + string(rune('0'+i))),
 				MimeType: "text/plain",
@@ -255,11 +312,11 @@ func TestLoadArtifact(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		// Load latest (should be version 3)
+		// Load latest (should be version 2)
 		loaded, err := svc.LoadArtifact(ctx, info, "doc.txt", nil)
 		require.NoError(t, err)
 		require.NotNil(t, loaded)
-		assert.Equal(t, []byte("version 3"), loaded.Data)
+		assert.Equal(t, []byte("version 2"), loaded.Data)
 	})
 
 	t.Run("load non-existent artifact", func(t *testing.T) {
@@ -287,6 +344,59 @@ func TestLoadArtifact(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, loaded)
 		assert.Equal(t, original.Data, loaded.Data)
+	})
+
+	t.Run("load with empty filename returns error", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+		info := testSessionInfo()
+
+		_, err := svc.LoadArtifact(ctx, info, "", nil)
+		assert.ErrorIs(t, err, ErrEmptyFilename)
+	})
+
+	t.Run("load with invalid filename returns error", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+		info := testSessionInfo()
+
+		_, err := svc.LoadArtifact(ctx, info, "path/to/file.txt", nil)
+		assert.ErrorIs(t, err, ErrInvalidFilename)
+	})
+
+	t.Run("load with empty session info returns error", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+
+		_, err := svc.LoadArtifact(ctx, artifact.SessionInfo{}, "test.txt", nil)
+		assert.ErrorIs(t, err, ErrEmptySessionInfo)
+	})
+
+	t.Run("load specific version that does not exist returns ErrVersionNotFound", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+		info := testSessionInfo()
+
+		// Save version 0
+		art := &artifact.Artifact{Data: []byte("v0"), MimeType: "text/plain"}
+		_, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
+		require.NoError(t, err)
+
+		// Try to load version 999 which doesn't exist
+		version := 999
+		_, err = svc.LoadArtifact(ctx, info, "doc.txt", &version)
+		assert.ErrorIs(t, err, ErrVersionNotFound)
+	})
+
+	t.Run("load latest of non-existent artifact returns nil", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+		info := testSessionInfo()
+
+		// Load artifact that doesn't exist (no specific version)
+		art, err := svc.LoadArtifact(ctx, info, "nonexistent.txt", nil)
+		assert.NoError(t, err)
+		assert.Nil(t, art)
 	})
 }
 
@@ -357,6 +467,14 @@ func TestListArtifactKeys(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []string{"doc.txt"}, keys)
 	})
+
+	t.Run("list with empty session info returns error", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+
+		_, err := svc.ListArtifactKeys(ctx, artifact.SessionInfo{})
+		assert.ErrorIs(t, err, ErrEmptySessionInfo)
+	})
 }
 
 func TestDeleteArtifact(t *testing.T) {
@@ -411,6 +529,32 @@ func TestDeleteArtifact(t *testing.T) {
 		err := svc.DeleteArtifact(ctx, info, "nonexistent.txt")
 		require.NoError(t, err)
 	})
+
+	t.Run("delete with empty filename returns error", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+		info := testSessionInfo()
+
+		err := svc.DeleteArtifact(ctx, info, "")
+		assert.ErrorIs(t, err, ErrEmptyFilename)
+	})
+
+	t.Run("delete with invalid filename returns error", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+		info := testSessionInfo()
+
+		err := svc.DeleteArtifact(ctx, info, "../etc/passwd")
+		assert.ErrorIs(t, err, ErrInvalidFilename)
+	})
+
+	t.Run("delete with empty session info returns error", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+
+		err := svc.DeleteArtifact(ctx, artifact.SessionInfo{}, "test.txt")
+		assert.ErrorIs(t, err, ErrEmptySessionInfo)
+	})
 }
 
 func TestListVersions(t *testing.T) {
@@ -428,7 +572,7 @@ func TestListVersions(t *testing.T) {
 
 		versions, err := svc.ListVersions(ctx, info, "doc.txt")
 		require.NoError(t, err)
-		assert.Equal(t, []int{1, 2, 3, 4, 5}, versions)
+		assert.Equal(t, []int{0, 1, 2, 3, 4}, versions)
 	})
 
 	t.Run("list versions of non-existent artifact", func(t *testing.T) {
@@ -439,6 +583,69 @@ func TestListVersions(t *testing.T) {
 		versions, err := svc.ListVersions(ctx, info, "nonexistent.txt")
 		require.NoError(t, err)
 		assert.Empty(t, versions)
+	})
+
+	t.Run("list versions with empty filename returns error", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+		info := testSessionInfo()
+
+		_, err := svc.ListVersions(ctx, info, "")
+		assert.ErrorIs(t, err, ErrEmptyFilename)
+	})
+
+	t.Run("list versions with invalid filename returns error", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+		info := testSessionInfo()
+
+		_, err := svc.ListVersions(ctx, info, "path/file.txt")
+		assert.ErrorIs(t, err, ErrInvalidFilename)
+	})
+
+	t.Run("list versions with empty session info returns error", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+
+		_, err := svc.ListVersions(ctx, artifact.SessionInfo{}, "test.txt")
+		assert.ErrorIs(t, err, ErrEmptySessionInfo)
+	})
+}
+
+func TestValidateFilename(t *testing.T) {
+	t.Run("valid filenames", func(t *testing.T) {
+		validNames := []string{
+			"file.txt",
+			"my-document.pdf",
+			"image_001.png",
+			"report.2024.xlsx",
+			"user:profile.json",      // user namespace prefix is valid
+			"user:settings.yaml",
+			"名前.txt",                 // unicode is OK
+			"файл.doc",
+		}
+
+		for _, name := range validNames {
+			err := validateFilename(name)
+			assert.NoError(t, err, "filename should be valid: %q", name)
+		}
+	})
+
+	t.Run("invalid filenames", func(t *testing.T) {
+		invalidNames := []string{
+			"",                       // empty
+			"path/to/file.txt",       // forward slash
+			"path\\to\\file.txt",     // backslash
+			"../parent.txt",          // path traversal
+			"..\\parent.txt",         // path traversal with backslash
+			"file\x00name.txt",       // null byte
+			"a/b",                    // simple slash
+		}
+
+		for _, name := range invalidNames {
+			err := validateFilename(name)
+			assert.Error(t, err, "filename should be invalid: %q", name)
+		}
 	})
 }
 
@@ -541,7 +748,7 @@ func TestServiceErrorPaths(t *testing.T) {
 		mock := newErrorMockStorage()
 		mock.listObjectsErr = testErr
 
-		svc, err := NewService("test-bucket", WithClient(mock))
+		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
 		require.NoError(t, err)
 
 		_, err = svc.SaveArtifact(ctx, sessionInfo, "test.txt", &artifact.Artifact{
@@ -556,7 +763,7 @@ func TestServiceErrorPaths(t *testing.T) {
 		mock := newErrorMockStorage()
 		mock.putObjectErr = testErr
 
-		svc, err := NewService("test-bucket", WithClient(mock))
+		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
 		require.NoError(t, err)
 
 		_, err = svc.SaveArtifact(ctx, sessionInfo, "test.txt", &artifact.Artifact{
@@ -571,7 +778,7 @@ func TestServiceErrorPaths(t *testing.T) {
 		mock := newErrorMockStorage()
 		mock.listObjectsErr = testErr
 
-		svc, err := NewService("test-bucket", WithClient(mock))
+		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
 		require.NoError(t, err)
 
 		_, err = svc.LoadArtifact(ctx, sessionInfo, "test.txt", nil)
@@ -583,7 +790,7 @@ func TestServiceErrorPaths(t *testing.T) {
 		mock := newErrorMockStorage()
 		mock.getObjectErr = testErr
 
-		svc, err := NewService("test-bucket", WithClient(mock))
+		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
 		require.NoError(t, err)
 
 		// First save an artifact so ListVersions returns a version
@@ -604,7 +811,7 @@ func TestServiceErrorPaths(t *testing.T) {
 	t.Run("LoadArtifact returns nil when GetObject returns NotFound", func(t *testing.T) {
 		mock := newErrorMockStorage()
 
-		svc, err := NewService("test-bucket", WithClient(mock))
+		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
 		require.NoError(t, err)
 
 		// Save an artifact first
@@ -625,7 +832,7 @@ func TestServiceErrorPaths(t *testing.T) {
 		mock := newErrorMockStorage()
 		mock.listObjectsErr = testErr
 
-		svc, err := NewService("test-bucket", WithClient(mock))
+		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
 		require.NoError(t, err)
 
 		_, err = svc.ListArtifactKeys(ctx, sessionInfo)
@@ -637,7 +844,7 @@ func TestServiceErrorPaths(t *testing.T) {
 		mock := newErrorMockStorage()
 		mock.listObjectsErr = testErr
 
-		svc, err := NewService("test-bucket", WithClient(mock))
+		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
 		require.NoError(t, err)
 
 		err = svc.DeleteArtifact(ctx, sessionInfo, "test.txt")
@@ -649,7 +856,7 @@ func TestServiceErrorPaths(t *testing.T) {
 		mock := newErrorMockStorage()
 		mock.listObjectsErr = s3storage.ErrNotFound
 
-		svc, err := NewService("test-bucket", WithClient(mock))
+		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
 		require.NoError(t, err)
 
 		err = svc.DeleteArtifact(ctx, sessionInfo, "test.txt")
@@ -659,7 +866,7 @@ func TestServiceErrorPaths(t *testing.T) {
 	t.Run("DeleteArtifact returns error when DeleteObjects fails", func(t *testing.T) {
 		mock := newErrorMockStorage()
 
-		svc, err := NewService("test-bucket", WithClient(mock))
+		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
 		require.NoError(t, err)
 
 		// Save an artifact first
@@ -680,7 +887,7 @@ func TestServiceErrorPaths(t *testing.T) {
 		mock := newErrorMockStorage()
 		mock.listObjectsErr = s3storage.ErrNotFound
 
-		svc, err := NewService("test-bucket", WithClient(mock))
+		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
 		require.NoError(t, err)
 
 		versions, err := svc.ListVersions(ctx, sessionInfo, "test.txt")
@@ -692,7 +899,7 @@ func TestServiceErrorPaths(t *testing.T) {
 		mock := newErrorMockStorage()
 		mock.listObjectsErr = testErr
 
-		svc, err := NewService("test-bucket", WithClient(mock))
+		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
 		require.NoError(t, err)
 
 		_, err = svc.ListVersions(ctx, sessionInfo, "test.txt")

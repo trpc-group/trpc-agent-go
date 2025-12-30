@@ -104,12 +104,24 @@ func TestWithCredentials(t *testing.T) {
 		assert.Equal(t, "new-secret", opts.SecretAccessKey)
 	})
 
-	t.Run("allows empty credentials", func(t *testing.T) {
+	t.Run("ignores empty credentials to preserve default chain", func(t *testing.T) {
 		opts := &ClientBuilderOpts{
 			AccessKeyID:     "existing",
 			SecretAccessKey: "existing",
 		}
 		WithCredentials("", "")(opts)
+		// Empty credentials are ignored to avoid overwriting default credential chain
+		assert.Equal(t, "existing", opts.AccessKeyID)
+		assert.Equal(t, "existing", opts.SecretAccessKey)
+	})
+
+	t.Run("ignores partial credentials", func(t *testing.T) {
+		opts := &ClientBuilderOpts{}
+		WithCredentials("key-only", "")(opts)
+		assert.Empty(t, opts.AccessKeyID)
+		assert.Empty(t, opts.SecretAccessKey)
+
+		WithCredentials("", "secret-only")(opts)
 		assert.Empty(t, opts.AccessKeyID)
 		assert.Empty(t, opts.SecretAccessKey)
 	})
