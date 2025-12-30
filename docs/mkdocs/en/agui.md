@@ -41,6 +41,45 @@ On the client side you can pair the server with frameworks that understand the A
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
+## Core Concepts
+
+### RunAgentInput
+
+`RunAgentInput` is the request payload for the AG-UI chat route and the messages snapshot route. It describes the input and context required for a conversation run. The structure is shown below.
+
+```go
+type RunAgentInput struct {
+	ThreadID       string // Conversation thread identifier. The framework uses it as `SessionID`.
+	RunID          string // Run ID. Used to correlate `RUN_STARTED`, `RUN_FINISHED`, and other events.
+	ParentRunID    *string // Parent run ID. Optional.
+	State          any    // Arbitrary state.
+	Messages       []any  // Message list. The framework requires the last message to be `role=user` and uses its content as input.
+	Tools          []any  // Tool definitions. Protocol field. Optional.
+	Context        []any  // Context entries. Protocol field. Optional.
+	ForwardedProps any    // Arbitrary forwarded properties. Typically used to carry business custom parameters.
+}
+```
+
+For the full field definition, refer to [AG-UI Go SDK](https://github.com/ag-ui-protocol/ag-ui/blob/main/sdks/community/go/pkg/core/types/types.go).
+
+Minimal request JSON example:
+
+```json
+{
+    "threadId": "thread-id",
+    "runId": "run-id",
+    "messages": [
+        {
+            "role": "user",
+            "content": "hello"
+        }
+    ],
+    "forwardedProps": {
+        "userId": "alice"
+    }
+}
+```
+
 ## Advanced Usage
 
 ### Custom transport

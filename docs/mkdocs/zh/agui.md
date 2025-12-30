@@ -41,6 +41,45 @@ Runner 全面的使用方法参见 [runner](./runner.md)。
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
+## 核心概念
+
+### RunAgentInput
+
+`RunAgentInput` 是 AG-UI 聊天路由和消息快照路由的请求体，用于描述一次对话运行所需的输入与上下文，结构如下所示。
+
+```go
+type RunAgentInput struct {
+	ThreadID       string          // 会话线程 ID，框架会将其作为 `SessionID`。
+	RunID          string          // 本次运行 ID，用于和事件流中的 `RUN_STARTED`、`RUN_FINISHED` 等事件关联。
+	ParentRunID    *string         // 父运行 ID，可选。
+	State          any             // 任意状态。
+	Messages       []any           // 消息列表，框架要求最后一条消息为 `role=user` 并把其内容作为输入。
+	Tools          []any           // 工具定义列表，协议字段，可选。
+	Context        []any           // 上下文列表，协议字段，可选。
+	ForwardedProps any             // 任意透传字段，通常用于携带业务自定义参数。
+}
+```
+
+完整字段定义可参考 [AG-UI Go SDK](https://github.com/ag-ui-protocol/ag-ui/blob/main/sdks/community/go/pkg/core/types/types.go)
+
+最小请求 JSON 示例：
+
+```json
+{
+    "threadId": "thread-id",
+    "runId": "run-id",
+    "messages": [
+        {
+            "role": "user",
+            "content": "hello"
+        }
+    ],
+    "forwardedProps": {
+        "userId": "alice"
+    }
+}
+```
+
 ## 进阶用法
 
 ### 自定义通信协议
@@ -509,9 +548,9 @@ server, err := agui.New(
 
 ### 消息快照
 
-消息快照用于在页面初始化或断线重连时恢复历史对话，通过 `agui.WithMessagesSnapshotEnabled(true)` 控制功能是否开启，默认关闭。启用该能力后，AG-UI 会同时提供聊天路由和消息快照路由：
+消息快照用于在页面初始化或断线重连时恢复历史对话，通过 `agui.WithMessagesSnapshotEnabled(true)` 控制功能是否开启，默认关闭。启用该能力后，AG-UI 会同时提供实时对话路由和消息快照路由：
 
-- 聊天路由默认是 `/`，可通过 `agui.WithPath` 自定义；
+- 实时对话路由默认是 `/`，可通过 `agui.WithPath` 自定义；
 - 消息快照路由默认是 `/history`， 可通过 `WithMessagesSnapshotPath` 自定义，负责返回 `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED` 的事件流。
 
 启用消息快照功能时需要配置下列参数：
@@ -549,7 +588,7 @@ resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, err
 sessionService := inmemory.NewService(context.Background())
 server, err := agui.New(
     runner,
-    agui.WithPath("/chat"),                    // 自定义聊天路由，默认为 "/"
+    agui.WithPath("/chat"),                    // 自定义实时对话路由，默认为 "/"
     agui.WithAppName("demo-app"),              // 设置 AppName，用于构造 Session Key
     agui.WithSessionService(sessionService),   // 设置 Session Service，用于查询 Session
     agui.WithMessagesSnapshotEnabled(true),    // 开启消息快照功能
@@ -572,7 +611,7 @@ AG-UI 的 MessagesSnapshotEvent 事件格式可见 [messages](https://docs.ag-ui
 
 ### 设置路由前缀 BasePath
 
-`agui.WithBasePath` 设置 AG-UI 服务的基础路由前缀，默认值为 `/`，用于在统一前缀下挂载聊天路由与消息快照路由，避免与现有服务冲突.
+`agui.WithBasePath` 设置 AG-UI 服务的基础路由前缀，默认值为 `/`，用于在统一前缀下挂载实时对话路由与消息快照路由，避免与现有服务冲突.
 
 `agui.WithPath` 与 `agui.WithMessagesSnapshotPath` 仅定义基础路径下的子路由，框架会通过 `url.JoinPath` 将它们与基础路径拼接成最终可访问的路由.
 
@@ -582,7 +621,7 @@ AG-UI 的 MessagesSnapshotEvent 事件格式可见 [messages](https://docs.ag-ui
 server, err := agui.New(
     runner,
     agui.WithBasePath("/agui"),                // 设置 AG-UI 前缀路由
-    agui.WithPath("/chat"),                    // 设置聊天路由，默认为 "/"
+    agui.WithPath("/chat"),                    // 设置实时对话路由，默认为 "/"
     agui.WithMessagesSnapshotEnabled(true),    // 开启消息快照功能
     agui.WithMessagesSnapshotPath("/history"), // 设置消息快照路由，默认为 "/history"
 )
@@ -591,7 +630,7 @@ if err != nil {
 }
 ```
 
-此时聊天路由为 `/agui/chat`，用消息快照路由为 `/agui/history`。
+此时实时对话路由为 `/agui/chat`，用消息快照路由为 `/agui/history`。
 
 ## 最佳实践
 
