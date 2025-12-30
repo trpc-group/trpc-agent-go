@@ -137,24 +137,22 @@ type wikipediaSearchRequest struct {
 }
 
 type wikipediaSearchResponse struct {
-	Query      string                `json:"query"`
-	Results    []wikipediaResultItem `json:"results"`
-	TotalHits  int                   `json:"total_hits"`
-	Summary    string                `json:"summary"`
-	SearchTime string                `json:"search_time,omitempty"`
+	Query      string                `json:"query"`                 // Query is the original query string
+	Results    []wikipediaResultItem `json:"results"`               // Results is the list of search results
+	TotalHits  int                   `json:"total_hits"`            // TotalHits is the total number of hits
+	Summary    string                `json:"summary"`               // Summary is a summary of the search results
+	SearchTime string                `json:"search_time,omitempty"` // SearchTime is the time taken for the search
 }
 
 type wikipediaResultItem struct {
-	Title       string   `json:"title"`
-	URL         string   `json:"url"`
-	Description string   `json:"description"`
-	PageID      int      `json:"page_id"`
-	WordCount   int      `json:"word_count"`
-	Size        int      `json:"size_bytes"`
-	Timestamp   string   `json:"last_modified"`
-	Namespace   int      `json:"namespace"`
-	Categories  []string `json:"categories,omitempty"`
-	Relevance   float64  `json:"relevance_score,omitempty"`
+	Title       string `json:"title"`         // Title is the title of the page
+	URL         string `json:"url"`           // URL is the URL of the page
+	Description string `json:"description"`   // Description is the description of the page
+	PageID      int    `json:"page_id"`       // PageID is the ID of the page
+	WordCount   int    `json:"word_count"`    // WordCount is the word count of the page
+	Size        int    `json:"size_bytes"`    // Size is the size of the page in bytes
+	Timestamp   string `json:"last_modified"` // Timestamp is the last modified timestamp of the page
+	Namespace   int    `json:"namespace"`
 }
 
 func createWikipediaSearchTool(wikipediaClient *client.Client, cfg *config) tool.CallableTool {
