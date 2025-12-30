@@ -96,14 +96,14 @@ type runInput struct {
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
 func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
 	if r.runner == nil {
-		return nil, errors.New("agui: runner is nil")
+		return nil, errors.New("runner is nil")
 	}
 	if runAgentInput == nil {
-		return nil, errors.New("agui: run input cannot be nil")
+		return nil, errors.New("run input cannot be nil")
 	}
 	runAgentInput, err := r.applyRunAgentInputHook(ctx, runAgentInput)
 	if err != nil {
-		return nil, fmt.Errorf("agui: run input hook: %w", err)
+		return nil, fmt.Errorf("run input hook: %w", err)
 	}
 	threadID := runAgentInput.ThreadID
 	runID := runAgentInput.RunID
@@ -127,6 +127,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	}
 	content, ok := runAgentInput.Messages[len(runAgentInput.Messages)-1].ContentString()
 	if !ok {
+		span.End()
 		return nil, errors.New("last message content is not a string")
 	}
 	input := &runInput{
@@ -148,6 +149,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		span:        span,
 	}
 	if _, ok := r.runningSessions.LoadOrStore(input.key, struct{}{}); ok {
+		span.End()
 		return nil, fmt.Errorf("session is already running: %v", input.key)
 	}
 	events := make(chan aguievents.Event)

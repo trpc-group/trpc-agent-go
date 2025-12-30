@@ -205,6 +205,41 @@ func TestRunStartSpanError(t *testing.T) {
 	assert.Equal(t, 0, underlying.calls)
 }
 
+func TestRunLastMessageContentNotString(t *testing.T) {
+	underlying := &fakeRunner{}
+	fakeTrans := &fakeTranslator{}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{
+			Role:    types.RoleUser,
+			Content: []types.InputContent{{Type: types.InputContentTypeText, Text: "hi"}},
+		}},
+	}
+	startSpanCalled := false
+	var span *spySpan
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator { return fakeTrans },
+		userIDResolver:    defaultUserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan: func(ctx context.Context, in *adapter.RunAgentInput) (context.Context, trace.Span, error) {
+			assert.Same(t, input, in)
+			startSpanCalled = true
+			span = &spySpan{Span: trace.SpanFromContext(ctx)}
+			return ctx, span, nil
+		},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.Nil(t, eventsCh)
+	assert.EqualError(t, err, "last message content is not a string")
+	assert.True(t, startSpanCalled)
+	assert.Equal(t, 0, underlying.calls)
+	assert.NotNil(t, span)
+	assert.Equal(t, 1, span.endCalls)
+}
+
 func TestRunFlushesTracker(t *testing.T) {
 	recorder := &flushRecorder{}
 	underlying := &fakeRunner{
@@ -513,7 +548,7 @@ func TestRunAgentInputHook(t *testing.T) {
 		}
 		_, err := r.Run(context.Background(), &adapter.RunAgentInput{})
 		assert.Error(t, err)
-		assert.ErrorContains(t, err, "agui: run input hook")
+		assert.ErrorContains(t, err, "run input hook")
 		assert.ErrorIs(t, err, wantErr)
 	})
 }
@@ -853,6 +888,16 @@ func (e *errorTracker) GetEvents(ctx context.Context,
 func (e *errorTracker) Flush(ctx context.Context,
 	_ session.Key) error {
 	return e.flushErr
+}
+
+type spySpan struct {
+	trace.Span
+	endCalls int
+}
+
+func (s *spySpan) End(options ...trace.SpanEndOption) {
+	s.endCalls++
+	s.Span.End(options...)
 }
 
 type fakeRunner struct {
