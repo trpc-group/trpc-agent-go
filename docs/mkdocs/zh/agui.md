@@ -145,10 +145,15 @@ import (
 )
 
 resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
-    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
-        return user, nil
+    forwardedProps, ok := input.ForwardedProps.(map[string]any)
+    if !ok {
+        return "anonymous", nil
     }
-    return "anonymous", nil
+    user, ok := forwardedProps["userId"].(string)
+    if !ok || user == "" {
+        return "anonymous", nil
+    }
+    return user, nil
 }
 
 runner := runner.NewRunner(agent.Info().Name, agent)
@@ -174,14 +179,15 @@ resolver := func(_ context.Context, input *adapter.RunAgentInput) ([]agent.RunOp
 	if input == nil {
 		return nil, errors.New("empty input")
 	}
-	if input.ForwardedProps == nil {
+	forwardedProps, ok := input.ForwardedProps.(map[string]any)
+	if !ok || forwardedProps == nil {
 		return nil, nil
 	}
 	opts := make([]agent.RunOption, 0, 2)
-	if modelName, ok := input.ForwardedProps["modelName"].(string); ok && modelName != "" {
+	if modelName, ok := forwardedProps["modelName"].(string); ok && modelName != "" {
 		opts = append(opts, agent.WithModelName(modelName))
 	}
-	if filter, ok := input.ForwardedProps["knowledgeFilter"].(map[string]any); ok {
+	if filter, ok := forwardedProps["knowledgeFilter"].(map[string]any); ok {
 		opts = append(opts, agent.WithKnowledgeFilter(filter))
 	}
 	return opts, nil
@@ -210,11 +216,18 @@ import (
 )
 
 runOptionResolver := func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
-    attrs := []attribute.KeyValue{
-        attribute.String("trace.input", input.Messages[len(input.Messages)-1].Content),
+    content, ok := input.Messages[len(input.Messages)-1].ContentString()
+    if !ok {
+        return nil, errors.New("last message content is not a string")
     }
-    if scenario, ok := input.ForwardedProps["scenario"].(string); ok {
-        attrs = append(attrs, attribute.String("conversation.scenario", scenario))
+    attrs := []attribute.KeyValue{
+        attribute.String("trace.input", content),
+    }
+    forwardedProps, ok := input.ForwardedProps.(map[string]any)
+    if ok {
+        if scenario, ok := forwardedProps["scenario"].(string); ok {
+            attrs = append(attrs, attribute.String("conversation.scenario", scenario))
+        }
     }
     return []agent.RunOption{agent.WithSpanAttributes(attrs...)}, nil
 }
@@ -296,15 +309,20 @@ hook := func(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAge
 	if len(input.Messages) == 0 {
 		return nil, errors.New("missing messages")
 	}
-	if input.ForwardedProps == nil {
+	forwardedProps, ok := input.ForwardedProps.(map[string]any)
+	if !ok || forwardedProps == nil {
 		return input, nil
 	}
-	otherContent, ok := input.ForwardedProps["other_content"].(string)
+	otherContent, ok := forwardedProps["other_content"].(string)
 	if !ok {
 		return input, nil
 	}
 
-	input.Messages[len(input.Messages)-1].Content += otherContent
+	content, ok := input.Messages[len(input.Messages)-1].ContentString()
+	if !ok {
+		return input, nil
+	}
+	input.Messages[len(input.Messages)-1].Content = content + otherContent
 	return input, nil
 }
 
@@ -517,10 +535,15 @@ import (
 )
 
 resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
-    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
-        return user, nil
+    forwardedProps, ok := input.ForwardedProps.(map[string]any)
+    if !ok {
+        return "anonymous", nil
     }
-    return "anonymous", nil
+    user, ok := forwardedProps["userId"].(string)
+    if !ok || user == "" {
+        return "anonymous", nil
+    }
+    return user, nil
 }
 
 sessionService := inmemory.NewService(context.Background())
