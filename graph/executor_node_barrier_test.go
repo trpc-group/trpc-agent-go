@@ -57,8 +57,31 @@ func TestEmitNodeBarrierAndWait_NilInvocationOrExecCtx(t *testing.T) {
 	t.Parallel()
 
 	exec := &Executor{}
-	require.NoError(t, exec.emitNodeBarrierAndWait(context.Background(), nil, &ExecutionContext{}, "N"))
-	require.NoError(t, exec.emitNodeBarrierAndWait(context.Background(), agent.NewInvocation(), nil, "N"))
+	err := exec.emitNodeBarrierAndWait(context.Background(), nil, &ExecutionContext{}, "N", 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invocation is nil")
+
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-nil-exec-ctx"))
+	barrier.Enable(inv)
+	err = exec.emitNodeBarrierAndWait(context.Background(), inv, nil, "N", 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "execution context is nil")
+}
+
+func TestEmitNodeBarrierAndWait_NilEventChanError(t *testing.T) {
+	t.Parallel()
+
+	exec := &Executor{}
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-nil-event-chan"))
+	barrier.Enable(inv)
+	execCtx := &ExecutionContext{EventChan: nil, InvocationID: inv.InvocationID}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err := exec.emitNodeBarrierAndWait(ctx, inv, execCtx, "N", 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "event channel is nil")
 }
 
 func TestEmitNodeBarrierAndWait_AddNoticeChannelFailure(t *testing.T) {
@@ -69,7 +92,7 @@ func TestEmitNodeBarrierAndWait_AddNoticeChannelFailure(t *testing.T) {
 	barrier.Enable(inv)
 	execCtx := &ExecutionContext{EventChan: make(chan *event.Event, 1), InvocationID: inv.InvocationID}
 
-	err := exec.emitNodeBarrierAndWait(context.Background(), inv, execCtx, "N")
+	err := exec.emitNodeBarrierAndWait(context.Background(), inv, execCtx, "N", 1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "add notice channel")
 }
@@ -85,7 +108,7 @@ func TestEmitNodeBarrierAndWait_EmitEventFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := exec.emitNodeBarrierAndWait(ctx, inv, execCtx, "N")
+	err := exec.emitNodeBarrierAndWait(ctx, inv, execCtx, "N", 1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "emit node barrier event")
 }
@@ -104,7 +127,7 @@ func TestEmitNodeBarrierAndWait_DeadlineWaitsForCompletion(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.emitNodeBarrierAndWait(ctx, inv, execCtx, "N")
+		done <- exec.emitNodeBarrierAndWait(ctx, inv, execCtx, "N", 1)
 	}()
 
 	var barrierEvt *event.Event
@@ -140,7 +163,7 @@ func TestEmitNodeBarrierAndWait_DeadlineAlreadyExceeded_StillWaits(t *testing.T)
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.emitNodeBarrierAndWait(ctx, inv, execCtx, "N")
+		done <- exec.emitNodeBarrierAndWait(ctx, inv, execCtx, "N", 1)
 	}()
 
 	var barrierEvt *event.Event
@@ -178,7 +201,7 @@ func TestEmitNodeBarrierAndWait_DeadlineAlreadyExceeded_ContextErrorReturns(t *t
 		err:      context.DeadlineExceeded,
 	}
 
-	err := exec.emitNodeBarrierAndWait(ctx, inv, execCtx, "N")
+	err := exec.emitNodeBarrierAndWait(ctx, inv, execCtx, "N", 1)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 
 	select {
@@ -203,7 +226,7 @@ func TestEmitNodeBarrierAndWait_WaitTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 
-	err := exec.emitNodeBarrierAndWait(ctx, inv, execCtx, "N")
+	err := exec.emitNodeBarrierAndWait(ctx, inv, execCtx, "N", 1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "wait for node barrier completion")
 }
