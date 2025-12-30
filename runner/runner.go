@@ -342,14 +342,14 @@ func (r *runner) getOrCreateSession(
 
 // eventLoopContext bundles all channels and state required by the event loop.
 type eventLoopContext struct {
-	sess             *session.Session
-	invocation       *agent.Invocation
-	agentEventCh     <-chan *event.Event
-	flushChan        chan *flush.FlushRequest
-	processedEventCh chan *event.Event
-	finalStateDelta  map[string][]byte
-	finalChoices     []model.Choice
-	assistantContent map[string]struct{}
+	sess                 *session.Session
+	invocation           *agent.Invocation
+	agentEventCh         <-chan *event.Event
+	flushChan            chan *flush.FlushRequest
+	processedEventCh     chan *event.Event
+	finalStateDelta      map[string][]byte
+	finalChoices         []model.Choice
+	assistantResponseIDs map[string]struct{}
 }
 
 // processAgentEvents consumes agent events, persists to session, and emits.
@@ -367,7 +367,6 @@ func (r *runner) processAgentEvents(
 		agentEventCh:     agentEventCh,
 		flushChan:        flushChan,
 		processedEventCh: processedEventCh,
-		assistantContent: make(map[string]struct{}),
 	}
 	runCtx := agent.CloneContext(ctx)
 	go r.runEventLoop(runCtx, loop)
@@ -428,7 +427,7 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 
 	agentEvent = r.applyEventPlugins(ctx, loop.invocation, agentEvent)
 
-	r.recordAssistantContent(loop, agentEvent)
+	r.recordAssistantResponseID(loop, agentEvent)
 
 	// Append qualifying events to session and trigger summarization.
 	r.handleEventPersistence(ctx, loop.sess, agentEvent)
@@ -496,20 +495,26 @@ func copyEventInvocationFields(dst *event.Event, src *event.Event) {
 	}
 }
 
-func (r *runner) recordAssistantContent(loop *eventLoopContext, e *event.Event) {
+func (r *runner) recordAssistantResponseID(
+	loop *eventLoopContext,
+	e *event.Event,
+) {
 	if loop == nil || e == nil || e.Response == nil {
 		return
 	}
 	if loop.invocation == nil {
 		return
 	}
-	if loop.assistantContent == nil {
-		loop.assistantContent = make(map[string]struct{})
+	if !loop.invocation.RunOptions.GraphEmitFinalModelResponses {
+		return
 	}
 	if isGraphCompletionEvent(e) {
 		return
 	}
 	if e.IsPartial || !e.IsValidContent() {
+		return
+	}
+	if e.Response.ID == "" {
 		return
 	}
 	for _, choice := range e.Response.Choices {
@@ -520,7 +525,11 @@ func (r *runner) recordAssistantContent(loop *eventLoopContext, e *event.Event) 
 		if msg.Content == "" {
 			continue
 		}
-		loop.assistantContent[msg.Content] = struct{}{}
+		if loop.assistantResponseIDs == nil {
+			loop.assistantResponseIDs = make(map[string]struct{})
+		}
+		loop.assistantResponseIDs[e.Response.ID] = struct{}{}
+		return
 	}
 }
 
@@ -734,22 +743,36 @@ func (r *runner) shouldIncludeFinalChoices(loop *eventLoopContext) bool {
 	if len(loop.finalChoices) == 0 {
 		return false
 	}
-	if len(loop.assistantContent) == 0 {
+	if loop.invocation == nil {
 		return true
 	}
-	for _, choice := range loop.finalChoices {
-		msg := choice.Message
-		if msg.Role != model.RoleAssistant {
-			continue
-		}
-		if msg.Content == "" {
-			continue
-		}
-		if _, ok := loop.assistantContent[msg.Content]; ok {
-			return false
-		}
+	if !loop.invocation.RunOptions.GraphEmitFinalModelResponses {
+		return true
 	}
-	return true
+	finalResponseID := finalResponseIDFromStateDelta(loop.finalStateDelta)
+	if finalResponseID == "" {
+		return true
+	}
+	if len(loop.assistantResponseIDs) == 0 {
+		return true
+	}
+	_, ok := loop.assistantResponseIDs[finalResponseID]
+	return !ok
+}
+
+func finalResponseIDFromStateDelta(finalStateDelta map[string][]byte) string {
+	if finalStateDelta == nil {
+		return ""
+	}
+	raw, ok := finalStateDelta[graph.StateKeyLastResponseID]
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	var responseID string
+	if err := json.Unmarshal(raw, &responseID); err != nil {
+		return ""
+	}
+	return responseID
 }
 
 // shouldAppendUserMessage checks if the incoming user message should be appended to the session.

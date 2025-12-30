@@ -262,6 +262,17 @@ func WithResume(enabled bool) RunOption {
 	}
 }
 
+// WithGraphEmitFinalModelResponses controls whether graph-based agents emit
+// final (Done=true) model responses as events.
+//
+// When disabled (default), graph Large Language Model (LLM) nodes only emit
+// streaming chunks (Done=false), which matches the pre-#901 behavior.
+func WithGraphEmitFinalModelResponses(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.GraphEmitFinalModelResponses = enabled
+	}
+}
+
 // WithRequestID sets the request id for the RunOptions.
 func WithRequestID(requestID string) RunOption {
 	return func(opts *RunOptions) {
@@ -457,6 +468,17 @@ type RunOptions struct {
 	// pending tool calls) and complete unfinished work prior to issuing a new
 	// LLM request.
 	Resume bool
+
+	// GraphEmitFinalModelResponses controls event emission for graph-based
+	// Large Language Model (LLM) nodes.
+	//
+	// When false (default), graph LLM nodes only emit streaming chunks
+	// (Done=false), matching the pre-#901 behavior.
+	//
+	// When true, graph LLM nodes emit the final model response too. In that
+	// mode, callers should be prepared to receive assistant messages from
+	// intermediate nodes.
+	GraphEmitFinalModelResponses bool
 
 	// RequestID is the request id of the request.
 	RequestID string
