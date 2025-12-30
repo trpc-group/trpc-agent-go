@@ -53,9 +53,9 @@ type RunAgentInput struct {
 	RunID          string          // 本次运行 ID，用于和事件流中的 `RUN_STARTED`、`RUN_FINISHED` 等事件关联。
 	ParentRunID    *string         // 父运行 ID，可选。
 	State          any             // 任意状态。
-	Messages       []any           // 消息列表，框架要求最后一条消息为 `role=user` 并把其内容作为输入。
-	Tools          []any           // 工具定义列表，协议字段，可选。
-	Context        []any           // 上下文列表，协议字段，可选。
+	Messages       []Message       // 消息列表，框架要求最后一条消息为 `role=user` 并把其内容作为输入。
+	Tools          []Tool          // 工具定义列表，协议字段，可选。
+	Context        []Context       // 上下文列表，协议字段，可选。
 	ForwardedProps any             // 任意透传字段，通常用于携带业务自定义参数。
 }
 ```

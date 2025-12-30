@@ -53,9 +53,9 @@ type RunAgentInput struct {
 	RunID          string // Run ID. Used to correlate `RUN_STARTED`, `RUN_FINISHED`, and other events.
 	ParentRunID    *string // Parent run ID. Optional.
 	State          any    // Arbitrary state.
-	Messages       []any  // Message list. The framework requires the last message to be `role=user` and uses its content as input.
-	Tools          []any  // Tool definitions. Protocol field. Optional.
-	Context        []any  // Context entries. Protocol field. Optional.
+	Messages       []Message // Message list. The framework requires the last message to be `role=user` and uses its content as input.
+	Tools          []Tool    // Tool definitions. Protocol field. Optional.
+	Context        []Context // Context entries. Protocol field. Optional.
 	ForwardedProps any    // Arbitrary forwarded properties. Typically used to carry business custom parameters.
 }
 ```
