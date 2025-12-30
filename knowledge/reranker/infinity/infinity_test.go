@@ -37,7 +37,8 @@ func TestInfinityReranker_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	r := New(WithEndpoint(server.URL), WithModel("bge-reranker"))
+	r, err := New(WithEndpoint(server.URL), WithModel("bge-reranker"))
+	assert.NoError(t, err)
 
 	query := &reranker.Query{FinalQuery: "test"}
 	results := []*reranker.Result{
@@ -51,7 +52,8 @@ func TestInfinityReranker_Success(t *testing.T) {
 }
 
 func TestInfinityReranker_EmptyInput(t *testing.T) {
-	r := New()
+	r, err := New(WithEndpoint("http://localhost:7997"))
+	assert.NoError(t, err)
 	query := &reranker.Query{FinalQuery: "test"}
 	reranked, err := r.Rerank(context.Background(), query, []*reranker.Result{})
 	assert.NoError(t, err)
@@ -64,11 +66,12 @@ func TestInfinityReranker_HTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	r := New(WithEndpoint(server.URL))
+	r, err := New(WithEndpoint(server.URL))
+	assert.NoError(t, err)
 	query := &reranker.Query{FinalQuery: "test"}
 	results := []*reranker.Result{{Document: &document.Document{Content: "D0"}}}
 
-	_, err := r.Rerank(context.Background(), query, results)
+	_, err = r.Rerank(context.Background(), query, results)
 	assert.Error(t, err)
 }
 
@@ -78,11 +81,12 @@ func TestInfinityReranker_InvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	r := New(WithEndpoint(server.URL))
+	r, err := New(WithEndpoint(server.URL))
+	assert.NoError(t, err)
 	query := &reranker.Query{FinalQuery: "test"}
 	results := []*reranker.Result{{Document: &document.Document{Content: "D0"}}}
 
-	_, err := r.Rerank(context.Background(), query, results)
+	_, err = r.Rerank(context.Background(), query, results)
 	assert.Error(t, err)
 }
 
@@ -98,7 +102,8 @@ func TestInfinityReranker_TopN(t *testing.T) {
 	}))
 	defer server.Close()
 
-	r := New(WithEndpoint(server.URL), WithTopN(1))
+	r, err := New(WithEndpoint(server.URL), WithTopN(1))
+	assert.NoError(t, err)
 	query := &reranker.Query{FinalQuery: "test"}
 	results := []*reranker.Result{
 		{Document: &document.Document{Content: "D0"}},
@@ -112,17 +117,24 @@ func TestInfinityReranker_TopN(t *testing.T) {
 }
 
 func TestInfinityReranker_Options(t *testing.T) {
-	r := New(
+	r, err := New(
 		WithAPIKey("key"),
 		WithModel("custom-model"),
 		WithEndpoint("http://custom"),
 		WithTopN(10),
 		WithHTTPClient(http.DefaultClient),
 	)
+	assert.NoError(t, err)
 
 	assert.Equal(t, "key", r.apiKey)
 	assert.Equal(t, "custom-model", r.modelName)
 	assert.Equal(t, "http://custom", r.endpoint)
 	assert.Equal(t, 10, r.topN)
 	assert.NotNil(t, r.httpClient)
+}
+
+func TestInfinityReranker_EmptyEndpoint(t *testing.T) {
+	_, err := New()
+	assert.Error(t, err)
+	assert.Equal(t, errEndpointEmpty, err)
 }

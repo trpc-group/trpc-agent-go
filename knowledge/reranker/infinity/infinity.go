@@ -12,15 +12,17 @@ package infinity
 
 import (
 	"context"
+	"errors"
 	"net/http"
-	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/internal/httpclient"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
-const (
-	envInfinityURL = "INFINITY_URL"
+var (
+	// errEndpointEmpty is returned when the endpoint is empty.
+	errEndpointEmpty = errors.New("infinity endpoint cannot be empty")
 )
 
 // Reranker implements Reranker using a self-hosted Infinity/TEI instance.
@@ -71,16 +73,18 @@ func WithEndpoint(endpoint string) Option {
 }
 
 // New creates a new Infinity reranker.
-func New(opts ...Option) *Reranker {
+func New(opts ...Option) (*Reranker, error) {
 	r := &Reranker{
-		endpoint:   os.Getenv(envInfinityURL),
 		topN:       -1,
 		httpClient: httpclient.NewClient(nil),
 	}
 	for _, opt := range opts {
 		opt(r)
 	}
-	return r
+	if r.endpoint == "" {
+		return nil, errEndpointEmpty
+	}
+	return r, nil
 }
 
 // Rerank implements the Reranker interface.
@@ -95,7 +99,11 @@ func (r *Reranker) Rerank(
 
 	docs := make([]string, len(results))
 	for i, res := range results {
-		docs[i] = res.Document.Content
+		if res.Document != nil {
+			docs[i] = res.Document.Content
+		} else {
+			log.WarnfContext(ctx, "infinity reranker: result[%d].Document is nil", i)
+		}
 	}
 
 	req := httpclient.RerankRequest{

@@ -610,20 +610,35 @@ rerank := cohere.New(
 )
 ```
 
-#### Infinity / BGE (自建 Rerank 服务)
+#### Infinity / TEI
 
-连接到自建的 Infinity 或 TEI 推理服务（常用于运行 BGE-Reranker 等开源模型）：
+**术语说明**
+
+- **Infinity**: 开源高性能推理引擎，支持多种 Reranker 模型
+- **TEI (Text Embeddings Inference)**: Hugging Face 官方推理引擎，专为 Embedding 和 Rerank 优化
+
+trpc-agent-go 的 Infinity Reranker 实现可以连接任何兼容标准 Rerank API 的服务，包括使用 Infinity/TEI 自建的服务、Hugging Face Inference Endpoints 托管服务等。
+
+**使用方式**
 
 ```go
 import (
     "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/infinity"
 )
 
-// 自动读取环境变量 INFINITY_URL，默认为 http://localhost:7997/rerank
-rerank := infinity.New(
-    infinity.WithModel("bge-reranker-v2-m3"),
-    infinity.WithTopN(5),
+// 连接自建或托管的 Rerank 服务
+reranker, err := infinity.New(
+    infinity.WithEndpoint("http://localhost:7997/rerank"), // 必填：服务地址
+    infinity.WithModel("BAAI/bge-reranker-v2-m3"),         // 可选：模型名称
+    infinity.WithTopN(5),                                   // 可选：返回数量
 )
+if err != nil {
+    log.Fatalf("Failed to create reranker: %v", err)
+}
+```
+
+详细的服务部署方法和示例请参考 `examples/knowledge/reranker/infinity/` 目录。
+
 ```
 
 #### 配置到 Knowledge

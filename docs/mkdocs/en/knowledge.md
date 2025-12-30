@@ -609,20 +609,35 @@ rerank := cohere.New(
 )
 ```
 
-#### Infinity / BGE (Self-hosted Rerank Service)
+#### Infinity / TEI 
 
-Connects to a self-hosted Infinity or TEI inference service (commonly used to run open-source models like BGE-Reranker):
+**Terminology**
+
+- **Infinity**: Open-source high-performance inference engine supporting multiple Reranker models
+- **TEI (Text Embeddings Inference)**: Official Hugging Face inference engine optimized for Embeddings and Reranking
+
+The Infinity Reranker implementation in trpc-agent-go can connect to any service compatible with the standard Rerank API, including self-hosted services using Infinity/TEI, Hugging Face Inference Endpoints, etc.
+
+**Usage**
 
 ```go
 import (
     "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/infinity"
 )
 
-// Automatically reads INFINITY_URL from environment variable, defaults to http://localhost:7997/rerank
-rerank := infinity.New(
-    infinity.WithModel("bge-reranker-v2-m3"),
-    infinity.WithTopN(5),
+// Connect to self-hosted or managed Rerank service
+reranker, err := infinity.New(
+    infinity.WithEndpoint("http://localhost:7997/rerank"), // Required: Service endpoint
+    infinity.WithModel("BAAI/bge-reranker-v2-m3"),         // Optional: Model name
+    infinity.WithTopN(5),                                   // Optional: Result count
 )
+if err != nil {
+    log.Fatalf("Failed to create reranker: %v", err)
+}
+```
+
+For detailed deployment methods and examples, see the `examples/knowledge/reranker/infinity/` directory.
+
 ```
 
 #### Configure to Knowledge

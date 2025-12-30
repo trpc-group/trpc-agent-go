@@ -12,10 +12,17 @@ package cohere
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/internal/httpclient"
+	"trpc.group/trpc-go/trpc-agent-go/log"
+)
+
+var (
+	// errEndpointEmpty is returned when the endpoint is empty.
+	errEndpointEmpty = errors.New("cohere endpoint cannot be empty")
 )
 
 const (
@@ -71,7 +78,7 @@ func WithEndpoint(url string) Option {
 }
 
 // New creates a new Cohere reranker.
-func New(opts ...Option) *Reranker {
+func New(opts ...Option) (*Reranker, error) {
 	r := &Reranker{
 		endpoint:   defaultCohereEndpoint,
 		modelName:  defaultCohereModel,
@@ -80,7 +87,10 @@ func New(opts ...Option) *Reranker {
 	for _, opt := range opts {
 		opt(r)
 	}
-	return r
+	if r.endpoint == "" {
+		return nil, errEndpointEmpty
+	}
+	return r, nil
 }
 
 // Rerank implements the Reranker interface.
@@ -95,7 +105,11 @@ func (r *Reranker) Rerank(
 
 	docs := make([]string, len(results))
 	for i, res := range results {
-		docs[i] = res.Document.Content
+		if res.Document != nil {
+			docs[i] = res.Document.Content
+		} else {
+			log.WarnfContext(ctx, "cohere reranker: result[%d].Document is nil", i)
+		}
 	}
 
 	req := httpclient.RerankRequest{

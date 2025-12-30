@@ -11,10 +11,14 @@
 //
 // Integration Guide:
 //
+//	reranker, err := cohere.New(
+//	    cohere.WithTopN(5),
+//	)
+//	if err != nil {
+//	    // handle error
+//	}
 //	k := knowledge.New(
-//	    knowledge.WithReranker(cohere.New(
-//	        cohere.WithTopN(5),
-//	    )),
+//	    knowledge.WithReranker(reranker),
 //	)
 //
 // Required environment variables:
@@ -131,10 +135,14 @@ func runComparison(ctx context.Context, queryText string, documents []string) {
 		FinalQuery: queryText,
 	}
 
-	r := cohere.New(
+	r, err := cohere.New(
 		cohere.WithAPIKey(*apiKey),
 		cohere.WithModel(*modelName),
 	)
+	if err != nil {
+		log.Printf("Create cohere reranker failed: %v", err)
+		return
+	}
 
 	results, err := r.Rerank(ctx, query, candidates)
 	if err != nil {

@@ -42,7 +42,8 @@ func TestCohereReranker_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	r := New(WithAPIKey("test-key"), WithEndpoint(server.URL))
+	r, err := New(WithAPIKey("test-key"), WithEndpoint(server.URL))
+	assert.NoError(t, err)
 
 	query := &reranker.Query{FinalQuery: "test"}
 	results := []*reranker.Result{
@@ -58,7 +59,8 @@ func TestCohereReranker_Success(t *testing.T) {
 }
 
 func TestCohereReranker_EmptyInput(t *testing.T) {
-	r := New(WithAPIKey("test-key"))
+	r, err := New(WithAPIKey("test-key"))
+	assert.NoError(t, err)
 	query := &reranker.Query{FinalQuery: "test"}
 	reranked, err := r.Rerank(context.Background(), query, []*reranker.Result{})
 	assert.NoError(t, err)
@@ -72,11 +74,12 @@ func TestCohereReranker_HTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	r := New(WithAPIKey("test-key"), WithEndpoint(server.URL))
+	r, err := New(WithAPIKey("test-key"), WithEndpoint(server.URL))
+	assert.NoError(t, err)
 	query := &reranker.Query{FinalQuery: "test"}
 	results := []*reranker.Result{{Document: &document.Document{Content: "D0"}}}
 
-	_, err := r.Rerank(context.Background(), query, results)
+	_, err = r.Rerank(context.Background(), query, results)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
 }
@@ -87,11 +90,12 @@ func TestCohereReranker_InvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	r := New(WithAPIKey("test-key"), WithEndpoint(server.URL))
+	r, err := New(WithAPIKey("test-key"), WithEndpoint(server.URL))
+	assert.NoError(t, err)
 	query := &reranker.Query{FinalQuery: "test"}
 	results := []*reranker.Result{{Document: &document.Document{Content: "D0"}}}
 
-	_, err := r.Rerank(context.Background(), query, results)
+	_, err = r.Rerank(context.Background(), query, results)
 	assert.Error(t, err)
 }
 
@@ -107,7 +111,8 @@ func TestCohereReranker_TopN(t *testing.T) {
 	}))
 	defer server.Close()
 
-	r := New(WithAPIKey("test-key"), WithEndpoint(server.URL), WithTopN(1))
+	r, err := New(WithAPIKey("test-key"), WithEndpoint(server.URL), WithTopN(1))
+	assert.NoError(t, err)
 	query := &reranker.Query{FinalQuery: "test"}
 	results := []*reranker.Result{
 		{Document: &document.Document{Content: "D0"}},
@@ -121,19 +126,26 @@ func TestCohereReranker_TopN(t *testing.T) {
 }
 
 func TestCohereReranker_Options(t *testing.T) {
-	r := New(
+	r, err := New(
 		WithAPIKey("key"),
 		WithModel("custom-model"),
 		WithEndpoint("http://custom"),
 		WithTopN(10),
 		WithHTTPClient(http.DefaultClient),
 	)
+	assert.NoError(t, err)
 
 	assert.Equal(t, "key", r.apiKey)
 	assert.Equal(t, "custom-model", r.modelName)
 	assert.Equal(t, "http://custom", r.endpoint)
 	assert.Equal(t, 10, r.topN)
 	assert.NotNil(t, r.httpClient)
+}
+
+func TestCohereReranker_EmptyEndpoint(t *testing.T) {
+	_, err := New(WithAPIKey("test-key"), WithEndpoint(""))
+	assert.Error(t, err)
+	assert.Equal(t, errEndpointEmpty, err)
 }
 
 func TestCohereReranker_ContextCancel(t *testing.T) {
@@ -143,13 +155,14 @@ func TestCohereReranker_ContextCancel(t *testing.T) {
 	}))
 	defer server.Close()
 
-	r := New(WithAPIKey("test-key"), WithEndpoint(server.URL))
+	r, err := New(WithAPIKey("test-key"), WithEndpoint(server.URL))
+	assert.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
 	query := &reranker.Query{FinalQuery: "test"}
 	results := []*reranker.Result{{Document: &document.Document{Content: "D0"}}}
 
-	_, err := r.Rerank(ctx, query, results)
+	_, err = r.Rerank(ctx, query, results)
 	assert.Error(t, err)
 }

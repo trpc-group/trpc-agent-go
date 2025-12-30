@@ -11,11 +11,15 @@
 //
 // Integration Guide:
 //
+//	reranker, err := infinity.New(
+//	    infinity.WithEndpoint("http://custom-host:7997/rerank"),
+//	    infinity.WithTopN(5),
+//	)
+//	if err != nil {
+//	    // handle error
+//	}
 //	k := knowledge.New(
-//	    knowledge.WithReranker(infinity.New(
-//	        infinity.WithEndpoint("http://custom-host:7997/rerank"),
-//	        infinity.WithTopN(5),
-//	    )),
+//	    knowledge.WithReranker(reranker),
 //	)
 //
 // Required environment variables:
@@ -135,10 +139,14 @@ func runComparison(ctx context.Context, queryText string, documents []string) {
 		FinalQuery: queryText,
 	}
 
-	r := infinity.New(
+	r, err := infinity.New(
 		infinity.WithEndpoint(*endpoint),
 		infinity.WithModel(*modelName),
 	)
+	if err != nil {
+		log.Printf("Create infinity reranker failed: %v", err)
+		return
+	}
 
 	results, err := r.Rerank(ctx, query, candidates)
 	if err != nil {
