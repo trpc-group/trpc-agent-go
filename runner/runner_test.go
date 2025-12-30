@@ -1790,6 +1790,48 @@ func TestShouldAppendUserMessage_Cases(t *testing.T) {
 	require.True(t, shouldAppendUserMessage(model.NewUserMessage("u"), []model.Message{model.NewSystemMessage("s"), model.NewAssistantMessage("a")}))
 }
 
+func TestFinalResponseIDFromStateDelta_Cases(t *testing.T) {
+	const (
+		unknownKey     = "other"
+		unknownValue   = "\"x\""
+		invalidJSON    = "{"
+		responseID     = "resp-123"
+		responseIDJSON = "\"resp-123\""
+	)
+
+	t.Run("nil delta", func(t *testing.T) {
+		require.Equal(t, "", finalResponseIDFromStateDelta(nil))
+	})
+
+	t.Run("missing key", func(t *testing.T) {
+		delta := map[string][]byte{
+			unknownKey: []byte(unknownValue),
+		}
+		require.Equal(t, "", finalResponseIDFromStateDelta(delta))
+	})
+
+	t.Run("empty value", func(t *testing.T) {
+		delta := map[string][]byte{
+			graph.StateKeyLastResponseID: nil,
+		}
+		require.Equal(t, "", finalResponseIDFromStateDelta(delta))
+	})
+
+	t.Run("invalid json", func(t *testing.T) {
+		delta := map[string][]byte{
+			graph.StateKeyLastResponseID: []byte(invalidJSON),
+		}
+		require.Equal(t, "", finalResponseIDFromStateDelta(delta))
+	})
+
+	t.Run("valid json", func(t *testing.T) {
+		delta := map[string][]byte{
+			graph.StateKeyLastResponseID: []byte(responseIDJSON),
+		}
+		require.Equal(t, responseID, finalResponseIDFromStateDelta(delta))
+	})
+}
+
 func TestRunner_Close_OwnedSessionService(t *testing.T) {
 	// Create runner without providing session service.
 	// Runner should create and own the default inmemory session service.

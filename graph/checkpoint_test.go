@@ -1350,6 +1350,13 @@ func TestShouldEmitModelResponse_Cases(t *testing.T) {
 	})
 }
 
+func TestShouldEmitModelResponseEvent_NilResponse(t *testing.T) {
+	require.False(
+		t,
+		shouldEmitModelResponseEvent(context.Background(), nil),
+	)
+}
+
 func TestProcessModelResponse_AfterModelCustomResponse(t *testing.T) {
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
 	_, span := tracer.Start(context.Background(), "s")
