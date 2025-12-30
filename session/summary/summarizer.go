@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -112,6 +113,8 @@ func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 	// Set default prompt if none was provided
 	if s.prompt == "" {
 		s.prompt = getDefaultSummarizerPrompt(s.maxSummaryWords)
+	} else if err := validatePrompt(s.prompt, s.maxSummaryWords); err != nil {
+		log.Warnf("invalid prompt in NewSummarizer: %v", err)
 	}
 
 	return s
@@ -252,7 +255,8 @@ func (s *sessionSummarizer) SetPrompt(prompt string) {
 		return
 	}
 	if err := validatePrompt(prompt, s.maxSummaryWords); err != nil {
-		panic(fmt.Errorf("invalid prompt: %w", err))
+		log.Warnf("invalid prompt: %v", err)
+		return
 	}
 	s.prompt = prompt
 }
