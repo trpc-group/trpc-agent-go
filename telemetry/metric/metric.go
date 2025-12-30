@@ -52,55 +52,45 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	if itelemetry.ChatMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(
 		mp,
 		metrics.MeterNameChat,
-		nil,
 		metrics.MetricGenAIClientOperationDuration,
-		"Duration of client operation",
-		"s",
-		nil,
+		metric.WithDescription("Duration of client operation"),
+		metric.WithUnit("s"),
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric GenAIClientOperationDuration: %w", err)
 	}
 	if itelemetry.ChatMetricGenAIServerTimeToFirstToken, err = histogram.NewDynamicFloat64Histogram(
 		mp,
 		metrics.MeterNameChat,
-		nil,
 		metrics.MetricGenAIServerTimeToFirstToken,
-		"Time to first token for server",
-		"s",
-		nil,
+		metric.WithDescription("Time to first token for server"),
+		metric.WithUnit("s"),
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric GenAIServerTimeToFirstToken: %w", err)
 	}
 	if itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken, err = histogram.NewDynamicFloat64Histogram(
 		mp,
 		metrics.MeterNameChat,
-		nil,
 		metrics.MetricTRPCAgentGoClientTimeToFirstToken,
-		"Time to first token (legacy metric name)",
-		"s",
-		nil,
+		metric.WithDescription("Time to first token (legacy metric name)"),
+		metric.WithUnit("s"),
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientTimeToFirstToken: %w", err)
 	}
 	if itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken, err = histogram.NewDynamicFloat64Histogram(
 		mp,
 		metrics.MeterNameChat,
-		nil,
 		metrics.MetricTRPCAgentGoClientTimePerOutputToken,
-		"Time per output token for client",
-		"s",
-		nil,
+		metric.WithDescription("Time per output token for client"),
+		metric.WithUnit("s"),
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientTimePerOutputToken: %w", err)
 	}
 	if itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime, err = histogram.NewDynamicFloat64Histogram(
 		mp,
 		metrics.MeterNameChat,
-		nil,
 		metrics.MetricTRPCAgentGoClientOutputTokenPerTime,
-		"Output token per time for client",
-		"{token}",
-		nil,
+		metric.WithDescription("Output token per time for client"),
+		metric.WithUnit("{token}"),
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientOutputTokenPerTime: %w", err)
 	}
@@ -116,11 +106,9 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	if itelemetry.ExecuteToolMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(
 		mp,
 		metrics.MeterNameExecuteTool,
-		nil,
 		metrics.MetricGenAIClientOperationDuration,
-		"Duration of client operation",
-		"s",
-		nil,
+		metric.WithDescription("Duration of client operation"),
+		metric.WithUnit("s"),
 	); err != nil {
 		return fmt.Errorf("failed to create execute tool metric GenAIClientOperationDuration: %w", err)
 	}
@@ -229,22 +217,18 @@ func initInvokeAgentMetrics(mp metric.MeterProvider) error {
 	if itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken, err = histogram.NewDynamicFloat64Histogram(
 		mp,
 		metrics.MeterNameInvokeAgent,
-		nil,
 		metrics.MetricTRPCAgentGoClientTimeToFirstToken,
-		"Time to first token for client",
-		"s",
-		nil,
+		metric.WithDescription("Time to first token for client"),
+		metric.WithUnit("s"),
 	); err != nil {
 		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricTRPCAgentGoClientTimeToFirstToken, err)
 	}
 	if itelemetry.InvokeAgentMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(
 		mp,
 		metrics.MeterNameInvokeAgent,
-		nil,
 		metrics.MetricGenAIClientOperationDuration,
-		"Duration of client operation",
-		"s",
-		nil,
+		metric.WithDescription("Duration of client operation"),
+		metric.WithUnit("s"),
 	); err != nil {
 		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIClientOperationDuration, err)
 	}

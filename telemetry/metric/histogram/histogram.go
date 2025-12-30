@@ -25,14 +25,12 @@ import (
 // It allows updating histogram bucket boundaries at runtime by recreating the underlying
 // histogram instrument.
 type DynamicFloat64Histogram struct {
-	mu          sync.RWMutex
-	histogram   metric.Float64Histogram
-	meterName   string
-	mp          metric.MeterProvider
-	name        string
-	description string
-	unit        string
-	boundaries  []float64
+	mu         sync.RWMutex
+	histogram  metric.Float64Histogram
+	meterName  string
+	mp         metric.MeterProvider
+	metricName string
+	options    []metric.Float64HistogramOption
 }
 
 // NewDynamicFloat64Histogram creates a new dynamic histogram with the given options.
@@ -41,39 +39,25 @@ type DynamicFloat64Histogram struct {
 func NewDynamicFloat64Histogram(
 	mp metric.MeterProvider,
 	meterName string,
-	meter metric.Meter,
-	name string,
-	description string,
-	unit string,
-	boundaries []float64,
+	metricName string,
+	options ...metric.Float64HistogramOption,
 ) (*DynamicFloat64Histogram, error) {
 	if mp == nil {
 		return nil, fmt.Errorf("meter provider is nil")
 	}
 
-	if meter == nil {
-		meter = mp.Meter(meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMeterName, meterName)))
-	}
-	opts := []metric.Float64HistogramOption{
-		metric.WithDescription(description),
-		metric.WithUnit(unit),
-	}
-	if len(boundaries) > 0 {
-		opts = append(opts, metric.WithExplicitBucketBoundaries(boundaries...))
-	}
+	meter := mp.Meter(meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, metricName)))
 
-	h, err := meter.Float64Histogram(name, opts...)
+	h, err := meter.Float64Histogram(metricName, options...)
 	if err != nil {
 		return nil, err
 	}
 	return &DynamicFloat64Histogram{
-		histogram:   h,
-		mp:          mp,
-		meterName:   meterName,
-		name:        name,
-		description: description,
-		unit:        unit,
-		boundaries:  boundaries,
+		histogram:  h,
+		mp:         mp,
+		meterName:  meterName,
+		metricName: metricName,
+		options:    options,
 	}, nil
 }
 
@@ -97,32 +81,14 @@ func (d *DynamicFloat64Histogram) SetBuckets(boundaries []float64) error {
 		return fmt.Errorf("meter provider is nil")
 	}
 	// Create a new Meter each time buckets change (required for some SDK/provider implementations).
-	meter := d.mp.Meter(d.meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMeterName, d.meterName)))
-	opts := []metric.Float64HistogramOption{
-		metric.WithDescription(d.description),
-		metric.WithUnit(d.unit),
-	}
-	if len(boundaries) > 0 {
-		opts = append(opts, metric.WithExplicitBucketBoundaries(boundaries...))
-	}
+	meter := d.mp.Meter(d.meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, d.metricName)))
 
-	h, err := meter.Float64Histogram(d.name, opts...)
+	h, err := meter.Float64Histogram(d.metricName, d.options...)
 	if err != nil {
 		return err
 	}
 	d.histogram = h
-	d.boundaries = boundaries
 	return nil
-}
-
-// GetBuckets returns the current bucket boundaries.
-// This method is thread-safe.
-func (d *DynamicFloat64Histogram) GetBuckets() []float64 {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	result := make([]float64, len(d.boundaries))
-	copy(result, d.boundaries)
-	return result
 }
 
 // DynamicInt64Histogram wraps an Int64Histogram with dynamic bucket configuration.
@@ -133,7 +99,7 @@ type DynamicInt64Histogram struct {
 	histogram   metric.Int64Histogram
 	meterName   string
 	mp          metric.MeterProvider
-	name        string
+	metricName  string
 	description string
 	unit        string
 	boundaries  []float64
@@ -146,7 +112,7 @@ func NewDynamicInt64Histogram(
 	mp metric.MeterProvider,
 	meterName string,
 	meter metric.Meter,
-	name string,
+	metricName string,
 	description string,
 	unit string,
 	boundaries []float64,
@@ -156,7 +122,7 @@ func NewDynamicInt64Histogram(
 	}
 
 	if meter == nil {
-		meter = mp.Meter(meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMeterName, meterName)))
+		meter = mp.Meter(meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, metricName)))
 	}
 	opts := []metric.Int64HistogramOption{
 		metric.WithDescription(description),
@@ -166,7 +132,7 @@ func NewDynamicInt64Histogram(
 		opts = append(opts, metric.WithExplicitBucketBoundaries(boundaries...))
 	}
 
-	h, err := meter.Int64Histogram(name, opts...)
+	h, err := meter.Int64Histogram(metricName, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +140,7 @@ func NewDynamicInt64Histogram(
 		histogram:   h,
 		mp:          mp,
 		meterName:   meterName,
-		name:        name,
+		metricName:  metricName,
 		description: description,
 		unit:        unit,
 		boundaries:  boundaries,
@@ -201,7 +167,7 @@ func (d *DynamicInt64Histogram) SetBuckets(boundaries []float64) error {
 		return fmt.Errorf("meter provider is nil")
 	}
 	// Create a new Meter each time buckets change (required for some SDK/provider implementations).
-	meter := d.mp.Meter(d.meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMeterName, d.meterName)))
+	meter := d.mp.Meter(d.meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, d.metricName)))
 	opts := []metric.Int64HistogramOption{
 		metric.WithDescription(d.description),
 		metric.WithUnit(d.unit),
@@ -210,7 +176,7 @@ func (d *DynamicInt64Histogram) SetBuckets(boundaries []float64) error {
 		opts = append(opts, metric.WithExplicitBucketBoundaries(boundaries...))
 	}
 
-	h, err := meter.Int64Histogram(d.name, opts...)
+	h, err := meter.Int64Histogram(d.metricName, opts...)
 	if err != nil {
 		return err
 	}
