@@ -210,10 +210,10 @@ func TestSaveArtifact(t *testing.T) {
 		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
 
 		invalidNames := []string{
-			"path/to/file.txt",   // contains /
-			"..\\etc\\passwd",    // contains \ and ..
-			"../parent.txt",      // path traversal
-			"file\x00name.txt",   // null byte
+			"path/to/file.txt", // contains /
+			"..\\etc\\passwd",  // contains \ and ..
+			"../parent.txt",    // path traversal
+			"file\x00name.txt", // null byte
 		}
 
 		for _, name := range invalidNames {
@@ -619,9 +619,9 @@ func TestValidateFilename(t *testing.T) {
 			"my-document.pdf",
 			"image_001.png",
 			"report.2024.xlsx",
-			"user:profile.json",      // user namespace prefix is valid
+			"user:profile.json", // user namespace prefix is valid
 			"user:settings.yaml",
-			"名前.txt",                 // unicode is OK
+			"名前.txt", // unicode is OK
 			"файл.doc",
 		}
 
@@ -633,13 +633,13 @@ func TestValidateFilename(t *testing.T) {
 
 	t.Run("invalid filenames", func(t *testing.T) {
 		invalidNames := []string{
-			"",                       // empty
-			"path/to/file.txt",       // forward slash
-			"path\\to\\file.txt",     // backslash
-			"../parent.txt",          // path traversal
-			"..\\parent.txt",         // path traversal with backslash
-			"file\x00name.txt",       // null byte
-			"a/b",                    // simple slash
+			"",                   // empty
+			"path/to/file.txt",   // forward slash
+			"path\\to\\file.txt", // backslash
+			"../parent.txt",      // path traversal
+			"..\\parent.txt",     // path traversal with backslash
+			"file\x00name.txt",   // null byte
+			"a/b",                // simple slash
 		}
 
 		for _, name := range invalidNames {

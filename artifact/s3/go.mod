@@ -10,7 +10,7 @@ replace (
 require (
 	github.com/stretchr/testify v1.11.1
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
-	trpc.group/trpc-go/trpc-agent-go/storage/s3 v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/storage/s3 v0.0.0-20251230211116-1b241b86876b
 )
 
 require (

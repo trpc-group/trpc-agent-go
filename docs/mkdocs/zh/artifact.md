@@ -106,6 +106,16 @@ import "trpc.group/trpc-go/trpc-agent-go/artifact/s3"
 #### 使用方法
 
 ```go
+import (
+    "context"
+    "log"
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/artifact/s3"
+)
+
+ctx := context.Background()
+
 // 创建服务（S3 客户端会自动在内部创建）
 service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"))
 if err != nil {
@@ -153,9 +163,14 @@ service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"),
 
 ```go
 import (
+    "context"
+    "log"
+
     "trpc.group/trpc-go/trpc-agent-go/artifact/s3"
     s3storage "trpc.group/trpc-go/trpc-agent-go/storage/s3"
 )
+
+ctx := context.Background()
 
 // 创建可复用的 S3 客户端
 client, err := s3storage.NewClient(ctx,
@@ -173,9 +188,6 @@ defer client.Close()
 // 在多个服务之间共享客户端
 artifactService, _ := s3.NewService(ctx, "my-bucket", s3.WithClient(client))
 // 该客户端也可用于其他服务，如向量存储
-
-// 注意：使用 WithClient 时，服务不会关闭客户端
-// 您需要自行负责在完成后关闭客户端
 ```
 
 > **注意**：使用 `WithClient` 时，制品服务不拥有该客户端的所有权。

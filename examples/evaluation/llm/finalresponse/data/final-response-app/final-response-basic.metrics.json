@@ -1,0 +1,22 @@
+[
+  {
+    "metricName": "llm_final_response",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "deepseek-chat",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
+          "numSamples": 3,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 1.0,
+            "stream": false
+          }
+        }
+      }
+    }
+  }
+]

@@ -11,8 +11,8 @@ package s3
 import "sync"
 
 var (
-	registryMu  sync.RWMutex
-	s3Registry  = make(map[string][]ClientBuilderOpt)
+	registryMu sync.RWMutex
+	s3Registry = make(map[string][]ClientBuilderOpt)
 )
 
 // RegisterS3Instance registers a named S3 instance with its configuration options.

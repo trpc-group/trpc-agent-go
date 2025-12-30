@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
 )
 
@@ -44,14 +45,13 @@ type SessionState struct {
 type Service struct {
 	opts            ServiceOpts
 	mysqlClient     storage.Client
-	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
-	trackEventChans []chan *trackEventPair   // channel for track events to persistence.
-	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
-	cleanupTicker   *time.Ticker             // ticker for automatic cleanup
-	cleanupDone     chan struct{}            // signal to stop cleanup routine
-	cleanupOnce     sync.Once                // ensure cleanup routine is stopped only once
-	summaryWg       sync.WaitGroup           // wait group for summary workers
-	persistWg       sync.WaitGroup           // wait group for persist workers
+	eventPairChans  []chan *sessionEventPair     // channel for session events to persistence
+	trackEventChans []chan *trackEventPair       // channel for track events to persistence
+	asyncWorker     *isummary.AsyncSummaryWorker // async summary worker
+	cleanupTicker   *time.Ticker                 // ticker for automatic cleanup
+	cleanupDone     chan struct{}                // signal to stop cleanup routine
+	cleanupOnce     sync.Once                    // ensure cleanup routine is stopped only once
+	persistWg       sync.WaitGroup               // wait group for persist workers
 	once            sync.Once
 
 	// Table names with prefix applied
@@ -71,14 +71,6 @@ type sessionEventPair struct {
 type trackEventPair struct {
 	key   session.Key
 	event *session.TrackEvent
-}
-
-// summaryJob represents a summary job to be processed asynchronously.
-type summaryJob struct {
-	ctx       context.Context // Detached context preserving values but not cancel.
-	filterKey string
-	force     bool
-	session   *session.Session
 }
 
 // NewService creates a new MySQL session service.
@@ -143,8 +135,15 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 
 	// Start async summary workers if summarizer is configured
-	if opts.summarizer != nil {
-		s.startAsyncSummaryWorker()
+	if opts.summarizer != nil && opts.asyncSummaryNum > 0 {
+		s.asyncWorker = isummary.NewAsyncSummaryWorker(isummary.AsyncSummaryConfig{
+			Summarizer:        opts.summarizer,
+			AsyncSummaryNum:   opts.asyncSummaryNum,
+			SummaryQueueSize:  opts.summaryQueueSize,
+			SummaryJobTimeout: opts.summaryJobTimeout,
+			CreateSummaryFunc: s.CreateSessionSummary,
+		})
+		s.asyncWorker.Start()
 	}
 
 	// Start cleanup routine if any TTL is configured
@@ -174,11 +173,8 @@ func (s *Service) Close() error {
 	s.persistWg.Wait()
 
 	// Close async summary workers and wait for them to finish
-	if s.summaryJobChans != nil {
-		for _, ch := range s.summaryJobChans {
-			close(ch)
-		}
-		s.summaryWg.Wait()
+	if s.asyncWorker != nil {
+		s.asyncWorker.Stop()
 	}
 
 	// Close MySQL client
@@ -221,7 +217,13 @@ func (s *Service) CreateSession(
 		CreatedAt: now,
 	}
 	for k, v := range state {
-		sessState.State[k] = v
+		if v == nil {
+			sessState.State[k] = nil
+			continue
+		}
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		sessState.State[k] = copiedValue
 	}
 
 	sessBytes, err := json.Marshal(sessState)
@@ -621,7 +623,13 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		sessState.State = make(session.StateMap)
 	}
 	for k, v := range state {
-		sessState.State[k] = v
+		if v == nil {
+			sessState.State[k] = nil
+			continue
+		}
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		sessState.State[k] = copiedValue
 	}
 	now := time.Now()
 	sessState.UpdatedAt = now
@@ -1172,16 +1180,12 @@ func mergeState(appState, userState session.StateMap, sess *session.Session) *se
 	if sess == nil {
 		return nil
 	}
-	if sess.State == nil {
-		sess.State = make(session.StateMap)
-	}
-
 	// Merge with priority: session state > user state > app state
 	for k, v := range appState {
-		sess.State[session.StateAppPrefix+k] = v
+		sess.SetState(session.StateAppPrefix+k, v)
 	}
 	for k, v := range userState {
-		sess.State[session.StateUserPrefix+k] = v
+		sess.SetState(session.StateUserPrefix+k, v)
 	}
 	return sess
 }

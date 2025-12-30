@@ -106,6 +106,16 @@ import "trpc.group/trpc-go/trpc-agent-go/artifact/s3"
 #### Usage
 
 ```go
+import (
+    "context"
+    "log"
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/artifact/s3"
+)
+
+ctx := context.Background()
+
 // Create the service (S3 client is automatically created internally)
 service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"))
 if err != nil {
@@ -153,9 +163,14 @@ For advanced use cases, the `storage/s3` package provides a reusable S3 client t
 
 ```go
 import (
+    "context"
+    "log"
+
     "trpc.group/trpc-go/trpc-agent-go/artifact/s3"
     s3storage "trpc.group/trpc-go/trpc-agent-go/storage/s3"
 )
+
+ctx := context.Background()
 
 // Create a reusable S3 client
 client, err := s3storage.NewClient(ctx,
@@ -172,10 +187,6 @@ defer client.Close()
 
 // Share the client across multiple services
 artifactService, _ := s3.NewService(ctx, "my-bucket", s3.WithClient(client))
-// The client can also be used with other services like vector stores
-
-// Note: When using WithClient, the service does NOT close the client
-// You are responsible for closing the client when done
 ```
 
 > **Note**: When using `WithClient`, the artifact service does not own the client.

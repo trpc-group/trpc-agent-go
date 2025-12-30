@@ -100,12 +100,14 @@ func SummarizeSession(
 	// Get previous summary info.
 	var prevText string
 	var prevAt time.Time
+	base.SummariesMu.RLock()
 	if base.Summaries != nil {
 		if s := base.Summaries[filterKey]; s != nil {
 			prevText = s.Summary
 			prevAt = s.UpdatedAt
 		}
 	}
+	base.SummariesMu.RUnlock()
 
 	// Compute delta events with both time and filterKey filtering in one pass.
 	delta, latestTs := computeDeltaSince(base, prevAt, filterKey)
@@ -158,10 +160,10 @@ func selectUpdatedAt(tmp *session.Session, prevAt, latestTs time.Time, hasDelta 
 const lastIncludedTsKey = "summary:last_included_ts"
 
 func readLastIncludedTimestamp(tmp *session.Session) time.Time {
-	if tmp == nil || tmp.State == nil {
+	if tmp == nil {
 		return time.Time{}
 	}
-	raw, ok := tmp.State[lastIncludedTsKey]
+	raw, ok := tmp.GetState(lastIncludedTsKey)
 	if !ok || len(raw) == 0 {
 		return time.Time{}
 	}
@@ -172,27 +174,38 @@ func readLastIncludedTimestamp(tmp *session.Session) time.Time {
 	return parsed
 }
 
+// meetsTimeCriteria checks if a summary meets the minimum time requirement.
+// Returns true if sum is non-nil and either minTime is zero or sum.UpdatedAt >= minTime.
+func meetsTimeCriteria(sum *session.Summary, minTime time.Time) bool {
+	if sum == nil {
+		return false
+	}
+	if minTime.IsZero() {
+		return true
+	}
+	return !sum.UpdatedAt.Before(minTime)
+}
+
 // PickSummaryText picks a non-empty summary string with preference for the
 // specified filterKey. Falls back to all-contents key and then any available summary.
 // When filterKey is empty (SummaryFilterKeyAllContents), prefers the full-session summary.
-func PickSummaryText(summaries map[string]*session.Summary, filterKey string) (string, bool) {
+// When minTime is non-zero, only returns summaries with UpdatedAt >= minTime.
+func PickSummaryText(
+	summaries map[string]*session.Summary,
+	filterKey string,
+	minTime time.Time,
+) (string, bool) {
 	if summaries == nil {
 		return "", false
 	}
 	// First, try to get the requested filter key summary.
-	if sum, ok := summaries[filterKey]; ok && sum != nil && sum.Summary != "" {
+	if sum, ok := summaries[filterKey]; ok && meetsTimeCriteria(sum, minTime) && sum.Summary != "" {
 		return sum.Summary, true
 	}
 	// Fallback: if requesting a specific filter key but not found, try full-session summary.
 	if filterKey != session.SummaryFilterKeyAllContents {
-		if sum, ok := summaries[session.SummaryFilterKeyAllContents]; ok && sum != nil && sum.Summary != "" {
+		if sum, ok := summaries[session.SummaryFilterKeyAllContents]; ok && meetsTimeCriteria(sum, minTime) && sum.Summary != "" {
 			return sum.Summary, true
-		}
-	}
-	// Last resort: return any available summary.
-	for _, s := range summaries {
-		if s != nil && s.Summary != "" {
-			return s.Summary, true
 		}
 	}
 	return "", false
@@ -200,7 +213,7 @@ func PickSummaryText(summaries map[string]*session.Summary, filterKey string) (s
 
 // GetSummaryTextFromSession attempts to retrieve summary text from the session's
 // in-memory summaries using the specified filter key. It parses the provided options
-// and applies the summary selection logic.
+// and applies the summary selection logic. Filters out summaries with UpdatedAt before sess.CreatedAt.
 func GetSummaryTextFromSession(sess *session.Session, opts ...session.SummaryOption) (string, bool) {
 	if sess == nil {
 		return "", false
@@ -215,8 +228,10 @@ func GetSummaryTextFromSession(sess *session.Session, opts ...session.SummaryOpt
 	}
 
 	// Prefer local in-memory session summaries when available.
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
 	if len(sess.Summaries) > 0 {
-		return PickSummaryText(sess.Summaries, options.FilterKey)
+		return PickSummaryText(sess.Summaries, options.FilterKey, sess.CreatedAt)
 	}
 
 	return "", false

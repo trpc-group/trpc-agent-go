@@ -314,7 +314,7 @@ func TestAWSS3Configuration(t *testing.T) {
 		assert.Equal(t, "my-bucket", opts.Bucket)
 		assert.Equal(t, "us-west-2", opts.Region)
 		assert.Equal(t, "AKIAIOSFODNN7EXAMPLE", opts.AccessKeyID)
-		assert.Empty(t, opts.Endpoint) // No custom endpoint for AWS
+		assert.Empty(t, opts.Endpoint)     // No custom endpoint for AWS
 		assert.False(t, opts.UsePathStyle) // Virtual-hosted style for AWS
 		assert.Equal(t, 5, opts.MaxRetries)
 	})

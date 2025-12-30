@@ -1,0 +1,32 @@
+[
+  {
+    "metricName": "llm_rubric_knowledge_recall",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "deepseek-chat",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
+          "numSamples": 3,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 1.0,
+            "stream": false
+          }
+        },
+        "rubrics": [
+          {
+            "id": "1",
+            "description": "The knowledge recall is relevant to the user's prompt.",
+            "type": "KNOWLEDGE_RELEVANCE",
+            "content": {
+              "text": "Evaluate the relevance of the knowledge recall. A knowledge recall can be considered relevant if it enhances or clarifies the response, adding value to the user's comprehension of the topic in question. Relevance is determined by the extent to which the provided information addresses the specific question asked, staying focused on the subject without straying into unrelated areas or providing extraneous details."
+            }
+          }
+        ]
+      }
+    }
+  }
+]
