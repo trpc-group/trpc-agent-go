@@ -7,7 +7,7 @@
 //
 //
 
-// Package client provides Wikipedia API client functionality.
+// Package client provides Wikipedia API client.
 package client
 
 import (

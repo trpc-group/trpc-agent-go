@@ -7,6 +7,7 @@
 //
 //
 
+// Package client provides Wikipedia API client.
 package client
 
 import (
@@ -36,24 +37,24 @@ func New(baseURL, userAgent string, httpClient *http.Client) *Client {
 
 // SearchResponse represents the Wikipedia API search response
 type SearchResponse struct {
-	BatchComplete string `json:"batchcomplete"`
+	BatchComplete string `json:"batchcomplete"` // BatchComplete indicates if the request was completed
 	Query         struct {
 		SearchInfo struct {
-			TotalHits int `json:"totalhits"`
+			TotalHits int `json:"totalhits"` // TotalHits is the total number of search results
 		} `json:"searchinfo"`
-		Search []SearchResult `json:"search"`
+		Search []SearchResult `json:"search"` // Search contains the list of search results
 	} `json:"query"`
 }
 
 // SearchResult represents a single search result
 type SearchResult struct {
-	NS        int    `json:"ns"`
-	Title     string `json:"title"`
-	PageID    int    `json:"pageid"`
-	Size      int    `json:"size"`
-	WordCount int    `json:"wordcount"`
-	Snippet   string `json:"snippet"`
-	Timestamp string `json:"timestamp"`
+	NS        int    `json:"ns"`        // NS is the namespace ID of the page
+	Title     string `json:"title"`     // Title is the title of the page
+	PageID    int    `json:"pageid"`    // PageID is the unique page identifier
+	Size      int    `json:"size"`      // Size is the page size in bytes
+	WordCount int    `json:"wordcount"` // WordCount is the number of words in the page
+	Snippet   string `json:"snippet"`   // Snippet is a short excerpt of the page content
+	Timestamp string `json:"timestamp"` // Timestamp is the last modification time
 }
 
 // validateQuery validates and normalizes query parameters
@@ -161,11 +162,11 @@ func (c *Client) FullTextSearch(query string, limit int, namespaces []int, inclu
 	}
 	params := newSearchParams(query, normalizeLimit(limit, 5))
 	params.Set("srwhat", "text")
-
+	// Set namespaces if provided
 	if nsStr := formatNamespaces(namespaces); nsStr != "" {
 		params.Set("srnamespace", nsStr)
 	}
-
+	// Set properties based on snippet inclusion
 	if includeSnippet {
 		params.Set("srprop", "snippet|titlesnippet|timestamp|wordcount|size|sectionsnippet")
 	} else {
@@ -179,35 +180,29 @@ func (c *Client) AdvancedSearch(options SearchOptions) (*SearchResponse, error) 
 	if err := validateQuery(options.Query); err != nil {
 		return nil, err
 	}
-
 	params := newSearchParams(options.Query, normalizeLimit(options.Limit, 5))
-
+	// Set search type if provided
 	if options.SearchWhat != "" {
 		params.Set("srwhat", options.SearchWhat)
 	}
-
 	if options.Properties != "" {
 		params.Set("srprop", options.Properties)
 	} else {
 		params.Set("srprop", "snippet|titlesnippet|timestamp|wordcount")
 	}
-
 	if nsStr := formatNamespaces(options.Namespaces); nsStr != "" {
 		params.Set("srnamespace", nsStr)
 	}
-
 	if options.Sort != "" {
 		params.Set("srsort", options.Sort)
 	}
-
 	if options.Offset > 0 {
 		params.Set("sroffset", fmt.Sprintf("%d", options.Offset))
 	}
-
 	if options.EnableRedirects {
 		params.Set("srredirects", "1")
 	}
-
+	// Execute the search
 	return c.executeSearch(params)
 }
 
@@ -226,36 +221,30 @@ type SearchOptions struct {
 // executeSearch is a helper method to execute search requests
 func (c *Client) executeSearch(params url.Values) (*SearchResponse, error) {
 	reqURL := fmt.Sprintf("%s?%s", c.baseURL, params.Encode())
-
 	// Create the HTTP request
 	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-
 	// Set headers
 	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set("Accept", "application/json")
-
 	// Perform the request
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform request: %w", err)
 	}
 	defer resp.Body.Close()
-
 	// Check response status
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
 	}
-
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
-
 	// Parse the JSON response
 	var response SearchResponse
 	if err := json.Unmarshal(body, &response); err != nil {
@@ -280,12 +269,11 @@ func newPageParams(title string) url.Values {
 // executePage performs page content request
 func (c *Client) executePage(params url.Values) (*PageContentResponse, error) {
 	reqURL := fmt.Sprintf("%s?%s", c.baseURL, params.Encode())
-
+	// Create the HTTP request
 	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-
 	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set("Accept", "application/json")
 
@@ -294,16 +282,16 @@ func (c *Client) executePage(params url.Values) (*PageContentResponse, error) {
 		return nil, fmt.Errorf("failed to perform request: %w", err)
 	}
 	defer resp.Body.Close()
-
+	// Check response status
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
 	}
-
+	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
-
+	// Parse the JSON response
 	var response PageContentResponse
 	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
@@ -325,17 +313,17 @@ func (c *Client) GetPageContent(title string) (*PageContentResponse, error) {
 // PageContentResponse represents the response from page content API
 type PageContentResponse struct {
 	Query struct {
-		Pages map[string]PageContent `json:"pages"`
+		Pages map[string]PageContent `json:"pages"` // Pages contains page content indexed by page ID
 	} `json:"query"`
 }
 
 // PageContent represents a Wikipedia page's content
 type PageContent struct {
-	PageID  int    `json:"pageid"`
-	NS      int    `json:"ns"`
-	Title   string `json:"title"`
-	Extract string `json:"extract"`
-	FullURL string `json:"fullurl"`
+	PageID  int    `json:"pageid"`  // PageID is the unique page identifier
+	NS      int    `json:"ns"`      // NS is the namespace ID of the page
+	Title   string `json:"title"`   // Title is the title of the page
+	Extract string `json:"extract"` // Extract is the text content of the page
+	FullURL string `json:"fullurl"` // FullURL is the complete URL to the page
 }
 
 // GetPageSummary retrieves a short summary of a Wikipedia page
