@@ -1360,7 +1360,7 @@ func TestPropagateGraphCompletion_NilStateValue(t *testing.T) {
 	require.Nil(t, ev.StateDelta["nil"]) // explicit nil copy branch covered
 }
 
-func TestShouldIncludeFinalChoices_Cases(t *testing.T) {
+func TestShouldEchoFinalChoicesInCompletion_Cases(t *testing.T) {
 	const (
 		appName        = "app"
 		agentName      = "a"
@@ -1372,12 +1372,12 @@ func TestShouldIncludeFinalChoices_Cases(t *testing.T) {
 	rr := NewRunner(appName, &noOpAgent{name: agentName}).(*runner)
 
 	t.Run("nil loop", func(t *testing.T) {
-		require.True(t, rr.shouldIncludeFinalChoices(nil))
+		require.True(t, rr.shouldEchoFinalChoicesInCompletion(nil))
 	})
 
 	t.Run("no final choices", func(t *testing.T) {
 		loop := &eventLoopContext{finalChoices: nil}
-		require.False(t, rr.shouldIncludeFinalChoices(loop))
+		require.False(t, rr.shouldEchoFinalChoicesInCompletion(loop))
 	})
 
 	t.Run("legacy always includes", func(t *testing.T) {
@@ -1393,11 +1393,11 @@ func TestShouldIncludeFinalChoices_Cases(t *testing.T) {
 			finalStateDelta: map[string][]byte{
 				graph.StateKeyLastResponseID: []byte(responseIDJSON),
 			},
-			assistantResponseIDs: map[string]struct{}{
+			emittedAssistantResponseIDs: map[string]struct{}{
 				responseID: {},
 			},
 		}
-		require.True(t, rr.shouldIncludeFinalChoices(loop))
+		require.True(t, rr.shouldEchoFinalChoicesInCompletion(loop))
 	})
 
 	t.Run("new mode missing final id includes", func(t *testing.T) {
@@ -1411,7 +1411,7 @@ func TestShouldIncludeFinalChoices_Cases(t *testing.T) {
 				Message: model.NewAssistantMessage(content),
 			}},
 		}
-		require.True(t, rr.shouldIncludeFinalChoices(loop))
+		require.True(t, rr.shouldEchoFinalChoicesInCompletion(loop))
 	})
 
 	t.Run("new mode duplicate id excluded", func(t *testing.T) {
@@ -1427,11 +1427,11 @@ func TestShouldIncludeFinalChoices_Cases(t *testing.T) {
 			finalStateDelta: map[string][]byte{
 				graph.StateKeyLastResponseID: []byte(responseIDJSON),
 			},
-			assistantResponseIDs: map[string]struct{}{
+			emittedAssistantResponseIDs: map[string]struct{}{
 				responseID: {},
 			},
 		}
-		require.False(t, rr.shouldIncludeFinalChoices(loop))
+		require.False(t, rr.shouldEchoFinalChoicesInCompletion(loop))
 	})
 
 	t.Run("new mode id not seen includes", func(t *testing.T) {
@@ -1448,11 +1448,11 @@ func TestShouldIncludeFinalChoices_Cases(t *testing.T) {
 				graph.StateKeyLastResponseID: []byte(responseIDJSON),
 			},
 		}
-		require.True(t, rr.shouldIncludeFinalChoices(loop))
+		require.True(t, rr.shouldEchoFinalChoicesInCompletion(loop))
 	})
 }
 
-func TestRecordAssistantResponseID_Cases(t *testing.T) {
+func TestRecordEmittedAssistantResponseID_Cases(t *testing.T) {
 	const (
 		appName        = "app"
 		agentName      = "a"
@@ -1484,17 +1484,17 @@ func TestRecordAssistantResponseID_Cases(t *testing.T) {
 			}},
 		}
 		e := event.NewResponseEvent(invocationID, author, rsp)
-		rr.recordAssistantResponseID(nil, e)
+		rr.recordEmittedAssistantResponseID(nil, e)
 	})
 
 	t.Run("nil event", func(t *testing.T) {
 		loop := &eventLoopContext{invocation: enabledInvocation}
-		rr.recordAssistantResponseID(loop, nil)
+		rr.recordEmittedAssistantResponseID(loop, nil)
 	})
 
 	t.Run("nil response", func(t *testing.T) {
 		loop := &eventLoopContext{invocation: enabledInvocation}
-		rr.recordAssistantResponseID(loop, &event.Event{})
+		rr.recordEmittedAssistantResponseID(loop, &event.Event{})
 	})
 
 	t.Run("nil invocation", func(t *testing.T) {
@@ -1509,8 +1509,8 @@ func TestRecordAssistantResponseID_Cases(t *testing.T) {
 			}},
 		}
 		e := event.NewResponseEvent(invocationID, author, rsp)
-		rr.recordAssistantResponseID(loop, e)
-		require.Nil(t, loop.assistantResponseIDs)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Nil(t, loop.emittedAssistantResponseIDs)
 	})
 
 	t.Run("skips when flag disabled", func(t *testing.T) {
@@ -1525,8 +1525,8 @@ func TestRecordAssistantResponseID_Cases(t *testing.T) {
 			}},
 		}
 		e := event.NewResponseEvent(invocationID, author, rsp)
-		rr.recordAssistantResponseID(loop, e)
-		require.Nil(t, loop.assistantResponseIDs)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Nil(t, loop.emittedAssistantResponseIDs)
 	})
 
 	t.Run("skips empty response id", func(t *testing.T) {
@@ -1540,8 +1540,8 @@ func TestRecordAssistantResponseID_Cases(t *testing.T) {
 			}},
 		}
 		e := event.NewResponseEvent(invocationID, author, rsp)
-		rr.recordAssistantResponseID(loop, e)
-		require.Nil(t, loop.assistantResponseIDs)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Nil(t, loop.emittedAssistantResponseIDs)
 	})
 
 	t.Run("records assistant message", func(t *testing.T) {
@@ -1556,15 +1556,15 @@ func TestRecordAssistantResponseID_Cases(t *testing.T) {
 			}},
 		}
 		e := event.NewResponseEvent(invocationID, author, rsp)
-		rr.recordAssistantResponseID(loop, e)
-		_, ok := loop.assistantResponseIDs[stateEventID]
+		rr.recordEmittedAssistantResponseID(loop, e)
+		_, ok := loop.emittedAssistantResponseIDs[stateEventID]
 		require.True(t, ok)
 	})
 
 	t.Run("skips graph completion", func(t *testing.T) {
 		loop := &eventLoopContext{
 			invocation: enabledInvocation,
-			assistantResponseIDs: map[string]struct{}{
+			emittedAssistantResponseIDs: map[string]struct{}{
 				stateEventID: {},
 			},
 		}
@@ -1578,8 +1578,8 @@ func TestRecordAssistantResponseID_Cases(t *testing.T) {
 			}},
 		}
 		e := event.NewResponseEvent(invocationID, author, rsp)
-		rr.recordAssistantResponseID(loop, e)
-		require.Len(t, loop.assistantResponseIDs, 1)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Len(t, loop.emittedAssistantResponseIDs, 1)
 	})
 
 	t.Run("skips partial response", func(t *testing.T) {
@@ -1595,8 +1595,8 @@ func TestRecordAssistantResponseID_Cases(t *testing.T) {
 			}},
 		}
 		e := event.NewResponseEvent(invocationID, author, rsp)
-		rr.recordAssistantResponseID(loop, e)
-		require.Empty(t, loop.assistantResponseIDs)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Empty(t, loop.emittedAssistantResponseIDs)
 	})
 
 	t.Run("skips invalid content", func(t *testing.T) {
@@ -1613,8 +1613,8 @@ func TestRecordAssistantResponseID_Cases(t *testing.T) {
 			}},
 		}
 		e := event.NewResponseEvent(invocationID, author, rsp)
-		rr.recordAssistantResponseID(loop, e)
-		require.Empty(t, loop.assistantResponseIDs)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Empty(t, loop.emittedAssistantResponseIDs)
 	})
 
 	t.Run("skips non assistant role", func(t *testing.T) {
@@ -1634,8 +1634,8 @@ func TestRecordAssistantResponseID_Cases(t *testing.T) {
 			}},
 		}
 		e := event.NewResponseEvent(invocationID, author, rsp)
-		rr.recordAssistantResponseID(loop, e)
-		require.Empty(t, loop.assistantResponseIDs)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Empty(t, loop.emittedAssistantResponseIDs)
 	})
 
 	t.Run("skips empty message content when delta used", func(t *testing.T) {
@@ -1657,8 +1657,8 @@ func TestRecordAssistantResponseID_Cases(t *testing.T) {
 			}},
 		}
 		e := event.NewResponseEvent(invocationID, author, rsp)
-		rr.recordAssistantResponseID(loop, e)
-		require.Empty(t, loop.assistantResponseIDs)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Empty(t, loop.emittedAssistantResponseIDs)
 	})
 }
 

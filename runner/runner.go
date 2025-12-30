@@ -342,14 +342,19 @@ func (r *runner) getOrCreateSession(
 
 // eventLoopContext bundles all channels and state required by the event loop.
 type eventLoopContext struct {
-	sess                 *session.Session
-	invocation           *agent.Invocation
-	agentEventCh         <-chan *event.Event
-	flushChan            chan *flush.FlushRequest
-	processedEventCh     chan *event.Event
-	finalStateDelta      map[string][]byte
-	finalChoices         []model.Choice
-	assistantResponseIDs map[string]struct{}
+	sess             *session.Session
+	invocation       *agent.Invocation
+	agentEventCh     <-chan *event.Event
+	flushChan        chan *flush.FlushRequest
+	processedEventCh chan *event.Event
+	finalStateDelta  map[string][]byte
+	finalChoices     []model.Choice
+	// emittedAssistantResponseIDs tracks response IDs that already produced a
+	// non-partial assistant message event during this run.
+	//
+	// It is used to avoid echoing the same final assistant message again in the
+	// runner-completion event when graph final model responses are emitted.
+	emittedAssistantResponseIDs map[string]struct{}
 }
 
 // processAgentEvents consumes agent events, persists to session, and emits.
@@ -427,7 +432,7 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 
 	agentEvent = r.applyEventPlugins(ctx, loop.invocation, agentEvent)
 
-	r.recordAssistantResponseID(loop, agentEvent)
+	r.recordEmittedAssistantResponseID(loop, agentEvent)
 
 	// Append qualifying events to session and trigger summarization.
 	r.handleEventPersistence(ctx, loop.sess, agentEvent)
@@ -495,7 +500,7 @@ func copyEventInvocationFields(dst *event.Event, src *event.Event) {
 	}
 }
 
-func (r *runner) recordAssistantResponseID(
+func (r *runner) recordEmittedAssistantResponseID(
 	loop *eventLoopContext,
 	e *event.Event,
 ) {
@@ -525,10 +530,10 @@ func (r *runner) recordAssistantResponseID(
 		if msg.Content == "" {
 			continue
 		}
-		if loop.assistantResponseIDs == nil {
-			loop.assistantResponseIDs = make(map[string]struct{})
+		if loop.emittedAssistantResponseIDs == nil {
+			loop.emittedAssistantResponseIDs = make(map[string]struct{})
 		}
-		loop.assistantResponseIDs[e.Response.ID] = struct{}{}
+		loop.emittedAssistantResponseIDs[e.Response.ID] = struct{}{}
 		return
 	}
 }
@@ -681,12 +686,12 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 
 	// Propagate graph-level completion data if available.
 	if len(loop.finalStateDelta) > 0 {
-		includeChoices := r.shouldIncludeFinalChoices(loop)
+		echoFinalChoices := r.shouldEchoFinalChoicesInCompletion(loop)
 		r.propagateGraphCompletion(
 			runnerCompletionEvent,
 			loop.finalStateDelta,
 			loop.finalChoices,
-			includeChoices,
+			echoFinalChoices,
 		)
 	}
 
@@ -705,7 +710,7 @@ func (r *runner) propagateGraphCompletion(
 	runnerCompletionEvent *event.Event,
 	finalStateDelta map[string][]byte,
 	finalChoices []model.Choice,
-	includeChoices bool,
+	echoFinalChoices bool,
 ) {
 	// Initialize state delta map if needed.
 	if runnerCompletionEvent.StateDelta == nil {
@@ -725,7 +730,7 @@ func (r *runner) propagateGraphCompletion(
 
 	// Optionally echo the final text as a non-streaming assistant message
 	// if graph provided it in its completion.
-	if includeChoices &&
+	if echoFinalChoices &&
 		runnerCompletionEvent.Response != nil &&
 		len(runnerCompletionEvent.Response.Choices) == 0 &&
 		len(finalChoices) > 0 {
@@ -736,7 +741,20 @@ func (r *runner) propagateGraphCompletion(
 	}
 }
 
-func (r *runner) shouldIncludeFinalChoices(loop *eventLoopContext) bool {
+// shouldEchoFinalChoicesInCompletion decides whether Runner should copy the
+// graph's final assistant message into the runner-completion event.
+//
+// Default behavior: Graph Large Language Model (LLM) nodes do not emit the
+// final (Done=true) assistant response event. In that mode, Runner must echo
+// the final choices so clients can reliably read the final answer.
+//
+// When GraphEmitFinalModelResponses is enabled, graph LLM nodes emit final
+// (Done=true) assistant response events. In that mode, Runner will skip
+// echoing final choices if it can match the graph's last response identifier
+// (ID) to a response ID that was already emitted, avoiding duplicates.
+func (r *runner) shouldEchoFinalChoicesInCompletion(
+	loop *eventLoopContext,
+) bool {
 	if loop == nil {
 		return true
 	}
@@ -746,18 +764,18 @@ func (r *runner) shouldIncludeFinalChoices(loop *eventLoopContext) bool {
 	if loop.invocation == nil {
 		return true
 	}
+
 	if !loop.invocation.RunOptions.GraphEmitFinalModelResponses {
 		return true
 	}
+
 	finalResponseID := finalResponseIDFromStateDelta(loop.finalStateDelta)
 	if finalResponseID == "" {
 		return true
 	}
-	if len(loop.assistantResponseIDs) == 0 {
-		return true
-	}
-	_, ok := loop.assistantResponseIDs[finalResponseID]
-	return !ok
+
+	_, alreadyEmitted := loop.emittedAssistantResponseIDs[finalResponseID]
+	return !alreadyEmitted
 }
 
 func finalResponseIDFromStateDelta(finalStateDelta map[string][]byte) string {

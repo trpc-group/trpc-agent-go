@@ -473,11 +473,14 @@ type RunOptions struct {
 	// Large Language Model (LLM) nodes.
 	//
 	// When false (default), graph LLM nodes only emit streaming chunks
-	// (Done=false), matching the pre-#901 behavior.
+	// (Done=false).
 	//
-	// When true, graph LLM nodes emit the final model response too. In that
-	// mode, callers should be prepared to receive assistant messages from
-	// intermediate nodes.
+	// When true, graph LLM nodes also emit the final model response
+	// (Done=true). In that mode, callers should be prepared to receive
+	// assistant messages from intermediate nodes.
+	//
+	// When enabled, Runner may omit echoing the final assistant message
+	// in its runner-completion event to avoid duplicates.
 	GraphEmitFinalModelResponses bool
 
 	// RequestID is the request id of the request.
