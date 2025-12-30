@@ -211,8 +211,9 @@ func TestService_GetSession_Detailed(t *testing.T) {
 	}
 
 	sess, err := s.GetSession(ctx, key)
-	if assert.Error(t, err) {
-		assert.Nil(t, sess)
+	assert.Error(t, err)
+	assert.Nil(t, sess)
+	if err != nil {
 		assert.Contains(t, err.Error(), "clickhouse session service get session state failed")
 	}
 }

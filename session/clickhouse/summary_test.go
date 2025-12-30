@@ -107,7 +107,7 @@ func TestService_AsyncSummary(t *testing.T) {
 	case <-execCalled:
 		// Success
 	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for summary execution")
+		assert.FailNow(t, "timeout waiting for summary execution")
 	}
 }
 
