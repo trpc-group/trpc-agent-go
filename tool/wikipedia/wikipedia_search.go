@@ -80,29 +80,29 @@ func WithUserAgent(userAgent string) Option {
 	}
 }
 
-// wikipediaToolSet implements the ToolSet interface for Wikipedia operations.
-type wikipediaToolSet struct {
+// WikipediaToolSet implements the ToolSet interface for Wikipedia operations.
+type WikipediaToolSet struct {
 	tools []tool.Tool
 }
 
 // Tools implements the ToolSet interface.
-func (w *wikipediaToolSet) Tools(_ context.Context) []tool.Tool {
+func (w *WikipediaToolSet) Tools(_ context.Context) []tool.Tool {
 	return w.tools
 }
 
 // Name implements the ToolSet interface.
-func (w *wikipediaToolSet) Name() string {
+func (w *WikipediaToolSet) Name() string {
 	return defaultName
 }
 
 // Close implements the ToolSet interface.
-func (w *wikipediaToolSet) Close() error {
+func (w *WikipediaToolSet) Close() error {
 	// No resources to clean up for Wikipedia tools.
 	return nil
 }
 
 // NewToolSet creates a new Wikipedia tool set with the given options.
-func NewToolSet(opts ...Option) (tool.ToolSet, error) {
+func NewToolSet(opts ...Option) (*WikipediaToolSet, error) {
 	// Apply default configuration
 	cfg := &config{
 		baseURL:   defaultBaseURL,
@@ -113,17 +113,15 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 		language:   defaultLanguage,
 		maxResults: maxResults,
 	}
-
 	// Apply user-provided options
 	for _, opt := range opts {
 		opt(cfg)
 	}
-
 	// Create the client
 	wikipediaClient := client.New(cfg.baseURL, cfg.userAgent, cfg.httpClient)
 	tools := []tool.Tool{createWikipediaSearchTool(wikipediaClient, cfg)}
 
-	return &wikipediaToolSet{
+	return &WikipediaToolSet{
 		tools: tools,
 	}, nil
 }

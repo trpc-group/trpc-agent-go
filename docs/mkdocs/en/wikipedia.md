@@ -106,9 +106,7 @@ The tool returns a comprehensive response with the following structure:
       "word_count": 12543,
       "size_bytes": 156789,
       "last_modified": "2024-11-15T10:30:00Z",
-      "namespace": 0,
-      "categories": [],
-      "relevance_score": 0.95
+      "namespace": 0
     }
   ],
   "total_hits": 1247,
@@ -139,8 +137,6 @@ The tool returns a comprehensive response with the following structure:
 | `size_bytes` | Article size in bytes |
 | `last_modified` | Last modification timestamp |
 | `namespace` | Wikipedia namespace (0=main articles) |
-| `categories` | Article categories (when `include_all` is true) |
-| `relevance_score` | Search relevance score (if available) |
 
 ## Use Cases
 

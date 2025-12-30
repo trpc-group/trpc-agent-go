@@ -106,9 +106,7 @@ Wiki 搜索工具接受以下 JSON 参数:
       "word_count": 12543,
       "size_bytes": 156789,
       "last_modified": "2024-11-15T10:30:00Z",
-      "namespace": 0,
-      "categories": [],
-      "relevance_score": 0.95
+      "namespace": 0
     }
   ],
   "total_hits": 1247,
@@ -139,8 +137,6 @@ Wiki 搜索工具接受以下 JSON 参数:
 | `size_bytes` | 文章大小(字节) |
 | `last_modified` | 最后修改时间戳 |
 | `namespace` | Wikipedia 命名空间(0=主文章) |
-| `categories` | 文章分类(当 `include_all` 为 true 时) |
-| `relevance_score` | 搜索相关性分数(如果可用) |
 
 ## 使用场景
 
