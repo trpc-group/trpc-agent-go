@@ -572,6 +572,20 @@ kb := knowledge.New(
 )
 ```
 
+**Supported embedding models**:
+
+- OpenAI embedding models (text-embedding-3-small, etc.)
+- Other OpenAI API compatible embedding services
+- Gemini embedding model (via `knowledge/embedder/gemini`)
+- Ollama embedding model (via `knowledge/embedder/ollama`)
+- huggingface text_embedding_interface model (via `knowledge/embedder/huggingface`）
+
+> **Note**:
+>
+> - Retriever and Reranker are currently implemented internally by Knowledge, users don't need to configure them separately. Knowledge automatically handles document retrieval and result ranking.
+> - The `OPENAI_EMBEDDING_MODEL` environment variable needs to be manually read in code, the framework won't read it automatically. Refer to the `getEnvOrDefault("OPENAI_EMBEDDING_MODEL", "")` implementation in the example code.
+
+
 ### Reranker
 
 > 📁 **Example Code**: [examples/knowledge/reranker](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/reranker)
@@ -638,9 +652,7 @@ if err != nil {
 
 For detailed deployment methods and examples, see the `examples/knowledge/reranker/infinity/` directory.
 
-```
-
-#### Configure to Knowledge
+#### Configure Reranker to Knowledge
 
 ```go
 kb := knowledge.New(
@@ -649,18 +661,6 @@ kb := knowledge.New(
 )
 ```
 
-**Supported embedding models**:
-
-- OpenAI embedding models (text-embedding-3-small, etc.)
-- Other OpenAI API compatible embedding services
-- Gemini embedding model (via `knowledge/embedder/gemini`)
-- Ollama embedding model (via `knowledge/embedder/ollama`)
-- huggingface text_embedding_interface model (via `knowledge/embedder/huggingface`）
-
-> **Note**:
->
-> - Retriever and Reranker are currently implemented internally by Knowledge, users don't need to configure them separately. Knowledge automatically handles document retrieval and result ranking.
-> - The `OPENAI_EMBEDDING_MODEL` environment variable needs to be manually read in code, the framework won't read it automatically. Refer to the `getEnvOrDefault("OPENAI_EMBEDDING_MODEL", "")` implementation in the example code.
 
 ### Document Source Configuration
 

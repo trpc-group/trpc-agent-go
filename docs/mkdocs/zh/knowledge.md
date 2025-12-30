@@ -573,6 +573,21 @@ kb := knowledge.New(
 )
 ```
 
+
+**支持的 embedding 模型**：
+
+- OpenAI embedding 模型（text-embedding-3-small 等）
+- 其他兼容 OpenAI API 的 embedding 服务
+- Gemini embedding 模型（通过 `knowledge/embedder/gemini`）
+- Ollama embedding 模型 (通过 `knowledge/embedder/ollama`）
+- hugging_face text_embedding_interface 模型 (通过 `knowledge/embedder/hugging_face`）
+
+> **注意**:
+>
+> - Retriever 和 Reranker 目前由 Knowledge 内部实现，用户无需单独配置。Knowledge 会自动处理文档检索和结果排序。
+> - `OPENAI_EMBEDDING_MODEL` 环境变量需要在代码中手动读取，框架不会自动读取。参考示例代码中的 `getEnvOrDefault("OPENAI_EMBEDDING_MODEL", "")` 实现。
+
+
 ### Reranker
 
 > 📁 **示例代码**: [examples/knowledge/reranker](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/reranker)
@@ -639,9 +654,8 @@ if err != nil {
 
 详细的服务部署方法和示例请参考 `examples/knowledge/reranker/infinity/` 目录。
 
-```
 
-#### 配置到 Knowledge
+#### Reranker 配置到 Knowledge
 
 ```go
 kb := knowledge.New(
@@ -649,19 +663,6 @@ kb := knowledge.New(
     // ... 其他配置
 )
 ```
-
-**支持的 embedding 模型**：
-
-- OpenAI embedding 模型（text-embedding-3-small 等）
-- 其他兼容 OpenAI API 的 embedding 服务
-- Gemini embedding 模型（通过 `knowledge/embedder/gemini`）
-- Ollama embedding 模型 (通过 `knowledge/embedder/ollama`）
-- hugging_face text_embedding_interface 模型 (通过 `knowledge/embedder/hugging_face`）
-
-> **注意**:
->
-> - Retriever 和 Reranker 目前由 Knowledge 内部实现，用户无需单独配置。Knowledge 会自动处理文档检索和结果排序。
-> - `OPENAI_EMBEDDING_MODEL` 环境变量需要在代码中手动读取，框架不会自动读取。参考示例代码中的 `getEnvOrDefault("OPENAI_EMBEDDING_MODEL", "")` 实现。
 
 ### 文档源配置
 
