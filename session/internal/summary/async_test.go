@@ -439,17 +439,14 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 
 	t.Run("enqueue with filter key", func(t *testing.T) {
 		summarizer := &mockSummarizer{shouldSummarize: true, summaryText: "test"}
-		var mu sync.Mutex
-		var receivedFilterKey string
+		filterKeyCh := make(chan string, 10)
 		config := AsyncSummaryConfig{
 			Summarizer:        summarizer,
 			AsyncSummaryNum:   2,
 			SummaryQueueSize:  10,
 			SummaryJobTimeout: time.Second,
 			CreateSummaryFunc: func(_ context.Context, _ *session.Session, fk string, _ bool) error {
-				mu.Lock()
-				receivedFilterKey = fk
-				mu.Unlock()
+				filterKeyCh <- fk
 				return nil
 			},
 		}
@@ -467,13 +464,22 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 		err := worker.EnqueueJob(context.Background(), sess, "branch1", false)
 		require.NoError(t, err)
 
-		// Wait for async processing to complete
-		time.Sleep(200 * time.Millisecond)
-		// Should create both branch1 and full-session summary (cascade)
-		// receivedFilterKey will be set to either "branch1" or "" depending on processing order
-		mu.Lock()
-		assert.NotEmpty(t, receivedFilterKey, "CreateSummaryFunc should have been called with a filterKey")
-		mu.Unlock()
+		// Should create both branch1 and full-session summary (cascade).
+		seenBranch := false
+		seenFull := false
+		assert.Eventually(t, func() bool {
+			select {
+			case fk := <-filterKeyCh:
+				switch fk {
+				case "branch1":
+					seenBranch = true
+				case "":
+					seenFull = true
+				}
+			default:
+			}
+			return seenBranch && seenFull
+		}, 2*time.Second, 10*time.Millisecond, "expected CreateSummaryFunc to be called for both branch and full-session summaries")
 	})
 }
 
