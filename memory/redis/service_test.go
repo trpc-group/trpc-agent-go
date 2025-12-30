@@ -20,46 +20,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
-
-func TestGenerateMemoryID(t *testing.T) {
-	tests := []struct {
-		name   string
-		memory *memory.Memory
-	}{
-		{
-			name: "memory with content only",
-			memory: &memory.Memory{
-				Memory: "test content",
-			},
-		},
-		{
-			name: "memory with content and topics",
-			memory: &memory.Memory{
-				Memory: "test content",
-				Topics: []string{"topic1", "topic2"},
-			},
-		},
-		{
-			name: "memory with empty topics",
-			memory: &memory.Memory{
-				Memory: "test content",
-				Topics: []string{},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			id := generateMemoryID(tt.memory)
-			assert.NotEmpty(t, id, "Generated memory ID should not be empty")
-			// The ID is a hex encoding, so it should be even length.
-			assert.Equal(t, 0, len(id)%2, "Generated memory ID should have even length")
-		})
-	}
-}
 
 func TestGetUserMemKey(t *testing.T) {
 	tests := []struct {
@@ -935,4 +901,141 @@ func TestUserScenario(t *testing.T) {
 	// Test clear.
 	err = memoryService.ClearMemories(ctx, userKey)
 	require.NoError(t, err)
+}
+
+// mockExtractor is a mock implementation of extractor.MemoryExtractor.
+type mockExtractor struct {
+	extractCalled bool
+}
+
+func (m *mockExtractor) Extract(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*extractor.Operation, error) {
+	m.extractCalled = true
+	return nil, nil
+}
+
+func (m *mockExtractor) SetPrompt(prompt string) {}
+
+func (m *mockExtractor) SetModel(mdl model.Model) {}
+
+func (m *mockExtractor) Metadata() map[string]any {
+	return map[string]any{}
+}
+
+func TestWithExtractor(t *testing.T) {
+	ext := &mockExtractor{}
+	opts := defaultOptions.clone()
+	WithExtractor(ext)(&opts)
+	assert.Equal(t, ext, opts.extractor)
+}
+
+func TestWithAsyncMemoryNum(t *testing.T) {
+	t.Run("valid value", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithAsyncMemoryNum(5)(&opts)
+		assert.Equal(t, 5, opts.asyncMemoryNum)
+	})
+
+	t.Run("invalid value uses default", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithAsyncMemoryNum(0)(&opts)
+		assert.Equal(t, imemory.DefaultAsyncMemoryNum, opts.asyncMemoryNum)
+	})
+}
+
+func TestWithMemoryQueueSize(t *testing.T) {
+	t.Run("valid value", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithMemoryQueueSize(200)(&opts)
+		assert.Equal(t, 200, opts.memoryQueueSize)
+	})
+
+	t.Run("invalid value uses default", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithMemoryQueueSize(0)(&opts)
+		assert.Equal(t, imemory.DefaultMemoryQueueSize, opts.memoryQueueSize)
+	})
+}
+
+func TestWithMemoryJobTimeout(t *testing.T) {
+	opts := defaultOptions.clone()
+	WithMemoryJobTimeout(time.Minute)(&opts)
+	assert.Equal(t, time.Minute, opts.memoryJobTimeout)
+}
+
+func TestWithMaxExistingMemories(t *testing.T) {
+	t.Run("valid value", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithMaxExistingMemories(100)(&opts)
+		assert.Equal(t, 100, opts.maxExistingMemories)
+	})
+
+	t.Run("invalid value uses default", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithMaxExistingMemories(0)(&opts)
+		assert.Equal(t, imemory.DefaultMaxExistingMemories, opts.maxExistingMemories)
+	})
+}
+
+func TestEnqueueAutoMemoryJob_NoWorker(t *testing.T) {
+	mr := miniredis.RunT(t)
+	defer mr.Close()
+
+	memoryService, err := NewService(
+		WithRedisClientURL("redis://" + mr.Addr()),
+	)
+	require.NoError(t, err)
+	defer memoryService.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	// Should return nil when no worker is configured.
+	err = memoryService.EnqueueAutoMemoryJob(ctx, userKey, []model.Message{
+		model.NewUserMessage("hello"),
+	})
+	assert.NoError(t, err)
+}
+
+func TestClose(t *testing.T) {
+	mr := miniredis.RunT(t)
+	defer mr.Close()
+
+	memoryService, err := NewService(
+		WithRedisClientURL("redis://" + mr.Addr()),
+	)
+	require.NoError(t, err)
+
+	err = memoryService.Close()
+	assert.NoError(t, err)
+}
+
+func TestTools_AutoMemoryMode(t *testing.T) {
+	mr := miniredis.RunT(t)
+	defer mr.Close()
+
+	ext := &mockExtractor{}
+	memoryService, err := NewService(
+		WithRedisClientURL("redis://"+mr.Addr()),
+		WithExtractor(ext),
+	)
+	require.NoError(t, err)
+	defer memoryService.Close()
+
+	tools := memoryService.Tools()
+
+	// In auto memory mode, only search and clear tools should be returned.
+	assert.Len(t, tools, 2)
+	toolNames := make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	assert.True(t, toolNames[memory.SearchToolName])
+	assert.True(t, toolNames[memory.ClearToolName])
 }

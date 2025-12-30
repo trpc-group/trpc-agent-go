@@ -22,6 +22,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
@@ -338,87 +341,6 @@ func TestValidateTableName(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestGenerateMemoryID tests the memory ID generation logic.
-// It verifies that IDs are deterministic for identical content and unique for different content.
-func TestGenerateMemoryID(t *testing.T) {
-	now := time.Now()
-
-	t.Run("same content generates same ID", func(t *testing.T) {
-		mem1 := &memory.Memory{
-			Memory:      "test memory",
-			Topics:      []string{"topic1", "topic2"},
-			LastUpdated: &now,
-		}
-		mem2 := &memory.Memory{
-			Memory:      "test memory",
-			Topics:      []string{"topic1", "topic2"},
-			LastUpdated: &now,
-		}
-
-		id1 := generateMemoryID(mem1)
-		id2 := generateMemoryID(mem2)
-		assert.Equal(t, id1, id2)
-	})
-
-	t.Run("different content generates different ID", func(t *testing.T) {
-		mem1 := &memory.Memory{
-			Memory:      "test memory",
-			Topics:      []string{"topic1"},
-			LastUpdated: &now,
-		}
-		mem2 := &memory.Memory{
-			Memory:      "different memory",
-			Topics:      []string{"topic1"},
-			LastUpdated: &now,
-		}
-
-		id1 := generateMemoryID(mem1)
-		id2 := generateMemoryID(mem2)
-		assert.NotEqual(t, id1, id2)
-	})
-
-	t.Run("without topics", func(t *testing.T) {
-		mem := &memory.Memory{
-			Memory:      "test memory",
-			Topics:      nil,
-			LastUpdated: &now,
-		}
-
-		id := generateMemoryID(mem)
-		assert.NotEmpty(t, id)
-		assert.Len(t, id, 64)
-	})
-
-	t.Run("empty topics", func(t *testing.T) {
-		mem := &memory.Memory{
-			Memory:      "test memory",
-			Topics:      []string{},
-			LastUpdated: &now,
-		}
-
-		id := generateMemoryID(mem)
-		assert.NotEmpty(t, id)
-		assert.Len(t, id, 64)
-	})
-
-	t.Run("different topics generate different IDs", func(t *testing.T) {
-		mem1 := &memory.Memory{
-			Memory:      "test memory",
-			Topics:      []string{"topic1"},
-			LastUpdated: &now,
-		}
-		mem2 := &memory.Memory{
-			Memory:      "test memory",
-			Topics:      []string{"topic2"},
-			LastUpdated: &now,
-		}
-
-		id1 := generateMemoryID(mem1)
-		id2 := generateMemoryID(mem2)
-		assert.NotEqual(t, id1, id2)
-	})
 }
 
 // TestAddMemory_InvalidUserKey tests that AddMemory rejects invalid user keys.
@@ -1225,42 +1147,47 @@ func TestSearchMemories_UnmarshalError(t *testing.T) {
 }
 
 // TestService_Tools tests the Tools method.
-// It verifies that tools are correctly created, cached, and filtered based on enabled status.
+// It verifies that tools are correctly pre-computed and returned consistently.
 func TestService_Tools(t *testing.T) {
 	db, _ := setupMockDB(t)
 	defer db.Close()
 
+	mockTool1 := &mockTool{name: "tool1"}
+	mockTool2 := &mockTool{name: "tool2"}
+
 	s := &Service{
 		opts: ServiceOpts{
-			toolCreators: make(map[string]memory.ToolCreator),
-			enabledTools: make(map[string]bool),
+			toolCreators: map[string]memory.ToolCreator{
+				"tool1": func() tool.Tool { return mockTool1 },
+				"tool2": func() tool.Tool { return mockTool2 },
+			},
+			enabledTools: map[string]bool{
+				"tool1": true,
+				"tool2": true,
+			},
 		},
 		db:          storage.WrapSQLDB(db),
 		tableName:   "memories",
 		cachedTools: make(map[string]tool.Tool),
 	}
-
-	mockTool1 := &mockTool{name: "tool1"}
-	mockTool2 := &mockTool{name: "tool2"}
-
-	s.opts.toolCreators["tool1"] = func() tool.Tool { return mockTool1 }
-	s.opts.toolCreators["tool2"] = func() tool.Tool { return mockTool2 }
-	s.opts.enabledTools["tool1"] = true
-	s.opts.enabledTools["tool2"] = true
+	// Pre-compute tools list as NewService would do.
+	s.precomputedTools = imemory.BuildToolsList(
+		s.opts.extractor,
+		s.opts.toolCreators,
+		s.opts.enabledTools,
+		s.cachedTools,
+	)
 
 	tools := s.Tools()
 	assert.Len(t, tools, 2)
 
+	// Verify tools are cached.
 	assert.Len(t, s.cachedTools, 2)
 
+	// Verify Tools() returns the same pre-computed list.
 	tools2 := s.Tools()
 	assert.Len(t, tools2, 2)
 	assert.Equal(t, tools[0], tools2[0])
-
-	s.opts.enabledTools["tool2"] = false
-	s.cachedTools = make(map[string]tool.Tool)
-	tools3 := s.Tools()
-	assert.Len(t, tools3, 1)
 }
 
 // TestService_Close tests the Close method.
@@ -1504,58 +1431,138 @@ func TestSearchMemories_SoftDeleteFalse(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGenerateMemoryID_EmptyTopics tests generateMemoryID with empty topics.
-func TestGenerateMemoryID_EmptyTopics(t *testing.T) {
-	mem := &memory.Memory{
-		Memory: "test memory",
-		Topics: nil,
-	}
-	id1 := generateMemoryID(mem)
-	id2 := generateMemoryID(mem)
-	// Same input should produce same ID
-	assert.Equal(t, id1, id2)
-	assert.NotEmpty(t, id1)
+// mockExtractor is a mock implementation of extractor.MemoryExtractor.
+type mockExtractor struct {
+	extractCalled bool
 }
 
-// TestGenerateMemoryID_WithTopics tests generateMemoryID with topics.
-func TestGenerateMemoryID_WithTopics(t *testing.T) {
-	mem := &memory.Memory{
-		Memory: "test memory",
-		Topics: []string{"topic1", "topic2"},
-	}
-	id1 := generateMemoryID(mem)
-	id2 := generateMemoryID(mem)
-	// Same input should produce same ID
-	assert.Equal(t, id1, id2)
-	assert.NotEmpty(t, id1)
+func (m *mockExtractor) Extract(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*extractor.Operation, error) {
+	m.extractCalled = true
+	return nil, nil
 }
 
-// TestGenerateMemoryID_DifferentContent tests that different content produces different IDs.
-func TestGenerateMemoryID_DifferentContent(t *testing.T) {
-	mem1 := &memory.Memory{
-		Memory: "test memory 1",
-		Topics: []string{"topic1"},
-	}
-	mem2 := &memory.Memory{
-		Memory: "test memory 2",
-		Topics: []string{"topic1"},
-	}
-	id1 := generateMemoryID(mem1)
-	id2 := generateMemoryID(mem2)
-	assert.NotEqual(t, id1, id2)
+func (m *mockExtractor) SetPrompt(prompt string) {}
+
+func (m *mockExtractor) SetModel(mdl model.Model) {}
+
+func (m *mockExtractor) Metadata() map[string]any {
+	return map[string]any{}
 }
 
-// TestGenerateMemoryID_DifferentTopics tests that different topics produce different IDs.
-func TestGenerateMemoryID_DifferentTopics(t *testing.T) {
-	mem1 := &memory.Memory{
-		Memory: "test memory",
-		Topics: []string{"topic1"},
+func TestWithExtractor(t *testing.T) {
+	ext := &mockExtractor{}
+	opts := defaultOptions.clone()
+	WithExtractor(ext)(&opts)
+	assert.Equal(t, ext, opts.extractor)
+}
+
+func TestWithAsyncMemoryNum(t *testing.T) {
+	t.Run("valid value", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithAsyncMemoryNum(5)(&opts)
+		assert.Equal(t, 5, opts.asyncMemoryNum)
+	})
+
+	t.Run("invalid value uses default", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithAsyncMemoryNum(0)(&opts)
+		assert.Equal(t, imemory.DefaultAsyncMemoryNum, opts.asyncMemoryNum)
+	})
+}
+
+func TestWithMemoryQueueSize(t *testing.T) {
+	t.Run("valid value", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithMemoryQueueSize(200)(&opts)
+		assert.Equal(t, 200, opts.memoryQueueSize)
+	})
+
+	t.Run("invalid value uses default", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithMemoryQueueSize(0)(&opts)
+		assert.Equal(t, imemory.DefaultMemoryQueueSize, opts.memoryQueueSize)
+	})
+}
+
+func TestWithMemoryJobTimeout(t *testing.T) {
+	opts := defaultOptions.clone()
+	WithMemoryJobTimeout(time.Minute)(&opts)
+	assert.Equal(t, time.Minute, opts.memoryJobTimeout)
+}
+
+func TestWithMaxExistingMemories(t *testing.T) {
+	t.Run("valid value", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithMaxExistingMemories(100)(&opts)
+		assert.Equal(t, 100, opts.maxExistingMemories)
+	})
+
+	t.Run("invalid value uses default", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithMaxExistingMemories(0)(&opts)
+		assert.Equal(t, imemory.DefaultMaxExistingMemories, opts.maxExistingMemories)
+	})
+}
+
+func TestEnqueueAutoMemoryJob_NoWorker(t *testing.T) {
+	db, _ := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
 	}
-	mem2 := &memory.Memory{
-		Memory: "test memory",
-		Topics: []string{"topic2"},
+
+	// Should return nil when no worker is configured.
+	err := s.EnqueueAutoMemoryJob(ctx, userKey, []model.Message{
+		model.NewUserMessage("hello"),
+	})
+	assert.NoError(t, err)
+}
+
+func TestClose_NoWorker(t *testing.T) {
+	db, mock := setupMockDB(t)
+	s := setupMockService(t, db)
+
+	// Expect db.Close() to be called.
+	mock.ExpectClose()
+
+	err := s.Close()
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTools_AutoMemoryMode(t *testing.T) {
+	db, _ := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	// Enable auto memory mode.
+	s.opts.extractor = &mockExtractor{}
+	s.opts.toolCreators = imemory.AllToolCreators
+	s.opts.enabledTools = imemory.DefaultEnabledTools
+	// Re-compute tools list after changing opts to simulate auto memory mode.
+	s.precomputedTools = imemory.BuildToolsList(
+		s.opts.extractor,
+		s.opts.toolCreators,
+		s.opts.enabledTools,
+		s.cachedTools,
+	)
+
+	tools := s.Tools()
+
+	// In auto memory mode, only search and clear tools should be returned.
+	assert.Len(t, tools, 2)
+	toolNames := make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
 	}
-	id1 := generateMemoryID(mem1)
-	id2 := generateMemoryID(mem2)
-	assert.NotEqual(t, id1, id2)
+	assert.True(t, toolNames[memory.SearchToolName])
+	assert.True(t, toolNames[memory.ClearToolName])
 }
