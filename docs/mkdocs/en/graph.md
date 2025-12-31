@@ -158,6 +158,8 @@ The Graph package provides some built-in state keys, mainly for internal system 
 - `StateKeyUserInput`: User input (one-shot, cleared after consumption, persisted by LLM nodes)
 - `StateKeyOneShotMessages`: One-shot messages (complete override for current round, cleared after consumption)
 - `StateKeyLastResponse`: Last response (used to set final output, Executor reads this value as result)
+- `StateKeyLastResponseID`: Last response identifier (ID) (set by LLM nodes; may
+  be empty when `StateKeyLastResponse` is produced by a non-model node)
 - `StateKeyMessages`: Message history (durable, supports append + MessageOp patch operations)
 - `StateKeyNodeResponses`: Per-node responses map. Key is node ID, value is the
   node's final textual response. Use `StateKeyLastResponse` for the final
@@ -208,6 +210,9 @@ Nodes communicate exclusively through the shared state. Each node returns a stat
   - `one_shot_messages`: Full message override for the next LLM call. Cleared after consumption.
   - `messages`: Durable conversation history (LLM/Tools append here). Supports MessageOp patches.
   - `last_response`: The last textual assistant response.
+  - `last_response_id`: The identifier (ID) of the last model response that
+    produced `last_response` (may be empty when `last_response` is set by a
+    non-model node).
   - `node_responses`: Map[nodeID]any — per‑node final textual response. Use `last_response` for the most recent.
 
 - Function node
@@ -221,6 +226,7 @@ Nodes communicate exclusively through the shared state. Each node returns a stat
   - Output:
     - Appends assistant message to `messages`
     - Sets `last_response`
+    - Sets `last_response_id`
     - Sets `node_responses[<llm_node_id>]`
 
 - Tools node
@@ -259,6 +265,7 @@ See examples:
   - `one_shot_messages` → `graph.StateKeyOneShotMessages`
   - `messages` → `graph.StateKeyMessages`
   - `last_response` → `graph.StateKeyLastResponse`
+  - `last_response_id` → `graph.StateKeyLastResponseID`
   - `node_responses` → `graph.StateKeyNodeResponses`
 
 - Other useful keys
@@ -600,6 +607,28 @@ Important notes:
 - When Graph runs sub-agents, it preserves the parent run's `RequestID`
   (request identifier) so the current user input is included exactly once,
   even when it already exists in session history.
+
+#### Event emission (streaming vs final)
+
+When the Large Language Model (LLM) is called with streaming enabled, a single
+model call can produce multiple events:
+
+- Streaming chunks: incremental text in `choice.Delta.Content`
+- A final message: full text in `choice.Message.Content`
+
+In graph workflows there are also two different "done" concepts:
+
+- Model done: a single model call finishes (typically `Response.Done=true`)
+- Workflow done: the whole graph run ends (use `event.IsRunnerCompletion()`)
+
+By default, graph LLM nodes only emit the streaming chunks. They do not emit
+the final `Done=true` assistant message event. This keeps intermediate node
+outputs from being treated as normal assistant replies (for example, being
+persisted into the Session by Runner).
+
+If you want graph LLM nodes to also emit the final `Done=true` assistant
+message events, enable `agent.WithGraphEmitFinalModelResponses(true)` when
+running via Runner. See `runner.md` for details and examples.
 
 #### Three input paradigms
 

@@ -94,7 +94,10 @@ type Response struct {
     // 时间戳
     Timestamp time.Time `json:"timestamp"`
     
-    // 表示整个对话是否完成
+    // 表示当前响应流是否结束。
+    //
+    // 注意：Done=true 不一定代表整个流程已结束。
+    // 对于图式流程，请以 Runner 完成事件作为结束信号。
     Done bool `json:"done"`
     
     // 是否为部分响应

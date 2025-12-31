@@ -158,6 +158,8 @@ Graph 包提供了一些内置状态键，主要用于系统内部通信：
 - `StateKeyUserInput`：用户输入（一次性，消费后清空，由 LLM 节点自动持久化）
 - `StateKeyOneShotMessages`：一次性消息（完整覆盖本轮输入，消费后清空）
 - `StateKeyLastResponse`：最后响应（用于设置最终输出，Executor 会读取此值作为结果）
+- `StateKeyLastResponseID`：最近一次响应标识符（identifier，ID）（由 LLM 节点写入；当
+  `StateKeyLastResponse` 由非模型节点写入时可能为空）
 - `StateKeyMessages`：消息历史（持久化，支持 append + MessageOp 补丁操作）
 - `StateKeyNodeResponses`：按节点存储的响应映射。键为节点 ID，值为该
   节点的最终文本响应。`StateKeyLastResponse` 用于串行路径上的最终输
@@ -208,6 +210,8 @@ schema.AddField("counter", graph.StateField{
   - `one_shot_messages`：一次性完整消息覆盖，用于下一次 LLM 调用，执行后清空
   - `messages`：持久化的消息历史（LLM/Tools 会追加），支持 MessageOp 补丁
   - `last_response`：最近一次助手文本回复
+  - `last_response_id`：生成 `last_response` 的最近一次模型响应标识符（identifier，
+    ID）。当 `last_response` 由非模型节点写入时，该值可能为空。
   - `node_responses`：map[nodeID]any，按节点保存最终文本回复。最近结果用 `last_response`
 
 - 函数节点（Function node）
@@ -221,6 +225,7 @@ schema.AddField("counter", graph.StateField{
   - 输出：
     - 向 `messages` 追加助手消息
     - 设置 `last_response`
+    - 设置 `last_response_id`
     - 设置 `node_responses[<llm_node_id>]`
 
 - Tools 节点
@@ -259,6 +264,7 @@ schema.AddField("counter", graph.StateField{
   - `one_shot_messages` → 常量 `graph.StateKeyOneShotMessages`
   - `messages` → 常量 `graph.StateKeyMessages`
   - `last_response` → 常量 `graph.StateKeyLastResponse`
+  - `last_response_id` → 常量 `graph.StateKeyLastResponseID`
   - `node_responses` → 常量 `graph.StateKeyNodeResponses`
 
 - 其他常用键
@@ -601,6 +607,27 @@ stateGraph.AddLLMNode("analyze", model,
   进行修改，并能在同一轮生效。
 - Graph 在执行子 Agent 时会保留父调用的 `RequestID`（请求标识），
   确保当会话历史里已包含本轮用户输入时，不会在提示词中重复插入。
+
+#### 事件输出（流式分片 vs 最终消息）
+
+当大语言模型（Large Language Model，LLM）以流式模式被调用时，一次模型调用可能会产生
+多条事件：
+
+- 流式分片：增量文本在 `choice.Delta.Content`
+- 最终消息：完整文本在 `choice.Message.Content`
+
+在图式流程里，还存在两层“完成（done）”的含义：
+
+- 模型完成：某一次模型调用结束（通常 `Response.Done=true`）
+- 流程完成：整个图运行结束（请以 `event.IsRunnerCompletion()` 为准）
+
+默认情况下，Graph 的 LLM 节点只输出流式分片事件，不输出最终 `Done=true` 的 assistant
+消息事件。这样可以避免“中间节点的输出”被当作普通助手回复（例如被 Runner 写入会话
+（Session））。
+
+如果你希望 Graph 的 LLM 节点也输出最终 `Done=true` 的 assistant 消息事件，请在通过
+Runner 运行时开启 `agent.WithGraphEmitFinalModelResponses(true)`。该选项的详细语义、
+示例和注意事项请参见 `runner.md`。
 
 #### 三种输入范式
 
@@ -2587,7 +2614,7 @@ Graph 的状态底层是 `map[string]any`，通过 `StateSchema` 提供运行时
 
 #### 常用键常量参考
 
-- 用户可见：`graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、`graph.StateKeyMessages`、`graph.StateKeyLastResponse`、`graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
+- 用户可见：`graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、`graph.StateKeyMessages`、`graph.StateKeyLastResponse`、`graph.StateKeyLastResponseID`、`graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
 - 系统内部：`session`、`exec_context`、`tool_callbacks`、`model_callbacks`、`agent_callbacks`、`current_node_id`、`parent_agent`
 - 命令/恢复：`__command__`、`__resume_map__`
 

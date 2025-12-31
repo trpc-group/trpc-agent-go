@@ -151,6 +151,15 @@ func TestWithResume(t *testing.T) {
 	require.False(t, ro.Resume)
 }
 
+func TestWithGraphEmitFinalModelResponses(t *testing.T) {
+	var ro RunOptions
+	WithGraphEmitFinalModelResponses(true)(&ro)
+	require.True(t, ro.GraphEmitFinalModelResponses)
+
+	WithGraphEmitFinalModelResponses(false)(&ro)
+	require.False(t, ro.GraphEmitFinalModelResponses)
+}
+
 type stubTool struct {
 	decl *tool.Declaration
 }

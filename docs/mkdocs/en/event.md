@@ -95,7 +95,10 @@ type Response struct {
     // Timestamp.
     Timestamp time.Time `json:"timestamp"`
     
-    // Indicates whether the entire conversation is complete.
+    // Indicates whether this response stream is complete.
+    //
+    // Note: Done=true does not necessarily mean the whole workflow ended.
+    // For graph workflows, use Runner completion events as the end signal.
     Done bool `json:"done"`
     
     // Whether it's a partial response.
