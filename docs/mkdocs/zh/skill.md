@@ -67,6 +67,10 @@ skills/
 export OPENAI_API_KEY="your-api-key"
 # 可选：指定技能根目录（容器执行器会只读挂载）
 export SKILLS_ROOT=/path/to/skills
+# 可选：也支持传入 HTTP(S) URL（例如 .zip/.tar.gz/.tgz/.tar 压缩包）
+# export SKILLS_ROOT=https://example.com/skills.zip
+# 可选：覆盖 URL 根目录的本地缓存目录
+# export SKILLS_CACHE_DIR=/path/to/cache
 ```
 
 ### 2) 启用 Skills

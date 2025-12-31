@@ -132,6 +132,10 @@ tools := []tool.Tool{
 }
 ```
 
+`NewFSRepository` also accepts an HTTP(S) URL (for example, a `.zip` or
+`.tar.gz` archive). The payload is downloaded and cached locally (set
+`SKILLS_CACHE_DIR` to override the cache location).
+
 </td>
 <td valign="top">
 
