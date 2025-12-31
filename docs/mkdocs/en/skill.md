@@ -67,6 +67,10 @@ Common env vars:
 export OPENAI_API_KEY="your-api-key"
 # Optional: read‑only mount for container runtime
 export SKILLS_ROOT=/path/to/skills
+# Optional: HTTP(S) URL to a skills archive (.zip/.tar.gz/.tgz/.tar)
+# export SKILLS_ROOT=https://example.com/skills.zip
+# Optional: override cache location for URL roots
+# export SKILLS_CACHE_DIR=/path/to/cache
 ```
 
 ### 2) Enable Skills in an Agent

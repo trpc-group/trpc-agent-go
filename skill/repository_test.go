@@ -12,11 +12,20 @@
 package skill
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -308,4 +317,480 @@ func TestIsDocFile_CaseInsensitive(t *testing.T) {
 	require.True(t, isDocFile("README.TXT"))
 	require.True(t, isDocFile("manual.MD"))
 	require.False(t, isDocFile("image.BIN"))
+}
+
+func TestFSRepository_URLRoot_ZipDownloadAndCache(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(EnvSkillsCacheDir, cacheDir)
+
+	zipBytes := buildZip(t, map[string]string{
+		"alpha/": "",
+		"alpha/" + skillFile: "---\nname: alpha\n" +
+			"description: d\n---\nbody\n",
+	})
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			n := atomic.AddInt32(&hits, 1)
+			if n > 1 {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(zipBytes)
+		},
+	))
+	defer srv.Close()
+
+	urlRoot := srv.URL + "/skills.zip"
+	repo, err := NewFSRepository(urlRoot)
+	require.NoError(t, err)
+
+	p, err := repo.Path("alpha")
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(p, skillFile))
+	require.NoError(t, err)
+
+	_, err = NewFSRepository(urlRoot)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), atomic.LoadInt32(&hits))
+}
+
+func TestFSRepository_URLRoot_TarGZDownload(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(EnvSkillsCacheDir, cacheDir)
+
+	tgzBytes := buildTarGZ(t, map[string]string{
+		"beta/" + skillFile: "---\nname: beta\n" +
+			"description: d\n---\nbody\n",
+	})
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(tgzBytes)
+		},
+	))
+	defer srv.Close()
+
+	urlRoot := srv.URL + "/skills.tgz"
+	repo, err := NewFSRepository(urlRoot)
+	require.NoError(t, err)
+	_, err = repo.Path("beta")
+	require.NoError(t, err)
+}
+
+func TestFSRepository_URLRoot_SingleSkillFile(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(EnvSkillsCacheDir, cacheDir)
+
+	skillBytes := []byte("---\nname: gamma\n" +
+		"description: d\n---\nbody\n")
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(skillBytes)
+		},
+	))
+	defer srv.Close()
+
+	urlRoot := srv.URL + "/" + skillFile
+	repo, err := NewFSRepository(urlRoot)
+	require.NoError(t, err)
+	_, err = repo.Path("gamma")
+	require.NoError(t, err)
+}
+
+func TestFSRepository_URLRoot_BadArchivePathRejected(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(EnvSkillsCacheDir, cacheDir)
+
+	zipBytes := buildZip(t, map[string]string{
+		"../" + skillFile: "---\nname: bad\n" +
+			"description: d\n---\nbody\n",
+	})
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(zipBytes)
+		},
+	))
+	defer srv.Close()
+
+	_, err := NewFSRepository(srv.URL + "/skills.zip")
+	require.Error(t, err)
+}
+
+func TestResolveSkillsRoot_UnsupportedScheme(t *testing.T) {
+	_, err := resolveSkillsRoot("cos://bucket/key.zip")
+	require.Error(t, err)
+}
+
+func TestResolveSkillsRoot_FileURL(t *testing.T) {
+	root := t.TempDir()
+	_ = writeSkill(t, root, "file-skill")
+	u := "file://" + root
+
+	p, err := resolveSkillsRoot(u)
+	require.NoError(t, err)
+	repo, err := NewFSRepository(p)
+	require.NoError(t, err)
+	_, err = repo.Path("file-skill")
+	require.NoError(t, err)
+}
+
+func TestFileURLPath_RejectsRemoteHost(t *testing.T) {
+	_, err := fileURLPath(&url.URL{
+		Scheme: "file",
+		Host:   "example.com",
+		Path:   "/tmp",
+	})
+	require.Error(t, err)
+}
+
+func TestSkillsCacheDir_DefaultsToUserCache(t *testing.T) {
+	t.Setenv(EnvSkillsCacheDir, "")
+	t.Setenv("HOME", t.TempDir())
+
+	uc, err := os.UserCacheDir()
+	require.NoError(t, err)
+	want := filepath.Join(uc, cacheAppDir, cacheSkillsDir)
+	got := skillsCacheDir()
+	require.Equal(t, want, got)
+}
+
+func TestDetectArchiveKind_OpenErrorReturnsUnknown(t *testing.T) {
+	kind := detectArchiveKind(filepath.Join(t.TempDir(), "nope"))
+	require.Equal(t, archiveKindUnknown, kind)
+}
+
+func TestFSRepository_URLRoot_TarDownload(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(EnvSkillsCacheDir, cacheDir)
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "delta/",
+		Typeflag: tar.TypeDir,
+		Mode:     dirPerm,
+	}))
+	body := "---\nname: delta\n" +
+		"description: d\n---\nbody\n"
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "delta/" + skillFile,
+		Typeflag: tar.TypeReg,
+		Mode:     filePerm,
+		Size:     int64(len(body)),
+	}))
+	_, err := tw.Write([]byte(body))
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(buf.Bytes())
+		},
+	))
+	defer srv.Close()
+
+	repo, err := NewFSRepository(srv.URL + "/skills.tar")
+	require.NoError(t, err)
+	_, err = repo.Path("delta")
+	require.NoError(t, err)
+}
+
+func TestFSRepository_URLRoot_DetectArchiveKind_Zip(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(EnvSkillsCacheDir, cacheDir)
+
+	zipBytes := buildZip(t, map[string]string{
+		"epsilon/" + skillFile: "---\nname: epsilon\n" +
+			"description: d\n---\nbody\n",
+	})
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(zipBytes)
+		},
+	))
+	defer srv.Close()
+
+	repo, err := NewFSRepository(srv.URL + "/skills")
+	require.NoError(t, err)
+	_, err = repo.Path("epsilon")
+	require.NoError(t, err)
+}
+
+func TestFSRepository_URLRoot_DetectArchiveKind_TarGZ(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(EnvSkillsCacheDir, cacheDir)
+
+	tgzBytes := buildTarGZ(t, map[string]string{
+		"zeta/" + skillFile: "---\nname: zeta\n" +
+			"description: d\n---\nbody\n",
+	})
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(tgzBytes)
+		},
+	))
+	defer srv.Close()
+
+	repo, err := NewFSRepository(srv.URL + "/skills")
+	require.NoError(t, err)
+	_, err = repo.Path("zeta")
+	require.NoError(t, err)
+}
+
+func TestFSRepository_URLRoot_DownloadNon2xxFails(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(EnvSkillsCacheDir, cacheDir)
+
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		},
+	))
+	defer srv.Close()
+
+	_, err := NewFSRepository(srv.URL + "/skills.zip")
+	require.Error(t, err)
+}
+
+func TestFSRepository_URLRoot_UnsupportedPayloadFails(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(EnvSkillsCacheDir, cacheDir)
+
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("not-archive"))
+		},
+	))
+	defer srv.Close()
+
+	_, err := NewFSRepository(srv.URL + "/skills.bin")
+	require.Error(t, err)
+}
+
+func TestResolveSkillsRoot_EmptyAndInvalid(t *testing.T) {
+	p, err := resolveSkillsRoot("")
+	require.NoError(t, err)
+	require.Empty(t, p)
+
+	_, err = resolveSkillsRoot("http://[::1")
+	require.Error(t, err)
+
+	_, err = fileURLPath(nil)
+	require.Error(t, err)
+}
+
+func TestArchiveExtract_Errors(t *testing.T) {
+	dir := t.TempDir()
+
+	srcZip := filepath.Join(dir, "bad.zip")
+	require.NoError(t, os.WriteFile(srcZip, []byte("nope"), filePerm))
+	require.Error(t, extractZip(srcZip, filepath.Join(dir, "out1")))
+
+	srcTGZ := filepath.Join(dir, "bad.tgz")
+	require.NoError(t, os.WriteFile(srcTGZ, []byte("nope"), filePerm))
+	require.Error(t, extractTarGZ(srcTGZ, filepath.Join(dir, "out2")))
+
+	err := extractTarReader(
+		tar.NewReader(strings.NewReader("bad")),
+		filepath.Join(dir, "out3"),
+	)
+	require.Error(t, err)
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	hdr := &tar.Header{
+		Name: "trunc.txt",
+		Mode: filePerm,
+		Size: int64(len("hello")),
+	}
+	require.NoError(t, tw.WriteHeader(hdr))
+	_, err = tw.Write([]byte("hi"))
+	require.NoError(t, err)
+	_ = tw.Close()
+
+	err = extractTarReader(tar.NewReader(bytes.NewReader(buf.Bytes())),
+		filepath.Join(t.TempDir(), "out"))
+	require.Error(t, err)
+}
+
+func TestURLRootHelpers(t *testing.T) {
+	t.Setenv(EnvSkillsCacheDir, "")
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("HOME", "")
+
+	got := skillsCacheDir()
+	want := filepath.Join(os.TempDir(), cacheAppDir, cacheSkillsDir)
+	require.Equal(t, want, got)
+
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set(
+				"Content-Length",
+				strconv.FormatInt(maxDownloadBytes+1, 10),
+			)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("x"))
+		},
+	))
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	err = downloadURLToFile(
+		u,
+		filepath.Join(t.TempDir(), "dl"),
+	)
+	require.Error(t, err)
+	clean, err := cleanArchivePath(".")
+	require.NoError(t, err)
+	require.Empty(t, clean)
+	_, err = cleanArchivePath("/x")
+	require.Error(t, err)
+
+	clean, err = cleanArchivePath("a\\b\\c.txt")
+	require.NoError(t, err)
+	require.Equal(t, "a/b/c.txt", clean)
+
+	_, err = cleanArchivePath("c:/evil")
+	require.Error(t, err)
+
+	require.Equal(t, os.FileMode(filePerm), sanitizePerm(0))
+	require.Equal(t, os.FileMode(0o755), sanitizePerm(0o1755))
+
+	require.Equal(t, os.FileMode(filePerm), tarHeaderPerm(-1))
+	require.Equal(t, os.FileMode(0o777), tarHeaderPerm(0o777))
+
+	require.Error(t, validateTarSize(-1))
+	require.NoError(t, validateTarSize(0))
+	require.Error(t, validateTarSize(maxExtractFileBytes+1))
+
+	require.Error(t, validateZipEntrySize(nil))
+	require.NoError(t, validateZipEntrySize(&zip.File{}))
+	require.Error(t, validateZipEntrySize(&zip.File{
+		FileHeader: zip.FileHeader{
+			Name:               "big",
+			UncompressedSize64: uint64(maxExtractFileBytes) + 1,
+		},
+	}))
+
+	f := &zip.File{
+		FileHeader: zip.FileHeader{
+			Name:               "big.txt",
+			UncompressedSize64: uint64(maxExtractFileBytes) + 1,
+		},
+	}
+	err = extractZipFile(f, t.TempDir(), new(int64))
+	require.Error(t, err)
+
+	require.NoError(t, addExtractedBytes(nil, 1))
+	var total int64
+	require.Error(t, addExtractedBytes(&total, -1))
+	total = maxExtractTotalBytes
+	require.Error(t, addExtractedBytes(&total, 1))
+}
+
+func TestFSRepository_URLRoot_RejectsZipSymlinkEntry(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(EnvSkillsCacheDir, cacheDir)
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create("eta/" + skillFile)
+	require.NoError(t, err)
+	_, err = w.Write([]byte("---\nname: eta\n" +
+		"description: d\n---\nbody\n"))
+	require.NoError(t, err)
+
+	hdr := &zip.FileHeader{Name: "eta/link"}
+	hdr.SetMode(os.ModeSymlink | 0o777)
+	_, err = zw.CreateHeader(hdr)
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(buf.Bytes())
+		},
+	))
+	defer srv.Close()
+
+	_, err = NewFSRepository(srv.URL + "/skills.zip")
+	require.Error(t, err)
+}
+
+func TestFSRepository_URLRoot_RejectsTarSymlinkEntry(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(EnvSkillsCacheDir, cacheDir)
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "theta/" + skillFile,
+		Typeflag: tar.TypeReg,
+		Mode:     filePerm,
+		Size:     int64(len("x")),
+	}))
+	_, err := tw.Write([]byte("x"))
+	require.NoError(t, err)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "theta/link",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "target",
+		Mode:     filePerm,
+	}))
+	require.NoError(t, tw.Close())
+
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(buf.Bytes())
+		},
+	))
+	defer srv.Close()
+
+	_, err = NewFSRepository(srv.URL + "/skills.tar")
+	require.Error(t, err)
+}
+
+func buildZip(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, body := range files {
+		w, err := zw.Create(name)
+		require.NoError(t, err)
+		_, err = w.Write([]byte(body))
+		require.NoError(t, err)
+	}
+	require.NoError(t, zw.Close())
+	return buf.Bytes()
+}
+
+func buildTarGZ(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, body := range files {
+		hdr := &tar.Header{
+			Name: name,
+			Mode: filePerm,
+			Size: int64(len(body)),
+		}
+		require.NoError(t, tw.WriteHeader(hdr))
+		_, err := tw.Write([]byte(body))
+		require.NoError(t, err)
+	}
+	require.NoError(t, tw.Close())
+	require.NoError(t, gz.Close())
+	return buf.Bytes()
 }
