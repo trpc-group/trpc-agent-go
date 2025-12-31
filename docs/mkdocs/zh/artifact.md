@@ -129,6 +129,13 @@ service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"),
     s3.WithCredentials(os.Getenv("S3_ACCESS_KEY"), os.Getenv("S3_SECRET_KEY")),
     s3.WithPathStyle(true),  // MinIO 和某些 S3 兼容服务需要
 )
+
+// 启用调试日志
+import "trpc.group/trpc-go/trpc-agent-go/log"
+
+service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"),
+    s3.WithLogger(log.Default),
+)
 ```
 
 > **注意**：在使用服务之前，存储桶必须已存在。
@@ -144,6 +151,7 @@ service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"),
 | `WithPathStyle(bool)` | 使用路径样式 URL（MinIO、R2 需要） | 虚拟主机样式 |
 | `WithRetries(n)` | 最大重试次数 | 3 |
 | `WithClient(client)` | 使用预创建的 S3 客户端（高级用法） | 自动创建 |
+| `WithLogger(logger)` | 调试消息日志器（如制品未找到） | `nil`（无日志） |
 
 #### 凭证解析顺序
 

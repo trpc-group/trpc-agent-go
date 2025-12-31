@@ -9,6 +9,7 @@
 package s3
 
 import (
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	s3storage "trpc.group/trpc-go/trpc-agent-go/storage/s3"
 )
 
@@ -16,6 +17,7 @@ type options struct {
 	bucket            string
 	client            s3storage.Client // pre-created client (if provided, clientBuilderOpts are ignored)
 	clientBuilderOpts []s3storage.ClientBuilderOpt
+	logger            log.Logger
 }
 
 // Option is a function that configures the S3 artifact service.
@@ -102,5 +104,12 @@ func WithRetries(n int) Option {
 func WithClient(client s3storage.Client) Option {
 	return func(o *options) {
 		o.client = client
+	}
+}
+
+// WithLogger sets the logger for operational messages.
+func WithLogger(logger log.Logger) Option {
+	return func(o *options) {
+		o.logger = logger
 	}
 }

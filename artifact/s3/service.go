@@ -22,6 +22,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	iartifact "trpc.group/trpc-go/trpc-agent-go/internal/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	s3storage "trpc.group/trpc-go/trpc-agent-go/storage/s3"
 )
 
@@ -43,6 +44,7 @@ var _ artifact.Service = (*Service)(nil)
 type Service struct {
 	client     s3storage.Client
 	ownsClient bool // true if we created the client, false if provided via WithClient
+	logger     log.Logger
 }
 
 // NewService creates a new S3 artifact service with optional configurations.
@@ -120,6 +122,7 @@ func NewService(ctx context.Context, bucket string, opts ...Option) (*Service, e
 	return &Service{
 		client:     client,
 		ownsClient: ownsClient,
+		logger:     o.logger,
 	}, nil
 }
 
@@ -180,7 +183,6 @@ func (s *Service) SaveArtifact(
 
 // LoadArtifact loads an artifact from S3.
 // If version is nil, the latest version is loaded.
-// If a specific version is requested but doesn't exist, ErrVersionNotFound is returned.
 func (s *Service) LoadArtifact(
 	ctx context.Context,
 	sessionInfo artifact.SessionInfo,
@@ -204,6 +206,10 @@ func (s *Service) LoadArtifact(
 			return nil, fmt.Errorf("failed to list versions: %w", err)
 		}
 		if len(versions) == 0 {
+			if s.logger != nil {
+				s.logger.Debugf("artifact not found: %s/%s/%s/%s",
+					sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
+			}
 			return nil, nil // Artifact not found
 		}
 		targetVersion = slices.Max(versions)
@@ -214,11 +220,16 @@ func (s *Service) LoadArtifact(
 	data, contentType, err := s.client.GetObject(ctx, objectKey)
 	if err != nil {
 		if errors.Is(err, s3storage.ErrNotFound) {
-			// Distinguish between "artifact doesn't exist" and "version doesn't exist"
-			if version != nil {
-				return nil, ErrVersionNotFound
+			if s.logger != nil {
+				if version != nil {
+					s.logger.Debugf("artifact version not found: %s/%s/%s/%s@%d",
+						sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename, *version)
+				} else {
+					s.logger.Debugf("artifact not found: %s/%s/%s/%s",
+						sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
+				}
 			}
-			return nil, nil // Artifact not found
+			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to download artifact: %w", err)
 	}

@@ -372,7 +372,7 @@ func TestLoadArtifact(t *testing.T) {
 		assert.ErrorIs(t, err, ErrEmptySessionInfo)
 	})
 
-	t.Run("load specific version that does not exist returns ErrVersionNotFound", func(t *testing.T) {
+	t.Run("load specific version that does not exist returns nil", func(t *testing.T) {
 		svc, _ := newTestService(t)
 		ctx := context.Background()
 		info := testSessionInfo()
@@ -383,9 +383,11 @@ func TestLoadArtifact(t *testing.T) {
 		require.NoError(t, err)
 
 		// Try to load version 999 which doesn't exist
+		// Per interface contract: returns nil when not found
 		version := 999
-		_, err = svc.LoadArtifact(ctx, info, "doc.txt", &version)
-		assert.ErrorIs(t, err, ErrVersionNotFound)
+		loaded, err := svc.LoadArtifact(ctx, info, "doc.txt", &version)
+		assert.NoError(t, err)
+		assert.Nil(t, loaded)
 	})
 
 	t.Run("load latest of non-existent artifact returns nil", func(t *testing.T) {
@@ -905,5 +907,86 @@ func TestServiceErrorPaths(t *testing.T) {
 		_, err = svc.ListVersions(ctx, sessionInfo, "test.txt")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to list versions")
+	})
+}
+
+// mockLogger is a mock logger for testing.
+type mockLogger struct {
+	debugMessages []string
+}
+
+func (m *mockLogger) Debug(args ...any)                 { m.debugMessages = append(m.debugMessages, "debug") }
+func (m *mockLogger) Debugf(format string, args ...any) { m.debugMessages = append(m.debugMessages, format) }
+func (m *mockLogger) Info(args ...any)                  {}
+func (m *mockLogger) Infof(format string, args ...any)  {}
+func (m *mockLogger) Warn(args ...any)                  {}
+func (m *mockLogger) Warnf(format string, args ...any)  {}
+func (m *mockLogger) Error(args ...any)                 {}
+func (m *mockLogger) Errorf(format string, args ...any) {}
+func (m *mockLogger) Fatal(args ...any)                 {}
+func (m *mockLogger) Fatalf(format string, args ...any) {}
+
+func TestWithLogger(t *testing.T) {
+	t.Run("logs when artifact not found", func(t *testing.T) {
+		mock := newMockClient()
+		logger := &mockLogger{}
+		svc, err := NewService(context.Background(), "test-bucket",
+			WithClient(mock),
+			WithLogger(logger),
+		)
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		info := testSessionInfo()
+
+		// Try to load non-existent artifact
+		art, err := svc.LoadArtifact(ctx, info, "nonexistent.txt", nil)
+		assert.NoError(t, err)
+		assert.Nil(t, art)
+		assert.Len(t, logger.debugMessages, 1)
+		assert.Contains(t, logger.debugMessages[0], "artifact not found")
+	})
+
+	t.Run("logs when specific version not found", func(t *testing.T) {
+		mock := newMockClient()
+		logger := &mockLogger{}
+		svc, err := NewService(context.Background(), "test-bucket",
+			WithClient(mock),
+			WithLogger(logger),
+		)
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		info := testSessionInfo()
+
+		// Save version 0
+		art := &artifact.Artifact{Data: []byte("v0"), MimeType: "text/plain"}
+		_, err = svc.SaveArtifact(ctx, info, "doc.txt", art)
+		require.NoError(t, err)
+
+		// Try to load version 999 which doesn't exist
+		version := 999
+		loaded, err := svc.LoadArtifact(ctx, info, "doc.txt", &version)
+		assert.NoError(t, err)
+		assert.Nil(t, loaded)
+		assert.Len(t, logger.debugMessages, 1)
+		assert.Contains(t, logger.debugMessages[0], "artifact version not found")
+	})
+
+	t.Run("no logging when logger is nil", func(t *testing.T) {
+		mock := newMockClient()
+		svc, err := NewService(context.Background(), "test-bucket",
+			WithClient(mock),
+			// No WithLogger - logger is nil
+		)
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		info := testSessionInfo()
+
+		// Should not panic when logger is nil
+		art, err := svc.LoadArtifact(ctx, info, "nonexistent.txt", nil)
+		assert.NoError(t, err)
+		assert.Nil(t, art)
 	})
 }

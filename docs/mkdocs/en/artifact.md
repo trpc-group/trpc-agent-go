@@ -129,6 +129,13 @@ service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"),
     s3.WithCredentials(os.Getenv("S3_ACCESS_KEY"), os.Getenv("S3_SECRET_KEY")),
     s3.WithPathStyle(true),  // Required for MinIO and some S3-compatible services
 )
+
+// With debug logging enabled
+import "trpc.group/trpc-go/trpc-agent-go/log"
+
+service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"),
+    s3.WithLogger(log.Default),
+)
 ```
 
 > **Note**: The bucket must already exist before using the service.
@@ -144,6 +151,7 @@ service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"),
 | `WithPathStyle(bool)` | Use path-style URLs (required for MinIO, R2) | Virtual-hosted |
 | `WithRetries(n)` | Max retry attempts | 3 |
 | `WithClient(client)` | Use a pre-created S3 client (advanced) | Auto-created |
+| `WithLogger(logger)` | Logger for debug messages (e.g., artifact not found) | `nil` (no logging) |
 
 #### Credential Resolution Order
 
