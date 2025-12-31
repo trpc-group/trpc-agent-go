@@ -145,7 +145,14 @@ func transformInvokeAgent(span *tracepb.Span) {
 					},
 				})
 			}
-			// Skip this attribute (delete it)
+			// Skip token usage attributes for InvokeAgent observations.
+			//
+			// Reason: the top-level span represents the whole trace, and Langfuse aggregates token
+			// usage across all spans in the trace. We recently started emitting token usage for
+			// InvokeAgent spans (to support Galileo); previously only Chat spans had token usage.
+			// Keeping token attributes on InvokeAgent would make Langfuse double count tokens
+			// compared to the old behavior (Chat-only token accounting).
+		case itelemetry.KeyGenAIUsageInputTokens, itelemetry.KeyGenAIUsageOutputTokens:
 		default:
 			newAttributes = append(newAttributes, attr)
 		}

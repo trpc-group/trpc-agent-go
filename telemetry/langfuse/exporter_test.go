@@ -232,6 +232,18 @@ func TestTransformInvokeAgent(t *testing.T) {
 				},
 			},
 			{
+				Key: itelemetry.KeyGenAIUsageInputTokens,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_IntValue{IntValue: 123},
+				},
+			},
+			{
+				Key: itelemetry.KeyGenAIUsageOutputTokens,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_IntValue{IntValue: 456},
+				},
+			},
+			{
 				Key: "other.attribute",
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: "keep-this"},
@@ -253,6 +265,12 @@ func TestTransformInvokeAgent(t *testing.T) {
 	assert.Equal(t, `[{"role":"user","content":"hi"}]`, attrMap[observationInput])
 	assert.Equal(t, `[{"role":"assistant","content":"hello"}]`, attrMap[observationOutput])
 	assert.Equal(t, "keep-this", attrMap["other.attribute"])
+
+	// Token usage attributes should be filtered out for InvokeAgent observations.
+	for _, attr := range span.Attributes {
+		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokens, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIUsageOutputTokens, attr.Key)
+	}
 }
 
 func TestTransformCallLLM(t *testing.T) {
