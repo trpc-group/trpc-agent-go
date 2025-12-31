@@ -190,6 +190,72 @@ func TestLLMAgent_SkillRun_UsesInjectedExecutor(t *testing.T) {
 	require.True(t, se.ran)
 }
 
+func TestLLMAgent_SkillRun_AllowedCommands_Enforced(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithSkillRunAllowedCommands("echo"),
+	)
+	tl := findTool(a.Tools(), "skill_run")
+	require.NotNil(t, tl)
+
+	allowArgs := map[string]any{
+		"skill": testSkillName, "command": "echo ok",
+	}
+	allowB, err := json.Marshal(allowArgs)
+	require.NoError(t, err)
+	_, err = tl.(tool.CallableTool).Call(context.Background(), allowB)
+	require.NoError(t, err)
+
+	blockArgs := map[string]any{
+		"skill": testSkillName, "command": "ls",
+	}
+	blockB, err := json.Marshal(blockArgs)
+	require.NoError(t, err)
+	_, err = tl.(tool.CallableTool).Call(context.Background(), blockB)
+	require.Error(t, err)
+}
+
+func TestLLMAgent_SkillRun_DeniedCommands_Enforced(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithSkillRunDeniedCommands("echo"),
+	)
+	tl := findTool(a.Tools(), "skill_run")
+	require.NotNil(t, tl)
+
+	blockArgs := map[string]any{
+		"skill": testSkillName, "command": "echo ok",
+	}
+	blockB, err := json.Marshal(blockArgs)
+	require.NoError(t, err)
+	_, err = tl.(tool.CallableTool).Call(context.Background(), blockB)
+	require.Error(t, err)
+
+	allowArgs := map[string]any{
+		"skill": testSkillName, "command": "ls",
+	}
+	allowB, err := json.Marshal(allowArgs)
+	require.NoError(t, err)
+	res, err := tl.(tool.CallableTool).Call(context.Background(), allowB)
+	require.NoError(t, err)
+
+	jb, err := json.Marshal(res)
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(jb, &m))
+	require.Equal(t, float64(0), m["exit_code"])
+}
+
 // captureModel records the last request passed to GenerateContent.
 type captureModel struct{ got *model.Request }
 
