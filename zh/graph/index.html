@@ -831,6 +831,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#vs" class="md-nav__link">
+    <span class="md-ellipsis">
+      事件输出（流式分片 vs 最终消息）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#_9" class="md-nav__link">
     <span class="md-ellipsis">
       三种输入范式
@@ -2294,6 +2303,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#vs" class="md-nav__link">
+    <span class="md-ellipsis">
+      事件输出（流式分片 vs 最终消息）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#_9" class="md-nav__link">
     <span class="md-ellipsis">
       三种输入范式
@@ -3242,6 +3260,8 @@
 <li><code>StateKeyUserInput</code>：用户输入（一次性，消费后清空，由 LLM 节点自动持久化）</li>
 <li><code>StateKeyOneShotMessages</code>：一次性消息（完整覆盖本轮输入，消费后清空）</li>
 <li><code>StateKeyLastResponse</code>：最后响应（用于设置最终输出，Executor 会读取此值作为结果）</li>
+<li><code>StateKeyLastResponseID</code>：最近一次响应标识符（identifier，ID）（由 LLM 节点写入；当
+  <code>StateKeyLastResponse</code> 由非模型节点写入时可能为空）</li>
 <li><code>StateKeyMessages</code>：消息历史（持久化，支持 append + MessageOp 补丁操作）</li>
 <li><code>StateKeyNodeResponses</code>：按节点存储的响应映射。键为节点 ID，值为该
   节点的最终文本响应。<code>StateKeyLastResponse</code> 用于串行路径上的最终输
@@ -3300,6 +3320,8 @@
 <li><code>one_shot_messages</code>：一次性完整消息覆盖，用于下一次 LLM 调用，执行后清空</li>
 <li><code>messages</code>：持久化的消息历史（LLM/Tools 会追加），支持 MessageOp 补丁</li>
 <li><code>last_response</code>：最近一次助手文本回复</li>
+<li><code>last_response_id</code>：生成 <code>last_response</code> 的最近一次模型响应标识符（identifier，
+  ID）。当 <code>last_response</code> 由非模型节点写入时，该值可能为空。</li>
 <li><code>node_responses</code>：map[nodeID]any，按节点保存最终文本回复。最近结果用 <code>last_response</code></li>
 </ul>
 </li>
@@ -3321,6 +3343,7 @@
 <li>输出：<ul>
 <li>向 <code>messages</code> 追加助手消息</li>
 <li>设置 <code>last_response</code></li>
+<li>设置 <code>last_response_id</code></li>
 <li>设置 <code>node_responses[&lt;llm_node_id&gt;]</code></li>
 </ul>
 </li>
@@ -3376,6 +3399,7 @@
 <li><code>one_shot_messages</code> → 常量 <code>graph.StateKeyOneShotMessages</code></li>
 <li><code>messages</code> → 常量 <code>graph.StateKeyMessages</code></li>
 <li><code>last_response</code> → 常量 <code>graph.StateKeyLastResponse</code></li>
+<li><code>last_response_id</code> → 常量 <code>graph.StateKeyLastResponseID</code></li>
 <li><code>node_responses</code> → 常量 <code>graph.StateKeyNodeResponses</code></li>
 </ul>
 </li>
@@ -3910,6 +3934,24 @@
 <li>Graph 在执行子 Agent 时会保留父调用的 <code>RequestID</code>（请求标识），
   确保当会话历史里已包含本轮用户输入时，不会在提示词中重复插入。</li>
 </ul>
+<h4 id="vs">事件输出（流式分片 vs 最终消息）</h4>
+<p>当大语言模型（Large Language Model，LLM）以流式模式被调用时，一次模型调用可能会产生
+多条事件：</p>
+<ul>
+<li>流式分片：增量文本在 <code>choice.Delta.Content</code></li>
+<li>最终消息：完整文本在 <code>choice.Message.Content</code></li>
+</ul>
+<p>在图式流程里，还存在两层“完成（done）”的含义：</p>
+<ul>
+<li>模型完成：某一次模型调用结束（通常 <code>Response.Done=true</code>）</li>
+<li>流程完成：整个图运行结束（请以 <code>event.IsRunnerCompletion()</code> 为准）</li>
+</ul>
+<p>默认情况下，Graph 的 LLM 节点只输出流式分片事件，不输出最终 <code>Done=true</code> 的 assistant
+消息事件。这样可以避免“中间节点的输出”被当作普通助手回复（例如被 Runner 写入会话
+（Session））。</p>
+<p>如果你希望 Graph 的 LLM 节点也输出最终 <code>Done=true</code> 的 assistant 消息事件，请在通过
+Runner 运行时开启 <code>agent.WithGraphEmitFinalModelResponses(true)</code>。该选项的详细语义、
+示例和注意事项请参见 <code>runner.md</code>。</p>
 <h4 id="_9">三种输入范式</h4>
 <ul>
 <li>
@@ -6747,7 +6789,7 @@
 <p>Graph 的状态底层是 <code>map[string]any</code>，通过 <code>StateSchema</code> 提供运行时类型校验和字段验证。Reducer 机制确保状态字段按预定义规则安全合并，避免并发更新冲突。</p>
 <h4 id="_28">常用键常量参考</h4>
 <ul>
-<li>用户可见：<code>graph.StateKeyUserInput</code>、<code>graph.StateKeyOneShotMessages</code>、<code>graph.StateKeyMessages</code>、<code>graph.StateKeyLastResponse</code>、<code>graph.StateKeyNodeResponses</code>、<code>graph.StateKeyMetadata</code></li>
+<li>用户可见：<code>graph.StateKeyUserInput</code>、<code>graph.StateKeyOneShotMessages</code>、<code>graph.StateKeyMessages</code>、<code>graph.StateKeyLastResponse</code>、<code>graph.StateKeyLastResponseID</code>、<code>graph.StateKeyNodeResponses</code>、<code>graph.StateKeyMetadata</code></li>
 <li>系统内部：<code>session</code>、<code>exec_context</code>、<code>tool_callbacks</code>、<code>model_callbacks</code>、<code>agent_callbacks</code>、<code>current_node_id</code>、<code>parent_agent</code></li>
 <li>命令/恢复：<code>__command__</code>、<code>__resume_map__</code></li>
 </ul>
@@ -7996,7 +8038,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月29日 08:00:28 UTC">2025-12-29 08:00:28</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月31日 01:23:21 UTC">2025-12-31 01:23:21</span>
   </span>
 
     

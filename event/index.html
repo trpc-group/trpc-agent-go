@@ -1714,7 +1714,10 @@
 <span class="normal"><a href="#__codelineno-1-107">107</a></span>
 <span class="normal"><a href="#__codelineno-1-108">108</a></span>
 <span class="normal"><a href="#__codelineno-1-109">109</a></span>
-<span class="normal"><a href="#__codelineno-1-110">110</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Response</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-1-110">110</a></span>
+<span class="normal"><a href="#__codelineno-1-111">111</a></span>
+<span class="normal"><a href="#__codelineno-1-112">112</a></span>
+<span class="normal"><a href="#__codelineno-1-113">113</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Response</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="c1">// Response unique identifier.</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nx">ID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;id&quot;`</span>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a>
@@ -1742,88 +1745,91 @@
 </span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26"></a><span class="w">    </span><span class="c1">// Timestamp.</span>
 </span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27"></a><span class="w">    </span><span class="nx">Timestamp</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w"> </span><span class="s">`json:&quot;timestamp&quot;`</span>
 </span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28"></a>
-</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29"></a><span class="w">    </span><span class="c1">// Indicates whether the entire conversation is complete.</span>
-</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30"></a><span class="w">    </span><span class="nx">Done</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;done&quot;`</span>
-</span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31"></a>
-</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32"></a><span class="w">    </span><span class="c1">// Whether it&#39;s a partial response.</span>
-</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33"></a><span class="w">    </span><span class="nx">IsPartial</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;is_partial&quot;`</span>
-</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34"></a><span class="p">}</span>
-</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35"></a>
-</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Choice</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37"></a><span class="w">    </span><span class="c1">// Choice index.</span>
-</span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38"></a><span class="w">    </span><span class="nx">Index</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;index&quot;`</span>
-</span><span id="__span-1-39"><a id="__codelineno-1-39" name="__codelineno-1-39"></a>
-</span><span id="__span-1-40"><a id="__codelineno-1-40" name="__codelineno-1-40"></a><span class="w">    </span><span class="c1">// Complete message, contains the entire response.</span>
-</span><span id="__span-1-41"><a id="__codelineno-1-41" name="__codelineno-1-41"></a><span class="w">    </span><span class="nx">Message</span><span class="w"> </span><span class="nx">Message</span><span class="w"> </span><span class="s">`json:&quot;message,omitempty&quot;`</span>
+</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29"></a><span class="w">    </span><span class="c1">// Indicates whether this response stream is complete.</span>
+</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30"></a><span class="w">    </span><span class="c1">//</span>
+</span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31"></a><span class="w">    </span><span class="c1">// Note: Done=true does not necessarily mean the whole workflow ended.</span>
+</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32"></a><span class="w">    </span><span class="c1">// For graph workflows, use Runner completion events as the end signal.</span>
+</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33"></a><span class="w">    </span><span class="nx">Done</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;done&quot;`</span>
+</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34"></a>
+</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35"></a><span class="w">    </span><span class="c1">// Whether it&#39;s a partial response.</span>
+</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36"></a><span class="w">    </span><span class="nx">IsPartial</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;is_partial&quot;`</span>
+</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37"></a><span class="p">}</span>
+</span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38"></a>
+</span><span id="__span-1-39"><a id="__codelineno-1-39" name="__codelineno-1-39"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Choice</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-40"><a id="__codelineno-1-40" name="__codelineno-1-40"></a><span class="w">    </span><span class="c1">// Choice index.</span>
+</span><span id="__span-1-41"><a id="__codelineno-1-41" name="__codelineno-1-41"></a><span class="w">    </span><span class="nx">Index</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;index&quot;`</span>
 </span><span id="__span-1-42"><a id="__codelineno-1-42" name="__codelineno-1-42"></a>
-</span><span id="__span-1-43"><a id="__codelineno-1-43" name="__codelineno-1-43"></a><span class="w">    </span><span class="c1">// Incremental message, used for streaming responses, only contains new content of current chunk.</span>
-</span><span id="__span-1-44"><a id="__codelineno-1-44" name="__codelineno-1-44"></a><span class="w">    </span><span class="c1">// For example: complete response &quot;Hello, how can I help you?&quot; in streaming response:</span>
-</span><span id="__span-1-45"><a id="__codelineno-1-45" name="__codelineno-1-45"></a><span class="w">    </span><span class="c1">// First event: Delta.Content = &quot;Hello&quot;</span>
-</span><span id="__span-1-46"><a id="__codelineno-1-46" name="__codelineno-1-46"></a><span class="w">    </span><span class="c1">// Second event: Delta.Content = &quot;, how&quot;  </span>
-</span><span id="__span-1-47"><a id="__codelineno-1-47" name="__codelineno-1-47"></a><span class="w">    </span><span class="c1">// Third event: Delta.Content = &quot; can I help you?&quot;</span>
-</span><span id="__span-1-48"><a id="__codelineno-1-48" name="__codelineno-1-48"></a><span class="w">    </span><span class="nx">Delta</span><span class="w"> </span><span class="nx">Message</span><span class="w"> </span><span class="s">`json:&quot;delta,omitempty&quot;`</span>
-</span><span id="__span-1-49"><a id="__codelineno-1-49" name="__codelineno-1-49"></a>
-</span><span id="__span-1-50"><a id="__codelineno-1-50" name="__codelineno-1-50"></a><span class="w">    </span><span class="c1">// Completion reason.</span>
-</span><span id="__span-1-51"><a id="__codelineno-1-51" name="__codelineno-1-51"></a><span class="w">    </span><span class="nx">FinishReason</span><span class="w"> </span><span class="o">*</span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;finish_reason,omitempty&quot;`</span>
-</span><span id="__span-1-52"><a id="__codelineno-1-52" name="__codelineno-1-52"></a><span class="p">}</span>
-</span><span id="__span-1-53"><a id="__codelineno-1-53" name="__codelineno-1-53"></a>
-</span><span id="__span-1-54"><a id="__codelineno-1-54" name="__codelineno-1-54"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Message</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-1-55"><a id="__codelineno-1-55" name="__codelineno-1-55"></a><span class="w">    </span><span class="c1">// Role of message initiator, such as &quot;system&quot;, &quot;user&quot;, &quot;assistant&quot;, &quot;tool&quot;.</span>
-</span><span id="__span-1-56"><a id="__codelineno-1-56" name="__codelineno-1-56"></a><span class="w">    </span><span class="nx">Role</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;role&quot;`</span>
-</span><span id="__span-1-57"><a id="__codelineno-1-57" name="__codelineno-1-57"></a>
-</span><span id="__span-1-58"><a id="__codelineno-1-58" name="__codelineno-1-58"></a><span class="w">    </span><span class="c1">// Message content.</span>
-</span><span id="__span-1-59"><a id="__codelineno-1-59" name="__codelineno-1-59"></a><span class="w">    </span><span class="nx">Content</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;content&quot;`</span>
+</span><span id="__span-1-43"><a id="__codelineno-1-43" name="__codelineno-1-43"></a><span class="w">    </span><span class="c1">// Complete message, contains the entire response.</span>
+</span><span id="__span-1-44"><a id="__codelineno-1-44" name="__codelineno-1-44"></a><span class="w">    </span><span class="nx">Message</span><span class="w"> </span><span class="nx">Message</span><span class="w"> </span><span class="s">`json:&quot;message,omitempty&quot;`</span>
+</span><span id="__span-1-45"><a id="__codelineno-1-45" name="__codelineno-1-45"></a>
+</span><span id="__span-1-46"><a id="__codelineno-1-46" name="__codelineno-1-46"></a><span class="w">    </span><span class="c1">// Incremental message, used for streaming responses, only contains new content of current chunk.</span>
+</span><span id="__span-1-47"><a id="__codelineno-1-47" name="__codelineno-1-47"></a><span class="w">    </span><span class="c1">// For example: complete response &quot;Hello, how can I help you?&quot; in streaming response:</span>
+</span><span id="__span-1-48"><a id="__codelineno-1-48" name="__codelineno-1-48"></a><span class="w">    </span><span class="c1">// First event: Delta.Content = &quot;Hello&quot;</span>
+</span><span id="__span-1-49"><a id="__codelineno-1-49" name="__codelineno-1-49"></a><span class="w">    </span><span class="c1">// Second event: Delta.Content = &quot;, how&quot;  </span>
+</span><span id="__span-1-50"><a id="__codelineno-1-50" name="__codelineno-1-50"></a><span class="w">    </span><span class="c1">// Third event: Delta.Content = &quot; can I help you?&quot;</span>
+</span><span id="__span-1-51"><a id="__codelineno-1-51" name="__codelineno-1-51"></a><span class="w">    </span><span class="nx">Delta</span><span class="w"> </span><span class="nx">Message</span><span class="w"> </span><span class="s">`json:&quot;delta,omitempty&quot;`</span>
+</span><span id="__span-1-52"><a id="__codelineno-1-52" name="__codelineno-1-52"></a>
+</span><span id="__span-1-53"><a id="__codelineno-1-53" name="__codelineno-1-53"></a><span class="w">    </span><span class="c1">// Completion reason.</span>
+</span><span id="__span-1-54"><a id="__codelineno-1-54" name="__codelineno-1-54"></a><span class="w">    </span><span class="nx">FinishReason</span><span class="w"> </span><span class="o">*</span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;finish_reason,omitempty&quot;`</span>
+</span><span id="__span-1-55"><a id="__codelineno-1-55" name="__codelineno-1-55"></a><span class="p">}</span>
+</span><span id="__span-1-56"><a id="__codelineno-1-56" name="__codelineno-1-56"></a>
+</span><span id="__span-1-57"><a id="__codelineno-1-57" name="__codelineno-1-57"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Message</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-58"><a id="__codelineno-1-58" name="__codelineno-1-58"></a><span class="w">    </span><span class="c1">// Role of message initiator, such as &quot;system&quot;, &quot;user&quot;, &quot;assistant&quot;, &quot;tool&quot;.</span>
+</span><span id="__span-1-59"><a id="__codelineno-1-59" name="__codelineno-1-59"></a><span class="w">    </span><span class="nx">Role</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;role&quot;`</span>
 </span><span id="__span-1-60"><a id="__codelineno-1-60" name="__codelineno-1-60"></a>
-</span><span id="__span-1-61"><a id="__codelineno-1-61" name="__codelineno-1-61"></a><span class="w">    </span><span class="c1">// Content fragments for multimodal messages.</span>
-</span><span id="__span-1-62"><a id="__codelineno-1-62" name="__codelineno-1-62"></a><span class="w">    </span><span class="nx">ContentParts</span><span class="w"> </span><span class="p">[]</span><span class="nx">ContentPart</span><span class="w"> </span><span class="s">`json:&quot;content_parts,omitempty&quot;`</span>
+</span><span id="__span-1-61"><a id="__codelineno-1-61" name="__codelineno-1-61"></a><span class="w">    </span><span class="c1">// Message content.</span>
+</span><span id="__span-1-62"><a id="__codelineno-1-62" name="__codelineno-1-62"></a><span class="w">    </span><span class="nx">Content</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;content&quot;`</span>
 </span><span id="__span-1-63"><a id="__codelineno-1-63" name="__codelineno-1-63"></a>
-</span><span id="__span-1-64"><a id="__codelineno-1-64" name="__codelineno-1-64"></a><span class="w">    </span><span class="c1">// ID of the tool used by tool response.</span>
-</span><span id="__span-1-65"><a id="__codelineno-1-65" name="__codelineno-1-65"></a><span class="w">    </span><span class="nx">ToolID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;tool_id,omitempty&quot;`</span>
+</span><span id="__span-1-64"><a id="__codelineno-1-64" name="__codelineno-1-64"></a><span class="w">    </span><span class="c1">// Content fragments for multimodal messages.</span>
+</span><span id="__span-1-65"><a id="__codelineno-1-65" name="__codelineno-1-65"></a><span class="w">    </span><span class="nx">ContentParts</span><span class="w"> </span><span class="p">[]</span><span class="nx">ContentPart</span><span class="w"> </span><span class="s">`json:&quot;content_parts,omitempty&quot;`</span>
 </span><span id="__span-1-66"><a id="__codelineno-1-66" name="__codelineno-1-66"></a>
-</span><span id="__span-1-67"><a id="__codelineno-1-67" name="__codelineno-1-67"></a><span class="w">    </span><span class="c1">// Name of the tool used by tool response.</span>
-</span><span id="__span-1-68"><a id="__codelineno-1-68" name="__codelineno-1-68"></a><span class="w">    </span><span class="nx">ToolName</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;tool_name,omitempty&quot;`</span>
+</span><span id="__span-1-67"><a id="__codelineno-1-67" name="__codelineno-1-67"></a><span class="w">    </span><span class="c1">// ID of the tool used by tool response.</span>
+</span><span id="__span-1-68"><a id="__codelineno-1-68" name="__codelineno-1-68"></a><span class="w">    </span><span class="nx">ToolID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;tool_id,omitempty&quot;`</span>
 </span><span id="__span-1-69"><a id="__codelineno-1-69" name="__codelineno-1-69"></a>
-</span><span id="__span-1-70"><a id="__codelineno-1-70" name="__codelineno-1-70"></a><span class="w">    </span><span class="c1">// Optional tool calls.</span>
-</span><span id="__span-1-71"><a id="__codelineno-1-71" name="__codelineno-1-71"></a><span class="w">    </span><span class="nx">ToolCalls</span><span class="w"> </span><span class="p">[]</span><span class="nx">ToolCall</span><span class="w"> </span><span class="s">`json:&quot;tool_calls,omitempty&quot;`</span>
-</span><span id="__span-1-72"><a id="__codelineno-1-72" name="__codelineno-1-72"></a><span class="p">}</span>
-</span><span id="__span-1-73"><a id="__codelineno-1-73" name="__codelineno-1-73"></a>
-</span><span id="__span-1-74"><a id="__codelineno-1-74" name="__codelineno-1-74"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Usage</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-1-75"><a id="__codelineno-1-75" name="__codelineno-1-75"></a><span class="w">    </span><span class="c1">// Number of tokens used in prompts.</span>
-</span><span id="__span-1-76"><a id="__codelineno-1-76" name="__codelineno-1-76"></a><span class="w">    </span><span class="nx">PromptTokens</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;prompt_tokens&quot;`</span>
-</span><span id="__span-1-77"><a id="__codelineno-1-77" name="__codelineno-1-77"></a>
-</span><span id="__span-1-78"><a id="__codelineno-1-78" name="__codelineno-1-78"></a><span class="w">    </span><span class="c1">// Number of tokens used in completion.</span>
-</span><span id="__span-1-79"><a id="__codelineno-1-79" name="__codelineno-1-79"></a><span class="w">    </span><span class="nx">CompletionTokens</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;completion_tokens&quot;`</span>
+</span><span id="__span-1-70"><a id="__codelineno-1-70" name="__codelineno-1-70"></a><span class="w">    </span><span class="c1">// Name of the tool used by tool response.</span>
+</span><span id="__span-1-71"><a id="__codelineno-1-71" name="__codelineno-1-71"></a><span class="w">    </span><span class="nx">ToolName</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;tool_name,omitempty&quot;`</span>
+</span><span id="__span-1-72"><a id="__codelineno-1-72" name="__codelineno-1-72"></a>
+</span><span id="__span-1-73"><a id="__codelineno-1-73" name="__codelineno-1-73"></a><span class="w">    </span><span class="c1">// Optional tool calls.</span>
+</span><span id="__span-1-74"><a id="__codelineno-1-74" name="__codelineno-1-74"></a><span class="w">    </span><span class="nx">ToolCalls</span><span class="w"> </span><span class="p">[]</span><span class="nx">ToolCall</span><span class="w"> </span><span class="s">`json:&quot;tool_calls,omitempty&quot;`</span>
+</span><span id="__span-1-75"><a id="__codelineno-1-75" name="__codelineno-1-75"></a><span class="p">}</span>
+</span><span id="__span-1-76"><a id="__codelineno-1-76" name="__codelineno-1-76"></a>
+</span><span id="__span-1-77"><a id="__codelineno-1-77" name="__codelineno-1-77"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Usage</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-78"><a id="__codelineno-1-78" name="__codelineno-1-78"></a><span class="w">    </span><span class="c1">// Number of tokens used in prompts.</span>
+</span><span id="__span-1-79"><a id="__codelineno-1-79" name="__codelineno-1-79"></a><span class="w">    </span><span class="nx">PromptTokens</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;prompt_tokens&quot;`</span>
 </span><span id="__span-1-80"><a id="__codelineno-1-80" name="__codelineno-1-80"></a>
-</span><span id="__span-1-81"><a id="__codelineno-1-81" name="__codelineno-1-81"></a><span class="w">    </span><span class="c1">// Total number of tokens used in response.</span>
-</span><span id="__span-1-82"><a id="__codelineno-1-82" name="__codelineno-1-82"></a><span class="w">    </span><span class="nx">TotalTokens</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;total_tokens&quot;`</span>
+</span><span id="__span-1-81"><a id="__codelineno-1-81" name="__codelineno-1-81"></a><span class="w">    </span><span class="c1">// Number of tokens used in completion.</span>
+</span><span id="__span-1-82"><a id="__codelineno-1-82" name="__codelineno-1-82"></a><span class="w">    </span><span class="nx">CompletionTokens</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;completion_tokens&quot;`</span>
 </span><span id="__span-1-83"><a id="__codelineno-1-83" name="__codelineno-1-83"></a>
-</span><span id="__span-1-84"><a id="__codelineno-1-84" name="__codelineno-1-84"></a><span class="w">    </span><span class="c1">// Timing statistics (optional).</span>
-</span><span id="__span-1-85"><a id="__codelineno-1-85" name="__codelineno-1-85"></a><span class="w">    </span><span class="nx">TimingInfo</span><span class="w"> </span><span class="o">*</span><span class="nx">TimingInfo</span><span class="w"> </span><span class="s">`json:&quot;timing_info,omitempty&quot;`</span>
-</span><span id="__span-1-86"><a id="__codelineno-1-86" name="__codelineno-1-86"></a><span class="p">}</span>
-</span><span id="__span-1-87"><a id="__codelineno-1-87" name="__codelineno-1-87"></a>
-</span><span id="__span-1-88"><a id="__codelineno-1-88" name="__codelineno-1-88"></a><span class="kd">type</span><span class="w"> </span><span class="nx">TimingInfo</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-1-89"><a id="__codelineno-1-89" name="__codelineno-1-89"></a><span class="w">    </span><span class="c1">// FirstTokenDuration is the accumulated duration from request start to the first meaningful token.</span>
-</span><span id="__span-1-90"><a id="__codelineno-1-90" name="__codelineno-1-90"></a><span class="w">    </span><span class="c1">// A &quot;meaningful token&quot; is defined as the first chunk containing reasoning content, regular content, or tool calls.</span>
-</span><span id="__span-1-91"><a id="__codelineno-1-91" name="__codelineno-1-91"></a><span class="w">    </span><span class="c1">//</span>
-</span><span id="__span-1-92"><a id="__codelineno-1-92" name="__codelineno-1-92"></a><span class="w">    </span><span class="c1">// Return timing:</span>
-</span><span id="__span-1-93"><a id="__codelineno-1-93" name="__codelineno-1-93"></a><span class="w">    </span><span class="c1">// - Streaming requests: Calculated and returned immediately when the first meaningful chunk is received</span>
-</span><span id="__span-1-94"><a id="__codelineno-1-94" name="__codelineno-1-94"></a><span class="w">    </span><span class="c1">// - Non-streaming requests: Calculated and returned when the complete response is received</span>
-</span><span id="__span-1-95"><a id="__codelineno-1-95" name="__codelineno-1-95"></a><span class="w">    </span><span class="nx">FirstTokenDuration</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span><span class="w"> </span><span class="s">`json:&quot;time_to_first_token,omitempty&quot;`</span>
-</span><span id="__span-1-96"><a id="__codelineno-1-96" name="__codelineno-1-96"></a>
-</span><span id="__span-1-97"><a id="__codelineno-1-97" name="__codelineno-1-97"></a><span class="w">    </span><span class="c1">// ReasoningDuration is the accumulated duration of reasoning phases (streaming mode only).</span>
-</span><span id="__span-1-98"><a id="__codelineno-1-98" name="__codelineno-1-98"></a><span class="w">    </span><span class="c1">// Measured from the first reasoning chunk to the last reasoning chunk in each LLM call.</span>
-</span><span id="__span-1-99"><a id="__codelineno-1-99" name="__codelineno-1-99"></a><span class="w">    </span><span class="c1">//</span>
-</span><span id="__span-1-100"><a id="__codelineno-1-100" name="__codelineno-1-100"></a><span class="w">    </span><span class="c1">// Measurement details:</span>
-</span><span id="__span-1-101"><a id="__codelineno-1-101" name="__codelineno-1-101"></a><span class="w">    </span><span class="c1">// - Starts timing when the first chunk with reasoning content is received</span>
-</span><span id="__span-1-102"><a id="__codelineno-1-102" name="__codelineno-1-102"></a><span class="w">    </span><span class="c1">// - Continues timing for all subsequent reasoning chunks</span>
-</span><span id="__span-1-103"><a id="__codelineno-1-103" name="__codelineno-1-103"></a><span class="w">    </span><span class="c1">// - Stops timing when the first non-reasoning chunk (regular content or tool call) is received</span>
-</span><span id="__span-1-104"><a id="__codelineno-1-104" name="__codelineno-1-104"></a><span class="w">    </span><span class="c1">//</span>
-</span><span id="__span-1-105"><a id="__codelineno-1-105" name="__codelineno-1-105"></a><span class="w">    </span><span class="c1">// Return timing:</span>
-</span><span id="__span-1-106"><a id="__codelineno-1-106" name="__codelineno-1-106"></a><span class="w">    </span><span class="c1">// - Streaming requests: Calculated and returned immediately when reasoning ends (i.e., when the first</span>
-</span><span id="__span-1-107"><a id="__codelineno-1-107" name="__codelineno-1-107"></a><span class="w">    </span><span class="c1">//   non-reasoning content/tool call chunk is received)</span>
-</span><span id="__span-1-108"><a id="__codelineno-1-108" name="__codelineno-1-108"></a><span class="w">    </span><span class="c1">// - Non-streaming requests: Cannot be measured precisely, this field will remain 0</span>
-</span><span id="__span-1-109"><a id="__codelineno-1-109" name="__codelineno-1-109"></a><span class="w">    </span><span class="nx">ReasoningDuration</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span><span class="w"> </span><span class="s">`json:&quot;reasoning_duration,omitempty&quot;`</span>
-</span><span id="__span-1-110"><a id="__codelineno-1-110" name="__codelineno-1-110"></a><span class="p">}</span>
+</span><span id="__span-1-84"><a id="__codelineno-1-84" name="__codelineno-1-84"></a><span class="w">    </span><span class="c1">// Total number of tokens used in response.</span>
+</span><span id="__span-1-85"><a id="__codelineno-1-85" name="__codelineno-1-85"></a><span class="w">    </span><span class="nx">TotalTokens</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;total_tokens&quot;`</span>
+</span><span id="__span-1-86"><a id="__codelineno-1-86" name="__codelineno-1-86"></a>
+</span><span id="__span-1-87"><a id="__codelineno-1-87" name="__codelineno-1-87"></a><span class="w">    </span><span class="c1">// Timing statistics (optional).</span>
+</span><span id="__span-1-88"><a id="__codelineno-1-88" name="__codelineno-1-88"></a><span class="w">    </span><span class="nx">TimingInfo</span><span class="w"> </span><span class="o">*</span><span class="nx">TimingInfo</span><span class="w"> </span><span class="s">`json:&quot;timing_info,omitempty&quot;`</span>
+</span><span id="__span-1-89"><a id="__codelineno-1-89" name="__codelineno-1-89"></a><span class="p">}</span>
+</span><span id="__span-1-90"><a id="__codelineno-1-90" name="__codelineno-1-90"></a>
+</span><span id="__span-1-91"><a id="__codelineno-1-91" name="__codelineno-1-91"></a><span class="kd">type</span><span class="w"> </span><span class="nx">TimingInfo</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-92"><a id="__codelineno-1-92" name="__codelineno-1-92"></a><span class="w">    </span><span class="c1">// FirstTokenDuration is the accumulated duration from request start to the first meaningful token.</span>
+</span><span id="__span-1-93"><a id="__codelineno-1-93" name="__codelineno-1-93"></a><span class="w">    </span><span class="c1">// A &quot;meaningful token&quot; is defined as the first chunk containing reasoning content, regular content, or tool calls.</span>
+</span><span id="__span-1-94"><a id="__codelineno-1-94" name="__codelineno-1-94"></a><span class="w">    </span><span class="c1">//</span>
+</span><span id="__span-1-95"><a id="__codelineno-1-95" name="__codelineno-1-95"></a><span class="w">    </span><span class="c1">// Return timing:</span>
+</span><span id="__span-1-96"><a id="__codelineno-1-96" name="__codelineno-1-96"></a><span class="w">    </span><span class="c1">// - Streaming requests: Calculated and returned immediately when the first meaningful chunk is received</span>
+</span><span id="__span-1-97"><a id="__codelineno-1-97" name="__codelineno-1-97"></a><span class="w">    </span><span class="c1">// - Non-streaming requests: Calculated and returned when the complete response is received</span>
+</span><span id="__span-1-98"><a id="__codelineno-1-98" name="__codelineno-1-98"></a><span class="w">    </span><span class="nx">FirstTokenDuration</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span><span class="w"> </span><span class="s">`json:&quot;time_to_first_token,omitempty&quot;`</span>
+</span><span id="__span-1-99"><a id="__codelineno-1-99" name="__codelineno-1-99"></a>
+</span><span id="__span-1-100"><a id="__codelineno-1-100" name="__codelineno-1-100"></a><span class="w">    </span><span class="c1">// ReasoningDuration is the accumulated duration of reasoning phases (streaming mode only).</span>
+</span><span id="__span-1-101"><a id="__codelineno-1-101" name="__codelineno-1-101"></a><span class="w">    </span><span class="c1">// Measured from the first reasoning chunk to the last reasoning chunk in each LLM call.</span>
+</span><span id="__span-1-102"><a id="__codelineno-1-102" name="__codelineno-1-102"></a><span class="w">    </span><span class="c1">//</span>
+</span><span id="__span-1-103"><a id="__codelineno-1-103" name="__codelineno-1-103"></a><span class="w">    </span><span class="c1">// Measurement details:</span>
+</span><span id="__span-1-104"><a id="__codelineno-1-104" name="__codelineno-1-104"></a><span class="w">    </span><span class="c1">// - Starts timing when the first chunk with reasoning content is received</span>
+</span><span id="__span-1-105"><a id="__codelineno-1-105" name="__codelineno-1-105"></a><span class="w">    </span><span class="c1">// - Continues timing for all subsequent reasoning chunks</span>
+</span><span id="__span-1-106"><a id="__codelineno-1-106" name="__codelineno-1-106"></a><span class="w">    </span><span class="c1">// - Stops timing when the first non-reasoning chunk (regular content or tool call) is received</span>
+</span><span id="__span-1-107"><a id="__codelineno-1-107" name="__codelineno-1-107"></a><span class="w">    </span><span class="c1">//</span>
+</span><span id="__span-1-108"><a id="__codelineno-1-108" name="__codelineno-1-108"></a><span class="w">    </span><span class="c1">// Return timing:</span>
+</span><span id="__span-1-109"><a id="__codelineno-1-109" name="__codelineno-1-109"></a><span class="w">    </span><span class="c1">// - Streaming requests: Calculated and returned immediately when reasoning ends (i.e., when the first</span>
+</span><span id="__span-1-110"><a id="__codelineno-1-110" name="__codelineno-1-110"></a><span class="w">    </span><span class="c1">//   non-reasoning content/tool call chunk is received)</span>
+</span><span id="__span-1-111"><a id="__codelineno-1-111" name="__codelineno-1-111"></a><span class="w">    </span><span class="c1">// - Non-streaming requests: Cannot be measured precisely, this field will remain 0</span>
+</span><span id="__span-1-112"><a id="__codelineno-1-112" name="__codelineno-1-112"></a><span class="w">    </span><span class="nx">ReasoningDuration</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span><span class="w"> </span><span class="s">`json:&quot;reasoning_duration,omitempty&quot;`</span>
+</span><span id="__span-1-113"><a id="__codelineno-1-113" name="__codelineno-1-113"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="event-types">Event Types</h3>
 <p>Events are created and sent in the following scenarios:</p>
@@ -2378,7 +2384,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 9, 2025 06:43:03 UTC">2025-12-09 06:43:03</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 31, 2025 01:23:21 UTC">2025-12-31 01:23:21</span>
   </span>
 
     

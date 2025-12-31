@@ -831,6 +831,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#event-emission-streaming-vs-final" class="md-nav__link">
+    <span class="md-ellipsis">
+      Event emission (streaming vs final)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#three-input-paradigms" class="md-nav__link">
     <span class="md-ellipsis">
       Three input paradigms
@@ -2300,6 +2309,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#event-emission-streaming-vs-final" class="md-nav__link">
+    <span class="md-ellipsis">
+      Event emission (streaming vs final)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#three-input-paradigms" class="md-nav__link">
     <span class="md-ellipsis">
       Three input paradigms
@@ -3254,6 +3272,8 @@
 <li><code>StateKeyUserInput</code>: User input (one-shot, cleared after consumption, persisted by LLM nodes)</li>
 <li><code>StateKeyOneShotMessages</code>: One-shot messages (complete override for current round, cleared after consumption)</li>
 <li><code>StateKeyLastResponse</code>: Last response (used to set final output, Executor reads this value as result)</li>
+<li><code>StateKeyLastResponseID</code>: Last response identifier (ID) (set by LLM nodes; may
+  be empty when <code>StateKeyLastResponse</code> is produced by a non-model node)</li>
 <li><code>StateKeyMessages</code>: Message history (durable, supports append + MessageOp patch operations)</li>
 <li><code>StateKeyNodeResponses</code>: Per-node responses map. Key is node ID, value is the
   node's final textual response. Use <code>StateKeyLastResponse</code> for the final
@@ -3312,6 +3332,9 @@
 <li><code>one_shot_messages</code>: Full message override for the next LLM call. Cleared after consumption.</li>
 <li><code>messages</code>: Durable conversation history (LLM/Tools append here). Supports MessageOp patches.</li>
 <li><code>last_response</code>: The last textual assistant response.</li>
+<li><code>last_response_id</code>: The identifier (ID) of the last model response that
+  produced <code>last_response</code> (may be empty when <code>last_response</code> is set by a
+  non-model node).</li>
 <li><code>node_responses</code>: Map[nodeID]any — per‑node final textual response. Use <code>last_response</code> for the most recent.</li>
 </ul>
 </li>
@@ -3333,6 +3356,7 @@
 <li>Output:<ul>
 <li>Appends assistant message to <code>messages</code></li>
 <li>Sets <code>last_response</code></li>
+<li>Sets <code>last_response_id</code></li>
 <li>Sets <code>node_responses[&lt;llm_node_id&gt;]</code></li>
 </ul>
 </li>
@@ -3388,6 +3412,7 @@
 <li><code>one_shot_messages</code> → <code>graph.StateKeyOneShotMessages</code></li>
 <li><code>messages</code> → <code>graph.StateKeyMessages</code></li>
 <li><code>last_response</code> → <code>graph.StateKeyLastResponse</code></li>
+<li><code>last_response_id</code> → <code>graph.StateKeyLastResponseID</code></li>
 <li><code>node_responses</code> → <code>graph.StateKeyNodeResponses</code></li>
 </ul>
 </li>
@@ -3923,6 +3948,25 @@
   (request identifier) so the current user input is included exactly once,
   even when it already exists in session history.</li>
 </ul>
+<h4 id="event-emission-streaming-vs-final">Event emission (streaming vs final)</h4>
+<p>When the Large Language Model (LLM) is called with streaming enabled, a single
+model call can produce multiple events:</p>
+<ul>
+<li>Streaming chunks: incremental text in <code>choice.Delta.Content</code></li>
+<li>A final message: full text in <code>choice.Message.Content</code></li>
+</ul>
+<p>In graph workflows there are also two different "done" concepts:</p>
+<ul>
+<li>Model done: a single model call finishes (typically <code>Response.Done=true</code>)</li>
+<li>Workflow done: the whole graph run ends (use <code>event.IsRunnerCompletion()</code>)</li>
+</ul>
+<p>By default, graph LLM nodes only emit the streaming chunks. They do not emit
+the final <code>Done=true</code> assistant message event. This keeps intermediate node
+outputs from being treated as normal assistant replies (for example, being
+persisted into the Session by Runner).</p>
+<p>If you want graph LLM nodes to also emit the final <code>Done=true</code> assistant
+message events, enable <code>agent.WithGraphEmitFinalModelResponses(true)</code> when
+running via Runner. See <code>runner.md</code> for details and examples.</p>
 <h4 id="three-input-paradigms">Three input paradigms</h4>
 <ul>
 <li>
@@ -7989,7 +8033,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 29, 2025 08:00:28 UTC">2025-12-29 08:00:28</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 31, 2025 01:23:21 UTC">2025-12-31 01:23:21</span>
   </span>
 
     
