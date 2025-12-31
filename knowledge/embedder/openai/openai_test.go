@@ -246,3 +246,148 @@ func TestEmbedder_GetEmbedding(t *testing.T) {
 		t.Fatalf("ada embedding failed: %v", err)
 	}
 }
+
+// TestGetEmbedding_EmptyResponse tests handling of empty embedding responses
+func TestGetEmbedding_EmptyResponse(t *testing.T) {
+	t.Run("empty data array", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"object": "list",
+				"data":   []map[string]any{},
+				"model":  "text-embedding-3-small",
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		emb := New(
+			WithBaseURL(srv.URL),
+			WithAPIKey("dummy"),
+		)
+
+		vec, err := emb.GetEmbedding(context.Background(), "test")
+		if err != nil {
+			t.Fatalf("GetEmbedding should not return error for empty data: %v", err)
+		}
+		if len(vec) != 0 {
+			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		}
+	})
+
+	t.Run("empty embedding vector", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"object": "list",
+				"data": []map[string]any{
+					{"object": "embedding", "index": 0, "embedding": []float64{}},
+				},
+				"model": "text-embedding-3-small",
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		emb := New(
+			WithBaseURL(srv.URL),
+			WithAPIKey("dummy"),
+		)
+
+		vec, err := emb.GetEmbedding(context.Background(), "test")
+		if err != nil {
+			t.Fatalf("GetEmbedding should not return error for empty vector: %v", err)
+		}
+		if len(vec) != 0 {
+			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		}
+	})
+}
+
+// TestGetEmbeddingWithUsage_EmptyResponse tests handling of empty responses with usage
+func TestGetEmbeddingWithUsage_EmptyResponse(t *testing.T) {
+	t.Run("empty data array with usage", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"object": "list",
+				"data":   []map[string]any{},
+				"model":  "text-embedding-3-small",
+				"usage":  map[string]any{"prompt_tokens": 1, "total_tokens": 1},
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		emb := New(
+			WithBaseURL(srv.URL),
+			WithAPIKey("dummy"),
+		)
+
+		vec, usage, err := emb.GetEmbeddingWithUsage(context.Background(), "test")
+		if err != nil {
+			t.Fatalf("GetEmbeddingWithUsage should not return error: %v", err)
+		}
+		if len(vec) != 0 {
+			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		}
+		// Usage may be nil when data is empty, which is acceptable
+		_ = usage
+	})
+
+	t.Run("empty embedding vector with usage", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"object": "list",
+				"data": []map[string]any{
+					{"object": "embedding", "index": 0, "embedding": []float64{}},
+				},
+				"model": "text-embedding-3-small",
+				"usage": map[string]any{"prompt_tokens": 1, "total_tokens": 1},
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		emb := New(
+			WithBaseURL(srv.URL),
+			WithAPIKey("dummy"),
+		)
+
+		vec, _, err := emb.GetEmbeddingWithUsage(context.Background(), "test")
+		if err != nil {
+			t.Fatalf("GetEmbeddingWithUsage should not return error: %v", err)
+		}
+		if len(vec) != 0 {
+			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		}
+	})
+}
+
+// TestGetEmbedding_EmptyDataArray tests the log.WarnContext path for empty data array
+func TestGetEmbedding_EmptyDataArray(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		rsp := map[string]any{
+			"object": "list",
+			"data":   []map[string]any{},
+			"model":  "text-embedding-3-small",
+		}
+		_ = json.NewEncoder(w).Encode(rsp)
+	}))
+	defer srv.Close()
+
+	emb := New(
+		WithBaseURL(srv.URL),
+		WithAPIKey("dummy"),
+	)
+
+	vec, err := emb.GetEmbedding(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("GetEmbedding should not return error: %v", err)
+	}
+	if len(vec) != 0 {
+		t.Errorf("Expected empty embedding, got length %d", len(vec))
+	}
+}

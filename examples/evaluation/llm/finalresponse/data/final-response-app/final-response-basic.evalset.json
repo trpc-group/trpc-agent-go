@@ -1,0 +1,26 @@
+{
+  "evalSetId": "final-response-basic",
+  "name": "final-response-basic",
+  "evalCases": [
+    {
+      "evalId": "qa_paris",
+      "conversation": [
+        {
+          "invocationId": "qa_paris-1",
+          "userContent": {
+            "role": "user",
+            "content": "With a principal of 1000 dollars and a compound annual interest rate of 10%, what will the profit be after 30 years?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "16,449.40 dollars"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "final-response-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}

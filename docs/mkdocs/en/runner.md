@@ -2,7 +2,7 @@
 
 ## Overview
 
-Runner provides the interface to run Agents, responsible for session management and event stream processing. The core responsibilities of Runner are: obtain or create sessions, generate an Invocation ID, call Agent.Run, process the returned event stream, and append non-partial response events to the session.
+Runner provides the interface to run Agents, responsible for session management and event stream processing. The core responsibilities of Runner are: obtain or create sessions, generate an Invocation ID, call the Agent (via `agent.RunWithPlugins`), process the returned event stream, and append non-partial response events to the session.
 
 ### 🎯 Key Features
 
@@ -11,6 +11,7 @@ Runner provides the interface to run Agents, responsible for session management 
 - **🆔 ID Generation**: Automatically generate Invocation IDs and event IDs.
 - **📊 Observability Integration**: Integrates telemetry/trace to automatically record spans.
 - **✅ Completion Event**: Generates a runner-completion event after the Agent event stream ends.
+- **🔌 Plugins**: Register once on a Runner to apply global hooks across agent, tool, and model lifecycles.
 
 ## Architecture
 
@@ -19,7 +20,7 @@ Runner provides the interface to run Agents, responsible for session management 
 │       Runner        │  - Session management.
 └─────────┬───────────┘  - Event stream processing.
           │
-          │ r.agent.Run(ctx, invocation)
+          │ agent.RunWithPlugins(ctx, invocation, r.agent)
           │
 ┌─────────▼───────────┐
 │       Agent         │  - Receives Invocation.
@@ -154,6 +155,30 @@ r := runner.NewRunner("my-app", agent,
 )
 ```
 
+### 🔌 Plugins
+
+Runner plugins are global, runner-scoped hooks. Register plugins once and they
+will apply automatically to all agents, tools, and model calls executed by that
+Runner.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/plugin"
+
+r := runner.NewRunner("my-app", a,
+    runner.WithPlugins(
+        plugin.NewLogging(),
+        plugin.NewGlobalInstruction("You must follow security policies."),
+    ),
+)
+defer r.Close()
+```
+
+Notes:
+
+- Plugin names must be unique per Runner.
+- Plugins run in the order they are registered.
+- If a plugin implements `plugin.Closer`, Runner will call it in `Close()`.
+
 ### Run Conversation
 
 ```go
@@ -266,6 +291,52 @@ for e := range eventChan {
 
 This keeps application code simple and consistent across Agent types while still
 preserving detailed graph events for advanced use.
+
+#### 🔁 Option: Emit Final Graph LLM Responses
+
+Graph-based agents (for example, GraphAgent) can call a Large Language Model
+(LLM) many times inside a single run. Each model call can produce a stream of
+events:
+
+- Partial chunks: `IsPartial=true`, `Done=false`, incremental text in
+  `choice.Delta.Content`
+- Final message: `IsPartial=false`, `Done=true`, full text in
+  `choice.Message.Content`
+
+By default, graph LLM nodes only emit the partial chunks. This avoids treating
+intermediate node outputs as normal assistant replies (for example, persisting
+them into the Session by Runner or showing them to end users).
+
+To opt into the newer behavior (emit the final `Done=true` assistant message
+events from graph LLM nodes), enable this RunOption:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithGraphEmitFinalModelResponses(true),
+)
+```
+
+Behavior summary:
+
+- Default (`false`): graph LLM nodes emit only partial chunks. The workflow’s
+  final text is available on the Runner completion event via
+  `StateDelta[graph.StateKeyLastResponse]`.
+- Enabled (`true`): graph LLM nodes also emit the final `Done=true` assistant
+  message events.
+  - Intermediate nodes may now emit assistant messages (and Runner may persist
+    them into the Session).
+  - Runner may omit echoing the final assistant message in its completion event
+    if it can prove (by response identifier (ID)) that the same final message
+    was already emitted earlier, avoiding duplicate display.
+
+Recommendation: for GraphAgent workflows, always read the final output from the
+Runner completion event’s `StateDelta` (for example,
+`graph.StateKeyLastResponse`). Treat `Response.Choices` on the completion event
+as optional when this option is enabled.
 
 ## 💾 Session Management
 

@@ -18,6 +18,9 @@ import (
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/finalresponse"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/rubricknowledgerecall"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/rubricresponse"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/tooltrajectory"
 )
 
@@ -44,6 +47,12 @@ func New() Registry {
 	}
 	toolTrajectory := tooltrajectory.New()
 	r.Register(toolTrajectory.Name(), toolTrajectory)
+	finalResponse := finalresponse.New()
+	r.Register(finalResponse.Name(), finalResponse)
+	rubricResponse := rubricresponse.New()
+	r.Register(rubricResponse.Name(), rubricResponse)
+	rubricKnowledgeRecall := rubricknowledgerecall.New()
+	r.Register(rubricKnowledgeRecall.Name(), rubricKnowledgeRecall)
 	return r
 }
 

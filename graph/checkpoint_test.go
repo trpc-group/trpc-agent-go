@@ -1235,7 +1235,11 @@ func TestProcessModelResponse_DoneWithContentEmitsEvent(t *testing.T) {
 	_, span := tracer.Start(context.Background(), "s")
 	evch := make(chan *event.Event, 1)
 	rsp := &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}}
-	_, _, err := processModelResponse(context.Background(), modelResponseConfig{
+	inv := agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+		GraphEmitFinalModelResponses: true,
+	}))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	_, _, err := processModelResponse(ctx, modelResponseConfig{
 		Response:     rsp,
 		EventChan:    evch,
 		InvocationID: "inv",
@@ -1266,7 +1270,11 @@ func TestProcessModelResponse_DoneWithoutContentSkipsEvent(t *testing.T) {
 			},
 		}},
 	}
-	_, _, err := processModelResponse(context.Background(), modelResponseConfig{
+	inv := agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+		GraphEmitFinalModelResponses: true,
+	}))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	_, _, err := processModelResponse(ctx, modelResponseConfig{
 		Response:     rsp,
 		EventChan:    evch,
 		InvocationID: "inv",
@@ -1340,6 +1348,13 @@ func TestShouldEmitModelResponse_Cases(t *testing.T) {
 		}
 		require.True(t, shouldEmitModelResponse(rsp))
 	})
+}
+
+func TestShouldEmitModelResponseEvent_NilResponse(t *testing.T) {
+	require.False(
+		t,
+		shouldEmitModelResponseEvent(context.Background(), nil),
+	)
 }
 
 func TestProcessModelResponse_AfterModelCustomResponse(t *testing.T) {

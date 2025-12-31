@@ -24,8 +24,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -480,6 +482,876 @@ func TestFunctionCallResponseProcessor_ToolIterationLimitEmitsFlowError(t *testi
 	}
 
 	require.True(t, inv.EndInvocation, "invocation should be marked as ended")
+}
+
+func TestFunctionCallResponseProcessor_ToolExecutionFilter_AllDeferred(
+	t *testing.T,
+) {
+	const (
+		toolName = "external_tool"
+		callID   = "call-1"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-defer-all",
+		AgentName:    "test-agent",
+		RunOptions: agent.RunOptions{
+			ToolExecutionFilter: tool.NewExcludeToolNamesFilter(
+				toolName,
+			),
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			toolName: &mockTool{
+				name:        toolName,
+				shouldPanic: true,
+			},
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   callID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      toolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case <-ch:
+		t.Fatalf("unexpected tool response event")
+	default:
+	}
+	require.True(t, inv.EndInvocation)
+}
+
+func TestFunctionCallResponseProcessor_WaitsForToolResponseCompletion(
+	t *testing.T,
+) {
+	const (
+		toolName = "echo"
+		callID   = "call-1"
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	sess := session.NewSession("app", "user", "session")
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "test-agent"}),
+		agent.WithInvocationModel(&mockModel{}),
+	)
+	sess.UpdateUserSession(event.NewResponseEvent(
+		inv.InvocationID,
+		inv.AgentName,
+		&model.Response{
+			Done: false,
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage(toolName),
+			}},
+		},
+	))
+	appender.Attach(inv, func(context.Context, *event.Event) error {
+		return nil
+	})
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			toolName: &mockCallableTool{
+				declaration: &tool.Declaration{Name: toolName},
+				callFn: func(context.Context, []byte) (any, error) {
+					return "ok", nil
+				},
+			},
+		},
+	}
+	rsp := &model.Response{
+		Model: "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   callID,
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      toolName,
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+
+	allowComplete := make(chan struct{})
+	eventSeen := make(chan struct{})
+	eventChan := make(chan *event.Event, 1)
+
+	go func() {
+		evt := <-eventChan
+		require.NotNil(t, evt)
+		require.True(t, evt.RequiresCompletion)
+		sess.UpdateUserSession(evt)
+		close(eventSeen)
+
+		<-allowComplete
+		completionID := agent.GetAppendEventNoticeKey(evt.ID)
+		require.NoError(t, inv.NotifyCompletion(ctx, completionID))
+	}()
+
+	done := make(chan struct{})
+	p := NewFunctionCallResponseProcessor(false, nil)
+	go func() {
+		p.ProcessResponse(ctx, inv, req, rsp, eventChan)
+		close(done)
+	}()
+
+	select {
+	case <-eventSeen:
+	case <-ctx.Done():
+		t.Fatalf("timeout waiting for tool.response event")
+	}
+
+	const noReturnWindow = 50 * time.Millisecond
+	select {
+	case <-done:
+		t.Fatalf("ProcessResponse returned before completion")
+	case <-time.After(noReturnWindow):
+	}
+
+	close(allowComplete)
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("timeout waiting for ProcessResponse to return")
+	}
+	require.Len(t, sess.Events, 2)
+}
+
+func TestFunctionCallResponseProcessor_NoWaitWithoutAppender(t *testing.T) {
+	const (
+		toolName = "echo"
+		callID   = "call-1"
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "test-agent"}),
+		agent.WithInvocationModel(&mockModel{}),
+	)
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			toolName: &mockCallableTool{
+				declaration: &tool.Declaration{Name: toolName},
+				callFn: func(context.Context, []byte) (any, error) {
+					return "ok", nil
+				},
+			},
+		},
+	}
+	rsp := &model.Response{
+		Model: "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   callID,
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      toolName,
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	done := make(chan struct{})
+	p := NewFunctionCallResponseProcessor(false, nil)
+	go func() {
+		p.ProcessResponse(ctx, inv, req, rsp, eventChan)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("timeout waiting for ProcessResponse to return")
+	}
+
+	select {
+	case evt := <-eventChan:
+		require.NotNil(t, evt)
+		require.True(t, evt.RequiresCompletion)
+	default:
+		t.Fatalf("expected tool.response event to be emitted")
+	}
+}
+
+func TestFunctionCallResponseProcessor_HandleFunctionCallsAndSendEvent_NilEvent(
+	t *testing.T,
+) {
+	const (
+		toolName = "echo"
+		callID   = "call-1"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "test-agent"}),
+		agent.WithInvocationModel(&mockModel{}),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ToolExecutionFilter: tool.NewExcludeToolNamesFilter(
+				toolName,
+			),
+		}),
+	)
+
+	tools := map[string]tool.Tool{
+		toolName: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "ok", nil
+			},
+		},
+	}
+
+	rsp := &model.Response{
+		Model: "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   callID,
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      toolName,
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	got, err := p.handleFunctionCallsAndSendEvent(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		eventChan,
+	)
+	require.NoError(t, err)
+	require.Nil(t, got)
+
+	select {
+	case <-eventChan:
+		t.Fatalf("unexpected tool.response event")
+	default:
+	}
+}
+
+func TestFunctionCallResponseProcessor_HandleFunctionCallsAndSendEvent_Canceled(
+	t *testing.T,
+) {
+	const (
+		toolName = "echo"
+		callID   = "call-1"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "test-agent"}),
+		agent.WithInvocationModel(&mockModel{}),
+	)
+	appender.Attach(inv, func(context.Context, *event.Event) error {
+		return nil
+	})
+
+	tools := map[string]tool.Tool{
+		toolName: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "ok", nil
+			},
+		},
+	}
+
+	rsp := &model.Response{
+		Model: "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   callID,
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      toolName,
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+
+	eventSeen := make(chan struct{})
+	eventChan := make(chan *event.Event)
+	go func() {
+		defer close(eventSeen)
+		evt := <-eventChan
+		require.NotNil(t, evt)
+		require.True(t, evt.RequiresCompletion)
+		cancel()
+	}()
+
+	got, err := p.handleFunctionCallsAndSendEvent(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		eventChan,
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, got)
+
+	select {
+	case <-eventSeen:
+	case <-time.After(time.Second):
+		t.Fatalf("timeout waiting for tool.response event")
+	}
+}
+
+func TestFunctionCallResponseProcessor_HandleFunctionCallsAndSendEvent_Warns(
+	t *testing.T,
+) {
+	const (
+		toolName = "echo"
+		callID   = "call-1"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := &agent.Invocation{
+		InvocationID: "test-123",
+		AgentName:    "test-agent",
+		Model:        &mockModel{},
+	}
+	appender.Attach(inv, func(context.Context, *event.Event) error {
+		return nil
+	})
+
+	tools := map[string]tool.Tool{
+		toolName: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "ok", nil
+			},
+		},
+	}
+
+	rsp := &model.Response{
+		Model: "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   callID,
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      toolName,
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	got, err := p.handleFunctionCallsAndSendEvent(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		eventChan,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.True(t, got.RequiresCompletion)
+
+	select {
+	case evt := <-eventChan:
+		require.NotNil(t, evt)
+		require.True(t, evt.RequiresCompletion)
+	default:
+		t.Fatalf("expected tool.response event to be emitted")
+	}
+}
+
+func TestFuncRespWaitTimeout_DefaultsWithoutDeadline(t *testing.T) {
+	require.Equal(
+		t,
+		funcRespCompletionTimeout,
+		funcRespWaitTimeout(context.Background()),
+	)
+}
+
+func TestFunctionCallResponseProcessor_ToolExecutionDecision(t *testing.T) {
+	const (
+		toolName      = "tool"
+		unknownTool   = "unknown_tool"
+		toolCallID    = "call-1"
+		unknownCallID = "call-2"
+		toolCallType  = "function"
+		toolArgJSON   = `{}`
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	makeReq := func(tools map[string]tool.Tool) *model.Request {
+		return &model.Request{Tools: tools}
+	}
+
+	makeRsp := func(toolCalls []model.ToolCall) *model.Response {
+		return &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:      model.RoleAssistant,
+						ToolCalls: toolCalls,
+					},
+				},
+			},
+		}
+	}
+
+	makeInvWithFilter := func(filter tool.FilterFunc) *agent.Invocation {
+		return &agent.Invocation{
+			RunOptions: agent.RunOptions{
+				ToolExecutionFilter: filter,
+			},
+		}
+	}
+
+	t.Run("invocation nil", func(t *testing.T) {
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			nil,
+			nil,
+			nil,
+		)
+		require.False(t, deferred)
+		require.True(t, executable)
+		require.False(t, unknown)
+	})
+
+	t.Run("filter nil", func(t *testing.T) {
+		inv := &agent.Invocation{}
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			inv,
+			nil,
+			nil,
+		)
+		require.False(t, deferred)
+		require.True(t, executable)
+		require.False(t, unknown)
+	})
+
+	t.Run("request nil", func(t *testing.T) {
+		inv := makeInvWithFilter(tool.NewIncludeToolNamesFilter(toolName))
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			inv,
+			nil,
+			nil,
+		)
+		require.False(t, deferred)
+		require.True(t, executable)
+		require.False(t, unknown)
+	})
+
+	t.Run("request tools nil", func(t *testing.T) {
+		inv := makeInvWithFilter(tool.NewIncludeToolNamesFilter(toolName))
+		req := &model.Request{}
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			inv,
+			req,
+			nil,
+		)
+		require.False(t, deferred)
+		require.True(t, executable)
+		require.False(t, unknown)
+	})
+
+	t.Run("response nil", func(t *testing.T) {
+		inv := makeInvWithFilter(tool.NewIncludeToolNamesFilter(toolName))
+		req := makeReq(map[string]tool.Tool{
+			toolName: &mockTool{name: toolName},
+		})
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			inv,
+			req,
+			nil,
+		)
+		require.False(t, deferred)
+		require.True(t, executable)
+		require.False(t, unknown)
+	})
+
+	t.Run("response has no choices", func(t *testing.T) {
+		inv := makeInvWithFilter(tool.NewIncludeToolNamesFilter(toolName))
+		req := makeReq(map[string]tool.Tool{
+			toolName: &mockTool{name: toolName},
+		})
+		rsp := &model.Response{}
+
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			inv,
+			req,
+			rsp,
+		)
+		require.False(t, deferred)
+		require.True(t, executable)
+		require.False(t, unknown)
+	})
+
+	t.Run("unknown tool call", func(t *testing.T) {
+		inv := makeInvWithFilter(tool.NewExcludeToolNamesFilter(toolName))
+		req := makeReq(map[string]tool.Tool{
+			toolName: &mockTool{name: toolName},
+		})
+		rsp := makeRsp([]model.ToolCall{
+			{
+				ID:   unknownCallID,
+				Type: toolCallType,
+				Function: model.FunctionDefinitionParam{
+					Name:      unknownTool,
+					Arguments: []byte(toolArgJSON),
+				},
+			},
+			{
+				ID:   toolCallID,
+				Type: toolCallType,
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(toolArgJSON),
+				},
+			},
+		})
+
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			inv,
+			req,
+			rsp,
+		)
+		require.True(t, deferred)
+		require.False(t, executable)
+		require.True(t, unknown)
+	})
+
+	t.Run("unknown plus executable", func(t *testing.T) {
+		inv := makeInvWithFilter(tool.NewIncludeToolNamesFilter(toolName))
+		req := makeReq(map[string]tool.Tool{
+			toolName: &mockTool{name: toolName},
+		})
+		rsp := makeRsp([]model.ToolCall{
+			{
+				ID:   unknownCallID,
+				Type: toolCallType,
+				Function: model.FunctionDefinitionParam{
+					Name:      unknownTool,
+					Arguments: []byte(toolArgJSON),
+				},
+			},
+			{
+				ID:   toolCallID,
+				Type: toolCallType,
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(toolArgJSON),
+				},
+			},
+		})
+
+		deferred, executable, unknown := p.toolExecutionDecision(
+			ctx,
+			inv,
+			req,
+			rsp,
+		)
+		require.False(t, deferred)
+		require.True(t, executable)
+		require.True(t, unknown)
+	})
+}
+
+func TestFunctionCallResponseProcessor_ToolExecutionFilter_MixedStops(
+	t *testing.T,
+) {
+	const (
+		autoToolName = "auto_tool"
+		extToolName  = "external_tool"
+		autoCallID   = "call-auto"
+		extCallID    = "call-ext"
+		toolResult   = "ok"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-mixed",
+		AgentName:    "test-agent",
+		RunOptions: agent.RunOptions{
+			ToolExecutionFilter: tool.NewIncludeToolNamesFilter(
+				autoToolName,
+			),
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			autoToolName: &mockTool{
+				name:   autoToolName,
+				result: toolResult,
+			},
+			extToolName: &mockTool{
+				name:        extToolName,
+				shouldPanic: true,
+			},
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   autoCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      autoToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+						{
+							ID:   extCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      extToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case ev := <-ch:
+		require.NotNil(t, ev.Response)
+		require.Len(t, ev.Response.Choices, 1)
+		msg := ev.Response.Choices[0].Message
+		require.Equal(t, model.RoleTool, msg.Role)
+		require.Equal(t, autoCallID, msg.ToolID)
+		require.Equal(t, autoToolName, msg.ToolName)
+
+		b, err := json.Marshal(toolResult)
+		require.NoError(t, err)
+		require.Equal(t, string(b), msg.Content)
+	default:
+		t.Fatalf("expected a tool response event")
+	}
+	require.True(t, inv.EndInvocation)
+}
+
+func TestFunctionCallResponseProcessor_ToolExecutionFilter_NoPlaceholders(
+	t *testing.T,
+) {
+	const (
+		autoToolName = "auto_tool"
+		extToolName  = "external_tool"
+		autoCallID   = "call-auto"
+		extCallID    = "call-ext"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-nil-longrunning",
+		AgentName:    "test-agent",
+		RunOptions: agent.RunOptions{
+			ToolExecutionFilter: tool.NewIncludeToolNamesFilter(
+				autoToolName,
+			),
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			autoToolName: &mockNilLongRunningTool{
+				name: autoToolName,
+			},
+			extToolName: &mockTool{
+				name:        extToolName,
+				shouldPanic: true,
+			},
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   autoCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      autoToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+						{
+							ID:   extCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      extToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case <-ch:
+		t.Fatalf("unexpected tool response event")
+	default:
+	}
+	require.True(t, inv.EndInvocation)
+}
+
+func TestFunctionCallResponseProcessor_ToolExecutionFilter_NoPlaceholdersPar(
+	t *testing.T,
+) {
+	const (
+		autoToolName = "auto_tool"
+		extToolName  = "external_tool"
+		autoCallID   = "call-auto"
+		extCallID    = "call-ext"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(true, nil)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-nil-longrunning-parallel",
+		AgentName:    "test-agent",
+		RunOptions: agent.RunOptions{
+			ToolExecutionFilter: tool.NewIncludeToolNamesFilter(
+				autoToolName,
+			),
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			autoToolName: &mockNilLongRunningTool{
+				name: autoToolName,
+			},
+			extToolName: &mockTool{
+				name:        extToolName,
+				shouldPanic: true,
+			},
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							Index: intPtr(0),
+							ID:    autoCallID,
+							Type:  "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      autoToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+						{
+							Index: intPtr(1),
+							ID:    extCallID,
+							Type:  "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      extToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case <-ch:
+		t.Fatalf("unexpected tool response event")
+	default:
+	}
+	require.True(t, inv.EndInvocation)
 }
 
 func TestFlow_EnableParallelTools_ForcesSerialExecution(t *testing.T) {
@@ -2152,6 +3024,357 @@ func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
 	require.NoError(t, err)
 	b, _ := json.Marshal(map[string]any{"v": 1})
 	require.JSONEq(t, string(b), string(mustJSON(res)))
+}
+
+type hookPlugin struct {
+	name string
+	reg  func(r *plugin.Registry)
+}
+
+func (p *hookPlugin) Name() string { return p.name }
+
+func (p *hookPlugin) Register(r *plugin.Registry) {
+	if p.reg != nil {
+		p.reg(r)
+	}
+}
+
+func TestExecuteToolWithCallbacks_PluginBeforeToolShortCircuit(t *testing.T) {
+	localCalled := false
+	toolCalled := false
+	var callID string
+
+	local := tool.NewCallbacks()
+	local.RegisterBeforeTool(func(
+		ctx context.Context,
+		toolName string,
+		decl *tool.Declaration,
+		jsonArgs *[]byte,
+	) (any, error) {
+		localCalled = true
+		return nil, nil
+	})
+
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.BeforeTool(func(
+				ctx context.Context,
+				args *tool.BeforeToolArgs,
+			) (*tool.BeforeToolResult, error) {
+				callID, _ = tool.ToolCallIDFromContext(ctx)
+				return &tool.BeforeToolResult{
+					CustomResult: map[string]any{"v": 1},
+				}, nil
+			})
+		},
+	}
+
+	pm := plugin.MustNewManager(p)
+	proc := NewFunctionCallResponseProcessor(false, local)
+	inv := &agent.Invocation{Plugins: pm}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			toolCalled = true
+			return "x", nil
+		},
+	}
+
+	toolCall := model.ToolCall{
+		ID:       "call-1",
+		Function: model.FunctionDefinitionParam{Name: "t"},
+	}
+
+	_, res, _, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		toolCall,
+		tl,
+		nil,
+	)
+	require.NoError(t, err)
+	require.False(t, localCalled)
+	require.False(t, toolCalled)
+	require.Equal(t, "call-1", callID)
+	require.Equal(t, map[string]any{"v": 1}, res)
+}
+
+func TestExecuteToolWithCallbacks_PluginAfterToolOverrides(t *testing.T) {
+	localAfterCalled := false
+
+	local := tool.NewCallbacks()
+	local.RegisterAfterTool(func(
+		ctx context.Context,
+		toolName string,
+		decl *tool.Declaration,
+		jsonArgs []byte,
+		result any,
+		runErr error,
+	) (any, error) {
+		localAfterCalled = true
+		return nil, nil
+	})
+
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterTool(func(
+				ctx context.Context,
+				args *tool.AfterToolArgs,
+			) (*tool.AfterToolResult, error) {
+				return &tool.AfterToolResult{
+					CustomResult: map[string]any{"p": true},
+				}, nil
+			})
+		},
+	}
+
+	pm := plugin.MustNewManager(p)
+	proc := NewFunctionCallResponseProcessor(false, local)
+	inv := &agent.Invocation{Plugins: pm}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return "x", nil
+		},
+	}
+
+	toolCall := model.ToolCall{
+		ID:       "call-1",
+		Function: model.FunctionDefinitionParam{Name: "t"},
+	}
+
+	_, res, _, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		toolCall,
+		tl,
+		nil,
+	)
+	require.NoError(t, err)
+	require.False(t, localAfterCalled)
+	require.Equal(t, map[string]any{"p": true}, res)
+}
+
+func TestExecuteToolWithCallbacks_PluginBeforeToolError(t *testing.T) {
+	localCalled := false
+	toolCalled := false
+
+	local := tool.NewCallbacks()
+	local.RegisterBeforeTool(func(
+		ctx context.Context,
+		toolName string,
+		decl *tool.Declaration,
+		jsonArgs *[]byte,
+	) (any, error) {
+		localCalled = true
+		return nil, nil
+	})
+
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.BeforeTool(func(
+				ctx context.Context,
+				args *tool.BeforeToolArgs,
+			) (*tool.BeforeToolResult, error) {
+				return nil, fmt.Errorf("boom")
+			})
+		},
+	}
+
+	pm := plugin.MustNewManager(p)
+	proc := NewFunctionCallResponseProcessor(false, local)
+	inv := &agent.Invocation{Plugins: pm}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			toolCalled = true
+			return "x", nil
+		},
+	}
+	toolCall := model.ToolCall{
+		ID:       "call-1",
+		Function: model.FunctionDefinitionParam{Name: "t"},
+	}
+
+	_, _, _, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		toolCall,
+		tl,
+		nil,
+	)
+	require.Error(t, err)
+	require.False(t, localCalled)
+	require.False(t, toolCalled)
+}
+
+func TestExecuteToolWithCallbacks_PluginBeforeToolArgsModified(
+	t *testing.T,
+) {
+	const (
+		toolName     = "t"
+		callID       = "call-1"
+		originalArgs = `{"a":1}`
+		modifiedArgs = `{"b":2}`
+	)
+	localArgs := ""
+	toolArgs := ""
+
+	local := tool.NewCallbacks()
+	local.RegisterBeforeTool(func(
+		ctx context.Context,
+		name string,
+		decl *tool.Declaration,
+		jsonArgs *[]byte,
+	) (any, error) {
+		if jsonArgs != nil {
+			localArgs = string(*jsonArgs)
+		}
+		return nil, nil
+	})
+
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.BeforeTool(func(
+				ctx context.Context,
+				args *tool.BeforeToolArgs,
+			) (*tool.BeforeToolResult, error) {
+				return &tool.BeforeToolResult{
+					ModifiedArguments: []byte(modifiedArgs),
+				}, nil
+			})
+		},
+	}
+
+	pm := plugin.MustNewManager(p)
+	proc := NewFunctionCallResponseProcessor(false, local)
+	inv := &agent.Invocation{Plugins: pm}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: toolName},
+		callFn: func(_ context.Context, args []byte) (any, error) {
+			toolArgs = string(args)
+			return "x", nil
+		},
+	}
+	toolCall := model.ToolCall{
+		ID: callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(originalArgs),
+		},
+	}
+
+	_, _, gotArgs, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		toolCall,
+		tl,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, modifiedArgs, localArgs)
+	require.Equal(t, modifiedArgs, toolArgs)
+	require.Equal(t, modifiedArgs, string(gotArgs))
+}
+
+func TestExecuteToolWithCallbacks_PluginAfterToolError(t *testing.T) {
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterTool(func(
+				ctx context.Context,
+				args *tool.AfterToolArgs,
+			) (*tool.AfterToolResult, error) {
+				return nil, fmt.Errorf("boom")
+			})
+		},
+	}
+
+	pm := plugin.MustNewManager(p)
+	proc := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{Plugins: pm}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return "x", nil
+		},
+	}
+	toolCall := model.ToolCall{
+		ID:       "call-1",
+		Function: model.FunctionDefinitionParam{Name: "t"},
+	}
+
+	_, _, _, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		toolCall,
+		tl,
+		nil,
+	)
+	require.Error(t, err)
+}
+
+func TestExecuteToolWithCallbacks_PluginAfterToolOverridePreservesErr(
+	t *testing.T,
+) {
+	localAfterCalled := false
+
+	local := tool.NewCallbacks()
+	local.RegisterAfterTool(func(
+		ctx context.Context,
+		name string,
+		decl *tool.Declaration,
+		jsonArgs []byte,
+		result any,
+		runErr error,
+	) (any, error) {
+		localAfterCalled = true
+		return nil, nil
+	})
+
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterTool(func(
+				ctx context.Context,
+				args *tool.AfterToolArgs,
+			) (*tool.AfterToolResult, error) {
+				return &tool.AfterToolResult{
+					CustomResult: map[string]any{"p": true},
+				}, nil
+			})
+		},
+	}
+
+	pm := plugin.MustNewManager(p)
+	proc := NewFunctionCallResponseProcessor(false, local)
+	inv := &agent.Invocation{Plugins: pm}
+	toolErr := errors.New("tool boom")
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return nil, toolErr
+		},
+	}
+	toolCall := model.ToolCall{
+		ID:       "call-1",
+		Function: model.FunctionDefinitionParam{Name: "t"},
+	}
+
+	_, res, _, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		toolCall,
+		tl,
+		nil,
+	)
+	require.ErrorIs(t, err, toolErr)
+	require.False(t, localAfterCalled)
+	require.Equal(t, map[string]any{"p": true}, res)
 }
 
 func TestExecuteToolWithCallbacks_BeforeError(t *testing.T) {

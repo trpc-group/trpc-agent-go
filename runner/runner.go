@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/appid"
@@ -71,6 +72,13 @@ func WithAgent(name string, ag agent.Agent) Option {
 	}
 }
 
+// WithPlugins registers plugins on the runner.
+func WithPlugins(plugins ...plugin.Plugin) Option {
+	return func(opts *Options) {
+		opts.plugins = append(opts.plugins, plugins...)
+	}
+}
+
 // Runner is the interface for running agents.
 type Runner interface {
 	Run(
@@ -95,6 +103,7 @@ type runner struct {
 	sessionService   session.Service
 	memoryService    memory.Service
 	artifactService  artifact.Service
+	pluginManager    agent.PluginManager
 
 	// Resource management fields.
 	ownedSessionService bool      // Indicates if sessionService was created by this runner.
@@ -107,6 +116,7 @@ type Options struct {
 	memoryService   memory.Service
 	artifactService artifact.Service
 	agents          map[string]agent.Agent
+	plugins         []plugin.Plugin
 }
 
 // newOptions creates a new Options.
@@ -131,6 +141,10 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 	}
 	agents := options.agents
 	agents[ag.Info().Name] = ag
+	var pm agent.PluginManager
+	if len(options.plugins) > 0 {
+		pm = plugin.MustNewManager(options.plugins...)
+	}
 	// Register the default agent for observability defaults.
 	appid.RegisterRunner(appName, ag.Info().Name)
 	// Register all runner identities for observability fallback.
@@ -144,6 +158,7 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		sessionService:      options.sessionService,
 		memoryService:       options.memoryService,
 		artifactService:     options.artifactService,
+		pluginManager:       pm,
 		ownedSessionService: ownedSessionService,
 	}
 }
@@ -154,6 +169,12 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 func (r *runner) Close() error {
 	var closeErr error
 	r.closeOnce.Do(func() {
+		if r.pluginManager != nil {
+			if err := r.pluginManager.Close(context.Background()); err != nil {
+				closeErr = err
+				log.Errorf("close plugins failed: %v", err)
+			}
+		}
 		// Only close resources that we own (created by this runner).
 		if r.ownedSessionService && r.sessionService != nil {
 			if err := r.sessionService.Close(); err != nil {
@@ -204,6 +225,7 @@ func (r *runner) Run(
 		agent.WithInvocationMemoryService(r.memoryService),
 		agent.WithInvocationArtifactService(r.artifactService),
 		agent.WithInvocationEventFilterKey(r.appName),
+		agent.WithInvocationPlugins(r.pluginManager),
 	)
 
 	// If caller provided a history via RunOptions and the session is empty,
@@ -222,6 +244,7 @@ func (r *runner) Run(
 				&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: m}}},
 			)
 			agent.InjectIntoEvent(invocation, seedEvt)
+			seedEvt = r.applyEventPlugins(ctx, invocation, seedEvt)
 			if err := r.sessionService.AppendEvent(ctx, sess, seedEvt); err != nil {
 				return nil, err
 			}
@@ -236,6 +259,7 @@ func (r *runner) Run(
 			&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
 		)
 		agent.InjectIntoEvent(invocation, evt)
+		evt = r.applyEventPlugins(ctx, invocation, evt)
 		if err := r.sessionService.AppendEvent(ctx, sess, evt); err != nil {
 			return nil, err
 		}
@@ -258,7 +282,7 @@ func (r *runner) Run(
 	barrier.Enable(invocation)
 
 	// Run the agent and get the event channel.
-	agentEventCh, err := ag.Run(ctx, invocation)
+	agentEventCh, err := agent.RunWithPlugins(ctx, invocation, ag)
 	if err != nil {
 		// Attempt to persist the error event so the session reflects the failure.
 		errorEvent := event.NewErrorEvent(
@@ -269,6 +293,7 @@ func (r *runner) Run(
 		)
 		// Populate content to ensure it is valid for persistence (and viewable by users).
 		ensureErrorEventContent(errorEvent)
+		errorEvent = r.applyEventPlugins(ctx, invocation, errorEvent)
 
 		if appendErr := r.sessionService.AppendEvent(ctx, sess, errorEvent); appendErr != nil {
 			log.Errorf("failed to append agent run error event: %v", appendErr)
@@ -324,7 +349,12 @@ type eventLoopContext struct {
 	processedEventCh chan *event.Event
 	finalStateDelta  map[string][]byte
 	finalChoices     []model.Choice
-	assistantContent map[string]struct{}
+	// emittedAssistantResponseIDs tracks response IDs that already produced a
+	// non-partial assistant message event during this run.
+	//
+	// It is used to avoid echoing the same final assistant message again in the
+	// runner-completion event when graph final model responses are emitted.
+	emittedAssistantResponseIDs map[string]struct{}
 }
 
 // processAgentEvents consumes agent events, persists to session, and emits.
@@ -342,7 +372,6 @@ func (r *runner) processAgentEvents(
 		agentEventCh:     agentEventCh,
 		flushChan:        flushChan,
 		processedEventCh: processedEventCh,
-		assistantContent: make(map[string]struct{}),
 	}
 	runCtx := agent.CloneContext(ctx)
 	go r.runEventLoop(runCtx, loop)
@@ -401,7 +430,9 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		return nil
 	}
 
-	r.recordAssistantContent(loop, agentEvent)
+	agentEvent = r.applyEventPlugins(ctx, loop.invocation, agentEvent)
+
+	r.recordEmittedAssistantResponseID(loop, agentEvent)
 
 	// Append qualifying events to session and trigger summarization.
 	r.handleEventPersistence(ctx, loop.sess, agentEvent)
@@ -425,20 +456,70 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	return nil
 }
 
-func (r *runner) recordAssistantContent(loop *eventLoopContext, e *event.Event) {
+func (r *runner) applyEventPlugins(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	e *event.Event,
+) *event.Event {
+	if e == nil {
+		return nil
+	}
+	if invocation == nil || invocation.Plugins == nil {
+		return e
+	}
+	updated, err := invocation.Plugins.OnEvent(ctx, invocation, e)
+	if err != nil {
+		log.ErrorfContext(ctx, "plugin OnEvent failed: %v", err)
+		return e
+	}
+	if updated == nil {
+		return e
+	}
+	copyEventInvocationFields(updated, e)
+	return updated
+}
+
+func copyEventInvocationFields(dst *event.Event, src *event.Event) {
+	if dst == nil || src == nil {
+		return
+	}
+	if dst.RequestID == "" {
+		dst.RequestID = src.RequestID
+	}
+	if dst.InvocationID == "" {
+		dst.InvocationID = src.InvocationID
+	}
+	if dst.ParentInvocationID == "" {
+		dst.ParentInvocationID = src.ParentInvocationID
+	}
+	if dst.Branch == "" {
+		dst.Branch = src.Branch
+	}
+	if dst.FilterKey == "" {
+		dst.FilterKey = src.FilterKey
+	}
+}
+
+func (r *runner) recordEmittedAssistantResponseID(
+	loop *eventLoopContext,
+	e *event.Event,
+) {
 	if loop == nil || e == nil || e.Response == nil {
 		return
 	}
 	if loop.invocation == nil {
 		return
 	}
-	if loop.assistantContent == nil {
-		loop.assistantContent = make(map[string]struct{})
+	if !loop.invocation.RunOptions.GraphEmitFinalModelResponses {
+		return
 	}
 	if isGraphCompletionEvent(e) {
 		return
 	}
 	if e.IsPartial || !e.IsValidContent() {
+		return
+	}
+	if e.Response.ID == "" {
 		return
 	}
 	for _, choice := range e.Response.Choices {
@@ -449,7 +530,11 @@ func (r *runner) recordAssistantContent(loop *eventLoopContext, e *event.Event) 
 		if msg.Content == "" {
 			continue
 		}
-		loop.assistantContent[msg.Content] = struct{}{}
+		if loop.emittedAssistantResponseIDs == nil {
+			loop.emittedAssistantResponseIDs = make(map[string]struct{})
+		}
+		loop.emittedAssistantResponseIDs[e.Response.ID] = struct{}{}
+		return
 	}
 }
 
@@ -531,7 +616,7 @@ func (r *runner) handleEventPersistence(
 	if err := r.sessionService.EnqueueSummaryJob(
 		ctx, sess, agentEvent.FilterKey, false,
 	); err != nil {
-		log.Debugf("Auto summarize after append skipped or failed: %v.", err)
+		log.DebugfContext(ctx, "Auto summarize after append skipped or failed: %v.", err)
 	}
 	// Do not enqueue full-session summary here. The worker will cascade
 	// a full-session summarization after a branch update when appropriate.
@@ -592,14 +677,21 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 		},
 	)
 
+	agent.InjectIntoEvent(loop.invocation, runnerCompletionEvent)
+	runnerCompletionEvent = r.applyEventPlugins(
+		ctx,
+		loop.invocation,
+		runnerCompletionEvent,
+	)
+
 	// Propagate graph-level completion data if available.
 	if len(loop.finalStateDelta) > 0 {
-		includeChoices := r.shouldIncludeFinalChoices(loop)
+		echoFinalChoices := r.shouldEchoFinalChoicesInCompletion(loop)
 		r.propagateGraphCompletion(
 			runnerCompletionEvent,
 			loop.finalStateDelta,
 			loop.finalChoices,
-			includeChoices,
+			echoFinalChoices,
 		)
 	}
 
@@ -618,7 +710,7 @@ func (r *runner) propagateGraphCompletion(
 	runnerCompletionEvent *event.Event,
 	finalStateDelta map[string][]byte,
 	finalChoices []model.Choice,
-	includeChoices bool,
+	echoFinalChoices bool,
 ) {
 	// Initialize state delta map if needed.
 	if runnerCompletionEvent.StateDelta == nil {
@@ -638,7 +730,7 @@ func (r *runner) propagateGraphCompletion(
 
 	// Optionally echo the final text as a non-streaming assistant message
 	// if graph provided it in its completion.
-	if includeChoices &&
+	if echoFinalChoices &&
 		runnerCompletionEvent.Response != nil &&
 		len(runnerCompletionEvent.Response.Choices) == 0 &&
 		len(finalChoices) > 0 {
@@ -649,29 +741,56 @@ func (r *runner) propagateGraphCompletion(
 	}
 }
 
-func (r *runner) shouldIncludeFinalChoices(loop *eventLoopContext) bool {
+// shouldEchoFinalChoicesInCompletion decides whether Runner should copy the
+// graph's final assistant message into the runner-completion event.
+//
+// Default behavior: Graph Large Language Model (LLM) nodes do not emit the
+// final (Done=true) assistant response event. In that mode, Runner must echo
+// the final choices so clients can reliably read the final answer.
+//
+// When GraphEmitFinalModelResponses is enabled, graph LLM nodes emit final
+// (Done=true) assistant response events. In that mode, Runner will skip
+// echoing final choices if it can match the graph's last response identifier
+// (ID) to a response ID that was already emitted, avoiding duplicates.
+func (r *runner) shouldEchoFinalChoicesInCompletion(
+	loop *eventLoopContext,
+) bool {
 	if loop == nil {
 		return true
 	}
 	if len(loop.finalChoices) == 0 {
 		return false
 	}
-	if len(loop.assistantContent) == 0 {
+	if loop.invocation == nil {
 		return true
 	}
-	for _, choice := range loop.finalChoices {
-		msg := choice.Message
-		if msg.Role != model.RoleAssistant {
-			continue
-		}
-		if msg.Content == "" {
-			continue
-		}
-		if _, ok := loop.assistantContent[msg.Content]; ok {
-			return false
-		}
+
+	if !loop.invocation.RunOptions.GraphEmitFinalModelResponses {
+		return true
 	}
-	return true
+
+	finalResponseID := finalResponseIDFromStateDelta(loop.finalStateDelta)
+	if finalResponseID == "" {
+		return true
+	}
+
+	_, alreadyEmitted := loop.emittedAssistantResponseIDs[finalResponseID]
+	return !alreadyEmitted
+}
+
+func finalResponseIDFromStateDelta(finalStateDelta map[string][]byte) string {
+	if finalStateDelta == nil {
+		return ""
+	}
+	raw, ok := finalStateDelta[graph.StateKeyLastResponseID]
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	var responseID string
+	if err := json.Unmarshal(raw, &responseID); err != nil {
+		return ""
+	}
+	return responseID
 }
 
 // shouldAppendUserMessage checks if the incoming user message should be appended to the session.
