@@ -1118,7 +1118,8 @@ func emitModelResponseEvent(
 	config modelResponseConfig,
 	ev *event.Event,
 ) error {
-	if config.EventChan == nil || !shouldEmitModelResponse(config.Response) {
+	if config.EventChan == nil ||
+		!shouldEmitModelResponseEvent(ctx, config.Response) {
 		return nil
 	}
 
@@ -1133,6 +1134,22 @@ func emitModelResponseEvent(
 		)
 	}
 	return agent.EmitEvent(ctx, invocation, config.EventChan, ev)
+}
+
+func shouldEmitModelResponseEvent(
+	ctx context.Context,
+	rsp *model.Response,
+) bool {
+	if rsp == nil {
+		return false
+	}
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if ok &&
+		invocation != nil &&
+		invocation.RunOptions.GraphEmitFinalModelResponses {
+		return shouldEmitModelResponse(rsp)
+	}
+	return !rsp.Done
 }
 
 // processModelResponse processes a single model response.
