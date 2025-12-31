@@ -915,8 +915,10 @@ type mockLogger struct {
 	debugMessages []string
 }
 
-func (m *mockLogger) Debug(args ...any)                 { m.debugMessages = append(m.debugMessages, "debug") }
-func (m *mockLogger) Debugf(format string, args ...any) { m.debugMessages = append(m.debugMessages, format) }
+func (m *mockLogger) Debug(args ...any) { m.debugMessages = append(m.debugMessages, "debug") }
+func (m *mockLogger) Debugf(format string, args ...any) {
+	m.debugMessages = append(m.debugMessages, format)
+}
 func (m *mockLogger) Info(args ...any)                  {}
 func (m *mockLogger) Infof(format string, args ...any)  {}
 func (m *mockLogger) Warn(args ...any)                  {}
