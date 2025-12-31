@@ -85,9 +85,14 @@ func NewClient(ctx context.Context, opts ...ClientBuilderOpt) (Client, error) {
 	// Build AWS config options
 	var awsOpts []func(*config.LoadOptions) error
 
-	// Set region
+	// Set region:
+	// - If explicit region provided, use it
+	// - If custom endpoint (MinIO, R2, etc.) without region, use default fallback
+	// - If no endpoint and no region, let AWS SDK auto-detect
 	if cfg.Region != "" {
 		awsOpts = append(awsOpts, config.WithRegion(cfg.Region))
+	} else if cfg.Endpoint != "" {
+		awsOpts = append(awsOpts, config.WithRegion(defaultRegion))
 	}
 
 	// Load default AWS config
