@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path"
 	"strings"
 	"time"
@@ -34,16 +35,129 @@ type RunTool struct {
 	repo skill.Repository
 	exec codeexecutor.CodeExecutor
 	reg  *codeexecutor.WorkspaceRegistry
+
+	allowedCmds map[string]struct{}
+	deniedCmds  map[string]struct{}
 }
 
 // NewRunTool creates a new RunTool.
-func NewRunTool(repo skill.Repository,
-	exec codeexecutor.CodeExecutor) *RunTool {
-	return &RunTool{
+func NewRunTool(
+	repo skill.Repository,
+	exec codeexecutor.CodeExecutor,
+	opts ...func(*RunTool),
+) *RunTool {
+	rt := &RunTool{
 		repo: repo,
 		exec: exec,
 		reg:  codeexecutor.NewWorkspaceRegistry(),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(rt)
+		}
+	}
+	rt.loadAllowedCommandsFromEnv()
+	rt.loadDeniedCommandsFromEnv()
+	return rt
+}
+
+const envAllowedCommands = "TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS"
+const envDeniedCommands = "TRPC_AGENT_SKILL_RUN_DENIED_COMMANDS"
+
+// WithAllowedCommands restricts skill_run to a single program execution
+// whose command name is in the allowlist.
+//
+// When enabled, shell features (pipes, redirects, separators) are
+// rejected and the command is executed without "bash -lc".
+func WithAllowedCommands(cmds ...string) func(*RunTool) {
+	return func(t *RunTool) {
+		t.setAllowedCommands(cmds)
+	}
+}
+
+// WithDeniedCommands rejects a single program execution whose command name
+// matches the denylist.
+//
+// When enabled, shell features (pipes, redirects, separators) are rejected
+// and the command is executed without "bash -lc".
+func WithDeniedCommands(cmds ...string) func(*RunTool) {
+	return func(t *RunTool) {
+		t.setDeniedCommands(cmds)
+	}
+}
+
+func (t *RunTool) loadAllowedCommandsFromEnv() {
+	if len(t.allowedCmds) > 0 {
+		return
+	}
+	raw := os.Getenv(envAllowedCommands)
+	parts := splitCommandList(raw)
+	if len(parts) == 0 {
+		return
+	}
+	t.setAllowedCommands(parts)
+}
+
+func (t *RunTool) setAllowedCommands(cmds []string) {
+	if len(cmds) == 0 {
+		return
+	}
+	if t.allowedCmds == nil {
+		t.allowedCmds = make(map[string]struct{}, len(cmds))
+	}
+	for _, c := range cmds {
+		s := strings.TrimSpace(c)
+		if s == "" {
+			continue
+		}
+		t.allowedCmds[s] = struct{}{}
+	}
+}
+
+func (t *RunTool) loadDeniedCommandsFromEnv() {
+	if len(t.deniedCmds) > 0 {
+		return
+	}
+	raw := os.Getenv(envDeniedCommands)
+	parts := splitCommandList(raw)
+	if len(parts) == 0 {
+		return
+	}
+	t.setDeniedCommands(parts)
+}
+
+func (t *RunTool) setDeniedCommands(cmds []string) {
+	if len(cmds) == 0 {
+		return
+	}
+	if t.deniedCmds == nil {
+		t.deniedCmds = make(map[string]struct{}, len(cmds))
+	}
+	for _, c := range cmds {
+		s := strings.TrimSpace(c)
+		if s == "" {
+			continue
+		}
+		t.deniedCmds[s] = struct{}{}
+	}
+}
+
+func splitCommandList(raw string) []string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t'
+	})
+	var out []string
+	for _, p := range parts {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // runInput is the JSON schema for skill_run.
@@ -386,6 +500,34 @@ func (t *RunTool) runProgram(
 	if _, ok := env[codeexecutor.EnvSkillName]; !ok {
 		env[codeexecutor.EnvSkillName] = in.Skill
 	}
+	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
+		argv, err := splitCommandLine(in.Command)
+		if err != nil {
+			return codeexecutor.RunResult{}, err
+		}
+		cmd := argv[0]
+		if len(t.allowedCmds) > 0 && !cmdInList(t.allowedCmds, cmd) {
+			return codeexecutor.RunResult{}, fmt.Errorf(
+				"skill_run: command %q is not allowed",
+				cmd,
+			)
+		}
+		if cmdInList(t.deniedCmds, cmd) {
+			return codeexecutor.RunResult{}, fmt.Errorf(
+				"skill_run: command %q is denied",
+				cmd,
+			)
+		}
+		return eng.Runner().RunProgram(
+			ctx, ws, codeexecutor.RunProgramSpec{
+				Cmd:     cmd,
+				Args:    argv[1:],
+				Env:     env,
+				Cwd:     cwd,
+				Timeout: timeout,
+			},
+		)
+	}
 	return eng.Runner().RunProgram(
 		ctx, ws, codeexecutor.RunProgramSpec{
 			Cmd:     "bash",
@@ -395,6 +537,79 @@ func (t *RunTool) runProgram(
 			Timeout: timeout,
 		},
 	)
+}
+
+const disallowedShellMeta = "\n\r;&|<>"
+
+func cmdInList(list map[string]struct{}, cmd string) bool {
+	if len(list) == 0 {
+		return false
+	}
+	if _, ok := list[cmd]; ok {
+		return true
+	}
+	base := filepathBase(cmd)
+	_, ok := list[base]
+	return ok
+}
+
+func splitCommandLine(s string) ([]string, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, fmt.Errorf("skill_run: command is empty")
+	}
+	if strings.ContainsAny(s, disallowedShellMeta) {
+		return nil, fmt.Errorf(
+			"skill_run: shell syntax is not allowed " +
+				"when command restrictions are enabled",
+		)
+	}
+	var args []string
+	var cur strings.Builder
+	inSingle := false
+	inDouble := false
+	escaped := false
+	flush := func() {
+		if cur.Len() == 0 {
+			return
+		}
+		args = append(args, cur.String())
+		cur.Reset()
+	}
+	for _, r := range s {
+		if escaped {
+			cur.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if !inSingle && r == '\\' {
+			escaped = true
+			continue
+		}
+		if !inDouble && r == '\'' {
+			inSingle = !inSingle
+			continue
+		}
+		if !inSingle && r == '"' {
+			inDouble = !inDouble
+			continue
+		}
+		if !inSingle && !inDouble && (r == ' ' || r == '\t') {
+			flush()
+			continue
+		}
+		cur.WriteRune(r)
+	}
+	if escaped {
+		return nil, fmt.Errorf("skill_run: trailing escape")
+	}
+	if inSingle || inDouble {
+		return nil, fmt.Errorf("skill_run: unterminated quote")
+	}
+	flush()
+	if len(args) == 0 {
+		return nil, fmt.Errorf("skill_run: command is empty")
+	}
+	return args, nil
 }
 
 // withArtifactContext returns a context augmented with artifact
