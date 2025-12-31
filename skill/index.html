@@ -1792,7 +1792,7 @@ them directly when driving the conversation naturally.</p>
 <p>Declaration: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go">tool/skill/run.go</a></p>
 <p>Input:
 - <code>skill</code> (required)
-- <code>command</code> (required, runs via <code>bash -lc</code>)
+- <code>command</code> (required; by default runs via <code>bash -lc</code>)
 - <code>cwd</code>, <code>env</code> (optional)
 - <code>output_files</code> (optional, legacy collection): glob patterns (e.g.,
   <code>out/*.txt</code>). Patterns are workspace‑relative; env‑style prefixes
@@ -1829,6 +1829,23 @@ them directly when driving the conversation naturally.</p>
   <code>output_files[*].content</code> and return metadata only</li>
 <li><code>artifact_prefix</code> (optional): prefix for the legacy artifact path</li>
 </ul>
+<p>Optional safety restriction (allowlist):
+- Env var <code>TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS</code>:
+  - Comma/space-separated command names (for example, <code>ls,cat,ifconfig</code>)
+  - When set, <code>skill_run</code> rejects shell syntax (pipes/redirections/
+    separators) and only allows a single allowlisted command
+  - Because the command is no longer parsed by a shell, patterns like
+    <code>&gt; out/x.txt</code>, heredocs, and <code>$OUTPUT_DIR</code> expansion will not work;
+    prefer running scripts or using <code>outputs</code> to collect files
+- You can also configure this in code via
+  <code>llmagent.WithSkillRunAllowedCommands(...)</code>.</p>
+<p>Optional safety restriction (denylist):
+- Env var <code>TRPC_AGENT_SKILL_RUN_DENIED_COMMANDS</code>:
+  - Comma/space-separated command names
+  - When set, <code>skill_run</code> also rejects shell syntax (single command only)
+    and blocks denylisted command names
+- You can also configure this in code via
+  <code>llmagent.WithSkillRunDeniedCommands(...)</code>.</p>
 <p>Output:
 - <code>stdout</code>, <code>stderr</code>, <code>exit_code</code>, <code>timed_out</code>, <code>duration_ms</code>
 - <code>output_files</code> with <code>name</code>, <code>content</code>, <code>mime_type</code>
@@ -1929,7 +1946,7 @@ them directly when driving the conversation naturally.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 31, 2025 02:32:30 UTC">2025-12-31 02:32:30</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 31, 2025 03:19:26 UTC">2025-12-31 03:19:26</span>
   </span>
 
     
