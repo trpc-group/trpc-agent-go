@@ -172,7 +172,7 @@ func TestWithSkillRunAllowedCommands_CopiesSlice(t *testing.T) {
 	WithSkillRunAllowedCommands(in...)(opts)
 
 	in[0] = "rm"
-	require.Equal(t, []string{"echo", "ls"}, opts.SkillRunAllowedCommands)
+	require.Equal(t, []string{"echo", "ls"}, opts.skillRunAllowedCommands)
 }
 
 func TestWithSkillRunDeniedCommands_CopiesSlice(t *testing.T) {
@@ -181,5 +181,5 @@ func TestWithSkillRunDeniedCommands_CopiesSlice(t *testing.T) {
 	WithSkillRunDeniedCommands(in...)(opts)
 
 	in[0] = "rm"
-	require.Equal(t, []string{"echo", "ls"}, opts.SkillRunDeniedCommands)
+	require.Equal(t, []string{"echo", "ls"}, opts.skillRunDeniedCommands)
 }

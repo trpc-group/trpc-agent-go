@@ -239,9 +239,9 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	// when a skills repository is configured. This ensures the model
 	// sees available skills (names/descriptions) and any loaded
 	// SKILL.md/doc texts before deciding on tool calls.
-	if options.SkillsRepository != nil {
+	if options.skillsRepository != nil {
 		skillsProcessor := processor.NewSkillsRequestProcessor(
-			options.SkillsRepository,
+			options.skillsRepository,
 		)
 		requestProcessors = append(requestProcessors, skillsProcessor)
 	}
@@ -383,14 +383,14 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 	}
 
 	// Add skill tools when skills are enabled.
-	if options.SkillsRepository != nil {
+	if options.skillsRepository != nil {
 		allTools = append(allTools,
-			toolskill.NewLoadTool(options.SkillsRepository))
+			toolskill.NewLoadTool(options.skillsRepository))
 		// Specialized doc tools for clarity and control.
 		allTools = append(allTools,
-			toolskill.NewSelectDocsTool(options.SkillsRepository))
+			toolskill.NewSelectDocsTool(options.skillsRepository))
 		allTools = append(allTools,
-			toolskill.NewListDocsTool(options.SkillsRepository))
+			toolskill.NewListDocsTool(options.skillsRepository))
 		// Provide executor to skill_run, fallback to local.
 		exec := options.codeExecutor
 		if exec == nil {
@@ -399,22 +399,22 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 		runOpts := make(
 			[]func(*toolskill.RunTool), 0, 2,
 		)
-		if len(options.SkillRunAllowedCommands) > 0 {
+		if len(options.skillRunAllowedCommands) > 0 {
 			runOpts = append(runOpts,
 				toolskill.WithAllowedCommands(
-					options.SkillRunAllowedCommands...,
+					options.skillRunAllowedCommands...,
 				),
 			)
 		}
-		if len(options.SkillRunDeniedCommands) > 0 {
+		if len(options.skillRunDeniedCommands) > 0 {
 			runOpts = append(runOpts,
 				toolskill.WithDeniedCommands(
-					options.SkillRunDeniedCommands...,
+					options.skillRunDeniedCommands...,
 				),
 			)
 		}
 		allTools = append(allTools, toolskill.NewRunTool(
-			options.SkillsRepository, exec, runOpts...,
+			options.skillsRepository, exec, runOpts...,
 		))
 	}
 
