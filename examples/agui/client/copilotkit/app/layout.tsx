@@ -25,6 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <CopilotKit
           agent="agui-demo"
           runtimeUrl="/api/copilotkit"
+          useSingleEndpoint
           showDevConsole={false}
         >
           {children}
