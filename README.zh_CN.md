@@ -132,6 +132,9 @@ tools := []tool.Tool{
 }
 ```
 
+`NewFSRepository` 也支持传入 HTTP(S) URL（例如 `.zip` / `.tar.gz` 压缩包），
+会自动下载并缓存到本地（可通过 `SKILLS_CACHE_DIR` 覆盖缓存目录）。
+
 </td>
 <td valign="top">
 
