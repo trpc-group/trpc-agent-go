@@ -71,8 +71,8 @@ type client struct {
 //	)
 func NewClient(ctx context.Context, opts ...ClientBuilderOpt) (Client, error) {
 	cfg := &ClientBuilderOpts{
-		Region:     defaultRegion,
 		MaxRetries: defaultMaxRetries,
+		// Region intentionally left empty to allow AWS SDK auto-detection
 	}
 	for _, opt := range opts {
 		opt(cfg)

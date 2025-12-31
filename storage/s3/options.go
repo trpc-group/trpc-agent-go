@@ -53,7 +53,10 @@ func WithEndpoint(endpoint string) ClientBuilderOpt {
 }
 
 // WithRegion sets the AWS region.
-// Default is "us-east-1" if not set.
+// If not set, the AWS SDK will automatically detect the region from:
+//   - AWS_REGION environment variable
+//   - ~/.aws/config shared configuration file
+//   - EC2/ECS instance metadata
 func WithRegion(region string) ClientBuilderOpt {
 	return func(o *ClientBuilderOpts) {
 		if region != "" {

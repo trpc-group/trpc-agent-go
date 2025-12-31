@@ -145,7 +145,7 @@ service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"),
 | 选项 | 描述 | 默认值 |
 |------|------|--------|
 | `WithEndpoint(url)` | S3 兼容服务的自定义端点（使用 `http://` 禁用 SSL） | AWS S3 |
-| `WithRegion(region)` | AWS 区域 | `AWS_REGION` 环境变量或 `us-east-1` |
+| `WithRegion(region)` | AWS 区域 | AWS SDK 自动检测 |
 | `WithCredentials(key, secret)` | 静态凭证 | AWS 凭证链 |
 | `WithSessionToken(token)` | 临时凭证的 STS 会话令牌 | - |
 | `WithPathStyle(bool)` | 使用路径样式 URL（MinIO、R2 需要） | 虚拟主机样式 |

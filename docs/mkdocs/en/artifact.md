@@ -145,7 +145,7 @@ service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"),
 | Option | Description | Default |
 |--------|-------------|---------|
 | `WithEndpoint(url)` | Custom endpoint for S3-compatible services (use `http://` for non-SSL) | AWS S3 |
-| `WithRegion(region)` | AWS region | `AWS_REGION` env or `us-east-1` |
+| `WithRegion(region)` | AWS region | AWS SDK auto-detection |
 | `WithCredentials(key, secret)` | Static credentials | AWS credential chain |
 | `WithSessionToken(token)` | STS session token for temporary credentials | - |
 | `WithPathStyle(bool)` | Use path-style URLs (required for MinIO, R2) | Virtual-hosted |
