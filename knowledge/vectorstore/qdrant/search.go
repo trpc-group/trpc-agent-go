@@ -69,7 +69,9 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 			Filter:         filter,
 			Limit:          qdrant.PtrOf(limit),
 			WithPayload:    qdrant.NewWithPayload(true),
-			ScoreThreshold: qdrant.PtrOf(float32(query.MinScore)),
+		}
+		if query.MinScore > 0 {
+			queryReq.ScoreThreshold = qdrant.PtrOf(float32(query.MinScore))
 		}
 	} else {
 		// Single vector query
@@ -79,7 +81,9 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 			Filter:         filter,
 			Limit:          qdrant.PtrOf(limit),
 			WithPayload:    qdrant.NewWithPayload(true),
-			ScoreThreshold: qdrant.PtrOf(float32(query.MinScore)),
+		}
+		if query.MinScore > 0 {
+			queryReq.ScoreThreshold = qdrant.PtrOf(float32(query.MinScore))
 		}
 	}
 
@@ -141,18 +145,21 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 
 	// Use BM25 sparse vector search with Document inference
 	results, err := retry(ctx, vs.retryCfg, func() ([]*qdrant.ScoredPoint, error) {
-		return vs.client.Query(ctx, &qdrant.QueryPoints{
+		queryReq := &qdrant.QueryPoints{
 			CollectionName: vs.opts.collectionName,
 			Query: qdrant.NewQueryDocument(&qdrant.Document{
 				Text:  query.Query,
 				Model: defaultBM25Model,
 			}),
-			Using:          qdrant.PtrOf(vectorNameSparse),
-			Filter:         filter,
-			Limit:          qdrant.PtrOf(limit),
-			WithPayload:    qdrant.NewWithPayload(true),
-			ScoreThreshold: qdrant.PtrOf(float32(query.MinScore)),
-		})
+			Using:       qdrant.PtrOf(vectorNameSparse),
+			Filter:      filter,
+			Limit:       qdrant.PtrOf(limit),
+			WithPayload: qdrant.NewWithPayload(true),
+		}
+		if query.MinScore > 0 {
+			queryReq.ScoreThreshold = qdrant.PtrOf(float32(query.MinScore))
+		}
+		return vs.client.Query(ctx, queryReq)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("keyword search in %q: %w", vs.opts.collectionName, err)
@@ -223,14 +230,17 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 	}
 
 	results, err := retry(ctx, vs.retryCfg, func() ([]*qdrant.ScoredPoint, error) {
-		return vs.client.Query(ctx, &qdrant.QueryPoints{
+		queryReq := &qdrant.QueryPoints{
 			CollectionName: vs.opts.collectionName,
 			Prefetch:       prefetches,
 			Query:          qdrant.NewQueryFusion(qdrant.Fusion_RRF),
 			Limit:          qdrant.PtrOf(limit),
 			WithPayload:    qdrant.NewWithPayload(true),
-			ScoreThreshold: qdrant.PtrOf(float32(query.MinScore)),
-		})
+		}
+		if query.MinScore > 0 {
+			queryReq.ScoreThreshold = qdrant.PtrOf(float32(query.MinScore))
+		}
+		return vs.client.Query(ctx, queryReq)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("hybrid search in %q: %w", vs.opts.collectionName, err)
