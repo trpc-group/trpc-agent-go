@@ -11,7 +11,7 @@
 
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import type { InputProps, RenderMessageProps } from "@copilotkit/react-ui";
+import type { InputProps, MessagesProps, RenderMessageProps } from "@copilotkit/react-ui";
 import {
   AssistantMessage as DefaultAssistantMessage,
   CopilotChat,
@@ -19,7 +19,6 @@ import {
   UserMessage as DefaultUserMessage,
   useChatContext,
 } from "@copilotkit/react-ui";
-import type { MessagesProps } from "@copilotkit/react-ui/dist/components/chat/props";
 import { useCopilotChatInternal as useCopilotChat } from "@copilotkit/react-core";
 import type { Message } from "@copilotkit/shared";
 
@@ -71,7 +70,7 @@ const PromptInput = ({
   useLayoutEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.focus();
-      // ensure consistent initial height after focus
+      // Ensure consistent initial height after focus.
       adjustHeight();
     }
   }, []);
@@ -375,8 +374,9 @@ const DocumentAwareMessages = ({
 
   const MessageRenderer = RenderMessage;
 
-  const panelInstance =
-    expandedDocumentId && instances.find((inst) => inst.session.documentId === expandedDocumentId);
+  const panelInstance = expandedDocumentId
+    ? instances.find((inst) => inst.session.documentId === expandedDocumentId) ?? null
+    : null;
   const panelSession = panelInstance?.session ?? null;
   const panelOpen = !!panelSession;
 
@@ -397,6 +397,7 @@ const DocumentAwareMessages = ({
                 <Fragment key={messageKey}>
                   <MessageRenderer
                     message={message}
+                    messages={combinedMessages}
                     inProgress={inProgress}
                     index={index}
                     isCurrentMessage={isCurrentMessage}
