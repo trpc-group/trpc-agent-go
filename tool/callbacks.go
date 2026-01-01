@@ -42,6 +42,8 @@ type AfterToolCallback = func(
 
 // BeforeToolArgs contains all parameters for before tool callback.
 type BeforeToolArgs struct {
+	// ToolCallID is the ID of the tool call issued by the model.
+	ToolCallID string
 	// ToolName is the name of the tool.
 	ToolName string
 	// Declaration is the tool declaration.
@@ -75,6 +77,8 @@ type BeforeToolCallbackStructured = func(
 
 // AfterToolArgs contains all parameters for after tool callback.
 type AfterToolArgs struct {
+	// ToolCallID is the ID of the tool call issued by the model.
+	ToolCallID string
 	// ToolName is the name of the tool.
 	ToolName string
 	// Declaration is the tool declaration.
