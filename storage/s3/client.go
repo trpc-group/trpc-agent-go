@@ -25,24 +25,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-// Client defines the interface for S3 client operations.
-// This allows for mocking in tests and provides a clean abstraction
-// over the AWS SDK.
+// Client defines the interface for S3 storage operations.
 type Client interface {
-	// PutObject uploads an object to the bucket.
 	PutObject(ctx context.Context, key string, data []byte, contentType string) error
-
-	// GetObject downloads an object from the bucket.
-	// Returns the object data, content type, and any error.
 	GetObject(ctx context.Context, key string) ([]byte, string, error)
-
-	// ListObjects lists object keys with the given prefix.
 	ListObjects(ctx context.Context, prefix string) ([]string, error)
-
-	// DeleteObjects deletes multiple objects in a single request (batch delete).
 	DeleteObjects(ctx context.Context, keys []string) error
-
-	// Close releases any resources held by the client.
 	Close() error
 }
 
@@ -62,17 +50,9 @@ type client struct {
 }
 
 // NewClient creates a new S3 client with the given options.
-//
-// Example:
-//
-//	client, err := s3.NewClient(ctx,
-//	    s3.WithBucket("my-bucket"),
-//	    s3.WithRegion("us-west-2"),
-//	)
 func NewClient(ctx context.Context, opts ...ClientBuilderOpt) (Client, error) {
 	cfg := &ClientBuilderOpts{
 		MaxRetries: defaultMaxRetries,
-		// Region intentionally left empty to allow AWS SDK auto-detection
 	}
 	for _, opt := range opts {
 		opt(cfg)
@@ -82,43 +62,30 @@ func NewClient(ctx context.Context, opts ...ClientBuilderOpt) (Client, error) {
 		return nil, ErrEmptyBucket
 	}
 
-	// Build AWS config options
 	var awsOpts []func(*config.LoadOptions) error
-
-	// Set region:
-	// - If explicit region provided, use it
-	// - If custom endpoint (MinIO, R2, etc.) without region, use default fallback
-	// - If no endpoint and no region, let AWS SDK auto-detect
 	if cfg.Region != "" {
 		awsOpts = append(awsOpts, config.WithRegion(cfg.Region))
 	} else if cfg.Endpoint != "" {
+		// Custom endpoints need a region; use default fallback
 		awsOpts = append(awsOpts, config.WithRegion(defaultRegion))
 	}
 
-	// Load default AWS config
 	awsCfg, err := config.LoadDefaultConfig(ctx, awsOpts...)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build S3-specific options
 	var s3Opts []func(*s3.Options)
-
-	// Custom endpoint (for MinIO, R2, Spaces, etc.)
 	if cfg.Endpoint != "" {
 		s3Opts = append(s3Opts, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
 		})
 	}
-
-	// Path-style addressing (required for MinIO and some S3-compatible services)
 	if cfg.UsePathStyle {
 		s3Opts = append(s3Opts, func(o *s3.Options) {
 			o.UsePathStyle = true
 		})
 	}
-
-	// Custom credentials
 	if cfg.AccessKeyID != "" && cfg.SecretAccessKey != "" {
 		s3Opts = append(s3Opts, func(o *s3.Options) {
 			o.Credentials = credentials.NewStaticCredentialsProvider(
@@ -128,8 +95,6 @@ func NewClient(ctx context.Context, opts ...ClientBuilderOpt) (Client, error) {
 			)
 		})
 	}
-
-	// Retry configuration
 	if cfg.MaxRetries > 0 {
 		s3Opts = append(s3Opts, func(o *s3.Options) {
 			o.RetryMaxAttempts = cfg.MaxRetries
@@ -155,11 +120,7 @@ func (c *client) PutObject(ctx context.Context, key string, data []byte, content
 	}
 
 	_, err := c.s3.PutObject(ctx, input)
-	if err != nil {
-		return wrapError(err)
-	}
-
-	return nil
+	return wrapError(err)
 }
 
 // GetObject downloads an object from S3.
@@ -187,11 +148,6 @@ func (c *client) ListObjects(ctx context.Context, prefix string) ([]string, erro
 	var continuationToken *string
 
 	for {
-		// Check for context cancellation between pagination requests
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-
 		output, err := c.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 			Bucket:            aws.String(c.bucket),
 			Prefix:            aws.String(prefix),
@@ -214,28 +170,18 @@ func (c *client) ListObjects(ctx context.Context, prefix string) ([]string, erro
 	return keys, nil
 }
 
-// DeleteObjects deletes multiple objects in a single batch request.
-// S3 allows up to 1000 objects per DeleteObjects request.
+// DeleteObjects deletes multiple objects in batches of 1000.
 func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 	if len(keys) == 0 {
 		return nil
 	}
 
-	// S3 DeleteObjects has a limit of 1000 objects per request
 	const maxBatchSize = 1000
-
 	for i := 0; i < len(keys); i += maxBatchSize {
-		// Check for context cancellation between batch requests
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-
-		end := i + maxBatchSize
-		if end > len(keys) {
-			end = len(keys)
-		}
-
-		batch := keys[i:end]
+		batch := keys[i:min(i+maxBatchSize, len(keys))]
 		objectIDs := make([]types.ObjectIdentifier, len(batch))
 		for j, key := range batch {
 			objectIDs[j] = types.ObjectIdentifier{
@@ -254,7 +200,6 @@ func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 			return wrapError(err)
 		}
 
-		// Check for partial failures (S3 returns individual errors even on success)
 		if len(output.Errors) > 0 {
 			firstErr := output.Errors[0]
 			return fmt.Errorf("failed to delete %d objects, first error: %s (key: %s)",
@@ -265,32 +210,27 @@ func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 	return nil
 }
 
-// Close releases any resources held by the client.
-// For the S3 client, this is a no-op as the AWS SDK doesn't require explicit cleanup.
+// Close implements the Client interface (no-op for S3).
 func (c *client) Close() error {
 	return nil
 }
 
-// wrapError converts AWS SDK errors to sentinel errors while preserving
-// the original error for diagnostics.
+// wrapError converts AWS SDK errors to sentinel errors.
 func wrapError(err error) error {
 	if err == nil {
 		return nil
 	}
 
-	// Check for NoSuchKey error
 	var noSuchKey *types.NoSuchKey
 	if errors.As(err, &noSuchKey) {
 		return errors.Join(ErrNotFound, err)
 	}
 
-	// Check for NoSuchBucket error
 	var noSuchBucket *types.NoSuchBucket
 	if errors.As(err, &noSuchBucket) {
 		return errors.Join(ErrBucketNotFound, err)
 	}
 
-	// Check for access denied (various error types)
 	var apiErr interface{ ErrorCode() string }
 	if errors.As(err, &apiErr) {
 		switch apiErr.ErrorCode() {

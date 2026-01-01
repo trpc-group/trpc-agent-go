@@ -194,6 +194,9 @@ func (m *mockS3API) DeleteObjects(ctx context.Context, params *s3.DeleteObjectsI
 }
 
 func (m *mockS3API) ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if m.listObjectsV2Func != nil {
 		return m.listObjectsV2Func(ctx, params, optFns...)
 	}

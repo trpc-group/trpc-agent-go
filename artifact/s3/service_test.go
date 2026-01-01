@@ -830,7 +830,7 @@ func TestServiceErrorPaths(t *testing.T) {
 		assert.Nil(t, art)
 	})
 
-	t.Run("ListArtifactKeys returns error when listing session artifacts fails", func(t *testing.T) {
+	t.Run("ListArtifactKeys returns error when listing artifacts fails", func(t *testing.T) {
 		mock := newErrorMockStorage()
 		mock.listObjectsErr = testErr
 
@@ -839,7 +839,7 @@ func TestServiceErrorPaths(t *testing.T) {
 
 		_, err = svc.ListArtifactKeys(ctx, sessionInfo)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to list session artifacts")
+		assert.Contains(t, err.Error(), "failed to list artifacts")
 	})
 
 	t.Run("DeleteArtifact returns error when ListObjects fails with non-NotFound error", func(t *testing.T) {

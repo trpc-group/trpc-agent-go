@@ -47,65 +47,19 @@ type Service struct {
 	logger     log.Logger
 }
 
-// NewService creates a new S3 artifact service with optional configurations.
-//
-// The context is used for initializing the AWS SDK client (loading credentials,
-// region detection, etc.). Pass a context with timeout if you need to limit
-// initialization time.
-//
-// The bucket parameter specifies the S3 bucket name. Note: when using WithClient,
-// this parameter is ignored as the client already has a bucket configured.
-// Ensure the bucket matches the client's bucket to avoid confusion.
-//
-// Example usage:
-//
-//	// AWS S3 (using environment variables or AWS credential chain)
-//	service, err := s3.NewService(ctx, "my-bucket",
-//	    s3.WithRegion("eu-west-1"),
-//	)
-//
-//	// MinIO
-//	service, err := s3.NewService(ctx, "artifacts",
-//	    s3.WithEndpoint("http://localhost:9000"),
-//	    s3.WithCredentials("minioadmin", "minioadmin"),
-//	    s3.WithPathStyle(true),
-//	)
-//
-//	// DigitalOcean Spaces
-//	service, err := s3.NewService(ctx, "my-space",
-//	    s3.WithEndpoint("https://nyc3.digitaloceanspaces.com"),
-//	    s3.WithRegion("nyc3"),
-//	    s3.WithCredentials(accessKey, secretKey),
-//	)
-//
-//	// Cloudflare R2
-//	service, err := s3.NewService(ctx, "my-bucket",
-//	    s3.WithEndpoint("https://ACCOUNT_ID.r2.cloudflarestorage.com"),
-//	    s3.WithCredentials(accessKey, secretKey),
-//	    s3.WithPathStyle(true),
-//	)
-//
-//	// Using a pre-created client (bucket param is ignored, uses client's bucket)
-//	client, err := s3storage.NewClient(ctx,
-//	    s3storage.WithBucket("my-bucket"),
-//	    s3storage.WithRegion("us-west-2"),
-//	)
-//	service, err := s3.NewService(ctx, "my-bucket", s3.WithClient(client))
+// NewService creates a new S3 artifact service.
+// When using WithClient, the bucket parameter is ignored as the client already has one configured.
 func NewService(ctx context.Context, bucket string, opts ...Option) (*Service, error) {
 	o := &options{
 		bucket: bucket,
 	}
-
-	// Apply options
 	for _, opt := range opts {
 		opt(o)
 	}
 
-	// Use pre-created client if provided, otherwise create one
 	client := o.client
 	ownsClient := false
 	if client == nil {
-		// Build client builder options
 		builderOpts := []s3storage.ClientBuilderOpt{
 			s3storage.WithBucket(bucket),
 		}
@@ -158,19 +112,16 @@ func (s *Service) SaveArtifact(
 		return 0, ErrNilArtifact
 	}
 
-	// Get existing versions to determine the next version number
 	versions, err := s.listVersions(ctx, sessionInfo, filename)
 	if err != nil {
 		return 0, fmt.Errorf("failed to list versions: %w", err)
 	}
 
-	// Determine next version (first version is 0)
 	version := 0
 	if len(versions) > 0 {
 		version = slices.Max(versions) + 1
 	}
 
-	// Build object key and upload
 	objectKey := iartifact.BuildObjectName(sessionInfo, filename, version)
 	contentType := cmp.Or(art.MimeType, defaultContentType)
 
@@ -200,7 +151,6 @@ func (s *Service) LoadArtifact(
 	if version != nil {
 		targetVersion = *version
 	} else {
-		// Get the latest version
 		versions, err := s.listVersions(ctx, sessionInfo, filename)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list versions: %w", err)
@@ -215,7 +165,6 @@ func (s *Service) LoadArtifact(
 		targetVersion = slices.Max(versions)
 	}
 
-	// Download the artifact
 	objectKey := iartifact.BuildObjectName(sessionInfo, filename, targetVersion)
 	data, contentType, err := s.client.GetObject(ctx, objectKey)
 	if err != nil {
@@ -252,29 +201,23 @@ func (s *Service) ListArtifactKeys(
 	}
 
 	filenameSet := make(map[string]struct{})
-
-	// Collect filenames from both session and user scopes
-	prefixes := []struct {
-		prefix  string
-		errWrap string
-	}{
-		{iartifact.BuildSessionPrefix(sessionInfo), "failed to list session artifacts"},
-		{iartifact.BuildUserNamespacePrefix(sessionInfo), "failed to list user artifacts"},
+	prefixes := []string{
+		iartifact.BuildSessionPrefix(sessionInfo),
+		iartifact.BuildUserNamespacePrefix(sessionInfo),
 	}
 
-	for _, p := range prefixes {
-		keys, err := s.client.ListObjects(ctx, p.prefix)
+	for _, prefix := range prefixes {
+		keys, err := s.client.ListObjects(ctx, prefix)
 		if err != nil && !errors.Is(err, s3storage.ErrNotFound) {
-			return nil, fmt.Errorf("%s: %w", p.errWrap, err)
+			return nil, fmt.Errorf("failed to list artifacts: %w", err)
 		}
 		for _, key := range keys {
-			if filename := extractFilename(key, p.prefix); filename != "" {
+			if filename := extractFilename(key, prefix); filename != "" {
 				filenameSet[filename] = struct{}{}
 			}
 		}
 	}
 
-	// Convert set to sorted slice
 	filenames := make([]string, 0, len(filenameSet))
 	for filename := range filenameSet {
 		filenames = append(filenames, filename)
@@ -297,21 +240,19 @@ func (s *Service) DeleteArtifact(
 		return err
 	}
 
-	// Get all versions of the artifact
 	prefix := iartifact.BuildObjectNamePrefix(sessionInfo, filename)
 	keys, err := s.client.ListObjects(ctx, prefix)
 	if err != nil {
 		if errors.Is(err, s3storage.ErrNotFound) {
-			return nil // Nothing to delete
+			return nil
 		}
 		return fmt.Errorf("failed to list artifact versions: %w", err)
 	}
 
 	if len(keys) == 0 {
-		return nil // Nothing to delete
+		return nil
 	}
 
-	// Batch delete
 	if err := s.client.DeleteObjects(ctx, keys); err != nil {
 		return fmt.Errorf("failed to delete artifact: %w", err)
 	}
@@ -334,8 +275,6 @@ func (s *Service) ListVersions(
 	return s.listVersions(ctx, sessionInfo, filename)
 }
 
-// listVersions is the internal implementation that skips validation.
-// Use this when the caller has already validated the inputs.
 func (s *Service) listVersions(
 	ctx context.Context,
 	sessionInfo artifact.SessionInfo,
@@ -345,14 +284,13 @@ func (s *Service) listVersions(
 	keys, err := s.client.ListObjects(ctx, prefix)
 	if err != nil {
 		if errors.Is(err, s3storage.ErrNotFound) {
-			return []int{}, nil
+			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to list versions: %w", err)
 	}
 
 	versions := make([]int, 0, len(keys))
 	for _, key := range keys {
-		// Extract version number from key suffix
 		if idx := strings.LastIndex(key, "/"); idx != -1 {
 			if v, err := strconv.Atoi(key[idx+1:]); err == nil {
 				versions = append(versions, v)
@@ -372,7 +310,6 @@ func extractFilename(objectKey, prefix string) string {
 		return ""
 	}
 
-	// Remove prefix and extract filename (first segment before "/")
 	relative := strings.TrimPrefix(objectKey, prefix)
 	if filename, _, ok := strings.Cut(relative, "/"); ok && filename != "" {
 		return filename

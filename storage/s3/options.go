@@ -36,14 +36,7 @@ type ClientBuilderOpts struct {
 	MaxRetries int // Maximum number of retries
 }
 
-// WithEndpoint sets a custom endpoint URL.
-// Use this for S3-compatible services like MinIO, DigitalOcean Spaces,
-// Cloudflare R2, or any other S3-compatible object storage.
-//
-// Examples:
-//   - MinIO: "http://localhost:9000"
-//   - DigitalOcean Spaces: "https://nyc3.digitaloceanspaces.com"
-//   - Cloudflare R2: "https://ACCOUNT_ID.r2.cloudflarestorage.com"
+// WithEndpoint sets a custom endpoint URL for S3-compatible services.
 func WithEndpoint(endpoint string) ClientBuilderOpt {
 	return func(o *ClientBuilderOpts) {
 		if endpoint != "" {
@@ -75,12 +68,7 @@ func WithBucket(bucket string) ClientBuilderOpt {
 	}
 }
 
-// WithCredentials sets the AWS access key ID and secret access key.
-// If not provided, credentials are loaded from environment variables
-// (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) or the default AWS credential chain.
-//
-// Both accessKeyID and secretAccessKey must be non-empty to take effect.
-// If either is empty, the default credential chain is used instead.
+// WithCredentials sets static AWS credentials.
 func WithCredentials(accessKeyID, secretAccessKey string) ClientBuilderOpt {
 	return func(o *ClientBuilderOpts) {
 		if accessKeyID != "" && secretAccessKey != "" {
@@ -90,27 +78,21 @@ func WithCredentials(accessKeyID, secretAccessKey string) ClientBuilderOpt {
 	}
 }
 
-// WithSessionToken sets the session token for temporary credentials (STS).
-// This is typically used with AWS STS AssumeRole or similar services.
+// WithSessionToken sets the session token for temporary credentials.
 func WithSessionToken(token string) ClientBuilderOpt {
 	return func(o *ClientBuilderOpts) {
 		o.SessionToken = token
 	}
 }
 
-// WithPathStyle enables path-style addressing instead of virtual-hosted-style.
-// This is required for MinIO and some other S3-compatible services.
-//
-// Path-style: http://endpoint/bucket/key
-// Virtual-hosted: http://bucket.endpoint/key (default for AWS S3)
+// WithPathStyle enables path-style addressing (required for MinIO).
 func WithPathStyle(enabled bool) ClientBuilderOpt {
 	return func(o *ClientBuilderOpts) {
 		o.UsePathStyle = enabled
 	}
 }
 
-// WithRetries sets the maximum number of retries for failed requests.
-// Default is 3.
+// WithRetries sets the maximum number of retries (default: 3).
 func WithRetries(n int) ClientBuilderOpt {
 	return func(o *ClientBuilderOpts) {
 		if n > 0 {

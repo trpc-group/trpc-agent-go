@@ -23,7 +23,4 @@ var (
 
 	// ErrEmptySessionInfo is returned when required session info fields are empty.
 	ErrEmptySessionInfo = errors.New("s3 artifact: session info fields cannot be empty")
-
-	// ErrVersionNotFound is returned when a specific version is requested but doesn't exist.
-	ErrVersionNotFound = errors.New("s3 artifact: version not found")
 )
