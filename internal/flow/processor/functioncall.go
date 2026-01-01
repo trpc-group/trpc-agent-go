@@ -973,6 +973,7 @@ func (p *FunctionCallResponseProcessor) runBeforeToolPluginCallbacks(
 	}
 
 	args := &tool.BeforeToolArgs{
+		ToolCallID:  toolCall.ID,
 		ToolName:    toolCall.Function.Name,
 		Declaration: toolDeclaration,
 		Arguments:   toolCall.Function.Arguments,
@@ -1010,6 +1011,7 @@ func (p *FunctionCallResponseProcessor) runBeforeToolCallbacks(
 	}
 
 	args := &tool.BeforeToolArgs{
+		ToolCallID:  toolCall.ID,
 		ToolName:    toolCall.Function.Name,
 		Declaration: toolDeclaration,
 		Arguments:   toolCall.Function.Arguments,
@@ -1056,6 +1058,7 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 	}
 
 	args := &tool.AfterToolArgs{
+		ToolCallID:  toolCall.ID,
 		ToolName:    toolCall.Function.Name,
 		Declaration: toolDeclaration,
 		Arguments:   toolCall.Function.Arguments,
@@ -1094,6 +1097,7 @@ func (p *FunctionCallResponseProcessor) runAfterToolCallbacks(
 	}
 
 	args := &tool.AfterToolArgs{
+		ToolCallID:  toolCall.ID,
 		ToolName:    toolCall.Function.Name,
 		Declaration: toolDeclaration,
 		Arguments:   toolCall.Function.Arguments,
