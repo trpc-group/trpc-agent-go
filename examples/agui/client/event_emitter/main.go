@@ -22,6 +22,7 @@ import (
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/client/sse"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/sirupsen/logrus"
 )
 
@@ -62,11 +63,11 @@ func runDemo(endpoint, prompt string) error {
 	client := newSSEClient(endpoint)
 	defer client.Close()
 
-	payload := map[string]any{
-		"threadId": "event-emitter-demo-thread",
-		"runId":    fmt.Sprintf("run-%d", time.Now().UnixNano()),
-		"messages": []map[string]any{
-			{"role": "user", "content": prompt},
+	payload := types.RunAgentInput{
+		ThreadID: "event-emitter-demo-thread",
+		RunID:    fmt.Sprintf("run-%d", time.Now().UnixNano()),
+		Messages: []types.Message{
+			{Role: types.RoleUser, Content: prompt},
 		},
 	}
 

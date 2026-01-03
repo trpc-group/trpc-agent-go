@@ -1,5 +1,5 @@
-github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20251202144511-d0e095fddefd h1:qeat3GmeCc5a3xlpi+Z0EcuM3CqTl0O6ekJ+dAqCqqo=
-github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20251202144511-d0e095fddefd/go.mod h1:ERAMOexUee4AIuoxksuuGoEcHl3aqLwaazjGwlR9ZCI=
+github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20251229221019-6a8d741d66f8 h1:YALuSg0pzYUxRq+RoLs0giPp132G/w91ADcc/FZgYEE=
+github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20251229221019-6a8d741d66f8/go.mod h1:ERAMOexUee4AIuoxksuuGoEcHl3aqLwaazjGwlR9ZCI=
 github.com/bmatcuk/doublestar/v4 v4.9.1 h1:X8jg9rRZmJd4yRy7ZeNDRnM+T3ZfHv15JiBJ/avrEXE=
 github.com/bmatcuk/doublestar/v4 v4.9.1/go.mod h1:xBQ8jztBU6kakFMg+8WGxn0c6z1fTSPVIjEY1Wr7jzc=
 github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=
