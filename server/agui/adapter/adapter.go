@@ -11,19 +11,8 @@
 package adapter
 
 import (
-	"trpc.group/trpc-go/trpc-agent-go/model"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 )
 
 // RunAgentInput represents the parameters for an AG-UI run request.
-type RunAgentInput struct {
-	// ThreadID is the ID of the conversation thread, which is the session ID.
-	ThreadID string `json:"threadId"`
-	// RunID is the ID of the current run, which is the invocation ID.
-	RunID string `json:"runId"`
-	// Messages is the list of messages in the conversation.
-	Messages []model.Message `json:"messages"`
-	// State is the session state of the agent.
-	State map[string]any `json:"state"`
-	// ForwardedProps is the custom properties forwarded to the agent.
-	ForwardedProps map[string]any `json:"forwardedProps"`
-}
+type RunAgentInput = types.RunAgentInput
