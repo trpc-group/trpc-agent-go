@@ -13,8 +13,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/stretchr/testify/assert"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 )
 
@@ -35,13 +35,15 @@ func TestRunAgentInputJSONUnmarshal(t *testing.T) {
 	assert.Equal(t, "thread-123", input.ThreadID)
 	assert.Equal(t, "run-456", input.RunID)
 	assert.Len(t, input.Messages, 1)
-	assert.Equal(t, model.RoleUser, input.Messages[0].Role)
+	assert.Equal(t, types.RoleUser, input.Messages[0].Role)
 	assert.Equal(t, "hi there", input.Messages[0].Content)
 
 	assert.Equal(t, map[string]any{"cursor": float64(1), "flags": []any{"a", "b"}}, input.State)
-	assert.Equal(t, "alice", input.ForwardedProps["userId"])
+	forwardedProps, ok := input.ForwardedProps.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "alice", forwardedProps["userId"])
 
-	metadata, ok := input.ForwardedProps["metadata"].(map[string]any)
+	metadata, ok := forwardedProps["metadata"].(map[string]any)
 	assert.True(t, ok)
 	assert.Equal(t, "trace-01", metadata["traceId"])
 }
@@ -50,7 +52,7 @@ func TestRunAgentInputJSONMarshal(t *testing.T) {
 	input := adapter.RunAgentInput{
 		ThreadID: "thread-xyz",
 		RunID:    "run-999",
-		Messages: []model.Message{{Role: model.RoleAssistant, Content: "result"}},
+		Messages: []types.Message{{Role: types.RoleAssistant, Content: "result"}},
 		State:    map[string]any{"step": 2},
 		ForwardedProps: map[string]any{
 			"userId": "bob",
