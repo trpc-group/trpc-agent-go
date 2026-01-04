@@ -692,7 +692,7 @@ agent := llmagent.New(
         true,                   // Strict mode
         "Product information",  // Description
     ),
-    llmagent.WithTools(searchTool, calculatorTool), // Tools are allowed!
+    llmagent.WithTools([]tool.Tool{searchTool, calculatorTool}), // Tools are allowed!
 )
 
 // Access untyped output from events
@@ -787,7 +787,7 @@ agent := llmagent.New(
         true,            // Strict mode
         "Agent output",  // Description
     ),
-    llmagent.WithTools(myTools), // ✅ Now works!
+    llmagent.WithTools([]tool.Tool{myTool1, myTool2}), // ✅ Now works!
 )
 ```
 

@@ -102,7 +102,7 @@ agent := llmagent.New(
         true,                // Strict mode
         "Place information", // Description
     ),
-    llmagent.WithTools(myTools), // Tools are allowed
+    llmagent.WithTools([]tool.Tool{searchTool, calculatorTool}), // Tools are allowed
 )
 
 // Access untyped output

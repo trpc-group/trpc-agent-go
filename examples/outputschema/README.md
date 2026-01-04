@@ -280,7 +280,7 @@ agent := llmagent.New(
         true,            // Strict mode
         "Agent output",  // Description
     ),
-    llmagent.WithTools(myTools), // ✅ Now works!
+    llmagent.WithTools([]tool.Tool{myTool1, myTool2}), // ✅ Now works!
 )
 ```
 
