@@ -1259,3 +1259,233 @@ func createMockCollectionDesc(hasVectorIndex, hasSparseIndex bool, filterFieldNa
 	result.IndexInterface = &mockIndexInterface{}
 	return result
 }
+
+// TestNewConnectionPriority tests the connection priority: Instance Name > URL
+func TestNewConnectionPriority(t *testing.T) {
+	t.Run("instance_priority_over_url", func(t *testing.T) {
+		oldBuilder := storage.GetClientBuilder()
+		defer func() { storage.SetClientBuilder(oldBuilder) }()
+
+		var receivedOpts *storage.ClientBuilderOpts
+		storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.ClientInterface, error) {
+			builderOpts := &storage.ClientBuilderOpts{}
+			for _, opt := range opts {
+				opt(builderOpts)
+			}
+			receivedOpts = builderOpts
+			return newMockClient(), nil
+		})
+
+		instanceURL := "http://instance-host:8080"
+		storage.RegisterTcVectorInstance("test-priority-instance",
+			storage.WithClientBuilderHTTPURL(instanceURL),
+			storage.WithClientBuilderUserName("instance-user"),
+			storage.WithClientBuilderKey("instance-key"))
+
+		// Instance should take priority over URL
+		_, err := New(
+			WithTCVectorInstance("test-priority-instance"),
+			WithURL("http://url-host:8080"),
+			WithUsername("url-user"),
+			WithPassword("url-key"),
+			WithDatabase("test_db"),
+			WithCollection("test_collection"),
+			WithIndexDimension(128),
+			WithEnableTSVector(false),
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if receivedOpts == nil {
+			t.Fatal("receivedOpts is nil")
+		}
+		if receivedOpts.HTTPURL != instanceURL {
+			t.Errorf("expected HTTPURL=%s, got %s", instanceURL, receivedOpts.HTTPURL)
+		}
+		if receivedOpts.UserName != "instance-user" {
+			t.Errorf("expected UserName=instance-user, got %s", receivedOpts.UserName)
+		}
+	})
+
+	t.Run("url_used_when_no_instance", func(t *testing.T) {
+		oldBuilder := storage.GetClientBuilder()
+		defer func() { storage.SetClientBuilder(oldBuilder) }()
+
+		var receivedOpts *storage.ClientBuilderOpts
+		storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.ClientInterface, error) {
+			builderOpts := &storage.ClientBuilderOpts{}
+			for _, opt := range opts {
+				opt(builderOpts)
+			}
+			receivedOpts = builderOpts
+			return newMockClient(), nil
+		})
+
+		expectedURL := "http://url-host:8080"
+		// URL should be used when no instance is specified
+		_, err := New(
+			WithURL(expectedURL),
+			WithUsername("url-user"),
+			WithPassword("url-key"),
+			WithDatabase("test_db"),
+			WithCollection("test_collection"),
+			WithIndexDimension(128),
+			WithEnableTSVector(false),
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if receivedOpts == nil {
+			t.Fatal("receivedOpts is nil")
+		}
+		if receivedOpts.HTTPURL != expectedURL {
+			t.Errorf("expected HTTPURL=%s, got %s", expectedURL, receivedOpts.HTTPURL)
+		}
+		if receivedOpts.UserName != "url-user" {
+			t.Errorf("expected UserName=url-user, got %s", receivedOpts.UserName)
+		}
+	})
+
+	t.Run("instance_not_found_error", func(t *testing.T) {
+		_, err := New(
+			WithTCVectorInstance("non-existent-instance"),
+			WithDatabase("test_db"),
+			WithCollection("test_collection"),
+		)
+		if err == nil {
+			t.Fatal("expected error but got nil")
+		}
+		if !errors.Is(err, nil) && err.Error() != "tcvectordb instance non-existent-instance not found" {
+			// Check error message contains expected text
+			if !containsString(err.Error(), "not found") {
+				t.Errorf("expected error to contain 'not found', got: %v", err)
+			}
+		}
+	})
+
+	t.Run("instance_with_extra_options", func(t *testing.T) {
+		oldBuilder := storage.GetClientBuilder()
+		defer func() { storage.SetClientBuilder(oldBuilder) }()
+
+		var receivedOpts *storage.ClientBuilderOpts
+		storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.ClientInterface, error) {
+			builderOpts := &storage.ClientBuilderOpts{}
+			for _, opt := range opts {
+				opt(builderOpts)
+			}
+			receivedOpts = builderOpts
+			return newMockClient(), nil
+		})
+
+		instanceURL := "http://instance-host:8080"
+		storage.RegisterTcVectorInstance("test-instance-extra-opts",
+			storage.WithClientBuilderHTTPURL(instanceURL),
+			storage.WithClientBuilderUserName("instance-user"),
+			storage.WithClientBuilderKey("instance-key"))
+
+		extraOpt := "instance-extra-option"
+		_, err := New(
+			WithTCVectorInstance("test-instance-extra-opts"),
+			WithExtraOptions(extraOpt),
+			WithDatabase("test_db"),
+			WithCollection("test_collection"),
+			WithIndexDimension(128),
+			WithEnableTSVector(false),
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if receivedOpts == nil {
+			t.Fatal("receivedOpts is nil")
+		}
+		if receivedOpts.HTTPURL != instanceURL {
+			t.Errorf("expected HTTPURL=%s, got %s", instanceURL, receivedOpts.HTTPURL)
+		}
+		if len(receivedOpts.ExtraOptions) != 1 {
+			t.Errorf("expected 1 extra option, got %d", len(receivedOpts.ExtraOptions))
+		}
+		if receivedOpts.ExtraOptions[0] != extraOpt {
+			t.Errorf("expected extra option=%s, got %v", extraOpt, receivedOpts.ExtraOptions[0])
+		}
+	})
+
+	t.Run("url_with_extra_options", func(t *testing.T) {
+		oldBuilder := storage.GetClientBuilder()
+		defer func() { storage.SetClientBuilder(oldBuilder) }()
+
+		var receivedOpts *storage.ClientBuilderOpts
+		storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.ClientInterface, error) {
+			builderOpts := &storage.ClientBuilderOpts{}
+			for _, opt := range opts {
+				opt(builderOpts)
+			}
+			receivedOpts = builderOpts
+			return newMockClient(), nil
+		})
+
+		expectedURL := "http://url-host:8080"
+		extraOpt := "url-extra-option"
+		_, err := New(
+			WithURL(expectedURL),
+			WithUsername("url-user"),
+			WithPassword("url-key"),
+			WithExtraOptions(extraOpt),
+			WithDatabase("test_db"),
+			WithCollection("test_collection"),
+			WithIndexDimension(128),
+			WithEnableTSVector(false),
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if receivedOpts == nil {
+			t.Fatal("receivedOpts is nil")
+		}
+		if receivedOpts.HTTPURL != expectedURL {
+			t.Errorf("expected HTTPURL=%s, got %s", expectedURL, receivedOpts.HTTPURL)
+		}
+		if len(receivedOpts.ExtraOptions) != 1 {
+			t.Errorf("expected 1 extra option, got %d", len(receivedOpts.ExtraOptions))
+		}
+		if receivedOpts.ExtraOptions[0] != extraOpt {
+			t.Errorf("expected extra option=%s, got %v", extraOpt, receivedOpts.ExtraOptions[0])
+		}
+	})
+
+	t.Run("builder_error", func(t *testing.T) {
+		oldBuilder := storage.GetClientBuilder()
+		defer func() { storage.SetClientBuilder(oldBuilder) }()
+
+		storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.ClientInterface, error) {
+			return nil, errors.New("builder error")
+		})
+
+		_, err := New(
+			WithURL("http://url-host:8080"),
+			WithUsername("url-user"),
+			WithPassword("url-key"),
+			WithDatabase("test_db"),
+			WithCollection("test_collection"),
+		)
+		if err == nil {
+			t.Fatal("expected error but got nil")
+		}
+		if !containsString(err.Error(), "create client failed") {
+			t.Errorf("expected error to contain 'create client failed', got: %v", err)
+		}
+	})
+}
+
+// containsString checks if s contains substr.
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
+}
+
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

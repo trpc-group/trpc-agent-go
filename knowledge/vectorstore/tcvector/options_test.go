@@ -68,6 +68,11 @@ func TestAllOptions(t *testing.T) {
 	WithTCVectorInstance("instance1")(&opt)
 	assert.Equal(t, "instance1", opt.instanceName)
 
+	// Test WithExtraOptions
+	WithExtraOptions("opt1", 2)(&opt)
+	assert.Contains(t, opt.extraOptions, "opt1")
+	assert.Contains(t, opt.extraOptions, 2)
+
 	// Test WithFilterIndexFields
 	WithFilterIndexFields([]string{"field1", "field2"})(&opt)
 	assert.Contains(t, opt.filterFields, "field1")
