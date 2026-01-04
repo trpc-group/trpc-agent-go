@@ -20,7 +20,8 @@ import (
 
 const (
 	callbackPanicErrFmt = "%s: %v"
-	callbackPanicLogFmt = "%s (tool_call_id: %s, tool: %s): %v\n%s"
+	callbackPanicLogFmt = "%s (tool_call_id: %s, tool: %s): " +
+		"%v\n%s"
 
 	beforeToolCallbackPanic         = "before tool callback panic"
 	afterToolCallbackPanic          = "after tool callback panic"
@@ -216,6 +217,8 @@ func (c *Callbacks) RegisterToolResultMessages(cb ToolResultMessagesFunc) *Callb
 	return c
 }
 
+// RunToolResultMessages runs the ToolResultMessages callback (if set) with panic
+// recovery, returning an error when the callback panics.
 func (c *Callbacks) RunToolResultMessages(
 	ctx context.Context,
 	in *ToolResultMessagesInput,
