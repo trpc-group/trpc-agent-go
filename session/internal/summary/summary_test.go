@@ -1037,7 +1037,8 @@ func TestCopySummaryToKey(t *testing.T) {
 		copySummaryToKey(sess, "src", "dst")
 		require.NotNil(t, sess.Summaries["dst"])
 		require.Equal(t, "source summary", sess.Summaries["dst"].Summary)
-		require.Equal(t, now, sess.Summaries["dst"].UpdatedAt)
+		// UpdatedAt is set to zero to mark as needing persistence.
+		require.True(t, sess.Summaries["dst"].UpdatedAt.IsZero())
 	})
 
 	t.Run("overwrite existing destination", func(t *testing.T) {
@@ -1051,14 +1052,15 @@ func TestCopySummaryToKey(t *testing.T) {
 		}
 		copySummaryToKey(sess, "src", "dst")
 		require.Equal(t, "new summary", sess.Summaries["dst"].Summary)
-		require.Equal(t, now, sess.Summaries["dst"].UpdatedAt)
+		// UpdatedAt is set to zero to mark as needing persistence.
+		require.True(t, sess.Summaries["dst"].UpdatedAt.IsZero())
 	})
 }
 
 func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.T) {
 	now := time.Now()
 
-	t.Run("single filterKey - only one LLM call", func(t *testing.T) {
+	t.Run("single filterKey - LLM call once, persist twice", func(t *testing.T) {
 		var callCount int
 		var callsMu sync.Mutex
 
@@ -1078,10 +1080,18 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 			callsMu.Lock()
 			callCount++
 			callsMu.Unlock()
+			// Simulate SummarizeSession behavior: only generate if not already present
+			// with zero UpdatedAt (copied summary).
 			s.SummariesMu.Lock()
-			s.Summaries[filterKey] = &session.Summary{
-				Summary:   "summary for " + filterKey,
-				UpdatedAt: now,
+			if existing := s.Summaries[filterKey]; existing != nil && existing.UpdatedAt.IsZero() {
+				// Copied summary: just set proper UpdatedAt, no LLM call.
+				existing.UpdatedAt = now
+			} else {
+				// New summary: generate via LLM.
+				s.Summaries[filterKey] = &session.Summary{
+					Summary:   "summary for " + filterKey,
+					UpdatedAt: now,
+				}
 			}
 			s.SummariesMu.Unlock()
 			return nil
@@ -1090,8 +1100,8 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 		err := CreateSessionSummaryWithCascade(context.Background(), sess, "app/math", false, createFunc)
 		require.NoError(t, err)
 
-		// Should only call createFunc once (optimization).
-		require.Equal(t, 1, callCount)
+		// Should call createFunc twice: once for filterKey, once for full-session (persist only).
+		require.Equal(t, 2, callCount)
 
 		// Both keys should have summaries.
 		sess.SummariesMu.RLock()
