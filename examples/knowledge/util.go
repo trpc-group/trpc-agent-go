@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -25,6 +26,8 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
@@ -70,7 +73,7 @@ func newPGVectorStore() (vectorstore.VectorStore, error) {
 	user := GetEnvOrDefault("PGVECTOR_USER", "root")
 	password := GetEnvOrDefault("PGVECTOR_PASSWORD", "")
 	database := GetEnvOrDefault("PGVECTOR_DATABASE", "vectordb")
-	table := GetEnvOrDefault("PGVECTOR_TABLE", "trpc-agent-go")
+	table := GetEnvOrDefault("PGVECTOR_TABLE", "trpc_agent_go")
 
 	encodedUser := url.QueryEscape(user)
 	encodedPassword := url.QueryEscape(password)
@@ -320,4 +323,71 @@ func ExampleDataPath(relativePath string) string {
 	}
 	baseDir := filepath.Dir(currentFile)
 	return filepath.Join(baseDir, "exampledata", relativePath)
+}
+
+// ScoredDoc represents a document with its score for ranking comparison.
+type ScoredDoc struct {
+	Index int
+	Score float64
+	Text  string
+}
+
+// CalculateEmbeddingScores calculates cosine similarity scores between query and documents.
+func CalculateEmbeddingScores(ctx context.Context, query string, documents []string, emb embedder.Embedder) []float64 {
+	queryEmbedding, err := emb.GetEmbedding(ctx, query)
+	if err != nil {
+		log.Fatalf("Failed to get query embedding: %v", err)
+	}
+
+	scores := make([]float64, len(documents))
+	for i, doc := range documents {
+		docEmbedding, err := emb.GetEmbedding(ctx, doc)
+		if err != nil {
+			log.Printf("Failed to get embedding for doc %d: %v", i, err)
+			continue
+		}
+		scores[i] = CosineSimilarity(queryEmbedding, docEmbedding)
+	}
+
+	return scores
+}
+
+// NewOpenAIEmbedder creates a new OpenAI embedder with the specified model.
+func NewOpenAIEmbedder(model string) embedder.Embedder {
+	return openai.New(openai.WithModel(model))
+}
+
+// CosineSimilarity calculates cosine similarity between two vectors.
+func CosineSimilarity(a, b []float64) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+
+	var dotProduct, normA, normB float64
+	for i := range a {
+		dotProduct += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+
+	return dotProduct / (math.Sqrt(normA) * math.Sqrt(normB))
+}
+
+// PrintEmbeddingResults prints embedding scores sorted by score descending.
+func PrintEmbeddingResults(scores []float64, documents []string) {
+	docs := make([]ScoredDoc, len(documents))
+	for i, doc := range documents {
+		docs[i] = ScoredDoc{Index: i, Score: scores[i], Text: doc}
+	}
+	sort.Slice(docs, func(i, j int) bool {
+		return docs[i].Score > docs[j].Score
+	})
+
+	for rank, doc := range docs {
+		fmt.Printf("%d. [Score: %.7f] %s\n", rank+1, doc.Score, doc.Text)
+	}
 }
