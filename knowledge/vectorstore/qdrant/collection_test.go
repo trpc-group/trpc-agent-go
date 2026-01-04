@@ -75,12 +75,15 @@ func TestEnsureCollection(t *testing.T) {
 		mock.CreateCollectionFn = func(ctx context.Context, req *qdrant.CreateCollection) error {
 			return errors.New("create failed")
 		}
+		mock.GetCollectionInfoFn = func(ctx context.Context, name string) (*qdrant.CollectionInfo, error) {
+			return nil, errors.New("get info failed")
+		}
 		vs := newTestVectorStore(mock)
 
 		err := vs.ensureCollection(context.Background())
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "create collection")
+		assert.Contains(t, err.Error(), "get collection")
 	})
 
 	t.Run("handles already exists race condition", func(t *testing.T) {
@@ -493,25 +496,4 @@ func TestDeleteCollection(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, testOptions.collectionName, capturedName)
 	})
-}
-
-func TestIsAlreadyExistsError(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		err      error
-		expected bool
-	}{
-		{"nil error", nil, false},
-		{"already exists lowercase", errors.New("collection already exists"), true},
-		{"AlreadyExists uppercase", errors.New("AlreadyExists: test"), true},
-		{"other error", errors.New("connection failed"), false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, isAlreadyExistsError(tt.err))
-		})
-	}
 }

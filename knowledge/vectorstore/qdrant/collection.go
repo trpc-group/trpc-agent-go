@@ -11,7 +11,6 @@ package qdrant
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/qdrant/go-client/qdrant"
 )
@@ -31,11 +30,7 @@ func (vs *VectorStore) ensureCollection(ctx context.Context) error {
 
 	// Try to create the collection
 	if err := vs.createCollection(ctx); err != nil {
-		// Handle race condition: another process may have created it
-		if isAlreadyExistsError(err) {
-			return vs.validateCollectionConfig(ctx)
-		}
-		return err
+		return vs.validateCollectionConfig(ctx)
 	}
 
 	return nil
@@ -45,10 +40,10 @@ func (vs *VectorStore) ensureCollection(ctx context.Context) error {
 func (vs *VectorStore) createCollection(ctx context.Context) error {
 	createReq := &qdrant.CreateCollection{
 		CollectionName: vs.opts.collectionName,
-		OnDiskPayload:  ptrBool(vs.opts.onDiskPayload),
+		OnDiskPayload:  qdrant.PtrOf(vs.opts.onDiskPayload),
 		HnswConfig: &qdrant.HnswConfigDiff{
-			M:           ptrUint64(uint64(vs.opts.hnswM)),
-			EfConstruct: ptrUint64(uint64(vs.opts.hnswEfConstruct)),
+			M:           qdrant.PtrOf(uint64(vs.opts.hnswM)),
+			EfConstruct: qdrant.PtrOf(uint64(vs.opts.hnswEfConstruct)),
 		},
 	}
 
@@ -57,9 +52,7 @@ func (vs *VectorStore) createCollection(ctx context.Context) error {
 		denseParams := &qdrant.VectorParams{
 			Size:     uint64(vs.opts.dimension),
 			Distance: vs.opts.distance,
-		}
-		if vs.opts.onDiskVectors {
-			denseParams.OnDisk = ptrBool(true)
+			OnDisk:   qdrant.PtrOf(vs.opts.onDiskVectors),
 		}
 
 		createReq.VectorsConfig = qdrant.NewVectorsConfigMap(map[string]*qdrant.VectorParams{
@@ -77,16 +70,13 @@ func (vs *VectorStore) createCollection(ctx context.Context) error {
 		vectorsConfig := qdrant.NewVectorsConfig(&qdrant.VectorParams{
 			Size:     uint64(vs.opts.dimension),
 			Distance: vs.opts.distance,
+			OnDisk:   qdrant.PtrOf(vs.opts.onDiskVectors),
 		})
-		if vs.opts.onDiskVectors {
-			vectorsConfig.GetParams().OnDisk = ptrBool(true)
-		}
 		createReq.VectorsConfig = vectorsConfig
 	}
 
-	err := retryVoid(ctx, vs.retryCfg, func() error {
-		return vs.client.CreateCollection(ctx, createReq)
-	})
+	err := vs.client.CreateCollection(ctx, createReq)
+
 	if err != nil {
 		return fmt.Errorf("create collection %q: %w", vs.opts.collectionName, err)
 	}
@@ -191,21 +181,9 @@ func (vs *VectorStore) validateSparseVectorConfig(config *qdrant.SparseVectorCon
 // DeleteCollection deletes the entire collection and all its data.
 // Use with caution as this operation is irreversible.
 func (vs *VectorStore) DeleteCollection(ctx context.Context) error {
-	err := retryVoid(ctx, vs.retryCfg, func() error {
-		return vs.client.DeleteCollection(ctx, vs.opts.collectionName)
-	})
+	err := vs.client.DeleteCollection(ctx, vs.opts.collectionName)
 	if err != nil {
 		return fmt.Errorf("delete collection %q: %w", vs.opts.collectionName, err)
 	}
 	return nil
-}
-
-// isAlreadyExistsError checks if the error indicates the collection already exists.
-func isAlreadyExistsError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := err.Error()
-	return strings.Contains(errStr, "already exists") ||
-		strings.Contains(errStr, "AlreadyExists")
 }
