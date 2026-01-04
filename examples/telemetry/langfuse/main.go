@@ -22,6 +22,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -58,16 +59,36 @@ func main() {
 				attribute.String("agentName", agentName),
 				attribute.String("modelName", *modelName),
 				attribute.String("langfuse.environment", "development"),
-				attribute.String("langfuse.session.id", "session-1"),
-				attribute.String("langfuse.user.id", "user-1"),
 				attribute.String("langfuse.trace.input", msg),
 			}
 
+			// Put trace-level Langfuse attributes(userId, sessionId, metadata, version, release, tags) into baggage so they can be propagated to all spans.
+			// https://langfuse.com/integrations/native/opentelemetry#propagating-attributes
+			mSession, err := baggage.NewMemberRaw("langfuse.session.id", "session-1")
+			if err != nil {
+				log.Fatalf("Failed to create baggage member: %v", err)
+			}
+			mUser, err := baggage.NewMemberRaw("langfuse.user.id", "user-1")
+			if err != nil {
+				log.Fatalf("Failed to create baggage member: %v", err)
+			}
+			mURL, err := baggage.NewMemberRaw("langfuse.trace.metadata.url", "https://www.google.com")
+			if err != nil {
+				log.Fatalf("Failed to create baggage member: %v", err)
+			}
+
+			bag, err := baggage.New(mSession, mUser, mURL)
+			if err != nil {
+				log.Fatalf("Failed to create baggage: %v", err)
+			}
+			ctx := baggage.ContextWithBaggage(context.Background(), bag)
+
 			ctx, span := atrace.Tracer.Start(
-				context.Background(),
+				ctx,
 				agentName,
 				trace.WithAttributes(commonAttrs...),
 			)
+
 			defer span.End()
 
 			result, err := a.ProcessMessage(ctx, msg)
