@@ -1483,6 +1483,20 @@ type streamRecordingModel struct {
 	lastStream bool
 }
 
+type testSubAgentProvider struct {
+	sub agent.Agent
+}
+
+func (p *testSubAgentProvider) FindSubAgent(name string) agent.Agent {
+	if p.sub == nil {
+		return nil
+	}
+	if name == p.sub.Info().Name {
+		return p.sub
+	}
+	return nil
+}
+
 func (m *streamRecordingModel) GenerateContent(
 	ctx context.Context,
 	req *model.Request,
@@ -1576,6 +1590,39 @@ func TestLLMRunner_OverridesStreamFromRunOptions(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.False(t, rm.lastStream)
+}
+
+func TestAgentNodeFunc_OverridesStreamFromRunOptions(t *testing.T) {
+	const (
+		testInvocationID = "inv-1"
+		testNodeID       = "node-1"
+		testAgentName    = "agent-1"
+	)
+	target := &dummyAgent{name: testAgentName}
+	provider := &testSubAgentProvider{sub: target}
+
+	stream := false
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationID(testInvocationID),
+		agent.WithInvocationRunOptions(agent.RunOptions{Stream: &stream}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parentInv)
+
+	eventCh := make(chan *event.Event, 8)
+	exec := &ExecutionContext{
+		InvocationID: testInvocationID,
+		EventChan:    eventCh,
+	}
+	state := State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: testNodeID,
+		StateKeyParentAgent:   provider,
+		StateKeyUserInput:     "hi",
+	}
+
+	nodeFn := NewAgentNodeFunc(testAgentName)
+	_, err := nodeFn(ctx, state)
+	require.NoError(t, err)
 }
 
 func TestExecuteSingleToolCallPropagatesResponseID(t *testing.T) {
