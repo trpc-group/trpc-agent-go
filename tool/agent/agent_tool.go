@@ -448,7 +448,18 @@ func (at *Tool) collectResponse(evCh <-chan *event.Event) (string, error) {
 func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
 	stream := tool.NewStream(64)
 
+	toolCallID, hasToolCallID := tool.ToolCallIDFromContext(ctx)
+
 	runCtx := agent.CloneContext(ctx)
+	if hasToolCallID && toolCallID != "" {
+		if _, ok := tool.ToolCallIDFromContext(runCtx); !ok {
+			runCtx = context.WithValue(
+				runCtx,
+				tool.ContextKeyToolCallID{},
+				toolCallID,
+			)
+		}
+	}
 	go func(ctx context.Context) {
 		defer stream.Writer.Close()
 
