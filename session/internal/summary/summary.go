@@ -177,7 +177,15 @@ func selectUpdatedAt(tmp *session.Session, prevAt, latestTs time.Time, hasDelta 
 	return latestTs.UTC()
 }
 
-const lastIncludedTsKey = "summary:last_included_ts"
+const (
+	// lastIncludedTsKey is the key for the last included timestamp.
+	// This key is used to store the last included timestamp in the session state.
+	lastIncludedTsKey = "summary:last_included_ts"
+
+	// singleFilterKeyCachePrefix is the prefix for caching isSingleFilterKey results.
+	// This prefix is used to store the result of isSingleFilterKey in the session state.
+	singleFilterKeyCachePrefix = "summary:single_filter_key:"
+)
 
 func readLastIncludedTimestamp(tmp *session.Session) time.Time {
 	if tmp == nil {
@@ -272,18 +280,33 @@ func GetFilterKeyFromOptions(opts ...session.SummaryOption) string {
 // isSingleFilterKey checks if all events in the session match the target filterKey.
 // Returns true if all events match, meaning the filterKey summary would be identical
 // to the full-session summary, allowing us to skip duplicate LLM calls.
+// Results are cached in session.State to avoid repeated O(n) scans.
 func isSingleFilterKey(sess *session.Session, targetKey string) bool {
 	if sess == nil || targetKey == "" {
 		return false
 	}
+	// Try to read from cache first.
+	cacheKey := singleFilterKeyCachePrefix + targetKey
+	if cached, ok := sess.GetState(cacheKey); ok {
+		return string(cached) == "1"
+	}
+	// Cache miss, perform O(n) scan.
 	sess.EventMu.RLock()
-	defer sess.EventMu.RUnlock()
+	result := true
 	for _, e := range sess.Events {
 		if !e.Filter(targetKey) {
-			return false
+			result = false
+			break
 		}
 	}
-	return true
+	sess.EventMu.RUnlock()
+	// Write result to cache.
+	if result {
+		sess.SetState(cacheKey, []byte("1"))
+	} else {
+		sess.SetState(cacheKey, []byte("0"))
+	}
+	return result
 }
 
 // copySummaryToKey copies a summary from srcKey to dstKey within the session.
