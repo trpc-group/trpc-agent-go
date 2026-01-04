@@ -374,26 +374,36 @@ func TestRedisService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	// Create service with very small queue size
+	// Create service with very small queue size.
 	s, err := NewService(
 		WithRedisClientURL(redisURL),
 		WithAsyncSummaryNum(1),
-		WithSummaryQueueSize(1), // Very small queue
+		WithSummaryQueueSize(1), // Very small queue.
 		WithSummarizer(&fakeSummarizer{allow: true, out: "fallback-summary"}),
 	)
 	require.NoError(t, err)
 	defer s.Close()
 
-	// Create a session first
+	// Create a session first.
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
 	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
 	require.NoError(t, err)
 
-	// Append an event to make delta non-empty
-	e := event.New("inv", "author")
-	e.Timestamp = time.Now()
-	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
-	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+	// Append events with different filterKeys to trigger cascade (not single filterKey
+	// optimization). Version must be CurrentVersion for Filter() to use FilterKey.
+	e1 := event.New("inv1", "author")
+	e1.Timestamp = time.Now()
+	e1.FilterKey = "user-messages"
+	e1.Version = event.CurrentVersion
+	e1.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e1))
+
+	e2 := event.New("inv2", "author")
+	e2.Timestamp = time.Now()
+	e2.FilterKey = "other-key"
+	e2.Version = event.CurrentVersion
+	e2.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "world"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e2))
 
 	// Fill up the queue by sending multiple jobs
 	// Since queue size is 1, sending 2 jobs should fill it
@@ -665,11 +675,21 @@ func TestRedisService_EnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade
 	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
 	require.NoError(t, err)
 
-	// Append an event to make delta non-empty.
-	e := event.New("inv", "author")
-	e.Timestamp = time.Now()
-	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
-	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+	// Append events with different filterKeys to trigger cascade (not single filterKey
+	// optimization). Version must be CurrentVersion for Filter() to use FilterKey.
+	e1 := event.New("inv1", "author")
+	e1.Timestamp = time.Now()
+	e1.FilterKey = "tool-usage"
+	e1.Version = event.CurrentVersion
+	e1.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e1))
+
+	e2 := event.New("inv2", "author")
+	e2.Timestamp = time.Now()
+	e2.FilterKey = "other-key"
+	e2.Version = event.CurrentVersion
+	e2.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "world"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e2))
 
 	// Get the latest session from storage to ensure we have the latest events.
 	sessFromStorage, err := s.GetSession(context.Background(), key)

@@ -729,13 +729,25 @@ func TestEnqueueSummaryJob_NoAsyncWorkers(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 
-	// Add an event to make delta non-empty so summarization actually runs.
-	e := event.New("inv", "author")
-	e.Timestamp = time.Now()
-	e.Response = &model.Response{
+	// Add events with different filterKeys to trigger cascade (not single filterKey
+	// optimization). Version must be CurrentVersion for Filter() to use FilterKey.
+	e1 := event.New("inv1", "author")
+	e1.Timestamp = time.Now()
+	e1.FilterKey = "branch1"
+	e1.Version = event.CurrentVersion
+	e1.Response = &model.Response{
 		Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}},
 	}
-	sess.Events = append(sess.Events, *e)
+	sess.Events = append(sess.Events, *e1)
+
+	e2 := event.New("inv2", "author")
+	e2.Timestamp = time.Now()
+	e2.FilterKey = "other-key"
+	e2.Version = event.CurrentVersion
+	e2.Response = &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "world"}}},
+	}
+	sess.Events = append(sess.Events, *e2)
 
 	// Mock the database insert for sync processing.
 	// CreateSessionSummaryWithCascade calls CreateSessionSummary twice when
