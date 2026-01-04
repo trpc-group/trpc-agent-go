@@ -215,6 +215,24 @@ func TestCallbacks_BeforeModel_WithError(t *testing.T) {
 	require.Equal(t, expectedErr, err)
 }
 
+func TestCallbacks_BeforeModel_PanicRecovery(t *testing.T) {
+	callbacks := NewCallbacks()
+	callbacks.RegisterBeforeModel(func(
+		_ context.Context,
+		_ *Request,
+	) (*Response, error) {
+		panic("boom")
+	})
+
+	args := &BeforeModelArgs{Request: &Request{}}
+	var err error
+	require.NotPanics(t, func() {
+		_, err = callbacks.RunBeforeModel(context.Background(), args)
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), beforeModelCallbackPanic)
+}
+
 // TestCallbacks_AfterModel_WithError tests error handling in after model callbacks.
 func TestCallbacks_AfterModel_WithError(t *testing.T) {
 	callbacks := NewCallbacks()
@@ -247,6 +265,29 @@ func TestCallbacks_AfterModel_WithError(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.Equal(t, expectedErr, err)
+}
+
+func TestCallbacks_AfterModel_PanicRecovery(t *testing.T) {
+	callbacks := NewCallbacks()
+	callbacks.RegisterAfterModel(func(
+		_ context.Context,
+		_ *Request,
+		_ *Response,
+		_ error,
+	) (*Response, error) {
+		panic("boom")
+	})
+
+	args := &AfterModelArgs{
+		Request:  &Request{},
+		Response: &Response{},
+	}
+	var err error
+	require.NotPanics(t, func() {
+		_, err = callbacks.RunAfterModel(context.Background(), args)
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), afterModelCallbackPanic)
 }
 
 // TestCallbacks_AfterModel_PassThrough tests when callbacks return nil (pass through).
