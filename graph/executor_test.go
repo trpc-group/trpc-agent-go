@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -1140,6 +1142,150 @@ func TestAfterCallbackOverride(t *testing.T) {
 	rv, ok := final["result"].(string)
 	require.True(t, ok)
 	require.Equal(t, "override", rv)
+}
+
+func TestBeforeCallbackError_BarrierWaitsForCompletion(t *testing.T) {
+	var nodeRuns int32
+	var onErrCalls int32
+
+	g := NewStateGraph(NewStateSchema())
+	g.AddNode("N", func(ctx context.Context, s State) (any, error) {
+		atomic.AddInt32(&nodeRuns, 1)
+		return State{"ok": true}, nil
+	})
+	g.SetEntryPoint("N")
+	g.SetFinishPoint("N")
+
+	cbs := NewNodeCallbacks().
+		RegisterBeforeNode(func(ctx context.Context, cb *NodeCallbackContext, st State) (any, error) {
+			return nil, fmt.Errorf("before callback failed")
+		}).
+		RegisterOnNodeError(func(ctx context.Context, cb *NodeCallbackContext, st State, err error) {
+			atomic.AddInt32(&onErrCalls, 1)
+		})
+	g.WithNodeCallbacks(cbs)
+
+	compiled, err := g.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(compiled)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-before-callback-barrier"))
+	barrier.Enable(inv)
+
+	ch, err := exec.Execute(context.Background(), State{}, inv)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var sawNodeError bool
+	var sawNodeBarrier bool
+	for {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				require.True(t, sawNodeError, "expected a node error event")
+				require.True(t, sawNodeBarrier, "expected a node barrier event")
+				require.Equal(t, int32(0), atomic.LoadInt32(&nodeRuns), "node should not run when before callback fails")
+				require.Equal(t, int32(1), atomic.LoadInt32(&onErrCalls), "on-node-error callback should run once")
+				return
+			}
+			require.NotNil(t, evt)
+			if evt.Object == model.ObjectTypeError && evt.Response != nil && evt.Response.Error != nil {
+				sawNodeError = true
+			}
+			if evt.Object != ObjectTypeGraphNodeBarrier {
+				continue
+			}
+			sawNodeBarrier = true
+			require.True(t, evt.RequiresCompletion)
+			select {
+			case nextEvt, stillOpen := <-ch:
+				if stillOpen {
+					require.FailNow(t, "unexpected event before barrier completion", "event: %+v", nextEvt)
+				}
+				require.FailNow(t, "unexpected channel close before barrier completion")
+			case <-time.After(100 * time.Millisecond):
+			}
+			completionID := agent.GetAppendEventNoticeKey(evt.ID)
+			require.NoError(t, inv.NotifyCompletion(context.Background(), completionID))
+		case <-ctx.Done():
+			require.NoError(t, ctx.Err(), "timed out waiting for graph events")
+		}
+	}
+}
+
+func TestAfterCallbackError_BarrierWaitsForCompletion(t *testing.T) {
+	var nodeRuns int32
+	var onErrCalls int32
+
+	g := NewStateGraph(NewStateSchema())
+	g.AddNode("N", func(ctx context.Context, s State) (any, error) {
+		atomic.AddInt32(&nodeRuns, 1)
+		return State{"ok": true}, nil
+	})
+	g.SetEntryPoint("N")
+	g.SetFinishPoint("N")
+
+	cbs := NewNodeCallbacks().
+		RegisterAfterNode(func(ctx context.Context, cb *NodeCallbackContext, st State, result any, nodeErr error) (any, error) {
+			return nil, fmt.Errorf("after callback failed")
+		}).
+		RegisterOnNodeError(func(ctx context.Context, cb *NodeCallbackContext, st State, err error) {
+			atomic.AddInt32(&onErrCalls, 1)
+		})
+	g.WithNodeCallbacks(cbs)
+
+	compiled, err := g.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(compiled)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-after-callback-barrier"))
+	barrier.Enable(inv)
+
+	ch, err := exec.Execute(context.Background(), State{}, inv)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var sawNodeError bool
+	var sawNodeBarrier bool
+	for {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				require.True(t, sawNodeError, "expected a node error event")
+				require.True(t, sawNodeBarrier, "expected a node barrier event")
+				require.Equal(t, int32(1), atomic.LoadInt32(&nodeRuns), "node should run once before after callback fails")
+				require.Equal(t, int32(1), atomic.LoadInt32(&onErrCalls), "on-node-error callback should run once")
+				return
+			}
+			require.NotNil(t, evt)
+			if evt.Object == model.ObjectTypeError && evt.Response != nil && evt.Response.Error != nil {
+				sawNodeError = true
+			}
+			if evt.Object != ObjectTypeGraphNodeBarrier {
+				continue
+			}
+			sawNodeBarrier = true
+			require.True(t, evt.RequiresCompletion)
+			select {
+			case nextEvt, stillOpen := <-ch:
+				if stillOpen {
+					require.FailNow(t, "unexpected event before barrier completion", "event: %+v", nextEvt)
+				}
+				require.FailNow(t, "unexpected channel close before barrier completion")
+			case <-time.After(100 * time.Millisecond):
+			}
+			completionID := agent.GetAppendEventNoticeKey(evt.ID)
+			require.NoError(t, inv.NotifyCompletion(context.Background(), completionID))
+		case <-ctx.Done():
+			require.NoError(t, ctx.Err(), "timed out waiting for graph events")
+		}
+	}
 }
 
 // TestNilResultStillTriggersStaticEdges verifies that a node returning nil

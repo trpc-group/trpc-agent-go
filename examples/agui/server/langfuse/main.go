@@ -91,6 +91,10 @@ func runOptionResolver(ctx context.Context, input *adapter.RunAgentInput) ([]age
 	if err != nil {
 		return nil, fmt.Errorf("userIDResolver: %w", err)
 	}
+	content, ok := input.Messages[len(input.Messages)-1].ContentString()
+	if !ok {
+		return nil, fmt.Errorf("last message content is not a string")
+	}
 	return []agent.RunOption{
 		agent.WithSpanAttributes(
 			attribute.String("agentName", agentName),
@@ -98,7 +102,7 @@ func runOptionResolver(ctx context.Context, input *adapter.RunAgentInput) ([]age
 			attribute.String("langfuse.environment", "development"),
 			attribute.String("langfuse.session.id", input.ThreadID),
 			attribute.String("langfuse.user.id", userID),
-			attribute.String("langfuse.trace.input", input.Messages[len(input.Messages)-1].Content),
+			attribute.String("langfuse.trace.input", content),
 		),
 	}, nil
 }

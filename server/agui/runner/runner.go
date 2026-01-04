@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -95,21 +96,21 @@ type runInput struct {
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
 func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
 	if r.runner == nil {
-		return nil, errors.New("agui: runner is nil")
+		return nil, errors.New("runner is nil")
 	}
 	if runAgentInput == nil {
-		return nil, errors.New("agui: run input cannot be nil")
+		return nil, errors.New("run input cannot be nil")
 	}
 	runAgentInput, err := r.applyRunAgentInputHook(ctx, runAgentInput)
 	if err != nil {
-		return nil, fmt.Errorf("agui: run input hook: %w", err)
+		return nil, fmt.Errorf("run input hook: %w", err)
 	}
 	threadID := runAgentInput.ThreadID
 	runID := runAgentInput.RunID
 	if len(runAgentInput.Messages) == 0 {
 		return nil, errors.New("no messages provided")
 	}
-	if runAgentInput.Messages[len(runAgentInput.Messages)-1].Role != model.RoleUser {
+	if runAgentInput.Messages[len(runAgentInput.Messages)-1].Role != types.RoleUser {
 		return nil, errors.New("last message is not a user message")
 	}
 	userID, err := r.userIDResolver(ctx, runAgentInput)
@@ -124,22 +125,31 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if err != nil {
 		return nil, fmt.Errorf("start span: %w", err)
 	}
+	content, ok := runAgentInput.Messages[len(runAgentInput.Messages)-1].ContentString()
+	if !ok {
+		span.End()
+		return nil, errors.New("last message content is not a string")
+	}
 	input := &runInput{
 		key: session.Key{
 			AppName:   r.appName,
 			UserID:    userID,
 			SessionID: runAgentInput.ThreadID,
 		},
-		threadID:    threadID,
-		runID:       runID,
-		userID:      userID,
-		userMessage: runAgentInput.Messages[len(runAgentInput.Messages)-1],
+		threadID: threadID,
+		runID:    runID,
+		userID:   userID,
+		userMessage: model.Message{
+			Role:    model.RoleUser,
+			Content: content,
+		},
 		runOption:   runOption,
 		translator:  r.translatorFactory(ctx, runAgentInput),
 		enableTrack: r.tracker != nil,
 		span:        span,
 	}
 	if _, ok := r.runningSessions.LoadOrStore(input.key, struct{}{}); ok {
+		span.End()
 		return nil, fmt.Errorf("session is already running: %v", input.key)
 	}
 	events := make(chan aguievents.Event)
