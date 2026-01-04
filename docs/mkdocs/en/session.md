@@ -944,10 +944,11 @@ WHERE t1.app_name = t2.app_name
 -- manually before Step 4.
 DELETE FROM session_summaries WHERE deleted_at IS NOT NULL;
 
--- Step 3: Drop the old lookup index (if exists)
+-- Step 3: Drop the old lookup index
 -- Note: Index name may have a table prefix, adjust according to your configuration.
 -- Example: idx_trpc_session_summaries_lookup
-DROP INDEX IF EXISTS idx_session_summaries_lookup ON session_summaries;
+-- If the index does not exist, this will error. Use SHOW INDEX to verify the index name first.
+DROP INDEX idx_session_summaries_lookup ON session_summaries;
 
 -- Step 4: Create the new unique index
 -- Note: Index name may have a table prefix, adjust according to your configuration.

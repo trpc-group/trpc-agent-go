@@ -943,10 +943,11 @@ WHERE t1.app_name = t2.app_name
 -- 如果需要保留软删除记录，可跳过此步骤，但需要在 Step 4 之前手动处理冲突。
 DELETE FROM session_summaries WHERE deleted_at IS NOT NULL;
 
--- Step 3: 删除旧的 lookup 索引（如果存在）
+-- Step 3: 删除旧的 lookup 索引
 -- 注意：索引名称可能带有表前缀，请根据实际情况调整。
 -- 例如：idx_trpc_session_summaries_lookup
-DROP INDEX IF EXISTS idx_session_summaries_lookup ON session_summaries;
+-- 如果索引不存在会报错，可以先用 SHOW INDEX 确认索引名称。
+DROP INDEX idx_session_summaries_lookup ON session_summaries;
 
 -- Step 4: 创建新的唯一索引
 -- 注意：索引名称可能带有表前缀，请根据实际情况调整。
