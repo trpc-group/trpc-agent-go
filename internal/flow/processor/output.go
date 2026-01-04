@@ -46,7 +46,7 @@ func (p *OutputResponseProcessor) ProcessResponse(
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
-	if invocation == nil || rsp == nil || rsp.IsPartial ||
+	if invocation == nil || rsp == nil || !rsp.IsFinalResponse() ||
 		(invocation.StructuredOutput == nil && invocation.StructuredOutputType == nil &&
 			p.outputKey == "" && p.outputSchema == nil) {
 		return

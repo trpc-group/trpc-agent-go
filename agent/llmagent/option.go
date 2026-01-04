@@ -485,6 +485,9 @@ func WithStructuredOutputJSON(examplePtr any, strict bool, description string) O
 		gen := jsonschema.New()
 		schema := gen.Generate(t.Elem())
 		name := t.Elem().Name()
+		if name == "" {
+			name = "output"
+		}
 		opts.StructuredOutput = &model.StructuredOutput{
 			Type: model.StructuredOutputJSONSchema,
 			JSONSchema: &model.JSONSchemaConfig{

@@ -35,7 +35,10 @@ func TestOutputResponseProcessor_StructuredOutputTypedEvent(t *testing.T) {
 	// Response content: valid JSON object for sampleOut.
 	payload := sampleOut{A: "ok"}
 	b, _ := json.Marshal(payload)
-	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{Content: string(b)}}}}
+	rsp := &model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Message: model.Message{Content: string(b)}}},
+	}
 
 	ch := make(chan *event.Event, 1)
 	proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
@@ -64,7 +67,10 @@ func TestOutputResponseProcessor_StructuredOutputUntypedEvent(t *testing.T) {
 		},
 	}
 
-	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{Content: `{"a":"ok"}`}}}}
+	rsp := &model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Message: model.Message{Content: `{"a":"ok"}`}}},
+	}
 
 	ch := make(chan *event.Event, 1)
 	proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)

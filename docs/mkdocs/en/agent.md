@@ -733,7 +733,7 @@ agent := llmagent.New(
         true,                       // Strict mode
         "Product information",      // Description
     ),
-    llmagent.WithTools(searchTool), // Tools are allowed
+    llmagent.WithTools([]tool.Tool{searchTool}), // Tools are allowed
 )
 
 // Access typed output from events
