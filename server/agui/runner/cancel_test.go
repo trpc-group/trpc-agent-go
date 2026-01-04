@@ -17,6 +17,7 @@ import (
 	"time"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
@@ -70,7 +71,7 @@ func TestCancelCancelsRunningRun(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 	}
 
 	events, err := r.Run(context.Background(), input)
@@ -112,7 +113,7 @@ func TestCancelIgnoresRunID(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 	}
 
 	events, err := r.Run(context.Background(), input)
@@ -153,7 +154,7 @@ func TestCancelDoesNotReleaseSessionUntilRunExits(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 	}
 
 	events1, err := r.Run(context.Background(), input)
@@ -178,7 +179,7 @@ func TestCancelDoesNotReleaseSessionUntilRunExits(t *testing.T) {
 	input2 := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run-2",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hi again"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi again"}},
 	}
 	events2, err := r.Run(context.Background(), input2)
 	assert.Nil(t, events2)

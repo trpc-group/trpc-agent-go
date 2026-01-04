@@ -317,7 +317,7 @@ func TestRunRejectsConcurrentSession(t *testing.T) {
 	input2 := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run-2",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hi again"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi again"}},
 	}
 	events2, err := r.Run(context.Background(), input2)
 	assert.Nil(t, events2)
