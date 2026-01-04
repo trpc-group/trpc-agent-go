@@ -303,7 +303,7 @@ func TestNew(t *testing.T) {
 
 // TestNewConnectionPriority tests the connection priority: Instance Name > DSN > Host (current impl)
 func TestNewConnectionPriority(t *testing.T) {
-	t.Run("dsn_priority_over_instance_and_host", func(t *testing.T) {
+	t.Run("instance_priority_over_dsn_and_host", func(t *testing.T) {
 		tc := newTestClient(t)
 		defer tc.Close()
 
@@ -324,17 +324,51 @@ func TestNewConnectionPriority(t *testing.T) {
 		tc.mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
 		tc.mock.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_embedding_idx").WillReturnResult(sqlmock.NewResult(0, 0))
 
+		instanceConnStr := "postgres://instance:pass@instance-host:5432/instancedb"
 		postgres.RegisterPostgresInstance("test-priority-instance",
-			postgres.WithClientConnString("postgres://instance:pass@instance-host:5432/instancedb"))
+			postgres.WithClientConnString(instanceConnStr))
 
-		expectedConn := "postgres://instance:pass@instance-host:5432/instancedb"
+		// Instance should take priority over DSN and Host
 		_, err := New(
 			WithPostgresInstance("test-priority-instance"),
+			WithPGVectorClientDSN("postgres://dsn:pass@dsn-host:5432/dsndb"),
 			WithHost("host-config"),
 			WithEnableTSVector(false),
 		)
 		require.NoError(t, err)
-		assert.Equal(t, expectedConn, receivedConnStr)
+		assert.Equal(t, instanceConnStr, receivedConnStr)
+	})
+
+	t.Run("dsn_priority_over_host", func(t *testing.T) {
+		tc := newTestClient(t)
+		defer tc.Close()
+
+		oldBuilder := postgres.GetClientBuilder()
+		defer func() { postgres.SetClientBuilder(oldBuilder) }()
+
+		var receivedConnStr string
+		postgres.SetClientBuilder(func(ctx context.Context, opts ...postgres.ClientBuilderOpt) (postgres.Client, error) {
+			builderOpts := &postgres.ClientBuilderOpts{}
+			for _, opt := range opts {
+				opt(builderOpts)
+			}
+			receivedConnStr = builderOpts.ConnString
+			return tc.client, nil
+		})
+
+		tc.mock.ExpectExec("CREATE EXTENSION").WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_embedding_idx").WillReturnResult(sqlmock.NewResult(0, 0))
+
+		expectedDSN := "postgres://dsn:pass@dsn-host:5432/dsndb"
+		// DSN should take priority over Host
+		_, err := New(
+			WithPGVectorClientDSN(expectedDSN),
+			WithHost("host-config"),
+			WithEnableTSVector(false),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, expectedDSN, receivedConnStr)
 	})
 
 	t.Run("instance_priority_over_host", func(t *testing.T) {
