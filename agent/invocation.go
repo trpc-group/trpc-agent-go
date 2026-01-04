@@ -321,6 +321,15 @@ func WithModelName(name string) RunOption {
 	}
 }
 
+// WithStream enables or disables streaming for this specific run.
+//
+// When set, it overrides the agent's default Stream setting for this Run.
+func WithStream(stream bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.Stream = &stream
+	}
+}
+
 // WithToolFilter sets a custom tool filter function for this specific run.
 // The filter function receives a context and a tool, and returns true if the tool should be included.
 //
@@ -517,6 +526,12 @@ type RunOptions struct {
 	// The agent will look up the model by name from its registered models.
 	// If both Model and ModelName are set, Model takes precedence.
 	ModelName string
+
+	// Stream overrides GenerationConfig.Stream for this run when non-nil.
+	//
+	// This is useful when you want to switch between streaming and
+	// non-streaming responses per request without rebuilding the agent.
+	Stream *bool
 
 	// ToolFilter is a custom function to filter tools for this run.
 	// If set, only tools for which the filter returns true will be available to the model.

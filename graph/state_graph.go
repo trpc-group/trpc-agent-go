@@ -893,6 +893,10 @@ func (r *llmRunner) executeModel(
 		Tools:            tools,
 		GenerationConfig: r.generationConfig,
 	}
+	if inv, ok := agent.InvocationFromContext(ctx); ok &&
+		inv != nil && inv.RunOptions.Stream != nil {
+		request.GenerationConfig.Stream = *inv.RunOptions.Stream
+	}
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
 	var nodeID string
@@ -1476,7 +1480,9 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 
 		itelemetry.TraceBeforeInvokeAgent(span, invocation, targetAgent.Info().Description, "", dummyNode.llmGenerationConfig)
 		var stream bool
-		if dummyNode.llmGenerationConfig != nil {
+		if invocation.RunOptions.Stream != nil {
+			stream = *invocation.RunOptions.Stream
+		} else if dummyNode.llmGenerationConfig != nil {
 			stream = dummyNode.llmGenerationConfig.Stream
 		}
 		tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &err)

@@ -664,8 +664,12 @@ eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
 
 - `agent.RunOptions.Model`: Directly specify a model instance
 - `agent.RunOptions.ModelName`: Specify a pre-registered model name
+- `agent.RunOptions.Stream`: Override whether responses are streamed
 - Priority: `Model` > `ModelName` > Agent default model
 - If the model specified by `ModelName` is not found, it falls back to the Agent's default model
+
+You can set streaming per request using `agent.WithStream(true)` or
+`agent.WithStream(false)`.
 
 ##### Agent-level vs Per-request Comparison
 
