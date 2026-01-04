@@ -427,8 +427,23 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 	a.setupInvocation(invocation)
 
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
-	itelemetry.TraceBeforeInvokeAgent(span, invocation, a.description, a.systemPrompt+a.instruction, &a.genConfig)
-	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, a.genConfig.Stream, &err)
+	effectiveGenConfig := a.genConfig
+	if invocation.RunOptions.Stream != nil {
+		effectiveGenConfig.Stream = *invocation.RunOptions.Stream
+	}
+	itelemetry.TraceBeforeInvokeAgent(
+		span,
+		invocation,
+		a.description,
+		a.systemPrompt+a.instruction,
+		&effectiveGenConfig,
+	)
+	tracker := itelemetry.NewInvokeAgentTracker(
+		ctx,
+		invocation,
+		effectiveGenConfig.Stream,
+		&err,
+	)
 
 	ctx, flowEventChan, err := a.executeAgentFlow(ctx, invocation)
 	if err != nil {
