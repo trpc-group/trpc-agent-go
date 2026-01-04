@@ -1,0 +1,24 @@
+{
+  "name": "tdesign-chat-agui-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tdesign-react/chat": "^1.0.2-alpha.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tdesign-icons-react": "^0.6.1",
+    "tdesign-react": "^1.15.8"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}
