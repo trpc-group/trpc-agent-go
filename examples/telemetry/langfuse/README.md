@@ -14,9 +14,11 @@ For this example, you can quickly get started by [deploying Langfuse locally or 
 ```bash
 export LANGFUSE_PUBLIC_KEY="your-public-key"
 export LANGFUSE_SECRET_KEY="your-secret-key"
-export LANGFUSE_HOST="your-langfuse-host"
-export LANGFUSE_INSECURE="true" # for insecure connections (development only)
+export LANGFUSE_HOST="your-langfuse-host" # In host:port format (no scheme), e.g. "cloud.langfuse.com:443" or "localhost:3000".
+export LANGFUSE_INSECURE="true" # Use "true" for local http (development only).
 ```
+
+Note: `LANGFUSE_HOST` is passed to OpenTelemetry `otlptracehttp.WithEndpoint`, so it must not include `http://` or `https://`. The scheme is controlled by `LANGFUSE_INSECURE`, and the path is fixed to `/api/public/otel/v1/traces`.
 
 ```go
 import (
@@ -33,7 +35,7 @@ func main() {
 		log.Fatalf("Failed to start trace telemetry: %v", err)
 	}
 	defer func() {
-		if err := clean(); err != nil {
+		if err := clean(context.Background()); err != nil {
 			log.Printf("Failed to clean up trace telemetry: %v", err)
 		}
 	}()

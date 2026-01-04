@@ -13,9 +13,11 @@ Langfuse offers multiple deployment options. See the [official self-hosting guid
 ```bash
 export LANGFUSE_PUBLIC_KEY="your-public-key"
 export LANGFUSE_SECRET_KEY="your-secret-key"
-export LANGFUSE_HOST="localhost:3000"          # Langfuse host in host:port format (no http://)
-export LANGFUSE_INSECURE="true"                # keep false in production
+export LANGFUSE_HOST="localhost:3000"          # In host:port format (no scheme), e.g. "cloud.langfuse.com:443" or "localhost:3000".
+export LANGFUSE_INSECURE="true"                # Use "true" for local http (development only).
 ```
+
+Note: `LANGFUSE_HOST` is passed to OpenTelemetry `otlptracehttp.WithEndpoint`, so it must not include `http://` or `https://`. The scheme is controlled by `LANGFUSE_INSECURE`, and the path is fixed to `/api/public/otel/v1/traces`.
 
 ## Run
 
