@@ -1,100 +1,154 @@
 # Filter-Key Summarization Example
 
 This example demonstrates session summarization with custom `filterKey` support,
-showing how to categorize events and retrieve filtered summaries.
+showing how to categorize conversations and generate separate summaries per category.
 
-Key concepts:
+## Key Concepts
 
-- **AppendEventHook**: Demonstrates how to set `event.FilterKey` before persistence
-- **FilterKey-based Summarization**: Generate summaries for specific event categories
-- **Session Summary Retrieval**: Fetch summaries by filter using `WithSummaryFilterKey`
+- **AppendEventHook**: Set `event.FilterKey` before persistence to categorize events.
+- **FilterKey-based Summarization**: Each filterKey gets its own independent summary.
+- **User-defined Categories**: Users can switch filterKey at runtime via `/key` command.
 
-## What the demo does
+## How It Works
 
-1. **Event Categorization**: Shows how events are automatically categorized by
-   author via AppendEventHook (with `app` prefix to match runner filtering):
+1. **Event Categorization**: All events (user messages, tool calls, assistant responses)
+   within a filterKey are grouped together for summarization.
 
-   - `"user"` messages → `filterKey: "<app>/user-messages"`
-   - `"tool"` calls → `filterKey: "<app>/tool-calls"`
-   - Other events → `filterKey: "<app>/misc"`
+2. **Separate Summaries**: When you switch to a different filterKey, conversations
+   under that key generate their own summary, independent of other keys.
 
-2. **Tool Integration**: Includes calculator and time tools for the agent to use
+3. **Tool Integration**: Includes calculator and time tools for demonstration.
 
-3. **Interactive Demo**: Provides commands to add events and view filtered summaries
-
-4. **LLM Integration**: Uses real LLM summarization (requires `OPENAI_API_KEY`)
-
-5. **Fallback Support**: Local aggregation when LLM is unavailable
-
-## Running the example
-
-From the repo root:
+## Running the Example
 
 ```bash
-# With real LLM (requires OPENAI_API_KEY for actual summarization)
-OPENAI_API_KEY=sk-xxx go run ./examples/summary/filterkey -model gpt-4o-mini -max-words 120 -streaming=true
+# Basic usage.
+go run ./examples/summary/filterkey
 
-# Without API key (demonstrates local aggregation fallback)
-go run ./examples/summary/filterkey -model deepseek-chat -max-words 120 -streaming=false
+# With custom model.
+go run ./examples/summary/filterkey -model gpt-4o-mini
+
+# With debug mode to see request messages.
+go run ./examples/summary/filterkey -debug
+
+# With all options.
+go run ./examples/summary/filterkey -model deepseek-chat -max-words 100 -streaming=true -debug
 ```
 
-Expected output (sample):
+### Command-line Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-model` | `deepseek-chat` | Model name for LLM |
+| `-streaming` | `true` | Enable streaming mode |
+| `-max-words` | `0` | Max summary words (0=unlimited) |
+| `-debug` | `false` | Print request messages for debugging |
+
+## Interactive Commands
+
+| Command | Description |
+|---------|-------------|
+| `/key <name>` | Switch to a filterKey (any name you want) |
+| `/key` | Show current filterKey |
+| `/show [key]` | Show summary for a filterKey (default: current) |
+| `/list` | List all summaries |
+| `/help` | Show help |
+| `/exit` | End the conversation |
+
+## Example Session
 
 ```
-📝 Filter-Key Summarization Chat
-Model: gpt-4o-mini
-Service: inmemory
-MaxWords: 120
-==================================================
-✅ Filter-key chat ready! Session: filterkey-session-1234567890
+📝 Filter-Key Summarization Demo
+Model: deepseek-chat | Streaming: true | MaxWords: 0 | Debug: false
+============================================================
+Session: filterkey-session-1735638000
 
-💡 Special commands:
-   /summary [filterKey] - Force summarize by filter (default: full)
-   /show [filterKey]    - Show summary by filter (default: full)
-   /exit                - End the conversation
+💡 This demo shows how to use filterKey to categorize conversations.
+   Each filterKey gets its own separate summary.
 
-👤 You: Calculate 25 * 4
-💡 FilterKey Demo: Events are automatically categorized by author via AppendEvent hooks:
-   - User messages → filterKey: '<app>/user-messages'
-   - Tool calls → filterKey: '<app>/tool-calls'
-   - Assistant/other → filterKey: '<app>/misc'
+📌 Commands:
+   /key <name>    - Switch to a filterKey (any name you want)
+   /show [key]    - Show summary for a filterKey (default: current)
+   /list          - List all summaries
+   /help          - Show this help
+   /exit          - End the conversation
 
-🤖 Assistant: ✅ Callable tool response (ID: ...): {"operation":"multiply","a":25,"b":4,"result":100}
-25 multiplied by 4 equals 100.
+👤 [default] You: Hello
+🤖 Assistant: Hello! How can I help you today!
 
-👤 You: /show <app>/user-messages
-📝 Summary[<app>/user-messages]:
-The user requested a multiplication calculation (25 * 4). The assistant provided the correct result (100) in both a structured format and a plain text response.
+👤 [default] You: /key calc
+📌 Switched to filterKey: calc
+   All messages will now be categorized under this key.
 
-👤 You: What time is it in EST?
-🤖 Assistant: ✅ Callable tool response (ID: ...): {"timezone":"EST","time":"13:05:32","date":"2025-12-09","weekday":"Tuesday"}
-The current time in EST is 1:05 PM on Tuesday, December 9, 2025.
+👤 [calc] You: Calculate 123 * 321
+🤖 Assistant:
+🔧 Tool: calculate({"operation":"multiply","a":123,"b":321})
+   → {"operation":"multiply","a":123,"b":321,"result":39483}
+123 * 321 is 39483.
 
-👤 You: /summary <app>/tool-calls
-📝 Summary[<app>/tool-calls] (forced):
-- User requested and received a correct multiplication calculation (25 * 4 = 100).
-- User asked for the current time in EST and received the time, date, and weekday in both structured and plain text formats.
+👤 [calc] You: /key time
+📌 Switched to filterKey: time
 
-👤 You: /list
-📝 Summaries (filterKey → summary):
-- <app>/misc
-  - Assistant can perform basic arithmetic (e.g., 25 * 4 = 100).
-  - Provides current time/date in EST (e.g., 1:05 PM, Tuesday, December 9, 2025).
-- <app>/user-messages
-  The user requested a multiplication calculation (25 * 4). The assistant provided the correct result (100) in both a structured format and a plain text response.
-- <app>/tool-calls
-  - User requested and received a correct multiplication calculation (25 * 4 = 100).
-  - User asked for the current time in EST and received the time, date, and weekday in both structured and plain text formats.
+👤 [time] You: What time is it
+🤖 Assistant:
+🔧 Tool: get_current_time({"timezone":"Asia/Shanghai"})
+   → {"timezone":"Asia/Shanghai","time":"17:30:00",...}
+It is 5:30PM.
 
-👤 You: /exit
+👤 [time] You: /list
+📝 All Summaries:
+--------------------------------------------------
+[default]
+User greeted the assistant.
+
+[calc]
+User asked to calculate 123 * 321, result is 39483.
+
+[time]
+User asked for the current time.
+
+[(full session)]
+The user greeted the assistant, performed a multiplication calculation,
+and asked for the current time.
+
+👤 [time] You: /show calc
+📝 Summary[calc]:
+User asked to calculate 123 * 321, result is 39483.
+
+👤 [time] You: /exit
 👋 Bye.
 ```
 
-## Implementation Notes
+## Implementation Details
 
-- **AppendEventHook**: Uses `inmemory.WithAppendEventHook()` to automatically set `event.FilterKey` based on `event.Author`.
-- **FilterKey Assignment**: Events are categorized automatically with an `app` prefix (e.g., `filterkey-demo-app/user-messages`). Runner injects the same prefix into invocation filter keys; without the prefix, history will be filtered out and the model may repeatedly trigger tools.
-- **Commands**: `/summary [filterKey]`, `/show [filterKey]`, `/list` (list all filterKeys and summaries), `/exit`.
-- **LLM vs Local**: With API key, summaries use LLM; without it, local aggregation provides basic summaries
-- **Filter Options**: Common filters include `"user-messages"`, `"tool-calls"`, `"misc"`, or `""` (all events)
-- **Code Structure**: Refactored to reduce cyclomatic complexity with separate command handlers
+### AppendEventHook
+
+The hook sets `event.FilterKey` based on the current user-selected key:
+
+```go
+sessService := inmemory.NewSessionService(
+    inmemory.WithSummarizer(sum),
+    inmemory.WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+        // Set filterKey with app prefix.
+        ctx.Event.FilterKey = appName + "/" + currentFilterKey
+        return next()
+    }),
+)
+```
+
+### FilterKey Format
+
+FilterKeys are prefixed with the app name to match the runner's invocation filter:
+- User input: `calc`
+- Stored filterKey: `filterkey-demo-app/calc`
+
+### Debug Mode
+
+Enable `-debug` flag to see request messages sent to the model:
+
+```
+🐛 [DEBUG] Request messages:
+   [0] system: A helpful AI assistant with calculator and time tools.
+   [1] user: Here is a brief summary of your previous interactions...
+   [2] user: Calculate 123 * 321
+```
