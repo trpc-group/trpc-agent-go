@@ -11,8 +11,11 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus => ../../knowledge/vectorstore/milvus
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../../knowledge/vectorstore/tcvector
+	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch => ../../storage/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/storage/milvus => ../../storage/milvus
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
+	trpc.group/trpc-go/trpc-agent-go/storage/tcvector => ../../storage/tcvector
+
 )
 
 require (

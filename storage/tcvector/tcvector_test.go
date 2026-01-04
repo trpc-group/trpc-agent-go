@@ -87,13 +87,30 @@ func TestRegisterAndGetTcVectorInstance(t *testing.T) {
 		WithClientBuilderHTTPURL("http://localhost"),
 		WithClientBuilderUserName("user"),
 		WithClientBuilderKey("key"),
+		WithExtraOptions("opt1", 2),
 	)
 
 	opts, ok := GetTcVectorInstance(name)
 	require.True(t, ok, "expected instance to exist")
-	require.GreaterOrEqual(t, len(opts), 3, "expected 3 options")
+	require.GreaterOrEqual(t, len(opts), 4, "expected at least 4 options (extra opts included)")
 
-	cli, err := defaultClientBuilder(opts...)
+	cfg := &ClientBuilderOpts{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	require.Equal(t, "http://localhost", cfg.HTTPURL)
+	require.Equal(t, "user", cfg.UserName)
+	require.Equal(t, "key", cfg.Key)
+	require.Len(t, cfg.ExtraOptions, 2)
+	require.Equal(t, "opt1", cfg.ExtraOptions[0])
+	require.Equal(t, 2, cfg.ExtraOptions[1])
+
+	// default builder should still succeed and ignore ExtraOptions safely
+	cli, err := defaultClientBuilder(
+		WithClientBuilderHTTPURL(cfg.HTTPURL),
+		WithClientBuilderUserName(cfg.UserName),
+		WithClientBuilderKey(cfg.Key),
+	)
 	require.NoError(t, err)
 	require.NotNil(t, cli)
 }
@@ -125,16 +142,18 @@ func TestRegisterTcVectorInstance_Overwrite(t *testing.T) {
 		WithClientBuilderHTTPURL("http://a"),
 		WithClientBuilderUserName("ua"),
 		WithClientBuilderKey("ka"),
+		WithExtraOptions("optA"),
 	)
 	RegisterTcVectorInstance(name,
 		WithClientBuilderHTTPURL("http://b"),
 		WithClientBuilderUserName("ub"),
 		WithClientBuilderKey("kb"),
+		WithExtraOptions("optB", 99),
 	)
 
 	opts, ok := GetTcVectorInstance(name)
 	require.True(t, ok)
-	require.Equal(t, 3, len(opts))
+	require.GreaterOrEqual(t, len(opts), 4)
 
 	cfg := &ClientBuilderOpts{}
 	for _, opt := range opts {
@@ -143,6 +162,9 @@ func TestRegisterTcVectorInstance_Overwrite(t *testing.T) {
 	require.Equal(t, "http://b", cfg.HTTPURL)
 	require.Equal(t, "ub", cfg.UserName)
 	require.Equal(t, "kb", cfg.Key)
+	require.Len(t, cfg.ExtraOptions, 2)
+	require.Equal(t, "optB", cfg.ExtraOptions[0])
+	require.Equal(t, 99, cfg.ExtraOptions[1])
 }
 
 // GetTcVectorInstance should return false for unknown names.

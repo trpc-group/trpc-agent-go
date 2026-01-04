@@ -80,6 +80,10 @@ type ClientBuilderOpts struct {
 	UserName string
 	// Key is the key for the tcvectordb client.
 	Key string
+
+	// ExtraOptions is reserved for custom client builders to accept
+	// additional parameters. The default builder ignores it.
+	ExtraOptions []any
 }
 
 // WithClientBuilderHTTPURL sets the http url for the tcvectordb client.
@@ -100,6 +104,14 @@ func WithClientBuilderUserName(userName string) ClientBuilderOpt {
 func WithClientBuilderKey(key string) ClientBuilderOpt {
 	return func(o *ClientBuilderOpts) {
 		o.Key = key
+	}
+}
+
+// WithExtraOptions sets extra options for customized client builders.
+// The default builder does not consume these options.
+func WithExtraOptions(extraOptions ...any) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) {
+		o.ExtraOptions = append(o.ExtraOptions, extraOptions...)
 	}
 }
 
