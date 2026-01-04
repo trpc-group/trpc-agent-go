@@ -19,6 +19,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const (
+	beforeToolCallbackPanic         = "before tool callback panic"
+	afterToolCallbackPanic          = "after tool callback panic"
+	toolResultMessagesCallbackPanic = "tool result messages callback panic"
+)
+
 // ToolError represents an error that occurred during tool execution.
 type ToolError struct {
 	Message string
@@ -39,6 +45,27 @@ func TestNewToolCallbacks(t *testing.T) {
 	require.NotNil(t, callbacks)
 	require.Empty(t, callbacks.BeforeTool)
 	require.Empty(t, callbacks.AfterTool)
+}
+
+func TestRunToolResultMessages_PanicRecovery(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		_ context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		panic("boom")
+	})
+
+	in := &tool.ToolResultMessagesInput{
+		ToolCallID: "call-1",
+		ToolName:   "test-tool",
+	}
+	var err error
+	require.NotPanics(t, func() {
+		_, err = callbacks.RunToolResultMessages(context.Background(), in)
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), toolResultMessagesCallbackPanic)
 }
 
 func TestRegisterBeforeTool(t *testing.T) {
@@ -125,6 +152,31 @@ func TestRunBeforeTool_Empty(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, result)
 
+}
+
+func TestRunBeforeTool_PanicRecovery(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		_ string,
+		_ *tool.Declaration,
+		_ *[]byte,
+	) (any, error) {
+		panic("boom")
+	})
+
+	args := &tool.BeforeToolArgs{
+		ToolCallID:  "call-1",
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+	}
+	var err error
+	require.NotPanics(t, func() {
+		_, err = callbacks.RunBeforeTool(context.Background(), args)
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), beforeToolCallbackPanic)
 }
 
 func TestRunBeforeTool_Skip(t *testing.T) {
@@ -294,6 +346,34 @@ func TestRunAfterTool_Empty(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, originalResult, result.CustomResult)
+}
+
+func TestRunAfterTool_PanicRecovery(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ string,
+		_ *tool.Declaration,
+		_ []byte,
+		_ any,
+		_ error,
+	) (any, error) {
+		panic("boom")
+	})
+
+	args := &tool.AfterToolArgs{
+		ToolCallID:  "call-1",
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+		Result:      map[string]any{"ok": true},
+	}
+	var err error
+	require.NotPanics(t, func() {
+		_, err = callbacks.RunAfterTool(context.Background(), args)
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), afterToolCallbackPanic)
 }
 
 func TestRunAfterTool_Override(t *testing.T) {

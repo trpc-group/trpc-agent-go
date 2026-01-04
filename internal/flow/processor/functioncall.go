@@ -863,14 +863,17 @@ func (p *FunctionCallResponseProcessor) applyToolResultMessagesCallback(
 	index int,
 	defaultMsg model.Message,
 ) ([]model.Choice, bool, error) {
-	raw, cbErr := p.toolCallbacks.ToolResultMessages(ctx, &tool.ToolResultMessagesInput{
-		ToolName:           toolCall.Function.Name,
-		Declaration:        tl.Declaration(),
-		Arguments:          modifiedArgs,
-		Result:             result,
-		ToolCallID:         toolCall.ID,
-		DefaultToolMessage: defaultMsg,
-	})
+	raw, cbErr := p.toolCallbacks.RunToolResultMessages(
+		ctx,
+		&tool.ToolResultMessagesInput{
+			ToolName:           toolCall.Function.Name,
+			Declaration:        tl.Declaration(),
+			Arguments:          modifiedArgs,
+			Result:             result,
+			ToolCallID:         toolCall.ID,
+			DefaultToolMessage: defaultMsg,
+		},
+	)
 	if cbErr != nil {
 		log.Errorf("ToolResultMessages callback failed for %s: %v", toolCall.Function.Name, cbErr)
 		return nil, false, fmt.Errorf("tool callback error: %w", cbErr)

@@ -12,13 +12,25 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"runtime/debug"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // ErrorTypeAgentCallbackError is used for errors from agent callbacks (before/after hooks).
 const ErrorTypeAgentCallbackError = "agent_callback_error"
+
+const (
+	callbackPanicErrFmt = "%s: %v"
+	callbackPanicLogFmt = "%s (invocation: %s, agent: %s): " +
+		"%v\n%s"
+
+	beforeAgentCallbackPanic = "before agent callback panic"
+	afterAgentCallbackPanic  = "after agent callback panic"
+)
 
 // BeforeAgentCallback is called before the agent runs.
 // Returns (customResponse, error).
@@ -221,6 +233,43 @@ func (c *Callbacks) processCallbackResult(
 	return false
 }
 
+func recoverAgentCallbackPanic(
+	ctx context.Context,
+	stage string,
+	inv *Invocation,
+	errp *error,
+) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+
+	stack := debug.Stack()
+	log.ErrorfContext(
+		ctx,
+		callbackPanicLogFmt,
+		stage,
+		invocationID(inv),
+		agentName(inv),
+		recovered,
+		string(stack),
+	)
+	*errp = fmt.Errorf(callbackPanicErrFmt, stage, recovered)
+}
+
+func (c *Callbacks) runBeforeAgentCallback(
+	ctx context.Context,
+	cb BeforeAgentCallbackStructured,
+	args *BeforeAgentArgs,
+) (result *BeforeAgentResult, err error) {
+	inv := (*Invocation)(nil)
+	if args != nil {
+		inv = args.Invocation
+	}
+	defer recoverAgentCallbackPanic(ctx, beforeAgentCallbackPanic, inv, &err)
+	return cb(ctx, args)
+}
+
 // finalizeBeforeAgentResult determines the final return value for before agent callbacks.
 func (c *Callbacks) finalizeBeforeAgentResult(
 	lastResult *BeforeAgentResult,
@@ -252,7 +301,7 @@ func (c *Callbacks) RunBeforeAgent(
 	var firstErr error
 
 	for _, cb := range c.BeforeAgent {
-		result, err := cb(ctx, args)
+		result, err := c.runBeforeAgentCallback(ctx, cb, args)
 
 		if c.handleCallbackError(err, &firstErr) {
 			return nil, err
@@ -313,6 +362,19 @@ func (c *Callbacks) finalizeAfterAgentResult(
 	return lastResult, nil
 }
 
+func (c *Callbacks) runAfterAgentCallback(
+	ctx context.Context,
+	cb AfterAgentCallbackStructured,
+	args *AfterAgentArgs,
+) (result *AfterAgentResult, err error) {
+	inv := (*Invocation)(nil)
+	if args != nil {
+		inv = args.Invocation
+	}
+	defer recoverAgentCallbackPanic(ctx, afterAgentCallbackPanic, inv, &err)
+	return cb(ctx, args)
+}
+
 // RunAfterAgent runs all after agent callbacks in order.
 // This method uses the new structured callback interface.
 // If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
@@ -324,7 +386,7 @@ func (c *Callbacks) RunAfterAgent(
 	var firstErr error
 
 	for _, cb := range c.AfterAgent {
-		result, err := cb(ctx, args)
+		result, err := c.runAfterAgentCallback(ctx, cb, args)
 
 		if c.handleCallbackError(err, &firstErr) {
 			return nil, err

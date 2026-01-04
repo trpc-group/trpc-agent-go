@@ -12,6 +12,18 @@ package model
 
 import (
 	"context"
+	"fmt"
+	"runtime/debug"
+
+	"trpc.group/trpc-go/trpc-agent-go/log"
+)
+
+const (
+	callbackPanicErrFmt = "%s: %v"
+	callbackPanicLogFmt = "%s: %v\n%s"
+
+	beforeModelCallbackPanic = "before model callback panic"
+	afterModelCallbackPanic  = "after model callback panic"
 )
 
 // BeforeModelCallback is called before the model is invoked. It can mutate the request.
@@ -235,6 +247,36 @@ func (c *Callbacks) finalizeBeforeModelResult(
 	return lastResult, nil
 }
 
+func recoverModelCallbackPanic(
+	ctx context.Context,
+	stage string,
+	errp *error,
+) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+
+	stack := debug.Stack()
+	log.ErrorfContext(
+		ctx,
+		callbackPanicLogFmt,
+		stage,
+		recovered,
+		string(stack),
+	)
+	*errp = fmt.Errorf(callbackPanicErrFmt, stage, recovered)
+}
+
+func (c *Callbacks) runBeforeModelCallback(
+	ctx context.Context,
+	cb BeforeModelCallbackStructured,
+	args *BeforeModelArgs,
+) (result *BeforeModelResult, err error) {
+	defer recoverModelCallbackPanic(ctx, beforeModelCallbackPanic, &err)
+	return cb(ctx, args)
+}
+
 // RunBeforeModel runs all before model callbacks in order.
 // This method uses the new structured callback interface.
 // If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
@@ -243,7 +285,7 @@ func (c *Callbacks) RunBeforeModel(ctx context.Context, args *BeforeModelArgs) (
 	var firstErr error
 
 	for _, cb := range c.BeforeModel {
-		result, err := cb(ctx, args)
+		result, err := c.runBeforeModelCallback(ctx, cb, args)
 
 		if c.handleCallbackError(err, &firstErr) {
 			return nil, err
@@ -304,6 +346,15 @@ func (c *Callbacks) finalizeAfterModelResult(
 	return lastResult, nil
 }
 
+func (c *Callbacks) runAfterModelCallback(
+	ctx context.Context,
+	cb AfterModelCallbackStructured,
+	args *AfterModelArgs,
+) (result *AfterModelResult, err error) {
+	defer recoverModelCallbackPanic(ctx, afterModelCallbackPanic, &err)
+	return cb(ctx, args)
+}
+
 // RunAfterModel runs all after model callbacks in order.
 // This method uses the new structured callback interface.
 // If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
@@ -312,7 +363,7 @@ func (c *Callbacks) RunAfterModel(ctx context.Context, args *AfterModelArgs) (*A
 	var firstErr error
 
 	for _, cb := range c.AfterModel {
-		result, err := cb(ctx, args)
+		result, err := c.runAfterModelCallback(ctx, cb, args)
 
 		if c.handleCallbackError(err, &firstErr) {
 			return nil, err
