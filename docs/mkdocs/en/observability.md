@@ -27,8 +27,8 @@ Refer to the Langfuse self-hosting guide for local or cloud deployment. For a qu
 ```bash
 export LANGFUSE_PUBLIC_KEY="your-public-key"
 export LANGFUSE_SECRET_KEY="your-secret-key"
-export LANGFUSE_HOST="your-langfuse-host"
-export LANGFUSE_INSECURE="true" # for insecure connections (development only)
+export LANGFUSE_HOST="your-langfuse-host" # In host:port format (no scheme), e.g. "cloud.langfuse.com:443" or "localhost:3000".
+export LANGFUSE_INSECURE="true" # Use "true" for local http (development only).
 ```
 
 ```go
@@ -53,6 +53,8 @@ func main() {
 ```
 
 See the complete example at [examples/telemetry/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/telemetry/langfuse).
+
+Note: `LANGFUSE_HOST` is passed to OpenTelemetry `otlptracehttp.WithEndpoint`, so it must not include `http://` or `https://`. The scheme is controlled by `LANGFUSE_INSECURE`, and the path is fixed to `/api/public/otel/v1/traces`.
 
 Run the example:
 
