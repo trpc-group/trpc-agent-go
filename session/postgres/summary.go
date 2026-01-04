@@ -50,6 +50,10 @@ func (s *Service) CreateSessionSummary(
 	sum := sess.Summaries[filterKey]
 	sess.SummariesMu.RUnlock()
 
+	if sum == nil {
+		return nil
+	}
+
 	summaryBytes, err := json.Marshal(sum)
 	if err != nil {
 		return fmt.Errorf("marshal summary failed: %w", err)
@@ -61,9 +65,9 @@ func (s *Service) CreateSessionSummary(
 		expiresAt = &t
 	}
 
-	// Use UPSERT (INSERT ... ON CONFLICT) for atomic operation
-	// This handles both insert and update in a single, race-condition-free operation
-	// Note: Last write wins - no timestamp comparison to avoid silent failures
+	// Use UPSERT (INSERT ... ON CONFLICT) for atomic operation.
+	// This handles both insert and update in a single, race-condition-free operation.
+	// Note: Last write wins - no timestamp comparison to avoid silent failures.
 	_, err = s.pgClient.ExecContext(ctx,
 		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)

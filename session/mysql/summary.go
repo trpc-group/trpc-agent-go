@@ -50,6 +50,10 @@ func (s *Service) CreateSessionSummary(
 	sum := sess.Summaries[filterKey]
 	sess.SummariesMu.RUnlock()
 
+	if sum == nil {
+		return nil
+	}
+
 	summaryBytes, err := json.Marshal(sum)
 	if err != nil {
 		return fmt.Errorf("marshal summary failed: %w", err)
@@ -61,7 +65,7 @@ func (s *Service) CreateSessionSummary(
 		expiresAt = &t
 	}
 
-	// Try UPDATE first, then INSERT if no rows affected
+	// Try UPDATE first, then INSERT if no rows affected.
 	result, err := s.mysqlClient.Exec(ctx,
 		fmt.Sprintf(
 			`UPDATE %s SET summary = ?, updated_at = ?, expires_at = ?
@@ -76,7 +80,7 @@ func (s *Service) CreateSessionSummary(
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		// No existing record, insert new one
+		// No existing record, insert new one.
 		_, err = s.mysqlClient.Exec(ctx,
 			fmt.Sprintf(
 				`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
