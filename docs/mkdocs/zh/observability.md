@@ -29,7 +29,7 @@ Langfuse 是专为 LLM 应用设计的可观测平台，支持通过 OpenTelemet
 ```bash
 export LANGFUSE_PUBLIC_KEY="your-public-key"
 export LANGFUSE_SECRET_KEY="your-secret-key"
-export LANGFUSE_HOST="your-langfuse-host"
+export LANGFUSE_HOST="your-langfuse-host" # 以 host:port 形式填写（不带 http:// 协议头），例如 "cloud.langfuse.com:443" 或 "localhost:3000".
 export LANGFUSE_INSECURE="true" # 用于不安全连接（仅限开发环境）
 ```
 
@@ -55,6 +55,8 @@ func main() {
 ```
 
 完整示例可参考 [examples/telemetry/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/telemetry/langfuse)。
+
+注意：`LANGFUSE_HOST` 会直接传给 OpenTelemetry 的 `otlptracehttp.WithEndpoint`，因此不能包含 `http://` 或 `https://`。协议由 `LANGFUSE_INSECURE` 控制，路径固定为 `/api/public/otel/v1/traces`。
 
 运行示例：
 
