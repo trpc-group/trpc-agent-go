@@ -229,10 +229,12 @@ func (p *ContentRequestProcessor) ProcessRequest(
 
 	// Append per-filter messages from session events when allowed.
 	needToAddInvocationMessage := true
-	if !skipHistory && invocation.Session != nil {
+	if invocation.Session != nil {
 		var messages []model.Message
 		var summaryUpdatedAt time.Time
-		if p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
+		// Skip session summary when include_contents=none, but still get current
+		// invocation's events (tool calls/results) to maintain ReAct loop context.
+		if !skipHistory && p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
 			// Add session summary as a system message if enabled and available.
 			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
 			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
@@ -249,7 +251,15 @@ func (p *ContentRequestProcessor) ProcessRequest(
 				summaryUpdatedAt = updatedAt
 			}
 		}
-		messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
+		if skipHistory {
+			// When include_contents=none, only get events from current invocation
+			// to preserve tool call history within the current ReAct loop.
+			// This fixes the infinite loop issue where the agent doesn't see its
+			// own tool calls when running as an isolated subgraph.
+			messages = p.getCurrentInvocationMessages(invocation)
+		} else {
+			messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
+		}
 		req.Messages = append(req.Messages, messages...)
 		needToAddInvocationMessage = len(messages) == 0
 	}
@@ -404,6 +414,71 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	return msg
 }
 
+// getCurrentInvocationMessages gets messages only from the current invocation.
+// This is used when include_contents=none to preserve tool call history within
+// the current ReAct loop while isolating from parent/other branch history.
+func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invocation) []model.Message {
+	if inv.Session == nil {
+		return nil
+	}
+
+	var events []event.Event
+	inv.Session.EventMu.RLock()
+	for _, evt := range inv.Session.Events {
+		// Only include events from current invocation
+		if evt.InvocationID != inv.InvocationID {
+			continue
+		}
+		// Skip invalid events
+		if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
+			continue
+		}
+		events = append(events, evt)
+	}
+	inv.Session.EventMu.RUnlock()
+
+	// insert invocation message if not already included
+	var hasInvocationMessage bool
+	for _, evt := range events {
+		if invocationMessageEqual(inv.Message, evt.Choices[0].Message) {
+			hasInvocationMessage = true
+			break
+		}
+	}
+	if !hasInvocationMessage && inv.Message.Content != "" {
+		events = p.insertInvocationMessage(events, inv)
+	}
+
+	resultEvents := p.rearrangeLatestFuncResp(events)
+	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
+
+	// Get current request ID for reasoning content filtering.
+	currentRequestID := ""
+	if inv != nil && inv.RunOptions.RequestID != "" {
+		currentRequestID = inv.RunOptions.RequestID
+	}
+
+	// Convert events to messages with reasoning content handling.
+	var messages []model.Message
+	for _, evt := range resultEvents {
+		// Convert foreign events or keep as-is (consistent with getIncrementMessages).
+		ev := evt
+		if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
+			ev = p.convertForeignEvent(&ev)
+		}
+		if len(ev.Choices) > 0 {
+			for _, choice := range ev.Choices {
+				msg := choice.Message
+				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+				messages = append(messages, msg)
+			}
+		}
+	}
+
+	messages = p.mergeUserMessages(messages)
+	return messages
+}
+
 func (p *ContentRequestProcessor) insertInvocationMessage(
 	events []event.Event, inv *agent.Invocation) []event.Event {
 	if inv.Message.Content == "" {
@@ -494,7 +569,9 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 	}
 
 	// check is invocation message
-	if inv.RunOptions.RequestID == evt.RequestID && evt.IsUserMessage() && evt.Choices[0].Message.Content == inv.Message.Content {
+	if inv.RunOptions.RequestID == evt.RequestID &&
+		len(evt.Choices) > 0 &&
+		invocationMessageEqual(inv.Message, evt.Choices[0].Message) {
 		return true, true
 	}
 
@@ -531,6 +608,16 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 	}
 
 	return true, false
+}
+
+func invocationMessageEqual(invMsg model.Message, evtMsg model.Message) bool {
+	if invMsg.Role == "" {
+		if evtMsg.Role != model.RoleUser {
+			return false
+		}
+		return invMsg.Content == evtMsg.Content
+	}
+	return model.MessagesEqual(invMsg, evtMsg)
 }
 
 // isOtherAgentReply checks whether the event is a reply from another agent.

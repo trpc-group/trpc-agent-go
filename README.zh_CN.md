@@ -10,39 +10,40 @@
 [![Coverage](https://codecov.io/gh/trpc-group/trpc-agent-go/branch/main/graph/badge.svg)](https://app.codecov.io/gh/trpc-group/trpc-agent-go/tree/main)
 [![Documentation](https://img.shields.io/badge/Docs-Website-blue.svg)](https://trpc-group.github.io/trpc-agent-go/)
 
-🚀 **一个用于构建智能 agent 系统的强大 Go 框架**，彻底改变您创建 AI 应用的方式。构建能够思考、记忆、协作和行动的自主 agent，前所未有地简单。
+**一个用于构建智能 agent 系统的强大 Go 框架**，彻底改变您创建 AI 应用的方式。构建能够思考、记忆、协作和行动的自主 agent，前所未有地简单。
 
-✨ **为什么选择 tRPC-Agent-Go？**
+**为什么选择 tRPC-Agent-Go？**
 
-- 🧠 **智能推理**：先进的分层 planner 和多 agent 编排
-- 🧰 **丰富的 Tool 生态系统**：与外部 API、数据库和服务的无缝集成
-- 💾 **持久化 Memory**：长期状态管理和上下文感知
-- 🔗 **多 Agent 协作**：Chain、Parallel 和基于 Graph 的 agent 工作流
-- 🧩 **Agent Skills**：可复用的 `SKILL.md` 工作流，支持安全执行
-- 📦 **Artifacts**：对 agent/tool 产出的文件进行版本化存储
-- ✅ **评测与基准**：EvalSet + Metric 用于长期质量度量
-- 🖥️ **UI 与服务集成**：AG-UI（Agent-User Interaction），
+- **智能推理**：先进的分层 planner 和多 agent 编排
+- **丰富的 Tool 生态系统**：与外部 API、数据库和服务的无缝集成
+- **持久化 Memory**：长期状态管理和上下文感知
+- **多 Agent 协作**：Chain、Parallel 和基于 Graph 的 agent 工作流
+- **GraphAgent**：类型安全的图工作流，支持多条件路由，功能对标 LangGraph 的 Go 实现
+- **Agent Skills**：可复用的 `SKILL.md` 工作流，支持安全执行
+- **Artifacts**：对 agent/tool 产出的文件进行版本化存储
+- **评测与基准**：EvalSet + Metric 用于长期质量度量
+- **UI 与服务集成**：AG-UI（Agent-User Interaction），
   以及 Agent-to-Agent（A2A）互通
-- 📊 **生产就绪**：内置 telemetry、tracing 和企业级可靠性
-- ⚡ **高性能**：针对可扩展性和低延迟进行优化
+- **生产就绪**：内置 telemetry、tracing 和企业级可靠性
+- **高性能**：针对可扩展性和低延迟进行优化
 
-## 🎯 使用场景
+## 使用场景
 
 **非常适合构建：**
 
-- 🤖 **客户支持机器人** - 理解上下文并解决复杂查询的智能 agent
-- 📊 **数据分析助手** - 查询数据库、生成报告并提供洞察的 agent
-- 🔧 **DevOps 自动化** - 智能部署、监控和事件响应系统
-- 💼 **业务流程自动化** - 具有 human-in-the-loop 能力的多步骤工作流
-- 🧠 **研究与知识管理** - 基于 RAG 的文档分析和问答 agent
+- **客户支持机器人** - 理解上下文并解决复杂查询的智能 agent
+- **数据分析助手** - 查询数据库、生成报告并提供洞察的 agent
+- **DevOps 自动化** - 智能部署、监控和事件响应系统
+- **业务流程自动化** - 具有 human-in-the-loop 能力的多步骤工作流
+- **研究与知识管理** - 基于 RAG 的文档分析和问答 agent
 
-## 🚀 核心特性
+## 核心特性
 
 <table>
 <tr>
-<td width="50%">
+<td width="50%" valign="top">
 
-### 🎪 **多 Agent 编排**
+### 多 Agent 编排
 
 ```go
 // Chain agent 构建复杂工作流
@@ -57,9 +58,9 @@ parallel := parallelagent.New("concurrent",
 ```
 
 </td>
-<td width="50%">
+<td width="50%" valign="top">
 
-### 🧠 **先进的 Memory 系统**
+### 先进的 Memory 系统
 
 ```go
 // 带搜索的持久化 memory
@@ -78,9 +79,9 @@ runner := runner.NewRunner("app", agent,
 </td>
 </tr>
 <tr>
-<td>
+<td valign="top">
 
-### 🛠️ **丰富的 Tool 集成**
+### 丰富的 Tool 集成
 
 ```go
 // 任何函数都可以成为 tool
@@ -94,25 +95,31 @@ mcpTool := mcptool.New(serverConn)
 ```
 
 </td>
-<td>
+<td valign="top">
 
-### 📈 **生产监控**
+### 生产可观测性
 
 ```go
-// OpenTelemetry 集成
-runner := runner.NewRunner("app", agent,
-    runner.WithTelemetry(telemetry.Config{
-        TracingEnabled: true,
-        MetricsEnabled: true,
-    }))
+// 启动 Langfuse 集成
+clean, _ := langfuse.Start(ctx)
+defer clean(ctx)
+
+runner := runner.NewRunner("app", agent)
+// 运行并添加 Langfuse 属性
+events, _ := runner.Run(ctx, "user-1", "session-1", 
+    model.NewUserMessage("Hello"),
+    agent.WithSpanAttributes(
+        attribute.String("langfuse.user.id", "user-1"),
+        attribute.String("langfuse.session.id", "session-1"),
+    ))
 ```
 
 </td>
 </tr>
 <tr>
-<td>
+<td valign="top">
 
-### 🧩 **Agent Skills**
+### Agent Skills
 
 ```go
 // Skills 是一个包含 SKILL.md 的文件夹。
@@ -125,10 +132,13 @@ tools := []tool.Tool{
 }
 ```
 
-</td>
-<td>
+`NewFSRepository` 也支持传入 HTTP(S) URL（例如 `.zip` / `.tar.gz` 压缩包），
+会自动下载并缓存到本地（可通过 `SKILLS_CACHE_DIR` 覆盖缓存目录）。
 
-### ✅ **评测与基准**
+</td>
+<td valign="top">
+
+### 评测与基准
 
 ```go
 evaluator, _ := evaluation.New("app", runner,
@@ -143,69 +153,87 @@ _ = result.OverallStatus
 
 ## 目录
 
-- [使用场景](#-使用场景)
-- [核心特性](#-核心特性)
-- [文档](#文档)
-- [快速开始](#快速开始)
-- [示例](#示例)
-  - [Tool 用法](#1-tool-用法)
-  - [仅 LLM 的 Agent](#2-仅-llm-的-agent)
-  - [多 Agent Runner](#3-多-agent-runner)
-  - [Graph Agent](#4-graph-agent)
-  - [Memory](#5-memory)
-  - [Knowledge](#6-knowledge)
-  - [Telemetry 与 Tracing](#7-telemetry-与-tracing)
-  - [MCP 集成](#8-mcp-集成)
-  - [调试 Web Demo](#9-调试-web-demo)
-  - [AG-UI Demo](#10-ag-ui-demo)
-  - [评测（Evaluation）](#11-评测evaluation)
-  - [Agent Skills](#12-agent-skills)
-  - [Artifacts](#13-artifacts)
-  - [A2A 互通](#14-a2a-互通)
-- [架构概览](#架构概览)
-- [使用内置 Agents](#使用内置-agents)
-- [未来增强](#未来增强)
-- [贡献](#贡献)
-- [致谢](#致谢)
+- [tRPC-Agent-Go](#trpc-agent-go)
+  - [使用场景](#使用场景)
+  - [核心特性](#核心特性)
+    - [**多 Agent 编排**](#多-agent-编排)
+    - [**先进的 Memory 系统**](#先进的-memory-系统)
+    - [**丰富的 Tool 集成**](#丰富的-tool-集成)
+    - [**生产可观测性**](#生产可观测性)
+    - [**Agent Skills**](#agent-skills)
+    - [**评测与基准**](#评测与基准)
+  - [目录](#目录)
+  - [文档](#文档)
+  - [快速开始](#快速开始)
+    - [前置条件](#前置条件)
+    - [运行示例](#运行示例)
+    - [基本用法](#基本用法)
+  - [示例](#示例)
+    - [1. Tool 用法](#1-tool-用法)
+    - [2. 仅 LLM 的 Agent](#2-仅-llm-的-agent)
+    - [3. 多 Agent Runner](#3-多-agent-runner)
+    - [4. Graph Agent](#4-graph-agent)
+    - [5. Memory](#5-memory)
+    - [6. Knowledge](#6-knowledge)
+    - [7. Telemetry 与 Tracing](#7-telemetry-与-tracing)
+    - [8. MCP 集成](#8-mcp-集成)
+    - [9. AG-UI Demo](#9-ag-ui-demo)
+    - [10. 评测（Evaluation）](#10-评测evaluation)
+    - [11. Agent Skills](#11-agent-skills)
+    - [12. Artifacts](#12-artifacts)
+    - [13. A2A 互通](#13-a2a-互通)
+  - [架构概览](#架构概览)
+    - [**执行流程**](#执行流程)
+  - [使用内置 Agents](#使用内置-agents)
+    - [多 Agent 协作示例](#多-agent-协作示例)
+  - [贡献](#贡献)
+    - [**贡献方式**](#贡献方式)
+    - [**快速贡献设置**](#快速贡献设置)
+  - [致谢](#致谢)
+    - [**企业验证**](#企业验证)
+    - [**开源灵感**](#开源灵感)
+  - [Star 历史](#star-历史)
+  - [许可证](#许可证)
+    - [**在 GitHub 上为我们加星** • **报告问题** • **加入讨论**](#在-github-上为我们加星--报告问题--加入讨论)
 
 ## 文档
 
 准备好深入了解 tRPC-Agent-Go 了吗？我们的[文档](https://trpc-group.github.io/trpc-agent-go/)涵盖从基础概念到高级技巧的一切，帮助你自信地构建强大的 AI 应用。无论你是 AI agent 新手还是有经验的开发者，都能在其中找到详细指南、实用示例和最佳实践，加速你的开发旅程。
 
-## ⚡ 快速开始
+## 快速开始
 
-> 🎬 **实际演示**：_[Demo GIF 占位符 - 展示 agent 推理和 tool 使用]_
+> **实际演示**：_[Demo GIF 占位符 - 展示 agent 推理和 tool 使用]_
 
-### 📋 前置条件
+### 前置条件
 
-- ✅ Go 1.21 或更高版本
-- 🔑 LLM 提供商 API 密钥（OpenAI、DeepSeek 等）
-- 💡 5 分钟构建您的第一个智能 agent
+- Go 1.21 或更高版本
+- LLM 提供商 API 密钥（OpenAI、DeepSeek 等）
+- 5 分钟构建您的第一个智能 agent
 
-### 🚀 运行示例
+### 运行示例
 
 **3 个简单步骤开始：**
 
 ```bash
-# 1️⃣ 克隆和设置
+# 1. 克隆和设置
 git clone https://github.com/trpc-group/trpc-agent-go.git
 cd trpc-agent-go
 
-# 2️⃣ 配置您的 LLM
+# 2. 配置您的 LLM
 export OPENAI_API_KEY="your-api-key-here"
 export OPENAI_BASE_URL="your-base-url-here"  # 可选
 
-# 3️⃣ 运行您的第一个 agent！🎉
+# 3. 运行您的第一个 agent！
 cd examples/runner
 go run . -model="gpt-4o-mini" -streaming=true
 ```
 
 **您将看到：**
 
-- 💬 **与您的 AI agent 互动聊天**
-- ⚡ **实时流式**响应
-- 🧮 **Tool 使用**（计算器 + 时间工具）
-- 🔄 **带 memory 的多轮对话**
+- **与您的 AI agent 互动聊天**
+- **实时流式**响应
+- **Tool 使用**（计算器 + 时间工具）
+- **带 memory 的多轮对话**
 
 试着问问："现在几点了？然后计算 15 \* 23 + 100"
 
@@ -392,7 +420,6 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 - 提供遵循 MCP 规范的 structured prompts、tool 调用、resource 与 session 消息。
 - 使 agent 与 LLM 之间能够进行动态工具执行与上下文丰富的交互。
 
-<<<<<<< HEAD
 ### 9. AG-UI Demo
 
 示例：[examples/agui](examples/agui)
@@ -405,7 +432,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 示例：[examples/evaluation](examples/evaluation)
 
 - 通过可复用的 EvalSet 与可插拔的 Metric 对 agent 进行评测。
-- 包含本地文件（local）与内存（inmemory）两种模式，并提供 Debug + 评测服务端示例。
+- 包含本地文件（local）与内存（inmemory）两种模式。
 
 ### 11. Agent Skills
 
@@ -428,8 +455,6 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 - Agent-to-Agent（A2A）与 ADK Python A2A Server 的互通示例。
 - 演示跨运行时的流式输出、工具调用与代码执行。
 
-=======
->>>>>>> main
 其他值得关注的示例：
 
 - [examples/humaninloop](examples/humaninloop) – Human-in-the-loop。
@@ -437,38 +462,38 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 
 关于使用详情，请参阅各示例文件夹中的 `README.md`。
 
-## 🏗️ 架构概览
+## 架构概览
 
 架构图
 
 ![architecture](docs/mkdocs/assets/img/component_architecture.svg)
 
-### 🔄 **执行流程**
+### **执行流程**
 
-1. **🚀 Runner** 通过会话管理编排整个执行管道
-2. **🤖 Agent** 使用多个专门组件处理请求
-3. **🧠 Planner** 确定最优策略和 tool 选择
-4. **🛠️ Tools** 执行特定任务（API 调用、计算、web 搜索）
-5. **💾 Memory** 维护上下文并从交互中学习
-6. **📚 Knowledge** 为文档理解提供 RAG 能力
+1. **Runner** 通过会话管理编排整个执行管道
+2. **Agent** 使用多个专门组件处理请求
+3. **Planner** 确定最优策略和 tool 选择
+4. **Tools** 执行特定任务（API 调用、计算、web 搜索）
+5. **Memory** 维护上下文并从交互中学习
+6. **Knowledge** 为文档理解提供 RAG 能力
 
 关键包：
 
 | Package     | 职责                                                               |
 | ----------- | ------------------------------------------------------------------ |
-| `agent`     | 核心执行单元，负责处理用户输入并生成响应。                         |
-| `runner`    | agent 执行器，负责管理执行流程并连接 Session/Memory Service 能力。 |
-| `model`     | 支持多种 LLM 模型（OpenAI、DeepSeek 等）。                         |
-| `tool`      | 提供多种工具能力（Function、MCP、DuckDuckGo 等）。                 |
-| `session`   | 管理用户会话状态与事件。                                           |
-| `memory`    | 记录用户长期记忆与个性化信息。                                     |
-| `knowledge` | 实现 RAG 知识检索能力。                                            |
-| `planner`   | 提供 agent 的规划与推理能力。                                      |
-| `artifact`  | 存储并读取工具/agent 产出的版本化文件（图片、报告等）。            |
-| `skill`     | 管理并执行以 `SKILL.md` 定义的可复用 Agent Skills。                 |
-| `event`     | 定义 Runner 与各类服务使用的事件结构与流式载荷。                   |
-| `evaluation`| 提供 EvalSet/Metric 驱动的评测框架并管理评测结果。                 |
-| `server`    | 提供 Debug、AG-UI、A2A 等 HTTP 服务端能力。                        |
+| `agent`     | 核心执行单元，负责处理用户输入并生成响应。                                |
+| `runner`    | agent 执行器，负责管理执行流程并连接 Session/Memory Service 能力。       |
+| `model`     | 支持多种 LLM 模型（OpenAI、DeepSeek 等）。                             |
+| `tool`      | 提供多种工具能力（Function、MCP、DuckDuckGo 等）。                      |
+| `session`   | 管理用户会话状态与事件。                                              |
+| `memory`    | 记录用户长期记忆与个性化信息。                                         |
+| `knowledge` | 实现 RAG 知识检索能力。                                              |
+| `planner`   | 提供 agent 的规划与推理能力。                                         |
+| `artifact`  | 存储并读取工具/agent 产出的版本化文件（图片、报告等）。                    |
+| `skill`     | 管理并执行以 `SKILL.md` 定义的可复用 Agent Skills。                   |
+| `event`     | 定义 Runner 与各类服务使用的事件结构与流式载荷。                        |
+| `evaluation`| 提供 EvalSet/Metric 驱动的评测框架并管理评测结果。                     |
+| `server`    | 提供 AG-UI、A2A 等 HTTP 服务端能力。                                |
 | `telemetry` | OpenTelemetry 的 tracing/metrics 采集与接入。                      |
 
 ## 使用内置 Agents
@@ -513,18 +538,18 @@ for ev := range events { /* ... */ }
 
 组合式 API 允许你将 chain、cycle 或 parallel 进行嵌套，从而在无需底层管线处理的情况下构建复杂工作流。
 
-## 🤝 贡献
+## 贡献
 
-我们 ❤️ 贡献！加入我们不断壮大的开发者社区，共同构建 AI agent 的未来。
+我们热爱贡献！加入我们不断壮大的开发者社区，共同构建 AI agent 的未来。
 
-### 🌟 **贡献方式**
+### **贡献方式**
 
-- 🐛 **报告 bug** 或通过 [Issues](https://github.com/trpc-group/trpc-agent-go/issues) 建议新功能
-- 📖 **改进文档** - 帮助他人更快学习
-- 🔧 **提交 PR** - bug 修复、新功能或示例
-- 💡 **分享您的用例** - 用您的 agent 应用启发他人
+- **报告 bug** 或通过 [Issues](https://github.com/trpc-group/trpc-agent-go/issues) 建议新功能
+- **改进文档** - 帮助他人更快学习
+- **提交 PR** - bug 修复、新功能或示例
+- **分享您的用例** - 用您的 agent 应用启发他人
 
-### 🚀 **快速贡献设置**
+### **快速贡献设置**
 
 ```bash
 # Fork 并克隆仓库
@@ -535,30 +560,30 @@ cd trpc-agent-go
 go test ./...
 go vet ./...
 
-# 进行您的更改并提交 PR！🎉
+# 进行您的更改并提交 PR！
 ```
 
-📋 **请阅读** [CONTRIBUTING.md](CONTRIBUTING.md) 了解详细指南和编码标准。
+**请阅读** [CONTRIBUTING.md](CONTRIBUTING.md) 了解详细指南和编码标准。
 
-## 🏆 致谢
+## 致谢
 
-### 🏢 **企业验证**
+### **企业验证**
 
 特别感谢腾讯各业务单元，包括**腾讯元宝**、**腾讯视频**、**腾讯新闻**、**IMA** 和 **QQ 音乐**的宝贵支持和生产环境验证推动框架发展
 
-### 🌟 **开源灵感**
+### **开源灵感**
 
-感谢优秀的开源框架如 **ADK**、**Agno**、**CrewAI**、**AutoGen** 等的启发。站在巨人的肩膀上！🙏
+感谢优秀的开源框架如 **ADK**、**Agno**、**CrewAI**、**AutoGen** 等的启发。站在巨人的肩膀上！
 
 ---
 
-## ⭐ Star 历史
+## Star 历史
 
 [![Star History Chart](https://api.star-history.com/svg?repos=trpc-group/trpc-agent-go&type=Date)](https://star-history.com/#trpc-group/trpc-agent-go&Date)
 
 ---
 
-## 📜 许可证
+## 许可证
 
 遵循 **Apache 2.0 许可证** - 详见 [LICENSE](LICENSE) 文件。
 
@@ -566,9 +591,9 @@ go vet ./...
 
 <div align="center">
 
-### 🌟 **在 GitHub 上为我们加星** • 🐛 **报告问题** • 💬 **加入讨论**
+### **在 GitHub 上为我们加星** • **报告问题** • **加入讨论**
 
-**由 tRPC-Agent-Go 团队用 ❤️ 构建**
+**由 tRPC-Agent-Go 团队用爱构建**
 
 _赋能开发者构建下一代智能应用_
 

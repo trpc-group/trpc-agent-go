@@ -19,12 +19,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -87,6 +89,33 @@ func (m *mockAgent) Tools() []tool.Tool {
 	return []tool.Tool{}
 }
 
+type staticModel struct {
+	name    string
+	content string
+}
+
+const staticModelResponseIDPrefix = "static-model-response-"
+
+func (m *staticModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		ID:        staticModelResponseIDPrefix + m.name,
+		Done:      true,
+		IsPartial: false,
+		Choices: []model.Choice{{
+			Index:   0,
+			Message: model.NewAssistantMessage(m.content),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *staticModel) Info() model.Info { return model.Info{Name: m.name} }
+
 func TestRunner_SessionIntegration(t *testing.T) {
 	// Create an in-memory session service.
 	sessionService := sessioninmemory.NewSessionService()
@@ -142,6 +171,183 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	agentEvent := sess.Events[1]
 	assert.Equal(t, "test-agent", agentEvent.Author)
 	assert.Contains(t, agentEvent.Response.Choices[0].Message.Content, "Hello, world!")
+}
+
+type testPlugin struct {
+	name string
+	reg  func(r *plugin.Registry)
+}
+
+func (p *testPlugin) Name() string { return p.name }
+
+func (p *testPlugin) Register(r *plugin.Registry) {
+	if p.reg != nil {
+		p.reg(r)
+	}
+}
+
+func TestRunner_WithPlugins_AppliesHooks(t *testing.T) {
+	beforeCalled := false
+	const tagged = "tagged"
+
+	p := &testPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.BeforeAgent(func(
+				ctx context.Context,
+				args *agent.BeforeAgentArgs,
+			) (*agent.BeforeAgentResult, error) {
+				beforeCalled = true
+				return nil, nil
+			})
+			r.OnEvent(func(
+				ctx context.Context,
+				inv *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				if e != nil {
+					e.Tag = tagged
+				}
+				return nil, nil
+			})
+		},
+	}
+
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &mockAgent{name: "test-agent"}
+	r := NewRunner(
+		"test-app",
+		ag,
+		WithSessionService(sessionService),
+		WithPlugins(p),
+	)
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+	)
+	require.NoError(t, err)
+
+	var events []*event.Event
+	for evt := range ch {
+		events = append(events, evt)
+	}
+
+	require.True(t, beforeCalled)
+	require.NotEmpty(t, events)
+	for _, evt := range events {
+		require.Equal(t, tagged, evt.Tag)
+	}
+}
+
+func TestRunner_applyEventPlugins_ReplacesEventAndCopiesFields(t *testing.T) {
+	const (
+		reqID    = "req"
+		invID    = "inv"
+		parentID = "parent"
+		branch   = "branch"
+		filter   = "filter"
+		tag      = "tag"
+	)
+	p := &testPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				ctx context.Context,
+				inv *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				updated := &event.Event{
+					Tag:    tag,
+					Author: "plugin",
+				}
+				return updated, nil
+			})
+		},
+	}
+
+	ag := &mockAgent{name: "test-agent"}
+	run := NewRunner("test-app", ag, WithPlugins(p)).(*runner)
+
+	inv := &agent.Invocation{Plugins: plugin.MustNewManager(p)}
+	orig := &event.Event{
+		Response:           &model.Response{Done: true},
+		RequestID:          reqID,
+		InvocationID:       invID,
+		ParentInvocationID: parentID,
+		Branch:             branch,
+		FilterKey:          filter,
+		Author:             "a",
+	}
+
+	out := run.applyEventPlugins(context.Background(), inv, orig)
+	require.NotNil(t, out)
+	require.Equal(t, tag, out.Tag)
+	require.Equal(t, reqID, out.RequestID)
+	require.Equal(t, invID, out.InvocationID)
+	require.Equal(t, parentID, out.ParentInvocationID)
+	require.Equal(t, branch, out.Branch)
+	require.Equal(t, filter, out.FilterKey)
+}
+
+func TestRunner_applyEventPlugins_ErrorKeepsOriginal(t *testing.T) {
+	p := &testPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				ctx context.Context,
+				inv *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				return nil, errors.New("boom")
+			})
+		},
+	}
+
+	ag := &mockAgent{name: "test-agent"}
+	run := NewRunner("test-app", ag, WithPlugins(p)).(*runner)
+
+	inv := &agent.Invocation{Plugins: plugin.MustNewManager(p)}
+	orig := &event.Event{Response: &model.Response{Done: true}}
+	out := run.applyEventPlugins(context.Background(), inv, orig)
+	require.Same(t, orig, out)
+}
+
+type closePlugin struct {
+	name     string
+	closed   bool
+	closeErr error
+}
+
+func (p *closePlugin) Name() string { return p.name }
+
+func (p *closePlugin) Register(r *plugin.Registry) {}
+
+func (p *closePlugin) Close(ctx context.Context) error {
+	p.closed = true
+	return p.closeErr
+}
+
+func TestRunner_Close_ClosesPlugins(t *testing.T) {
+	p := &closePlugin{name: "p"}
+	ag := &mockAgent{name: "test-agent"}
+	run := NewRunner("test-app", ag, WithPlugins(p)).(*runner)
+
+	err := run.Close()
+	require.NoError(t, err)
+	require.True(t, p.closed)
+}
+
+func TestRunner_Close_PropagatesPluginCloseError(t *testing.T) {
+	p := &closePlugin{name: "p", closeErr: errors.New("boom")}
+	ag := &mockAgent{name: "test-agent"}
+	run := NewRunner("test-app", ag, WithPlugins(p)).(*runner)
+
+	err := run.Close()
+	require.Error(t, err)
+	require.True(t, p.closed)
 }
 
 func TestRunner_SessionCreateIfMissing(t *testing.T) {
@@ -576,6 +782,48 @@ func TestRunner_GraphCompletionPropagation(t *testing.T) {
 		"Final message content should match")
 }
 
+func TestRunner_GraphCompletion_DedupFinalChoices(t *testing.T) {
+	const (
+		appName       = "test-app"
+		userID        = "user"
+		sessionID     = "session"
+		agentName     = "dedup-agent"
+		finalMsg      = "final"
+		stateDeltaKey = "k"
+		stateDeltaVal = "v"
+	)
+
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &dedupGraphCompletionAgent{
+		name:          agentName,
+		assistantText: finalMsg,
+		stateKey:      stateDeltaKey,
+		stateVal:      stateDeltaVal,
+	}
+	r := NewRunner(appName, ag, WithSessionService(sessionService))
+
+	ch, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage(""),
+		agent.WithGraphEmitFinalModelResponses(true),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for e := range ch {
+		if e.Object == model.ObjectTypeRunnerCompletion {
+			completion = e
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.StateDelta)
+	require.Equal(t, stateDeltaVal,
+		string(completion.StateDelta[stateDeltaKey]))
+	require.Empty(t, completion.Response.Choices)
+}
+
 // graphCompletionMockAgent emits a graph completion event with state delta
 // and choices.
 type graphCompletionMockAgent struct {
@@ -636,6 +884,89 @@ func (m *graphCompletionMockAgent) Run(
 
 func (m *graphCompletionMockAgent) Tools() []tool.Tool {
 	return []tool.Tool{}
+}
+
+// dedupGraphCompletionAgent emits an assistant message followed by a graph
+// completion event with the same assistant content, so runner completion
+// should not echo the final choices.
+type dedupGraphCompletionAgent struct {
+	name          string
+	assistantText string
+	stateKey      string
+	stateVal      string
+}
+
+func (m *dedupGraphCompletionAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent for dedup final choices",
+	}
+}
+
+func (m *dedupGraphCompletionAgent) SubAgents() []agent.Agent { return nil }
+
+func (m *dedupGraphCompletionAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *dedupGraphCompletionAgent) Tools() []tool.Tool { return nil }
+
+func (m *dedupGraphCompletionAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	const (
+		assistantEventID = "assistant-event-id"
+		graphEventID     = "graph-event-id"
+	)
+
+	eventCh := make(chan *event.Event, 2)
+
+	assistantEvent := &event.Event{
+		Response: &model.Response{
+			ID:     assistantEventID,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: m.assistantText,
+				},
+			}},
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           assistantEventID,
+		Timestamp:    time.Now(),
+	}
+
+	graphCompletionEvent := &event.Event{
+		Response: &model.Response{
+			ID:     graphEventID,
+			Object: graph.ObjectTypeGraphExecution,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(m.assistantText),
+			}},
+		},
+		StateDelta: map[string][]byte{
+			m.stateKey: []byte(m.stateVal),
+			graph.StateKeyLastResponseID: []byte(
+				"\"" + assistantEventID + "\"",
+			),
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           graphEventID,
+		Timestamp:    time.Now(),
+	}
+
+	eventCh <- assistantEvent
+	eventCh <- graphCompletionEvent
+	close(eventCh)
+	return eventCh, nil
 }
 
 // failingAgent returns an error from Run to cover error path in Runner.Run.
@@ -897,14 +1228,438 @@ func TestGraphCompletionNotPersistedAsMessage(t *testing.T) {
 		sess.Events[1].Object)
 }
 
+func TestRunner_GraphAgent_LegacyRunnerCompletionIncludesFinalResponse(t *testing.T) {
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	sg.AddLLMNode(
+		"n1",
+		&staticModel{name: "m1", content: "first"},
+		"i1",
+		nil,
+	)
+	sg.AddLLMNode(
+		"n2",
+		&staticModel{name: "m2", content: "second"},
+		"i2",
+		nil,
+	)
+	sg.AddEdge("n1", "n2")
+	compiled := sg.SetEntryPoint("n1").SetFinishPoint("n2").MustCompile()
+
+	ga, err := graphagent.New("ga", compiled)
+	require.NoError(t, err)
+
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner("app", ga, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+	)
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range ch {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.True(t, last.IsRunnerCompletion())
+	require.Len(t, last.Response.Choices, 1)
+	require.Equal(t, model.RoleAssistant,
+		last.Response.Choices[0].Message.Role)
+	require.Equal(t, "second",
+		last.Response.Choices[0].Message.Content)
+
+	sess, err := svc.GetSession(context.Background(), session.Key{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: "s",
+	})
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 2)
+	require.True(t, sess.Events[0].IsUserMessage())
+	require.Equal(t, model.ObjectTypeRunnerCompletion,
+		sess.Events[1].Object)
+	require.Len(t, sess.Events[1].Choices, 1)
+	require.Equal(t, model.RoleAssistant,
+		sess.Events[1].Choices[0].Message.Role)
+	require.Equal(t, "second",
+		sess.Events[1].Choices[0].Message.Content)
+}
+
+func TestRunner_GraphAgentPersistsLLMDoneResponses(t *testing.T) {
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	sg.AddLLMNode(
+		"n1",
+		&staticModel{name: "m1", content: "first"},
+		"i1",
+		nil,
+	)
+	sg.AddLLMNode(
+		"n2",
+		&staticModel{name: "m2", content: "second"},
+		"i2",
+		nil,
+	)
+	sg.AddEdge("n1", "n2")
+	compiled := sg.SetEntryPoint("n1").SetFinishPoint("n2").MustCompile()
+
+	ga, err := graphagent.New("ga", compiled)
+	require.NoError(t, err)
+
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner("app", ga, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+		agent.WithGraphEmitFinalModelResponses(true),
+	)
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range ch {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.True(t, last.IsRunnerCompletion())
+	require.Empty(t, last.Response.Choices)
+
+	sess, err := svc.GetSession(context.Background(), session.Key{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: "s",
+	})
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 3)
+	require.True(t, sess.Events[0].IsUserMessage())
+
+	require.Equal(t, model.RoleAssistant,
+		sess.Events[1].Choices[0].Message.Role)
+	require.Equal(t, "first",
+		sess.Events[1].Choices[0].Message.Content)
+
+	require.Equal(t, model.RoleAssistant,
+		sess.Events[2].Choices[0].Message.Role)
+	require.Equal(t, "second",
+		sess.Events[2].Choices[0].Message.Content)
+}
+
 func TestPropagateGraphCompletion_NilStateValue(t *testing.T) {
 	// Call propagateGraphCompletion directly to cover the nil-value copy branch.
 	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
 	ev := event.NewResponseEvent("inv", "app", &model.Response{ID: "rc", Object: model.ObjectTypeRunnerCompletion, Done: true})
 	delta := map[string][]byte{"nil": nil}
-	rr.propagateGraphCompletion(ev, delta, nil)
+	rr.propagateGraphCompletion(ev, delta, nil, false)
 	require.Contains(t, ev.StateDelta, "nil")
 	require.Nil(t, ev.StateDelta["nil"]) // explicit nil copy branch covered
+}
+
+func TestShouldEchoFinalChoicesInCompletion_Cases(t *testing.T) {
+	const (
+		appName        = "app"
+		agentName      = "a"
+		content        = "content"
+		responseID     = "response-id"
+		responseIDJSON = "\"response-id\""
+	)
+
+	rr := NewRunner(appName, &noOpAgent{name: agentName}).(*runner)
+
+	t.Run("nil loop", func(t *testing.T) {
+		require.True(t, rr.shouldEchoFinalChoicesInCompletion(nil))
+	})
+
+	t.Run("no final choices", func(t *testing.T) {
+		loop := &eventLoopContext{finalChoices: nil}
+		require.False(t, rr.shouldEchoFinalChoicesInCompletion(loop))
+	})
+
+	t.Run("legacy always includes", func(t *testing.T) {
+		invocation := agent.NewInvocation(agent.WithInvocationRunOptions(
+			agent.RunOptions{},
+		))
+		loop := &eventLoopContext{
+			invocation: invocation,
+			finalChoices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+			finalStateDelta: map[string][]byte{
+				graph.StateKeyLastResponseID: []byte(responseIDJSON),
+			},
+			emittedAssistantResponseIDs: map[string]struct{}{
+				responseID: {},
+			},
+		}
+		require.True(t, rr.shouldEchoFinalChoicesInCompletion(loop))
+	})
+
+	t.Run("new mode missing final id includes", func(t *testing.T) {
+		invocation := agent.NewInvocation(agent.WithInvocationRunOptions(
+			agent.RunOptions{GraphEmitFinalModelResponses: true},
+		))
+		loop := &eventLoopContext{
+			invocation: invocation,
+			finalChoices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+		}
+		require.True(t, rr.shouldEchoFinalChoicesInCompletion(loop))
+	})
+
+	t.Run("new mode duplicate id excluded", func(t *testing.T) {
+		invocation := agent.NewInvocation(agent.WithInvocationRunOptions(
+			agent.RunOptions{GraphEmitFinalModelResponses: true},
+		))
+		loop := &eventLoopContext{
+			invocation: invocation,
+			finalChoices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+			finalStateDelta: map[string][]byte{
+				graph.StateKeyLastResponseID: []byte(responseIDJSON),
+			},
+			emittedAssistantResponseIDs: map[string]struct{}{
+				responseID: {},
+			},
+		}
+		require.False(t, rr.shouldEchoFinalChoicesInCompletion(loop))
+	})
+
+	t.Run("new mode id not seen includes", func(t *testing.T) {
+		invocation := agent.NewInvocation(agent.WithInvocationRunOptions(
+			agent.RunOptions{GraphEmitFinalModelResponses: true},
+		))
+		loop := &eventLoopContext{
+			invocation: invocation,
+			finalChoices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+			finalStateDelta: map[string][]byte{
+				graph.StateKeyLastResponseID: []byte(responseIDJSON),
+			},
+		}
+		require.True(t, rr.shouldEchoFinalChoicesInCompletion(loop))
+	})
+}
+
+func TestRecordEmittedAssistantResponseID_Cases(t *testing.T) {
+	const (
+		appName        = "app"
+		agentName      = "a"
+		invocationID   = "inv"
+		author         = "author"
+		content        = "content"
+		deltaContent   = "delta"
+		stateEventID   = "state-event-id"
+		graphEventID   = "graph-event-id"
+		partialEvent   = "partial-event-id"
+		invalidEvent   = "invalid-event-id"
+		userEvent      = "user-event-id"
+		deltaOnlyEvent = "delta-only-event-id"
+	)
+
+	rr := NewRunner(appName, &noOpAgent{name: agentName}).(*runner)
+	enabledInvocation := agent.NewInvocation(agent.WithInvocationRunOptions(
+		agent.RunOptions{GraphEmitFinalModelResponses: true},
+	))
+
+	t.Run("nil loop", func(t *testing.T) {
+		rsp := &model.Response{
+			ID:     stateEventID,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordEmittedAssistantResponseID(nil, e)
+	})
+
+	t.Run("nil event", func(t *testing.T) {
+		loop := &eventLoopContext{invocation: enabledInvocation}
+		rr.recordEmittedAssistantResponseID(loop, nil)
+	})
+
+	t.Run("nil response", func(t *testing.T) {
+		loop := &eventLoopContext{invocation: enabledInvocation}
+		rr.recordEmittedAssistantResponseID(loop, &event.Event{})
+	})
+
+	t.Run("nil invocation", func(t *testing.T) {
+		loop := &eventLoopContext{}
+		rsp := &model.Response{
+			ID:     stateEventID,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Nil(t, loop.emittedAssistantResponseIDs)
+	})
+
+	t.Run("skips when flag disabled", func(t *testing.T) {
+		loop := &eventLoopContext{invocation: agent.NewInvocation()}
+		rsp := &model.Response{
+			ID:     stateEventID,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Nil(t, loop.emittedAssistantResponseIDs)
+	})
+
+	t.Run("skips empty response id", func(t *testing.T) {
+		loop := &eventLoopContext{invocation: enabledInvocation}
+		rsp := &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Nil(t, loop.emittedAssistantResponseIDs)
+	})
+
+	t.Run("records assistant message", func(t *testing.T) {
+		loop := &eventLoopContext{invocation: enabledInvocation}
+		rsp := &model.Response{
+			ID:     stateEventID,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		_, ok := loop.emittedAssistantResponseIDs[stateEventID]
+		require.True(t, ok)
+	})
+
+	t.Run("skips graph completion", func(t *testing.T) {
+		loop := &eventLoopContext{
+			invocation: enabledInvocation,
+			emittedAssistantResponseIDs: map[string]struct{}{
+				stateEventID: {},
+			},
+		}
+		rsp := &model.Response{
+			ID:     graphEventID,
+			Object: graph.ObjectTypeGraphExecution,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Len(t, loop.emittedAssistantResponseIDs, 1)
+	})
+
+	t.Run("skips partial response", func(t *testing.T) {
+		loop := &eventLoopContext{invocation: enabledInvocation}
+		rsp := &model.Response{
+			ID:        partialEvent,
+			Object:    model.ObjectTypeChatCompletionChunk,
+			Done:      false,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(content),
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Empty(t, loop.emittedAssistantResponseIDs)
+	})
+
+	t.Run("skips invalid content", func(t *testing.T) {
+		loop := &eventLoopContext{invocation: enabledInvocation}
+		rsp := &model.Response{
+			ID:     invalidEvent,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role: model.RoleAssistant,
+				},
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Empty(t, loop.emittedAssistantResponseIDs)
+	})
+
+	t.Run("skips non assistant role", func(t *testing.T) {
+		loop := &eventLoopContext{
+			invocation: enabledInvocation,
+		}
+		rsp := &model.Response{
+			ID:     userEvent,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: content,
+				},
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Empty(t, loop.emittedAssistantResponseIDs)
+	})
+
+	t.Run("skips empty message content when delta used", func(t *testing.T) {
+		loop := &eventLoopContext{
+			invocation: enabledInvocation,
+		}
+		rsp := &model.Response{
+			ID:     deltaOnlyEvent,
+			Object: model.ObjectTypeChatCompletionChunk,
+			Done:   false,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role: model.RoleAssistant,
+				},
+				Delta: model.Message{
+					Content: deltaContent,
+				},
+			}},
+		}
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		rr.recordEmittedAssistantResponseID(loop, e)
+		require.Empty(t, loop.emittedAssistantResponseIDs)
+	})
 }
 
 func TestProcessAgentEvents_NotifyCompletion(t *testing.T) {
@@ -1033,6 +1788,48 @@ func TestShouldAppendUserMessage_Cases(t *testing.T) {
 	require.True(t, shouldAppendUserMessage(model.NewAssistantMessage("a"), []model.Message{model.NewUserMessage("u")}))
 	// seed has no user -> should append
 	require.True(t, shouldAppendUserMessage(model.NewUserMessage("u"), []model.Message{model.NewSystemMessage("s"), model.NewAssistantMessage("a")}))
+}
+
+func TestFinalResponseIDFromStateDelta_Cases(t *testing.T) {
+	const (
+		unknownKey     = "other"
+		unknownValue   = "\"x\""
+		invalidJSON    = "{"
+		responseID     = "resp-123"
+		responseIDJSON = "\"resp-123\""
+	)
+
+	t.Run("nil delta", func(t *testing.T) {
+		require.Equal(t, "", finalResponseIDFromStateDelta(nil))
+	})
+
+	t.Run("missing key", func(t *testing.T) {
+		delta := map[string][]byte{
+			unknownKey: []byte(unknownValue),
+		}
+		require.Equal(t, "", finalResponseIDFromStateDelta(delta))
+	})
+
+	t.Run("empty value", func(t *testing.T) {
+		delta := map[string][]byte{
+			graph.StateKeyLastResponseID: nil,
+		}
+		require.Equal(t, "", finalResponseIDFromStateDelta(delta))
+	})
+
+	t.Run("invalid json", func(t *testing.T) {
+		delta := map[string][]byte{
+			graph.StateKeyLastResponseID: []byte(invalidJSON),
+		}
+		require.Equal(t, "", finalResponseIDFromStateDelta(delta))
+	})
+
+	t.Run("valid json", func(t *testing.T) {
+		delta := map[string][]byte{
+			graph.StateKeyLastResponseID: []byte(responseIDJSON),
+		}
+		require.Equal(t, responseID, finalResponseIDFromStateDelta(delta))
+	})
 }
 
 func TestRunner_Close_OwnedSessionService(t *testing.T) {

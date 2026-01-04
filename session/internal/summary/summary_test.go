@@ -12,6 +12,7 @@ package summary
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -312,6 +313,63 @@ func TestSummarizeSession_UsesLastIncludedTimestampWhenProvided(t *testing.T) {
 	require.Equal(t, t2.UTC(), base.Summaries[""].UpdatedAt)
 }
 
+func TestMeetsTimeCriteria(t *testing.T) {
+	now := time.Now()
+	past := now.Add(-time.Hour)
+	future := now.Add(time.Hour)
+
+	tests := []struct {
+		name     string
+		sum      *session.Summary
+		minTime  time.Time
+		expected bool
+	}{
+		{
+			name:     "nil summary should return false",
+			sum:      nil,
+			minTime:  now,
+			expected: false,
+		},
+		{
+			name:     "zero minTime should return true for any non-nil summary",
+			sum:      &session.Summary{Summary: "test", UpdatedAt: past},
+			minTime:  time.Time{},
+			expected: true,
+		},
+		{
+			name:     "summary UpdatedAt equals minTime should return true",
+			sum:      &session.Summary{Summary: "test", UpdatedAt: now},
+			minTime:  now,
+			expected: true,
+		},
+		{
+			name:     "summary UpdatedAt after minTime should return true",
+			sum:      &session.Summary{Summary: "test", UpdatedAt: future},
+			minTime:  now,
+			expected: true,
+		},
+		{
+			name:     "summary UpdatedAt before minTime should return false",
+			sum:      &session.Summary{Summary: "test", UpdatedAt: past},
+			minTime:  now,
+			expected: false,
+		},
+		{
+			name:     "nil summary with zero minTime should return false",
+			sum:      nil,
+			minTime:  time.Time{},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := meetsTimeCriteria(tt.sum, tt.minTime)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestPickSummaryText(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -345,24 +403,24 @@ func TestPickSummaryText(t *testing.T) {
 			wantOk:    true,
 		},
 		{
-			name: "all-contents summary exists but empty, should pick other non-empty",
+			name: "all-contents summary exists but empty, should return false",
 			summaries: map[string]*session.Summary{
 				"":        {Summary: ""},
 				"filter1": {Summary: "filtered summary 1"},
 			},
 			filterKey: "",
-			wantText:  "filtered summary 1",
-			wantOk:    true,
+			wantText:  "",
+			wantOk:    false,
 		},
 		{
-			name: "all-contents summary is nil, should pick other non-empty",
+			name: "all-contents summary is nil, should return false",
 			summaries: map[string]*session.Summary{
 				"":        nil,
 				"filter1": {Summary: "filtered summary 1"},
 			},
 			filterKey: "",
-			wantText:  "filtered summary 1",
-			wantOk:    true,
+			wantText:  "",
+			wantOk:    false,
 		},
 		{
 			name: "only all-contents summary exists and is non-empty",
@@ -392,13 +450,13 @@ func TestPickSummaryText(t *testing.T) {
 			wantOk:    false,
 		},
 		{
-			name: "no all-contents summary, pick first non-empty",
+			name: "no all-contents summary, should return false",
 			summaries: map[string]*session.Summary{
 				"filter1": {Summary: "filtered summary 1"},
 			},
 			filterKey: "",
-			wantText:  "filtered summary 1",
-			wantOk:    true,
+			wantText:  "",
+			wantOk:    false,
 		},
 		{
 			name: "all summaries are empty",
@@ -423,15 +481,15 @@ func TestPickSummaryText(t *testing.T) {
 			wantOk:    false,
 		},
 		{
-			name: "mixed nil and empty summaries, pick first non-empty",
+			name: "mixed nil and empty summaries, no fallback",
 			summaries: map[string]*session.Summary{
 				"":        nil,
 				"filter1": {Summary: ""},
 				"filter2": {Summary: "valid summary"},
 			},
 			filterKey: "",
-			wantText:  "valid summary",
-			wantOk:    true,
+			wantText:  "",
+			wantOk:    false,
 		},
 		{
 			name: "specific filter key exists",
@@ -454,19 +512,95 @@ func TestPickSummaryText(t *testing.T) {
 			wantOk:    true,
 		},
 		{
-			name: "specific filter key not found, no full fallback",
+			name: "specific filter key not found, no full fallback, should return false",
 			summaries: map[string]*session.Summary{
 				"filter1": {Summary: "filtered summary 1"},
 			},
 			filterKey: "nonexistent",
-			wantText:  "filtered summary 1",
-			wantOk:    true,
+			wantText:  "",
+			wantOk:    false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotText, gotOk := PickSummaryText(tt.summaries, tt.filterKey)
+			gotText, gotOk := PickSummaryText(tt.summaries, tt.filterKey, time.Time{})
+			require.Equal(t, tt.wantText, gotText)
+			require.Equal(t, tt.wantOk, gotOk)
+		})
+	}
+}
+
+func TestPickSummaryText_WithMinTime(t *testing.T) {
+	now := time.Now()
+	past := now.Add(-time.Hour)
+	future := now.Add(time.Hour)
+
+	tests := []struct {
+		name      string
+		summaries map[string]*session.Summary
+		filterKey string
+		minTime   time.Time
+		wantText  string
+		wantOk    bool
+	}{
+		{
+			name: "filter by minTime: summary before minTime should be excluded",
+			summaries: map[string]*session.Summary{
+				"": {Summary: "old summary", UpdatedAt: past},
+			},
+			filterKey: "",
+			minTime:   now,
+			wantText:  "",
+			wantOk:    false,
+		},
+		{
+			name: "filter by minTime: summary equal to minTime should be included",
+			summaries: map[string]*session.Summary{
+				"": {Summary: "current summary", UpdatedAt: now},
+			},
+			filterKey: "",
+			minTime:   now,
+			wantText:  "current summary",
+			wantOk:    true,
+		},
+		{
+			name: "filter by minTime: summary after minTime should be included",
+			summaries: map[string]*session.Summary{
+				"": {Summary: "new summary", UpdatedAt: future},
+			},
+			filterKey: "",
+			minTime:   now,
+			wantText:  "new summary",
+			wantOk:    true,
+		},
+		{
+			name: "filter by minTime: fallback when filterKey is too old",
+			summaries: map[string]*session.Summary{
+				"":        {Summary: "full summary", UpdatedAt: future},
+				"filter1": {Summary: "old filtered summary", UpdatedAt: past},
+			},
+			filterKey: "filter1",
+			minTime:   now,
+			wantText:  "full summary",
+			wantOk:    true,
+		},
+		{
+			name: "filter by minTime: both filterKey and fallback are too old",
+			summaries: map[string]*session.Summary{
+				"":        {Summary: "old full summary", UpdatedAt: past},
+				"filter1": {Summary: "old filtered summary", UpdatedAt: past},
+			},
+			filterKey: "filter1",
+			minTime:   now,
+			wantText:  "",
+			wantOk:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotText, gotOk := PickSummaryText(tt.summaries, tt.filterKey, tt.minTime)
 			require.Equal(t, tt.wantText, gotText)
 			require.Equal(t, tt.wantOk, gotOk)
 		})
@@ -637,7 +771,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			name:        "first call fails, return error",
 			filterKey:   "user-messages",
 			force:       false,
-			expectCalls: []string{"user-messages"},
+			expectCalls: []string{"user-messages", ""},
 			expectError: true,
 			createSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
 				if filterKey == "user-messages" {
@@ -664,6 +798,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var calls []string
+			var callsMu sync.Mutex
 			sess := &session.Session{
 				ID:      "test-session",
 				AppName: "test-app",
@@ -671,7 +806,9 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			}
 
 			mockFunc := func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+				callsMu.Lock()
 				calls = append(calls, filterKey)
+				callsMu.Unlock()
 				return tt.createSummaryFunc(ctx, sess, filterKey, force)
 			}
 
@@ -682,7 +819,10 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			require.Equal(t, tt.expectCalls, calls)
+			require.Equal(t, len(tt.expectCalls), len(calls))
+			for _, expectedCall := range tt.expectCalls {
+				require.Contains(t, calls, expectedCall)
+			}
 		})
 	}
 }
@@ -690,12 +830,15 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 	// Test using method value (like s.CreateSessionSummary)
 	type mockService struct {
+		mu        sync.Mutex
 		summaries map[string]string
 	}
 
 	mockSvc := &mockService{}
 
 	createFunc := func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+		mockSvc.mu.Lock()
+		defer mockSvc.mu.Unlock()
 		if mockSvc.summaries == nil {
 			mockSvc.summaries = make(map[string]string)
 		}
@@ -713,6 +856,8 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should have created both summaries
+	mockSvc.mu.Lock()
+	defer mockSvc.mu.Unlock()
 	require.Equal(t, "summary-user-messages", mockSvc.summaries["user-messages"])
 	require.Equal(t, "summary-", mockSvc.summaries[""])
 }

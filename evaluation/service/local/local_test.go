@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"google.golang.org/genai"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -99,18 +98,18 @@ func makeFinalEvent(text string) *event.Event {
 func makeInvocation(id, prompt string) *evalset.Invocation {
 	return &evalset.Invocation{
 		InvocationID: id,
-		UserContent: &genai.Content{
-			Role:  "user",
-			Parts: []*genai.Part{{Text: prompt}},
+		UserContent: &model.Message{
+			Role:    model.RoleUser,
+			Content: prompt,
 		},
 	}
 }
 
 func makeActualInvocation(id, prompt, response string) *evalset.Invocation {
 	inv := makeInvocation(id, prompt)
-	inv.FinalResponse = &genai.Content{
-		Role:  "assistant",
-		Parts: []*genai.Part{{Text: response}},
+	inv.FinalResponse = &model.Message{
+		Role:    model.RoleAssistant,
+		Content: response,
 	}
 	return inv
 }
@@ -205,7 +204,7 @@ func TestLocalInferenceFiltersCases(t *testing.T) {
 	assert.Equal(t, status.EvalStatusPassed, results[0].Status)
 	assert.Len(t, results[0].Inferences, 1)
 	assert.NotNil(t, results[0].Inferences[0].FinalResponse)
-	assert.Equal(t, "calc result: 3", results[0].Inferences[0].FinalResponse.Parts[0].Text)
+	assert.Equal(t, "calc result: 3", results[0].Inferences[0].FinalResponse.Content)
 
 	runnerStub.mu.Lock()
 	callCount := len(runnerStub.calls)
@@ -317,7 +316,7 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 		result: &evaluator.EvaluateResult{
 			OverallScore:  0.8,
 			OverallStatus: status.EvalStatusPassed,
-			PerInvocationResults: []evaluator.PerInvocationResult{
+			PerInvocationResults: []*evaluator.PerInvocationResult{
 				{Score: 0.8, Status: status.EvalStatusPassed},
 			},
 		},
@@ -467,7 +466,7 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 					result: &evaluator.EvaluateResult{
 						OverallScore:         1,
 						OverallStatus:        status.EvalStatusPassed,
-						PerInvocationResults: []evaluator.PerInvocationResult{},
+						PerInvocationResults: []*evaluator.PerInvocationResult{},
 					},
 				}
 				assert.NoError(t, reg.Register(metricName, fakeEval))
@@ -491,7 +490,7 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 					result: &evaluator.EvaluateResult{
 						OverallScore:         0,
 						OverallStatus:        status.EvalStatusUnknown,
-						PerInvocationResults: []evaluator.PerInvocationResult{{Score: 0, Status: status.EvalStatusNotEvaluated}},
+						PerInvocationResults: []*evaluator.PerInvocationResult{{Score: 0, Status: status.EvalStatusNotEvaluated}},
 					},
 				}
 				assert.NoError(t, reg.Register(metricName, fakeEval))

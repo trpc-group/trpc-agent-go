@@ -47,3 +47,15 @@ func TestEpochTimeUnmarshalJSON(t *testing.T) {
 	expected := time.Unix(0, int64(input*nanosecondsPerSecond)).UTC()
 	assert.WithinDuration(t, expected, timestamp.Time, time.Microsecond)
 }
+
+func TestEpochTimeUnmarshalJSONError(t *testing.T) {
+	var timestamp EpochTime
+	err := timestamp.UnmarshalJSON([]byte(`"bad"`))
+	assert.Error(t, err)
+}
+
+func TestEpochTimeUnmarshalJSONInvalid(t *testing.T) {
+	var timestamp EpochTime
+	err := timestamp.UnmarshalJSON([]byte(`"invalid"`))
+	assert.Error(t, err)
+}

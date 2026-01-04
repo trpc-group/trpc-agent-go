@@ -13,11 +13,17 @@ package state
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+const (
+	// Prefix for current invocation-scoped state variables from invocation.state
+	stateInvocationKey = "invocation:"
 )
 
 // mustachePlaceholderRE matches Mustache-style placeholders like {{key}},
@@ -92,9 +98,15 @@ func InjectSessionState(template string, invocation *agent.Invocation) (string, 
 			return match // Return original match for invalid names.
 		}
 
+		if stateKey, ok := strings.CutPrefix(varName, stateInvocationKey); ok && invocation != nil {
+			if val, exists := invocation.GetState(stateKey); exists && val != nil {
+				return fmt.Sprintf("%+v", val)
+			}
+		}
+
 		// Get the value from session state.
-		if invocation != nil && invocation.Session != nil && invocation.Session.State != nil {
-			if jsonBytes, exists := invocation.Session.State[varName]; exists {
+		if invocation != nil && invocation.Session != nil {
+			if jsonBytes, exists := invocation.Session.GetState(varName); exists {
 				return renderStateValue(jsonBytes)
 			}
 		}
@@ -115,11 +127,17 @@ func InjectSessionState(template string, invocation *agent.Invocation) (string, 
 // It preserves JSON semantics while avoiding scientific notation and precision
 // issues for numeric literals by decoding them into json.Number.
 func renderStateValue(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	if !json.Valid(raw) {
+		return string(raw)
+	}
+
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var jsonValue any
 	if err := dec.Decode(&jsonValue); err != nil {
-		// Not valid JSON, treat as plain string.
 		return string(raw)
 	}
 	switch v := jsonValue.(type) {
@@ -152,7 +170,7 @@ func isValidStateName(varName string) bool {
 	parts := strings.Split(varName, ":")
 	if len(parts) == 2 {
 		prefix := parts[0] + ":"
-		validPrefixes := []string{session.StateAppPrefix, session.StateUserPrefix, session.StateTempPrefix}
+		validPrefixes := []string{session.StateAppPrefix, session.StateUserPrefix, session.StateTempPrefix, stateInvocationKey}
 		for _, validPrefix := range validPrefixes {
 			if prefix == validPrefix {
 				return isIdentifier(parts[1])

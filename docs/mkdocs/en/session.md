@@ -729,95 +729,9 @@ sessionService, err := postgres.NewService(
 
 ### Storage Structure
 
-PostgreSQL uses relational table structure with JSON data stored using JSONB type:
+PostgreSQL uses relational table structure with JSON data stored using JSONB type.
 
-```sql
--- Session states table
-CREATE TABLE session_states (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    state JSONB,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP
-);
-
--- Partial unique index (only applies to non-deleted records)
-CREATE UNIQUE INDEX idx_session_states_unique_active
-ON session_states(app_name, user_id, session_id)
-WHERE deleted_at IS NULL;
-
--- Session events table
-CREATE TABLE session_events (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    event JSONB NOT NULL,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP
-);
-
--- Track events table.
-CREATE TABLE session_track_events (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    track VARCHAR(255) NOT NULL,
-    event JSONB NOT NULL,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP
-);
-
--- Session summaries table
-CREATE TABLE session_summaries (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    filter_key VARCHAR(255) NOT NULL,
-    summary JSONB NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP,
-    UNIQUE(app_name, user_id, session_id, filter_key)
-);
-
--- Application states table
-CREATE TABLE app_states (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    key VARCHAR(255) NOT NULL,
-    value TEXT DEFAULT NULL,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP,
-    UNIQUE(app_name, key)
-);
-
--- User states table
-CREATE TABLE user_states (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    key VARCHAR(255) NOT NULL,
-    value TEXT DEFAULT NULL,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP,
-    deleted_at TIMESTAMP,
-    UNIQUE(app_name, user_id, key)
-);
-```
+For complete table definitions, see [session/postgres/schema.sql](https://github.com/trpc-group/trpc-agent-go/blob/main/session/postgres/schema.sql)
 
 ## MySQL Storage
 
@@ -986,84 +900,11 @@ sessionService, err := mysql.NewService(
 
 ### Storage Structure
 
-MySQL uses relational table structure with JSON data stored using JSON type:
+MySQL uses relational table structure with JSON data stored using JSON type.
 
-```sql
--- Session states table
-CREATE TABLE session_states (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    state JSON,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL,
-    deleted_at TIMESTAMP NULL,
-    UNIQUE KEY idx_session_states_unique (app_name, user_id, session_id, deleted_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+For complete table definitions, see [session/mysql/schema.sql](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema.sql)
 
--- Session events table
-CREATE TABLE session_events (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    event JSON NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL,
-    deleted_at TIMESTAMP NULL,
-    KEY idx_session_events (app_name, user_id, session_id, deleted_at, created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Session summaries table
-CREATE TABLE session_summaries (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    filter_key VARCHAR(255) NOT NULL,
-    summary JSON NOT NULL,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL,
-    deleted_at TIMESTAMP NULL,
-    UNIQUE KEY idx_session_summaries_unique (app_name, user_id, session_id, filter_key, deleted_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Application states table
-CREATE TABLE app_states (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    `key` VARCHAR(255) NOT NULL,
-    value TEXT DEFAULT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL,
-    deleted_at TIMESTAMP NULL,
-    UNIQUE KEY idx_app_states_unique (app_name, `key`, deleted_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- User states table
-CREATE TABLE user_states (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    `key` VARCHAR(255) NOT NULL,
-    value TEXT DEFAULT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL,
-    deleted_at TIMESTAMP NULL,
-    UNIQUE KEY idx_user_states_unique (app_name, user_id, `key`, deleted_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-```
-
-**Key Differences Between MySQL and PostgreSQL:**
-
-- MySQL doesn't support partial index with `WHERE deleted_at IS NULL`, requires including `deleted_at` in unique index
-- MySQL uses `JSON` type instead of `JSONB` (similar functionality, different storage format)
-- MySQL uses `ON DUPLICATE KEY UPDATE` syntax for UPSERT
 
 ## Advanced Usage
 
@@ -1124,6 +965,157 @@ sess, err := sessionService.GetSession(ctx, key,
 sess, err := sessionService.GetSession(ctx, key,
     session.WithEventTime(time.Now().Add(-1*time.Hour)))
 ```
+
+#### Directly Append Events to Session
+
+In some scenarios, you may want to directly append events to a session without invoking the model. This is useful for:
+
+- Pre-loading conversation history from external sources
+- Inserting system messages or context before the first user query
+- Recording user actions or metadata as events
+- Building conversation context programmatically
+
+**Important**: An Event can represent both user requests and model responses. When you use `Runner.Run()`, the framework automatically creates events for both user messages and assistant responses.
+
+**Example: Append a User Message**
+
+```go
+import (
+    "context"
+    "github.com/google/uuid"
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+// Get or create session
+sessionKey := session.Key{
+    AppName:   "my-agent",
+    UserID:    "user123",
+    SessionID: "session-123",
+}
+sess, err := sessionService.GetSession(ctx, sessionKey)
+if err != nil {
+    return err
+}
+if sess == nil {
+    sess, err = sessionService.CreateSession(ctx, sessionKey, session.StateMap{})
+    if err != nil {
+        return err
+    }
+}
+
+// Create a user message
+message := model.NewUserMessage("Hello, I'm learning Go programming.")
+
+// Create event with required fields:
+// - invocationID: Unique identifier (required)
+// - author: Event author, "user" for user messages (required)
+// - response: *model.Response with Choices containing Message (required)
+invocationID := uuid.New().String()
+evt := event.NewResponseEvent(
+    invocationID, // Required: unique invocation identifier
+    "user",       // Required: event author
+    &model.Response{
+        Done: false, // Recommended: false for non-final events
+        Choices: []model.Choice{
+            {
+                Index:   0,       // Required: choice index
+                Message: message, // Required: message with Content or ContentParts
+            },
+        },
+    },
+)
+evt.RequestID = uuid.New().String() // Optional: for tracking
+
+// Append event to session
+if err := sessionService.AppendEvent(ctx, sess, evt); err != nil {
+    return fmt.Errorf("append event failed: %w", err)
+}
+```
+
+**Example: Append a System Message**
+
+```go
+systemMessage := model.Message{
+    Role:    model.RoleSystem,
+    Content: "You are a helpful assistant specialized in Go programming.",
+}
+
+evt := event.NewResponseEvent(
+    uuid.New().String(),
+    "system", // Author for system messages
+    &model.Response{
+        Done:    false,
+        Choices: []model.Choice{{Index: 0, Message: systemMessage}},
+    },
+)
+
+if err := sessionService.AppendEvent(ctx, sess, evt); err != nil {
+    return err
+}
+```
+
+**Example: Append an Assistant Message**
+
+```go
+assistantMessage := model.Message{
+    Role:    model.RoleAssistant,
+    Content: "Go is a statically typed, compiled programming language.",
+}
+
+evt := event.NewResponseEvent(
+    uuid.New().String(),
+    "assistant", // Author for assistant messages (or use agent name)
+    &model.Response{
+        Done:    false,
+        Choices: []model.Choice{{Index: 0, Message: assistantMessage}},
+    },
+)
+
+if err := sessionService.AppendEvent(ctx, sess, evt); err != nil {
+    return err
+}
+```
+
+**Event Required Fields**
+
+When creating an event using `event.NewResponseEvent()`, the following fields are required:
+
+1. **Function Parameters**:
+
+   - `invocationID` (string): Unique identifier, typically `uuid.New().String()`
+   - `author` (string): Event author (`"user"`, `"system"`, or agent name)
+   - `response` (\*model.Response): Response object with Choices
+
+2. **Response Fields**:
+
+   - `Choices` ([]model.Choice): At least one Choice with `Index` and `Message`
+   - `Message`: Must have `Content` or `ContentParts`
+
+3. **Auto-generated Fields** (by `event.NewResponseEvent()`):
+
+   - `ID`: Auto-generated UUID
+   - `Timestamp`: Auto-set to current time
+   - `Version`: Auto-set to `CurrentVersion`
+
+4. **Persistence Requirements**:
+   - `Response != nil`
+   - `!IsPartial` (or has `StateDelta`)
+   - `IsValidContent()` returns `true`
+
+**How It Works with Runner**
+
+When you later use `Runner.Run()` with the same session:
+
+1. Runner automatically loads the session (including all appended events)
+2. Converts session events to messages
+3. Includes all messages (appended + current) in the conversation context
+4. Sends everything to the model together
+
+All appended events become part of the conversation history and are available to the model in subsequent interactions.
+
+**Example**: See `examples/session/appendevent` ([code](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/appendevent))
 
 ## Session Summarization
 

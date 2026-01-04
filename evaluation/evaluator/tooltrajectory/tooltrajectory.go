@@ -51,7 +51,7 @@ func (e *toolTrajectoryEvaluator) Evaluate(ctx context.Context, actuals, expecte
 		return nil, fmt.Errorf("tooltrajectory: actual invocations (%d) and expected invocations (%d) count mismatch",
 			len(actuals), len(expecteds))
 	}
-	perInvocation := make([]evaluator.PerInvocationResult, 0, len(actuals))
+	perInvocation := make([]*evaluator.PerInvocationResult, 0, len(actuals))
 	var totalScore float64
 	for i := range len(actuals) {
 		actual := actuals[i]
@@ -65,7 +65,7 @@ func (e *toolTrajectoryEvaluator) Evaluate(ctx context.Context, actuals, expecte
 			score = 1.0
 		}
 		status := e.statusForScore(score, evalMetric)
-		perInvocation = append(perInvocation, evaluator.PerInvocationResult{
+		perInvocation = append(perInvocation, &evaluator.PerInvocationResult{
 			ActualInvocation:   actual,
 			ExpectedInvocation: expected,
 			Score:              score,

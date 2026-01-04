@@ -16,11 +16,14 @@ import (
 )
 
 // defaultToolTrajectoryStrategy is used when no user strategy is supplied.
-var defaultToolTrajectoryStrategy = &ToolTrajectoryStrategy{
-	Name:      &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact},
-	Arguments: &json.JSONCriterion{MatchStrategy: json.JSONMatchStrategyExact},
-	Response:  &json.JSONCriterion{MatchStrategy: json.JSONMatchStrategyExact},
-}
+var (
+	defaultJsonCriterion          = json.New()
+	defaultToolTrajectoryStrategy = &ToolTrajectoryStrategy{
+		Name:      &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact},
+		Arguments: defaultJsonCriterion,
+		Result:    defaultJsonCriterion,
+	}
+)
 
 // options configures ToolTrajectoryCriterion.
 type options struct {
@@ -28,8 +31,10 @@ type options struct {
 	defaultStrategy *ToolTrajectoryStrategy
 	// toolStrategy configures per-tool strategies keyed by tool name.
 	toolStrategy map[string]*ToolTrajectoryStrategy
-	// orderInsensitive toggles order-agnostic comparison for args and responses.
-	orderInsensitive bool
+	// orderSensitive enforces ordered matching when true; when false, tools can match out of order.
+	orderSensitive bool
+	// subsetMatching allows expected tool list to be a subset of actual list.
+	subsetMatching bool
 	// compare allows overriding comparison logic entirely.
 	compare func(actual, expected *evalset.Invocation) (bool, error)
 }
@@ -37,10 +42,11 @@ type options struct {
 // newOptions applies provided options for ToolTrajectoryCriterion.
 func newOptions(opt ...Option) *options {
 	opts := &options{
-		defaultStrategy:  defaultToolTrajectoryStrategy,
-		toolStrategy:     nil,
-		orderInsensitive: false,
-		compare:          nil,
+		defaultStrategy: defaultToolTrajectoryStrategy,
+		toolStrategy:    nil,
+		orderSensitive:  false,
+		subsetMatching:  false,
+		compare:         nil,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -65,10 +71,17 @@ func WithTool(tool map[string]*ToolTrajectoryStrategy) Option {
 	}
 }
 
-// WithOrderInsensitive sets the order-agnostic comparison for tool calls and responses.
-func WithOrderInsensitive(orderInsensitive bool) Option {
+// WithOrderSensitive controls whether tool matching must follow sequence order.
+func WithOrderSensitive(orderSensitive bool) Option {
 	return func(o *options) {
-		o.orderInsensitive = orderInsensitive
+		o.orderSensitive = orderSensitive
+	}
+}
+
+// WithSubsetMatching allows expected tool list to be a subset of actual list.
+func WithSubsetMatching(subsetMatching bool) Option {
+	return func(o *options) {
+		o.subsetMatching = subsetMatching
 	}
 }
 

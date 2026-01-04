@@ -348,11 +348,8 @@ func setupMockService(t *testing.T, opts *TestServiceOpts) (*Service, sqlmock.Sq
 		}
 	}
 
-	// Initialize summary job channels
-	s.summaryJobChans = make([]chan *summaryJob, opts.asyncSummaryNum)
-	for i := range s.summaryJobChans {
-		s.summaryJobChans[i] = make(chan *summaryJob, opts.summaryQueueSize)
-	}
+	// Note: summaryJobChans is now handled by asyncWorker in session/internal/summary
+	// The asyncWorker is initialized in NewService if summarizer and asyncSummaryNum are set
 
 	return s, mock, db
 }
@@ -2872,6 +2869,113 @@ func TestNewService_DSNPriority(t *testing.T) {
 	assert.Equal(t, dsn, capturedConnString, "DSN should take priority over host settings")
 
 	_ = svc.Close()
+}
+
+func TestNewService_NoSummarizer_NoAsyncWorker(t *testing.T) {
+	db, _, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockPostgresClient{db: db}, nil
+	})
+
+	// Register instance
+	instanceName := "test-instance-nosum"
+	storage.RegisterPostgresInstance(instanceName,
+		storage.WithClientConnString("test:test@tcp(localhost:5432)/testdb"),
+	)
+
+	svc, err := NewService(
+		WithPostgresInstance(instanceName),
+		WithSkipDBInit(true),
+		// No summarizer provided - should not start async summary workers
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	defer svc.Close()
+
+	// Note: summaryJobChans is now handled by asyncWorker in session/internal/summary
+	// Verify that asyncWorker is not initialized when no summarizer is provided
+	assert.Nil(t, svc.asyncWorker)
+}
+
+func TestNewService_WithSummarizer_StartsAsyncWorker(t *testing.T) {
+	db, _, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockPostgresClient{db: db}, nil
+	})
+
+	// Register instance
+	instanceName := "test-instance-withsum"
+	storage.RegisterPostgresInstance(instanceName,
+		storage.WithClientConnString("test:test@tcp(localhost:5432)/testdb"),
+	)
+
+	svc, err := NewService(
+		WithPostgresInstance(instanceName),
+		WithSkipDBInit(true),
+		WithSummarizer(&mockSummarizerImpl{summaryText: "test", shouldSummarize: true}),
+		WithAsyncSummaryNum(2),
+		WithSummaryQueueSize(10),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	defer svc.Close()
+
+	// Note: summaryJobChans is now handled by asyncWorker in session/internal/summary
+	// Verify that asyncWorker is initialized when summarizer is provided
+	assert.NotNil(t, svc.asyncWorker)
+}
+
+func TestNewService_InstanceNotFound(t *testing.T) {
+	svc, err := NewService(
+		WithPostgresInstance("non-existent-instance"),
+		WithSkipDBInit(true),
+	)
+	assert.Error(t, err)
+	assert.Nil(t, svc)
+	assert.Contains(t, err.Error(), "postgres instance non-existent-instance not found")
+}
+
+func TestNewService_DefaultCleanupInterval(t *testing.T) {
+	db, _, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockPostgresClient{db: db}, nil
+	})
+
+	// Register instance
+	instanceName := "test-instance-cleanup"
+	storage.RegisterPostgresInstance(instanceName,
+		storage.WithClientConnString("test:test@tcp(localhost:5432)/testdb"),
+	)
+
+	svc, err := NewService(
+		WithPostgresInstance(instanceName),
+		WithSkipDBInit(true),
+		WithSessionTTL(time.Hour), // This should trigger default cleanup interval
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	defer svc.Close()
+
+	// Verify that default cleanup interval was set
+	assert.Equal(t, defaultCleanupIntervalSecond, svc.opts.cleanupInterval)
 }
 
 func TestAppendEventHook(t *testing.T) {

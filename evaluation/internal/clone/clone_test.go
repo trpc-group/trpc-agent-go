@@ -16,31 +16,53 @@ import (
 )
 
 type sample struct {
-	ID    string
-	Attrs map[string]int
+	Value string
+}
+
+type nonSerializable struct {
+	Bad map[string]any
 }
 
 func TestCloneSuccess(t *testing.T) {
+	src := &sample{Value: "ok"}
+	dst, err := Clone(src)
+	assert.NoError(t, err)
+	assert.NotSame(t, src, dst)
+	assert.Equal(t, src, dst)
+}
 
-	src := &sample{
-		ID: "item",
-		Attrs: map[string]int{
-			"score": 1,
+func TestCloneNilInput(t *testing.T) {
+	dst, err := Clone[*sample](nil)
+	assert.Error(t, err)
+	assert.Nil(t, dst)
+}
+
+func TestCloneGobError(t *testing.T) {
+	src := &nonSerializable{Bad: map[string]any{"c": make(chan int)}}
+	dst, err := Clone(src)
+	assert.Error(t, err)
+	assert.Nil(t, dst)
+}
+
+type dynamic struct {
+	Payload map[string]any
+}
+
+func TestCloneWithInterfaces(t *testing.T) {
+
+	src := &dynamic{
+		Payload: map[string]any{
+			"docs": []any{
+				map[string]any{"text": "t1", "score": 1},
+			},
+			"flag": true,
 		},
 	}
 	dst, err := Clone(src)
 	assert.NoError(t, err)
 	assert.NotSame(t, src, dst)
-	assert.Equal(t, src, dst)
-
-	dst.Attrs["score"] = 2
-	assert.Equal(t, 1, src.Attrs["score"])
-}
-
-func TestCloneNilInput(t *testing.T) {
-
-	var src *sample
-	clone, err := Clone(src)
-	assert.Nil(t, clone)
-	assert.Error(t, err)
+	assert.Equal(t, src.Payload["flag"], dst.Payload["flag"])
+	// mutate clone and ensure original unchanged
+	dst.Payload["flag"] = false
+	assert.Equal(t, true, src.Payload["flag"])
 }

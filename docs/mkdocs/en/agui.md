@@ -43,6 +43,43 @@ On the client side you can pair the server with frameworks that understand the A
 
 ## Core Concepts
 
+### RunAgentInput
+
+`RunAgentInput` is the request payload for the AG-UI chat route and the messages snapshot route. It describes the input and context required for a conversation run. The structure is shown below.
+
+```go
+type RunAgentInput struct {
+	ThreadID       string // Conversation thread identifier. The framework uses it as `SessionID`.
+	RunID          string // Run ID. Used to correlate `RUN_STARTED`, `RUN_FINISHED`, and other events.
+	ParentRunID    *string // Parent run ID. Optional.
+	State          any    // Arbitrary state.
+	Messages       []Message // Message list. The framework requires the last message to be `role=user` and uses its content as input.
+	Tools          []Tool    // Tool definitions. Protocol field. Optional.
+	Context        []Context // Context entries. Protocol field. Optional.
+	ForwardedProps any    // Arbitrary forwarded properties. Typically used to carry business custom parameters.
+}
+```
+
+For the full field definition, refer to [AG-UI Go SDK](https://github.com/ag-ui-protocol/ag-ui/blob/main/sdks/community/go/pkg/core/types/types.go).
+
+Minimal request JSON example:
+
+```json
+{
+    "threadId": "thread-id",
+    "runId": "run-id",
+    "messages": [
+        {
+            "role": "user",
+            "content": "hello"
+        }
+    ],
+    "forwardedProps": {
+        "userId": "alice"
+    }
+}
+```
+
 ### Real-time conversation route
 
 The real-time conversation route handles a real-time conversation request and streams the events produced during execution to the client via SSE. The default route is `/` and can be customised with `agui.WithPath`.
@@ -57,7 +94,7 @@ If you want to interrupt a running real-time conversation, enable the cancel rou
 
 The cancel route uses the same request body as the real-time conversation route. To cancel successfully, you must provide the same `SessionKey` (`AppName` + `userID` + `sessionID`) as the corresponding real-time conversation request.
 
-### Message Snapshot
+### Message Snapshot route
 
 Message snapshots restore conversation history when a page is initialised or after a reconnect. The feature is controlled by `agui.WithMessagesSnapshotEnabled(true)` and is disabled by default. The default route is `/history`, can be customised with `WithMessagesSnapshotPath`, and returns the event stream `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED`.
 
@@ -84,10 +121,15 @@ import (
 )
 
 resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
-    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
-        return user, nil
+    forwardedProps, ok := input.ForwardedProps.(map[string]any)
+    if !ok {
+        return "anonymous", nil
     }
-    return "anonymous", nil
+    user, ok := forwardedProps["userId"].(string)
+    if !ok || user == "" {
+        return "anonymous", nil
+    }
+    return user, nil
 }
 
 sessionService := inmemory.NewService(context.Background())
@@ -219,10 +261,15 @@ import (
 )
 
 resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
-    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
-        return user, nil
+    forwardedProps, ok := input.ForwardedProps.(map[string]any)
+    if !ok {
+        return "anonymous", nil
     }
-    return "anonymous", nil
+    user, ok := forwardedProps["userId"].(string)
+    if !ok || user == "" {
+        return "anonymous", nil
+    }
+    return user, nil
 }
 
 runner := runner.NewRunner(agent.Info().Name, agent)
@@ -246,14 +293,15 @@ resolver := func(_ context.Context, input *adapter.RunAgentInput) ([]agent.RunOp
 	if input == nil {
 		return nil, errors.New("empty input")
 	}
-	if input.ForwardedProps == nil {
+	forwardedProps, ok := input.ForwardedProps.(map[string]any)
+	if !ok || forwardedProps == nil {
 		return nil, nil
 	}
 	opts := make([]agent.RunOption, 0, 2)
-	if modelName, ok := input.ForwardedProps["modelName"].(string); ok && modelName != "" {
+	if modelName, ok := forwardedProps["modelName"].(string); ok && modelName != "" {
 		opts = append(opts, agent.WithModelName(modelName))
 	}
-	if filter, ok := input.ForwardedProps["knowledgeFilter"].(map[string]any); ok {
+	if filter, ok := forwardedProps["knowledgeFilter"].(map[string]any); ok {
 		opts = append(opts, agent.WithKnowledgeFilter(filter))
 	}
 	return opts, nil
@@ -267,42 +315,39 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 ### Observability Reporting
 
-AG-UI Runner exposes `WithStartSpan` to create a tracing span at the beginning of each run and attach request attributes.
+Attach custom span attributes in `RunOptionResolver`; the framework will stamp them onto the agent entry span automatically:
 
 ```go
 import (
     "go.opentelemetry.io/otel/attribute"
-    "go.opentelemetry.io/otel/trace"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
     aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
     "trpc.group/trpc-go/trpc-agent-go/runner"
-    atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+    "trpc.group/trpc-go/trpc-agent-go/agent"
 )
 
-// Custom StartSpan: set threadId/userId/input as span attributes.
-func startSpan(ctx context.Context, input *adapter.RunAgentInput) (context.Context, trace.Span, error) {
-    userID, _ := userIDResolver(ctx, input)
-    attrs := []attribute.KeyValue{
-        attribute.String("session.id", input.ThreadID),
-        attribute.String("user.id", userID),
-        attribute.String("trace.input", input.Messages[len(input.Messages)-1].Content),
-    }
-    return atrace.Tracer.Start(ctx, "agui-run", trace.WithAttributes(attrs...))
-}
-
-func userIDResolver(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
-    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
-        return user, nil
-    }
-    return "anonymous", nil
+runOptionResolver := func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+	content, ok := input.Messages[len(input.Messages)-1].ContentString()
+	if !ok {
+		return nil, errors.New("last message content is not a string")
+	}
+	attrs := []attribute.KeyValue{
+		attribute.String("trace.input", content),
+	}
+	forwardedProps, ok := input.ForwardedProps.(map[string]any)
+	if ok {
+		if scenario, ok := forwardedProps["scenario"].(string); ok {
+			attrs = append(attrs, attribute.String("conversation.scenario", scenario))
+		}
+	}
+	return []agent.RunOption{agent.WithSpanAttributes(attrs...)}, nil
 }
 
 r := runner.NewRunner(agent.Info().Name, agent)
 server, err := agui.New(r,
     agui.WithAGUIRunnerOptions(
-        aguirunner.WithUserIDResolver(userIDResolver),
-        aguirunner.WithStartSpan(startSpan),
+        aguirunner.WithRunOptionResolver(runOptionResolver),
     ),
 )
 ```
@@ -376,15 +421,20 @@ hook := func(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAge
 	if len(input.Messages) == 0 {
 		return nil, errors.New("missing messages")
 	}
-	if input.ForwardedProps == nil {
+	forwardedProps, ok := input.ForwardedProps.(map[string]any)
+	if !ok || forwardedProps == nil {
 		return input, nil
 	}
-	otherContent, ok := input.ForwardedProps["other_content"].(string)
+	otherContent, ok := forwardedProps["other_content"].(string)
 	if !ok {
 		return input, nil
 	}
 
-	input.Messages[len(input.Messages)-1].Content += otherContent
+	content, ok := input.Messages[len(input.Messages)-1].ContentString()
+	if !ok {
+		return input, nil
+	}
+	input.Messages[len(input.Messages)-1].Content = content + otherContent
 	return input, nil
 }
 

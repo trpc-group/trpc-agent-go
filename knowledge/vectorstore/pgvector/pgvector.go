@@ -99,35 +99,54 @@ func New(opts ...Option) (*VectorStore, error) {
 	var client postgres.Client
 	var err error
 	builder := postgres.GetClientBuilder()
+	var builderOpts []postgres.ClientBuilderOpt
 
-	// If instance name is set, use it to create postgres client
-	if option.instanceName != "" {
-		builderOpts, ok := postgres.GetPostgresInstance(option.instanceName)
+	// Priority 1: DSN
+	if option.dsn != "" {
+		builderOpts = []postgres.ClientBuilderOpt{
+			postgres.WithClientConnString(option.dsn),
+		}
+	} else if option.instanceName != "" {
+		// Priority 2: Instance Name
+		var ok bool
+		builderOpts, ok = postgres.GetPostgresInstance(option.instanceName)
 		if !ok {
 			return nil, fmt.Errorf("postgres instance %s not found", option.instanceName)
 		}
-		client, err = builder(context.Background(), builderOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("create postgres client from instance name failed: %w", err)
-		}
-	} else {
-		// Build connection string from individual parameters
-		// URL encode username and password to handle special characters
-		encodedUser := url.QueryEscape(option.user)
-		encodedPassword := url.QueryEscape(option.password)
-		connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-			encodedUser, encodedPassword, option.host, option.port, option.database, option.sslMode)
 
-		builderOpts := []postgres.ClientBuilderOpt{
-			postgres.WithClientConnString(connStr),
-		}
 		if len(option.extraOptions) > 0 {
 			builderOpts = append(builderOpts, postgres.WithExtraOptions(option.extraOptions...))
 		}
 
 		client, err = builder(context.Background(), builderOpts...)
 		if err != nil {
-			return nil, fmt.Errorf("create postgres client from connection string failed: %w", err)
+			return nil, fmt.Errorf("create postgres client from instance name failed: %w", err)
+		}
+	} else if option.host != "" {
+		// Priority 3: Custom Configuration (Host is checked as sufficient condition)
+		encodedUser := url.QueryEscape(option.user)
+		encodedPassword := url.QueryEscape(option.password)
+		connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+			encodedUser, encodedPassword, option.host, option.port, option.database, option.sslMode)
+
+		builderOpts = []postgres.ClientBuilderOpt{
+			postgres.WithClientConnString(connStr),
+		}
+	}
+
+	// If no connection method specified
+	if client == nil && len(builderOpts) == 0 {
+		return nil, fmt.Errorf("no postgres connection configuration provided")
+	}
+
+	if len(option.extraOptions) > 0 && client == nil {
+		builderOpts = append(builderOpts, postgres.WithExtraOptions(option.extraOptions...))
+	}
+
+	if client == nil {
+		client, err = builder(context.Background(), builderOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("create postgres client failed: %w", err)
 		}
 	}
 
@@ -379,7 +398,9 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 	if !vs.option.enableTSVector &&
 		(query.SearchMode == vectorstore.SearchModeKeyword ||
 			query.SearchMode == vectorstore.SearchModeHybrid) {
-		log.Infof("pgvector: keyword or hybrid search is not supported when enableTSVector is disabled, use filter/vector search instead")
+		log.InfofContext(ctx,
+			"pgvector: keyword or hybrid search is not supported when enableTSVector "+
+				"is disabled, use filter/vector search instead")
 		if len(query.Vector) > 0 {
 			return vs.searchByVector(ctx, query)
 		}
@@ -521,7 +542,9 @@ func (vs *VectorStore) executeSearch(ctx context.Context, query string, args []a
 				id = scoredDoc.Document.ID
 				result.Results = append(result.Results, scoredDoc)
 			}
-			log.Debugf("pgvector search result: score: %v id: %v searchMode: %v, query: %v", score, id, searchMode, query)
+			log.DebugfContext(ctx,
+				"pgvector search result: score: %v id: %v searchMode: %v, query: %v",
+				score, id, searchMode, query)
 		}
 		return nil
 	}, query, args...)
@@ -564,7 +587,7 @@ func (vs *VectorStore) deleteAll(ctx context.Context) error {
 	if _, err := vs.client.ExecContext(ctx, truncateSQL); err != nil {
 		return fmt.Errorf("pgvector delete all documents: %w", err)
 	}
-	log.Infof("pgvector truncated all documents from table %s", vs.option.table)
+	log.InfofContext(ctx, "pgvector truncated all documents from table %s", vs.option.table)
 	return nil
 }
 
@@ -591,7 +614,7 @@ func (vs *VectorStore) deleteByFilter(ctx context.Context, config *vectorstore.D
 	if err != nil {
 		return fmt.Errorf("pgvector get rows affected: %w", err)
 	}
-	log.Infof("pgvector deleted %d documents by filter", rowsAffected)
+	log.InfofContext(ctx, "pgvector deleted %d documents by filter", rowsAffected)
 	return nil
 }
 

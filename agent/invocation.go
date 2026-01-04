@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
@@ -46,6 +47,9 @@ const (
 	flusherStateKey = "__flush_session__"
 	// barrierStateKey is the invocation state key used by internal barrier flag.
 	barrierStateKey = "__graph_barrier__"
+	// appenderStateKey is the invocation state key used by internal appender
+	// attachment (see internal/state/appender).
+	appenderStateKey = "__append_event__"
 )
 
 // TransferInfo contains information about a pending agent transfer.
@@ -79,6 +83,9 @@ type Invocation struct {
 	RunOptions RunOptions
 	// TransferInfo contains information about a pending agent transfer.
 	TransferInfo *TransferInfo
+
+	// Plugins provides runner-scoped hooks applied to this invocation.
+	Plugins PluginManager
 
 	// StructuredOutput defines how the model should produce structured output for this invocation.
 	StructuredOutput *model.StructuredOutput
@@ -255,10 +262,32 @@ func WithResume(enabled bool) RunOption {
 	}
 }
 
+// WithGraphEmitFinalModelResponses controls whether graph-based agents emit
+// final (Done=true) model responses as events.
+//
+// When disabled (default), graph Large Language Model (LLM) nodes only emit
+// streaming chunks (Done=false), which matches the pre-#901 behavior.
+func WithGraphEmitFinalModelResponses(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.GraphEmitFinalModelResponses = enabled
+	}
+}
+
 // WithRequestID sets the request id for the RunOptions.
 func WithRequestID(requestID string) RunOption {
 	return func(opts *RunOptions) {
 		opts.RequestID = requestID
+	}
+}
+
+// WithSpanAttributes sets custom span attributes for the RunOptions.
+func WithSpanAttributes(attrs ...attribute.KeyValue) RunOption {
+	return func(opts *RunOptions) {
+		if len(attrs) == 0 {
+			opts.SpanAttributes = nil
+			return
+		}
+		opts.SpanAttributes = append([]attribute.KeyValue(nil), attrs...)
 	}
 }
 
@@ -334,6 +363,23 @@ func WithModelName(name string) RunOption {
 func WithToolFilter(filter tool.FilterFunc) RunOption {
 	return func(opts *RunOptions) {
 		opts.ToolFilter = filter
+	}
+}
+
+// WithToolExecutionFilter sets which tools the framework will execute.
+//
+// This is different from WithToolFilter:
+//   - WithToolFilter controls which tools are visible to the model.
+//   - WithToolExecutionFilter controls which tool calls are auto-executed
+//     after the model requests them.
+//
+// When the filter returns false for a tool, the tool call is not executed
+// and the run ends after emitting the assistant tool_call response. The
+// caller can then execute the tool externally and provide a RoleTool
+// message with the tool result to continue.
+func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
+	return func(opts *RunOptions) {
+		opts.ToolExecutionFilter = filter
 	}
 }
 
@@ -423,8 +469,25 @@ type RunOptions struct {
 	// LLM request.
 	Resume bool
 
+	// GraphEmitFinalModelResponses controls event emission for graph-based
+	// Large Language Model (LLM) nodes.
+	//
+	// When false (default), graph LLM nodes only emit streaming chunks
+	// (Done=false).
+	//
+	// When true, graph LLM nodes also emit the final model response
+	// (Done=true). In that mode, callers should be prepared to receive
+	// assistant messages from intermediate nodes.
+	//
+	// When enabled, Runner may omit echoing the final assistant message
+	// in its runner-completion event to avoid duplicates.
+	GraphEmitFinalModelResponses bool
+
 	// RequestID is the request id of the request.
 	RequestID string
+
+	// SpanAttributes carries custom span attributes for this run.
+	SpanAttributes []attribute.KeyValue
 
 	// A2ARequestOptions contains A2A client request options that will be passed to
 	// A2A agent's SendMessage and StreamMessage calls. This allows callers to pass
@@ -475,6 +538,21 @@ type RunOptions struct {
 	//       return t.Declaration().Name == "calculator"
 	//   })
 	ToolFilter tool.FilterFunc
+
+	// ToolExecutionFilter controls which tools are executed by the
+	// framework when the model returns tool calls.
+	//
+	// This is different from ToolFilter:
+	//   - ToolFilter controls which tools are sent to (and callable by) the
+	//     model.
+	//   - ToolExecutionFilter controls which tool calls are auto-executed by
+	//     the framework after the model requests them.
+	//
+	// When this filter is set and returns false for a tool, the tool call
+	// is not executed by the agent. The run stops after emitting the
+	// assistant tool_call response so the caller can execute the tool
+	// externally and later provide tool results (RoleTool messages).
+	ToolExecutionFilter tool.FilterFunc
 }
 
 // NewInvocation create a new invocation
@@ -512,6 +590,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		RunOptions:      inv.RunOptions,
 		MemoryService:   inv.MemoryService,
 		ArtifactService: inv.ArtifactService,
+		Plugins:         inv.Plugins,
 		noticeMu:        inv.noticeMu,
 		noticeChannels:  inv.noticeChannels,
 		eventFilterKey:  inv.eventFilterKey,
@@ -552,6 +631,9 @@ func (inv *Invocation) cloneState() map[string]any {
 	}
 	if barrier, ok := inv.state[barrierStateKey]; ok {
 		copied[barrierStateKey] = barrier
+	}
+	if holder, ok := inv.state[appenderStateKey]; ok {
+		copied[appenderStateKey] = holder
 	}
 	return copied
 }

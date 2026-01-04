@@ -56,6 +56,13 @@ func (p *PlanningRequestProcessor) ProcessRequest(
 		)
 		return
 	}
+	if invocation == nil {
+		log.DebugContext(
+			ctx,
+			"Planning request processor: invocation is nil",
+		)
+		return
+	}
 
 	log.DebugfContext(
 		ctx,
@@ -82,10 +89,6 @@ func (p *PlanningRequestProcessor) ProcessRequest(
 				"Planning request processor: added planning instruction",
 			)
 		}
-	}
-
-	if invocation == nil {
-		return
 	}
 
 	log.DebugContext(
@@ -119,14 +122,6 @@ func hasSystemMessage(messages []model.Message, content string) bool {
 		}
 	}
 	return false
-}
-
-// min returns the minimum of two integers.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // PlanningResponseProcessor implements planning response processing logic.
@@ -191,11 +186,15 @@ func (p *PlanningResponseProcessor) ProcessResponse(
 		"Planning response processor: sent postprocessing event",
 	)
 
-	if err := agent.EmitEvent(ctx, invocation, ch, event.New(
+	planningEvent := event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePostprocessingPlanning),
-	)); err != nil {
+	)
+	// Mark as partial response so it doesn't interfere with full response detection.
+	planningEvent.Response.IsPartial = true
+
+	if err := agent.EmitEvent(ctx, invocation, ch, planningEvent); err != nil {
 		log.DebugContext(
 			ctx,
 			"Planning response processor: context cancelled",

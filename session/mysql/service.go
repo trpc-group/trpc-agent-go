@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -25,10 +26,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
 )
 
 var _ session.Service = (*Service)(nil)
+var _ session.TrackService = (*Service)(nil)
 
 // SessionState is the state of a session.
 type SessionState struct {
@@ -42,18 +45,19 @@ type SessionState struct {
 type Service struct {
 	opts            ServiceOpts
 	mysqlClient     storage.Client
-	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
-	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
-	cleanupTicker   *time.Ticker             // ticker for automatic cleanup
-	cleanupDone     chan struct{}            // signal to stop cleanup routine
-	cleanupOnce     sync.Once                // ensure cleanup routine is stopped only once
-	summaryWg       sync.WaitGroup           // wait group for summary workers
-	persistWg       sync.WaitGroup           // wait group for persist workers
+	eventPairChans  []chan *sessionEventPair     // channel for session events to persistence
+	trackEventChans []chan *trackEventPair       // channel for track events to persistence
+	asyncWorker     *isummary.AsyncSummaryWorker // async summary worker
+	cleanupTicker   *time.Ticker                 // ticker for automatic cleanup
+	cleanupDone     chan struct{}                // signal to stop cleanup routine
+	cleanupOnce     sync.Once                    // ensure cleanup routine is stopped only once
+	persistWg       sync.WaitGroup               // wait group for persist workers
 	once            sync.Once
 
 	// Table names with prefix applied
 	tableSessionStates    string
 	tableSessionEvents    string
+	tableSessionTracks    string
 	tableSessionSummaries string
 	tableAppStates        string
 	tableUserStates       string
@@ -64,12 +68,9 @@ type sessionEventPair struct {
 	event *event.Event
 }
 
-// summaryJob represents a summary job to be processed asynchronously.
-type summaryJob struct {
-	ctx       context.Context // Detached context preserving values but not cancel.
-	filterKey string
-	force     bool
-	session   *session.Session
+type trackEventPair struct {
+	key   session.Key
+	event *session.TrackEvent
 }
 
 // NewService creates a new MySQL session service.
@@ -102,6 +103,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	// Build table names with prefix
 	tableSessionStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionStates)
 	tableSessionEvents := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionEvents)
+	tableSessionTracks := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionTrackEvents)
 	tableSessionSummaries := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionSummaries)
 	tableAppStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameAppStates)
 	tableUserStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameUserStates)
@@ -112,6 +114,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		mysqlClient:           mysqlClient,
 		tableSessionStates:    tableSessionStates,
 		tableSessionEvents:    tableSessionEvents,
+		tableSessionTracks:    tableSessionTracks,
 		tableSessionSummaries: tableSessionSummaries,
 		tableAppStates:        tableAppStates,
 		tableUserStates:       tableUserStates,
@@ -132,8 +135,15 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 
 	// Start async summary workers if summarizer is configured
-	if opts.summarizer != nil {
-		s.startAsyncSummaryWorker()
+	if opts.summarizer != nil && opts.asyncSummaryNum > 0 {
+		s.asyncWorker = isummary.NewAsyncSummaryWorker(isummary.AsyncSummaryConfig{
+			Summarizer:        opts.summarizer,
+			AsyncSummaryNum:   opts.asyncSummaryNum,
+			SummaryQueueSize:  opts.summaryQueueSize,
+			SummaryJobTimeout: opts.summaryJobTimeout,
+			CreateSummaryFunc: s.CreateSessionSummary,
+		})
+		s.asyncWorker.Start()
 	}
 
 	// Start cleanup routine if any TTL is configured
@@ -155,14 +165,16 @@ func (s *Service) Close() error {
 			close(ch)
 		}
 	}
+	if s.trackEventChans != nil {
+		for _, ch := range s.trackEventChans {
+			close(ch)
+		}
+	}
 	s.persistWg.Wait()
 
 	// Close async summary workers and wait for them to finish
-	if s.summaryJobChans != nil {
-		for _, ch := range s.summaryJobChans {
-			close(ch)
-		}
-		s.summaryWg.Wait()
+	if s.asyncWorker != nil {
+		s.asyncWorker.Stop()
 	}
 
 	// Close MySQL client
@@ -205,7 +217,13 @@ func (s *Service) CreateSession(
 		CreatedAt: now,
 	}
 	for k, v := range state {
-		sessState.State[k] = v
+		if v == nil {
+			sessState.State[k] = nil
+			continue
+		}
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		sessState.State[k] = copiedValue
 	}
 
 	sessBytes, err := json.Marshal(sessState)
@@ -226,53 +244,34 @@ func (s *Service) CreateSession(
 			return err
 		}
 		return nil
-	}, fmt.Sprintf(`SELECT expires_at FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
-		key.AppName, key.UserID, key.SessionID)
+	}, fmt.Sprintf(
+		`SELECT expires_at FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+		s.tableSessionStates,
+	), key.AppName, key.UserID, key.SessionID)
 	if err != nil {
 		return nil, fmt.Errorf("check existing session failed: %w", err)
 	}
 
 	if sessionExists {
 		// If session exists and has not expired, reject creation
-		if !existingExpiresAt.Valid {
+		if !existingExpiresAt.Valid || existingExpiresAt.Time.After(now) {
 			log.ErrorfContext(
 				ctx,
-				"CreateSession: session already exists with no "+
-					"expiration (app=%s, user=%s, session=%s)",
+				"CreateSession: session already exists and not expired (app=%s, user=%s, session=%s, expires=%v)",
 				key.AppName,
 				key.UserID,
 				key.SessionID,
+				existingExpiresAt,
 			)
 			return nil, fmt.Errorf("session already exists and has not expired")
 		}
-		if existingExpiresAt.Time.After(now) {
-			log.ErrorfContext(
-				ctx,
-				"CreateSession: session already exists and not "+
-					"expired yet (app=%s, user=%s, session=%s, "+
-					"expires=%v)",
-				key.AppName,
-				key.UserID,
-				key.SessionID,
-				existingExpiresAt.Time,
-			)
-			return nil, fmt.Errorf("session already exists and has not expired")
-		}
-		// If session exists but has expired, trigger cleanup before creating new one
+		// Session exists but has expired, will be overwritten below
 		log.DebugfContext(
 			ctx,
-			"found expired session (app=%s, user=%s, session=%s), "+
-				"triggering cleanup",
+			"found expired session (app=%s, user=%s, session=%s), overwriting",
 			key.AppName,
 			key.UserID,
 			key.SessionID,
-		)
-		s.cleanupExpiredForUser(
-			ctx,
-			session.UserKey{
-				AppName: key.AppName,
-				UserID:  key.UserID,
-			},
 		)
 	}
 
@@ -285,11 +284,29 @@ func (s *Service) CreateSession(
 		key.SessionID,
 	)
 
-	// Insert session state (MySQL syntax)
-	_, err = s.mysqlClient.Exec(ctx,
-		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, state, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, s.tableSessionStates),
-		key.AppName, key.UserID, key.SessionID, sessBytes, sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
-	)
+	// Insert or update session state
+	// If expired session exists, overwrite it; events/summaries will be filtered by created_at when reading
+	if sessionExists {
+		_, err = s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(
+				`UPDATE %s SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL
+				WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+				s.tableSessionStates,
+			),
+			sessBytes, sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
+			key.AppName, key.UserID, key.SessionID,
+		)
+	} else {
+		_, err = s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(
+				`INSERT INTO %s (app_name, user_id, session_id, state, created_at, updated_at, expires_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				s.tableSessionStates,
+			),
+			key.AppName, key.UserID, key.SessionID, sessBytes,
+			sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("create session failed: %w", err)
 	}
@@ -405,15 +422,38 @@ func (s *Service) UpdateAppState(ctx context.Context, appName string, state sess
 
 	for k, v := range state {
 		k = strings.TrimPrefix(k, session.StateAppPrefix)
-		_, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf("REPLACE INTO %s (app_name, `key`, value, updated_at, expires_at, deleted_at) VALUES (?, ?, ?, ?, ?, NULL)", s.tableAppStates),
-			appName, k, v, now, expiresAt,
-		)
-		if err != nil {
+		if err := s.upsertAppState(ctx, appName, k, v, now, expiresAt); err != nil {
 			return fmt.Errorf("mysql session service update app state failed: %w", err)
 		}
 	}
 	return nil
+}
+
+// upsertAppState inserts or updates an app state record.
+// It first checks if an active record exists, then updates or inserts accordingly.
+func (s *Service) upsertAppState(ctx context.Context, appName, key string, value []byte, now time.Time, expiresAt *time.Time) error {
+	// Check if active record exists
+	var id int64
+	err := s.mysqlClient.QueryRow(ctx, []any{&id},
+		fmt.Sprintf("SELECT id FROM %s WHERE app_name = ? AND `key` = ? AND deleted_at IS NULL LIMIT 1", s.tableAppStates),
+		appName, key)
+
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	if errors.Is(err, sql.ErrNoRows) {
+		// Insert new record
+		_, err = s.mysqlClient.Exec(ctx,
+			fmt.Sprintf("INSERT INTO %s (app_name, `key`, value, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)", s.tableAppStates),
+			appName, key, value, now, now, expiresAt)
+	} else {
+		// Update existing record
+		_, err = s.mysqlClient.Exec(ctx,
+			fmt.Sprintf("UPDATE %s SET value = ?, updated_at = ?, expires_at = ? WHERE id = ?", s.tableAppStates),
+			value, now, expiresAt, id)
+	}
+	return err
 }
 
 // ListAppStates gets the app states.
@@ -480,15 +520,38 @@ func (s *Service) UpdateUserState(ctx context.Context, userKey session.UserKey, 
 
 	for k, v := range state {
 		k = strings.TrimPrefix(k, session.StateUserPrefix)
-		_, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf("REPLACE INTO %s (app_name, user_id, `key`, value, updated_at, expires_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, NULL)", s.tableUserStates),
-			userKey.AppName, userKey.UserID, k, v, now, expiresAt,
-		)
-		if err != nil {
+		if err := s.upsertUserState(ctx, userKey.AppName, userKey.UserID, k, v, now, expiresAt); err != nil {
 			return fmt.Errorf("mysql session service update user state failed: %w", err)
 		}
 	}
 	return nil
+}
+
+// upsertUserState inserts or updates a user state record.
+// It first checks if an active record exists, then updates or inserts accordingly.
+func (s *Service) upsertUserState(ctx context.Context, appName, userID, key string, value []byte, now time.Time, expiresAt *time.Time) error {
+	// Check if active record exists
+	var id int64
+	err := s.mysqlClient.QueryRow(ctx, []any{&id},
+		fmt.Sprintf("SELECT id FROM %s WHERE app_name = ? AND user_id = ? AND `key` = ? AND deleted_at IS NULL LIMIT 1", s.tableUserStates),
+		appName, userID, key)
+
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	if errors.Is(err, sql.ErrNoRows) {
+		// Insert new record
+		_, err = s.mysqlClient.Exec(ctx,
+			fmt.Sprintf("INSERT INTO %s (app_name, user_id, `key`, value, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)", s.tableUserStates),
+			appName, userID, key, value, now, now, expiresAt)
+	} else {
+		// Update existing record
+		_, err = s.mysqlClient.Exec(ctx,
+			fmt.Sprintf("UPDATE %s SET value = ?, updated_at = ?, expires_at = ? WHERE id = ?", s.tableUserStates),
+			value, now, expiresAt, id)
+	}
+	return err
 }
 
 // ListUserStates lists the state by target scope and key.
@@ -560,7 +623,13 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		sessState.State = make(session.StateMap)
 	}
 	for k, v := range state {
-		sessState.State[k] = v
+		if v == nil {
+			sessState.State[k] = nil
+			continue
+		}
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		sessState.State[k] = copiedValue
 	}
 	now := time.Now()
 	sessState.UpdatedAt = now
@@ -684,16 +753,63 @@ func (s *Service) appendEventInternal(
 	return nil
 }
 
+// AppendTrackEvent appends a protocol-specific track event to a session.
+func (s *Service) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	trackEvent *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	key := session.Key{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
+		return fmt.Errorf("mysql session service append track event failed: %w", err)
+	}
+
+	if s.opts.enableAsyncPersist {
+		defer func() {
+			if r := recover(); r != nil {
+				if err, ok := r.(error); ok && err.Error() == "send on closed channel" {
+					log.Errorf("mysql session service append track event failed: %v", r)
+					return
+				}
+				panic(r)
+			}
+		}()
+
+		index := sess.Hash % len(s.trackEventChans)
+		select {
+		case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	}
+
+	if err := s.addTrackEvent(ctx, key, trackEvent); err != nil {
+		return fmt.Errorf("mysql session service append track event failed: %w", err)
+	}
+	return nil
+}
+
 // startAsyncPersistWorker starts worker goroutines for async event persistence.
 func (s *Service) startAsyncPersistWorker() {
 	persisterNum := s.opts.asyncPersisterNum
-	// init event pair chan
+	// init event pair chan and track pair chan.
 	s.eventPairChans = make([]chan *sessionEventPair, persisterNum)
+	s.trackEventChans = make([]chan *trackEventPair, persisterNum)
 	for i := 0; i < persisterNum; i++ {
 		s.eventPairChans[i] = make(chan *sessionEventPair, defaultChanBufferSize)
+		s.trackEventChans[i] = make(chan *trackEventPair, defaultChanBufferSize)
 	}
 
-	s.persistWg.Add(persisterNum)
+	s.persistWg.Add(persisterNum * 2)
 	for _, eventPairChan := range s.eventPairChans {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
@@ -724,6 +840,38 @@ func (s *Service) startAsyncPersistWorker() {
 				cancel()
 			}
 		}(eventPairChan)
+	}
+
+	for _, trackPairChan := range s.trackEventChans {
+		go func(trackPairChan chan *trackEventPair) {
+			defer s.persistWg.Done()
+			for trackEventPair := range trackPairChan {
+				ctx := context.Background()
+				ctx, cancel := context.WithTimeout(
+					ctx,
+					defaultAsyncPersistTimeout,
+				)
+				log.DebugfContext(
+					ctx,
+					"Session persistence queue monitoring: channel "+
+						"capacity: %d, current length: %d, "+
+						"(app=%s, user=%s, session=%s)",
+					cap(trackPairChan),
+					len(trackPairChan),
+					trackEventPair.key.AppName,
+					trackEventPair.key.UserID,
+					trackEventPair.key.SessionID,
+				)
+				if err := s.addTrackEvent(ctx, trackEventPair.key, trackEventPair.event); err != nil {
+					log.ErrorfContext(
+						ctx,
+						"async persist event failed: %w",
+						err,
+					)
+				}
+				cancel()
+			}
+		}(trackPairChan)
 	}
 }
 
@@ -797,124 +945,143 @@ func (s *Service) cleanupExpiredData(ctx context.Context) {
 // cleanupExpiredSessions cleans up expired session states, events, and summaries.
 func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 	var deletedCount int64
-	var sessionKeys []session.Key
-	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM %s
-				WHERE deleted_at IS NULL GROUP BY app_name, user_id, session_id`,
-		s.tableSessionEvents)
-	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		// rows.Next() is already called by the Query loop
-		var appName, userID, sessionID string
-		var updatedAt time.Time
-		if err := rows.Scan(&appName, &userID, &sessionID, &updatedAt); err != nil {
-			return err
+
+	// Delete expired sessions and related data in a transaction.
+	// We directly use SELECT ... FOR UPDATE with LIMIT to find and lock expired sessions.
+	err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+		// 1. Find and lock expired sessions
+		// Use LIMIT to avoid locking too many rows in one transaction.
+		query := fmt.Sprintf(`SELECT app_name, user_id, session_id FROM %s
+			WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL
+			LIMIT 1000 FOR UPDATE`,
+			s.tableSessionStates)
+
+		var sessionKeys []session.Key
+		rows, err := tx.QueryContext(ctx, query, now)
+		if err != nil {
+			return fmt.Errorf("fetch expired sessions failed: %w", err)
 		}
-		if updatedAt.Before(now.Add(-s.opts.sessionTTL)) {
+		defer rows.Close()
+
+		for rows.Next() {
+			var app, user, sess string
+			if err := rows.Scan(&app, &user, &sess); err != nil {
+				continue
+			}
 			sessionKeys = append(sessionKeys, session.Key{
-				AppName:   appName,
-				UserID:    userID,
-				SessionID: sessionID,
+				AppName:   app,
+				UserID:    user,
+				SessionID: sess,
 			})
 		}
+
+		if len(sessionKeys) == 0 {
+			return nil
+		}
+
+		// 2. Delete the locked sessions
+		if err := s.deleteSessions(ctx, tx, sessionKeys, now); err != nil {
+			return err
+		}
+
+		// We count the number of sessions deleted, not the total rows affected across all tables
+		deletedCount = int64(len(sessionKeys))
 		return nil
-	}, query)
+	})
+
 	if err != nil {
-		log.WarnfContext(
-			ctx,
-			"fetch events failed: %w",
-			err,
-		)
+		log.ErrorfContext(ctx, "cleanup expired sessions failed: %v", err)
 		return
-	}
-	placeholders := make([]string, len(sessionKeys))
-	args := make([]any, 0, len(sessionKeys))
-	for i, key := range sessionKeys {
-		placeholders[i] = "(?, ?, ?)"
-		args = append(args, key.AppName, key.UserID, key.SessionID)
-	}
-
-	if s.opts.softDelete {
-		// Use transaction to ensure atomicity
-		err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
-			// Soft delete expired sessions
-			result, err := tx.ExecContext(ctx,
-				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionStates),
-				now, now)
-			if err != nil {
-				return fmt.Errorf("soft delete sessions: %w", err)
-			}
-			deletedCount, _ = result.RowsAffected()
-
-			// Soft delete related events and summaries with same expiration condition
-			if _, err := tx.ExecContext(ctx,
-				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`,
-					s.tableSessionSummaries),
-				now, now); err != nil {
-				return fmt.Errorf("soft delete summaries: %w", err)
-			}
-
-			if len(args) > 0 {
-				if _, err := tx.ExecContext(ctx,
-					fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
-						s.tableSessionEvents, strings.Join(placeholders, ",")), append([]any{now}, args...)...); err != nil {
-					return fmt.Errorf("soft delete events: %w", err)
-				}
-			}
-
-			return nil
-		})
-		if err != nil {
-			log.ErrorfContext(
-				ctx,
-				"cleanup expired sessions failed: %v",
-				err,
-			)
-			return
-		}
-	} else {
-		// Use transaction to ensure atomicity
-		err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
-			// Hard delete expired sessions, events, and summaries with same condition
-			result, err := tx.ExecContext(ctx,
-				fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionStates),
-				now)
-			if err != nil {
-				return fmt.Errorf("hard delete sessions: %w", err)
-			}
-			deletedCount, _ = result.RowsAffected()
-
-			// Hard delete events and summaries with same expiration condition
-			if _, err := tx.ExecContext(ctx,
-				fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`,
-					s.tableSessionSummaries),
-				now); err != nil {
-				return fmt.Errorf("hard delete summaries: %w", err)
-			}
-			if len(args) > 0 {
-				if _, err := tx.ExecContext(ctx,
-					fmt.Sprintf(`DELETE FROM %s WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
-						s.tableSessionEvents, strings.Join(placeholders, ",")), args...); err != nil {
-					return fmt.Errorf("soft delete summaries: %w", err)
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			log.ErrorfContext(
-				ctx,
-				"cleanup expired sessions failed: %v",
-				err,
-			)
-			return
-		}
 	}
 
 	if deletedCount > 0 {
-		log.InfofContext(
-			ctx,
-			"cleaned up %d expired sessions",
-			deletedCount,
-		)
+		log.InfofContext(ctx, "cleaned up %d expired sessions", deletedCount)
 	}
+}
+
+// deleteSessions deletes session data for the given keys within a transaction.
+func (s *Service) deleteSessions(ctx context.Context, tx *sql.Tx, keys []session.Key, now time.Time) error {
+	// Prepare delete args for verified keys
+	placeholders := make([]string, len(keys))
+	args := make([]any, 0, len(keys)*3)
+	for i, key := range keys {
+		placeholders[i] = "(?, ?, ?)"
+		args = append(args, key.AppName, key.UserID, key.SessionID)
+	}
+	whereClause := fmt.Sprintf(`(app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`, strings.Join(placeholders, ","))
+
+	if s.opts.softDelete {
+		return s.softDeleteSessions(ctx, tx, whereClause, args, now)
+	}
+	return s.hardDeleteSessions(ctx, tx, whereClause, args)
+}
+
+// softDeleteSessions performs soft delete on session tables.
+func (s *Service) softDeleteSessions(ctx context.Context, tx *sql.Tx, whereClause string, args []any, now time.Time) error {
+	// Soft delete session states
+	_, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionStates, whereClause),
+		append([]any{now}, args...)...)
+	if err != nil {
+		return fmt.Errorf("soft delete sessions: %w", err)
+	}
+
+	// Soft delete summaries
+	if _, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionSummaries, whereClause),
+		append([]any{now}, args...)...); err != nil {
+		return fmt.Errorf("soft delete summaries: %w", err)
+	}
+
+	// Soft delete events
+	if _, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionEvents, whereClause),
+		append([]any{now}, args...)...); err != nil {
+		return fmt.Errorf("soft delete events: %w", err)
+	}
+
+	// Soft delete track events
+	if _, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionTracks, whereClause),
+		append([]any{now}, args...)...); err != nil {
+		return fmt.Errorf("soft delete track events: %w", err)
+	}
+
+	return nil
+}
+
+// hardDeleteSessions performs hard delete on session tables.
+func (s *Service) hardDeleteSessions(ctx context.Context, tx *sql.Tx, whereClause string, args []any) error {
+	// Hard delete session states
+	_, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionStates, whereClause),
+		args...)
+	if err != nil {
+		return fmt.Errorf("hard delete sessions: %w", err)
+	}
+
+	// Hard delete summaries
+	if _, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionSummaries, whereClause),
+		args...); err != nil {
+		return fmt.Errorf("hard delete summaries: %w", err)
+	}
+
+	// Hard delete events
+	if _, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionEvents, whereClause),
+		args...); err != nil {
+		return fmt.Errorf("hard delete events: %w", err)
+	}
+
+	// Hard delete track events
+	if _, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionTracks, whereClause),
+		args...); err != nil {
+		return fmt.Errorf("hard delete track events: %w", err)
+	}
+
+	return nil
 }
 
 // cleanupExpiredAppStates cleans up expired app states.
@@ -999,36 +1166,6 @@ func (s *Service) cleanupExpiredUserStates(ctx context.Context, now time.Time) {
 	}
 }
 
-// cleanupExpiredForUser cleans up all expired data for a specific user.
-// This is called when creating a session finds an expired session exists.
-func (s *Service) cleanupExpiredForUser(ctx context.Context, userKey session.UserKey) {
-	now := time.Now()
-
-	if s.opts.softDelete {
-		// Soft delete expired sessions for this user
-		if _, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionStates),
-			now, userKey.AppName, userKey.UserID, now); err != nil {
-			log.ErrorfContext(
-				ctx,
-				"cleanup expired sessions for user failed: %v",
-				err,
-			)
-		}
-	} else {
-		// Hard delete expired sessions for this user
-		if _, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionStates),
-			userKey.AppName, userKey.UserID, now); err != nil {
-			log.ErrorfContext(
-				ctx,
-				"cleanup expired sessions for user failed: %v",
-				err,
-			)
-		}
-	}
-}
-
 // applyOptions is a convenience wrapper to internal/session.ApplyOptions.
 func applyOptions(opts ...session.Option) *session.Options {
 	opt := &session.Options{}
@@ -1043,16 +1180,12 @@ func mergeState(appState, userState session.StateMap, sess *session.Session) *se
 	if sess == nil {
 		return nil
 	}
-	if sess.State == nil {
-		sess.State = make(session.StateMap)
-	}
-
 	// Merge with priority: session state > user state > app state
 	for k, v := range appState {
-		sess.State[session.StateAppPrefix+k] = v
+		sess.SetState(session.StateAppPrefix+k, v)
 	}
 	for k, v := range userState {
-		sess.State[session.StateUserPrefix+k] = v
+		sess.SetState(session.StateUserPrefix+k, v)
 	}
 	return sess
 }

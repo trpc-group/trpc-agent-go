@@ -168,6 +168,58 @@ func TestService_CreateSession(t *testing.T) {
 			},
 		},
 		{
+			name: "session_creation_copies_state_value",
+			setup: func(t *testing.T) (session.Key, session.StateMap) {
+				key := session.Key{
+					AppName: "testapp",
+					UserID:  "user123",
+				}
+				input := []byte("value")
+				state := session.StateMap{
+					"key": input,
+				}
+				return key, state
+			},
+			validate: func(t *testing.T, sess *session.Session, err error, key session.Key, state session.StateMap) {
+				require.NoError(t, err)
+				require.NotNil(t, sess)
+
+				got, ok := sess.GetState("key")
+				require.True(t, ok)
+				require.Equal(t, []byte("value"), got)
+
+				state["key"][0] = 'x'
+				got2, ok := sess.GetState("key")
+				require.True(t, ok)
+				assert.Equal(t, []byte("value"), got2)
+			},
+		},
+		{
+			name: "session_creation_with_nil_state_value",
+			setup: func(t *testing.T) (session.Key, session.StateMap) {
+				key := session.Key{
+					AppName: "testapp",
+					UserID:  "user123",
+				}
+				state := session.StateMap{
+					"nilKey": nil,
+				}
+				return key, state
+			},
+			validate: func(t *testing.T, sess *session.Session, err error, key session.Key, state session.StateMap) {
+				require.NoError(t, err)
+				require.NotNil(t, sess)
+
+				raw, exists := sess.State["nilKey"]
+				require.True(t, exists)
+				assert.Nil(t, raw)
+
+				val, ok := sess.GetState("nilKey")
+				require.True(t, ok)
+				assert.Nil(t, val)
+			},
+		},
+		{
 			name: "session_with_predefined_id",
 			setup: func(t *testing.T) (session.Key, session.StateMap) {
 				key := session.Key{
@@ -243,6 +295,84 @@ func TestService_CreateSession(t *testing.T) {
 			tt.validate(t, sess, err, key, state)
 		})
 	}
+}
+
+func TestService_UpdateSessionState_NilValue(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+	_, err = service.CreateSession(ctx, key, session.StateMap{
+		"existing": []byte("value"),
+	})
+	require.NoError(t, err)
+
+	err = service.UpdateSessionState(ctx, key, session.StateMap{
+		"nilKey": nil,
+	})
+	require.NoError(t, err)
+
+	got, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	nilVal, ok := got.GetState("nilKey")
+	require.True(t, ok)
+	assert.Nil(t, nilVal)
+
+	existingVal, ok := got.GetState("existing")
+	require.True(t, ok)
+	assert.Equal(t, []byte("value"), existingVal)
+}
+
+func TestService_UpdateSessionState_CopiesValue(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+	_, err = service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	input := []byte("value")
+	err = service.UpdateSessionState(ctx, key, session.StateMap{
+		"key": input,
+	})
+	require.NoError(t, err)
+
+	got, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	val, ok := got.GetState("key")
+	require.True(t, ok)
+	require.Equal(t, []byte("value"), val)
+
+	input[0] = 'x'
+	got2, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, got2)
+
+	val2, ok := got2.GetState("key")
+	require.True(t, ok)
+	assert.Equal(t, []byte("value"), val2)
 }
 
 func TestService_AppendEvent_UpdateTime(t *testing.T) {
@@ -1699,6 +1829,7 @@ func TestStartAsyncSummaryWorker(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
+	// Test without summarizer - async workers should not be started
 	service, err := NewService(
 		WithRedisClientURL(redisURL),
 		WithAsyncSummaryNum(2),
@@ -1707,15 +1838,8 @@ func TestStartAsyncSummaryWorker(t *testing.T) {
 	require.NoError(t, err)
 	defer service.Close()
 
-	// Verify that summary job channels are initialized
-	assert.Len(t, service.summaryJobChans, 2)
-	assert.NotNil(t, service.summaryJobChans[0])
-	assert.NotNil(t, service.summaryJobChans[1])
-
-	// Verify channel buffer sizes
-	for i, ch := range service.summaryJobChans {
-		assert.Equal(t, 50, cap(ch), "Summary channel %d should have buffer size 50", i)
-	}
+	// Verify that asyncWorker is not initialized when no summarizer is provided
+	assert.Nil(t, service.asyncWorker)
 }
 
 func TestService_Close(t *testing.T) {
@@ -2363,6 +2487,38 @@ func TestService_AppendEvent_WithLimit(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, retrievedSess)
 	assert.LessOrEqual(t, len(retrievedSess.Events), limit)
+}
+
+func TestService_AppendTrackEvent_SessionError(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "track-app",
+		UserID:    "track-user",
+		SessionID: "track-session",
+	}
+
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	err = service.AppendTrackEvent(ctx, sess, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "append track event")
+	assert.Contains(t, err.Error(), "track event is nil")
+
+	_, ok := sess.GetState("tracks")
+	assert.False(t, ok)
+
+	retrieved, getErr := service.GetSession(ctx, key)
+	require.NoError(t, getErr)
+	require.NotNil(t, retrieved)
+	assert.Nil(t, retrieved.Tracks)
 }
 
 func TestService_AppendTrackEvent_Persistence(t *testing.T) {

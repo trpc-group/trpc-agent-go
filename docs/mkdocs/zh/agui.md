@@ -43,6 +43,43 @@ Runner 全面的使用方法参见 [runner](./runner.md)。
 
 ## 核心概念
 
+### 请求体 RunAgentInput
+
+`RunAgentInput` 是 AG-UI 聊天路由和消息快照路由的请求体，用于描述一次对话运行所需的输入与上下文，结构如下所示。
+
+```go
+type RunAgentInput struct {
+	ThreadID       string          // 会话线程 ID，框架会将其作为 `SessionID`。
+	RunID          string          // 本次运行 ID，用于和事件流中的 `RUN_STARTED`、`RUN_FINISHED` 等事件关联。
+	ParentRunID    *string         // 父运行 ID，可选。
+	State          any             // 任意状态。
+	Messages       []Message       // 消息列表，框架要求最后一条消息为 `role=user` 并把其内容作为输入。
+	Tools          []Tool          // 工具定义列表，协议字段，可选。
+	Context        []Context       // 上下文列表，协议字段，可选。
+	ForwardedProps any             // 任意透传字段，通常用于携带业务自定义参数。
+}
+```
+
+完整字段定义可参考 [AG-UI Go SDK](https://github.com/ag-ui-protocol/ag-ui/blob/main/sdks/community/go/pkg/core/types/types.go)
+
+最小请求 JSON 示例：
+
+```json
+{
+    "threadId": "thread-id",
+    "runId": "run-id",
+    "messages": [
+        {
+            "role": "user",
+            "content": "hello"
+        }
+    ],
+    "forwardedProps": {
+        "userId": "alice"
+    }
+}
+```
+
 ### 实时对话路由
 
 实时对话路由负责处理一次实时对话请求，并通过 SSE 把执行过程中的事件流推送给前端。该路由默认是 `/`，可通过 `agui.WithPath` 自定义。
@@ -57,7 +94,7 @@ Runner 全面的使用方法参见 [runner](./runner.md)。
 
 取消路由的请求体与实时对话请求一致，要成功取消，需要传入与实时对话路由相同的 `SessionKey`(`AppName`+`userID`+`sessionID`)。
 
-### 消息快照
+### 消息快照路由
 
 消息快照用于在页面初始化或断线重连时恢复历史对话，通过 `agui.WithMessagesSnapshotEnabled(true)` 控制功能是否开启，默认关闭。该路由默认是 `/history`， 可通过 `WithMessagesSnapshotPath` 自定义，负责返回 `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED` 的事件流。
 
@@ -84,10 +121,15 @@ import (
 )
 
 resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
-    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
-        return user, nil
+    forwardedProps, ok := input.ForwardedProps.(map[string]any)
+    if !ok {
+        return "anonymous", nil
     }
-    return "anonymous", nil
+    user, ok := forwardedProps["userId"].(string)
+    if !ok || user == "" {
+        return "anonymous", nil
+    }
+    return user, nil
 }
 
 sessionService := inmemory.NewService(context.Background())
@@ -218,10 +260,15 @@ import (
 )
 
 resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
-    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
-        return user, nil
+    forwardedProps, ok := input.ForwardedProps.(map[string]any)
+    if !ok {
+        return "anonymous", nil
     }
-    return "anonymous", nil
+    user, ok := forwardedProps["userId"].(string)
+    if !ok || user == "" {
+        return "anonymous", nil
+    }
+    return user, nil
 }
 
 runner := runner.NewRunner(agent.Info().Name, agent)
@@ -247,14 +294,15 @@ resolver := func(_ context.Context, input *adapter.RunAgentInput) ([]agent.RunOp
 	if input == nil {
 		return nil, errors.New("empty input")
 	}
-	if input.ForwardedProps == nil {
+	forwardedProps, ok := input.ForwardedProps.(map[string]any)
+	if !ok || forwardedProps == nil {
 		return nil, nil
 	}
 	opts := make([]agent.RunOption, 0, 2)
-	if modelName, ok := input.ForwardedProps["modelName"].(string); ok && modelName != "" {
+	if modelName, ok := forwardedProps["modelName"].(string); ok && modelName != "" {
 		opts = append(opts, agent.WithModelName(modelName))
 	}
-	if filter, ok := input.ForwardedProps["knowledgeFilter"].(map[string]any); ok {
+	if filter, ok := forwardedProps["knowledgeFilter"].(map[string]any); ok {
 		opts = append(opts, agent.WithKnowledgeFilter(filter))
 	}
 	return opts, nil
@@ -270,42 +318,39 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 ### 可观测平台上报
 
-AG-UI Runner 提供 `WithStartSpan`，用于在每次 run 开始时统一创建追踪 span 并写入请求相关属性。
+在 `RunOptionResolver` 里附加自定义 span 属性，框架会在 Agent 入口 span 处自动打标：
 
 ```go
 import (
     "go.opentelemetry.io/otel/attribute"
-    "go.opentelemetry.io/otel/trace"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
     aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
     "trpc.group/trpc-go/trpc-agent-go/runner"
-    atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+    "trpc.group/trpc-go/trpc-agent-go/agent"
 )
 
-// 自定义 StartSpan，设置 threadId/userId/input 等属性
-func startSpan(ctx context.Context, input *adapter.RunAgentInput) (context.Context, trace.Span, error) {
-    userID, _ := userIDResolver(ctx, input)
+runOptionResolver := func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+    content, ok := input.Messages[len(input.Messages)-1].ContentString()
+    if !ok {
+        return nil, errors.New("last message content is not a string")
+    }
     attrs := []attribute.KeyValue{
-        attribute.String("session.id", input.ThreadID),
-        attribute.String("user.id", userID),
-        attribute.String("trace.input", input.Messages[len(input.Messages)-1].Content),
+        attribute.String("trace.input", content),
     }
-    return atrace.Tracer.Start(ctx, "agui-run", trace.WithAttributes(attrs...))
-}
-
-func userIDResolver(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
-    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
-        return user, nil
+    forwardedProps, ok := input.ForwardedProps.(map[string]any)
+    if ok {
+        if scenario, ok := forwardedProps["scenario"].(string); ok {
+            attrs = append(attrs, attribute.String("conversation.scenario", scenario))
+        }
     }
-    return "anonymous", nil
+    return []agent.RunOption{agent.WithSpanAttributes(attrs...)}, nil
 }
 
 r := runner.NewRunner(agent.Info().Name, agent)
 server, err := agui.New(r,
     agui.WithAGUIRunnerOptions(
-        aguirunner.WithUserIDResolver(userIDResolver),
-        aguirunner.WithStartSpan(startSpan),
+        aguirunner.WithRunOptionResolver(runOptionResolver),
     ),
 )
 ```
@@ -379,15 +424,20 @@ hook := func(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAge
 	if len(input.Messages) == 0 {
 		return nil, errors.New("missing messages")
 	}
-	if input.ForwardedProps == nil {
+	forwardedProps, ok := input.ForwardedProps.(map[string]any)
+	if !ok || forwardedProps == nil {
 		return input, nil
 	}
-	otherContent, ok := input.ForwardedProps["other_content"].(string)
+	otherContent, ok := forwardedProps["other_content"].(string)
 	if !ok {
 		return input, nil
 	}
 
-	input.Messages[len(input.Messages)-1].Content += otherContent
+	content, ok := input.Messages[len(input.Messages)-1].ContentString()
+	if !ok {
+		return input, nil
+	}
+	input.Messages[len(input.Messages)-1].Content = content + otherContent
 	return input, nil
 }
 

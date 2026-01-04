@@ -17,7 +17,6 @@ import (
 )
 
 // EvalMetric represents a metric used to evaluate a particular aspect of an eval case.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvalMetric struct {
 	MetricName string               `json:"metricName,omitempty"` // MetricName identifies the metric.
 	Threshold  float64              `json:"threshold,omitempty"`  // Threshold value for this metric.

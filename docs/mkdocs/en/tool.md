@@ -256,7 +256,7 @@ mcpToolSet := mcp.NewMCPToolSet(
         Args:      []string{"run", "./stdio_server/main.go"},
         Timeout:   10 * time.Second,
     },
-    mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")), // Optional: tool filter.
+    mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("echo", "add")), // Optional: tool filter.
 )
 
 // (Optional but recommended) Explicitly initialize MCP: connect + initialize + list tools.
@@ -758,6 +758,52 @@ runner.Run(ctx, userID, sessionID, message,
 #### Important Notes
 
 ⚠️ **Security Notice:** Per-run tool filtering is a "soft constraint" primarily for optimization and user experience. Tools must still implement their own authorization logic:
+
+### Manual Tool Execution (Interrupt Tool Calls)
+
+By default, when the model returns `tool_calls`, the framework executes those
+tools automatically, then sends the tool results back to the model.
+
+In some systems, you may want the caller (for example, a client, an upstream
+service, or an external tool runtime such as Model Context Protocol (MCP)) to
+execute tools instead. You can interrupt tool execution with
+`agent.WithToolExecutionFilter(...)`.
+
+**Key idea:**
+
+- `agent.WithToolFilter(...)` controls **tool visibility** (what the model can
+  see and call).
+- `agent.WithToolExecutionFilter(...)` controls **tool execution** (what the
+  framework will auto-run after the model requests it).
+
+#### Basic Flow
+
+1. Run the agent with `WithToolExecutionFilter` so the framework does **not**
+   execute selected tools.
+2. Read `tool_calls` from the model response.
+3. Execute the tool externally.
+4. Send a `role=tool` message back so the model can continue.
+
+```go
+execFilter := tool.NewExcludeToolNamesFilter("external_search")
+
+// Step 1: model returns tool_calls, but the tool is NOT executed.
+ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("search ..."),
+    agent.WithToolExecutionFilter(execFilter),
+)
+
+// Step 2: extract tool_call_id + arguments from events (omitted).
+toolCallID := "call_123"
+toolResultJSON := `{"status":"ok","data":"..."}`
+
+// Step 3/4: send tool result as role=tool, then model continues.
+toolMsg := model.NewToolMessage(toolCallID, "external_search", toolResultJSON)
+ch, err = r.Run(ctx, userID, sessionID, toolMsg,
+    agent.WithToolExecutionFilter(execFilter),
+)
+```
+
+**Complete example:** `examples/toolinterrupt/`
 
 ```go
 func sensitiveOperation(ctx context.Context, req Request) (Result, error) {

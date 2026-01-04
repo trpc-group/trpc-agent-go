@@ -76,14 +76,15 @@ llmAgent := llmagent.New(
 
 LLMAgent 会自动在 `Instruction` 和可选的 `SystemPrompt` 中注入会话状态。支持的占位符语法：
 
-- `{key}`：替换为 `session.State["key"]` 的字符串值
+- `{key}`：替换为会话状态中键 `key` 对应的字符串值（可通过 `invocation.Session.SetState("key", ...)` 或 SessionService 写入）
 - `{key?}`：可选；如果不存在，替换为空字符串
 - `{user:subkey}` / `{app:subkey}` / `{temp:subkey}`：访问用户/应用/临时命名空间（SessionService 会把 app/user 作用域的状态合并进 session，并带上前缀）
+- `{invocation:subkey}` ：替换为fmt.Sprintf("%+v",`invocation.state["subkey"]`)的值，（可以通过invocation.SetState(k,v)来设置）。
 
 注意：
 
 - 对于非可选的 `{key}`，若找不到则保留原样（便于 LLM 感知缺失上下文）
-- 值读取自 `invocation.Session.State`（Runner + SessionService 会自动设置/合并）
+- 值读取自会话状态（Runner + SessionService 会自动设置/合并）
 
 示例：
 
@@ -93,9 +94,13 @@ llm := llmagent.New(
   llmagent.WithModel(modelInstance),
   llmagent.WithInstruction(
     "You are a research assistant. Focus: {research_topics}. " +
-    "User interests: {user:topics?}. App banner: {app:banner?}.",
+    "User interests: {user:topics?}. App banner: {app:banner?}." +
+    "Invocation case: {invocation:case}",
   ),
 )
+
+inv := agent.NewInvoction()
+inv.SetState("case", "case-1")
 
 // 通过 SessionService 初始化状态（用户态/应用态 + 会话本地键）
 _ = sessionService.UpdateUserState(ctx, session.UserKey{AppName: app, UserID: user}, session.StateMap{
@@ -189,7 +194,7 @@ cycleAgent := cycleagent.New(
 )
 
 // 创建 Runner
-runner := runner.NewRunner("demo-app", chainagent)
+runner := runner.NewRunner("demo-app", cycleAgent)
 
 // 直接发送消息，无需创建复杂的 Invocation
 message := model.NewUserMessage("Hello! Can you tell me about yourself?")
@@ -736,11 +741,8 @@ _, _ = run.Run(context.Background(), user, sid, model.NewUserMessage("Hi!"))
 callbacks := agent.NewCallbacks()
 callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
   if args.Invocation != nil && args.Invocation.Session != nil {
-    if args.Invocation.Session.State == nil {
-      args.Invocation.Session.State = make(map[string][]byte)
-    }
     // 为"本轮"临时指定指令
-    args.Invocation.Session.State["temp:sys"] = []byte("Translate to French.")
+    args.Invocation.Session.SetState("temp:sys", []byte("Translate to French."))
   }
   return nil, nil
 })
@@ -754,5 +756,5 @@ llm := llmagent.New(
 
 注意事项
 
-- 内存版 `UpdateUserState` 出于安全设计禁止写 `temp:*`；需要临时值时，直接往 `invocation.Session.State` 写（例如通过回调）。
+- 内存版 `UpdateUserState` 出于安全设计禁止写 `temp:*`；需要临时值时，通过 `invocation.Session.SetState` 写入（例如通过回调）。
 - 占位符是在“请求时”解析；只要你换了存储的值，下一次模型请求就会用新值，无需重建 Agent。

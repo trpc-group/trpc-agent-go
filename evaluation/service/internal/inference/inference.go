@@ -7,6 +7,7 @@
 //
 //
 
+// Package inference runs agent sessions to generate invocations for evaluation.
 package inference
 
 import (
@@ -15,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 
-	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -60,24 +60,16 @@ func inferenceInvocation(
 	if invocation.UserContent == nil {
 		return nil, fmt.Errorf("invocation user content is nil for eval case invocation %q", invocation.InvocationID)
 	}
-	if len(invocation.UserContent.Parts) == 0 {
-		return nil, fmt.Errorf("user content parts are empty for eval case invocation %q", invocation.InvocationID)
-	}
-	// Convert the evalset content into a model message.
-	message, err := convertContentToMessage(invocation.UserContent)
-	if err != nil {
-		return nil, fmt.Errorf("convert content to message: %w", err)
-	}
-	events, err := r.Run(ctx, initialSession.UserID, sessionID, *message, agent.WithRuntimeState(initialSession.State))
+	events, err := r.Run(ctx, initialSession.UserID, sessionID, *invocation.UserContent, agent.WithRuntimeState(initialSession.State))
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
 	}
 	// Capture the invocation ID, final response, tool uses, and tool responses.
 	var (
 		invocationID  string
-		finalResponse *genai.Content
-		toolUses      []*genai.FunctionCall
-		toolResponses []*genai.FunctionResponse
+		finalResponse *model.Message
+		tools         = make([]*evalset.Tool, 0)
+		toolIDIdx     = make(map[string]int)
 	)
 	for event := range events {
 		if event == nil {
@@ -92,127 +84,71 @@ func inferenceInvocation(
 		}
 		// Capture the final response.
 		if event.IsFinalResponse() {
-			finalResponse, err = convertMessageToContent(&event.Response.Choices[0].Message)
-			if err != nil {
-				return nil, fmt.Errorf("convert message to content: %w", err)
-			}
+			finalResponse = &event.Response.Choices[0].Message
 			continue
 		}
 		// Capture tool call uses.
 		if event.IsToolCallResponse() {
-			uses, err := convertToolCallResponse(event)
+			toolcalls, err := convertTools(event)
 			if err != nil {
 				return nil, fmt.Errorf("convert tool call response: %w", err)
 			}
-			toolUses = append(toolUses, uses...)
+			for _, toolcall := range toolcalls {
+				tools = append(tools, toolcall)
+				toolIDIdx[toolcall.ID] = len(tools) - 1
+			}
 		}
 		// Capture tool call responses.
 		if event.IsToolResultResponse() {
-			responses, err := convertToolResultResponse(event)
+			err := mergeToolResultResponse(event, toolIDIdx, tools)
 			if err != nil {
 				return nil, fmt.Errorf("convert tool result response: %w", err)
 			}
-			toolResponses = append(toolResponses, responses...)
 		}
 	}
-	// Convert the final response to evalset content.
+	// Convert the final response to invocation.
 	return &evalset.Invocation{
 		InvocationID:  invocationID,
 		UserContent:   invocation.UserContent,
 		FinalResponse: finalResponse,
-		IntermediateData: &evalset.IntermediateData{
-			ToolUses:      toolUses,
-			ToolResponses: toolResponses,
-		},
+		Tools:         tools,
 	}, nil
 }
 
-// convertToolCallResponse converts the tool call response to function calls.
-func convertToolCallResponse(event *event.Event) ([]*genai.FunctionCall, error) {
-	toolUses := []*genai.FunctionCall{}
+// convertTools converts the tool call to tools.
+func convertTools(event *event.Event) ([]*evalset.Tool, error) {
+	tools := []*evalset.Tool{}
 	for _, choice := range event.Response.Choices {
 		for _, toolCall := range choice.Message.ToolCalls {
-			toolUse, err := convertToolCallsToFunctionCalls(&toolCall)
-			if err != nil {
-				return nil, fmt.Errorf("convert tool calls to function calls: %w", err)
+			args := map[string]any{}
+			if err := json.Unmarshal(toolCall.Function.Arguments, &args); err != nil {
+				return nil, fmt.Errorf("unmarshal tool call arguments %s for tool %s: %w",
+					string(toolCall.Function.Arguments), toolCall.ID, err)
 			}
-			toolUses = append(toolUses, toolUse)
+			tool := &evalset.Tool{
+				ID:        toolCall.ID,
+				Name:      toolCall.Function.Name,
+				Arguments: args,
+			}
+			tools = append(tools, tool)
 		}
 	}
-	return toolUses, nil
+	return tools, nil
 }
 
-// convertToolResultResponse converts the tool result response to function responses.
-func convertToolResultResponse(event *event.Event) ([]*genai.FunctionResponse, error) {
-	toolResponses := []*genai.FunctionResponse{}
+// mergeToolResultResponse merges the tool result response into the tools.
+func mergeToolResultResponse(event *event.Event, toolIDIdx map[string]int, tools []*evalset.Tool) error {
 	for _, choice := range event.Response.Choices {
-		if choice.Message.ToolID == "" {
-			continue
+		idx, ok := toolIDIdx[choice.Message.ToolID]
+		if !ok {
+			return fmt.Errorf("tool ID %s not found in tool ID index for tool result response", choice.Message.ToolID)
 		}
-		var response map[string]any
-		if err := json.Unmarshal([]byte(choice.Message.Content), &response); err != nil {
-			return nil, fmt.Errorf("unmarshal tool result response: %w", err)
+		result := map[string]any{}
+		if err := json.Unmarshal([]byte(choice.Message.Content), &result); err != nil {
+			return fmt.Errorf("unmarshal tool result response %s for tool %s: %w",
+				choice.Message.Content, choice.Message.ToolID, err)
 		}
-		toolResponse := &genai.FunctionResponse{
-			ID:       choice.Message.ToolID,
-			Name:     choice.Message.ToolName,
-			Response: response,
-		}
-		toolResponses = append(toolResponses, toolResponse)
+		tools[idx].Result = result
 	}
-	return toolResponses, nil
-}
-
-// convertContentToMessage transforms evalset input content into a model message.
-func convertContentToMessage(content *genai.Content) (*model.Message, error) {
-	if content == nil {
-		return nil, errors.New("content is nil")
-	}
-	if len(content.Parts) == 0 {
-		return nil, errors.New("content parts are empty")
-	}
-	if content.Parts[0].Text == "" {
-		return nil, errors.New("content part text is empty")
-	}
-	return &model.Message{
-		Role:    model.Role(content.Role),
-		Content: content.Parts[0].Text,
-	}, nil
-}
-
-// convertMessageToContent converts the model response back into evalset content.
-func convertMessageToContent(finalResponse *model.Message) (*genai.Content, error) {
-	if finalResponse == nil {
-		return nil, errors.New("final response is nil")
-	}
-	if finalResponse.Content == "" {
-		return nil, errors.New("final response content is empty")
-	}
-	return &genai.Content{
-		Role: string(finalResponse.Role),
-		Parts: []*genai.Part{{
-			Text: finalResponse.Content,
-		}},
-	}, nil
-}
-
-// convertToolCallsToFunctionCalls maps model-level tool calls to the evalset FunctionCall structure.
-func convertToolCallsToFunctionCalls(toolCalls *model.ToolCall) (*genai.FunctionCall, error) {
-	if toolCalls == nil {
-		return nil, errors.New("tool calls is nil")
-	}
-	if toolCalls.Function.Name == "" {
-		return nil, errors.New("tool call function name is empty")
-	}
-	var args map[string]any
-	if len(toolCalls.Function.Arguments) > 0 {
-		if err := json.Unmarshal(toolCalls.Function.Arguments, &args); err != nil {
-			return nil, fmt.Errorf("unmarshal tool arguments: %w", err)
-		}
-	}
-	return &genai.FunctionCall{
-		ID:   toolCalls.ID,
-		Name: toolCalls.Function.Name,
-		Args: args,
-	}, nil
+	return nil
 }

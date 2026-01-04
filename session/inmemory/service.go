@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
 
 // stateWithTTL wraps state data with expiration time.
@@ -88,23 +89,14 @@ func newAppSessions() *appSessions {
 
 // SessionService provides an in-memory implementation of SessionService.
 type SessionService struct {
-	mu              sync.RWMutex
-	apps            map[string]*appSessions
-	opts            serviceOpts
-	cleanupTicker   *time.Ticker
-	cleanupDone     chan struct{}
-	cleanupOnce     sync.Once
-	summaryJobChans []chan *summaryJob // channel for summary jobs to processing
-	summaryWg       sync.WaitGroup     // wait group for summary workers
-	once            sync.Once          // ensure Close is called only once
-}
-
-// summaryJob represents a summary job to be processed asynchronously.
-type summaryJob struct {
-	ctx       context.Context // Detached context preserving values but not cancel.
-	filterKey string
-	force     bool
-	session   *session.Session
+	mu            sync.RWMutex
+	apps          map[string]*appSessions
+	opts          serviceOpts
+	cleanupTicker *time.Ticker
+	cleanupDone   chan struct{}
+	cleanupOnce   sync.Once
+	asyncWorker   *isummary.AsyncSummaryWorker
+	once          sync.Once // ensure Close is called only once
 }
 
 // NewSessionService creates a new in-memory session service.
@@ -132,8 +124,17 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 		s.startCleanupRoutine()
 	}
 
-	// Always start async summary workers by default
-	s.startAsyncSummaryWorker()
+	// Start async summary workers if summarizer is configured
+	if opts.summarizer != nil && opts.asyncSummaryNum > 0 {
+		s.asyncWorker = isummary.NewAsyncSummaryWorker(isummary.AsyncSummaryConfig{
+			Summarizer:        opts.summarizer,
+			AsyncSummaryNum:   opts.asyncSummaryNum,
+			SummaryQueueSize:  opts.summaryQueueSize,
+			SummaryJobTimeout: opts.summaryJobTimeout,
+			CreateSummaryFunc: s.CreateSessionSummary,
+		})
+		s.asyncWorker.Start()
+	}
 
 	return s
 }
@@ -189,7 +190,7 @@ func (s *SessionService) CreateSession(
 
 	// Set initial state if provided
 	for k, v := range state {
-		sess.State[k] = v
+		sess.SetState(k, v)
 	}
 
 	app.mu.Lock()
@@ -530,9 +531,7 @@ func (s *SessionService) UpdateSessionState(ctx context.Context, key session.Key
 
 	// Update session state (allow temp: prefix and unprefixed keys)
 	for k, v := range state {
-		copiedValue := make([]byte, len(v))
-		copy(copiedValue, v)
-		sessWithTTL.session.State[k] = copiedValue
+		sessWithTTL.session.SetState(k, v)
 	}
 
 	// Update timestamp
@@ -800,7 +799,9 @@ func (s *SessionService) stopCleanupRoutine() {
 func (s *SessionService) Close() error {
 	s.once.Do(func() {
 		s.stopCleanupRoutine()
-		s.stopAsyncSummaryWorker()
+		if s.asyncWorker != nil {
+			s.asyncWorker.Stop()
+		}
 	})
 	return nil
 }
@@ -824,10 +825,10 @@ func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Eve
 // mergeState merges app-level and user-level state into the session state.
 func mergeState(appState, userState session.StateMap, sess *session.Session) *session.Session {
 	for k, v := range appState {
-		sess.State[session.StateAppPrefix+k] = v
+		sess.SetState(session.StateAppPrefix+k, v)
 	}
 	for k, v := range userState {
-		sess.State[session.StateUserPrefix+k] = v
+		sess.SetState(session.StateUserPrefix+k, v)
 	}
 	return sess
 }

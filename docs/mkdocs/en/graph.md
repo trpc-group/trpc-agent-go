@@ -158,6 +158,8 @@ The Graph package provides some built-in state keys, mainly for internal system 
 - `StateKeyUserInput`: User input (one-shot, cleared after consumption, persisted by LLM nodes)
 - `StateKeyOneShotMessages`: One-shot messages (complete override for current round, cleared after consumption)
 - `StateKeyLastResponse`: Last response (used to set final output, Executor reads this value as result)
+- `StateKeyLastResponseID`: Last response identifier (ID) (set by LLM nodes; may
+  be empty when `StateKeyLastResponse` is produced by a non-model node)
 - `StateKeyMessages`: Message history (durable, supports append + MessageOp patch operations)
 - `StateKeyNodeResponses`: Per-node responses map. Key is node ID, value is the
   node's final textual response. Use `StateKeyLastResponse` for the final
@@ -208,6 +210,9 @@ Nodes communicate exclusively through the shared state. Each node returns a stat
   - `one_shot_messages`: Full message override for the next LLM call. Cleared after consumption.
   - `messages`: Durable conversation history (LLM/Tools append here). Supports MessageOp patches.
   - `last_response`: The last textual assistant response.
+  - `last_response_id`: The identifier (ID) of the last model response that
+    produced `last_response` (may be empty when `last_response` is set by a
+    non-model node).
   - `node_responses`: Map[nodeID]any — per‑node final textual response. Use `last_response` for the most recent.
 
 - Function node
@@ -221,6 +226,7 @@ Nodes communicate exclusively through the shared state. Each node returns a stat
   - Output:
     - Appends assistant message to `messages`
     - Sets `last_response`
+    - Sets `last_response_id`
     - Sets `node_responses[<llm_node_id>]`
 
 - Tools node
@@ -259,6 +265,7 @@ See examples:
   - `one_shot_messages` → `graph.StateKeyOneShotMessages`
   - `messages` → `graph.StateKeyMessages`
   - `last_response` → `graph.StateKeyLastResponse`
+  - `last_response_id` → `graph.StateKeyLastResponseID`
   - `node_responses` → `graph.StateKeyNodeResponses`
 
 - Other useful keys
@@ -597,6 +604,31 @@ Important notes:
 - One-shot keys (`user_input` / `one_shot_messages`) are automatically cleared after successful execution.
 - All state updates are atomic.
 - GraphAgent/Runner only sets `user_input` and no longer pre-populates `messages` with a user message. This allows any pre-LLM node to modify `user_input` and have it take effect in the same round.
+- When Graph runs sub-agents, it preserves the parent run's `RequestID`
+  (request identifier) so the current user input is included exactly once,
+  even when it already exists in session history.
+
+#### Event emission (streaming vs final)
+
+When the Large Language Model (LLM) is called with streaming enabled, a single
+model call can produce multiple events:
+
+- Streaming chunks: incremental text in `choice.Delta.Content`
+- A final message: full text in `choice.Message.Content`
+
+In graph workflows there are also two different "done" concepts:
+
+- Model done: a single model call finishes (typically `Response.Done=true`)
+- Workflow done: the whole graph run ends (use `event.IsRunnerCompletion()`)
+
+By default, graph LLM nodes only emit the streaming chunks. They do not emit
+the final `Done=true` assistant message event. This keeps intermediate node
+outputs from being treated as normal assistant replies (for example, being
+persisted into the Session by Runner).
+
+If you want graph LLM nodes to also emit the final `Done=true` assistant
+message events, enable `agent.WithGraphEmitFinalModelResponses(true)` when
+running via Runner. See `runner.md` for details and examples.
 
 #### Three input paradigms
 
@@ -666,8 +698,14 @@ func preparePromptNode(ctx context.Context, state graph.State) (any, error) {
 - `RemoveAllMessages{}` is a special `MessageOp` that `MessageReducer` recognizes
   and uses to clear the message list
 - Must set `RemoveAllMessages{}` **before** setting `StateKeyUserInput`
-- `WithSubgraphIsolatedMessages(true)` only works for `AddSubgraphNode`, not for
-  `AddLLMNode`; use `RemoveAllMessages` to isolate messages between LLM nodes
+- `WithSubgraphIsolatedMessages(true)` only works for `AddSubgraphNode` (agent
+  nodes), not for `AddLLMNode`; use `RemoveAllMessages` to isolate messages
+  between LLM nodes
+- For agent nodes, `WithSubgraphIsolatedMessages(true)` disables seeding
+  session history into the sub‑agent’s request. This also hides tool call
+  results, so it breaks multi‑turn tool calling. Use it only for single‑turn
+  sub‑agents; otherwise, isolate via sub‑agent message filtering (see “Agent
+  nodes: isolation vs multi‑turn tool calls”).
 
 ### 3. GraphAgent Configuration Options
 
@@ -770,6 +808,33 @@ stateGraph.AddAgentNode("assistant",
 
 > The agent node uses its ID for the lookup, so keep `AddAgentNode("assistant")`
 > aligned with `subAgent.Info().Name == "assistant"`.
+
+#### Agent nodes: isolation vs multi‑turn tool calls
+
+Tool calling is usually multi‑turn within a single run: the model returns a
+tool call, the framework executes the tool, then the next model request must
+include the tool result (a `role=tool` message) so the model can continue.
+
+`WithSubgraphIsolatedMessages(true)` is a **strong isolation switch**: it
+prevents the sub‑agent from reading any session history when building the next
+model request (internally it sets `include_contents="none"` for the sub‑agent).
+This makes the sub‑agent “black‑box” (it only sees the current `user_input`),
+but it also means the sub‑agent will not see tool results, so it cannot do
+multi‑turn tool calling.
+
+If a sub‑agent needs tools **and** needs to continue after tools return:
+
+- Do **not** enable `WithSubgraphIsolatedMessages(true)` on that agent node.
+- Instead, keep session seeding enabled and isolate the sub‑agent by filtering
+  its message history to only its own invocation. For `LLMAgent`, use:
+  `llmagent.WithMessageFilterMode(llmagent.IsolatedInvocation)`.
+
+Symptoms of the misconfiguration:
+
+- The second model request looks the same as the first one (tool results never
+  appear in the prompt).
+- The agent repeats the first tool call or loops because it never “sees” the
+  tool output.
 
 ### 4. Conditional Routing
 
@@ -920,7 +985,7 @@ Tool-call pairing and second entry into LLM:
 
 LLM nodes support placeholder injection in their `instruction` string (same rules as LLMAgent). Both native `{key}` and Mustache `{{key}}` syntaxes are accepted (Mustache is normalized to the native form automatically):
 
-- `{key}` / `{{key}}` → replaced by `session.State["key"]`
+- `{key}` / `{{key}}` → Replaced with the string value corresponding to the key `key` in the session state (write via `sess.SetState("key", ...)` or SessionService).
 - `{key?}` / `{{key?}}` → optional; missing values become empty
 - `{user:subkey}`, `{app:subkey}`, `{temp:subkey}` (and their Mustache forms) → access user/app/temp scopes (session services merge app/user state into session with these prefixes)
 
@@ -956,9 +1021,8 @@ sg.AddNode("retrieve", func(ctx context.Context, s graph.State) (any, error) {
     var input string
     if v, ok := s[graph.StateKeyUserInput].(string); ok { input = v }
     if sess, _ := s[graph.StateKeySession].(*session.Session); sess != nil {
-        if sess.State == nil { sess.State = make(session.StateMap) }
-        sess.State[session.StateTempPrefix+"retrieved_context"] = []byte(retrieved)
-        sess.State[session.StateTempPrefix+"user_input"] = []byte(input)
+        sess.SetState(session.StateTempPrefix+"retrieved_context", []byte(retrieved))
+        sess.SetState(session.StateTempPrefix+"user_input", []byte(input))
     }
     return graph.State{}, nil
 })
@@ -973,8 +1037,8 @@ Example: `examples/graph/retrieval_placeholder`.
 
 Best practices for placeholders and session state
 
-- Ephemeral vs persistent: write per‑turn values to `temp:*` on `session.State` (session state). Persistent configuration should go through `SessionService` with `user:*`/`app:*`.
-- Why direct write is OK: LLM nodes expand placeholders from the session object present in graph state; see [graph/state_graph.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/state_graph.go). GraphAgent puts the session into state; see [agent/graphagent/graph_agent.go](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/graphagent/graph_agent.go).
+- Ephemeral vs persistent: write per‑turn values to `temp:*` on session state (recommended via `sess.SetState`). Persistent configuration should go through `SessionService` with `user:*`/`app:*`.
+- Why `SetState` is recommended: LLM nodes expand placeholders from the session object present in graph state; using `sess.SetState` avoids unsafe concurrent map access.
 - Service guardrails: the in‑memory service intentionally disallows writing `temp:*` (and `app:*` via user updater); see [session/inmemory/service.go](https://github.com/trpc-group/trpc-agent-go/blob/main/session/inmemory/service.go).
 - Concurrency: when multiple branches run in parallel, avoid multiple nodes mutating the same `session.State` keys. Prefer composing in a single node before the LLM, or store intermediate values in graph state then write once to `temp:*`.
 - Observability: if you want parts of the prompt to appear in completion events, also store a compact summary in graph state (e.g., under `metadata`). The final event serializes non‑internal final state; see [graph/events.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go).
@@ -2481,7 +2545,8 @@ sg.AddAgentNode("orchestrator",
         }
         return nil, nil
     }),
-    // Optional: isolate child sub‑agent from session contents
+    // Optional: isolate child sub‑agent from session contents.
+    // Use only when the sub‑agent is single‑turn (no multi‑turn tool calls).
     graph.WithSubgraphIsolatedMessages(true),
 )
 ```
@@ -2492,7 +2557,9 @@ sg.AddAgentNode("orchestrator",
 // Declarative option that automatically maps last_response → user_input
 sg.AddAgentNode("orchestrator",
     graph.WithSubgraphInputFromLastResponse(),
-    graph.WithSubgraphIsolatedMessages(true), // optional: isolate for true "pass only results"
+    // Optional: isolate for true "pass only results".
+    // Use only when the sub‑agent is single‑turn (no multi‑turn tool calls).
+    graph.WithSubgraphIsolatedMessages(true),
 )
 ```
 

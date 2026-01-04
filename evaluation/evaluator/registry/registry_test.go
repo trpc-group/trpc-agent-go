@@ -12,6 +12,7 @@ package registry
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -110,4 +111,25 @@ func TestRegistryGetMissing(t *testing.T) {
 	_, err := reg.Get("missing")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "missing")
+}
+
+func TestRegistryListSorted(t *testing.T) {
+	reg := New()
+	_ = reg.Register("zzz", &stubEvaluator{name: "zzz"})
+	_ = reg.Register("aaa", &stubEvaluator{name: "aaa"})
+
+	names := reg.List()
+	assert.True(t, sort.StringsAreSorted(names))
+	assert.Contains(t, names, "aaa")
+	assert.Contains(t, names, "zzz")
+}
+
+func TestRegistryListSorting(t *testing.T) {
+	reg := &registry{
+		evaluators: map[string]evaluator.Evaluator{
+			"b-eval": &stubEvaluator{name: "b-eval"},
+			"a-eval": &stubEvaluator{name: "a-eval"},
+		},
+	}
+	assert.Equal(t, []string{"a-eval", "b-eval"}, reg.List())
 }

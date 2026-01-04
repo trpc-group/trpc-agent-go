@@ -19,6 +19,8 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -188,12 +190,12 @@ func (at *Tool) callWithParentInvocation(
 	)
 
 	// Run the agent and collect response.
-	evCh, err := at.agent.Run(agent.NewInvocationContext(ctx, subInv), subInv)
+	subCtx := agent.NewInvocationContext(ctx, subInv)
+	evCh, err := agent.RunWithPlugins(subCtx, subInv, at.agent)
 	if err != nil {
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
-	childCtx := agent.NewInvocationContext(ctx, subInv)
-	return at.collectResponse(at.wrapWithCompletion(childCtx, subInv, evCh))
+	return at.collectResponse(at.wrapWithCallSemantics(subCtx, subInv, evCh))
 }
 
 // wrapWithCompletion consumes events, notifies completion when required, and forwards to a new channel.
@@ -216,6 +218,178 @@ func (at *Tool) wrapWithCompletion(ctx context.Context, inv *agent.Invocation, s
 		}
 	}(runCtx)
 	return out
+}
+
+// wrapWithCallSemantics consumes events from a child agent invocation that is
+// executed without a Runner. It mirrors persisted events into the shared
+// Session so multi-step tool calling can work, and notifies completion when
+// required.
+func (at *Tool) wrapWithCallSemantics(
+	ctx context.Context,
+	inv *agent.Invocation,
+	src <-chan *event.Event,
+) <-chan *event.Event {
+	if inv == nil || inv.Session == nil {
+		return at.wrapWithCompletion(ctx, inv, src)
+	}
+
+	at.ensureUserMessageForCall(ctx, inv)
+
+	out := make(chan *event.Event)
+	runCtx := agent.CloneContext(ctx)
+	go func(ctx context.Context) {
+		defer close(out)
+		for evt := range src {
+			if evt != nil {
+				if shouldMirrorEventToSession(evt) {
+					at.appendEvent(
+						ctx, inv, persistableSessionEvent(evt),
+					)
+				}
+				if evt.RequiresCompletion {
+					completionID :=
+						agent.GetAppendEventNoticeKey(evt.ID)
+					if err := inv.NotifyCompletion(
+						ctx, completionID,
+					); err != nil {
+						log.Errorf(
+							"AgentTool: notify completion failed: %v",
+							err,
+						)
+					}
+				}
+			}
+			out <- evt
+		}
+	}(runCtx)
+	return out
+}
+
+func (at *Tool) wrapWithStreamSemantics(
+	ctx context.Context,
+	inv *agent.Invocation,
+	src <-chan *event.Event,
+) <-chan *event.Event {
+	if shouldDeferStreamCompletion(ctx, inv) {
+		return src
+	}
+	return at.wrapWithCallSemantics(ctx, inv, src)
+}
+
+func shouldDeferStreamCompletion(
+	ctx context.Context,
+	inv *agent.Invocation,
+) bool {
+	if inv == nil || inv.Session == nil {
+		return false
+	}
+	callID, ok := ctx.Value(tool.ContextKeyToolCallID{}).(string)
+	if !ok || callID == "" {
+		return false
+	}
+	return appender.IsAttached(inv)
+}
+
+func (at *Tool) ensureUserMessageForCall(
+	ctx context.Context,
+	inv *agent.Invocation,
+) {
+	if inv == nil || inv.Session == nil {
+		return
+	}
+	if inv.Message.Role != model.RoleUser || inv.Message.Content == "" {
+		return
+	}
+
+	inv.Session.EventMu.RLock()
+	for i := range inv.Session.Events {
+		if inv.Session.Events[i].IsUserMessage() {
+			inv.Session.EventMu.RUnlock()
+			return
+		}
+	}
+	inv.Session.EventMu.RUnlock()
+
+	evt := event.NewResponseEvent(inv.InvocationID, "user", &model.Response{
+		Done:    false,
+		Choices: []model.Choice{{Index: 0, Message: inv.Message}},
+	})
+	agent.InjectIntoEvent(inv, evt)
+	at.appendEvent(ctx, inv, evt)
+}
+
+func (at *Tool) appendEvent(
+	ctx context.Context,
+	inv *agent.Invocation,
+	evt *event.Event,
+) {
+	if inv == nil || inv.Session == nil || evt == nil {
+		return
+	}
+	ok, err := appender.Invoke(ctx, inv, evt)
+	if ok {
+		if err != nil {
+			log.Errorf(
+				"AgentTool: session append failed: %v", err,
+			)
+			if evt.ID == "" || !sessionHasEventID(inv, evt.ID) {
+				inv.Session.UpdateUserSession(evt)
+			}
+		}
+		return
+	}
+	inv.Session.UpdateUserSession(evt)
+}
+
+func sessionHasEventID(inv *agent.Invocation, eventID string) bool {
+	if inv == nil || inv.Session == nil || eventID == "" {
+		return false
+	}
+	inv.Session.EventMu.RLock()
+	defer inv.Session.EventMu.RUnlock()
+
+	for i := range inv.Session.Events {
+		if inv.Session.Events[i].ID == eventID {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldMirrorEventToSession(evt *event.Event) bool {
+	if evt == nil {
+		return false
+	}
+	if len(evt.StateDelta) > 0 {
+		return true
+	}
+	if evt.Response == nil {
+		return false
+	}
+	if evt.IsPartial {
+		return false
+	}
+	return evt.IsValidContent()
+}
+
+func persistableSessionEvent(evt *event.Event) *event.Event {
+	if !isGraphCompletionEvent(evt) {
+		return evt
+	}
+	copyEvt := *evt
+	if evt.Response != nil {
+		copyEvt.Response = evt.Response.Clone()
+		copyEvt.Response.Choices = nil
+	}
+	return &copyEvt
+}
+
+func isGraphCompletionEvent(evt *event.Event) bool {
+	if evt == nil || evt.Response == nil {
+		return false
+	}
+	return evt.Done &&
+		evt.Object == graph.ObjectTypeGraphExecution
 }
 
 // callWithIsolatedRunner executes the agent in an isolated environment using
@@ -299,12 +473,12 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 			)
 
 			subCtx := agent.NewInvocationContext(ctx, subInv)
-			evCh, err := at.agent.Run(subCtx, subInv)
+			evCh, err := agent.RunWithPlugins(subCtx, subInv, at.agent)
 			if err != nil {
 				_ = stream.Writer.Send(tool.StreamChunk{Content: fmt.Sprintf("agent tool run error: %v", err)}, nil)
 				return
 			}
-			wrapped := at.wrapWithCompletion(subCtx, subInv, evCh)
+			wrapped := at.wrapWithStreamSemantics(subCtx, subInv, evCh)
 
 			for ev := range wrapped {
 				if stream.Writer.Send(tool.StreamChunk{Content: ev}, nil) {

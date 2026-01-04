@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 )
 
@@ -44,15 +45,14 @@ type SessionState struct {
 type Service struct {
 	opts            ServiceOpts
 	pgClient        storage.Client
-	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
-	trackEventChans []chan *trackEventPair   // channel for track events to persistence.
-	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
-	cleanupTicker   *time.Ticker             // ticker for automatic cleanup
-	cleanupDone     chan struct{}            // signal to stop cleanup routine
-	cleanupOnce     sync.Once                // ensure cleanup routine is stopped only once
-	persistWg       sync.WaitGroup           // wait group for persist workers
-	summaryWg       sync.WaitGroup           // wait group for summary workers
-	once            sync.Once                // ensure Close is called only once
+	eventPairChans  []chan *sessionEventPair     // channel for session events to persistence
+	trackEventChans []chan *trackEventPair       // channel for track events to persistence
+	asyncWorker     *isummary.AsyncSummaryWorker // async summary worker
+	cleanupTicker   *time.Ticker                 // ticker for automatic cleanup
+	cleanupDone     chan struct{}                // signal to stop cleanup routine
+	cleanupOnce     sync.Once                    // ensure cleanup routine is stopped only once
+	persistWg       sync.WaitGroup               // wait group for persist workers
+	once            sync.Once                    // ensure Close is called only once
 
 	// Table names with prefix applied
 	tableSessionStates    string
@@ -71,14 +71,6 @@ type sessionEventPair struct {
 type trackEventPair struct {
 	key   session.Key
 	event *session.TrackEvent
-}
-
-// summaryJob represents a summary job to be processed asynchronously.
-type summaryJob struct {
-	ctx       context.Context // Detached context preserving values but not cancel.
-	filterKey string
-	force     bool
-	session   *session.Session
 }
 
 // buildConnString builds a PostgreSQL connection string from options.
@@ -176,8 +168,18 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if opts.enableAsyncPersist {
 		s.startAsyncPersistWorker()
 	}
-	// Always start async summary workers by default.
-	s.startAsyncSummaryWorker()
+
+	// Start async summary workers if summarizer is configured
+	if opts.summarizer != nil && opts.asyncSummaryNum > 0 {
+		s.asyncWorker = isummary.NewAsyncSummaryWorker(isummary.AsyncSummaryConfig{
+			Summarizer:        opts.summarizer,
+			AsyncSummaryNum:   opts.asyncSummaryNum,
+			SummaryQueueSize:  opts.summaryQueueSize,
+			SummaryJobTimeout: opts.summaryJobTimeout,
+			CreateSummaryFunc: s.CreateSessionSummary,
+		})
+		s.asyncWorker.Start()
+	}
 
 	// Start automatic cleanup if cleanup interval is configured
 	if opts.cleanupInterval > 0 {
@@ -209,7 +211,13 @@ func (s *Service) CreateSession(
 		CreatedAt: now,
 	}
 	for k, v := range state {
-		sessState.State[k] = v
+		if v == nil {
+			sessState.State[k] = nil
+			continue
+		}
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		sessState.State[k] = copiedValue
 	}
 
 	sessBytes, err := json.Marshal(sessState)
@@ -581,7 +589,13 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		sessState.State = make(session.StateMap)
 	}
 	for k, v := range state {
-		sessState.State[k] = v
+		if v == nil {
+			sessState.State[k] = nil
+			continue
+		}
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		sessState.State[k] = copiedValue
 	}
 	sessState.UpdatedAt = now
 
@@ -785,10 +799,9 @@ func (s *Service) Close() error {
 		s.persistWg.Wait()
 
 		// Close summary job channels and wait for summary workers.
-		for _, ch := range s.summaryJobChans {
-			close(ch)
+		if s.asyncWorker != nil {
+			s.asyncWorker.Stop()
 		}
-		s.summaryWg.Wait()
 	})
 
 	return nil
@@ -1149,7 +1162,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 	if err := sess.AppendTrackEvent(trackEvent); err != nil {
 		return err
 	}
-	sessState.State = sess.State
+	sessState.State = sess.SnapshotState()
 	sessState.UpdatedAt = sess.UpdatedAt
 
 	updatedStateBytes, err := json.Marshal(sessState)
@@ -1387,10 +1400,10 @@ func (s *Service) startAsyncPersistWorker() {
 
 func mergeState(appState, userState session.StateMap, sess *session.Session) *session.Session {
 	for k, v := range appState {
-		sess.State[session.StateAppPrefix+k] = v
+		sess.SetState(session.StateAppPrefix+k, v)
 	}
 	for k, v := range userState {
-		sess.State[session.StateUserPrefix+k] = v
+		sess.SetState(session.StateUserPrefix+k, v)
 	}
 	return sess
 }

@@ -20,7 +20,6 @@ import (
 )
 
 // EvalSetResult represents the evaluation result for an entire eval set.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvalSetResult struct {
 	// EvalSetResultID uniquely identifies this result.
 	EvalSetResultID string `json:"evalSetResultId,omitempty"`
@@ -35,7 +34,6 @@ type EvalSetResult struct {
 }
 
 // EvalCaseResult represents the result of a single evaluation case.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvalCaseResult struct {
 	// EvalSetID identifies the eval set.
 	EvalSetID string `json:"evalSetId,omitempty"`
@@ -54,7 +52,6 @@ type EvalCaseResult struct {
 }
 
 // EvalMetricResult represents the result of a single metric evaluation.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvalMetricResult struct {
 	// MetricName identifies the metric.
 	MetricName string `json:"metricName,omitempty"`
@@ -76,10 +73,11 @@ type EvalMetricResultDetails struct {
 	Reason string `json:"reason,omitempty"`
 	// Score is the score for the metric evaluation result.
 	Score float64 `json:"score,omitempty"`
+	// RubricScores contains the scores for the rubric items.
+	RubricScores []*RubricScore `json:"rubricScores,omitempty"`
 }
 
 // EvalMetricResultPerInvocation represents metric results for a single invocation.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvalMetricResultPerInvocation struct {
 	// ActualInvocation is the actual invocation, captured from agent run.
 	ActualInvocation *evalset.Invocation `json:"actualInvocation,omitempty"`
@@ -87,6 +85,13 @@ type EvalMetricResultPerInvocation struct {
 	ExpectedInvocation *evalset.Invocation `json:"expectedInvocation,omitempty"`
 	// EvalMetricResults contains results for each metric for this invocation.
 	EvalMetricResults []*EvalMetricResult `json:"evalMetricResults,omitempty"`
+}
+
+// RubricScore captures an individual rubric item score returned by judge models.
+type RubricScore struct {
+	ID     string  `json:"id,omitempty"`     // ID identifies the rubric item.
+	Reason string  `json:"reason,omitempty"` // Reason explains why the rubric was scored this way.
+	Score  float64 `json:"score,omitempty"`  // Score is the numeric rubric score.
 }
 
 // Manager defines the interface for managing evaluation results.
