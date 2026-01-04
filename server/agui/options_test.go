@@ -12,6 +12,7 @@ package agui
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
@@ -21,6 +22,8 @@ import (
 func TestNewOptionsDefaults(t *testing.T) {
 	opts := newOptions()
 	assert.Equal(t, "/", opts.path)
+	assert.Equal(t, "/cancel", opts.cancelPath)
+	assert.False(t, opts.cancelEnabled)
 	assert.NotNil(t, opts.serviceFactory)
 	assert.Empty(t, opts.aguiRunnerOptions)
 }
@@ -68,7 +71,16 @@ func TestWithServiceFactory(t *testing.T) {
 	svc := opts.serviceFactory(nil)
 	assert.NotNil(t, svc)
 	assert.True(t, invoked)
-	if _, ok := svc.(fakeService); !ok {
-		t.Fatal("expected fakeService instance")
-	}
+	assert.IsType(t, fakeService{}, svc)
+}
+
+func TestWithTimeout(t *testing.T) {
+	opts := newOptions(WithTimeout(2 * time.Second))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.Equal(t, 2*time.Second, ro.Timeout)
+}
+
+func TestWithCancelEnabled(t *testing.T) {
+	opts := newOptions(WithCancelEnabled(true))
+	assert.True(t, opts.cancelEnabled)
 }

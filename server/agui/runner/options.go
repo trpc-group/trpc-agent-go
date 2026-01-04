@@ -22,6 +22,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+const (
+	defaultTimeout = time.Hour
+)
+
 // Options holds the options for the runner.
 type Options struct {
 	TranslatorFactory  TranslatorFactory     // TranslatorFactory creates a translator for an AG-UI run.
@@ -35,6 +39,7 @@ type Options struct {
 	AggregationOption  []aggregator.Option   // AggregationOption is the aggregation options for each run.
 	FlushInterval      time.Duration         // FlushInterval controls how often buffered AG-UI events are flushed for a session.
 	StartSpan          StartSpan             // StartSpan starts a span for an AG-UI run.
+	Timeout            time.Duration         // Timeout controls how long a run is allowed to execute.
 }
 
 // NewOptions creates a new options instance.
@@ -47,6 +52,7 @@ func NewOptions(opt ...Option) *Options {
 		AggregatorFactory: aggregator.New,
 		FlushInterval:     track.DefaultFlushInterval,
 		StartSpan:         defaultStartSpan,
+		Timeout:           defaultTimeout,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -146,6 +152,13 @@ type StartSpan func(ctx context.Context, input *adapter.RunAgentInput) (context.
 func WithStartSpan(start StartSpan) Option {
 	return func(o *Options) {
 		o.StartSpan = start
+	}
+}
+
+// WithTimeout sets the maximum execution time for a run.
+func WithTimeout(d time.Duration) Option {
+	return func(o *Options) {
+		o.Timeout = d
 	}
 }
 

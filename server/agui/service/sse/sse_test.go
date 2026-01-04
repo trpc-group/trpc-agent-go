@@ -16,11 +16,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	aguisse "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 )
 
@@ -70,6 +72,26 @@ func TestHandleRunnerError(t *testing.T) {
 	defer res.Body.Close()
 
 	assert.Equal(t, http.StatusInternalServerError, res.StatusCode)
+	assert.Equal(t, 1, runner.calls)
+}
+
+func TestHandleRunnerDuplicateKeyReturnsConflict(t *testing.T) {
+	runner := &stubRunner{
+		runFn: func(ctx context.Context, input *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
+			return nil, aguirunner.ErrRunAlreadyExists
+		},
+	}
+	srv := &sse{runner: runner, writer: aguisse.NewSSEWriter()}
+	payload := `{"threadId":"thread","runId":"run","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/agui", strings.NewReader(payload))
+	rr := httptest.NewRecorder()
+
+	srv.handle(rr, req)
+
+	res := rr.Result()
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusConflict, res.StatusCode)
 	assert.Equal(t, 1, runner.calls)
 }
 
@@ -133,6 +155,94 @@ func TestHandleWriteEventError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, res.StatusCode)
 	assert.Contains(t, errWriter.Body.String(), "SSE write failed")
 	assert.Equal(t, 1, runner.calls)
+}
+
+func TestHandleWriteEventErrorDoesNotBlockRunner(t *testing.T) {
+	eventsCh := make(chan aguievents.Event)
+	continueProduce := make(chan struct{})
+	produced := make(chan struct{})
+
+	runner := &stubRunner{
+		runFn: func(ctx context.Context, input *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
+			go func() {
+				defer close(eventsCh)
+				eventsCh <- aguievents.NewRunStartedEvent("thread", "run")
+				<-continueProduce
+				eventsCh <- aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant"))
+				close(produced)
+			}()
+			return eventsCh, nil
+		},
+	}
+	srv := &sse{runner: runner, writer: aguisse.NewSSEWriter()}
+	payload := `{"threadId":"thread","runId":"run","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/agui", strings.NewReader(payload))
+	errWriter := newErrorResponseWriter(errors.New("write failure"))
+
+	srv.handle(errWriter, req)
+
+	close(continueProduce)
+	assert.Eventually(t, func() bool {
+		select {
+		case <-produced:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestHandleClientDisconnectDoesNotBlockRunner(t *testing.T) {
+	eventsCh := make(chan aguievents.Event)
+	continueProduce := make(chan struct{})
+	produced := make(chan struct{})
+	started := make(chan struct{})
+
+	runner := &stubRunner{
+		runFn: func(ctx context.Context, input *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
+			close(started)
+			go func() {
+				defer close(eventsCh)
+				<-continueProduce
+				eventsCh <- aguievents.NewRunStartedEvent("thread", "run")
+				close(produced)
+			}()
+			return eventsCh, nil
+		},
+	}
+	srv := &sse{runner: runner, writer: aguisse.NewSSEWriter()}
+	payload := `{"threadId":"thread","runId":"run","messages":[{"role":"user","content":"hi"}]}`
+	baseReq := httptest.NewRequest(http.MethodPost, "/agui", strings.NewReader(payload))
+	reqCtx, cancel := context.WithCancel(baseReq.Context())
+	req := baseReq.WithContext(reqCtx)
+	rr := httptest.NewRecorder()
+	handleDone := make(chan struct{})
+	go func() {
+		srv.handle(rr, req)
+		close(handleDone)
+	}()
+
+	<-started
+	cancel()
+
+	assert.Eventually(t, func() bool {
+		select {
+		case <-handleDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	close(continueProduce)
+	assert.Eventually(t, func() bool {
+		select {
+		case <-produced:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestHandleMethodNotAllowed(t *testing.T) {
@@ -305,6 +415,26 @@ func TestHandleMessagesSnapshotProviderError(t *testing.T) {
 	assert.Equal(t, 1, runner.snapshotCalls)
 }
 
+func TestHandleMessagesSnapshotDuplicateKeyReturnsInternalServerError(t *testing.T) {
+	runner := &snapshotRunner{
+		snapshotFn: func(context.Context, *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
+			return nil, aguirunner.ErrRunAlreadyExists
+		},
+	}
+	srv := &sse{runner: runner, writer: aguisse.NewSSEWriter()}
+	payload := `{"threadId":"thread","runId":"run"}`
+	req := httptest.NewRequest(http.MethodPost, "/history", strings.NewReader(payload))
+	rr := httptest.NewRecorder()
+
+	srv.handleMessagesSnapshot(rr, req)
+
+	res := rr.Result()
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusInternalServerError, res.StatusCode)
+	assert.Equal(t, 1, runner.snapshotCalls)
+}
+
 func TestHandleMessagesSnapshotNotSupported(t *testing.T) {
 	svc := New(&stubRunner{},
 		service.WithMessagesSnapshotEnabled(true),
@@ -379,6 +509,184 @@ func TestHandleMessagesSnapshotWriteEventError(t *testing.T) {
 	assert.Equal(t, 1, runner.snapshotCalls)
 }
 
+func TestHandleMessagesSnapshotClientDisconnectCancelsContext(t *testing.T) {
+	ctxCh := make(chan context.Context, 1)
+	runner := &snapshotRunner{
+		snapshotFn: func(ctx context.Context, _ *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
+			ctxCh <- ctx
+			ch := make(chan aguievents.Event)
+			go func() {
+				<-ctx.Done()
+				close(ch)
+			}()
+			return ch, nil
+		},
+	}
+	srv := &sse{runner: runner, writer: aguisse.NewSSEWriter()}
+	baseReq := httptest.NewRequest(http.MethodPost, "/history", strings.NewReader(`{"threadId":"thread","runId":"run"}`))
+	reqCtx, cancel := context.WithCancel(baseReq.Context())
+	req := baseReq.WithContext(reqCtx)
+	rr := httptest.NewRecorder()
+	handleDone := make(chan struct{})
+	go func() {
+		srv.handleMessagesSnapshot(rr, req)
+		close(handleDone)
+	}()
+
+	snapshotCtx := <-ctxCh
+	cancel()
+
+	assert.Eventually(t, func() bool {
+		select {
+		case <-handleDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	assert.Eventually(t, func() bool {
+		select {
+		case <-snapshotCtx.Done():
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestHandleCancelCORSPreflight(t *testing.T) {
+	srv := &sse{cancelPath: "/cancel", writer: aguisse.NewSSEWriter()}
+	req := httptest.NewRequest(http.MethodOptions, "/cancel", nil)
+	req.Header.Set("Access-Control-Request-Headers", "Content-Type")
+	rr := httptest.NewRecorder()
+
+	srv.handleCancel(rr, req)
+
+	res := rr.Result()
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusNoContent, res.StatusCode)
+	assert.Equal(t, "*", res.Header.Get("Access-Control-Allow-Origin"))
+	assert.Equal(t, http.MethodPost, res.Header.Get("Access-Control-Allow-Methods"))
+	assert.Equal(t, "Content-Type", res.Header.Get("Access-Control-Allow-Headers"))
+}
+
+func TestHandleCancelMethodNotAllowed(t *testing.T) {
+	srv := &sse{cancelPath: "/cancel", runner: &cancelRunner{}, writer: aguisse.NewSSEWriter()}
+	req := httptest.NewRequest(http.MethodGet, "/cancel", nil)
+	rr := httptest.NewRecorder()
+
+	srv.handleCancel(rr, req)
+
+	res := rr.Result()
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusMethodNotAllowed, res.StatusCode)
+	assert.Equal(t, http.MethodPost, res.Header.Get("Allow"))
+}
+
+func TestHandleCancelRunnerNil(t *testing.T) {
+	srv := &sse{cancelPath: "/cancel", writer: aguisse.NewSSEWriter()}
+	payload := `{"threadId":"thread","runId":"run"}`
+	req := httptest.NewRequest(http.MethodPost, "/cancel", strings.NewReader(payload))
+	rr := httptest.NewRecorder()
+
+	srv.handleCancel(rr, req)
+
+	res := rr.Result()
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusInternalServerError, res.StatusCode)
+	assert.Contains(t, rr.Body.String(), "runner not configured")
+}
+
+func TestHandleCancelInvalidJSON(t *testing.T) {
+	srv := &sse{cancelPath: "/cancel", runner: &cancelRunner{}, writer: aguisse.NewSSEWriter()}
+	req := httptest.NewRequest(http.MethodPost, "/cancel", strings.NewReader("{invalid"))
+	rr := httptest.NewRecorder()
+
+	srv.handleCancel(rr, req)
+
+	res := rr.Result()
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, res.StatusCode)
+}
+
+func TestHandleCancelNotSupported(t *testing.T) {
+	svc := New(&stubRunner{},
+		service.WithPath("/agui"),
+		service.WithCancelEnabled(true),
+		service.WithCancelPath("/cancel"),
+	)
+	handler := svc.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/cancel", strings.NewReader(`{"threadId":"thread","runId":"run"}`))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	res := rr.Result()
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusNotImplemented, res.StatusCode)
+}
+
+func TestHandleCancelDisabledReturnsNotFound(t *testing.T) {
+	svc := New(&cancelRunner{}, service.WithPath("/agui"))
+	handler := svc.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/cancel", strings.NewReader(`{"threadId":"thread","runId":"run"}`))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	res := rr.Result()
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusNotFound, res.StatusCode)
+}
+
+func TestHandleCancelNotFound(t *testing.T) {
+	runner := &cancelRunner{
+		cancelFn: func(context.Context, *adapter.RunAgentInput) error {
+			return aguirunner.ErrRunNotFound
+		},
+	}
+	srv := &sse{cancelPath: "/cancel", runner: runner, writer: aguisse.NewSSEWriter()}
+	req := httptest.NewRequest(http.MethodPost, "/cancel", strings.NewReader(`{"threadId":"thread","runId":"run"}`))
+	rr := httptest.NewRecorder()
+
+	srv.handleCancel(rr, req)
+
+	res := rr.Result()
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusNotFound, res.StatusCode)
+	assert.Equal(t, 1, runner.cancelCalls)
+}
+
+func TestHandleCancelSuccess(t *testing.T) {
+	runner := &cancelRunner{
+		cancelFn: func(context.Context, *adapter.RunAgentInput) error {
+			return nil
+		},
+	}
+	srv := &sse{cancelPath: "/cancel", runner: runner, writer: aguisse.NewSSEWriter()}
+	req := httptest.NewRequest(http.MethodPost, "/cancel", strings.NewReader(`{"threadId":"thread","runId":"run"}`))
+	rr := httptest.NewRecorder()
+
+	srv.handleCancel(rr, req)
+
+	res := rr.Result()
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "*", res.Header.Get("Access-Control-Allow-Origin"))
+	assert.Equal(t, 1, runner.cancelCalls)
+}
+
 type stubRunner struct {
 	runFn     func(ctx context.Context, input *adapter.RunAgentInput) (<-chan aguievents.Event, error)
 	calls     int
@@ -409,6 +717,20 @@ func (s *snapshotRunner) MessagesSnapshot(ctx context.Context,
 	ch := make(chan aguievents.Event)
 	close(ch)
 	return ch, nil
+}
+
+type cancelRunner struct {
+	stubRunner
+	cancelFn    func(context.Context, *adapter.RunAgentInput) error
+	cancelCalls int
+}
+
+func (s *cancelRunner) Cancel(ctx context.Context, input *adapter.RunAgentInput) error {
+	s.cancelCalls++
+	if s.cancelFn != nil {
+		return s.cancelFn(ctx, input)
+	}
+	return nil
 }
 
 type errorResponseWriter struct {
