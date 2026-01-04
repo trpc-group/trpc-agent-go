@@ -24,7 +24,21 @@ nav:
       - Skill: skill.md
       - Tool: tool.md
       - Session: session.md
-      - Knowledge: knowledge.md
+      - Knowledge:
+          - Overview: knowledge/index.md
+          - Embedder: knowledge/embedder.md
+          - Source: knowledge/source.md
+          - Filter: knowledge/filter.md
+          - Management: knowledge/management.md
+          - VectorStore:
+              - Overview: knowledge/vectorstore/index.md
+              - Memory: knowledge/vectorstore/inmemory.md
+              - PGVector: knowledge/vectorstore/pgvector.md
+              - TcVector: knowledge/vectorstore/tcvector.md
+              - Elasticsearch: knowledge/vectorstore/elasticsearch.md
+              - Qdrant: knowledge/vectorstore/qdrant.md
+              - Milvus: knowledge/vectorstore/milvus.md
+          - Troubleshooting: knowledge/troubleshooting.md
       - Planner: planner.md
       - Event: event.md
       - Evaluation: evaluation.md
@@ -66,7 +80,21 @@ plugins:
                 - Skill: skill.md
                 - Tool: tool.md
                 - Session: session.md
-                - Knowledge: knowledge.md
+                - Knowledge:
+                    - 概述: knowledge/index.md
+                    - Embedder: knowledge/embedder.md
+                    - 数据源: knowledge/source.md
+                    - 过滤器: knowledge/filter.md
+                    - 知识库管理: knowledge/management.md
+                    - 向量存储:
+                        - 概述: knowledge/vectorstore/index.md
+                        - Memory: knowledge/vectorstore/inmemory.md
+                        - PGVector: knowledge/vectorstore/pgvector.md
+                        - TcVector: knowledge/vectorstore/tcvector.md
+                        - Elasticsearch: knowledge/vectorstore/elasticsearch.md
+                        - Qdrant: knowledge/vectorstore/qdrant.md
+                        - Milvus: knowledge/vectorstore/milvus.md
+                    - 故障排除: knowledge/troubleshooting.md
                 - Planner: planner.md
                 - Event: event.md
                 - Evaluation: evaluation.md
