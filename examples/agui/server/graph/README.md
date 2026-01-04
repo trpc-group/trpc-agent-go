@@ -83,7 +83,13 @@ Look for SSE `data:` lines that contain `"type":"ACTIVITY_DELTA"`, for example:
   "type": "ACTIVITY_DELTA",
   "activityType": "graph.node.start",
   "patch": [
-    {"op":"add","path":"/node","value":{"nodeId":"prepare"}}
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "prepare"
+      }
+    }
   ]
 }
 ```
