@@ -1225,6 +1225,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#graphagent-node-execution-progress" class="md-nav__link">
+    <span class="md-ellipsis">
+      GraphAgent Node Execution Progress
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1491,6 +1500,15 @@
   <a href="#generating-documents" class="md-nav__link">
     <span class="md-ellipsis">
       Generating Documents
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#graphagent-node-execution-progress" class="md-nav__link">
+    <span class="md-ellipsis">
+      GraphAgent Node Execution Progress
     </span>
   </a>
   
@@ -2574,6 +2592,38 @@
 <p>The effect is shown below. For a full example, refer to
 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report">examples/agui/server/report</a>.</p>
 <p><img alt="report" src="../assets/gif/agui/report.gif" /></p>
+<h3 id="graphagent-node-execution-progress">GraphAgent Node Execution Progress</h3>
+<p>With <code>GraphAgent</code>, a single run typically executes multiple nodes along the graph. To help the frontend clearly show “which node is currently executing”, the framework sends an <code>ACTIVITY_DELTA</code> event before each node starts executing.</p>
+<p>This event is emitted before the node actually runs. It is also emitted before resuming from an interrupt, which makes it suitable for consistent progress tracking.</p>
+<p>Example <code>ACTIVITY_DELTA</code> event (the <code>patch</code> follows <a href="https://jsonpatch.com/">JSON Patch</a>):</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-16-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-16-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-16-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-16-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-16-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-16-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-16-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-16-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-16-10">10</a></span>
+<span class="normal"><a href="#__codelineno-16-11">11</a></span>
+<span class="normal"><a href="#__codelineno-16-12">12</a></span>
+<span class="normal"><a href="#__codelineno-16-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a><span class="p">{</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ACTIVITY_DELTA&quot;</span><span class="p">,</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a><span class="w">  </span><span class="nt">&quot;activityType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;graph.node.start&quot;</span><span class="p">,</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4"></a><span class="w">  </span><span class="nt">&quot;patch&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6"></a><span class="w">      </span><span class="nt">&quot;op&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7"></a><span class="w">      </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/node&quot;</span><span class="p">,</span>
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8"></a><span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9"></a><span class="w">        </span><span class="nt">&quot;nodeId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;plan_llm_node&quot;</span>
+</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-16-13"><a id="__codelineno-16-13" name="__codelineno-16-13"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Frontend handling suggestion: listen for <code>ACTIVITY_DELTA</code> events with <code>activityType == "graph.node.start"</code>, read <code>nodeId</code> from the patch, and locate the corresponding node in the UI.</p>
+<p>For a complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph">examples/agui/server/graph</a>.</p>
 
 
 
@@ -2596,7 +2646,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 3, 2026 12:40:37 UTC">2026-01-03 12:40:37</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 4, 2026 10:09:37 UTC">2026-01-04 10:09:37</span>
   </span>
 
     
