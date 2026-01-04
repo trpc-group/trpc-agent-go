@@ -102,6 +102,17 @@ func TestNewServiceRequiresServiceFactory(t *testing.T) {
 	assert.EqualError(t, err, "agui: serviceFactory must not be nil")
 }
 
+func TestNewWrapsServiceFactoryError(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+
+	srv, err := New(r, WithServiceFactory(nil))
+
+	assert.Nil(t, srv)
+	assert.ErrorContains(t, err, "new service")
+	assert.ErrorContains(t, err, "serviceFactory must not be nil")
+}
+
 func TestNewServiceRequiresTrackService(t *testing.T) {
 	agent := &mockAgent{info: agent.Info{Name: "demo"}}
 	r := runner.NewRunner(agent.Info().Name, agent)
@@ -119,6 +130,52 @@ func TestNewServiceRequiresTrackService(t *testing.T) {
 	assert.EqualError(t, err, "agui: session service must implement TrackService")
 }
 
+func TestNewCancelDisabledDoesNotWireServiceOptions(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	var captured *service.Options
+	customFactory := func(_ aguirunner.Runner, opt ...service.Option) service.Service {
+		captured = service.NewOptions(opt...)
+		return dummyAGUIService{}
+	}
+
+	srv, err := New(r,
+		WithBasePath("/api"),
+		WithPath("/chat"),
+		WithCancelPath("/cancel"),
+		WithServiceFactory(customFactory),
+	)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, srv)
+	assert.NotNil(t, captured)
+	assert.False(t, captured.CancelEnabled)
+	assert.Empty(t, captured.CancelPath)
+}
+
+func TestNewMessagesSnapshotDisabledDoesNotWireServiceOptions(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	var captured *service.Options
+	customFactory := func(_ aguirunner.Runner, opt ...service.Option) service.Service {
+		captured = service.NewOptions(opt...)
+		return dummyAGUIService{}
+	}
+
+	srv, err := New(r,
+		WithBasePath("/api"),
+		WithPath("/chat"),
+		WithMessagesSnapshotPath("/history"),
+		WithServiceFactory(customFactory),
+	)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, srv)
+	assert.NotNil(t, captured)
+	assert.False(t, captured.MessagesSnapshotEnabled)
+	assert.Empty(t, captured.MessagesSnapshotPath)
+}
+
 func TestNewMessagesSnapshotEnabledSuccess(t *testing.T) {
 	agent := &mockAgent{info: agent.Info{Name: "demo"}}
 	r := runner.NewRunner(agent.Info().Name, agent)
@@ -133,6 +190,30 @@ func TestNewMessagesSnapshotEnabledSuccess(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, srv)
 	assert.Equal(t, "/agui", srv.Path())
+}
+
+func TestNewCancelEnabledWiresServiceOptions(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	var captured *service.Options
+	customFactory := func(_ aguirunner.Runner, opt ...service.Option) service.Service {
+		captured = service.NewOptions(opt...)
+		return dummyAGUIService{}
+	}
+
+	srv, err := New(r,
+		WithBasePath("/api"),
+		WithPath("/chat"),
+		WithCancelEnabled(true),
+		WithCancelPath("/cancel"),
+		WithServiceFactory(customFactory),
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, srv)
+	assert.NotNil(t, captured)
+	assert.Equal(t, "/api/chat", captured.Path)
+	assert.True(t, captured.CancelEnabled)
+	assert.Equal(t, "/api/cancel", captured.CancelPath)
 }
 
 func TestPathDefault(t *testing.T) {

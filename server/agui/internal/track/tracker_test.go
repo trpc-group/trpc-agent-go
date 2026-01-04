@@ -429,7 +429,7 @@ func TestTrackerFlushPeriodically(t *testing.T) {
 	select {
 	case <-agg.flushCh:
 	case <-time.After(200 * time.Millisecond):
-		t.Fatalf("expected periodic flush")
+		require.FailNow(t, "expected periodic flush")
 	}
 }
 
