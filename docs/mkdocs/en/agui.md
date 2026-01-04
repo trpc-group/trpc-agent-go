@@ -677,3 +677,31 @@ The effect is shown below. For a full example, refer to
 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report).
 
 ![report](../assets/gif/agui/report.gif)
+
+### GraphAgent Node Execution Progress
+
+With `GraphAgent`, a single run typically executes multiple nodes along the graph. To help the frontend clearly show “which node is currently executing”, the framework sends an `ACTIVITY_DELTA` event before each node starts executing.
+
+This event is emitted before the node actually runs. It is also emitted before resuming from an interrupt, which makes it suitable for consistent progress tracking.
+
+Example `ACTIVITY_DELTA` event (the `patch` follows [JSON Patch](https://jsonpatch.com/)):
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.start",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node"
+      }
+    }
+  ]
+}
+```
+
+Frontend handling suggestion: listen for `ACTIVITY_DELTA` events with `activityType == "graph.node.start"`, read `nodeId` from the patch, and locate the corresponding node in the UI.
+
+For a complete example, see [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph).
