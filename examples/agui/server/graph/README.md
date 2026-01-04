@@ -34,8 +34,6 @@ go run ./server/graph \
   -path /agui
 ```
 
-You can also provide `-api-key` and `-base-url` flags instead of environment variables.
-
 ## Verify With curl
 
 First request: the graph will interrupt at `confirm` (after the tool is executed).
