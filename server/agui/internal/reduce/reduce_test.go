@@ -10,12 +10,12 @@
 package reduce
 
 import (
-	"reflect"
-	"strings"
 	"testing"
 	"time"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -41,73 +41,42 @@ func TestBuildMessagesHappyPath(t *testing.T) {
 	}
 
 	msgs, err := Reduce(testAppName, testUserID, events)
-	if err != nil {
-		t.Fatalf("BuildMessages err: %v", err)
-	}
-	if len(msgs) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(msgs))
-	}
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
 
 	// User message assertions.
 	user := msgs[0]
-	if user.ID != "user-1" {
-		t.Fatalf("user id mismatch, got %s", user.ID)
-	}
-	if user.Role != "user" {
-		t.Fatalf("user role mismatch: %s", user.Role)
-	}
-	if user.Name == nil || *user.Name != testUserID {
-		t.Fatalf("expected user name %q, got %v", testUserID, user.Name)
-	}
-	if user.Content == nil || *user.Content != "hello world" {
-		t.Fatalf("unexpected user content %v", user.Content)
-	}
-	if len(user.ToolCalls) != 0 {
-		t.Fatalf("user message should not have tool calls")
-	}
+	assert.Equal(t, "user-1", user.ID)
+	assert.Equal(t, "user", user.Role)
+	require.NotNil(t, user.Name)
+	assert.Equal(t, testUserID, *user.Name)
+	require.NotNil(t, user.Content)
+	assert.Equal(t, "hello world", *user.Content)
+	assert.Empty(t, user.ToolCalls)
 
 	// Assistant message assertions.
 	assistant := msgs[1]
-	if assistant.ID != "assistant-1" {
-		t.Fatalf("assistant id mismatch: %s", assistant.ID)
-	}
-	if assistant.Role != "assistant" {
-		t.Fatalf("assistant role mismatch: %s", assistant.Role)
-	}
-	if assistant.Name == nil || *assistant.Name != testAppName {
-		t.Fatalf("expected assistant name %q, got %v", testAppName, assistant.Name)
-	}
-	if assistant.Content == nil || *assistant.Content != "thinking...done" {
-		t.Fatalf("unexpected assistant content %v", assistant.Content)
-	}
-	if len(assistant.ToolCalls) != 1 {
-		t.Fatalf("expected 1 tool call, got %d", len(assistant.ToolCalls))
-	}
+	assert.Equal(t, "assistant-1", assistant.ID)
+	assert.Equal(t, "assistant", assistant.Role)
+	require.NotNil(t, assistant.Name)
+	assert.Equal(t, testAppName, *assistant.Name)
+	require.NotNil(t, assistant.Content)
+	assert.Equal(t, "thinking...done", *assistant.Content)
+	require.Len(t, assistant.ToolCalls, 1)
 	call := assistant.ToolCalls[0]
-	if call.ID != "tool-call-1" || call.Type != "function" {
-		t.Fatalf("unexpected tool call meta: %+v", call)
-	}
-	if call.Function.Name != "calc" {
-		t.Fatalf("unexpected tool name %s", call.Function.Name)
-	}
-	if call.Function.Arguments != "{\"a\":1}" {
-		t.Fatalf("unexpected tool args %s", call.Function.Arguments)
-	}
+	assert.Equal(t, "tool-call-1", call.ID)
+	assert.Equal(t, "function", call.Type)
+	assert.Equal(t, "calc", call.Function.Name)
+	assert.Equal(t, "{\"a\":1}", call.Function.Arguments)
 
 	// Tool result assertions.
 	tool := msgs[2]
-	if tool.ID != "tool-msg-1" {
-		t.Fatalf("tool result id mismatch: %s", tool.ID)
-	}
-	if tool.Role != "tool" {
-		t.Fatalf("tool result role mismatch: %s", tool.Role)
-	}
-	if tool.Content == nil || *tool.Content != "42" {
-		t.Fatalf("unexpected tool result content %v", tool.Content)
-	}
-	if tool.ToolCallID == nil || *tool.ToolCallID != "tool-call-1" {
-		t.Fatalf("unexpected tool call reference %v", tool.ToolCallID)
-	}
+	assert.Equal(t, "tool-msg-1", tool.ID)
+	assert.Equal(t, "tool", tool.Role)
+	require.NotNil(t, tool.Content)
+	assert.Equal(t, "42", *tool.Content)
+	require.NotNil(t, tool.ToolCallID)
+	assert.Equal(t, "tool-call-1", *tool.ToolCallID)
 }
 
 func TestReduceReturnsMessagesOnReduceError(t *testing.T) {
@@ -118,32 +87,22 @@ func TestReduceReturnsMessagesOnReduceError(t *testing.T) {
 		aguievents.NewTextMessageContentEvent("user-1", "!"),
 	)
 	msgs, err := Reduce(testAppName, testUserID, events)
-	if err == nil || !strings.Contains(err.Error(), "reduce: text message content after end: user-1") {
-		t.Fatalf("unexpected error %v", err)
-	}
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
-	}
-	if msgs[0].Content == nil || *msgs[0].Content != "hello" {
-		t.Fatalf("unexpected content %v", msgs[0].Content)
-	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reduce: text message content after end: user-1")
+	require.Len(t, msgs, 1)
+	require.NotNil(t, msgs[0].Content)
+	assert.Equal(t, "hello", *msgs[0].Content)
 }
 
-func TestReduceReturnsMessagesOnFinalizeError(t *testing.T) {
+func TestReduceAllowsUnclosedTextMessage(t *testing.T) {
 	events := trackEventsFrom(
 		aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user")),
 		aguievents.NewTextMessageContentEvent("user-1", "hello"),
 	)
 	msgs, err := Reduce(testAppName, testUserID, events)
-	if err == nil || !strings.Contains(err.Error(), "finalize: text message user-1 not closed") {
-		t.Fatalf("unexpected error %v", err)
-	}
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
-	}
-	if msgs[0].Content != nil {
-		t.Fatalf("expected nil content, got %v", msgs[0].Content)
-	}
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Nil(t, msgs[0].Content)
 }
 
 func TestHandleTextChunkSuccess(t *testing.T) {
@@ -172,38 +131,20 @@ func TestHandleTextChunkSuccess(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := new(testAppName, testUserID)
-			if err := r.handleTextChunk(tt.chunk); err != nil {
-				t.Fatalf("handleTextChunk err: %v", err)
-			}
-			if err := r.finalize(); err != nil {
-				t.Fatalf("finalize err: %v", err)
-			}
-			if len(r.messages) != 1 {
-				t.Fatalf("expected 1 message, got %d", len(r.messages))
-			}
+			require.NoError(t, r.handleTextChunk(tt.chunk))
+			require.Len(t, r.messages, 1)
 			msg := r.messages[0]
-			if msg.Role != tt.wantRole {
-				t.Fatalf("unexpected role %q", msg.Role)
-			}
-			if msg.Name == nil || *msg.Name != tt.wantName {
-				t.Fatalf("unexpected name %v", msg.Name)
-			}
-			if msg.Content == nil || *msg.Content != tt.wantContent {
-				t.Fatalf("unexpected content %v", msg.Content)
-			}
+			assert.Equal(t, tt.wantRole, msg.Role)
+			require.NotNil(t, msg.Name)
+			assert.Equal(t, tt.wantName, *msg.Name)
+			require.NotNil(t, msg.Content)
+			assert.Equal(t, tt.wantContent, *msg.Content)
+			require.NotNil(t, tt.chunk.MessageID)
 			state, ok := r.texts[*tt.chunk.MessageID]
-			if !ok {
-				t.Fatalf("expected text state for %s", *tt.chunk.MessageID)
-			}
-			if state.phase != textEnded {
-				t.Fatalf("unexpected phase %v", state.phase)
-			}
-			if got := state.content.String(); got != tt.wantContent {
-				t.Fatalf("unexpected builder content %q", got)
-			}
-			if state.index != 0 {
-				t.Fatalf("unexpected state index %d", state.index)
-			}
+			require.True(t, ok)
+			assert.Equal(t, textEnded, state.phase)
+			assert.Equal(t, tt.wantContent, state.content.String())
+			assert.Equal(t, 0, state.index)
 		})
 	}
 }
@@ -216,53 +157,43 @@ func TestHandleTextChunkErrors(t *testing.T) {
 	t.Run("missing id", func(t *testing.T) {
 		chunk := aguievents.NewTextMessageChunkEvent(stringPtr(""), stringPtr("assistant"), stringPtr(""))
 		r := new(testAppName, testUserID)
-		if err := r.handleTextChunk(chunk); err == nil || !strings.Contains(err.Error(), "text message chunk missing id") {
-			t.Fatalf("unexpected error %v", err)
-		}
+		err := r.handleTextChunk(chunk)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "text message chunk missing id")
 	})
 	t.Run("duplicate id", func(t *testing.T) {
 		chunk := aguievents.NewTextMessageChunkEvent(stringPtr("msg-1"), stringPtr("assistant"), stringPtr(""))
 		r := new(testAppName, testUserID)
-		if err := r.handleTextChunk(chunk); err != nil {
-			t.Fatalf("handleTextChunk err: %v", err)
-		}
-		if err := r.handleTextChunk(chunk); err == nil || !strings.Contains(err.Error(), "duplicate text message chunk: msg-1") {
-			t.Fatalf("unexpected error %v", err)
-		}
+		require.NoError(t, r.handleTextChunk(chunk))
+		err := r.handleTextChunk(chunk)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate text message chunk: msg-1")
 	})
 	t.Run("unsupported role", func(t *testing.T) {
 		chunk := aguievents.NewTextMessageChunkEvent(stringPtr("msg-3"), stringPtr("tool"), stringPtr(""))
 		r := new(testAppName, testUserID)
-		if err := r.handleTextChunk(chunk); err == nil || !strings.Contains(err.Error(), "unsupported role: tool") {
-			t.Fatalf("unexpected error %v", err)
-		}
+		err := r.handleTextChunk(chunk)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported role: tool")
 	})
 	t.Run("empty string id pointer", func(t *testing.T) {
 		chunk := aguievents.NewTextMessageChunkEvent(stringPtr(""), stringPtr("assistant"), stringPtr(""))
 		empty := ""
 		chunk.MessageID = &empty
 		r := new(testAppName, testUserID)
-		if err := r.handleTextChunk(chunk); err == nil || !strings.Contains(err.Error(), "text message chunk missing id") {
-			t.Fatalf("unexpected error %v", err)
-		}
+		err := r.handleTextChunk(chunk)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "text message chunk missing id")
 	})
 }
 
 func TestReduceEventDispatchesChunk(t *testing.T) {
 	r := new(testAppName, testUserID)
 	chunk := aguievents.NewTextMessageChunkEvent(stringPtr("msg-1"), stringPtr("assistant"), stringPtr("hi"))
-	if err := r.reduceEvent(chunk); err != nil {
-		t.Fatalf("reduceEvent err: %v", err)
-	}
-	if err := r.finalize(); err != nil {
-		t.Fatalf("finalize err: %v", err)
-	}
-	if len(r.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(r.messages))
-	}
-	if r.messages[0].Content == nil || *r.messages[0].Content != "hi" {
-		t.Fatalf("unexpected content %v", r.messages[0].Content)
-	}
+	require.NoError(t, r.reduceEvent(chunk))
+	require.Len(t, r.messages, 1)
+	require.NotNil(t, r.messages[0].Content)
+	assert.Equal(t, "hi", *r.messages[0].Content)
 }
 
 func TestAssistantOnlyToolCall(t *testing.T) {
@@ -276,30 +207,19 @@ func TestAssistantOnlyToolCall(t *testing.T) {
 	}
 
 	msgs, err := Reduce(testAppName, testUserID, events)
-	if err != nil {
-		t.Fatalf("Reduce err: %v", err)
-	}
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(msgs))
-	}
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
 	assistant := msgs[0]
-	if len(assistant.ToolCalls) != 1 {
-		t.Fatalf("expected 1 tool call, got %d", len(assistant.ToolCalls))
-	}
+	require.Len(t, assistant.ToolCalls, 1)
 	call := assistant.ToolCalls[0]
-	if call.ID != "tool-call-1" || call.Function.Name != "search" {
-		t.Fatalf("unexpected tool call %+v", call)
-	}
-	if call.Function.Arguments != "{}" {
-		t.Fatalf("unexpected tool args: %s", call.Function.Arguments)
-	}
+	assert.Equal(t, "tool-call-1", call.ID)
+	assert.Equal(t, "search", call.Function.Name)
+	assert.Equal(t, "{}", call.Function.Arguments)
 	tool := msgs[1]
-	if tool.ToolCallID == nil || *tool.ToolCallID != "tool-call-1" {
-		t.Fatalf("unexpected tool call id %v", tool.ToolCallID)
-	}
-	if tool.Content == nil || *tool.Content != "reply" {
-		t.Fatalf("unexpected tool content %v", tool.Content)
-	}
+	require.NotNil(t, tool.ToolCallID)
+	assert.Equal(t, "tool-call-1", *tool.ToolCallID)
+	require.NotNil(t, tool.Content)
+	assert.Equal(t, "reply", *tool.Content)
 }
 
 func TestAssistantInterleavesTextAfterToolEnd(t *testing.T) {
@@ -314,26 +234,18 @@ func TestAssistantInterleavesTextAfterToolEnd(t *testing.T) {
 	}
 
 	msgs, err := Reduce(testAppName, testUserID, events)
-	if err != nil {
-		t.Fatalf("Reduce err: %v", err)
-	}
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(msgs))
-	}
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
 	assistant := msgs[0]
-	if assistant.Content == nil || *assistant.Content != "waiting" {
-		t.Fatalf("unexpected assistant content %v", assistant.Content)
-	}
-	if len(assistant.ToolCalls) != 1 || assistant.ToolCalls[0].Function.Arguments != "{\"x\":1}" {
-		t.Fatalf("unexpected tool calls %+v", assistant.ToolCalls)
-	}
+	require.NotNil(t, assistant.Content)
+	assert.Equal(t, "waiting", *assistant.Content)
+	require.Len(t, assistant.ToolCalls, 1)
+	assert.Equal(t, "{\"x\":1}", assistant.ToolCalls[0].Function.Arguments)
 	tool := msgs[1]
-	if tool.Content == nil || *tool.Content != "done" {
-		t.Fatalf("unexpected tool content %v", tool.Content)
-	}
-	if tool.ToolCallID == nil || *tool.ToolCallID != "tool-call-1" {
-		t.Fatalf("unexpected tool call id %v", tool.ToolCallID)
-	}
+	require.NotNil(t, tool.Content)
+	assert.Equal(t, "done", *tool.Content)
+	require.NotNil(t, tool.ToolCallID)
+	assert.Equal(t, "tool-call-1", *tool.ToolCallID)
 }
 
 func TestAssistantMultipleToolCalls(t *testing.T) {
@@ -351,44 +263,28 @@ func TestAssistantMultipleToolCalls(t *testing.T) {
 	}
 
 	msgs, err := Reduce(testAppName, testUserID, events)
-	if err != nil {
-		t.Fatalf("Reduce err: %v", err)
-	}
-	if len(msgs) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(msgs))
-	}
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
 
 	assistant := msgs[0]
-	if len(assistant.ToolCalls) != 2 {
-		t.Fatalf("expected 2 tool calls, got %d", len(assistant.ToolCalls))
-	}
-	if assistant.ToolCalls[0].ID != "call-1" || assistant.ToolCalls[0].Function.Name != "alpha" {
-		t.Fatalf("unexpected first tool call: %+v", assistant.ToolCalls[0])
-	}
-	if assistant.ToolCalls[0].Function.Arguments != "{\"step\":1}" {
-		t.Fatalf("unexpected call-1 args: %s", assistant.ToolCalls[0].Function.Arguments)
-	}
-	if assistant.ToolCalls[1].ID != "call-2" || assistant.ToolCalls[1].Function.Name != "beta" {
-		t.Fatalf("unexpected second tool call: %+v", assistant.ToolCalls[1])
-	}
-	if assistant.ToolCalls[1].Function.Arguments != "{\"step\":2}" {
-		t.Fatalf("unexpected call-2 args: %s", assistant.ToolCalls[1].Function.Arguments)
-	}
+	require.Len(t, assistant.ToolCalls, 2)
+	assert.Equal(t, "call-1", assistant.ToolCalls[0].ID)
+	assert.Equal(t, "alpha", assistant.ToolCalls[0].Function.Name)
+	assert.Equal(t, "{\"step\":1}", assistant.ToolCalls[0].Function.Arguments)
+	assert.Equal(t, "call-2", assistant.ToolCalls[1].ID)
+	assert.Equal(t, "beta", assistant.ToolCalls[1].Function.Name)
+	assert.Equal(t, "{\"step\":2}", assistant.ToolCalls[1].Function.Arguments)
 
 	first := msgs[1]
-	if first.ToolCallID == nil || *first.ToolCallID != "call-1" {
-		t.Fatalf("unexpected first result id %v", first.ToolCallID)
-	}
-	if first.Content == nil || *first.Content != "first-result" {
-		t.Fatalf("unexpected first result content %v", first.Content)
-	}
+	require.NotNil(t, first.ToolCallID)
+	assert.Equal(t, "call-1", *first.ToolCallID)
+	require.NotNil(t, first.Content)
+	assert.Equal(t, "first-result", *first.Content)
 	second := msgs[2]
-	if second.ToolCallID == nil || *second.ToolCallID != "call-2" {
-		t.Fatalf("unexpected second result id %v", second.ToolCallID)
-	}
-	if second.Content == nil || *second.Content != "second-result" {
-		t.Fatalf("unexpected second result content %v", second.Content)
-	}
+	require.NotNil(t, second.ToolCallID)
+	assert.Equal(t, "call-2", *second.ToolCallID)
+	require.NotNil(t, second.Content)
+	assert.Equal(t, "second-result", *second.Content)
 }
 
 func TestReduceTextStartErrors(t *testing.T) {
@@ -480,10 +376,15 @@ func TestReduceTextEndErrors(t *testing.T) {
 	}
 }
 
-func TestReduceFinalizeErrors(t *testing.T) {
+func TestReduceDoesNotValidateFinalizeState(t *testing.T) {
 	t.Run("text not closed", func(t *testing.T) {
 		events := trackEventsFrom(aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user")))
-		assertReduceError(t, events, "text message user-1 not closed")
+
+		msgs, err := Reduce(testAppName, testUserID, events)
+
+		require.NoError(t, err)
+		require.Len(t, msgs, 1)
+		assert.Nil(t, msgs[0].Content)
 	})
 	t.Run("tool not completed", func(t *testing.T) {
 		events := trackEventsFrom(
@@ -495,7 +396,15 @@ func TestReduceFinalizeErrors(t *testing.T) {
 			aguievents.NewToolCallArgsEvent("tool-call-1", "{}"),
 			aguievents.NewToolCallEndEvent("tool-call-1"),
 		)
-		assertReduceError(t, events, "tool call tool-call-1 not completed")
+
+		msgs, err := Reduce(testAppName, testUserID, events)
+
+		require.NoError(t, err)
+		require.Len(t, msgs, 2)
+		require.Len(t, msgs[1].ToolCalls, 1)
+		assert.Equal(t, "tool-call-1", msgs[1].ToolCalls[0].ID)
+		assert.Equal(t, "calc", msgs[1].ToolCalls[0].Function.Name)
+		assert.Equal(t, "{}", msgs[1].ToolCalls[0].Function.Arguments)
 	})
 }
 
@@ -547,41 +456,22 @@ func TestReduceToolStartCreatesParentMessage(t *testing.T) {
 		aguievents.NewToolCallResultEvent("tool-msg-1", "tool-call-1", "done"),
 	)
 	msgs, err := Reduce(testAppName, testUserID, events)
-	if err != nil {
-		t.Fatalf("Reduce err: %v", err)
-	}
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(msgs))
-	}
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
 	first := msgs[0]
-	if first.ID != "assistant-ghost" {
-		t.Fatalf("unexpected id %q", first.ID)
-	}
-	if first.Role != "assistant" {
-		t.Fatalf("unexpected role %q", first.Role)
-	}
-	if first.Name == nil || *first.Name != testAppName {
-		t.Fatalf("unexpected assistant name %v", first.Name)
-	}
-	if len(first.ToolCalls) != 1 {
-		t.Fatalf("expected tool call on assistant, got %d", len(first.ToolCalls))
-	}
-	if first.ToolCalls[0].Function.Name != "search" {
-		t.Fatalf("unexpected tool call name %s", first.ToolCalls[0].Function.Name)
-	}
-	if first.ToolCalls[0].Function.Arguments != "{\"q\":\"hi\"}" {
-		t.Fatalf("unexpected arguments %s", first.ToolCalls[0].Function.Arguments)
-	}
+	assert.Equal(t, "assistant-ghost", first.ID)
+	assert.Equal(t, "assistant", first.Role)
+	require.NotNil(t, first.Name)
+	assert.Equal(t, testAppName, *first.Name)
+	require.Len(t, first.ToolCalls, 1)
+	assert.Equal(t, "search", first.ToolCalls[0].Function.Name)
+	assert.Equal(t, "{\"q\":\"hi\"}", first.ToolCalls[0].Function.Arguments)
 	second := msgs[1]
-	if second.Role != "tool" {
-		t.Fatalf("unexpected tool role %q", second.Role)
-	}
-	if second.ToolCallID == nil || *second.ToolCallID != "tool-call-1" {
-		t.Fatalf("unexpected tool call id %v", second.ToolCallID)
-	}
-	if second.Content == nil || *second.Content != "done" {
-		t.Fatalf("unexpected tool result content %v", second.Content)
-	}
+	assert.Equal(t, "tool", second.Role)
+	require.NotNil(t, second.ToolCallID)
+	assert.Equal(t, "tool-call-1", *second.ToolCallID)
+	require.NotNil(t, second.Content)
+	assert.Equal(t, "done", *second.Content)
 }
 
 func TestReduceToolArgsErrors(t *testing.T) {
@@ -684,12 +574,8 @@ func TestReduceToolResultErrors(t *testing.T) {
 
 func TestReduceIgnoresEmptyPayload(t *testing.T) {
 	msgs, err := Reduce(testAppName, testUserID, []session.TrackEvent{{}})
-	if err != nil {
-		t.Fatalf("Reduce err: %v", err)
-	}
-	if len(msgs) != 0 {
-		t.Fatalf("expected no messages, got %d", len(msgs))
-	}
+	require.NoError(t, err)
+	assert.Empty(t, msgs)
 }
 
 func TestReduceInvalidPayload(t *testing.T) {
@@ -700,12 +586,8 @@ func TestReduceInvalidPayload(t *testing.T) {
 func TestReduceIgnoresUnknownEvents(t *testing.T) {
 	events := trackEventsFrom(aguievents.NewRunStartedEvent("thread", "run"))
 	msgs, err := Reduce(testAppName, testUserID, events)
-	if err != nil {
-		t.Fatalf("Reduce err: %v", err)
-	}
-	if len(msgs) != 0 {
-		t.Fatalf("expected no messages, got %d", len(msgs))
-	}
+	require.NoError(t, err)
+	assert.Empty(t, msgs)
 }
 
 func TestHandleActivityAllCases(t *testing.T) {
@@ -832,31 +714,17 @@ func TestHandleActivityAllCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := new(testAppName, testUserID)
-			if err := r.handleActivity(tt.event); err != nil {
-				t.Fatalf("handleActivity err: %v", err)
-			}
-			if len(r.messages) != tt.wantCount {
-				t.Fatalf("expected %d activity messages, got %d", tt.wantCount, len(r.messages))
-			}
-			if len(r.messages) == 0 {
+			require.NoError(t, r.handleActivity(tt.event))
+			require.Len(t, r.messages, tt.wantCount)
+			if tt.wantCount == 0 {
 				return
 			}
 			msg := r.messages[0]
-			if msg.Role != "activity" {
-				t.Fatalf("unexpected role %q", msg.Role)
-			}
-			if msg.ID != tt.wantID {
-				t.Fatalf("unexpected id %q", msg.ID)
-			}
-			if msg.ActivityType != tt.wantType {
-				t.Fatalf("unexpected activity type %q", msg.ActivityType)
-			}
-			if msg.Content != nil {
-				t.Fatalf("expected nil text content, got %v", msg.Content)
-			}
-			if !reflect.DeepEqual(msg.ActivityContent, tt.wantContent) {
-				t.Fatalf("unexpected activity content %+v", msg.ActivityContent)
-			}
+			assert.Equal(t, "activity", msg.Role)
+			assert.Equal(t, tt.wantID, msg.ID)
+			assert.Equal(t, tt.wantType, msg.ActivityType)
+			assert.Nil(t, msg.Content)
+			assert.Equal(t, tt.wantContent, msg.ActivityContent)
 		})
 	}
 }
@@ -868,9 +736,8 @@ func TestHandleToolEndMissingParent(t *testing.T) {
 		phase:     toolAwaitingArgs,
 	}
 	err := r.handleToolEnd(aguievents.NewToolCallEndEvent("tool-call-1"))
-	if err == nil || !strings.Contains(err.Error(), "tool call end missing parent message: ghost-parent") {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tool call end missing parent message: ghost-parent")
 }
 
 func newTrackEvent(evt aguievents.Event) session.TrackEvent {
@@ -905,10 +772,6 @@ func combineEvents(chunks ...[]session.TrackEvent) []session.TrackEvent {
 func assertReduceError(t *testing.T, events []session.TrackEvent, want string) {
 	t.Helper()
 	_, err := Reduce(testAppName, testUserID, events)
-	if err == nil {
-		t.Fatalf("expected error containing %q, got nil", want)
-	}
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("unexpected error %v", err)
-	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), want)
 }

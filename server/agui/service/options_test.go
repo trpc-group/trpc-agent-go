@@ -19,17 +19,36 @@ func TestWithPath(t *testing.T) {
 	// Test default path
 	opts := NewOptions()
 	assert.Equal(t, opts.Path, "/")
+	assert.Empty(t, opts.CancelPath)
+	assert.False(t, opts.CancelEnabled)
 
 	// Test with path
 	opts = NewOptions(WithPath("/sse"))
 	assert.Equal(t, opts.Path, "/sse")
+	assert.Empty(t, opts.CancelPath)
+	assert.False(t, opts.CancelEnabled)
 
 	// Test with messages snapshot enabled
 	opts = NewOptions(WithMessagesSnapshotEnabled(true))
 	assert.True(t, opts.MessagesSnapshotEnabled)
 	assert.Equal(t, opts.MessagesSnapshotPath, "/history")
+	assert.Empty(t, opts.CancelPath)
+	assert.False(t, opts.CancelEnabled)
 
 	opts = NewOptions(WithMessagesSnapshotPath("/custom"))
 	assert.False(t, opts.MessagesSnapshotEnabled)
 	assert.Equal(t, opts.MessagesSnapshotPath, "/custom")
+	assert.Empty(t, opts.CancelPath)
+	assert.False(t, opts.CancelEnabled)
+}
+
+func TestWithCancelPath(t *testing.T) {
+	opts := NewOptions(WithCancelPath("/custom-cancel"))
+	assert.Equal(t, "/custom-cancel", opts.CancelPath)
+}
+
+func TestWithCancelEnabled(t *testing.T) {
+	opts := NewOptions(WithCancelEnabled(true))
+	assert.True(t, opts.CancelEnabled)
+	assert.Equal(t, "/cancel", opts.CancelPath)
 }

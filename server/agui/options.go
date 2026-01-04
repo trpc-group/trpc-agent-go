@@ -10,6 +10,8 @@
 package agui
 
 import (
+	"time"
+
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service/sse"
@@ -21,7 +23,9 @@ var (
 	defaultPath                  = "/"
 	defaultServiceFactory        = sse.New
 	defaultMessagesSnapshotPath  = "/history"
+	defaultCancelPath            = "/cancel"
 	defaultMessagesSnapshotState = false
+	defaultCancelState           = false
 )
 
 // options holds the options for the AG-UI server.
@@ -32,6 +36,8 @@ type options struct {
 	aguiRunnerOptions       []aguirunner.Option
 	messagesSnapshotPath    string
 	messagesSnapshotEnabled bool
+	cancelPath              string
+	cancelEnabled           bool
 	appName                 string
 	sessionService          session.Service
 }
@@ -44,6 +50,8 @@ func newOptions(opt ...Option) *options {
 		serviceFactory:          defaultServiceFactory,
 		messagesSnapshotPath:    defaultMessagesSnapshotPath,
 		messagesSnapshotEnabled: defaultMessagesSnapshotState,
+		cancelPath:              defaultCancelPath,
+		cancelEnabled:           defaultCancelState,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -68,6 +76,20 @@ func WithPath(path string) Option {
 	}
 }
 
+// WithCancelPath sets the cancel endpoint path for AG-UI service, "/cancel" in default.
+func WithCancelPath(path string) Option {
+	return func(o *options) {
+		o.cancelPath = path
+	}
+}
+
+// WithCancelEnabled enables the cancel handler.
+func WithCancelEnabled(e bool) Option {
+	return func(o *options) {
+		o.cancelEnabled = e
+	}
+}
+
 // ServiceFactory is a function that creates AG-UI service.
 type ServiceFactory func(runner aguirunner.Runner, opt ...service.Option) service.Service
 
@@ -82,6 +104,13 @@ func WithServiceFactory(f ServiceFactory) Option {
 func WithAGUIRunnerOptions(aguiRunnerOpts ...aguirunner.Option) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguiRunnerOpts...)
+	}
+}
+
+// WithTimeout sets the maximum execution time for a run, 1h in default.
+func WithTimeout(d time.Duration) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithTimeout(d))
 	}
 }
 

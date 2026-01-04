@@ -74,11 +74,6 @@ func Reduce(appName, userID string, events []session.TrackEvent) ([]aguievents.M
 			break
 		}
 	}
-	if err == nil {
-		if finalizeErr := r.finalize(); finalizeErr != nil {
-			err = fmt.Errorf("finalize: %w", finalizeErr)
-		}
-	}
 	messages := make([]aguievents.Message, 0, len(r.messages))
 	for _, message := range r.messages {
 		messages = append(messages, *message)
@@ -408,20 +403,5 @@ func (r *reducer) handleActivity(e aguievents.Event) error {
 		return nil
 	}
 	r.messages = append(r.messages, activity)
-	return nil
-}
-
-// finalize finalizes the message snapshots.
-func (r *reducer) finalize() error {
-	for id, state := range r.texts {
-		if state.phase != textEnded {
-			return fmt.Errorf("text message %s not closed", id)
-		}
-	}
-	for id, state := range r.toolCalls {
-		if state.phase != toolCompleted {
-			return fmt.Errorf("tool call %s not completed", id)
-		}
-	}
 	return nil
 }

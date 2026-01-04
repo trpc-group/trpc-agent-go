@@ -65,6 +65,17 @@ func newService(runner runner.Runner, opts *options) (service.Service, error) {
 		return nil, fmt.Errorf("agui: url join chat path: %w", err)
 	}
 	serviceOpts := []service.Option{service.WithPath(chatPath)}
+	if opts.cancelEnabled {
+		cancelPath, err := joinURLPath(opts.basePath, opts.cancelPath)
+		if err != nil {
+			return nil, fmt.Errorf("agui: url join cancel path: %w", err)
+		}
+		serviceOpts = append(
+			serviceOpts,
+			service.WithCancelEnabled(true),
+			service.WithCancelPath(cancelPath),
+		)
+	}
 	if opts.messagesSnapshotEnabled {
 		if opts.appName == "" {
 			return nil, errors.New("agui: app name is required when messages snapshot is enabled")
