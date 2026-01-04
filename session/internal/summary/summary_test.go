@@ -1065,6 +1065,52 @@ func TestCopySummaryToKey(t *testing.T) {
 		// UpdatedAt is set to zero to mark as needing persistence.
 		require.True(t, sess.Summaries["dst"].UpdatedAt.IsZero())
 	})
+
+	t.Run("copies Topics field", func(t *testing.T) {
+		sess := &session.Session{
+			ID: "s1",
+			Summaries: map[string]*session.Summary{
+				"src": {
+					Summary:   "summary with topics",
+					Topics:    []string{"topic1", "topic2", "topic3"},
+					UpdatedAt: now,
+				},
+			},
+		}
+		copySummaryToKey(sess, "src", "dst")
+		require.NotNil(t, sess.Summaries["dst"])
+		require.Equal(t, "summary with topics", sess.Summaries["dst"].Summary)
+		require.Equal(t, []string{"topic1", "topic2", "topic3"}, sess.Summaries["dst"].Topics)
+		// Verify Topics slice is a copy, not shared reference.
+		sess.Summaries["src"].Topics[0] = "modified"
+		require.Equal(t, "topic1", sess.Summaries["dst"].Topics[0])
+	})
+
+	t.Run("handles nil Topics", func(t *testing.T) {
+		sess := &session.Session{
+			ID: "s1",
+			Summaries: map[string]*session.Summary{
+				"src": {Summary: "summary without topics", UpdatedAt: now},
+			},
+		}
+		copySummaryToKey(sess, "src", "dst")
+		require.NotNil(t, sess.Summaries["dst"])
+		require.Equal(t, "summary without topics", sess.Summaries["dst"].Summary)
+		require.Nil(t, sess.Summaries["dst"].Topics)
+	})
+
+	t.Run("handles empty Topics slice", func(t *testing.T) {
+		sess := &session.Session{
+			ID: "s1",
+			Summaries: map[string]*session.Summary{
+				"src": {Summary: "summary with empty topics", Topics: []string{}, UpdatedAt: now},
+			},
+		}
+		copySummaryToKey(sess, "src", "dst")
+		require.NotNil(t, sess.Summaries["dst"])
+		require.Equal(t, "summary with empty topics", sess.Summaries["dst"].Summary)
+		require.Nil(t, sess.Summaries["dst"].Topics) // Empty slice becomes nil.
+	})
 }
 
 func TestSummarizeSession_NeedsPersistOnly(t *testing.T) {

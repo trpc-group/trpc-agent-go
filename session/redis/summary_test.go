@@ -722,6 +722,78 @@ func TestRedisService_EnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade
 	require.Equal(t, "sync-summary", sum.Summary)
 }
 
+func TestRedisService_EnqueueSummaryJob_SingleFilterKey_PersistsBothKeys(t *testing.T) {
+	// This test verifies that when all events match a single filterKey,
+	// the optimization path still persists BOTH the filterKey summary AND
+	// the full-session summary (filter_key="") to Redis.
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with async workers.
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(1),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "single-key-summary"}),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Create a session first.
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-single"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append events that ALL match the same filterKey (triggers single filterKey
+	// optimization). Version must be CurrentVersion for Filter() to use FilterKey.
+	e1 := event.New("inv1", "author")
+	e1.Timestamp = time.Now()
+	e1.FilterKey = "tool-usage"
+	e1.Version = event.CurrentVersion
+	e1.Response = &model.Response{Choices: []model.Choice{{
+		Message: model.Message{Role: model.RoleUser, Content: "hello"},
+	}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e1))
+
+	e2 := event.New("inv2", "author")
+	e2.Timestamp = time.Now()
+	e2.FilterKey = "tool-usage" // Same filterKey as e1.
+	e2.Version = event.CurrentVersion
+	e2.Response = &model.Response{Choices: []model.Choice{{
+		Message: model.Message{Role: model.RoleUser, Content: "world"},
+	}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e2))
+
+	// Get the latest session from storage to ensure we have the latest events.
+	sessFromStorage, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, sessFromStorage)
+
+	// Stop only the async worker to simulate sync fallback.
+	s.asyncWorker.Stop()
+
+	// EnqueueSummaryJob should trigger single filterKey optimization
+	// and persist BOTH keys.
+	err = s.EnqueueSummaryJob(context.Background(), sessFromStorage, "tool-usage", false)
+	require.NoError(t, err)
+
+	// Verify both filterKey summary and full-session summary were created.
+	client := buildRedisClient(t, redisURL)
+	raw, err := client.HGet(context.Background(), getSessionSummaryKey(key), key.SessionID).Bytes()
+	require.NoError(t, err)
+	var m map[string]*session.Summary
+	require.NoError(t, json.Unmarshal(raw, &m))
+
+	// Check filterKey summary.
+	sum, ok := m["tool-usage"]
+	require.True(t, ok, "filterKey summary should exist")
+	require.Equal(t, "single-key-summary", sum.Summary)
+
+	// Check full-session summary (filter_key=""). This is the critical part!
+	sum, ok = m[""]
+	require.True(t, ok, "full-session summary (filter_key='') should exist in Redis")
+	require.Equal(t, "single-key-summary", sum.Summary)
+}
+
 func TestRedisService_GetSessionSummaryText_NilSession(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()

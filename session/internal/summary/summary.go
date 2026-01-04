@@ -302,10 +302,17 @@ func copySummaryToKey(sess *session.Session, srcKey, dstKey string) {
 	if !ok || src == nil {
 		return
 	}
+	// Copy Topics slice to avoid sharing underlying array.
+	var topics []string
+	if len(src.Topics) > 0 {
+		topics = make([]string, len(src.Topics))
+		copy(topics, src.Topics)
+	}
 	// Use zero UpdatedAt to mark as needing persistence.
 	// SummarizeSession will detect this and return updated=true.
 	sess.Summaries[dstKey] = &session.Summary{
 		Summary:   src.Summary,
+		Topics:    topics,
 		UpdatedAt: time.Time{},
 	}
 }
