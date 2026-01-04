@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/google/uuid"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -62,9 +63,11 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 	hasGraphDelta := event.StateDelta != nil &&
 		(len(event.StateDelta[graph.MetadataKeyModel]) > 0 ||
 			len(event.StateDelta[graph.MetadataKeyTool]) > 0 ||
-			len(event.StateDelta[graph.MetadataKeyNodeCustom]) > 0)
+			len(event.StateDelta[graph.MetadataKeyNodeCustom]) > 0 ||
+			len(event.StateDelta[graph.MetadataKeyNode]) > 0)
 
 	// GraphAgent emits model/tool metadata via StateDelta instead of raw tool_calls.
+	events = append(events, t.graphNodeStartActivityEvents(event)...)
 	events = append(events, t.graphModelEvents(event)...)
 	events = append(events, t.graphToolEvents(event)...)
 	// Handle node custom events (progress, text, custom).
@@ -110,6 +113,47 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 		events = append(events, aguievents.NewRunFinishedEvent(t.threadID, t.runID))
 	}
 	return events, nil
+}
+
+const (
+	graphNodeStartActivityType = "graph.node.start"
+	graphNodeStartPatchPath    = "/node"
+)
+
+type graphNodeStartPatchValue struct {
+	NodeID string `json:"nodeId"`
+}
+
+func (t *translator) graphNodeStartActivityEvents(evt *agentevent.Event) []aguievents.Event {
+	if evt == nil || evt.StateDelta == nil {
+		return nil
+	}
+	raw, ok := evt.StateDelta[graph.MetadataKeyNode]
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	var meta graph.NodeExecutionMetadata
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return []aguievents.Event{aguievents.NewRunErrorEvent(
+			fmt.Sprintf("invalid graph node metadata: %v", err),
+			aguievents.WithRunID(t.runID),
+		)}
+	}
+	if meta.Phase != graph.ExecutionPhaseStart || meta.NodeID == "" {
+		return nil
+	}
+	// Agent nodes emit an additional start event without attempt metadata; ignore it to avoid duplicates.
+	if meta.NodeType == graph.NodeTypeAgent && meta.Attempt == 0 {
+		return nil
+	}
+
+	patch := []aguievents.JSONPatchOperation{
+		{Op: "add", Path: graphNodeStartPatchPath, Value: graphNodeStartPatchValue{NodeID: meta.NodeID}},
+	}
+
+	return []aguievents.Event{
+		aguievents.NewActivityDeltaEvent(uuid.NewString(), graphNodeStartActivityType, patch),
+	}
 }
 
 // textMessageEvent translates a text message trpc-agent-go event to AG-UI events.
