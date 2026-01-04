@@ -218,11 +218,7 @@ func (s *sse) handleMessagesSnapshot(w http.ResponseWriter, r *http.Request) {
 			runAgentInput.RunID,
 			err,
 		)
-		status := http.StatusInternalServerError
-		if errors.Is(err, aguirunner.ErrRunAlreadyExists) {
-			status = http.StatusConflict
-		}
-		http.Error(w, err.Error(), status)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")

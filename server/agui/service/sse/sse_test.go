@@ -415,7 +415,7 @@ func TestHandleMessagesSnapshotProviderError(t *testing.T) {
 	assert.Equal(t, 1, runner.snapshotCalls)
 }
 
-func TestHandleMessagesSnapshotDuplicateKeyReturnsConflict(t *testing.T) {
+func TestHandleMessagesSnapshotDuplicateKeyReturnsInternalServerError(t *testing.T) {
 	runner := &snapshotRunner{
 		snapshotFn: func(context.Context, *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
 			return nil, aguirunner.ErrRunAlreadyExists
@@ -431,7 +431,7 @@ func TestHandleMessagesSnapshotDuplicateKeyReturnsConflict(t *testing.T) {
 	res := rr.Result()
 	defer res.Body.Close()
 
-	assert.Equal(t, http.StatusConflict, res.StatusCode)
+	assert.Equal(t, http.StatusInternalServerError, res.StatusCode)
 	assert.Equal(t, 1, runner.snapshotCalls)
 }
 
