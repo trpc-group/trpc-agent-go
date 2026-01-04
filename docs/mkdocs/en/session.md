@@ -904,6 +904,82 @@ MySQL uses relational table structure with JSON data stored using JSON type.
 
 For complete table definitions, see [session/mysql/schema.sql](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema.sql)
 
+### Database Migration
+
+#### Migrating from Older Versions
+
+**Affected Versions**: v1.2.0 and earlier
+**Fixed in Version**: v1.2.0 and later
+
+**Background**: Earlier versions of the `session_summaries` table used a unique index that included the `deleted_at` column. However, in MySQL `NULL != NULL`, which means multiple records with `deleted_at = NULL` would not trigger the unique constraint, potentially causing duplicate data.
+
+**Affected Versions**: Users with the old lookup index `idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)`.
+
+**Old Index**: `idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)`
+
+**New Index**: `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key)`
+
+**Migration Steps**:
+
+```sql
+-- ============================================================================
+-- Migration Script: Fix session_summaries unique index issue
+-- Please backup your data before executing!
+-- ============================================================================
+
+-- Step 1: Clean up duplicate data (keep the latest record)
+-- If there are multiple records with deleted_at = NULL, keep the one with the largest id.
+DELETE t1 FROM session_summaries t1
+INNER JOIN session_summaries t2
+WHERE t1.app_name = t2.app_name
+  AND t1.user_id = t2.user_id
+  AND t1.session_id = t2.session_id
+  AND t1.filter_key = t2.filter_key
+  AND t1.deleted_at IS NULL
+  AND t2.deleted_at IS NULL
+  AND t1.id < t2.id;
+
+-- Step 2: Hard delete soft-deleted records (summary data is regenerable)
+-- If you need to keep soft-deleted records, skip this step, but handle conflicts
+-- manually before Step 4.
+DELETE FROM session_summaries WHERE deleted_at IS NOT NULL;
+
+-- Step 3: Drop the old lookup index (if exists)
+-- Note: Index name may have a table prefix, adjust according to your configuration.
+-- Example: idx_trpc_session_summaries_lookup
+DROP INDEX IF EXISTS idx_session_summaries_lookup ON session_summaries;
+
+-- Step 4: Create the new unique index
+-- Note: Index name may have a table prefix, adjust according to your configuration.
+-- Example: idx_trpc_session_summaries_unique_active
+CREATE UNIQUE INDEX idx_session_summaries_unique_active 
+ON session_summaries(app_name, user_id, session_id, filter_key);
+
+-- Step 5: Verify migration results
+SELECT COUNT(*) as duplicate_count FROM (
+    SELECT app_name, user_id, session_id, filter_key, COUNT(*) as cnt
+    FROM session_summaries
+    WHERE deleted_at IS NULL
+    GROUP BY app_name, user_id, session_id, filter_key
+    HAVING cnt > 1
+) t;
+-- Expected result: duplicate_count = 0
+
+-- Step 6: Verify the index was created successfully
+SHOW INDEX FROM session_summaries WHERE Key_name = 'idx_session_summaries_unique_active';
+-- Expected result: Shows the newly created unique index
+```
+
+> Note
+
+If you configured `WithTablePrefix("trpc_")`, table and index names will have a prefix:
+
+    - Table name: `trpc_session_summaries`
+    - Old index name: `idx_trpc_session_summaries_lookup`
+    - New index name: `idx_trpc_session_summaries_unique_active`
+
+    Please adjust the table and index names in the SQL above according to your actual configuration.
+
 
 
 ## Advanced Usage

@@ -904,6 +904,81 @@ sessionService, err := mysql.NewService(
 
 完整的表定义请参考 [session/mysql/schema.sql](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema.sql)
 
+### 版本升级
+
+#### 旧版本数据迁移
+
+如果您的数据库是使用旧版本创建的，需要执行以下迁移步骤。
+
+**影响版本**：v1.2.0 之前的版本
+**修复版本**：v1.2.0 及之后
+
+**问题背景**：早期版本的 `session_summaries` 表使用包含 `deleted_at` 列的唯一索引，但 MySQL 中 `NULL != NULL`，导致多条 `deleted_at = NULL` 的记录无法触发唯一约束，可能产生重复数据。
+
+**旧版索引**：`idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)`
+
+**新版索引**：`idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key)`
+
+**迁移步骤**：
+
+```sql
+-- ============================================================================
+-- 迁移脚本：修复 session_summaries 唯一索引问题
+-- 执行前请备份数据！
+-- ============================================================================
+
+-- Step 1: 清理重复数据（保留最新记录）
+-- 如果存在多条 deleted_at = NULL 的重复记录，保留 id 最大的那条。
+DELETE t1 FROM session_summaries t1
+INNER JOIN session_summaries t2
+WHERE t1.app_name = t2.app_name
+  AND t1.user_id = t2.user_id
+  AND t1.session_id = t2.session_id
+  AND t1.filter_key = t2.filter_key
+  AND t1.deleted_at IS NULL
+  AND t2.deleted_at IS NULL
+  AND t1.id < t2.id;
+
+-- Step 2: 硬删除软删除记录（summary 数据可再生，无需保留）
+-- 如果需要保留软删除记录，可跳过此步骤，但需要在 Step 4 之前手动处理冲突。
+DELETE FROM session_summaries WHERE deleted_at IS NOT NULL;
+
+-- Step 3: 删除旧的 lookup 索引（如果存在）
+-- 注意：索引名称可能带有表前缀，请根据实际情况调整。
+-- 例如：idx_trpc_session_summaries_lookup
+DROP INDEX IF EXISTS idx_session_summaries_lookup ON session_summaries;
+
+-- Step 4: 创建新的唯一索引
+-- 注意：索引名称可能带有表前缀，请根据实际情况调整。
+-- 例如：idx_trpc_session_summaries_unique_active
+CREATE UNIQUE INDEX idx_session_summaries_unique_active 
+ON session_summaries(app_name, user_id, session_id, filter_key);
+
+-- Step 5: 验证迁移结果
+SELECT COUNT(*) as duplicate_count FROM (
+    SELECT app_name, user_id, session_id, filter_key, COUNT(*) as cnt
+    FROM session_summaries
+    WHERE deleted_at IS NULL
+    GROUP BY app_name, user_id, session_id, filter_key
+    HAVING cnt > 1
+) t;
+-- 期望结果：duplicate_count = 0
+
+-- Step 6: 验证索引是否创建成功
+SHOW INDEX FROM session_summaries WHERE Key_name = 'idx_session_summaries_unique_active';
+-- 期望结果：显示新创建的唯一索引
+```
+
+> 注意事项
+
+如果使用了 `WithTablePrefix("trpc_")` 配置，表名和索引名会带有前缀：
+
+    - 表名：`trpc_session_summaries`
+    - 旧索引名：`idx_trpc_session_summaries_lookup`
+    - 新索引名：`idx_trpc_session_summaries_unique_active`
+
+    请根据实际配置调整上述 SQL 中的表名和索引名。
+
 
 ## 高级用法
 
