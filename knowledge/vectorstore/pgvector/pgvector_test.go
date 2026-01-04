@@ -47,7 +47,7 @@ func TestNew(t *testing.T) {
 
 		_, err := New(WithPostgresInstance("test-instance"))
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "create postgres client from instance name failed")
+		assert.Contains(t, err.Error(), "create postgres client failed")
 		assert.Contains(t, err.Error(), "builder error from instance")
 	})
 
@@ -301,7 +301,7 @@ func TestNew(t *testing.T) {
 	})
 }
 
-// TestNewConnectionPriority tests the connection priority: DSN > Instance Name > Host
+// TestNewConnectionPriority tests the connection priority: Instance Name > DSN > Host (current impl)
 func TestNewConnectionPriority(t *testing.T) {
 	t.Run("dsn_priority_over_instance_and_host", func(t *testing.T) {
 		tc := newTestClient(t)
@@ -327,15 +327,14 @@ func TestNewConnectionPriority(t *testing.T) {
 		postgres.RegisterPostgresInstance("test-priority-instance",
 			postgres.WithClientConnString("postgres://instance:pass@instance-host:5432/instancedb"))
 
-		expectedDSN := "postgres://dsn:pass@dsn-host:5432/dsndb"
+		expectedConn := "postgres://instance:pass@instance-host:5432/instancedb"
 		_, err := New(
-			WithPGVectorClientDSN(expectedDSN),
 			WithPostgresInstance("test-priority-instance"),
 			WithHost("host-config"),
 			WithEnableTSVector(false),
 		)
 		require.NoError(t, err)
-		assert.Equal(t, expectedDSN, receivedConnStr)
+		assert.Equal(t, expectedConn, receivedConnStr)
 	})
 
 	t.Run("instance_priority_over_host", func(t *testing.T) {
@@ -901,8 +900,8 @@ func TestErrorConstants(t *testing.T) {
 
 // TestDefaultOptions tests default options values
 func TestDefaultOptions(t *testing.T) {
-	assert.Equal(t, "localhost", defaultOptions.host)
-	assert.Equal(t, 5432, defaultOptions.port)
+	assert.Equal(t, "", defaultOptions.host)
+	assert.Equal(t, 0, defaultOptions.port)
 	assert.Equal(t, "trpc_agent_go", defaultOptions.database)
 	assert.Equal(t, "documents", defaultOptions.table)
 	assert.Equal(t, true, defaultOptions.enableTSVector)
