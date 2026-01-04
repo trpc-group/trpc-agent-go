@@ -7,6 +7,8 @@
 //
 
 // Package main demonstrates session summarization with custom filterKey support.
+// This example shows how to use AppendEventHook to set custom filterKeys for
+// categorizing conversations, enabling separate summaries per category.
 package main
 
 import (
@@ -16,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -34,13 +37,17 @@ var (
 	modelName = flag.String("model", "deepseek-chat", "Model name for LLM summarization")
 	streaming = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	maxWords  = flag.Int("max-words", 0, "Max summary words (0=unlimited)")
+	debug     = flag.Bool("debug", false, "Enable debug mode to print request messages")
 )
+
+const defaultFilterKey = "default"
 
 func main() {
 	flag.Parse()
 
 	chat := &filterKeyChat{
-		modelName: *modelName,
+		modelName:        *modelName,
+		currentFilterKey: defaultFilterKey,
 	}
 	if err := chat.run(); err != nil {
 		fmt.Printf("❌ Error: %v\n", err)
@@ -56,6 +63,10 @@ type filterKeyChat struct {
 	app            string
 	userID         string
 	sessionID      string
+
+	// currentFilterKey is the active filterKey for new messages.
+	currentFilterKey string
+	filterKeyMu      sync.RWMutex
 }
 
 func (c *filterKeyChat) run() error {
@@ -64,7 +75,7 @@ func (c *filterKeyChat) run() error {
 		return fmt.Errorf("setup failed: %w", err)
 	}
 
-	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	// Ensure runner resources are cleaned up.
 	defer c.runner.Close()
 
 	return c.startChat(ctx)
@@ -79,6 +90,7 @@ func (c *filterKeyChat) setup(_ context.Context) error {
 	sum := summary.NewSummarizer(llm, summary.WithMaxSummaryWords(*maxWords))
 
 	// In-memory session service with summarizer and AppendEventHook.
+	// The hook sets filterKey based on the current user-defined key.
 	sessService := inmemory.NewSessionService(
 		inmemory.WithSummarizer(sum),
 		inmemory.WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
@@ -91,24 +103,44 @@ func (c *filterKeyChat) setup(_ context.Context) error {
 	// Create tools for the agent.
 	tools := []tool.Tool{
 		function.NewFunctionTool(c.calculate, function.WithName("calculate"),
-			function.WithDescription("Performs basic arithmetic operations like addition, subtraction, multiplication, and division. Use this for any mathematical calculations.")),
+			function.WithDescription("Performs basic arithmetic operations.")),
 		function.NewFunctionTool(c.getCurrentTime, function.WithName("get_current_time"),
-			function.WithDescription("Gets the current time and date information for different timezones. Use this when asked about current time.")),
+			function.WithDescription("Gets the current time for different timezones.")),
 	}
 
 	// Agent and runner with tools.
-	ag := llmagent.New(
-		"filterkey-demo-agent",
+	agentOpts := []llmagent.Option{
 		llmagent.WithModel(llm),
 		llmagent.WithDescription("A helpful AI assistant with calculator and time tools."),
-		llmagent.WithInstruction("Use the calculator tool for math; use the time tool for time queries. Make exactly one tool call for a single question, never repeat. After the tool returns, directly give the final answer in one short sentence. 请只调用一次工具，拿到结果后用一句中文或英文直接回答，不要再次调用工具。"),
+		llmagent.WithInstruction("Use the calculator tool for math; use the time tool " +
+			"for time queries. After the tool returns, give the final answer in one sentence."),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
 			Stream:    *streaming,
 			MaxTokens: intPtr(4000),
 		}),
 		llmagent.WithTools(tools),
-		llmagent.WithEnableParallelTools(false),
-	)
+		llmagent.WithAddSessionSummary(true),
+	}
+
+	// Add debug callback if enabled.
+	if *debug {
+		debugCallbacks := model.NewCallbacks().RegisterBeforeModel(
+			func(_ context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+				fmt.Println("🐛 [DEBUG] Request messages:")
+				for i, msg := range args.Request.Messages {
+					content := msg.Content
+					if len(content) > 200 {
+						content = content[:200] + "..."
+					}
+					fmt.Printf("   [%d] %s: %s\n", i, msg.Role, content)
+				}
+				fmt.Println()
+				return nil, nil
+			})
+		agentOpts = append(agentOpts, llmagent.WithModelCallbacks(debugCallbacks))
+	}
+
+	ag := llmagent.New("filterkey-demo-agent", agentOpts...)
 	c.app = "filterkey-demo-app"
 	c.runner = runner.NewRunner(c.app, ag, runner.WithSessionService(sessService))
 
@@ -116,50 +148,50 @@ func (c *filterKeyChat) setup(_ context.Context) error {
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("filterkey-session-%d", time.Now().Unix())
 
-	fmt.Printf("📝 Filter-Key Summarization Chat\n")
-	fmt.Printf("Model: %s\n", c.modelName)
-	fmt.Printf("Service: inmemory\n")
-	fmt.Printf("MaxWords: %d\n", *maxWords)
-	fmt.Printf("Streaming: %v\n", *streaming)
-	fmt.Println(strings.Repeat("=", 50))
-	fmt.Printf("✅ Filter-key chat ready! Session: %s\n\n", c.sessionID)
+	fmt.Printf("📝 Filter-Key Summarization Demo\n")
+	fmt.Printf("Model: %s | Streaming: %v | MaxWords: %d | Debug: %v\n",
+		c.modelName, *streaming, *maxWords, *debug)
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Printf("Session: %s\n\n", c.sessionID)
 
 	return nil
 }
 
-// setEventFilterKey demonstrates how to set custom filterKey based on event
-// author. Always prefix with app so it matches the runner's invocation
-// filter key; otherwise history gets filtered out and models may keep
-// re-triggering tools.
+// setEventFilterKey sets the filterKey based on the current user-defined key.
 func (c *filterKeyChat) setEventFilterKey(evt *event.Event) {
 	if evt == nil {
 		return
 	}
-	// Set filterKey based on author to demonstrate custom filtering.
+	c.filterKeyMu.RLock()
+	key := c.currentFilterKey
+	c.filterKeyMu.RUnlock()
+
 	// Use app-prefixed keys so they match the invocation's filter prefix.
-	prefix := c.app + "/"
-	switch evt.Author {
-	case "user":
-		evt.FilterKey = prefix + "user-messages"
-	case "tool":
-		evt.FilterKey = prefix + "tool-calls"
-	default:
-		// Assistant messages and others go to misc
-		evt.FilterKey = prefix + "misc"
-	}
+	evt.FilterKey = c.app + "/" + key
+}
+
+// setCurrentFilterKey updates the current filterKey.
+func (c *filterKeyChat) setCurrentFilterKey(key string) {
+	c.filterKeyMu.Lock()
+	c.currentFilterKey = key
+	c.filterKeyMu.Unlock()
+}
+
+// getCurrentFilterKey returns the current filterKey.
+func (c *filterKeyChat) getCurrentFilterKey() string {
+	c.filterKeyMu.RLock()
+	defer c.filterKeyMu.RUnlock()
+	return c.currentFilterKey
 }
 
 // startChat runs the interactive conversation loop.
 func (c *filterKeyChat) startChat(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Println("💡 Special commands:")
-	fmt.Println("   /summary [filterKey] - Force summarize by filter (default: full)")
-	fmt.Println("   /show [filterKey]    - Show summary by filter (default: full)")
-	fmt.Println("   /list                - List all filterKeys and summaries in session")
-	fmt.Println("   /exit                - End the conversation")
-	fmt.Println()
+	c.printHelp()
+
 	for {
-		fmt.Print("👤 You: ")
+		key := c.getCurrentFilterKey()
+		fmt.Printf("👤 [%s] You: ", key)
 		if !scanner.Scan() {
 			break
 		}
@@ -182,107 +214,103 @@ func (c *filterKeyChat) startChat(ctx context.Context) error {
 	return nil
 }
 
+func (c *filterKeyChat) printHelp() {
+	fmt.Println("💡 This demo shows how to use filterKey to categorize conversations.")
+	fmt.Println("   Each filterKey gets its own separate summary.")
+	fmt.Println()
+	fmt.Println("📌 Commands:")
+	fmt.Println("   /key <name>    - Switch to a filterKey (any name you want)")
+	fmt.Println("   /show [key]    - Show summary for a filterKey (default: current)")
+	fmt.Println("   /list          - List all summaries")
+	fmt.Println("   /help          - Show this help")
+	fmt.Println("   /exit          - End the conversation")
+	fmt.Println()
+}
+
 // processMessage handles one message: run the agent, print the answer.
 func (c *filterKeyChat) processMessage(ctx context.Context, userMessage string) error {
-	// Handle summary commands
-	if strings.HasPrefix(userMessage, "/summary") {
-		return c.handleSummaryCommand(ctx, userMessage, true)
+	// Handle commands.
+	if strings.HasPrefix(userMessage, "/key") {
+		return c.handleKeyCommand(userMessage)
 	}
 	if strings.HasPrefix(userMessage, "/show") {
-		return c.handleSummaryCommand(ctx, userMessage, false)
+		return c.handleShowCommand(ctx, userMessage)
 	}
 	if strings.EqualFold(userMessage, "/list") {
 		return c.handleListSummaries(ctx)
 	}
-
-	// Normal chat turn
-	return c.handleChatTurn(ctx, userMessage)
-}
-
-// handleSummaryCommand handles /summary and /show commands.
-func (c *filterKeyChat) handleSummaryCommand(ctx context.Context, userMessage string, force bool) error {
-	prefix := "/show"
-	if force {
-		prefix = "/summary"
-	}
-
-	filterKey := strings.TrimSpace(strings.TrimPrefix(userMessage, prefix))
-	if filterKey == "" {
-		filterKey = session.SummaryFilterKeyAllContents // Default to full session
-	}
-
-	sess, err := c.sessionService.GetSession(ctx, session.Key{AppName: c.app, UserID: c.userID, SessionID: c.sessionID})
-	if err != nil || sess == nil {
-		fmt.Printf("⚠️ load session failed: %v\n", err)
+	if strings.EqualFold(userMessage, "/help") {
+		c.printHelp()
 		return nil
 	}
 
-	if force {
-		if err := c.sessionService.CreateSessionSummary(ctx, sess, filterKey, true); err != nil {
-			fmt.Printf("⚠️ force summarize failed: %v\n", err)
-			return nil
-		}
-		// Re-fetch session to ensure we read the latest summaries.
-		sess, _ = c.sessionService.GetSession(ctx, session.Key{AppName: c.app, UserID: c.userID, SessionID: c.sessionID})
+	// Normal chat turn.
+	return c.handleChatTurn(ctx, userMessage)
+}
+
+// handleKeyCommand switches the current filterKey.
+func (c *filterKeyChat) handleKeyCommand(userMessage string) error {
+	key := strings.TrimSpace(strings.TrimPrefix(userMessage, "/key"))
+	if key == "" {
+		fmt.Printf("📌 Current filterKey: %s\n", c.getCurrentFilterKey())
+		return nil
 	}
 
-	ensureAggregated(sess)
-	c.displaySummary(sess, filterKey, force)
+	c.setCurrentFilterKey(key)
+	fmt.Printf("📌 Switched to filterKey: %s\n", key)
+	fmt.Println("   All messages will now be categorized under this key.")
+	return nil
+}
+
+// handleShowCommand shows the summary for a specific filterKey.
+func (c *filterKeyChat) handleShowCommand(ctx context.Context, userMessage string) error {
+	key := strings.TrimSpace(strings.TrimPrefix(userMessage, "/show"))
+	if key == "" {
+		key = c.getCurrentFilterKey()
+	}
+
+	sess, err := c.sessionService.GetSession(ctx, session.Key{
+		AppName: c.app, UserID: c.userID, SessionID: c.sessionID,
+	})
+	if err != nil || sess == nil {
+		fmt.Printf("⚠️ Load session failed: %v\n", err)
+		return nil
+	}
+
+	filterKey := c.app + "/" + key
+	c.displaySummary(sess, filterKey, key)
 	return nil
 }
 
 // handleChatTurn handles normal chat messages.
 func (c *filterKeyChat) handleChatTurn(ctx context.Context, userMessage string) error {
-	fmt.Println("💡 FilterKey Demo: Events are automatically categorized by author via AppendEvent hooks:")
-	fmt.Printf("   - User messages → filterKey: '%s/user-messages'\n", c.app)
-	fmt.Printf("   - Tool calls → filterKey: '%s/tool-calls'\n", c.app)
-	fmt.Printf("   - Assistant/other → filterKey: '%s/misc'\n", c.app)
-	fmt.Println()
-
-	// Run the agent with the user message
 	msg := model.NewUserMessage(userMessage)
 	evtCh, err := c.runner.Run(ctx, c.userID, c.sessionID, msg)
 	if err != nil {
 		return fmt.Errorf("run failed: %w", err)
 	}
 
-	// Process the response
 	c.consumeResponse(evtCh, *streaming)
 	return nil
 }
 
 // displaySummary displays a summary for the given filter key.
-func (c *filterKeyChat) displaySummary(sess *session.Session, filterKey string, forced bool) {
-	var text string
-	var ok bool
+func (c *filterKeyChat) displaySummary(sess *session.Session, filterKey, displayName string) {
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
 
-	// Try structured summary first
-	if text, ok = getSummaryFromSession(sess, filterKey); !ok {
-		// Fallback to service helper
-		if t, o := c.sessionService.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey(filterKey)); o && t != "" {
-			text = t
-			ok = true
-		}
+	if sess.Summaries == nil {
+		fmt.Printf("📝 Summary[%s]: <empty>\n\n", displayName)
+		return
 	}
 
-	forceText := ""
-	if forced {
-		forceText = " (forced)"
+	sum, ok := sess.Summaries[filterKey]
+	if !ok || sum == nil || sum.Summary == "" {
+		fmt.Printf("📝 Summary[%s]: <empty>\n\n", displayName)
+		return
 	}
 
-	if ok && text != "" {
-		if filterKey == session.SummaryFilterKeyAllContents {
-			fmt.Printf("📝 Summary%s:\n%s\n\n", forceText, text)
-		} else {
-			fmt.Printf("📝 Summary[%s]%s:\n%s\n\n", filterKey, forceText, text)
-		}
-	} else {
-		if filterKey == session.SummaryFilterKeyAllContents {
-			fmt.Printf("📝 Summary%s: <empty>.\n", forceText)
-		} else {
-			fmt.Printf("📝 Summary[%s]%s: <empty>.\n", filterKey, forceText)
-		}
-	}
+	fmt.Printf("📝 Summary[%s]:\n%s\n\n", displayName, sum.Summary)
 }
 
 // handleListSummaries prints all filterKeys and their summaries in the session.
@@ -291,83 +319,37 @@ func (c *filterKeyChat) handleListSummaries(ctx context.Context) error {
 		AppName: c.app, UserID: c.userID, SessionID: c.sessionID,
 	})
 	if err != nil || sess == nil {
-		fmt.Printf("⚠️ load session failed: %v\n", err)
+		fmt.Printf("⚠️ Load session failed: %v\n", err)
 		return nil
 	}
 
-	if len(sess.Summaries) == 0 {
-		ensureAggregated(sess)
-	}
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
 
 	if len(sess.Summaries) == 0 {
-		fmt.Println("📝 Summaries: <empty>.")
+		fmt.Println("📝 No summaries yet. Chat more to generate summaries!")
 		return nil
 	}
 
-	fmt.Println("📝 Summaries (filterKey → summary):")
-	for k, v := range sess.Summaries {
-		s := ""
-		if v != nil {
-			s = v.Summary
+	fmt.Println("📝 All Summaries:")
+	fmt.Println(strings.Repeat("-", 50))
+	for key, sum := range sess.Summaries {
+		// Extract display name from filterKey (e.g., "app/math" -> "math").
+		displayName := key
+		if after, ok := strings.CutPrefix(key, c.app+"/"); ok {
+			displayName = after
 		}
-		if s == "" {
-			s = "<empty>"
+		if key == "" || key == session.SummaryFilterKeyAllContents {
+			displayName = "(full session)"
 		}
-		fmt.Printf("- %s\n  %s\n", k, s)
+
+		text := "<empty>"
+		if sum != nil && sum.Summary != "" {
+			text = sum.Summary
+		}
+		fmt.Printf("[%s]\n%s\n\n", displayName, text)
 	}
-	fmt.Println()
 	return nil
-}
-
-// ensureAggregated ensures session has aggregated summaries as fallback.
-func ensureAggregated(sess *session.Session) {
-	if len(sess.Summaries) > 0 {
-		return
-	}
-	aggregateSummaries(sess, []string{
-		"user-messages", "tool-calls", "misc", session.SummaryFilterKeyAllContents,
-	})
-}
-
-// aggregateSummaries creates simple aggregated summaries when LLM is not available.
-func aggregateSummaries(sess *session.Session, keys []string) {
-	if sess.Summaries == nil {
-		sess.Summaries = make(map[string]*session.Summary)
-	}
-	contentsByKey := make(map[string][]string)
-	for _, key := range keys {
-		contentsByKey[key] = []string{}
-	}
-	for _, evt := range sess.Events {
-		content := extractContent(&evt)
-		if content == "" {
-			continue
-		}
-		// Map event to filterKey based on author
-		var filterKey string
-		switch evt.Author {
-		case "user":
-			filterKey = "user-messages"
-		case "tool":
-			filterKey = "tool-calls"
-		default:
-			filterKey = "misc"
-		}
-		if _, ok := contentsByKey[filterKey]; ok {
-			contentsByKey[filterKey] = append(contentsByKey[filterKey], content)
-		}
-		contentsByKey[session.SummaryFilterKeyAllContents] = append(
-			contentsByKey[session.SummaryFilterKeyAllContents], content)
-	}
-	for key, vals := range contentsByKey {
-		if len(vals) == 0 {
-			continue
-		}
-		sess.Summaries[key] = &session.Summary{
-			Summary:   fmt.Sprintf("[%s] %d event(s): %s", key, len(vals), strings.Join(vals, "; ")),
-			UpdatedAt: time.Now().UTC(),
-		}
-	}
 }
 
 // consumeResponse reads the event stream and displays the assistant response.
@@ -375,63 +357,50 @@ func (c *filterKeyChat) consumeResponse(evtCh <-chan *event.Event, streaming boo
 	fmt.Print("🤖 Assistant: ")
 
 	var (
-		fullContent      string
-		assistantStarted bool
-		toolCallsSeen    bool
-		seenToolCallIDs  = make(map[string]struct{})
+		fullContent     strings.Builder
+		seenToolCallIDs = make(map[string]struct{})
 	)
 
-	for event := range evtCh {
+	for evt := range evtCh {
 		// Handle errors.
-		if event.Error != nil {
-			fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
+		if evt.Error != nil {
+			fmt.Printf("\n❌ Error: %s\n", evt.Error.Message)
 			continue
 		}
 
-		// Tool call events (assistant requesting a tool).
-		if c.handleToolCalls(event, streaming, seenToolCallIDs) {
-			toolCallsSeen = true
+		// Tool call events.
+		if c.handleToolCalls(evt, streaming, seenToolCallIDs) {
 			continue
 		}
 
-		// Tool response events (tool role).
-		if c.handleToolResponses(event, seenToolCallIDs) {
+		// Tool response events.
+		if c.handleToolResponses(evt, seenToolCallIDs) {
 			continue
 		}
 
 		// Handle content.
-		if content := c.extractContent(event, streaming); content != "" {
-			if !assistantStarted {
-				assistantStarted = true
-			}
+		if content := c.extractContent(evt, streaming); content != "" {
 			fmt.Print(content)
-			fullContent += content
+			fullContent.WriteString(content)
 		}
 
-		// Final assistant response.
-		if event.IsFinalResponse() {
-			fmt.Printf("\n")
+		// Final response.
+		if evt.IsFinalResponse() {
+			fmt.Println()
 			break
 		}
 	}
 
-	// If a tool call was seen but no final response printed, add a newline for cleanliness.
-	if toolCallsSeen {
-		fmt.Printf("\n")
-	}
-
-	return fullContent
+	return fullContent.String()
 }
 
-// handleToolCalls logs tool calls when the LLM requests them, de-duplicating by ID.
-func (c *filterKeyChat) handleToolCalls(event *event.Event, streaming bool, seen map[string]struct{}) bool {
-	if event.Response == nil || len(event.Response.Choices) == 0 {
+// handleToolCalls logs tool calls when the LLM requests them.
+func (c *filterKeyChat) handleToolCalls(evt *event.Event, streaming bool, seen map[string]struct{}) bool {
+	if evt.Response == nil || len(evt.Response.Choices) == 0 {
 		return false
 	}
 
-	choice := event.Response.Choices[0]
-
-	// Streaming tool calls live in Delta; non-streaming in Message.
+	choice := evt.Response.Choices[0]
 	var toolCalls []model.ToolCall
 	if streaming {
 		toolCalls = choice.Delta.ToolCalls
@@ -443,7 +412,6 @@ func (c *filterKeyChat) handleToolCalls(event *event.Event, streaming bool, seen
 		return false
 	}
 
-	fmt.Printf("\n🔧 Callable tool calls initiated:\n")
 	for _, call := range toolCalls {
 		if call.ID != "" {
 			if _, ok := seen[call.ID]; ok {
@@ -451,31 +419,26 @@ func (c *filterKeyChat) handleToolCalls(event *event.Event, streaming bool, seen
 			}
 			seen[call.ID] = struct{}{}
 		}
-		fmt.Printf("   • %s (ID: %s)\n", call.Function.Name, call.ID)
-		if len(call.Function.Arguments) > 0 {
-			fmt.Printf("     Args: %s\n", strings.TrimSpace(string(call.Function.Arguments)))
-		}
+		fmt.Printf("\n🔧 Tool: %s(%s)\n", call.Function.Name,
+			strings.TrimSpace(string(call.Function.Arguments)))
 	}
-	fmt.Printf("\n🔄 Executing tools...\n")
 	return true
 }
 
-// handleToolResponses logs tool outputs (tool role messages), de-duplicating by ToolID.
-func (c *filterKeyChat) handleToolResponses(event *event.Event, seen map[string]struct{}) bool {
-	if event.Response == nil || len(event.Response.Choices) == 0 {
+// handleToolResponses logs tool outputs.
+func (c *filterKeyChat) handleToolResponses(evt *event.Event, seen map[string]struct{}) bool {
+	if evt.Response == nil || len(evt.Response.Choices) == 0 {
 		return false
 	}
 
 	hasToolResponse := false
-	for _, choice := range event.Response.Choices {
+	for _, choice := range evt.Response.Choices {
 		if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
 			if _, ok := seen[choice.Message.ToolID]; ok {
 				continue
 			}
 			seen[choice.Message.ToolID] = struct{}{}
-			fmt.Printf("✅ Callable tool response (ID: %s): %s\n",
-				choice.Message.ToolID,
-				strings.TrimSpace(choice.Message.Content))
+			fmt.Printf("   → %s\n", strings.TrimSpace(choice.Message.Content))
 			hasToolResponse = true
 		}
 	}
@@ -483,42 +446,21 @@ func (c *filterKeyChat) handleToolResponses(event *event.Event, seen map[string]
 }
 
 // extractContent extracts content from the event based on streaming mode.
-func (c *filterKeyChat) extractContent(event *event.Event, streaming bool) string {
-	if event.Response == nil || len(event.Response.Choices) == 0 {
+func (c *filterKeyChat) extractContent(evt *event.Event, streaming bool) string {
+	if evt.Response == nil || len(evt.Response.Choices) == 0 {
 		return ""
 	}
 
-	choice := event.Response.Choices[0]
+	choice := evt.Response.Choices[0]
 	if streaming {
-		// Skip tool responses in streaming mode.
 		if choice.Delta.Role == model.RoleTool {
 			return ""
 		}
-
-		// In streaming mode, content comes from Delta
-		content := choice.Delta.Content
-
-		// Handle tool calls in streaming mode
-		if len(choice.Delta.ToolCalls) > 0 {
-			// Emit a short marker so users know a tool is being called.
-			content += "[TOOL_CALL]"
-		}
-
-		return content
+		return choice.Delta.Content
 	}
 
-	// Skip tool responses in non-streaming mode
 	if choice.Message.Role == model.RoleTool {
 		return ""
 	}
-
-	// In non-streaming mode, content comes from Message
-	content := choice.Message.Content
-
-	// Handle tool calls in non-streaming mode
-	if len(choice.Message.ToolCalls) > 0 {
-		content += "[TOOL_CALL]"
-	}
-
-	return content
+	return choice.Message.Content
 }
