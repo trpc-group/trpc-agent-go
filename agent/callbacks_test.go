@@ -99,6 +99,32 @@ func TestAgentCallbacks_Before_Err(t *testing.T) {
 	require.Nil(t, result)
 }
 
+func TestAgentCallbacks_Before_PanicRecovery(t *testing.T) {
+	callbacks := NewCallbacks()
+	callbacks.RegisterBeforeAgent(func(
+		_ context.Context,
+		_ *Invocation,
+	) (*model.Response, error) {
+		panic("boom")
+	})
+	args := &BeforeAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Hello",
+			},
+		},
+	}
+	var err error
+	require.NotPanics(t, func() {
+		_, err = callbacks.RunBeforeAgent(context.Background(), args)
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), beforeAgentCallbackPanic)
+}
+
 func TestAgentCallbacks_Before_Multi(t *testing.T) {
 	callbacks := NewCallbacks()
 	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, error) {
@@ -175,6 +201,34 @@ func TestAgentCallbacks_AfterAgent_Error(t *testing.T) {
 	require.Error(t, err)
 
 	require.Nil(t, result)
+}
+
+func TestAgentCallbacks_After_PanicRecovery(t *testing.T) {
+	callbacks := NewCallbacks()
+	callbacks.RegisterAfterAgent(func(
+		_ context.Context,
+		_ *Invocation,
+		_ error,
+	) (*model.Response, error) {
+		panic("boom")
+	})
+	args := &AfterAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Hello",
+			},
+		},
+		Error: nil,
+	}
+	var err error
+	require.NotPanics(t, func() {
+		_, err = callbacks.RunAfterAgent(context.Background(), args)
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), afterAgentCallbackPanic)
 }
 
 func TestAgentCallbacks_After_RunErr(t *testing.T) {
