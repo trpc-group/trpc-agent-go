@@ -139,7 +139,11 @@ func (t *translator) graphNodeStartActivityEvents(evt *agentevent.Event) []aguie
 			aguievents.WithRunID(t.runID),
 		)}
 	}
-	if meta.Phase != graph.ExecutionPhaseStart || meta.NodeID == "" || meta.Attempt == 0 {
+	if meta.Phase != graph.ExecutionPhaseStart || meta.NodeID == "" {
+		return nil
+	}
+	// Agent nodes emit an additional start event without attempt metadata; ignore it to avoid duplicates.
+	if meta.NodeType == graph.NodeTypeAgent && meta.Attempt == 0 {
 		return nil
 	}
 

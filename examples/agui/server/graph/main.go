@@ -133,6 +133,7 @@ Read the user's message and use the calculator tool to compute, in order:
 6) total_g = subtotal_g + sugar_g
 Rules:
 - Call the calculator tool for each step above, in order.
+- When calling the calculator tool, use operation values: add, subtract, multiply, divide.
 - Do not write the final recipe message in this node.`,
 		tools,
 		graph.WithGenerationConfig(generationConfig),
@@ -203,13 +204,13 @@ type calculatorResult struct {
 
 func calculator(ctx context.Context, args calculatorArgs) (calculatorResult, error) {
 	switch args.Operation {
-	case "add", "+":
+	case "add":
 		return calculatorResult{Result: args.A + args.B}, nil
-	case "subtract", "-":
+	case "subtract":
 		return calculatorResult{Result: args.A - args.B}, nil
-	case "multiply", "*":
+	case "multiply":
 		return calculatorResult{Result: args.A * args.B}, nil
-	case "divide", "/":
+	case "divide":
 		if args.B == 0 {
 			return calculatorResult{}, errors.New("division by zero")
 		}
@@ -219,21 +220,16 @@ func calculator(ctx context.Context, args calculatorArgs) (calculatorResult, err
 	}
 }
 
-func intPtr(i int) *int { return &i }
-
-func floatPtr(f float64) *float64 { return &f }
-
 func resolveRunOptions(ctx context.Context, input *aguiadapter.RunAgentInput) ([]agent.RunOption, error) {
 	if input == nil {
 		return nil, errors.New("run input is nil")
 	}
 
-	runtimeState := make(map[string]any)
-
-	if input.ForwardedProps == nil {
-		return nil, fmt.Errorf("missing forwardedProps.%s", graph.CfgKeyLineageID)
+	forwardedProps, ok := input.ForwardedProps.(map[string]any)
+	if !ok || forwardedProps == nil {
+		return nil, errors.New("forwardedProps must be an object")
 	}
-	rawLineageID, exists := input.ForwardedProps[graph.CfgKeyLineageID]
+	rawLineageID, exists := forwardedProps[graph.CfgKeyLineageID]
 	if !exists {
 		return nil, fmt.Errorf("missing forwardedProps.%s", graph.CfgKeyLineageID)
 	}
@@ -245,19 +241,35 @@ func resolveRunOptions(ctx context.Context, input *aguiadapter.RunAgentInput) ([
 	if lineageID == "" {
 		return nil, fmt.Errorf("forwardedProps.%s cannot be empty", graph.CfgKeyLineageID)
 	}
-	runtimeState[graph.CfgKeyLineageID] = lineageID
+	runtimeState := map[string]any{
+		graph.CfgKeyLineageID: lineageID,
+	}
 
-	if resumeMapRaw, exists := runtimeState[graph.CfgKeyResumeMap]; exists {
-		resumeMap, ok := resumeMapRaw.(map[string]any)
+	if rawCheckpointID, exists := forwardedProps[graph.CfgKeyCheckpointID]; exists {
+		checkpointID, ok := rawCheckpointID.(string)
 		if !ok {
-			return nil, fmt.Errorf("%s must be an object", graph.CfgKeyResumeMap)
+			return nil, fmt.Errorf("forwardedProps.%s must be a string", graph.CfgKeyCheckpointID)
+		}
+		runtimeState[graph.CfgKeyCheckpointID] = checkpointID
+	}
+
+	if rawResumeMap, exists := forwardedProps[graph.CfgKeyResumeMap]; exists {
+		resumeMap, ok := rawResumeMap.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("forwardedProps.%s must be an object", graph.CfgKeyResumeMap)
 		}
 		if len(resumeMap) == 0 {
-			return nil, fmt.Errorf("%s cannot be empty", graph.CfgKeyResumeMap)
+			return nil, fmt.Errorf("forwardedProps.%s cannot be empty", graph.CfgKeyResumeMap)
+		}
+		if _, hasCheckpointID := runtimeState[graph.CfgKeyCheckpointID]; !hasCheckpointID {
+			return nil, fmt.Errorf("forwardedProps.%s is required when forwardedProps.%s is set", graph.CfgKeyCheckpointID, graph.CfgKeyResumeMap)
 		}
 		runtimeState[graph.StateKeyCommand] = &graph.Command{ResumeMap: resumeMap}
-		delete(runtimeState, graph.CfgKeyResumeMap)
 	}
 
 	return []agent.RunOption{agent.WithRuntimeState(runtimeState)}, nil
 }
+
+func intPtr(i int) *int { return &i }
+
+func floatPtr(f float64) *float64 { return &f }

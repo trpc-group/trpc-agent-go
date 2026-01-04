@@ -55,7 +55,7 @@ curl --no-buffer --location 'http://127.0.0.1:8080/agui' \
   }'
 ```
 
-Second request: resume from the latest checkpoint in the same run by providing `state.checkpoint_id=""` and a `state.resume_map` value.
+Second request: resume from the latest checkpoint in the same lineage by providing `forwardedProps.checkpoint_id=""` and a `forwardedProps.resume_map` value.
 
 ```bash
 curl --no-buffer --location 'http://127.0.0.1:8080/agui' \
@@ -64,17 +64,15 @@ curl --no-buffer --location 'http://127.0.0.1:8080/agui' \
     "threadId": "demo-thread",
     "runId": "demo-run-2",
     "forwardedProps": {
-      "lineage_id": "demo-lineage"
-    },
-    "messages": [
-      {"role": "user", "content": "resume"}
-    ],
-    "state": {
+      "lineage_id": "demo-lineage",
       "checkpoint_id": "",
       "resume_map": {
         "confirm": true
       }
-    }
+    },
+    "messages": [
+      {"role": "user", "content": "resume"}
+    ]
   }'
 ```
 
