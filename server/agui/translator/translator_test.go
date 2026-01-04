@@ -1139,6 +1139,163 @@ func TestTranslateSubagentGraph_NonStream(t *testing.T) {
 	assert.Equal(t, 1, runFinished)
 }
 
+func TestGraphNodeStartEmitsActivityDelta(t *testing.T) {
+	tr, ok := New(context.Background(), "thread", "run").(*translator)
+	assert.True(t, ok)
+
+	meta := graph.NodeExecutionMetadata{
+		NodeID:      "node-1",
+		NodeType:    graph.NodeTypeTool,
+		Phase:       graph.ExecutionPhaseStart,
+		StepNumber:  1,
+		Attempt:     1,
+		MaxAttempts: 3,
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "node-start-1",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNode: raw,
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+	assert.NotEmpty(t, delta.MessageID)
+	assert.Equal(t, graphNodeStartActivityType, delta.ActivityType)
+	assert.Len(t, delta.Patch, 1)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, graphNodeStartPatchPath, delta.Patch[0].Path)
+	assert.Equal(t, graphNodeStartPatchValue{NodeID: "node-1"}, delta.Patch[0].Value)
+
+	meta2 := meta
+	meta2.NodeID = "node-2"
+	meta2.StepNumber = 2
+	raw2, err := json.Marshal(meta2)
+	assert.NoError(t, err)
+
+	evt2 := &agentevent.Event{
+		ID:       "node-start-2",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNode: raw2,
+		},
+	}
+	events2, err := tr.Translate(context.Background(), evt2)
+	assert.NoError(t, err)
+	assert.Len(t, events2, 1)
+
+	delta2, ok := events2[0].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+	assert.NotEmpty(t, delta2.MessageID)
+	assert.NotEqual(t, delta.MessageID, delta2.MessageID)
+	assert.Len(t, delta2.Patch, 1)
+	assert.Equal(t, graphNodeStartPatchPath, delta2.Patch[0].Path)
+	assert.Equal(t, graphNodeStartPatchValue{NodeID: "node-2"}, delta2.Patch[0].Value)
+}
+
+func TestGraphNodeStartEmitsActivityDeltaForAgentNode(t *testing.T) {
+	tr := New(context.Background(), "thread", "run")
+
+	meta := graph.NodeExecutionMetadata{
+		NodeID:   "agent-node-1",
+		NodeType: graph.NodeTypeAgent,
+		Phase:    graph.ExecutionPhaseStart,
+		Attempt:  1,
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "agent-node-start-1",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNode: raw,
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+	assert.NotEmpty(t, delta.MessageID)
+	assert.Equal(t, graphNodeStartActivityType, delta.ActivityType)
+	assert.Len(t, delta.Patch, 1)
+	assert.Equal(t, graphNodeStartPatchValue{NodeID: "agent-node-1"}, delta.Patch[0].Value)
+}
+
+func TestGraphNodeStartIgnoresAgentStartWithoutAttempt(t *testing.T) {
+	tr := New(context.Background(), "thread", "run")
+
+	meta := graph.NodeExecutionMetadata{
+		NodeID:   "agent-node-1",
+		NodeType: graph.NodeTypeAgent,
+		Phase:    graph.ExecutionPhaseStart,
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "agent-start-without-attempt",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNode: raw,
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+}
+
+func TestGraphNodeStartIgnoresNonStartPhase(t *testing.T) {
+	tr := New(context.Background(), "thread", "run")
+
+	meta := graph.NodeExecutionMetadata{
+		NodeID:   "node-complete",
+		NodeType: graph.NodeTypeFunction,
+		Phase:    graph.ExecutionPhaseComplete,
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "node-complete-evt",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNode: raw,
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+}
+
+func TestGraphNodeStartInvalidMetadataEmitsRunError(t *testing.T) {
+	tr := New(context.Background(), "thread", "run")
+
+	evt := &agentevent.Event{
+		ID: "invalid-node-meta",
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNode: []byte("invalid json"),
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	runErr, ok := events[0].(*aguievents.RunErrorEvent)
+	assert.True(t, ok)
+	assert.Contains(t, runErr.Message, "invalid graph node metadata")
+	assert.Equal(t, "run", runErr.RunID())
+}
+
 func TestGraphNodeCustomEvents_CustomCategory(t *testing.T) {
 	tr := New(context.Background(), "thread", "run")
 
