@@ -47,9 +47,9 @@ func main() {
 	userMessage := []string{
 		"Calculate 123 + 456 * 789",
 		"What day of the week is today?",
-		// "'Hello World' to uppercase",
-		// "Create a test file in the current directory",
-		// "Find information about Tesla company",
+		"'Hello World' to uppercase",
+		"Create a test file in the current directory",
+		"Find information about Tesla company",
 	}
 
 	for _, msg := range userMessage {

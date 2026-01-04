@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/baggage"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -60,13 +62,9 @@ func TestNewSpanProcessor_CopiesBaggageToSpanAttributes(t *testing.T) {
 
 	// Use NewMemberRaw to allow spaces (mirrors opentelemetry-go-contrib/processors/baggagecopy tests).
 	m, err := baggage.NewMemberRaw(traceUserID, "user-123")
-	if err != nil {
-		t.Fatalf("baggage.NewMemberRaw: %v", err)
-	}
+	require.NoError(t, err)
 	b, err := baggage.New(m)
-	if err != nil {
-		t.Fatalf("baggage.New: %v", err)
-	}
+	require.NoError(t, err)
 	ctx = baggage.ContextWithBaggage(ctx, b)
 
 	exp := &recordingExporter{}
@@ -79,39 +77,22 @@ func TestNewSpanProcessor_CopiesBaggageToSpanAttributes(t *testing.T) {
 	_, span := tr.Start(ctx, "span")
 	span.End()
 
-	if err := tp.ForceFlush(context.Background()); err != nil {
-		t.Fatalf("ForceFlush: %v", err)
-	}
+	require.NoError(t, tp.ForceFlush(context.Background()))
 
 	spans := exp.snapshot()
-	if len(spans) != 1 {
-		t.Fatalf("exported spans = %d, want 1", len(spans))
-	}
+	require.Len(t, spans, 1)
 
 	want := attribute.String(traceUserID, "user-123")
-	found := false
-	for _, kv := range spans[0].Attributes() {
-		if kv == want {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected baggage attribute %v to be present in exported span attributes: %v", want, spans[0].Attributes())
-	}
+	assert.Contains(t, spans[0].Attributes(), want)
 }
 
 func TestNewSpanProcessor_DefaultFilter_IgnoresNonLangfuseKeys(t *testing.T) {
 	ctx := context.Background()
 
 	m, err := baggage.NewMemberRaw("baggage.test", "baggage value")
-	if err != nil {
-		t.Fatalf("baggage.NewMemberRaw: %v", err)
-	}
+	require.NoError(t, err)
 	b, err := baggage.New(m)
-	if err != nil {
-		t.Fatalf("baggage.New: %v", err)
-	}
+	require.NoError(t, err)
 	ctx = baggage.ContextWithBaggage(ctx, b)
 
 	exp := &recordingExporter{}
@@ -124,19 +105,19 @@ func TestNewSpanProcessor_DefaultFilter_IgnoresNonLangfuseKeys(t *testing.T) {
 	_, span := tr.Start(ctx, "span")
 	span.End()
 
-	if err := tp.ForceFlush(context.Background()); err != nil {
-		t.Fatalf("ForceFlush: %v", err)
-	}
+	require.NoError(t, tp.ForceFlush(context.Background()))
 
 	spans := exp.snapshot()
-	if len(spans) != 1 {
-		t.Fatalf("exported spans = %d, want 1", len(spans))
-	}
+	require.Len(t, spans, 1)
 
 	unwanted := attribute.String("baggage.test", "baggage value")
-	for _, kv := range spans[0].Attributes() {
-		if kv == unwanted {
-			t.Fatalf("did not expect non-langfuse baggage attribute %v to be present; got: %v", unwanted, spans[0].Attributes())
-		}
-	}
+	assert.NotContains(t, spans[0].Attributes(), unwanted)
+}
+
+func TestBaggageBatchSpanProcessor_NilNext_Noops(t *testing.T) {
+	p := &baggageBatchSpanProcessor{next: nil}
+	ctx := context.Background()
+
+	require.NoError(t, p.Shutdown(ctx))
+	require.NoError(t, p.ForceFlush(ctx))
 }
