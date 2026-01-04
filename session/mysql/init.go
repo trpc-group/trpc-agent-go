@@ -136,10 +136,13 @@ const (
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
-	// session_summaries: lookup index on (app_name, user_id, session_id, deleted_at)
-	sqlCreateSessionSummariesLookupIndex = `
-		CREATE INDEX {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(app_name, user_id, session_id, deleted_at)`
+	// session_summaries: unique index on (app_name, user_id, session_id, filter_key).
+	// Note: This index does NOT include deleted_at because MySQL treats NULL != NULL,
+	// which would allow duplicate active records. Summary data is regenerable, so we
+	// use hard delete for summaries and enforce uniqueness on the business key only.
+	sqlCreateSessionSummariesUniqueIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name, user_id, session_id, filter_key)`
 
 	// session_summaries: TTL index on (expires_at)
 	sqlCreateSessionSummariesExpiresIndex = `
@@ -264,7 +267,8 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp", true},
 		},
 		indexes: []tableIndex{
-			{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixLookup, []string{"app_name", "user_id", "session_id", "deleted_at"}},
+			// Unique index on business key only (no deleted_at) to prevent duplicate active records.
+			{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive, []string{"app_name", "user_id", "session_id", "filter_key"}},
 			{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, []string{"expires_at"}},
 		},
 	},
@@ -317,12 +321,12 @@ var tableDefs = []tableDefinition{
 var indexDefs = []indexDefinition{
 	// Unique indexes
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, sqlCreateSessionStatesUniqueIndex},
+	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive, sqlCreateSessionSummariesUniqueIndex},
 	{sqldb.TableNameAppStates, sqldb.IndexSuffixUniqueActive, sqlCreateAppStatesUniqueIndex},
 	{sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive, sqlCreateUserStatesUniqueIndex},
 
 	// Lookup indexes
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookup, sqlCreateSessionEventsLookupIndex},
-	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixLookup, sqlCreateSessionSummariesLookupIndex},
 	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixLookup, sqlCreateSessionTracksIndex},
 
 	// TTL indexes
