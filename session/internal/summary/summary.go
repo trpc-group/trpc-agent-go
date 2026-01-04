@@ -249,9 +249,49 @@ func GetFilterKeyFromOptions(opts ...session.SummaryOption) string {
 	return options.FilterKey
 }
 
+// isSingleFilterKey checks if all events in the session match the target filterKey.
+// Returns true if all events match, meaning the filterKey summary would be identical
+// to the full-session summary, allowing us to skip duplicate LLM calls.
+func isSingleFilterKey(sess *session.Session, targetKey string) bool {
+	if sess == nil || targetKey == "" {
+		return false
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	for _, e := range sess.Events {
+		if !e.Filter(targetKey) {
+			return false
+		}
+	}
+	return true
+}
+
+// copySummaryToKey copies a summary from srcKey to dstKey within the session.
+// This avoids duplicate LLM calls when the summaries would be identical.
+func copySummaryToKey(sess *session.Session, srcKey, dstKey string) {
+	if sess == nil {
+		return
+	}
+	sess.SummariesMu.Lock()
+	defer sess.SummariesMu.Unlock()
+	if sess.Summaries == nil {
+		return
+	}
+	src, ok := sess.Summaries[srcKey]
+	if !ok || src == nil {
+		return
+	}
+	sess.Summaries[dstKey] = &session.Summary{
+		Summary:   src.Summary,
+		UpdatedAt: src.UpdatedAt,
+	}
+}
+
 // CreateSessionSummaryWithCascade creates a session summary for the specified filterKey
 // and cascades to create a full-session summary if the filterKey is not already the full session.
 // The createSummaryFunc should create a summary for the given filterKey and return an error if failed.
+// When all events match the filterKey (single filterKey scenario), it generates only one summary
+// and copies it to both keys to avoid duplicate LLM calls.
 func CreateSessionSummaryWithCascade(
 	ctx context.Context,
 	sess *session.Session,
@@ -263,6 +303,18 @@ func CreateSessionSummaryWithCascade(
 		return createSummaryFunc(ctx, sess, filterKey, force)
 	}
 
+	// Optimization: when all events match the filterKey, the filterKey summary
+	// would be identical to the full-session summary. Generate only once and reuse.
+	if isSingleFilterKey(sess, filterKey) {
+		if err := createSummaryFunc(ctx, sess, filterKey, force); err != nil {
+			return fmt.Errorf("create session summary for filterKey %q failed: %w",
+				filterKey, err)
+		}
+		copySummaryToKey(sess, filterKey, session.SummaryFilterKeyAllContents)
+		return nil
+	}
+
+	// Multiple filterKeys detected: generate both summaries in parallel.
 	var summaryWg sync.WaitGroup
 	result := make([]error, 2)
 	summaryWg.Add(2)
