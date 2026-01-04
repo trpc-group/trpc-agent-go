@@ -12,6 +12,19 @@ package tool
 
 import (
 	"context"
+	"fmt"
+	"runtime/debug"
+
+	"trpc.group/trpc-go/trpc-agent-go/log"
+)
+
+const (
+	callbackPanicErrFmt = "%s: %v"
+	callbackPanicLogFmt = "%s (tool_call_id: %s, tool: %s): %v\n%s"
+
+	beforeToolCallbackPanic         = "before tool callback panic"
+	afterToolCallbackPanic          = "after tool callback panic"
+	toolResultMessagesCallbackPanic = "tool result messages callback panic"
 )
 
 // BeforeToolCallback is called before a tool is executed.
@@ -203,6 +216,30 @@ func (c *Callbacks) RegisterToolResultMessages(cb ToolResultMessagesFunc) *Callb
 	return c
 }
 
+func (c *Callbacks) RunToolResultMessages(
+	ctx context.Context,
+	in *ToolResultMessagesInput,
+) (result any, err error) {
+	if c == nil || c.ToolResultMessages == nil {
+		return nil, nil
+	}
+
+	toolCallID := ""
+	toolName := ""
+	if in != nil {
+		toolCallID = in.ToolCallID
+		toolName = in.ToolName
+	}
+	defer recoverToolCallbackPanic(
+		ctx,
+		toolResultMessagesCallbackPanic,
+		toolCallID,
+		toolName,
+		&err,
+	)
+	return c.ToolResultMessages(ctx, in)
+}
+
 // RegisterBeforeTool registers a before tool callback.
 // Supports both old and new callback function signatures.
 // Old signatures are automatically wrapped into new signatures.
@@ -317,6 +354,52 @@ func (c *Callbacks) finalizeBeforeToolResult(
 	return lastResult, nil
 }
 
+func recoverToolCallbackPanic(
+	ctx context.Context,
+	stage string,
+	toolCallID string,
+	toolName string,
+	errp *error,
+) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+
+	stack := debug.Stack()
+	log.ErrorfContext(
+		ctx,
+		callbackPanicLogFmt,
+		stage,
+		toolCallID,
+		toolName,
+		recovered,
+		string(stack),
+	)
+	*errp = fmt.Errorf(callbackPanicErrFmt, stage, recovered)
+}
+
+func (c *Callbacks) runBeforeToolCallback(
+	ctx context.Context,
+	cb BeforeToolCallbackStructured,
+	args *BeforeToolArgs,
+) (result *BeforeToolResult, err error) {
+	toolCallID := ""
+	toolName := ""
+	if args != nil {
+		toolCallID = args.ToolCallID
+		toolName = args.ToolName
+	}
+	defer recoverToolCallbackPanic(
+		ctx,
+		beforeToolCallbackPanic,
+		toolCallID,
+		toolName,
+		&err,
+	)
+	return cb(ctx, args)
+}
+
 // RunBeforeTool runs all before tool callbacks in order.
 // This method uses the new structured callback interface.
 // If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
@@ -328,7 +411,7 @@ func (c *Callbacks) RunBeforeTool(
 	var firstErr error
 
 	for _, cb := range c.BeforeTool {
-		result, err := cb(ctx, args)
+		result, err := c.runBeforeToolCallback(ctx, cb, args)
 
 		if c.handleCallbackError(err, &firstErr) {
 			return nil, err
@@ -395,6 +478,27 @@ func (c *Callbacks) finalizeAfterToolResult(
 	return lastResult, nil
 }
 
+func (c *Callbacks) runAfterToolCallback(
+	ctx context.Context,
+	cb AfterToolCallbackStructured,
+	args *AfterToolArgs,
+) (result *AfterToolResult, err error) {
+	toolCallID := ""
+	toolName := ""
+	if args != nil {
+		toolCallID = args.ToolCallID
+		toolName = args.ToolName
+	}
+	defer recoverToolCallbackPanic(
+		ctx,
+		afterToolCallbackPanic,
+		toolCallID,
+		toolName,
+		&err,
+	)
+	return cb(ctx, args)
+}
+
 // RunAfterTool runs all after tool callbacks in order.
 // This method uses the new structured callback interface.
 // If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
@@ -406,7 +510,7 @@ func (c *Callbacks) RunAfterTool(
 	var firstErr error
 
 	for _, cb := range c.AfterTool {
-		result, err := cb(ctx, args)
+		result, err := c.runAfterToolCallback(ctx, cb, args)
 
 		if c.handleCallbackError(err, &firstErr) {
 			return nil, err
