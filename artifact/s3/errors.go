@@ -5,25 +5,22 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
-//
 
 package s3
 
-import (
-	"errors"
-)
+import "errors"
 
-// Sentinel errors for S3 operations.
+// Sentinel errors for artifact validation.
 var (
-	// ErrNotFound is returned when an object does not exist.
-	ErrNotFound = errors.New("s3: object not found")
+	// ErrEmptyFilename is returned when the filename is empty.
+	ErrEmptyFilename = errors.New("s3 artifact: filename cannot be empty")
 
-	// ErrAccessDenied is returned when access to an object is denied.
-	ErrAccessDenied = errors.New("s3: access denied")
+	// ErrInvalidFilename is returned when the filename contains invalid characters.
+	ErrInvalidFilename = errors.New("s3 artifact: filename contains invalid characters")
 
-	// ErrInvalidConfig is returned when the service configuration is invalid.
-	ErrInvalidConfig = errors.New("s3: invalid configuration")
+	// ErrNilArtifact is returned when the artifact is nil.
+	ErrNilArtifact = errors.New("s3 artifact: artifact cannot be nil")
 
-	// ErrBucketNotFound is returned when the bucket does not exist.
-	ErrBucketNotFound = errors.New("s3: bucket not found")
+	// ErrEmptySessionInfo is returned when required session info fields are empty.
+	ErrEmptySessionInfo = errors.New("s3 artifact: session info fields cannot be empty")
 )
