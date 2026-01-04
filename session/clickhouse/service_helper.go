@@ -87,12 +87,10 @@ func (s *Service) getSession(
 	// Query summaries
 	summaries := make(map[string]*session.Summary)
 	if len(events) > 0 {
-		// Batch load summaries for all sessions
-		summariesList, err := s.getSummariesList(ctx, []session.Key{key})
+		summaries, err = s.getSummary(ctx, key, sessState.CreatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("get summaries failed: %w", err)
 		}
-		summaries = summariesList[0]
 	}
 
 	sess := session.NewSession(
@@ -178,7 +176,7 @@ func (s *Service) listSessions(
 	}
 
 	// Batch load summaries for all sessions
-	summariesList, err := s.getSummariesList(ctx, sessionKeys)
+	summariesList, err := s.getSummariesList(ctx, sessionKeys, sessionCreatedAts)
 	if err != nil {
 		return nil, fmt.Errorf("get summaries list failed: %w", err)
 	}
@@ -453,63 +451,111 @@ func (s *Service) getEventsList(
 	return result, nil
 }
 
-// getSummariesList loads summaries for multiple sessions in batch.
-func (s *Service) getSummariesList(
+// getSummary loads summaries for a single session.
+func (s *Service) getSummary(
 	ctx context.Context,
-	sessionKeys []session.Key,
-) ([]map[string]*session.Summary, error) {
-	if len(sessionKeys) == 0 {
-		return nil, nil
-	}
+	key session.Key,
+	sessionCreatedAt time.Time,
+) (map[string]*session.Summary, error) {
+	summaries := make(map[string]*session.Summary)
 
-	// Build query with multiple conditions
-	conditions := make([]string, len(sessionKeys))
-	args := make([]any, 0, len(sessionKeys)*3+1)
+	rows, err := s.chClient.Query(ctx,
+		fmt.Sprintf(`SELECT filter_key, summary FROM %s FINAL
+			WHERE app_name = ? AND user_id = ? AND session_id = ?
+			AND updated_at >= ?
+			AND (expires_at IS NULL OR expires_at > ?)
+			AND deleted_at IS NULL`, s.tableSessionSummaries),
+		key.AppName, key.UserID, key.SessionID, sessionCreatedAt, time.Now())
 
-	for i, key := range sessionKeys {
-		conditions[i] = "(app_name = ? AND user_id = ? AND session_id = ?)"
-		args = append(args, key.AppName, key.UserID, key.SessionID)
-	}
-
-	args = append(args, time.Now())
-
-	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, filter_key, summary FROM %s FINAL
-		WHERE (%s)
-		AND (expires_at IS NULL OR expires_at > ?)
-		AND deleted_at IS NULL`,
-		s.tableSessionSummaries, strings.Join(conditions, " OR "))
-
-	// Map to collect summaries by session
-	summariesMap := make(map[string]map[string]*session.Summary)
-
-	rows, err := s.chClient.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("batch get summaries failed: %w", err)
+		return nil, fmt.Errorf("get summaries failed: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var appName, userID, sessionID, filterKey string
+		var filterKey string
 		var summaryStr string
-		if err := rows.Scan(&appName, &userID, &sessionID, &filterKey, &summaryStr); err != nil {
+		if err := rows.Scan(&filterKey, &summaryStr); err != nil {
 			return nil, err
 		}
 		var sum session.Summary
 		if err := json.Unmarshal([]byte(summaryStr), &sum); err != nil {
 			return nil, fmt.Errorf("unmarshal summary failed: %w", err)
 		}
-		key := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
-		if summariesMap[key] == nil {
-			summariesMap[key] = make(map[string]*session.Summary)
+		summaries[filterKey] = &sum
+	}
+
+	return summaries, nil
+}
+
+// getSummariesList loads summaries for multiple sessions of the same user in batch.
+// It queries by app_name + user_id, then filters in memory by each session's createdAt.
+func (s *Service) getSummariesList(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	sessionCreatedAts []time.Time,
+) ([]map[string]*session.Summary, error) {
+	if len(sessionKeys) == 0 {
+		return nil, nil
+	}
+	if len(sessionKeys) != len(sessionCreatedAts) {
+		return nil, fmt.Errorf("session keys and createdAts length mismatch")
+	}
+
+	// All sessions belong to the same user (from listSessions context)
+	appName := sessionKeys[0].AppName
+	userID := sessionKeys[0].UserID
+
+	// Build sessionCreatedAt lookup map for filtering
+	sessionCreatedAtMap := make(map[string]time.Time, len(sessionKeys))
+	for i, key := range sessionKeys {
+		sessionCreatedAtMap[key.SessionID] = sessionCreatedAts[i]
+	}
+
+	// Query all summaries for this user, filter by session createdAt in memory
+	rows, err := s.chClient.Query(ctx,
+		fmt.Sprintf(`SELECT session_id, filter_key, summary, updated_at FROM %s FINAL
+			WHERE app_name = ? AND user_id = ?
+			AND (expires_at IS NULL OR expires_at > ?)
+			AND deleted_at IS NULL`, s.tableSessionSummaries),
+		appName, userID, time.Now())
+
+	if err != nil {
+		return nil, fmt.Errorf("batch get summaries failed: %w", err)
+	}
+	defer rows.Close()
+
+	// Map to collect summaries by session
+	summariesMap := make(map[string]map[string]*session.Summary)
+
+	for rows.Next() {
+		var sessionID, filterKey string
+		var summaryStr string
+		var updatedAt time.Time
+		if err := rows.Scan(&sessionID, &filterKey, &summaryStr, &updatedAt); err != nil {
+			return nil, err
 		}
-		summariesMap[key][filterKey] = &sum
+
+		// Filter by session createdAt to avoid cross-session leakage
+		createdAt, exists := sessionCreatedAtMap[sessionID]
+		if !exists || updatedAt.Before(createdAt) {
+			continue
+		}
+
+		var sum session.Summary
+		if err := json.Unmarshal([]byte(summaryStr), &sum); err != nil {
+			return nil, fmt.Errorf("unmarshal summary failed: %w", err)
+		}
+		if summariesMap[sessionID] == nil {
+			summariesMap[sessionID] = make(map[string]*session.Summary)
+		}
+		summariesMap[sessionID][filterKey] = &sum
 	}
 
 	// Build result in same order as sessionKeys
 	result := make([]map[string]*session.Summary, len(sessionKeys))
 	for i, key := range sessionKeys {
-		keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
-		summaries := summariesMap[keyStr]
+		summaries := summariesMap[key.SessionID]
 		if summaries == nil {
 			summaries = make(map[string]*session.Summary)
 		}

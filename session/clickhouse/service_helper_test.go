@@ -365,7 +365,38 @@ func TestService_GetEventsList_MultiRow(t *testing.T) {
 	assert.Equal(t, "evt2", events[1].ID)
 }
 
-func TestService_GetSummariesList_MultiRow(t *testing.T) {
+func TestService_GetSummary(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		tableSessionSummaries: "session_summaries",
+	}
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	createdAt := time.Now().Add(-time.Hour)
+
+	// Prepare summaries with different filter keys
+	sum1 := session.Summary{Summary: "sum1"}
+	sum1Bytes, _ := json.Marshal(sum1)
+	sum2 := session.Summary{Summary: "sum2"}
+	sum2Bytes, _ := json.Marshal(sum2)
+
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		// Format: filter_key, summary
+		return newMockRows([][]any{
+			{"k1", string(sum1Bytes)},
+			{"k2", string(sum2Bytes)},
+		}), nil
+	}
+
+	summaries, err := s.getSummary(ctx, key, createdAt)
+	assert.NoError(t, err)
+	assert.Len(t, summaries, 2)
+	assert.Equal(t, "sum1", summaries["k1"].Summary)
+	assert.Equal(t, "sum2", summaries["k2"].Summary)
+}
+
+func TestService_GetSummary_Empty(t *testing.T) {
 	mockCli := &mockClient{}
 	s := &Service{
 		chClient:              mockCli,
@@ -374,6 +405,53 @@ func TestService_GetSummariesList_MultiRow(t *testing.T) {
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
 
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		return newMockRows([][]any{}), nil
+	}
+
+	summaries, err := s.getSummary(ctx, key, time.Now())
+	assert.NoError(t, err)
+	assert.Len(t, summaries, 0)
+}
+
+func TestService_GetSummary_Error(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		tableSessionSummaries: "session_summaries",
+	}
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+	// Case 1: Query error
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		return nil, assert.AnError
+	}
+	_, err := s.getSummary(ctx, key, time.Now())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "get summaries failed")
+
+	// Case 2: Malformed JSON
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		return newMockRows([][]any{
+			{"k1", "{malformed"},
+		}), nil
+	}
+	_, err = s.getSummary(ctx, key, time.Now())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal summary failed")
+}
+
+func TestService_GetSummariesList_MultiRow(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		tableSessionSummaries: "session_summaries",
+	}
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	createdAt := time.Now().Add(-time.Hour)
+
 	// Prepare multi-row summaries
 	sum1 := session.Summary{Summary: "sum1"}
 	sum1Bytes, _ := json.Marshal(sum1)
@@ -381,19 +459,149 @@ func TestService_GetSummariesList_MultiRow(t *testing.T) {
 	sum2Bytes, _ := json.Marshal(sum2)
 
 	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		// Format: session_id, filter_key, summary, updated_at
 		return newMockRows([][]any{
-			{"app", "user", "sess", "k1", string(sum1Bytes)},
-			{"app", "user", "sess", "k2", string(sum2Bytes)},
+			{"sess", "k1", string(sum1Bytes), time.Now()},
+			{"sess", "k2", string(sum2Bytes), time.Now()},
 		}), nil
 	}
 
-	summariesList, err := s.getSummariesList(ctx, []session.Key{key})
+	summariesList, err := s.getSummariesList(ctx, []session.Key{key}, []time.Time{createdAt})
 	assert.NoError(t, err)
 	assert.Len(t, summariesList, 1)
 	summaries := summariesList[0]
 	assert.Len(t, summaries, 2)
 	assert.Equal(t, "sum1", summaries["k1"].Summary)
 	assert.Equal(t, "sum2", summaries["k2"].Summary)
+}
+
+func TestService_GetSummariesList_Empty(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		tableSessionSummaries: "session_summaries",
+	}
+	ctx := context.Background()
+
+	// Empty input
+	result, err := s.getSummariesList(ctx, []session.Key{}, []time.Time{})
+	assert.NoError(t, err)
+	assert.Nil(t, result)
+}
+
+func TestService_GetSummariesList_LengthMismatch(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		tableSessionSummaries: "session_summaries",
+	}
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+	// Length mismatch
+	_, err := s.getSummariesList(ctx, []session.Key{key}, []time.Time{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "length mismatch")
+}
+
+func TestService_GetSummariesList_FilterOldSummary(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		tableSessionSummaries: "session_summaries",
+	}
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	// Session created 1 hour ago
+	sessionCreatedAt := time.Now().Add(-time.Hour)
+
+	// Prepare summaries: one fresh, one stale (from previous session instance)
+	freshSum := session.Summary{Summary: "fresh"}
+	freshBytes, _ := json.Marshal(freshSum)
+	staleSum := session.Summary{Summary: "stale"}
+	staleBytes, _ := json.Marshal(staleSum)
+
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		// Format: session_id, filter_key, summary, updated_at
+		return newMockRows([][]any{
+			// Fresh summary: updated_at is after session createdAt
+			{"sess", "k1", string(freshBytes), time.Now()},
+			// Stale summary: updated_at is before session createdAt (from old session)
+			{"sess", "k2", string(staleBytes), sessionCreatedAt.Add(-time.Minute)},
+		}), nil
+	}
+
+	summariesList, err := s.getSummariesList(ctx, []session.Key{key}, []time.Time{sessionCreatedAt})
+	assert.NoError(t, err)
+	assert.Len(t, summariesList, 1)
+	summaries := summariesList[0]
+	// Only fresh summary should be included, stale one filtered out
+	assert.Len(t, summaries, 1)
+	assert.Equal(t, "fresh", summaries["k1"].Summary)
+	assert.Nil(t, summaries["k2"])
+}
+
+func TestService_GetSummariesList_MultipleSessions(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		tableSessionSummaries: "session_summaries",
+	}
+	ctx := context.Background()
+	key1 := session.Key{AppName: "app", UserID: "user", SessionID: "sess1"}
+	key2 := session.Key{AppName: "app", UserID: "user", SessionID: "sess2"}
+	createdAt1 := time.Now().Add(-2 * time.Hour)
+	createdAt2 := time.Now().Add(-time.Hour)
+
+	sum1 := session.Summary{Summary: "sum1"}
+	sum1Bytes, _ := json.Marshal(sum1)
+	sum2 := session.Summary{Summary: "sum2"}
+	sum2Bytes, _ := json.Marshal(sum2)
+
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		// Format: session_id, filter_key, summary, updated_at
+		return newMockRows([][]any{
+			{"sess1", "k1", string(sum1Bytes), time.Now()},
+			{"sess2", "k1", string(sum2Bytes), time.Now()},
+		}), nil
+	}
+
+	summariesList, err := s.getSummariesList(ctx, []session.Key{key1, key2}, []time.Time{createdAt1, createdAt2})
+	assert.NoError(t, err)
+	assert.Len(t, summariesList, 2)
+	assert.Equal(t, "sum1", summariesList[0]["k1"].Summary)
+	assert.Equal(t, "sum2", summariesList[1]["k1"].Summary)
+}
+
+func TestService_GetSummariesList_UnknownSessionFiltered(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		tableSessionSummaries: "session_summaries",
+	}
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess1"}
+	createdAt := time.Now().Add(-time.Hour)
+
+	sum1 := session.Summary{Summary: "sum1"}
+	sum1Bytes, _ := json.Marshal(sum1)
+	sumUnknown := session.Summary{Summary: "unknown"}
+	sumUnknownBytes, _ := json.Marshal(sumUnknown)
+
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		// Format: session_id, filter_key, summary, updated_at
+		return newMockRows([][]any{
+			{"sess1", "k1", string(sum1Bytes), time.Now()},
+			// Summary for unknown session (not in sessionKeys) should be filtered
+			{"sess_unknown", "k1", string(sumUnknownBytes), time.Now()},
+		}), nil
+	}
+
+	summariesList, err := s.getSummariesList(ctx, []session.Key{key}, []time.Time{createdAt})
+	assert.NoError(t, err)
+	assert.Len(t, summariesList, 1)
+	assert.Len(t, summariesList[0], 1)
+	assert.Equal(t, "sum1", summariesList[0]["k1"].Summary)
 }
 
 func TestService_GetEventsList_Error(t *testing.T) {
@@ -431,23 +639,103 @@ func TestService_GetSummariesList_Error(t *testing.T) {
 	}
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	createdAt := time.Now().Add(-time.Hour)
 
 	// Case 1: Query error
 	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
 		return nil, assert.AnError
 	}
-	_, err := s.getSummariesList(ctx, []session.Key{key})
+	_, err := s.getSummariesList(ctx, []session.Key{key}, []time.Time{createdAt})
 	assert.Error(t, err)
 
 	// Case 2: Malformed JSON
 	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		// New format: session_id, filter_key, summary, updated_at
 		return newMockRows([][]any{
-			{"app", "user", "sess", "k1", "{malformed"},
+			{"sess", "k1", "{malformed", time.Now()},
 		}), nil
 	}
-	_, err = s.getSummariesList(ctx, []session.Key{key})
+	_, err = s.getSummariesList(ctx, []session.Key{key}, []time.Time{createdAt})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshal summary failed")
+}
+
+func TestService_GetSummary_ScanError(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		tableSessionSummaries: "session_summaries",
+	}
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+	// Force scan error using scanFunc
+	rows := newMockRows([][]any{{"k1", "summary"}})
+	rows.scanFunc = func(dest ...any) error {
+		return assert.AnError
+	}
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		return rows, nil
+	}
+
+	_, err := s.getSummary(ctx, key, time.Now())
+	assert.Error(t, err)
+}
+
+func TestService_GetSummariesList_ScanError(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		tableSessionSummaries: "session_summaries",
+	}
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	createdAt := time.Now().Add(-time.Hour)
+
+	// Force scan error using scanFunc
+	rows := newMockRows([][]any{{"sess", "k1", "summary", time.Now()}})
+	rows.scanFunc = func(dest ...any) error {
+		return assert.AnError
+	}
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		return rows, nil
+	}
+
+	_, err := s.getSummariesList(ctx, []session.Key{key}, []time.Time{createdAt})
+	assert.Error(t, err)
+}
+
+func TestService_GetSummariesList_SessionWithNoSummary(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		tableSessionSummaries: "session_summaries",
+	}
+	ctx := context.Background()
+	key1 := session.Key{AppName: "app", UserID: "user", SessionID: "sess1"}
+	key2 := session.Key{AppName: "app", UserID: "user", SessionID: "sess2"}
+	createdAt1 := time.Now().Add(-2 * time.Hour)
+	createdAt2 := time.Now().Add(-time.Hour)
+
+	sum1 := session.Summary{Summary: "sum1"}
+	sum1Bytes, _ := json.Marshal(sum1)
+
+	// Only sess1 has summary, sess2 has none
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		return newMockRows([][]any{
+			{"sess1", "k1", string(sum1Bytes), time.Now()},
+		}), nil
+	}
+
+	summariesList, err := s.getSummariesList(ctx, []session.Key{key1, key2}, []time.Time{createdAt1, createdAt2})
+	assert.NoError(t, err)
+	assert.Len(t, summariesList, 2)
+	// sess1 has summary
+	assert.Len(t, summariesList[0], 1)
+	assert.Equal(t, "sum1", summariesList[0]["k1"].Summary)
+	// sess2 has empty map (not nil)
+	assert.NotNil(t, summariesList[1])
+	assert.Len(t, summariesList[1], 0)
 }
 
 func TestService_RefreshSessionTTL_MoreErrors(t *testing.T) {
