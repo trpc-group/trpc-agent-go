@@ -836,6 +836,43 @@ func TestCreateSessionSummary_MarshalError(t *testing.T) {
 	})
 }
 
+func TestCreateSessionSummary_UpsertError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+
+	s := createTestService(t, db, WithSummarizer(summarizer))
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:        "session-123",
+		AppName:   "test-app",
+		UserID:    "user-456",
+		UpdatedAt: time.Now(),
+	}
+
+	// Mock: UPSERT fails.
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",               // filter_key
+			sqlmock.AnyArg(), // summary
+			sqlmock.AnyArg(), // updated_at
+			sqlmock.AnyArg(), // expires_at
+		).
+		WillReturnError(fmt.Errorf("upsert error"))
+
+	// Use force=true to trigger upsert even with no events.
+	err = s.CreateSessionSummary(ctx, sess, "", true)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "upsert summary failed")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestEnqueueSummaryJob_AsyncProcessing(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)

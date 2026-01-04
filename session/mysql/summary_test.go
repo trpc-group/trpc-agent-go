@@ -1178,6 +1178,60 @@ func TestCreateSessionSummary_UpsertError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestCreateSessionSummary_InsertError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &mockSummarizer{
+		summarizeFunc: func(ctx context.Context, sess *session.Session) (string, error) {
+			return "Test summary", nil
+		},
+	}
+
+	s := createTestService(t, db, WithSummarizer(summarizer))
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:        "session-123",
+		AppName:   "test-app",
+		UserID:    "user-456",
+		UpdatedAt: time.Now(),
+	}
+
+	// Mock: Update returns 0 rows affected (no existing record).
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+		WithArgs(
+			sqlmock.AnyArg(), // summary
+			sqlmock.AnyArg(), // updated_at
+			sqlmock.AnyArg(), // expires_at
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"", // filter_key
+		).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock: Insert fails.
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",               // filter_key
+			sqlmock.AnyArg(), // summary
+			sqlmock.AnyArg(), // updated_at
+			sqlmock.AnyArg(), // expires_at
+		).
+		WillReturnError(fmt.Errorf("insert error"))
+
+	// Use force=true to trigger insert even with no events.
+	err = s.CreateSessionSummary(ctx, sess, "", true)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "insert summary failed")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestEnqueueSummaryJob_ChannelClosed(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
