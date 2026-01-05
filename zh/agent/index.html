@@ -768,6 +768,75 @@
         <li class="md-nav__item">
   <a href="#_11" class="md-nav__link">
     <span class="md-ellipsis">
+      结构化输出
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="结构化输出">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      结构化输出方法对比
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#withstructuredoutputjsonschema" class="md-nav__link">
+    <span class="md-ellipsis">
+      WithStructuredOutputJSONSchema
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#withstructuredoutputjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      WithStructuredOutputJSON
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#withoutputschema" class="md-nav__link">
+    <span class="md-ellipsis">
+      WithOutputSchema (遗留)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#withoutputkey" class="md-nav__link">
+    <span class="md-ellipsis">
+      WithOutputKey
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      选择合适的方法
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
       进阶使用
     </span>
   </a>
@@ -1589,6 +1658,75 @@
         <li class="md-nav__item">
   <a href="#_11" class="md-nav__link">
     <span class="md-ellipsis">
+      结构化输出
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="结构化输出">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      结构化输出方法对比
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#withstructuredoutputjsonschema" class="md-nav__link">
+    <span class="md-ellipsis">
+      WithStructuredOutputJSONSchema
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#withstructuredoutputjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      WithStructuredOutputJSON
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#withoutputschema" class="md-nav__link">
+    <span class="md-ellipsis">
+      WithOutputSchema (遗留)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#withoutputkey" class="md-nav__link">
+    <span class="md-ellipsis">
+      WithOutputKey
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      选择合适的方法
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
       进阶使用
     </span>
   </a>
@@ -1727,7 +1865,7 @@
 <li><code>{key}</code>：替换为会话状态中键 <code>key</code> 对应的字符串值（可通过 <code>invocation.Session.SetState("key", ...)</code> 或 SessionService 写入）</li>
 <li><code>{key?}</code>：可选；如果不存在，替换为空字符串</li>
 <li><code>{user:subkey}</code> / <code>{app:subkey}</code> / <code>{temp:subkey}</code>：访问用户/应用/临时命名空间（SessionService 会把 app/user 作用域的状态合并进 session，并带上前缀）</li>
-<li><code>{invocation:subkey}</code> ：替换为fmt.Sprintf("%+v",<code>invocation.state["subkey"]</code>)的值，（可以通过invocation.SetState(k,v)来设置）。</li>
+<li><code>{invocation:subkey}</code> ：替换为 fmt.Sprintf("%+v",<code>invocation.state["subkey"]</code>) 的值，（可以通过 invocation.SetState(k,v) 来设置）。</li>
 </ul>
 <p>注意：</p>
 <ul>
@@ -1813,18 +1951,18 @@
 </span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="_5">消息可见性选项</h3>
-<p>当前Agent可在需要时根据不同场景控制其对其他Agent生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
-在与model交互时仅将可见的内容输入给模型。 </p>
+<p>当前 Agent 可在需要时根据不同场景控制其对其他 Agent 生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
+在与 model 交互时仅将可见的内容输入给模型。 </p>
 <p>TIPS:
- - 不同sessionID的消息在任何场景下都是互不可见的，以下管控策略均针对同一个sessionID的消息
- - invocation.Message在任何场景下均可见
- - 未配置选项时，默认值为FullContext</p>
-<p>配置:
+ - 不同 sessionID 的消息在任何场景下都是互不可见的，以下管控策略均针对同一个 sessionID 的消息
+ - invocation.Message 在任何场景下均可见
+ - 未配置选项时，默认值为 FullContext</p>
+<p>配置：
 - <code>llmagent.WithMessageFilterMode(MessageFilterMode)</code>:
-  - <code>FullContext</code>: 所有能通过filterKey做前缀匹配的消息
-  - <code>RequestContext</code>: 仅包含当前请求周期内通过filterKey前缀匹配的消息
-  - <code>IsolatedRequest</code>: 仅包含当前请求周期内通过filterKey完全匹配的消息
-  - <code>IsolatedInvocation</code>: 仅包含当前invocation周期内通过filterKey完全匹配的消息</p>
+  - <code>FullContext</code>: 所有能通过 filterKey 做前缀匹配的消息
+  - <code>RequestContext</code>: 仅包含当前请求周期内通过 filterKey 前缀匹配的消息
+  - <code>IsolatedRequest</code>: 仅包含当前请求周期内通过 filterKey 完全匹配的消息
+  - <code>IsolatedInvocation</code>: 仅包含当前 invocation 周期内通过 filterKey 完全匹配的消息</p>
 <p>推荐用法示例（该用法仅基于高级用法基础之上做了简化配置）:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-7-2"> 2</a></span>
@@ -1873,32 +2011,32 @@
 <span class="normal"><a href="#__codelineno-7-45">45</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="nx">taskagentA</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">  </span><span class="s">&quot;coordinator&quot;</span><span class="p">,</span>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">  </span><span class="c1">// 对taskagentA、taskagentB生成的所有消息可见（包含同一sessionID的历史会话消息）</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">  </span><span class="c1">// 对 taskagentA、taskagentB 生成的所有消息可见（包含同一 sessionID 的历史会话消息）</span>
 </span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMessageFilterMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">FullContext</span><span class="p">)</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="w">  </span><span class="c1">// 对taskagentA、taskagentB当前runner.Run期间生成的所有消息可见（不包含历史会话消息）</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="w">  </span><span class="c1">// 对 taskagentA、taskagentB 当前 runner.Run 期间生成的所有消息可见（不包含历史会话消息）</span>
 </span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMessageFilterMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">RequestContext</span><span class="p">)</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="w">  </span><span class="c1">// 仅对taskagentA当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="w">  </span><span class="c1">// 仅对 taskagentA 当前 runner.Run 期间生成的消息可见（不包含自己的历史会话消息）</span>
 </span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMessageFilterMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">IsolatedRequest</span><span class="p">)</span>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="w">  </span><span class="c1">// agent执性顺序：taskagentA-invocation1 -&gt; taskagentB-invocation2 -&gt; taskagentA-invocation3(当前执行阶段)</span>
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">  </span><span class="c1">// 仅对taskagentA当前taskagentA-invocation3期间生成的消息可见（不包含自己的历史会话消息以及taskagentA-invocation1期间生成的消息）</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="w">  </span><span class="c1">// agent 执性顺序：taskagentA-invocation1 -&gt; taskagentB-invocation2 -&gt; taskagentA-invocation3(当前执行阶段)</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">  </span><span class="c1">// 仅对 taskagentA 当前 taskagentA-invocation3 期间生成的消息可见（不包含自己的历史会话消息以及 taskagentA-invocation1 期间生成的消息）</span>
 </span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMessageFilterMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">IsolatedInvocation</span><span class="p">)</span>
 </span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="p">)</span>
 </span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a>
 </span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="nx">taskagentB</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="w">  </span><span class="s">&quot;coordinator&quot;</span><span class="p">,</span>
 </span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
-</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">  </span><span class="c1">// 对taskagentA、taskagentB生成的所有消息可见（包含同一sessionID的历史会话消息）</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">  </span><span class="c1">// 对 taskagentA、taskagentB 生成的所有消息可见（包含同一 sessionID 的历史会话消息）</span>
 </span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMessageFilterMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">FullContext</span><span class="p">),</span>
-</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="w">  </span><span class="c1">// 对taskagentA、taskagentB当前runner.Run期间生成的所有消息可见（不包含历史会话消息）</span>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="w">  </span><span class="c1">// 对 taskagentA、taskagentB 当前 runner.Run 期间生成的所有消息可见（不包含历史会话消息）</span>
 </span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMessageFilterMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">RequestContext</span><span class="p">),</span>
-</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a><span class="w">  </span><span class="c1">// 仅对taskagentB当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）</span>
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a><span class="w">  </span><span class="c1">// 仅对 taskagentB 当前 runner.Run 期间生成的消息可见（不包含自己的历史会话消息）</span>
 </span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMessageFilterMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">IsolatedRequest</span><span class="p">),</span>
-</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24"></a><span class="w">  </span><span class="c1">// agent执性顺序：taskagentA-invocation1 -&gt; taskagentB-invocation2 -&gt; taskagentA-invocation3 -&gt; taskagentB-invocation4(当前执行阶段)</span>
-</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25"></a><span class="w">  </span><span class="c1">// 仅对taskagentB当前taskagentB-invocation4期间生成的消息可见（不包含自己的历史会话消息以及taskagentB-invocation2期间生成的消息）</span>
+</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24"></a><span class="w">  </span><span class="c1">// agent 执性顺序：taskagentA-invocation1 -&gt; taskagentB-invocation2 -&gt; taskagentA-invocation3 -&gt; taskagentB-invocation4(当前执行阶段)</span>
+</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25"></a><span class="w">  </span><span class="c1">// 仅对 taskagentB 当前 taskagentB-invocation4 期间生成的消息可见（不包含自己的历史会话消息以及 taskagentB-invocation2 期间生成的消息）</span>
 </span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMessageFilterMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">IsolatedInvocation</span><span class="p">),</span>
 </span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27"></a><span class="p">)</span>
 </span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28"></a>
-</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29"></a><span class="c1">// 循环执行taskagentA、taskagentB</span>
+</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29"></a><span class="c1">// 循环执行 taskagentA、taskagentB</span>
 </span><span id="__span-7-30"><a id="__codelineno-7-30" name="__codelineno-7-30"></a><span class="nx">cycleAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">cycleagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-7-31"><a id="__codelineno-7-31" name="__codelineno-7-31"></a><span class="w">  </span><span class="s">&quot;coordinator&quot;</span><span class="p">,</span>
 </span><span id="__span-7-32"><a id="__codelineno-7-32" name="__codelineno-7-32"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
@@ -1917,16 +2055,16 @@
 </span><span id="__span-7-45"><a id="__codelineno-7-45" name="__codelineno-7-45"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>高阶用法示例：
-可以单独通过 <code>WithMessageTimelineFilterMode</code>、<code>WithMessageBranchFilterMode</code>控制当前agent对历史消息与其他agent生成的消息可见性。
-当前agent在与模型交互时，最终将同时满足两个条件的消息输入给模型。</p>
+可以单独通过 <code>WithMessageTimelineFilterMode</code>、<code>WithMessageBranchFilterMode</code>控制当前 agent 对历史消息与其他 agent 生成的消息可见性。
+当前 agent 在与模型交互时，最终将同时满足两个条件的消息输入给模型。</p>
 <p><code>配置:</code>
 - <code>WithMessageTimelineFilterMode</code>: 时间维度可见性控制
   - <code>TimelineFilterAll</code>: 包含历史消息以及当前请求中所生成的消息
-  - <code>TimelineFilterCurrentRequest</code>: 仅包含当前请求(一次runner.Run为一次请求)中所生成的消息
-  - <code>TimelineFilterCurrentInvocation</code>: 仅包含当前invocation上下文中生成的消息
-- <code>WithMessageBranchFilterMode</code>: 分支维度可见性控制（用于控制对其他agent生成消息的可见性）
-  - <code>BranchFilterModePrefix</code>: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配
-  - <code>BranchFilterModeAll</code>: 所有agent的均消息
+  - <code>TimelineFilterCurrentRequest</code>: 仅包含当前请求 (一次 runner.Run 为一次请求) 中所生成的消息
+  - <code>TimelineFilterCurrentInvocation</code>: 仅包含当前 invocation 上下文中生成的消息
+- <code>WithMessageBranchFilterMode</code>: 分支维度可见性控制（用于控制对其他 agent 生成消息的可见性）
+  - <code>BranchFilterModePrefix</code>: 通过 Event.FilterKey 与 Invocation.eventFilterKey 做前缀匹配
+  - <code>BranchFilterModeAll</code>: 所有 agent 的均消息
   - <code>BranchFilterModeExact</code>: 仅自己生成的消息可见</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-8-2"> 2</a></span>
@@ -1957,20 +2095,20 @@
 </span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;Be helpful, concise, and informative in your responses&quot;</span><span class="p">),</span><span class="w"> </span><span class="c1">// 设置指令</span>
 </span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithGenerationConfig</span><span class="p">(</span><span class="nx">genConfig</span><span class="p">),</span><span class="w">                                           </span><span class="c1">// 设置生成参数</span>
 </span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7"></a>
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="w">    </span><span class="c1">// 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="w">    </span><span class="c1">// 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足 WithMessageTimelineFilterMode 与 WithMessageBranchFilterMode 条件</span>
 </span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="w">    </span><span class="c1">// 时间维度过滤条件</span>
-</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="w">    </span><span class="c1">// 默认值: llmagent.TimelineFilterAll</span>
-</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11"></a><span class="w">    </span><span class="c1">// 可选值:</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="w">    </span><span class="c1">// 默认值：llmagent.TimelineFilterAll</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11"></a><span class="w">    </span><span class="c1">// 可选值：</span>
 </span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12"></a><span class="w">    </span><span class="c1">//  - llmagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息</span>
 </span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13"></a><span class="w">    </span><span class="c1">//  - llmagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息</span>
-</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14"></a><span class="w">    </span><span class="c1">//  - llmagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14"></a><span class="w">    </span><span class="c1">//  - llmagent.TimelineFilterCurrentInvocation: 仅包含当前 invocation 上下文中生成的消息</span>
 </span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMessageTimelineFilterMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">TimelineFilterAll</span><span class="p">),</span>
 </span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16"></a><span class="w">    </span><span class="c1">// 分支维度过滤条件</span>
-</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17"></a><span class="w">    </span><span class="c1">// 默认值: llmagent.BranchFilterModePrefix</span>
-</span><span id="__span-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18"></a><span class="w">    </span><span class="c1">// 可选值:</span>
-</span><span id="__span-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19"></a><span class="w">    </span><span class="c1">//  - llmagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值</span>
-</span><span id="__span-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20"></a><span class="w">    </span><span class="c1">//  - llmagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值</span>
-</span><span id="__span-8-21"><a id="__codelineno-8-21" name="__codelineno-8-21"></a><span class="w">    </span><span class="c1">//  - llmagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值</span>
+</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17"></a><span class="w">    </span><span class="c1">// 默认值：llmagent.BranchFilterModePrefix</span>
+</span><span id="__span-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18"></a><span class="w">    </span><span class="c1">// 可选值：</span>
+</span><span id="__span-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19"></a><span class="w">    </span><span class="c1">//  - llmagent.BranchFilterModeAll: 包含所有 agent 的消息，当前 agent 与模型交互时，如需将所有 agent 生成的有效内容消息同步给模型时可设置该值</span>
+</span><span id="__span-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20"></a><span class="w">    </span><span class="c1">//  - llmagent.BranchFilterModePrefix: 通过 Event.FilterKey 与 Invocation.eventFilterKey 做前缀匹配过滤消息，期望将与当前 agent 以及相关上下游 agent 生成的消息传递给模型时，可设置该值</span>
+</span><span id="__span-8-21"><a id="__codelineno-8-21" name="__codelineno-8-21"></a><span class="w">    </span><span class="c1">//  - llmagent.BranchFilterModeExact: 通过 Event.FilterKey==Invocation.eventFilterKey 过滤消息，当前 agent 与模型交互时，仅需使用当前 agent 生成的消息时可设置该值</span>
 </span><span id="__span-8-22"><a id="__codelineno-8-22" name="__codelineno-8-22"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMessageBranchFilterMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">BranchFilterModePrefix</span><span class="p">),</span>
 </span><span id="__span-8-23"><a id="__codelineno-8-23" name="__codelineno-8-23"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
@@ -2506,25 +2644,67 @@
 </span><span id="__span-21-18"><a id="__codelineno-21-18" name="__codelineno-21-18"></a><span class="nx">llmagent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;llmagent&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">callbacks</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
 <p>回调机制让你能够精确控制 Agent 的执行过程，实现更复杂的业务逻辑。</p>
-<h2 id="_11">进阶使用</h2>
-<p>框架提供了 Runner、Session 和 Memory 等高级功能，用于构建更复杂的 Agent 系统。</p>
-<p><strong>Runner 是推荐的使用方式</strong>，它负责管理 Agent 的执行流程，串联了 Session/Memory Service 等能力，提供了更友好的接口。</p>
-<p>Session Service 用于管理会话状态，支持对话历史记录和上下文维护。</p>
-<p>Memory Service 用于记录用户的偏好信息，支持个性化体验。</p>
-<p><strong>推荐阅读顺序：</strong></p>
-<ol>
-<li><a href="../runner/">Runner</a> - 学习推荐的使用方式</li>
-<li><a href="../session/">Session</a> - 了解会话管理</li>
-<li><a href="../multiagent/">Multi-Agent</a> - 学习多 Agent 系统</li>
-</ol>
-<h2 id="instruction">运行时动态更新 Instruction</h2>
-<p>你可以在 Agent 已经创建并被 Runner 使用的情况下，动态更新其行为文案：</p>
-<ul>
-<li>Instruction：用于约束 Agent 行为的说明文本（追加到系统消息中）。</li>
-<li>Global Instruction（系统提示词）：系统级前言（作为系统消息的前缀）。</li>
-</ul>
-<p>两者都可以在已有的 <code>LLMAgent</code> 实例上动态设置，新值会作用于后续的模型请求。</p>
-<p>示例</p>
+<h2 id="_11">结构化输出</h2>
+<p>结构化输出确保 Agent 的响应符合预定义的格式，使其更易于解析和程序化处理。框架提供了多种结构化输出方法，每种方法适用于不同的使用场景。</p>
+<h3 id="_12">结构化输出方法对比</h3>
+<table>
+<thead>
+<tr>
+<th>特性</th>
+<th>WithStructuredOutputJSONSchema</th>
+<th>WithStructuredOutputJSON</th>
+<th>WithOutputSchema</th>
+<th>WithOutputKey</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>工具使用</strong></td>
+<td>✅ 允许</td>
+<td>✅ 允许</td>
+<td>❌ 禁用</td>
+<td>✅ 允许</td>
+</tr>
+<tr>
+<td><strong>Schema 类型</strong></td>
+<td>用户提供的 JSON Schema</td>
+<td>从 Go 结构体自动生成</td>
+<td>用户提供的 JSON Schema</td>
+<td>不适用</td>
+</tr>
+<tr>
+<td><strong>输出类型</strong></td>
+<td>非类型化 (map/interface{})</td>
+<td>类型化 (Go 结构体)</td>
+<td>非类型化 (map/interface{})</td>
+<td>字符串/字节</td>
+</tr>
+<tr>
+<td><strong>Schema 验证</strong></td>
+<td>✅ 由 LLM 验证</td>
+<td>✅ 由 LLM 验证</td>
+<td>✅ 由 LLM 验证</td>
+<td>❌ 无</td>
+</tr>
+<tr>
+<td><strong>数据位置</strong></td>
+<td>Event.StructuredOutput</td>
+<td>Event.StructuredOutput</td>
+<td>模型响应内容</td>
+<td>Session State</td>
+</tr>
+<tr>
+<td><strong>主要用途</strong></td>
+<td>灵活 schema + 工具</td>
+<td>类型安全的结构化输出</td>
+<td>简单的结构化响应</td>
+<td>状态存储和流程控制</td>
+</tr>
+</tbody>
+</table>
+<h3 id="withstructuredoutputjsonschema">WithStructuredOutputJSONSchema</h3>
+<p>提供用户自定义的 JSON schema 用于结构化输出，同时<strong>允许使用工具</strong>。这是需要结构化输出和工具能力的 Agent 的最灵活选项。</p>
+<p><strong>示例：</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-22-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-22-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-22-3"> 3</a></span>
@@ -2550,48 +2730,69 @@
 <span class="normal"><a href="#__codelineno-22-23">23</a></span>
 <span class="normal"><a href="#__codelineno-22-24">24</a></span>
 <span class="normal"><a href="#__codelineno-22-25">25</a></span>
-<span class="normal"><a href="#__codelineno-22-26">26</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3"></a>
-</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
-</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
-</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8"></a><span class="p">)</span>
-</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9"></a>
-</span><span id="__span-22-10"><a id="__codelineno-22-10" name="__codelineno-22-10"></a><span class="c1">// 1）服务启动时只构建一次模型与 Agent</span>
-</span><span id="__span-22-11"><a id="__codelineno-22-11" name="__codelineno-22-11"></a><span class="nx">mdl</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">Options</span><span class="p">{})</span>
-</span><span id="__span-22-12"><a id="__codelineno-22-12" name="__codelineno-22-12"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-22-13"><a id="__codelineno-22-13" name="__codelineno-22-13"></a><span class="w">    </span><span class="s">&quot;support-bot&quot;</span><span class="p">,</span>
-</span><span id="__span-22-14"><a id="__codelineno-22-14" name="__codelineno-22-14"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">mdl</span><span class="p">),</span>
-</span><span id="__span-22-15"><a id="__codelineno-22-15" name="__codelineno-22-15"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;Be helpful and concise.&quot;</span><span class="p">),</span>
-</span><span id="__span-22-16"><a id="__codelineno-22-16" name="__codelineno-22-16"></a><span class="p">)</span>
-</span><span id="__span-22-17"><a id="__codelineno-22-17" name="__codelineno-22-17"></a><span class="nx">run</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llm</span><span class="p">)</span>
-</span><span id="__span-22-18"><a id="__codelineno-22-18" name="__codelineno-22-18"></a>
-</span><span id="__span-22-19"><a id="__codelineno-22-19" name="__codelineno-22-19"></a><span class="c1">// 2）运行中根据用户在后台修改的提示词，动态更新</span>
-</span><span id="__span-22-20"><a id="__codelineno-22-20" name="__codelineno-22-20"></a><span class="nx">llm</span><span class="p">.</span><span class="nx">SetInstruction</span><span class="p">(</span><span class="s">&quot;Translate all user inputs to French.&quot;</span><span class="p">)</span>
-</span><span id="__span-22-21"><a id="__codelineno-22-21" name="__codelineno-22-21"></a><span class="nx">llm</span><span class="p">.</span><span class="nx">SetGlobalInstruction</span><span class="p">(</span><span class="s">&quot;System: Safety first. No PII leakage.&quot;</span><span class="p">)</span>
-</span><span id="__span-22-22"><a id="__codelineno-22-22" name="__codelineno-22-22"></a>
-</span><span id="__span-22-23"><a id="__codelineno-22-23" name="__codelineno-22-23"></a><span class="c1">// 3）之后的对话轮次将使用最新的提示词</span>
-</span><span id="__span-22-24"><a id="__codelineno-22-24" name="__codelineno-22-24"></a><span class="nx">msg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Where is the nearest museum?&quot;</span><span class="p">)</span>
-</span><span id="__span-22-25"><a id="__codelineno-22-25" name="__codelineno-22-25"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">run</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="s">&quot;u1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;s1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">msg</span><span class="p">)</span>
-</span><span id="__span-22-26"><a id="__codelineno-22-26" name="__codelineno-22-26"></a><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">ch</span><span class="p">;</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">err</span>
+<span class="normal"><a href="#__codelineno-22-26">26</a></span>
+<span class="normal"><a href="#__codelineno-22-27">27</a></span>
+<span class="normal"><a href="#__codelineno-22-28">28</a></span>
+<span class="normal"><a href="#__codelineno-22-29">29</a></span>
+<span class="normal"><a href="#__codelineno-22-30">30</a></span>
+<span class="normal"><a href="#__codelineno-22-31">31</a></span>
+<span class="normal"><a href="#__codelineno-22-32">32</a></span>
+<span class="normal"><a href="#__codelineno-22-33">33</a></span>
+<span class="normal"><a href="#__codelineno-22-34">34</a></span>
+<span class="normal"><a href="#__codelineno-22-35">35</a></span>
+<span class="normal"><a href="#__codelineno-22-36">36</a></span>
+<span class="normal"><a href="#__codelineno-22-37">37</a></span>
+<span class="normal"><a href="#__codelineno-22-38">38</a></span>
+<span class="normal"><a href="#__codelineno-22-39">39</a></span>
+<span class="normal"><a href="#__codelineno-22-40">40</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1"></a><span class="nx">schema</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2"></a><span class="w">    </span><span class="s">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;object&quot;</span><span class="p">,</span>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3"></a><span class="w">    </span><span class="s">&quot;properties&quot;</span><span class="p">:</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span>
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4"></a><span class="w">        </span><span class="s">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span>
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5"></a><span class="w">            </span><span class="s">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;string&quot;</span><span class="p">,</span>
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6"></a><span class="w">            </span><span class="s">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Product name&quot;</span><span class="p">,</span>
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8"></a><span class="w">        </span><span class="s">&quot;price&quot;</span><span class="p">:</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span>
+</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9"></a><span class="w">            </span><span class="s">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;number&quot;</span><span class="p">,</span>
+</span><span id="__span-22-10"><a id="__codelineno-22-10" name="__codelineno-22-10"></a><span class="w">            </span><span class="s">&quot;minimum&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-22-11"><a id="__codelineno-22-11" name="__codelineno-22-11"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-22-12"><a id="__codelineno-22-12" name="__codelineno-22-12"></a><span class="w">        </span><span class="s">&quot;category&quot;</span><span class="p">:</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span>
+</span><span id="__span-22-13"><a id="__codelineno-22-13" name="__codelineno-22-13"></a><span class="w">            </span><span class="s">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;string&quot;</span><span class="p">,</span>
+</span><span id="__span-22-14"><a id="__codelineno-22-14" name="__codelineno-22-14"></a><span class="w">            </span><span class="s">&quot;enum&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;electronics&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;clothing&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;food&quot;</span><span class="p">},</span>
+</span><span id="__span-22-15"><a id="__codelineno-22-15" name="__codelineno-22-15"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-22-16"><a id="__codelineno-22-16" name="__codelineno-22-16"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-22-17"><a id="__codelineno-22-17" name="__codelineno-22-17"></a><span class="w">    </span><span class="s">&quot;required&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;name&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;price&quot;</span><span class="p">},</span>
+</span><span id="__span-22-18"><a id="__codelineno-22-18" name="__codelineno-22-18"></a><span class="p">}</span>
+</span><span id="__span-22-19"><a id="__codelineno-22-19" name="__codelineno-22-19"></a>
+</span><span id="__span-22-20"><a id="__codelineno-22-20" name="__codelineno-22-20"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-22-21"><a id="__codelineno-22-21" name="__codelineno-22-21"></a><span class="w">    </span><span class="s">&quot;shopping-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-22-22"><a id="__codelineno-22-22" name="__codelineno-22-22"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-22-23"><a id="__codelineno-22-23" name="__codelineno-22-23"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithStructuredOutputJSONSchema</span><span class="p">(</span>
+</span><span id="__span-22-24"><a id="__codelineno-22-24" name="__codelineno-22-24"></a><span class="w">        </span><span class="s">&quot;shopping_output&quot;</span><span class="p">,</span><span class="w">      </span><span class="c1">// Name</span>
+</span><span id="__span-22-25"><a id="__codelineno-22-25" name="__codelineno-22-25"></a><span class="w">        </span><span class="nx">schema</span><span class="p">,</span><span class="w">                 </span><span class="c1">// JSON schema</span>
+</span><span id="__span-22-26"><a id="__codelineno-22-26" name="__codelineno-22-26"></a><span class="w">        </span><span class="kc">true</span><span class="p">,</span><span class="w">                   </span><span class="c1">// Strict mode</span>
+</span><span id="__span-22-27"><a id="__codelineno-22-27" name="__codelineno-22-27"></a><span class="w">        </span><span class="s">&quot;Product information&quot;</span><span class="p">,</span><span class="w">  </span><span class="c1">// Description</span>
+</span><span id="__span-22-28"><a id="__codelineno-22-28" name="__codelineno-22-28"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-22-29"><a id="__codelineno-22-29" name="__codelineno-22-29"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">searchTool</span><span class="p">,</span><span class="w"> </span><span class="nx">calculatorTool</span><span class="p">}),</span><span class="w"> </span><span class="c1">// Tools are allowed!</span>
+</span><span id="__span-22-30"><a id="__codelineno-22-30" name="__codelineno-22-30"></a><span class="p">)</span>
+</span><span id="__span-22-31"><a id="__codelineno-22-31" name="__codelineno-22-31"></a>
+</span><span id="__span-22-32"><a id="__codelineno-22-32" name="__codelineno-22-32"></a><span class="c1">// Access untyped output from events</span>
+</span><span id="__span-22-33"><a id="__codelineno-22-33" name="__codelineno-22-33"></a><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventCh</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-22-34"><a id="__codelineno-22-34" name="__codelineno-22-34"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">StructuredOutput</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-22-35"><a id="__codelineno-22-35" name="__codelineno-22-35"></a><span class="w">        </span><span class="nx">data</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">StructuredOutput</span><span class="p">.(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">)</span>
+</span><span id="__span-22-36"><a id="__codelineno-22-36" name="__codelineno-22-36"></a><span class="w">        </span><span class="nx">name</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">data</span><span class="p">[</span><span class="s">&quot;name&quot;</span><span class="p">].(</span><span class="kt">string</span><span class="p">)</span>
+</span><span id="__span-22-37"><a id="__codelineno-22-37" name="__codelineno-22-37"></a><span class="w">        </span><span class="nx">price</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">data</span><span class="p">[</span><span class="s">&quot;price&quot;</span><span class="p">].(</span><span class="kt">float64</span><span class="p">)</span>
+</span><span id="__span-22-38"><a id="__codelineno-22-38" name="__codelineno-22-38"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Product: %s, Price: $%.2f\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">name</span><span class="p">,</span><span class="w"> </span><span class="nx">price</span><span class="p">)</span>
+</span><span id="__span-22-39"><a id="__codelineno-22-39" name="__codelineno-22-39"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-22-40"><a id="__codelineno-22-40" name="__codelineno-22-40"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>注意</p>
-<ul>
-<li>线程安全：上述设置方法是并发安全的，可在服务处理请求时调用。</li>
-<li>同一轮次内的效果：若一次调用过程中会触发多次模型请求（例如工具调用后再次提问），更新可能会对同一轮后续的请求生效。若需要“每次调用内保持稳定”，可在调用开始时确定或冻结提示词。</li>
-<li>个性化上下文：若需按用户/会话动态注入内容，优先使用指令中的占位符加会话状态注入（见上文“占位符变量”一节）。</li>
-</ul>
-<h3 id="system-prompt">另一种方式：用占位符驱动动态 System Prompt</h3>
-<p>如果不想在运行时调用 setter，也可以把 Instruction 写成模板，然后用会话状态（Session/App/User/Temp）来“喂”值。指令处理器会在每次请求时注入占位符。</p>
-<p>模式</p>
-<ul>
-<li>持久化“按用户”：写到 <code>user:*</code>，在模板里用 <code>{user:key}</code> 引用</li>
-<li>持久化“按应用”：写到 <code>app:*</code>，在模板里用 <code>{app:key}</code> 引用</li>
-<li>每轮一次（临时）：写入会话的 <code>temp:*</code> 命名空间，模板用 <code>{temp:key}</code>（不会持久化）</li>
-</ul>
-<p>示例：按用户动态提示词</p>
+<p><strong>最适合：</strong>
+- 需要结构化输出和工具使用的复杂 Agent
+- 使用外部 JSON schema（来自 API、数据库、配置文件）
+- 使用动态 schema 进行原型开发
+- 渐进式类型场景</p>
+<h3 id="withstructuredoutputjson">WithStructuredOutputJSON</h3>
+<p>从 Go 结构体自动生成 JSON schema 并返回类型化输出。提供编译时类型安全。</p>
+<p><strong>示例：</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-23-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-23-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-23-3"> 3</a></span>
@@ -2615,69 +2816,340 @@
 <span class="normal"><a href="#__codelineno-23-21">21</a></span>
 <span class="normal"><a href="#__codelineno-23-22">22</a></span>
 <span class="normal"><a href="#__codelineno-23-23">23</a></span>
-<span class="normal"><a href="#__codelineno-23-24">24</a></span>
-<span class="normal"><a href="#__codelineno-23-25">25</a></span>
-<span class="normal"><a href="#__codelineno-23-26">26</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3"></a>
-</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
-</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session&quot;</span>
-</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
-</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8"></a><span class="p">)</span>
-</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9"></a>
-</span><span id="__span-23-10"><a id="__codelineno-23-10" name="__codelineno-23-10"></a><span class="nx">svc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
-</span><span id="__span-23-11"><a id="__codelineno-23-11" name="__codelineno-23-11"></a><span class="nx">app</span><span class="p">,</span><span class="w"> </span><span class="nx">user</span><span class="p">,</span><span class="w"> </span><span class="nx">sid</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;u1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;s1&quot;</span>
-</span><span id="__span-23-12"><a id="__codelineno-23-12" name="__codelineno-23-12"></a>
-</span><span id="__span-23-13"><a id="__codelineno-23-13" name="__codelineno-23-13"></a><span class="c1">// 1）在指令模板里引用用户态 key</span>
-</span><span id="__span-23-14"><a id="__codelineno-23-14" name="__codelineno-23-14"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-23-15"><a id="__codelineno-23-15" name="__codelineno-23-15"></a><span class="w">  </span><span class="s">&quot;dyn-agent&quot;</span><span class="p">,</span>
-</span><span id="__span-23-16"><a id="__codelineno-23-16" name="__codelineno-23-16"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;{user:system_prompt}&quot;</span><span class="p">),</span>
-</span><span id="__span-23-17"><a id="__codelineno-23-17" name="__codelineno-23-17"></a><span class="p">)</span>
-</span><span id="__span-23-18"><a id="__codelineno-23-18" name="__codelineno-23-18"></a><span class="nx">run</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">app</span><span class="p">,</span><span class="w"> </span><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">svc</span><span class="p">))</span>
-</span><span id="__span-23-19"><a id="__codelineno-23-19" name="__codelineno-23-19"></a>
-</span><span id="__span-23-20"><a id="__codelineno-23-20" name="__codelineno-23-20"></a><span class="c1">// 2）当用户在后台改设置时，更新用户态状态</span>
-</span><span id="__span-23-21"><a id="__codelineno-23-21" name="__codelineno-23-21"></a><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">svc</span><span class="p">.</span><span class="nx">UpdateUserState</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">UserKey</span><span class="p">{</span><span class="nx">AppName</span><span class="p">:</span><span class="w"> </span><span class="nx">app</span><span class="p">,</span><span class="w"> </span><span class="nx">UserID</span><span class="p">:</span><span class="w"> </span><span class="nx">user</span><span class="p">},</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">StateMap</span><span class="p">{</span>
-</span><span id="__span-23-22"><a id="__codelineno-23-22" name="__codelineno-23-22"></a><span class="w">  </span><span class="s">&quot;system_prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="s">&quot;You are a helpful assistant. Always answer in English.&quot;</span><span class="p">),</span>
-</span><span id="__span-23-23"><a id="__codelineno-23-23" name="__codelineno-23-23"></a><span class="p">})</span>
-</span><span id="__span-23-24"><a id="__codelineno-23-24" name="__codelineno-23-24"></a>
-</span><span id="__span-23-25"><a id="__codelineno-23-25" name="__codelineno-23-25"></a><span class="c1">// 3）后续运行会通过占位符读取最新值</span>
-</span><span id="__span-23-26"><a id="__codelineno-23-26" name="__codelineno-23-26"></a><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">run</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="nx">user</span><span class="p">,</span><span class="w"> </span><span class="nx">sid</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Hi!&quot;</span><span class="p">))</span>
+<span class="normal"><a href="#__codelineno-23-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">ProductInfo</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2"></a><span class="w">    </span><span class="nx">Name</span><span class="w">     </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;name&quot;`</span>
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3"></a><span class="w">    </span><span class="nx">Price</span><span class="w">    </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;price&quot;`</span>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4"></a><span class="w">    </span><span class="nx">Category</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;category&quot;`</span>
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5"></a><span class="p">}</span>
+</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6"></a>
+</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8"></a><span class="w">    </span><span class="s">&quot;shopping-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-23-10"><a id="__codelineno-23-10" name="__codelineno-23-10"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithStructuredOutputJSON</span><span class="p">(</span>
+</span><span id="__span-23-11"><a id="__codelineno-23-11" name="__codelineno-23-11"></a><span class="w">        </span><span class="nb">new</span><span class="p">(</span><span class="nx">ProductInfo</span><span class="p">),</span><span class="w">           </span><span class="c1">// Auto-generates schema</span>
+</span><span id="__span-23-12"><a id="__codelineno-23-12" name="__codelineno-23-12"></a><span class="w">        </span><span class="kc">true</span><span class="p">,</span><span class="w">                       </span><span class="c1">// Strict mode</span>
+</span><span id="__span-23-13"><a id="__codelineno-23-13" name="__codelineno-23-13"></a><span class="w">        </span><span class="s">&quot;Product information&quot;</span><span class="p">,</span><span class="w">      </span><span class="c1">// Description</span>
+</span><span id="__span-23-14"><a id="__codelineno-23-14" name="__codelineno-23-14"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-23-15"><a id="__codelineno-23-15" name="__codelineno-23-15"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">searchTool</span><span class="p">}),</span><span class="w"> </span><span class="c1">// Tools are allowed</span>
+</span><span id="__span-23-16"><a id="__codelineno-23-16" name="__codelineno-23-16"></a><span class="p">)</span>
+</span><span id="__span-23-17"><a id="__codelineno-23-17" name="__codelineno-23-17"></a>
+</span><span id="__span-23-18"><a id="__codelineno-23-18" name="__codelineno-23-18"></a><span class="c1">// Access typed output from events</span>
+</span><span id="__span-23-19"><a id="__codelineno-23-19" name="__codelineno-23-19"></a><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventCh</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-23-20"><a id="__codelineno-23-20" name="__codelineno-23-20"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">StructuredOutput</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-23-21"><a id="__codelineno-23-21" name="__codelineno-23-21"></a><span class="w">        </span><span class="nx">product</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">StructuredOutput</span><span class="p">.(</span><span class="o">*</span><span class="nx">ProductInfo</span><span class="p">)</span>
+</span><span id="__span-23-22"><a id="__codelineno-23-22" name="__codelineno-23-22"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Product: %s, Price: $%.2f\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">product</span><span class="p">.</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">product</span><span class="p">.</span><span class="nx">Price</span><span class="p">)</span>
+</span><span id="__span-23-23"><a id="__codelineno-23-23" name="__codelineno-23-23"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-23-24"><a id="__codelineno-23-24" name="__codelineno-23-24"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p><strong>最适合：</strong>
+- 具有明确定义的 Go 结构体的类型安全应用
+- 清晰的代码集成
+- 编译时类型检查</p>
+<h3 id="withoutputschema">WithOutputSchema (遗留)</h3>
+<p>类似于 <code>WithStructuredOutputJSONSchema</code>，但<strong>禁用所有工具</strong>。这是为了向后兼容而保留的遗留方法。</p>
+<p><strong>示例：</strong></p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-24-1">1</a></span>
+<span class="normal"><a href="#__codelineno-24-2">2</a></span>
+<span class="normal"><a href="#__codelineno-24-3">3</a></span>
+<span class="normal"><a href="#__codelineno-24-4">4</a></span>
+<span class="normal"><a href="#__codelineno-24-5">5</a></span>
+<span class="normal"><a href="#__codelineno-24-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2"></a><span class="w">    </span><span class="s">&quot;weather-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithOutputSchema</span><span class="p">(</span><span class="nx">weatherSchema</span><span class="p">),</span>
+</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5"></a><span class="w">    </span><span class="c1">// llmagent.WithTools(...) // ❌ Tools are disabled!</span>
+</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p><strong>限制：</strong>
+- ❌ 无法使用工具、函数调用或 RAG
+- ❌ 响应在模型内容中（需要解析）</p>
+<p><strong>迁移提示：</strong> 如果需要工具能力，迁移到 <code>WithStructuredOutputJSONSchema</code>：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-25-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-25-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-25-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-25-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-25-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-25-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-25-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-25-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-25-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-25-10">10</a></span>
+<span class="normal"><a href="#__codelineno-25-11">11</a></span>
+<span class="normal"><a href="#__codelineno-25-12">12</a></span>
+<span class="normal"><a href="#__codelineno-25-13">13</a></span>
+<span class="normal"><a href="#__codelineno-25-14">14</a></span>
+<span class="normal"><a href="#__codelineno-25-15">15</a></span>
+<span class="normal"><a href="#__codelineno-25-16">16</a></span>
+<span class="normal"><a href="#__codelineno-25-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1"></a><span class="c1">// Old: Tools disabled</span>
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3"></a><span class="w">    </span><span class="s">&quot;agent&quot;</span><span class="p">,</span>
+</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithOutputSchema</span><span class="p">(</span><span class="nx">schema</span><span class="p">),</span>
+</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5"></a><span class="p">)</span>
+</span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6"></a>
+</span><span id="__span-25-7"><a id="__codelineno-25-7" name="__codelineno-25-7"></a><span class="c1">// New: Tools enabled</span>
+</span><span id="__span-25-8"><a id="__codelineno-25-8" name="__codelineno-25-8"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-25-9"><a id="__codelineno-25-9" name="__codelineno-25-9"></a><span class="w">    </span><span class="s">&quot;agent&quot;</span><span class="p">,</span>
+</span><span id="__span-25-10"><a id="__codelineno-25-10" name="__codelineno-25-10"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithStructuredOutputJSONSchema</span><span class="p">(</span>
+</span><span id="__span-25-11"><a id="__codelineno-25-11" name="__codelineno-25-11"></a><span class="w">        </span><span class="s">&quot;agent_output&quot;</span><span class="p">,</span><span class="w">  </span><span class="c1">// Name</span>
+</span><span id="__span-25-12"><a id="__codelineno-25-12" name="__codelineno-25-12"></a><span class="w">        </span><span class="nx">schema</span><span class="p">,</span><span class="w">          </span><span class="c1">// JSON schema</span>
+</span><span id="__span-25-13"><a id="__codelineno-25-13" name="__codelineno-25-13"></a><span class="w">        </span><span class="kc">true</span><span class="p">,</span><span class="w">            </span><span class="c1">// Strict mode</span>
+</span><span id="__span-25-14"><a id="__codelineno-25-14" name="__codelineno-25-14"></a><span class="w">        </span><span class="s">&quot;Agent output&quot;</span><span class="p">,</span><span class="w">  </span><span class="c1">// Description</span>
+</span><span id="__span-25-15"><a id="__codelineno-25-15" name="__codelineno-25-15"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-25-16"><a id="__codelineno-25-16" name="__codelineno-25-16"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">myTool1</span><span class="p">,</span><span class="w"> </span><span class="nx">myTool2</span><span class="p">}),</span><span class="w"> </span><span class="c1">// ✅ Now works!</span>
+</span><span id="__span-25-17"><a id="__codelineno-25-17" name="__codelineno-25-17"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="withoutputkey">WithOutputKey</h3>
+<p>将 Agent 输出存储在会话状态的特定键下，适用于输出需要被下游 Agent 访问的工作流。</p>
+<p><strong>示例：</strong></p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-26-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-26-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-26-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-26-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-26-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-26-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-26-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-26-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-26-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-26-10">10</a></span>
+<span class="normal"><a href="#__codelineno-26-11">11</a></span>
+<span class="normal"><a href="#__codelineno-26-12">12</a></span>
+<span class="normal"><a href="#__codelineno-26-13">13</a></span>
+<span class="normal"><a href="#__codelineno-26-14">14</a></span>
+<span class="normal"><a href="#__codelineno-26-15">15</a></span>
+<span class="normal"><a href="#__codelineno-26-16">16</a></span>
+<span class="normal"><a href="#__codelineno-26-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1"></a><span class="nx">researchAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2"></a><span class="w">    </span><span class="s">&quot;researcher&quot;</span><span class="p">,</span>
+</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithOutputKey</span><span class="p">(</span><span class="s">&quot;research_findings&quot;</span><span class="p">),</span>
+</span><span id="__span-26-5"><a id="__codelineno-26-5" name="__codelineno-26-5"></a><span class="p">)</span>
+</span><span id="__span-26-6"><a id="__codelineno-26-6" name="__codelineno-26-6"></a>
+</span><span id="__span-26-7"><a id="__codelineno-26-7" name="__codelineno-26-7"></a><span class="nx">writerAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-26-8"><a id="__codelineno-26-8" name="__codelineno-26-8"></a><span class="w">    </span><span class="s">&quot;writer&quot;</span><span class="p">,</span>
+</span><span id="__span-26-9"><a id="__codelineno-26-9" name="__codelineno-26-9"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-26-10"><a id="__codelineno-26-10" name="__codelineno-26-10"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;Based on research: {research_findings}, write a summary.&quot;</span><span class="p">),</span>
+</span><span id="__span-26-11"><a id="__codelineno-26-11" name="__codelineno-26-11"></a><span class="p">)</span>
+</span><span id="__span-26-12"><a id="__codelineno-26-12" name="__codelineno-26-12"></a>
+</span><span id="__span-26-13"><a id="__codelineno-26-13" name="__codelineno-26-13"></a><span class="c1">// Chain agents using session state</span>
+</span><span id="__span-26-14"><a id="__codelineno-26-14" name="__codelineno-26-14"></a><span class="nx">chain</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chainagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;pipeline&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">chainagent</span><span class="p">.</span><span class="nx">WithSubAgents</span><span class="p">([]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">{</span>
+</span><span id="__span-26-15"><a id="__codelineno-26-15" name="__codelineno-26-15"></a><span class="w">    </span><span class="nx">researchAgent</span><span class="p">,</span>
+</span><span id="__span-26-16"><a id="__codelineno-26-16" name="__codelineno-26-16"></a><span class="w">    </span><span class="nx">writerAgent</span><span class="p">,</span>
+</span><span id="__span-26-17"><a id="__codelineno-26-17" name="__codelineno-26-17"></a><span class="p">}))</span>
+</span></code></pre></div></td></tr></table></div>
+<p><strong>最适合：</strong>
+- 带数据传递的多 Agent 工作流
+- 会话状态管理
+- 在下游 Agent 中使用占位符变量访问</p>
+<h3 id="_13">选择合适的方法</h3>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>推荐方法</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>需要工具 + 结构化输出</td>
+<td><code>WithStructuredOutputJSONSchema</code> 或 <code>WithStructuredOutputJSON</code></td>
+</tr>
+<tr>
+<td>类型安全至关重要</td>
+<td><code>WithStructuredOutputJSON</code></td>
+</tr>
+<tr>
+<td>使用外部 schema</td>
+<td><code>WithStructuredOutputJSONSchema</code></td>
+</tr>
+<tr>
+<td>简单的结构化响应（无工具）</td>
+<td><code>WithOutputSchema</code></td>
+</tr>
+<tr>
+<td>多 Agent 工作流</td>
+<td><code>WithOutputKey</code></td>
+</tr>
+<tr>
+<td>快速原型开发</td>
+<td><code>WithStructuredOutputJSONSchema</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>示例：</strong>
+- <code>examples/structuredoutput/</code> - 演示 <code>WithStructuredOutputJSON</code>（类型化）
+- <code>examples/outputschema/</code> - 演示 <code>WithOutputSchema</code>（遗留）
+- <code>examples/outputkey/</code> - 演示 <code>WithOutputKey</code>（会话状态）</p>
+<h2 id="_14">进阶使用</h2>
+<p>框架提供了 Runner、Session 和 Memory 等高级功能，用于构建更复杂的 Agent 系统。</p>
+<p><strong>Runner 是推荐的使用方式</strong>，它负责管理 Agent 的执行流程，串联了 Session/Memory Service 等能力，提供了更友好的接口。</p>
+<p>Session Service 用于管理会话状态，支持对话历史记录和上下文维护。</p>
+<p>Memory Service 用于记录用户的偏好信息，支持个性化体验。</p>
+<p><strong>推荐阅读顺序：</strong></p>
+<ol>
+<li><a href="../runner/">Runner</a> - 学习推荐的使用方式</li>
+<li><a href="../session/">Session</a> - 了解会话管理</li>
+<li><a href="../multiagent/">Multi-Agent</a> - 学习多 Agent 系统</li>
+</ol>
+<h2 id="instruction">运行时动态更新 Instruction</h2>
+<p>你可以在 Agent 已经创建并被 Runner 使用的情况下，动态更新其行为文案：</p>
+<ul>
+<li>Instruction：用于约束 Agent 行为的说明文本（追加到系统消息中）。</li>
+<li>Global Instruction（系统提示词）：系统级前言（作为系统消息的前缀）。</li>
+</ul>
+<p>两者都可以在已有的 <code>LLMAgent</code> 实例上动态设置，新值会作用于后续的模型请求。</p>
+<p>示例</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-27-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-27-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-27-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-27-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-27-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-27-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-27-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-27-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-27-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-27-10">10</a></span>
+<span class="normal"><a href="#__codelineno-27-11">11</a></span>
+<span class="normal"><a href="#__codelineno-27-12">12</a></span>
+<span class="normal"><a href="#__codelineno-27-13">13</a></span>
+<span class="normal"><a href="#__codelineno-27-14">14</a></span>
+<span class="normal"><a href="#__codelineno-27-15">15</a></span>
+<span class="normal"><a href="#__codelineno-27-16">16</a></span>
+<span class="normal"><a href="#__codelineno-27-17">17</a></span>
+<span class="normal"><a href="#__codelineno-27-18">18</a></span>
+<span class="normal"><a href="#__codelineno-27-19">19</a></span>
+<span class="normal"><a href="#__codelineno-27-20">20</a></span>
+<span class="normal"><a href="#__codelineno-27-21">21</a></span>
+<span class="normal"><a href="#__codelineno-27-22">22</a></span>
+<span class="normal"><a href="#__codelineno-27-23">23</a></span>
+<span class="normal"><a href="#__codelineno-27-24">24</a></span>
+<span class="normal"><a href="#__codelineno-27-25">25</a></span>
+<span class="normal"><a href="#__codelineno-27-26">26</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3"></a>
+</span><span id="__span-27-4"><a id="__codelineno-27-4" name="__codelineno-27-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-27-5"><a id="__codelineno-27-5" name="__codelineno-27-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-27-6"><a id="__codelineno-27-6" name="__codelineno-27-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-27-7"><a id="__codelineno-27-7" name="__codelineno-27-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-27-8"><a id="__codelineno-27-8" name="__codelineno-27-8"></a><span class="p">)</span>
+</span><span id="__span-27-9"><a id="__codelineno-27-9" name="__codelineno-27-9"></a>
+</span><span id="__span-27-10"><a id="__codelineno-27-10" name="__codelineno-27-10"></a><span class="c1">// 1）服务启动时只构建一次模型与 Agent</span>
+</span><span id="__span-27-11"><a id="__codelineno-27-11" name="__codelineno-27-11"></a><span class="nx">mdl</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">Options</span><span class="p">{})</span>
+</span><span id="__span-27-12"><a id="__codelineno-27-12" name="__codelineno-27-12"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-27-13"><a id="__codelineno-27-13" name="__codelineno-27-13"></a><span class="w">    </span><span class="s">&quot;support-bot&quot;</span><span class="p">,</span>
+</span><span id="__span-27-14"><a id="__codelineno-27-14" name="__codelineno-27-14"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">mdl</span><span class="p">),</span>
+</span><span id="__span-27-15"><a id="__codelineno-27-15" name="__codelineno-27-15"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;Be helpful and concise.&quot;</span><span class="p">),</span>
+</span><span id="__span-27-16"><a id="__codelineno-27-16" name="__codelineno-27-16"></a><span class="p">)</span>
+</span><span id="__span-27-17"><a id="__codelineno-27-17" name="__codelineno-27-17"></a><span class="nx">run</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llm</span><span class="p">)</span>
+</span><span id="__span-27-18"><a id="__codelineno-27-18" name="__codelineno-27-18"></a>
+</span><span id="__span-27-19"><a id="__codelineno-27-19" name="__codelineno-27-19"></a><span class="c1">// 2）运行中根据用户在后台修改的提示词，动态更新</span>
+</span><span id="__span-27-20"><a id="__codelineno-27-20" name="__codelineno-27-20"></a><span class="nx">llm</span><span class="p">.</span><span class="nx">SetInstruction</span><span class="p">(</span><span class="s">&quot;Translate all user inputs to French.&quot;</span><span class="p">)</span>
+</span><span id="__span-27-21"><a id="__codelineno-27-21" name="__codelineno-27-21"></a><span class="nx">llm</span><span class="p">.</span><span class="nx">SetGlobalInstruction</span><span class="p">(</span><span class="s">&quot;System: Safety first. No PII leakage.&quot;</span><span class="p">)</span>
+</span><span id="__span-27-22"><a id="__codelineno-27-22" name="__codelineno-27-22"></a>
+</span><span id="__span-27-23"><a id="__codelineno-27-23" name="__codelineno-27-23"></a><span class="c1">// 3）之后的对话轮次将使用最新的提示词</span>
+</span><span id="__span-27-24"><a id="__codelineno-27-24" name="__codelineno-27-24"></a><span class="nx">msg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Where is the nearest museum?&quot;</span><span class="p">)</span>
+</span><span id="__span-27-25"><a id="__codelineno-27-25" name="__codelineno-27-25"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">run</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="s">&quot;u1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;s1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">msg</span><span class="p">)</span>
+</span><span id="__span-27-26"><a id="__codelineno-27-26" name="__codelineno-27-26"></a><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">ch</span><span class="p">;</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">err</span>
+</span></code></pre></div></td></tr></table></div>
+<p>注意</p>
+<ul>
+<li>线程安全：上述设置方法是并发安全的，可在服务处理请求时调用。</li>
+<li>同一轮次内的效果：若一次调用过程中会触发多次模型请求（例如工具调用后再次提问），更新可能会对同一轮后续的请求生效。若需要“每次调用内保持稳定”，可在调用开始时确定或冻结提示词。</li>
+<li>个性化上下文：若需按用户/会话动态注入内容，优先使用指令中的占位符加会话状态注入（见上文“占位符变量”一节）。</li>
+</ul>
+<h3 id="system-prompt">另一种方式：用占位符驱动动态 System Prompt</h3>
+<p>如果不想在运行时调用 setter，也可以把 Instruction 写成模板，然后用会话状态（Session/App/User/Temp）来“喂”值。指令处理器会在每次请求时注入占位符。</p>
+<p>模式</p>
+<ul>
+<li>持久化“按用户”：写到 <code>user:*</code>，在模板里用 <code>{user:key}</code> 引用</li>
+<li>持久化“按应用”：写到 <code>app:*</code>，在模板里用 <code>{app:key}</code> 引用</li>
+<li>每轮一次（临时）：写入会话的 <code>temp:*</code> 命名空间，模板用 <code>{temp:key}</code>（不会持久化）</li>
+</ul>
+<p>示例：按用户动态提示词</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-28-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-28-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-28-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-28-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-28-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-28-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-28-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-28-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-28-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-28-10">10</a></span>
+<span class="normal"><a href="#__codelineno-28-11">11</a></span>
+<span class="normal"><a href="#__codelineno-28-12">12</a></span>
+<span class="normal"><a href="#__codelineno-28-13">13</a></span>
+<span class="normal"><a href="#__codelineno-28-14">14</a></span>
+<span class="normal"><a href="#__codelineno-28-15">15</a></span>
+<span class="normal"><a href="#__codelineno-28-16">16</a></span>
+<span class="normal"><a href="#__codelineno-28-17">17</a></span>
+<span class="normal"><a href="#__codelineno-28-18">18</a></span>
+<span class="normal"><a href="#__codelineno-28-19">19</a></span>
+<span class="normal"><a href="#__codelineno-28-20">20</a></span>
+<span class="normal"><a href="#__codelineno-28-21">21</a></span>
+<span class="normal"><a href="#__codelineno-28-22">22</a></span>
+<span class="normal"><a href="#__codelineno-28-23">23</a></span>
+<span class="normal"><a href="#__codelineno-28-24">24</a></span>
+<span class="normal"><a href="#__codelineno-28-25">25</a></span>
+<span class="normal"><a href="#__codelineno-28-26">26</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3"></a>
+</span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-28-5"><a id="__codelineno-28-5" name="__codelineno-28-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session&quot;</span>
+</span><span id="__span-28-7"><a id="__codelineno-28-7" name="__codelineno-28-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
+</span><span id="__span-28-8"><a id="__codelineno-28-8" name="__codelineno-28-8"></a><span class="p">)</span>
+</span><span id="__span-28-9"><a id="__codelineno-28-9" name="__codelineno-28-9"></a>
+</span><span id="__span-28-10"><a id="__codelineno-28-10" name="__codelineno-28-10"></a><span class="nx">svc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
+</span><span id="__span-28-11"><a id="__codelineno-28-11" name="__codelineno-28-11"></a><span class="nx">app</span><span class="p">,</span><span class="w"> </span><span class="nx">user</span><span class="p">,</span><span class="w"> </span><span class="nx">sid</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;u1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;s1&quot;</span>
+</span><span id="__span-28-12"><a id="__codelineno-28-12" name="__codelineno-28-12"></a>
+</span><span id="__span-28-13"><a id="__codelineno-28-13" name="__codelineno-28-13"></a><span class="c1">// 1）在指令模板里引用用户态 key</span>
+</span><span id="__span-28-14"><a id="__codelineno-28-14" name="__codelineno-28-14"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-28-15"><a id="__codelineno-28-15" name="__codelineno-28-15"></a><span class="w">  </span><span class="s">&quot;dyn-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-28-16"><a id="__codelineno-28-16" name="__codelineno-28-16"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;{user:system_prompt}&quot;</span><span class="p">),</span>
+</span><span id="__span-28-17"><a id="__codelineno-28-17" name="__codelineno-28-17"></a><span class="p">)</span>
+</span><span id="__span-28-18"><a id="__codelineno-28-18" name="__codelineno-28-18"></a><span class="nx">run</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">app</span><span class="p">,</span><span class="w"> </span><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">svc</span><span class="p">))</span>
+</span><span id="__span-28-19"><a id="__codelineno-28-19" name="__codelineno-28-19"></a>
+</span><span id="__span-28-20"><a id="__codelineno-28-20" name="__codelineno-28-20"></a><span class="c1">// 2）当用户在后台改设置时，更新用户态状态</span>
+</span><span id="__span-28-21"><a id="__codelineno-28-21" name="__codelineno-28-21"></a><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">svc</span><span class="p">.</span><span class="nx">UpdateUserState</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">UserKey</span><span class="p">{</span><span class="nx">AppName</span><span class="p">:</span><span class="w"> </span><span class="nx">app</span><span class="p">,</span><span class="w"> </span><span class="nx">UserID</span><span class="p">:</span><span class="w"> </span><span class="nx">user</span><span class="p">},</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">StateMap</span><span class="p">{</span>
+</span><span id="__span-28-22"><a id="__codelineno-28-22" name="__codelineno-28-22"></a><span class="w">  </span><span class="s">&quot;system_prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="s">&quot;You are a helpful assistant. Always answer in English.&quot;</span><span class="p">),</span>
+</span><span id="__span-28-23"><a id="__codelineno-28-23" name="__codelineno-28-23"></a><span class="p">})</span>
+</span><span id="__span-28-24"><a id="__codelineno-28-24" name="__codelineno-28-24"></a>
+</span><span id="__span-28-25"><a id="__codelineno-28-25" name="__codelineno-28-25"></a><span class="c1">// 3）后续运行会通过占位符读取最新值</span>
+</span><span id="__span-28-26"><a id="__codelineno-28-26" name="__codelineno-28-26"></a><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">run</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="nx">user</span><span class="p">,</span><span class="w"> </span><span class="nx">sid</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Hi!&quot;</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
 <p>示例：通过前置回调注入本轮临时值（temp）</p>
 <blockquote>
 <p><strong>版本要求</strong><br />
 结构化回调 API（推荐）需要 <strong>trpc-agent-go &gt;= 0.6.0</strong>。</p>
 </blockquote>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-24-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-24-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-24-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-24-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-24-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-24-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-24-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-24-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-24-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-24-10">10</a></span>
-<span class="normal"><a href="#__codelineno-24-11">11</a></span>
-<span class="normal"><a href="#__codelineno-24-12">12</a></span>
-<span class="normal"><a href="#__codelineno-24-13">13</a></span>
-<span class="normal"><a href="#__codelineno-24-14">14</a></span>
-<span class="normal"><a href="#__codelineno-24-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1"></a><span class="c1">// 注意：结构化回调 API 需要 trpc-agent-go &gt;= 0.6.0</span>
-</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2"></a><span class="nx">callbacks</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">()</span>
-</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3"></a><span class="nx">callbacks</span><span class="p">.</span><span class="nx">RegisterBeforeAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">.</span><span class="nx">Session</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5"></a><span class="w">    </span><span class="c1">// 为&quot;本轮&quot;临时指定指令</span>
-</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6"></a><span class="w">    </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">.</span><span class="nx">Session</span><span class="p">.</span><span class="nx">SetState</span><span class="p">(</span><span class="s">&quot;temp:sys&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="s">&quot;Translate to French.&quot;</span><span class="p">))</span>
-</span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-24-8"><a id="__codelineno-24-8" name="__codelineno-24-8"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-24-9"><a id="__codelineno-24-9" name="__codelineno-24-9"></a><span class="p">})</span>
-</span><span id="__span-24-10"><a id="__codelineno-24-10" name="__codelineno-24-10"></a>
-</span><span id="__span-24-11"><a id="__codelineno-24-11" name="__codelineno-24-11"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-24-12"><a id="__codelineno-24-12" name="__codelineno-24-12"></a><span class="w">  </span><span class="s">&quot;temp-agent&quot;</span><span class="p">,</span>
-</span><span id="__span-24-13"><a id="__codelineno-24-13" name="__codelineno-24-13"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;{temp:sys}&quot;</span><span class="p">),</span>
-</span><span id="__span-24-14"><a id="__codelineno-24-14" name="__codelineno-24-14"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">callbacks</span><span class="p">),</span><span class="w"> </span><span class="c1">// 需要 trpc-agent-go &gt;= 0.6.0</span>
-</span><span id="__span-24-15"><a id="__codelineno-24-15" name="__codelineno-24-15"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-29-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-29-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-29-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-29-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-29-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-29-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-29-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-29-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-29-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-29-10">10</a></span>
+<span class="normal"><a href="#__codelineno-29-11">11</a></span>
+<span class="normal"><a href="#__codelineno-29-12">12</a></span>
+<span class="normal"><a href="#__codelineno-29-13">13</a></span>
+<span class="normal"><a href="#__codelineno-29-14">14</a></span>
+<span class="normal"><a href="#__codelineno-29-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1"></a><span class="c1">// 注意：结构化回调 API 需要 trpc-agent-go &gt;= 0.6.0</span>
+</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2"></a><span class="nx">callbacks</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">()</span>
+</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3"></a><span class="nx">callbacks</span><span class="p">.</span><span class="nx">RegisterBeforeAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">.</span><span class="nx">Session</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5"></a><span class="w">    </span><span class="c1">// 为&quot;本轮&quot;临时指定指令</span>
+</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6"></a><span class="w">    </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">.</span><span class="nx">Session</span><span class="p">.</span><span class="nx">SetState</span><span class="p">(</span><span class="s">&quot;temp:sys&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="s">&quot;Translate to French.&quot;</span><span class="p">))</span>
+</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-29-8"><a id="__codelineno-29-8" name="__codelineno-29-8"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-29-9"><a id="__codelineno-29-9" name="__codelineno-29-9"></a><span class="p">})</span>
+</span><span id="__span-29-10"><a id="__codelineno-29-10" name="__codelineno-29-10"></a>
+</span><span id="__span-29-11"><a id="__codelineno-29-11" name="__codelineno-29-11"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-29-12"><a id="__codelineno-29-12" name="__codelineno-29-12"></a><span class="w">  </span><span class="s">&quot;temp-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-29-13"><a id="__codelineno-29-13" name="__codelineno-29-13"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;{temp:sys}&quot;</span><span class="p">),</span>
+</span><span id="__span-29-14"><a id="__codelineno-29-14" name="__codelineno-29-14"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">callbacks</span><span class="p">),</span><span class="w"> </span><span class="c1">// 需要 trpc-agent-go &gt;= 0.6.0</span>
+</span><span id="__span-29-15"><a id="__codelineno-29-15" name="__codelineno-29-15"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>注意事项</p>
 <ul>
@@ -2706,7 +3178,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月29日 08:00:28 UTC">2025-12-29 08:00:28</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月5日 01:20:02 UTC">2026-01-05 01:20:02</span>
   </span>
 
     
