@@ -84,8 +84,10 @@ func buildFilterSession(base *session.Session, filterKey string, evs []event.Eve
 
 // SummarizeSession performs per-filterKey delta summarization using the given
 // summarizer and writes results to base.Summaries.
-// - When filterKey is non-empty, summarizes only that filter's events.
-// - When filterKey is empty, summarizes all events as a single full-session summary.
+//   - When filterKey is non-empty, summarizes only that filter's events.
+//   - When filterKey is empty, summarizes all events as a single full-session summary.
+//   - When summary exists with zero UpdatedAt (copied via copySummaryToKey), returns
+//     updated=true to trigger persistence without LLM call, and sets proper UpdatedAt.
 func SummarizeSession(
 	ctx context.Context,
 	m summary.SessionSummarizer,
@@ -100,14 +102,32 @@ func SummarizeSession(
 	// Get previous summary info.
 	var prevText string
 	var prevAt time.Time
+	var needsPersistOnly bool
 	base.SummariesMu.RLock()
 	if base.Summaries != nil {
 		if s := base.Summaries[filterKey]; s != nil {
 			prevText = s.Summary
 			prevAt = s.UpdatedAt
+			// Zero UpdatedAt indicates summary was copied and needs persistence.
+			needsPersistOnly = prevText != "" && prevAt.IsZero()
 		}
 	}
 	base.SummariesMu.RUnlock()
+
+	// Handle copied summary that needs persistence only (no LLM call).
+	if needsPersistOnly {
+		// Compute the latest event timestamp for proper UpdatedAt.
+		_, latestTs := computeDeltaSince(base, time.Time{}, filterKey)
+		if latestTs.IsZero() {
+			latestTs = time.Now()
+		}
+		base.SummariesMu.Lock()
+		if base.Summaries != nil && base.Summaries[filterKey] != nil {
+			base.Summaries[filterKey].UpdatedAt = latestTs.UTC()
+		}
+		base.SummariesMu.Unlock()
+		return true, nil
+	}
 
 	// Compute delta events with both time and filterKey filtering in one pass.
 	delta, latestTs := computeDeltaSince(base, prevAt, filterKey)
@@ -157,6 +177,8 @@ func selectUpdatedAt(tmp *session.Session, prevAt, latestTs time.Time, hasDelta 
 	return latestTs.UTC()
 }
 
+// lastIncludedTsKey is the key for the last included timestamp.
+// This key is used to store the last included timestamp in the session state.
 const lastIncludedTsKey = "summary:last_included_ts"
 
 func readLastIncludedTimestamp(tmp *session.Session) time.Time {
@@ -249,9 +271,60 @@ func GetFilterKeyFromOptions(opts ...session.SummaryOption) string {
 	return options.FilterKey
 }
 
+// isSingleFilterKey checks if all events in the session match the target filterKey.
+// Returns true if all events match, meaning the filterKey summary would be identical
+// to the full-session summary, allowing us to skip duplicate LLM calls.
+func isSingleFilterKey(sess *session.Session, targetKey string) bool {
+	if sess == nil || targetKey == "" {
+		return false
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	for _, e := range sess.Events {
+		if !e.Filter(targetKey) {
+			return false
+		}
+	}
+	return true
+}
+
+// copySummaryToKey copies a summary from srcKey to dstKey within the session.
+// This avoids duplicate LLM calls when the summaries would be identical.
+// Sets UpdatedAt to zero to mark the summary as needing persistence.
+func copySummaryToKey(sess *session.Session, srcKey, dstKey string) {
+	if sess == nil {
+		return
+	}
+	sess.SummariesMu.Lock()
+	defer sess.SummariesMu.Unlock()
+	if sess.Summaries == nil {
+		return
+	}
+	src, ok := sess.Summaries[srcKey]
+	if !ok || src == nil {
+		return
+	}
+	// Copy Topics slice to avoid sharing underlying array.
+	var topics []string
+	if len(src.Topics) > 0 {
+		topics = make([]string, len(src.Topics))
+		copy(topics, src.Topics)
+	}
+	// Use zero UpdatedAt to mark as needing persistence.
+	// SummarizeSession will detect this and return updated=true.
+	sess.Summaries[dstKey] = &session.Summary{
+		Summary:   src.Summary,
+		Topics:    topics,
+		UpdatedAt: time.Time{},
+	}
+}
+
 // CreateSessionSummaryWithCascade creates a session summary for the specified filterKey
 // and cascades to create a full-session summary if the filterKey is not already the full session.
 // The createSummaryFunc should create a summary for the given filterKey and return an error if failed.
+// When all events match the filterKey (single filterKey scenario), it generates only one summary
+// and copies it to both keys to avoid duplicate LLM calls. The copied summary is then persisted
+// via createSummaryFunc which detects existing in-memory summary and triggers persistence.
 func CreateSessionSummaryWithCascade(
 	ctx context.Context,
 	sess *session.Session,
@@ -263,6 +336,25 @@ func CreateSessionSummaryWithCascade(
 		return createSummaryFunc(ctx, sess, filterKey, force)
 	}
 
+	// Optimization: when all events match the filterKey, the filterKey summary
+	// would be identical to the full-session summary. Generate only once via LLM,
+	// then copy to memory and persist both keys.
+	if isSingleFilterKey(sess, filterKey) {
+		if err := createSummaryFunc(ctx, sess, filterKey, force); err != nil {
+			return fmt.Errorf("create session summary for filterKey %q failed: %w",
+				filterKey, err)
+		}
+		// Copy to in-memory session for immediate access.
+		copySummaryToKey(sess, filterKey, session.SummaryFilterKeyAllContents)
+		// Persist the full-session key to storage. SummarizeSession detects
+		// existing in-memory summary with empty delta and returns updated=true.
+		if err := createSummaryFunc(ctx, sess, session.SummaryFilterKeyAllContents, false); err != nil {
+			return fmt.Errorf("persist full-session summary failed: %w", err)
+		}
+		return nil
+	}
+
+	// Multiple filterKeys detected: generate both summaries in parallel.
 	var summaryWg sync.WaitGroup
 	result := make([]error, 2)
 	summaryWg.Add(2)

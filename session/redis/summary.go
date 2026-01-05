@@ -75,12 +75,16 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	sum := sess.Summaries[filterKey]
 	sess.SummariesMu.RUnlock()
 
+	if sum == nil {
+		return nil
+	}
+
 	payload, err := json.Marshal(sum)
 	if err != nil {
 		return fmt.Errorf("marshal summary failed: %w", err)
 	}
 
-	sumKey := getSessionSummaryKey(session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID})
+	sumKey := getSessionSummaryKey(key)
 	if _, err := luaSummariesSetIfNewer.Run(
 		ctx, s.redisClient, []string{sumKey}, sess.ID, filterKey, string(payload),
 	).Result(); err != nil {

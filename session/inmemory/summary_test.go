@@ -225,46 +225,53 @@ func TestMemoryService_EnqueueSummaryJob_InvalidSession_Error(t *testing.T) {
 }
 
 func TestMemoryService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) {
-	// Create service with very small queue size
+	// Create service with very small queue size.
 	s := NewSessionService(
 		WithAsyncSummaryNum(1),
-		WithSummaryQueueSize(1), // Very small queue
+		WithSummaryQueueSize(1), // Very small queue.
 		WithSummarizer(&fakeSummarizer{allow: true, out: "fallback-summary"}),
 	)
 	defer s.Close()
 
-	// Create a session first
+	// Create a session first.
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
 	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
 	require.NoError(t, err)
 
-	// Append an event to make delta non-empty
-	e := event.New("inv", "author")
-	e.Timestamp = time.Now()
-	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
-	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+	// Append events with different filterKeys to ensure cascade creates both summaries.
+	e1 := event.New("inv1", "author")
+	e1.Timestamp = time.Now().Add(-time.Minute)
+	e1.FilterKey = "branch"
+	e1.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e1))
 
-	// Fill up the queue by enqueueing multiple jobs
-	// The queue size is 1, so after the first job, the queue will be full
+	e2 := event.New("inv2", "author")
+	e2.Timestamp = time.Now()
+	e2.FilterKey = "other-branch"
+	e2.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "world"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e2))
+
+	// Fill up the queue by enqueueing multiple jobs.
+	// The queue size is 1, so after the first job, the queue will be full.
 	err = s.EnqueueSummaryJob(context.Background(), sess, "blocking", true)
 	require.NoError(t, err)
 
-	// Now try to enqueue another job - should fall back to sync
+	// Now try to enqueue another job - should fall back to sync.
 	err = s.EnqueueSummaryJob(context.Background(), sess, "branch", false)
 	require.NoError(t, err)
 	time.Sleep(time.Millisecond * 100)
 
-	// Verify both branch summary and full summary were created immediately (sync fallback with cascade)
+	// Verify both branch summary and full summary were created immediately (sync fallback with cascade).
 	got, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 
-	// Check branch summary
+	// Check branch summary.
 	sum, ok := got.Summaries["branch"]
 	require.True(t, ok)
 	require.Equal(t, "fallback-summary", sum.Summary)
 
-	// Check full summary (should be created by cascade)
+	// Check full summary (should be created by cascade).
 	sum, ok = got.Summaries[""]
 	require.True(t, ok)
 	require.Equal(t, "fallback-summary", sum.Summary)

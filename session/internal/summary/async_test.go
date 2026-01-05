@@ -455,10 +455,16 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 		worker.Start()
 		defer worker.Stop()
 
-		sess := &session.Session{
-			ID:      "test-session",
-			AppName: "test-app",
-			UserID:  "test-user",
+		now := time.Now()
+		// Use NewSession to properly initialize Hash field.
+		sess := session.NewSession("test-app", "test-user", "test-session")
+		// Add events with multiple filterKeys to ensure cascade creates both summaries.
+		// Set Version to CurrentVersion so Filter() uses FilterKey instead of Branch.
+		sess.Events = []event.Event{
+			{FilterKey: "branch1", Timestamp: now.Add(-2 * time.Minute), Version: event.CurrentVersion,
+				Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "e1"}}}}},
+			{FilterKey: "branch2", Timestamp: now.Add(-1 * time.Minute), Version: event.CurrentVersion,
+				Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "e2"}}}}},
 		}
 
 		err := worker.EnqueueJob(context.Background(), sess, "branch1", false)
