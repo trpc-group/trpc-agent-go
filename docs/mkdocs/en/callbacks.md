@@ -1,16 +1,15 @@
 ## Callbacks
 
-> **Version Requirement**  
-> The structured callback API (recommended) requires **trpc-agent-go >= 0.6.0**.
-
 This page describes the callback system used across the project to intercept,
-observe, and customize model inference, tool invocation, and agent execution.
+observe, and customize model inference, tool invocation, agent execution,
+and AG-UI event translation.
 
-The callback system comes in three categories:
+The callback system comes in four categories:
 
 - ModelCallbacks
 - ToolCallbacks
 - AgentCallbacks
+- TranslateCallbacks
 
 Each category provides a Before and an After callback. A Before callback can
 short-circuit the default execution by returning a non-nil custom response.
@@ -19,7 +18,7 @@ short-circuit the default execution by returning a non-nil custom response.
 
 ## ModelCallbacks
 
-### Structured Model Callbacks (Recommended)
+### Structured Model Callbacks
 
 - BeforeModelCallbackStructured: Runs before a model inference with structured arguments.
 - AfterModelCallbackStructured: Runs after the model finishes with structured arguments.
@@ -147,16 +146,11 @@ llmAgent := llmagent.New(
 
 For a complete example, see [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go).
 
-### Legacy Model Callbacks (Deprecated)
-
-> **⚠️ Deprecated**  
-> Legacy callbacks are deprecated. Use structured callbacks for new code.
-
 ---
 
 ## ToolCallbacks
 
-### Structured Tool Callbacks (Recommended)
+### Structured Tool Callbacks
 
 - BeforeToolCallbackStructured: Runs before each tool invocation with structured arguments.
 - AfterToolCallbackStructured: Runs after each tool invocation with structured arguments.
@@ -165,18 +159,20 @@ Arguments:
 
 ```go
 type BeforeToolArgs struct {
+    ToolCallID   string               // The ID of tool call issued by the model
     ToolName     string               // The name of the tool
     Declaration  *tool.Declaration    // Tool declaration metadata
     Arguments    []byte               // JSON arguments (can be modified)
 }
 
 type BeforeToolResult struct {
-    Context       context.Context     // Optional context for subsequent operations
-    CustomResult  any                 // If non-nil, skips tool execution and returns this result
-    ModifiedArguments []byte          // Optional modified arguments for tool execution
+    Context           context.Context  // Optional context for subsequent operations
+    CustomResult      any              // If non-nil, skips tool execution and returns this result
+    ModifiedArguments []byte           // Optional modified arguments for tool execution
 }
 
 type AfterToolArgs struct {
+    ToolCallID   string               // The ID of tool call issued by the model
     ToolName     string               // The name of the tool
     Declaration  *tool.Declaration    // Tool declaration metadata
     Arguments    []byte               // Original JSON arguments
@@ -185,8 +181,8 @@ type AfterToolArgs struct {
 }
 
 type AfterToolResult struct {
-    Context       context.Context     // Optional context for subsequent operations
-    CustomResult  any                 // If non-nil, replaces the original result
+    Context      context.Context  // Optional context for subsequent operations
+    CustomResult any              // If non-nil, replaces the original result
 }
 ```
 
@@ -204,6 +200,7 @@ Key points:
 - `BeforeToolResult.Context` and `AfterToolResult.Context` can pass context between operations.
 - Arguments can be modified directly via `args.Arguments`.
 - If BeforeToolCallbackStructured returns a non-nil custom result, the tool is skipped and that result is used directly.
+- `ToolCallID` is available in `BeforeToolArgs` and `AfterToolArgs`.
 
 ### Callback Execution Control
 
@@ -296,16 +293,63 @@ Telemetry and events:
   - `TraceToolCall` telemetry attributes.
   - Graph events emitted by `emitToolStartEvent` and `emitToolCompleteEvent`.
 
-### Legacy Tool Callbacks (Deprecated)
+### ToolResultMessages Callback
 
-> **⚠️ Deprecated**  
-> Legacy callbacks are deprecated. Use structured callbacks for new code.
+The `ToolResultMessagesFunc` callback allows you to customize how tool execution results are converted into messages sent back to the model.
+
+**Parameters:**
+
+```go
+type ToolResultMessagesInput struct {
+    ToolName           string    // The name of the tool
+    Declaration        *tool.Declaration  // Tool declaration
+    Arguments          []byte    // Final tool arguments in JSON (after before-tool callbacks)
+    Result             any       // Final tool execution result (after after-tool callbacks)
+    ToolCallID         string    // The ID of the tool call
+    DefaultToolMessage any       // Default tool response message framework would send
+}
+```
+
+**Callback signature:**
+
+```go
+type ToolResultMessagesFunc = func(
+    ctx context.Context,
+    in *tool.ToolResultMessagesInput,
+) (any, error)
+```
+
+**Behavior:**
+
+- If the callback returns `(nil, nil)` or an empty slice, the framework falls back to `DefaultToolMessage`.
+- If the callback returns non-empty messages, they replace the default tool message.
+- When using llmagent with built-in OpenAI/Anthropic adapters, the recommended return type is `[]model.Message`.
+
+**Usage example:**
+
+```go
+toolCallbacks := tool.NewCallbacks().
+  RegisterToolResultMessages(func(ctx context.Context, in *tool.ToolResultMessagesInput) (any, error) {
+    // Customize tool result message format
+    if messages, ok := in.Result.([]string); ok {
+      return []model.Message{
+        {
+          Role:    model.RoleTool,
+          Content: "Tool results: " + strings.Join(messages, ", "),
+          ToolID:  in.ToolCallID,
+        },
+      }, nil
+    }
+    // Return nil to use default message
+    return nil, nil
+  })
+```
 
 ---
 
 ## AgentCallbacks
 
-### Structured Agent Callbacks (Recommended)
+### Structured Agent Callbacks
 
 - BeforeAgentCallbackStructured: Runs before agent execution with structured arguments.
 - AfterAgentCallbackStructured: Runs after agent execution with structured arguments.
@@ -471,10 +515,56 @@ Notes:
 
 For a complete example, see [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go).
 
-### Legacy Agent Callbacks (Deprecated)
+---
 
-> **⚠️ Deprecated**  
-> Legacy callbacks are deprecated. Use structured callbacks for new code.
+## TranslateCallbacks
+
+TranslateCallbacks serve as callbacks for AG-UI event translation, with two categories:
+
+- BeforeTranslateCallback: Triggered before translating internal events to AG-UI events
+- AfterTranslateCallback: Triggered after AG-UI event translation completes, before sending to client
+
+Signatures:
+
+```go
+import (
+    aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+    "trpc.group/trpc-go/trpc-agent-go/event"
+)
+
+type BeforeTranslateCallback func(ctx context.Context, evt *event.Event) (*event.Event, error)
+type AfterTranslateCallback  func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error)
+```
+
+Key points:
+
+- When Before callback returns a non-nil custom event, the input of event translation is replaced with that custom event
+- When After callback returns a non-nil custom event, the output of event translation is replaced with that custom event, which is eventually sent to the client
+- Before/After callbacks follow the global short-circuit rule; if you need to combine modifications, please implement the merging logic within a single callback
+
+Example:
+
+```go
+import (
+    aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
+)
+
+translateCallbacks := translator.NewCallbacks().
+  // Observe internal events
+  RegisterBeforeTranslate(func(ctx context.Context, event *event.Event) (*event.Event, error) {
+    fmt.Println(event)
+    return nil, nil
+  }).
+  // Observe AG-UI events
+  RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+    fmt.Println(event)
+    return nil, nil
+  })
+```
+
+For more details on TranslateCallbacks, see [agui](./agui.md).
 
 ---
 
@@ -491,6 +581,34 @@ if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 
 This pattern is showcased in the examples where Before/After callbacks print
 the presence of an invocation.
+
+### Access Tool Call ID
+
+For tool callbacks, you can access the tool call ID directly from the callback
+arguments:
+
+```go
+RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+    // ToolCallID is available in args
+    fmt.Printf("Tool call ID: %s\n", args.ToolCallID)
+    // ...
+})
+
+RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+    // ToolCallID is available in args
+    fmt.Printf("Tool call ID: %s\n", args.ToolCallID)
+    // ...
+})
+```
+
+Alternatively, you can retrieve the tool call ID from context using
+`tool.ToolCallIDFromContext(ctx)`:
+
+```go
+if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
+    fmt.Printf("Tool call ID: %s\n", toolCallID)
+}
+```
 
 ---
 
@@ -526,7 +644,7 @@ To avoid key conflicts between different use cases, use prefixes:
 - Agent callbacks: `"agent:xxx"` (e.g., `"agent:start_time"`)
 - Model callbacks: `"model:xxx"` (e.g., `"model:start_time"`)
 - Tool callbacks: `"tool:<toolName>:<toolCallID>:xxx"` (e.g., `"tool:calculator:call_abc123:start_time"`)
-  - Note: Tool callbacks should include tool call ID to support concurrent calls
+  - Note: Tool callbacks should include tool call ID
 - Middleware: `"middleware:xxx"` (e.g., `"middleware:request_id"`)
 - Custom logic: `"custom:xxx"` (e.g., `"custom:user_context"`)
 
@@ -578,35 +696,39 @@ modelCallbacks := model.NewCallbacks().
   })
 ```
 
-### Example: Tool Callback Timing (Multi-tool Isolation)
+### Example: Tool Callback Timing
 
 ```go
 toolCallbacks := tool.NewCallbacks().
   // BeforeToolCallback: Record tool start time.
   RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-      // Get tool call ID for concurrent call support.
-      toolCallID, ok := tool.ToolCallIDFromContext(ctx)
-      if !ok || toolCallID == "" {
-        toolCallID = "default" // Fallback for compatibility.
-      }
+    // Use ToolCallID from args.
+    toolCallID := args.ToolCallID
+    if toolCallID == "" {
+      toolCallID = "default" // Fallback for compatibility.
+    }
 
-      // Use tool call ID to build unique key.
-      key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
+    // Use tool call ID to build unique key.
+    key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
+
+    // Retrieve Invocation from context.
+    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
       inv.SetState(key, time.Now())
     }
     return nil, nil
   }).
   // AfterToolCallback: Calculate tool execution duration.
   RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
-    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-      // Get tool call ID for concurrent call support.
-      toolCallID, ok := tool.ToolCallIDFromContext(ctx)
-      if !ok || toolCallID == "" {
-        toolCallID = "default" // Fallback for compatibility.
-      }
+    // Use ToolCallID from args.
+    toolCallID := args.ToolCallID
+    if toolCallID == "" {
+      toolCallID = "default" // Fallback for compatibility.
+    }
 
-      key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
+    key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
+
+    // Retrieve Invocation from context.
+    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
       if startTimeVal, ok := inv.GetState(key); ok {
         startTime := startTimeVal.(time.Time)
         duration := time.Since(startTime)
@@ -620,10 +742,10 @@ toolCallbacks := tool.NewCallbacks().
 
 **Key Points**:
 
-1. **Get tool call ID**: Use `tool.ToolCallIDFromContext(ctx)` to retrieve the unique ID for each tool call from context
+1. **Use ToolCallID from args**: `BeforeToolArgs` and `AfterToolArgs` now include `ToolCallID` directly
 2. **Key format**: `"tool:<toolName>:<toolCallID>:<key>"` ensures state isolation for concurrent calls
-3. **Fallback handling**: If tool call ID is not available (older versions or special scenarios), use `"default"` as fallback
-4. **Consistency**: Before and After callbacks must use the same logic to retrieve tool call ID
+3. **Fallback handling**: If tool call ID is empty (older versions or special scenarios), use `"default"` as fallback
+4. **Consistency**: Before and After callbacks use the same `ToolCallID` from the callback args
 
 This ensures that when the LLM calls `calculator` multiple times concurrently (e.g., `calculator(1,2)` and `calculator(3,4)`), each call has its own independent timing data.
 

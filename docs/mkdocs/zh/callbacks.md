@@ -1,8 +1,5 @@
 ## 回调（Callbacks）
 
-> **版本要求**  
-> 结构化回调 API（推荐）需要 **trpc-agent-go >= 0.6.0**。
-
 本文介绍项目中的回调系统，用于拦截、观测与定制模型推理、工具调用、Agent 执行以及 AG-UI 事件翻译。
 
 回调分为四类：
@@ -20,7 +17,7 @@
 
 ## ModelCallbacks
 
-### 结构化模型回调（推荐）
+### 结构化模型回调
 
 - BeforeModelCallbackStructured：模型推理前触发，使用结构化参数
 - AfterModelCallbackStructured：模型完成后触发，使用结构化参数
@@ -148,16 +145,11 @@ llmAgent := llmagent.New(
 
 完整示例请参考 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go)。
 
-### 传统模型回调（已弃用）
-
-> **⚠️ 已弃用**
-> 传统回调已弃用。请在新代码中使用结构化回调。
-
 ---
 
 ## ToolCallbacks
 
-### 结构化工具回调（推荐）
+### 结构化工具回调
 
 - BeforeToolCallbackStructured：工具调用前触发，使用结构化参数
 - AfterToolCallbackStructured：工具调用后触发，使用结构化参数
@@ -166,18 +158,20 @@ llmAgent := llmagent.New(
 
 ```go
 type BeforeToolArgs struct {
+    ToolCallID   string               // 模型发出的工具调用 ID
     ToolName     string               // 工具名称
     Declaration  *tool.Declaration    // 工具声明元数据
     Arguments    []byte               // JSON 参数（可修改）
 }
 
 type BeforeToolResult struct {
-    Context       context.Context     // 可选，用于后续操作的上下文
-    CustomResult  any                 // 非空时跳过工具执行并返回此结果
-    ModifiedArguments []byte          // 可选，修改后的参数用于工具执行
+    Context           context.Context  // 可选，用于后续操作的上下文
+    CustomResult      any              // 非空时跳过工具执行并返回此结果
+    ModifiedArguments []byte           // 可选，修改后的参数用于工具执行
 }
 
 type AfterToolArgs struct {
+    ToolCallID   string               // 模型发出的工具调用 ID
     ToolName     string               // 工具名称
     Declaration  *tool.Declaration    // 工具声明元数据
     Arguments    []byte               // 原始 JSON 参数
@@ -186,8 +180,8 @@ type AfterToolArgs struct {
 }
 
 type AfterToolResult struct {
-    Context       context.Context     // 可选，用于后续操作的上下文
-    CustomResult  any                 // 非空时替换原始结果
+    Context      context.Context  // 可选，用于后续操作的上下文
+    CustomResult any              // 非空时替换原始结果
 }
 ```
 
@@ -205,6 +199,8 @@ type AfterToolCallbackStructured  func(ctx context.Context, args *tool.AfterTool
 - `BeforeToolResult.Context` 和 `AfterToolResult.Context` 可在操作之间传递上下文
 - 可通过 `args.Arguments` 直接修改参数
 - BeforeToolCallbackStructured 返回非空自定义结果时，会跳过工具执行并直接使用该结果
+- `BeforeToolArgs` 和 `AfterToolArgs` 中提供了 `ToolCallID`
+
 
 ### 回调执行控制
 
@@ -297,16 +293,63 @@ llmAgent := llmagent.New(
   - `TraceToolCall` 可观测属性
   - 图事件 `emitToolStartEvent` 与 `emitToolCompleteEvent`
 
-### 传统工具回调（已弃用）
+### ToolResultMessages 回调
 
-> **⚠️ 已弃用**
-> 传统回调已弃用。请在新代码中使用结构化回调。
+`ToolResultMessagesFunc` 回调允许你自定义工具执行结果如何转换为发送回模型的消息。
+
+**参数：**
+
+```go
+type ToolResultMessagesInput struct {
+    ToolName           string    // 工具名称
+    Declaration        *tool.Declaration  // 工具声明
+    Arguments          []byte    // 最终的工具参数（JSON 格式，在 before-tool 回调之后）
+    Result             any       // 最终的工具执行结果（在 after-tool 回调之后）
+    ToolCallID         string    // 工具调用 ID
+    DefaultToolMessage any       // 框架默认会发送的工具响应消息
+}
+```
+
+**回调签名：**
+
+```go
+type ToolResultMessagesFunc = func(
+    ctx context.Context,
+    in *tool.ToolResultMessagesInput,
+) (any, error)
+```
+
+**行为：**
+
+- 如果回调返回 `(nil, nil)` 或空切片，框架将回退到 `DefaultToolMessage`。
+- 如果回调返回非空消息，它们将替换默认工具消息。
+- 当使用带有内置 OpenAI/Anthropic 适配器的 llmagent 时，推荐的返回类型是 `[]model.Message`。
+
+**使用示例：**
+
+```go
+toolCallbacks := tool.NewCallbacks().
+  RegisterToolResultMessages(func(ctx context.Context, in *tool.ToolResultMessagesInput) (any, error) {
+    // 自定义工具结果消息格式
+    if messages, ok := in.Result.([]string); ok {
+      return []model.Message{
+        {
+          Role:    model.RoleTool,
+          Content: "工具结果：" + strings.Join(messages, ", "),
+          ToolID:  in.ToolCallID,
+        },
+      }, nil
+    }
+    // 返回 nil 以使用默认消息
+    return nil, nil
+  })
+```
 
 ---
 
 ## AgentCallbacks
 
-### 结构化 Agent 回调（推荐）
+### 结构化 Agent 回调
 
 - BeforeAgentCallbackStructured：Agent 执行前触发，使用结构化参数
 - AfterAgentCallbackStructured：Agent 执行后触发，使用结构化参数
@@ -469,11 +512,6 @@ agentCallbacks := agent.NewCallbacks().
 
 完整示例请参考 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go)。
 
-### 传统 Agent 回调（已弃用）
-
-> **⚠️ 已弃用**
-> 传统回调已弃用。请在新代码中使用结构化回调。
-
 ---
 
 ## TranslateCallbacks
@@ -539,6 +577,32 @@ if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 
 示例工程在 Before/After 回调中打印了 Invocation 的存在性。
 
+### 访问 Tool Call ID
+
+对于工具回调，你可以直接从回调参数中访问工具调用 ID：
+
+```go
+RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+    // ToolCallID 在 args 中可用
+    fmt.Printf("Tool call ID: %s\n", args.ToolCallID)
+    // ...
+})
+
+RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+    // ToolCallID 在 args 中可用
+    fmt.Printf("Tool call ID: %s\n", args.ToolCallID)
+    // ...
+})
+```
+
+另外，你也可以使用 `tool.ToolCallIDFromContext(ctx)` 从 context 中获取工具调用 ID：
+
+```go
+if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
+    fmt.Printf("Tool call ID: %s\n", toolCallID)
+}
+```
+
 ---
 
 ## Invocation State：在回调间共享状态
@@ -573,7 +637,7 @@ func (inv *Invocation) DeleteState(key string)
 - Agent 回调：`"agent:xxx"`（如 `"agent:start_time"`）
 - Model 回调：`"model:xxx"`（如 `"model:start_time"`）
 - Tool 回调：`"tool:<toolName>:<toolCallID>:xxx"`（如 `"tool:calculator:call_abc123:start_time"`）
-  - 注意：Tool 回调需要包含 tool call ID 以支持并发调用
+  - 注意：Tool 回调需要包含 tool call ID
 - 中间件：`"middleware:xxx"`（如 `"middleware:request_id"`）
 - 自定义逻辑：`"custom:xxx"`（如 `"custom:user_context"`）
 
@@ -625,37 +689,41 @@ modelCallbacks := model.NewCallbacks().
   })
 ```
 
-### 示例：Tool 回调计时（支持并发工具调用）
+### 示例：Tool 回调计时（支持并发）
 
-当 LLM 在一次响应中返回多个工具调用（包括同一工具的多次调用）时，框架会并发执行这些工具。为了正确追踪每个工具调用的状态，需要使用 **tool call ID** 来区分：
+当 LLM 在一次响应中返回多个工具调用时，框架会并发执行这些工具。为了正确追踪每个工具调用的状态，需要使用 **ToolCallID** 来区分：
 
 ```go
 toolCallbacks := tool.NewCallbacks().
   // BeforeToolCallback：记录工具开始时间
   RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-      // 获取 tool call ID 以支持并发调用
-      toolCallID, ok := tool.ToolCallIDFromContext(ctx)
-      if !ok || toolCallID == "" {
-        toolCallID = "default" // 降级方案
-      }
+    // 使用 args 中的 ToolCallID
+    toolCallID := args.ToolCallID
+    if toolCallID == "" {
+      toolCallID = "default" // 降级方案
+    }
 
-      // 使用 tool call ID 构建唯一键
-      key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
+    // 使用 tool call ID 构建唯一键
+    key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
+
+    // 从 context 获取 Invocation
+    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
       inv.SetState(key, time.Now())
     }
     return nil, nil
   }).
   // AfterToolCallback：计算工具执行时长
   RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
-    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-      // 使用相同的逻辑获取 tool call ID
-      toolCallID, ok := tool.ToolCallIDFromContext(ctx)
-      if !ok || toolCallID == "" {
-        toolCallID = "default"
-      }
+    // 使用 args 中的 ToolCallID
+    toolCallID := args.ToolCallID
+    if toolCallID == "" {
+      toolCallID = "default"
+    }
 
-      key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
+    key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
+
+    // 从 context 获取 Invocation
+    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
       if startTimeVal, ok := inv.GetState(key); ok {
         startTime := startTimeVal.(time.Time)
         duration := time.Since(startTime)
@@ -669,10 +737,10 @@ toolCallbacks := tool.NewCallbacks().
 
 **关键点**：
 
-1. **获取 tool call ID**：使用 `tool.ToolCallIDFromContext(ctx)` 从 context 中获取唯一的工具调用 ID
+1. **使用 args 中的 ToolCallID**：`BeforeToolArgs` 和 `AfterToolArgs` 现在直接包含 `ToolCallID` 字段
 2. **键名格式**：`"tool:<toolName>:<toolCallID>:<key>"` 确保并发调用的状态隔离
-3. **降级处理**：如果获取不到 tool call ID（旧版本或特殊场景），使用 `"default"` 作为降级
-4. **一致性**：Before 和 After 回调必须使用相同的逻辑获取 tool call ID
+3. **降级处理**：如果 ToolCallID 为空（旧版本或特殊场景），使用 `"default"` 作为降级
+4. **一致性**：Before 和 After 回调使用相同的 `ToolCallID`（来自回调参数）
 
 这样可以确保当 LLM 同时调用 `calculator` 多次（如 `calculator(1,2)` 和 `calculator(3,4)`）时，每个调用都有独立的计时数据。
 
