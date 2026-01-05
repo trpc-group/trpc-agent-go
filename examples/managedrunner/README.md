@@ -6,7 +6,6 @@ control over it.
 It demonstrates:
 
 - A run identifier (runID, run identifier) with `agent.WithRunID`
-- A run identifier (runID) with `agent.WithRunID`
 - Detached cancellation with `agent.WithDetachedCancel(true)`
 - A maximum runtime with `agent.WithMaxRunDuration`
 - Run status with `runner.ManagedRunner.RunStatus`
