@@ -64,10 +64,12 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 		(len(event.StateDelta[graph.MetadataKeyModel]) > 0 ||
 			len(event.StateDelta[graph.MetadataKeyTool]) > 0 ||
 			len(event.StateDelta[graph.MetadataKeyNodeCustom]) > 0 ||
-			len(event.StateDelta[graph.MetadataKeyNode]) > 0)
+			len(event.StateDelta[graph.MetadataKeyNode]) > 0 ||
+			len(event.StateDelta[graph.MetadataKeyPregel]) > 0)
 
 	// GraphAgent emits model/tool metadata via StateDelta instead of raw tool_calls.
 	events = append(events, t.graphNodeStartActivityEvents(event)...)
+	events = append(events, t.graphNodeInterruptActivityEvents(event)...)
 	events = append(events, t.graphModelEvents(event)...)
 	events = append(events, t.graphToolEvents(event)...)
 	// Handle node custom events (progress, text, custom).
@@ -116,12 +118,19 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 }
 
 const (
-	graphNodeStartActivityType = "graph.node.start"
-	graphNodeStartPatchPath    = "/node"
+	graphNodeStartActivityType     = "graph.node.start"
+	graphNodeStartPatchPath        = "/node"
+	graphNodeInterruptActivityType = "graph.node.interrupt"
+	graphNodeInterruptPatchPath    = "/interrupt"
 )
 
 type graphNodeStartPatchValue struct {
 	NodeID string `json:"nodeId"`
+}
+
+type graphNodeInterruptPatchValue struct {
+	NodeID string `json:"nodeId"`
+	Prompt any    `json:"prompt"`
 }
 
 func (t *translator) graphNodeStartActivityEvents(evt *agentevent.Event) []aguievents.Event {
@@ -153,6 +162,41 @@ func (t *translator) graphNodeStartActivityEvents(evt *agentevent.Event) []aguie
 
 	return []aguievents.Event{
 		aguievents.NewActivityDeltaEvent(uuid.NewString(), graphNodeStartActivityType, patch),
+	}
+}
+
+func (t *translator) graphNodeInterruptActivityEvents(evt *agentevent.Event) []aguievents.Event {
+	if evt == nil || evt.StateDelta == nil {
+		return nil
+	}
+	raw, ok := evt.StateDelta[graph.MetadataKeyPregel]
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	var meta graph.PregelStepMetadata
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return []aguievents.Event{aguievents.NewRunErrorEvent(
+			fmt.Sprintf("invalid graph pregel metadata: %v", err),
+			aguievents.WithRunID(t.runID),
+		)}
+	}
+	if meta.NodeID == "" || meta.InterruptValue == nil {
+		return nil
+	}
+
+	patch := []aguievents.JSONPatchOperation{
+		{
+			Op:   "add",
+			Path: graphNodeInterruptPatchPath,
+			Value: graphNodeInterruptPatchValue{
+				NodeID: meta.NodeID,
+				Prompt: meta.InterruptValue,
+			},
+		},
+	}
+
+	return []aguievents.Event{
+		aguievents.NewActivityDeltaEvent(uuid.NewString(), graphNodeInterruptActivityType, patch),
 	}
 }
 

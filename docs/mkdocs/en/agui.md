@@ -695,11 +695,14 @@ The effect is shown below. For a full example, refer to
 
 ### GraphAgent Node Execution Progress
 
-With `GraphAgent`, a single run typically executes multiple nodes along the graph. To help the frontend clearly show “which node is currently executing”, the framework sends an `ACTIVITY_DELTA` event before each node starts executing.
+With `GraphAgent`, a single run typically executes multiple nodes along the graph. To help the frontend clearly show “which node is currently executing” and render Human-in-the-Loop (HITL) prompts when a graph interrupts, the framework emits `ACTIVITY_DELTA` events:
 
-This event is emitted before the node actually runs. It is also emitted before resuming from an interrupt, which makes it suitable for consistent progress tracking.
+- `activityType == "graph.node.start"`: emitted before the node actually runs. It is also emitted before resuming from an interrupt, which makes it suitable for consistent progress tracking.
+- `activityType == "graph.node.interrupt"`: emitted when the graph execution is interrupted, which is useful for rendering a prompt and collecting user input.
 
-Example `ACTIVITY_DELTA` event (the `patch` follows [JSON Patch](https://jsonpatch.com/)):
+Below are two example `ACTIVITY_DELTA` events (the `patch` follows [JSON Patch](https://jsonpatch.com/)).
+
+Node start (`graph.node.start`):
 
 ```json
 {
@@ -717,6 +720,23 @@ Example `ACTIVITY_DELTA` event (the `patch` follows [JSON Patch](https://jsonpat
 }
 ```
 
-Frontend handling suggestion: listen for `ACTIVITY_DELTA` events with `activityType == "graph.node.start"`, read `nodeId` from the patch, and locate the corresponding node in the UI.
+Interrupt (`graph.node.interrupt`):
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.interrupt",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/interrupt",
+      "value": {
+        "nodeId": "confirm",
+        "prompt": "Confirm continuing after the recipe amounts are calculated."
+      }
+    }
+  ]
+}
+```
 
 For a complete example, see [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph).

@@ -4,12 +4,12 @@ This example exposes an AG-UI SSE endpoint backed by a `GraphAgent` that execute
 
 The graph includes function/LLM/tools/agent nodes to exercise different `GraphAgent` node types in a realistic scenario.
 
-When each graph node starts, the AG-UI translator emits an `ACTIVITY_DELTA` event with:
+The AG-UI translator emits `ACTIVITY_DELTA` events that the frontend can use to track graph progress and interrupts:
 
-- `activityType`: `graph.node.start`
-- `patch`: sets `/node` to the current node information
+- `activityType`: `graph.node.start` sets `/node` to the current node information.
+- `activityType`: `graph.node.interrupt` sets `/interrupt` with the interrupt payload, where `prompt` is the value passed to `graph.Interrupt(...)` (string or structured JSON).
 
-This helps the frontend track which node is executing, including during resume-from-interrupt flows.
+This helps the frontend track which node is executing and render Human-in-the-Loop prompts, including during resume-from-interrupt flows.
 
 The node IDs are executed in this order:
 
@@ -34,7 +34,7 @@ go run ./server/graph \
   -path /agui
 ```
 
-## Verify With curl
+## Verify with curl
 
 First request: the graph will interrupt at `confirm` (after the tool is executed).
 
@@ -76,16 +76,41 @@ curl --no-buffer --location 'http://127.0.0.1:8080/agui' \
 
 Look for SSE `data:` lines that contain `"type":"ACTIVITY_DELTA"`, for example:
 
+Node start:
+
 ```json
 {
   "type": "ACTIVITY_DELTA",
+  "timestamp": 1767596081644,
+  "messageId": "7e3c1eb2-670f-470d-9a5d-9270207b5c02",
   "activityType": "graph.node.start",
   "patch": [
     {
       "op": "add",
       "path": "/node",
       "value": {
-        "nodeId": "prepare"
+        "nodeId": "confirm"
+      }
+    }
+  ]
+}
+```
+
+Interrupt:
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "timestamp": 1767596081644,
+  "messageId": "1b57bb24-2de0-4824-9175-9dbf58bff34c",
+  "activityType": "graph.node.interrupt",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/interrupt",
+      "value": {
+        "nodeId": "confirm",
+        "prompt": "Confirm continuing after the recipe amounts are calculated."
       }
     }
   ]

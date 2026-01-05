@@ -696,11 +696,14 @@ if err != nil {
 
 ### GraphAgent 节点执行进度
 
-在 `GraphAgent` 场景下，一个 run 通常会按图执行多个节点。为了让前端能直观展示“当前正在执行哪个节点”，框架在每个节点开始执行前发送一条 `ACTIVITY_DELTA` 事件。
+在 `GraphAgent` 场景下，一个 run 通常会按图执行多个节点。为了让前端能直观展示“当前正在执行哪个节点”，并在 Human-in-the-Loop（HITL）场景中展示中断提示，框架会发送 `ACTIVITY_DELTA` 事件：
 
-该事件会在节点真正执行前发出，包括从中断恢复时也会在恢复前先发出对应节点的事件，因此适合做统一的进度跟踪。
+- `activityType == "graph.node.start"`：在节点真正执行前发出；从中断恢复时也会在恢复前先发出一次，适合做统一的进度跟踪。
+- `activityType == "graph.node.interrupt"`：在图执行被中断时发出；适合用于前端渲染提示并收集用户输入。
 
-`ACTIVITY_DELTA` 事件示例，其中 `patch` 遵从 [JSON PATCH](https://jsonpatch.com/) 格式。
+下面是两个 `ACTIVITY_DELTA` 事件示例，其中 `patch` 遵从 [JSON PATCH](https://jsonpatch.com/) 格式。
+
+节点开始（`graph.node.start`）：
 
 ```json
 {
@@ -718,6 +721,23 @@ if err != nil {
 }
 ```
 
-前端处理建议：监听 `ACTIVITY_DELTA` 且 `activityType == "graph.node.start"` 的事件，读取 patch 中的 `nodeId`，并在 UI 上定位对应的节点。
+中断提示（`graph.node.interrupt`）：
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.interrupt",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/interrupt",
+      "value": {
+        "nodeId": "confirm",
+        "prompt": "Confirm continuing after the recipe amounts are calculated."
+      }
+    }
+  ]
+}
+```
 
 完整示例可参考 [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph)。
