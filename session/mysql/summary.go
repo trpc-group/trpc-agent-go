@@ -51,6 +51,10 @@ func (s *Service) CreateSessionSummary(
 	sum := sess.Summaries[filterKey]
 	sess.SummariesMu.RUnlock()
 
+	if sum == nil {
+		return nil
+	}
+
 	summaryBytes, err := json.Marshal(sum)
 	if err != nil {
 		return fmt.Errorf("marshal summary failed: %w", err)

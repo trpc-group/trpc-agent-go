@@ -306,9 +306,10 @@ func WithAgentNodeEventCallback(callback AgentEventCallback) Option {
 // decoding, which may coerce numbers to float64 and complex structures to
 // map[string]any.
 type SubgraphResult struct {
-	LastResponse  string
-	FinalState    State
-	RawStateDelta map[string][]byte
+	LastResponse     string
+	FinalState       State
+	RawStateDelta    map[string][]byte
+	StructuredOutput any // Structured output from sub-agent (typed struct or untyped map)
 }
 
 // SubgraphInputMapper projects parent state into child runtime state.
@@ -1502,7 +1503,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		}
 
 		// Process agent event stream and capture completion state.
-		lastResponse, finalState, rawDelta, fullRespEvent, tokenUsage, err := processAgentEventStream(
+		lastResponse, finalState, rawDelta, structuredOutput, fullRespEvent, tokenUsage, err := processAgentEventStream(
 			ctx, agentEventChan, nodeCallbacks, nodeID, state, eventChan, agentName, tracker,
 		)
 		if err != nil {
@@ -1515,7 +1516,12 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		emitAgentCompleteEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime)
 		// Update state with either custom output mapping or default behavior.
 		if outputMapper != nil {
-			mapped := outputMapper(state, SubgraphResult{LastResponse: lastResponse, FinalState: finalState, RawStateDelta: rawDelta})
+			mapped := outputMapper(state, SubgraphResult{
+				LastResponse:     lastResponse,
+				FinalState:       finalState,
+				RawStateDelta:    rawDelta,
+				StructuredOutput: structuredOutput,
+			})
 			if mapped != nil {
 				return mapped, nil
 			}
@@ -1540,10 +1546,11 @@ func processAgentEventStream(
 	eventChan chan<- *event.Event,
 	agentName string,
 	tracker *itelemetry.InvokeAgentTracker,
-) (string, State, map[string][]byte, *event.Event, *itelemetry.TokenUsage, error) {
+) (string, State, map[string][]byte, any, *event.Event, *itelemetry.TokenUsage, error) {
 	var lastResponse string
 	var finalState State
 	var rawDelta map[string][]byte
+	var structuredOutput any
 	var fullRespEvent *event.Event
 	tokenUsage := &itelemetry.TokenUsage{}
 
@@ -1560,13 +1567,18 @@ func processAgentEventStream(
 
 		// Forward the event to the parent event channel.
 		if err := event.EmitEvent(ctx, eventChan, agentEvent); err != nil {
-			return "", nil, nil, fullRespEvent, tokenUsage, err
+			return "", nil, nil, nil, fullRespEvent, tokenUsage, err
 		}
 
 		// Track the last response for state update.
 		if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 &&
 			agentEvent.Response.Choices[0].Message.Content != "" {
 			lastResponse = agentEvent.Response.Choices[0].Message.Content
+		}
+
+		// Capture structured output from state.update events.
+		if agentEvent.StructuredOutput != nil {
+			structuredOutput = agentEvent.StructuredOutput
 		}
 
 		if agentEvent.Response != nil {
@@ -1607,7 +1619,7 @@ func processAgentEventStream(
 		}
 	}
 
-	return lastResponse, finalState, rawDelta, fullRespEvent, tokenUsage, nil
+	return lastResponse, finalState, rawDelta, structuredOutput, fullRespEvent, tokenUsage, nil
 }
 
 // buildAgentInvocationWithStateAndScope builds an invocation for the target agent

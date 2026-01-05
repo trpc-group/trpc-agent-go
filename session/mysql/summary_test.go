@@ -786,13 +786,25 @@ func TestEnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade(t *testing.T
 	ctx := context.Background()
 	sess := session.NewSession("test-app", "user-456", "session-123")
 
-	// Add an event to make delta non-empty.
-	e := event.New("inv", "author")
-	e.Timestamp = time.Now()
-	e.Response = &model.Response{Choices: []model.Choice{{
+	// Add events with different filterKeys to trigger cascade (not single filterKey
+	// optimization). Version must be CurrentVersion for Filter() to use FilterKey.
+	e1 := event.New("inv1", "author")
+	e1.Timestamp = time.Now()
+	e1.FilterKey = "tool-usage"
+	e1.Version = event.CurrentVersion
+	e1.Response = &model.Response{Choices: []model.Choice{{
 		Message: model.Message{Role: model.RoleUser, Content: "hello"},
 	}}}
-	sess.Events = append(sess.Events, *e)
+	sess.Events = append(sess.Events, *e1)
+
+	e2 := event.New("inv2", "author")
+	e2.Timestamp = time.Now()
+	e2.FilterKey = "other-key"
+	e2.Version = event.CurrentVersion
+	e2.Response = &model.Response{Choices: []model.Choice{{
+		Message: model.Message{Role: model.RoleUser, Content: "world"},
+	}}}
+	sess.Events = append(sess.Events, *e2)
 
 	// Mock sync processing for branch summary.
 	// INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert).
@@ -823,6 +835,103 @@ func TestEnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade(t *testing.T
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// EnqueueSummaryJob should fall back to sync processing with cascade.
+	err = s.EnqueueSummaryJob(ctx, sess, "tool-usage", false)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestEnqueueSummaryJob_SingleFilterKey_PersistsBothKeys(t *testing.T) {
+	// This test verifies that when all events match a single filterKey,
+	// the optimization path still persists BOTH the filterKey summary AND
+	// the full-session summary (filter_key="") to the database.
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Disable order matching since we need to match two sets of SQL calls.
+	mock.MatchExpectationsInOrder(false)
+
+	summarizer := &fakeSummarizer{allow: true, out: "single-key-summary"}
+
+	// Create service without async workers.
+	s := createTestService(t, db, WithSummarizer(summarizer))
+
+	ctx := context.Background()
+	sess := session.NewSession("test-app", "user-456", "session-123")
+
+	// Add events that ALL match the same filterKey (triggers single filterKey
+	// optimization). Version must be CurrentVersion for Filter() to use FilterKey.
+	e1 := event.New("inv1", "author")
+	e1.Timestamp = time.Now()
+	e1.FilterKey = "tool-usage"
+	e1.Version = event.CurrentVersion
+	e1.Response = &model.Response{Choices: []model.Choice{{
+		Message: model.Message{Role: model.RoleUser, Content: "hello"},
+	}}}
+	sess.Events = append(sess.Events, *e1)
+
+	e2 := event.New("inv2", "author")
+	e2.Timestamp = time.Now()
+	e2.FilterKey = "tool-usage" // Same filterKey as e1.
+	e2.Version = event.CurrentVersion
+	e2.Response = &model.Response{Choices: []model.Choice{{
+		Message: model.Message{Role: model.RoleUser, Content: "world"},
+	}}}
+	sess.Events = append(sess.Events, *e2)
+
+	// Mock: First call persists filterKey="tool-usage" (LLM generates summary).
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"tool-usage",
+		).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"tool-usage",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Mock: Second call persists filter_key="" (full-session, copied summary).
+	// This is the critical part - verifying that filter_key="" is also persisted!
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"", // filter_key="" must be persisted.
+		).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"", // filter_key="" must be persisted.
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// EnqueueSummaryJob with filterKey should trigger single filterKey optimization
+	// and persist BOTH keys.
 	err = s.EnqueueSummaryJob(ctx, sess, "tool-usage", false)
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -1033,6 +1142,60 @@ func TestCreateSessionSummary_UpsertError(t *testing.T) {
 	err = s.CreateSessionSummary(ctx, sess, "", true)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "upsert summary failed")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateSessionSummary_InsertError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &mockSummarizer{
+		summarizeFunc: func(ctx context.Context, sess *session.Session) (string, error) {
+			return "Test summary", nil
+		},
+	}
+
+	s := createTestService(t, db, WithSummarizer(summarizer))
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:        "session-123",
+		AppName:   "test-app",
+		UserID:    "user-456",
+		UpdatedAt: time.Now(),
+	}
+
+	// Mock: Update returns 0 rows affected (no existing record).
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+		WithArgs(
+			sqlmock.AnyArg(), // summary
+			sqlmock.AnyArg(), // updated_at
+			sqlmock.AnyArg(), // expires_at
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"", // filter_key
+		).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock: Insert fails.
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",               // filter_key
+			sqlmock.AnyArg(), // summary
+			sqlmock.AnyArg(), // updated_at
+			sqlmock.AnyArg(), // expires_at
+		).
+		WillReturnError(fmt.Errorf("insert error"))
+
+	// Use force=true to trigger insert even with no events.
+	err = s.CreateSessionSummary(ctx, sess, "", true)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "insert summary failed")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -346,7 +346,7 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 	}
 	close(agentEvents)
 
-	last, final, raw, _, _, err := processAgentEventStream(
+	last, final, raw, _, _, _, err := processAgentEventStream(
 		ctx,
 		agentEvents,
 		nil,
@@ -394,7 +394,7 @@ func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
 	agentEvents <- finalEvent
 	close(agentEvents)
 
-	last, _, _, fullRespEvent, tokenUsage, err := processAgentEventStream(
+	last, _, _, _, fullRespEvent, tokenUsage, err := processAgentEventStream(
 		ctx,
 		agentEvents,
 		nil,
@@ -411,6 +411,50 @@ func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
 	require.Equal(t, finalUsage.TotalTokens, tokenUsage.TotalTokens)
 	require.Equal(t, finalEvent, fullRespEvent)
 	require.Len(t, parentEventChan, 2)
+}
+
+func TestProcessAgentEventStream_CapturesStructuredOutput(t *testing.T) {
+	ctx := context.Background()
+	agentEvents := make(chan *event.Event, 2)
+	parentEventChan := make(chan *event.Event, 2)
+
+	// First event without structured output
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			IsPartial: false,
+			Choices:   []model.Choice{{Message: model.NewAssistantMessage("text response")}},
+		},
+	}
+
+	// Second event with structured output
+	structuredData := map[string]any{
+		"status": "success",
+		"data":   []string{"item1", "item2"},
+		"count":  2,
+	}
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			IsPartial: false,
+			Choices:   []model.Choice{{Message: model.NewAssistantMessage("final")}},
+		},
+		StructuredOutput: structuredData,
+	}
+	close(agentEvents)
+
+	last, _, _, capturedOutput, _, _, err := processAgentEventStream(
+		ctx,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		&itelemetry.InvokeAgentTracker{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "final", last)
+	require.NotNil(t, capturedOutput, "should capture structured output from event")
+	require.Equal(t, structuredData, capturedOutput, "captured output should match event payload")
 }
 
 func TestProcessToolCalls_ParallelCancelOnFirstError(t *testing.T) {
