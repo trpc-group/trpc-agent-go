@@ -56,6 +56,8 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, rootCtx, ctx)
 	assert.NotNil(t, span)
+
+	assert.Equal(t, time.Hour, opts.Timeout)
 }
 
 func TestWithUserIDResolver(t *testing.T) {
@@ -171,4 +173,9 @@ func TestWithStartSpan(t *testing.T) {
 	_, _, err := opts.StartSpan(context.Background(), &adapter.RunAgentInput{})
 	assert.True(t, called)
 	assert.EqualError(t, err, "start failed")
+}
+
+func TestWithTimeout(t *testing.T) {
+	opts := NewOptions(WithTimeout(2 * time.Second))
+	assert.Equal(t, 2*time.Second, opts.Timeout)
 }

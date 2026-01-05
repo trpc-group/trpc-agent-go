@@ -217,8 +217,12 @@ type Options struct {
 	// again when building the tools list for each invocation.
 	RefreshToolSetsOnRun bool
 
-	// SkillsRepository enables Agent Skills if non-nil.
-	SkillsRepository          skill.Repository
+	// skillsRepository enables agent skills when non-nil.
+	skillsRepository skill.Repository
+	// skillRunAllowedCommands restricts skill_run to allowlisted commands.
+	skillRunAllowedCommands []string
+	// skillRunDeniedCommands rejects denylisted commands for skill_run.
+	skillRunDeniedCommands    []string
 	messageTimelineFilterMode string
 	messageBranchFilterMode   string
 
@@ -344,7 +348,27 @@ func WithRefreshToolSetsOnRun(refresh bool) Option {
 // and on-demand content according to session state.
 func WithSkills(repo skill.Repository) Option {
 	return func(opts *Options) {
-		opts.SkillsRepository = repo
+		opts.skillsRepository = repo
+	}
+}
+
+// WithSkillRunAllowedCommands restricts skill_run to a single,
+// allowlisted command (no shell syntax) when non-empty.
+func WithSkillRunAllowedCommands(cmds ...string) Option {
+	return func(opts *Options) {
+		opts.skillRunAllowedCommands = append(
+			[]string(nil), cmds...,
+		)
+	}
+}
+
+// WithSkillRunDeniedCommands rejects a single, denylisted command (no shell
+// syntax) when non-empty.
+func WithSkillRunDeniedCommands(cmds ...string) Option {
+	return func(opts *Options) {
+		opts.skillRunDeniedCommands = append(
+			[]string(nil), cmds...,
+		)
 	}
 }
 
@@ -440,6 +464,32 @@ func WithDefaultTransferMessage(msg string) Option {
 	}
 }
 
+// WithStructuredOutputJSONSchema sets a JSON schema structured output for normal runs.
+//
+// Unlike WithOutputSchema, this uses the model-native response_format json_schema mechanism
+// (when supported by the provider) and can be used together with tools/toolsets.
+//
+// name should be a short identifier for the schema. Some providers (e.g. OpenAI) require it.
+func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict bool, description string) Option {
+	return func(opts *Options) {
+		if schema == nil {
+			return
+		}
+		if name == "" {
+			name = "output"
+		}
+		opts.StructuredOutput = &model.StructuredOutput{
+			Type: model.StructuredOutputJSONSchema,
+			JSONSchema: &model.JSONSchemaConfig{
+				Name:        name,
+				Schema:      schema,
+				Strict:      strict,
+				Description: description,
+			},
+		}
+	}
+}
+
 // WithStructuredOutputJSON sets a JSON schema structured output for normal runs.
 // The schema is constructed automatically from the provided example type.
 // Provide a typed zero-value pointer like: new(MyStruct) or (*MyStruct)(nil) and we infer the type.
@@ -459,6 +509,9 @@ func WithStructuredOutputJSON(examplePtr any, strict bool, description string) O
 		gen := jsonschema.New()
 		schema := gen.Generate(t.Elem())
 		name := t.Elem().Name()
+		if name == "" {
+			name = "output"
+		}
 		opts.StructuredOutput = &model.StructuredOutput{
 			Type: model.StructuredOutputJSONSchema,
 			JSONSchema: &model.JSONSchemaConfig{

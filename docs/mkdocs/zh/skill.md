@@ -67,6 +67,10 @@ skills/
 export OPENAI_API_KEY="your-api-key"
 # 可选：指定技能根目录（容器执行器会只读挂载）
 export SKILLS_ROOT=/path/to/skills
+# 可选：也支持传入 HTTP(S) URL（例如 .zip/.tar.gz/.tgz/.tar 压缩包）
+# export SKILLS_ROOT=https://example.com/skills.zip
+# 可选：覆盖 URL 根目录的本地缓存目录
+# export SKILLS_CACHE_DIR=/path/to/cache
 ```
 
 ### 2) 启用 Skills
@@ -213,7 +217,7 @@ https://github.com/anthropics/skills
 
 输入：
 - `skill`（必填）：技能名
-- `command`（必填）：Shell 命令（通过 `bash -lc` 执行）
+- `command`（必填）：Shell 命令（默认通过 `bash -lc` 执行）
 - `cwd`（可选）：相对技能根目录的工作路径
 - `env`（可选）：环境变量映射
 - `output_files`（可选，传统收集方式）：通配符列表
@@ -248,6 +252,23 @@ https://github.com/anthropics/skills
 - `omit_inline_content`（可选）：与 `save_as_artifacts` 配合，
   为 true 时不返回文件内容，仅保留文件名/MIME 信息。
 - `artifact_prefix`（可选）：与 `save_as_artifacts` 配合的前缀。
+
+可选的安全限制（白名单）：
+- 环境变量 `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`：
+  - 逗号/空格分隔的命令名列表（如 `ls,cat,ifconfig`）
+  - 启用后 `skill_run` 会拒绝管道/重定向/分号等 Shell 语法，
+    并仅允许执行白名单中的“单条命令”
+  - 因为不再经过 Shell 解析，诸如 `> out/x.txt`、heredoc、
+    `$OUTPUT_DIR` 变量展开等写法将不可用；建议改为调用脚本，
+    或使用 `outputs` 收集输出文件
+- 代码侧也可通过 `llmagent.WithSkillRunAllowedCommands(...)` 配置。
+
+可选的安全限制（黑名单）：
+- 环境变量 `TRPC_AGENT_SKILL_RUN_DENIED_COMMANDS`：
+  - 逗号/空格分隔的命令名列表
+  - 启用后同样会拒绝 Shell 语法（仅允许“单条命令”），并拒绝
+    执行黑名单中的命令名
+- 代码侧也可通过 `llmagent.WithSkillRunDeniedCommands(...)` 配置。
 
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`

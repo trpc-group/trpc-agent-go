@@ -67,6 +67,10 @@ Common env vars:
 export OPENAI_API_KEY="your-api-key"
 # Optional: read‑only mount for container runtime
 export SKILLS_ROOT=/path/to/skills
+# Optional: HTTP(S) URL to a skills archive (.zip/.tar.gz/.tgz/.tar)
+# export SKILLS_ROOT=https://example.com/skills.zip
+# Optional: override cache location for URL roots
+# export SKILLS_CACHE_DIR=/path/to/cache
 ```
 
 ### 2) Enable Skills in an Agent
@@ -208,7 +212,7 @@ Declaration: [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blo
 
 Input:
 - `skill` (required)
-- `command` (required, runs via `bash -lc`)
+- `command` (required; by default runs via `bash -lc`)
 - `cwd`, `env` (optional)
 - `output_files` (optional, legacy collection): glob patterns (e.g.,
   `out/*.txt`). Patterns are workspace‑relative; env‑style prefixes
@@ -241,6 +245,25 @@ Input:
 - `omit_inline_content` (optional): with `save_as_artifacts`, omit
   `output_files[*].content` and return metadata only
 - `artifact_prefix` (optional): prefix for the legacy artifact path
+
+Optional safety restriction (allowlist):
+- Env var `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`:
+  - Comma/space-separated command names (for example, `ls,cat,ifconfig`)
+  - When set, `skill_run` rejects shell syntax (pipes/redirections/
+    separators) and only allows a single allowlisted command
+  - Because the command is no longer parsed by a shell, patterns like
+    `> out/x.txt`, heredocs, and `$OUTPUT_DIR` expansion will not work;
+    prefer running scripts or using `outputs` to collect files
+- You can also configure this in code via
+  `llmagent.WithSkillRunAllowedCommands(...)`.
+
+Optional safety restriction (denylist):
+- Env var `TRPC_AGENT_SKILL_RUN_DENIED_COMMANDS`:
+  - Comma/space-separated command names
+  - When set, `skill_run` also rejects shell syntax (single command only)
+    and blocks denylisted command names
+- You can also configure this in code via
+  `llmagent.WithSkillRunDeniedCommands(...)`.
 
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
