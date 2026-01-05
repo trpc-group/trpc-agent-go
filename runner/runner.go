@@ -97,21 +97,20 @@ type Runner interface {
 
 // ManagedRunner extends Runner with run control APIs.
 //
-// RunID is used as the run identifier.
+// RequestID is used as the run identifier.
 //
-// If the caller does not set a run id via agent.WithRunID (or
-// agent.WithRequestID), Runner will generate one and inject it into every
-// emitted event.
+// If the caller does not set a request ID via agent.WithRequestID,
+// Runner will generate one and inject it into every emitted event.
 type ManagedRunner interface {
 	Runner
 
-	// Cancel cancels a running invocation by run id.
+	// Cancel cancels a running invocation by request ID.
 	// It returns true if a matching run was found.
-	Cancel(runID string) bool
+	Cancel(requestID string) bool
 
 	// RunStatus returns the current status for a running invocation.
-	// It returns false when the run id is unknown or the run completed.
-	RunStatus(runID string) (RunStatus, bool)
+	// It returns false when the request ID is unknown or the run completed.
+	RunStatus(requestID string) (RunStatus, bool)
 }
 
 // RunStatus is a snapshot of a running invocation.
@@ -409,8 +408,8 @@ func (r *runner) Run(
 	), nil
 }
 
-func (r *runner) Cancel(runID string) bool {
-	cancel := r.lookupCancel(runID)
+func (r *runner) Cancel(requestID string) bool {
+	cancel := r.lookupCancel(requestID)
 	if cancel == nil {
 		return false
 	}
@@ -418,8 +417,8 @@ func (r *runner) Cancel(runID string) bool {
 	return true
 }
 
-func (r *runner) RunStatus(runID string) (RunStatus, bool) {
-	handle := r.lookupRun(runID)
+func (r *runner) RunStatus(requestID string) (RunStatus, bool) {
+	handle := r.lookupRun(requestID)
 	if handle == nil {
 		return RunStatus{}, false
 	}
