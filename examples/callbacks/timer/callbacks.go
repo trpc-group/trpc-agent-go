@@ -228,9 +228,9 @@ func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallbackStr
 			return nil, nil
 		}
 
-		// Get tool call ID from context for concurrent tool call support.
-		toolCallID, ok := tool.ToolCallIDFromContext(ctx)
-		if !ok || toolCallID == "" {
+		// Use tool call ID from args for concurrent tool call support.
+		toolCallID := args.ToolCallID
+		if toolCallID == "" {
 			// Fallback: use "default" if tool call ID is not available.
 			toolCallID = "default"
 		}
@@ -281,9 +281,9 @@ func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallbackStruc
 			return nil, nil
 		}
 
-		// Get tool call ID from context (must use same logic as BeforeToolCallback).
-		toolCallID, ok := tool.ToolCallIDFromContext(ctx)
-		if !ok || toolCallID == "" {
+		// Use tool call ID from args (must use same logic as BeforeToolCallback).
+		toolCallID := args.ToolCallID
+		if toolCallID == "" {
 			toolCallID = "default"
 		}
 
