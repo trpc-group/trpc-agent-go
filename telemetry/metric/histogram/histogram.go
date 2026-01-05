@@ -34,7 +34,7 @@ type DynamicFloat64Histogram struct {
 }
 
 // NewDynamicFloat64Histogram creates a new dynamic histogram with the given options.
-// The meter provider, meter name, histogram name, description, and unit are stored for later use when recreating
+// The meter provider, meter name, histogram name, and options are stored for later use when recreating
 // the histogram with new bucket boundaries.
 func NewDynamicFloat64Histogram(
 	mp metric.MeterProvider,
@@ -83,7 +83,13 @@ func (d *DynamicFloat64Histogram) SetBuckets(boundaries []float64) error {
 	// Create a new Meter each time buckets change (required for some SDK/provider implementations).
 	meter := d.mp.Meter(d.meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, d.metricName)))
 
-	h, err := meter.Float64Histogram(d.metricName, d.options...)
+	opts := make([]metric.Float64HistogramOption, 0, len(d.options)+1)
+	opts = append(opts, d.options...)
+	if len(boundaries) > 0 {
+		opts = append(opts, metric.WithExplicitBucketBoundaries(boundaries...))
+	}
+
+	h, err := meter.Float64Histogram(d.metricName, opts...)
 	if err != nil {
 		return err
 	}
@@ -95,55 +101,39 @@ func (d *DynamicFloat64Histogram) SetBuckets(boundaries []float64) error {
 // It allows updating histogram bucket boundaries at runtime by recreating the underlying
 // histogram instrument.
 type DynamicInt64Histogram struct {
-	mu          sync.RWMutex
-	histogram   metric.Int64Histogram
-	meterName   string
-	mp          metric.MeterProvider
-	metricName  string
-	description string
-	unit        string
-	boundaries  []float64
+	mu         sync.RWMutex
+	histogram  metric.Int64Histogram
+	meterName  string
+	mp         metric.MeterProvider
+	metricName string
+	options    []metric.Int64HistogramOption
 }
 
 // NewDynamicInt64Histogram creates a new dynamic histogram with the given options.
-// The meter provider, meter name, histogram name, description, and unit are stored for later use when recreating
+// The meter provider, meter name, histogram name, and options are stored for later use when recreating
 // the histogram with new bucket boundaries.
 func NewDynamicInt64Histogram(
 	mp metric.MeterProvider,
 	meterName string,
-	meter metric.Meter,
 	metricName string,
-	description string,
-	unit string,
-	boundaries []float64,
+	options ...metric.Int64HistogramOption,
 ) (*DynamicInt64Histogram, error) {
 	if mp == nil {
 		return nil, fmt.Errorf("meter provider is nil")
 	}
 
-	if meter == nil {
-		meter = mp.Meter(meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, metricName)))
-	}
-	opts := []metric.Int64HistogramOption{
-		metric.WithDescription(description),
-		metric.WithUnit(unit),
-	}
-	if len(boundaries) > 0 {
-		opts = append(opts, metric.WithExplicitBucketBoundaries(boundaries...))
-	}
+	meter := mp.Meter(meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, metricName)))
 
-	h, err := meter.Int64Histogram(metricName, opts...)
+	h, err := meter.Int64Histogram(metricName, options...)
 	if err != nil {
 		return nil, err
 	}
 	return &DynamicInt64Histogram{
-		histogram:   h,
-		mp:          mp,
-		meterName:   meterName,
-		metricName:  metricName,
-		description: description,
-		unit:        unit,
-		boundaries:  boundaries,
+		histogram:  h,
+		mp:         mp,
+		meterName:  meterName,
+		metricName: metricName,
+		options:    options,
 	}, nil
 }
 
@@ -168,10 +158,9 @@ func (d *DynamicInt64Histogram) SetBuckets(boundaries []float64) error {
 	}
 	// Create a new Meter each time buckets change (required for some SDK/provider implementations).
 	meter := d.mp.Meter(d.meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, d.metricName)))
-	opts := []metric.Int64HistogramOption{
-		metric.WithDescription(d.description),
-		metric.WithUnit(d.unit),
-	}
+
+	opts := make([]metric.Int64HistogramOption, 0, len(d.options)+1)
+	opts = append(opts, d.options...)
 	if len(boundaries) > 0 {
 		opts = append(opts, metric.WithExplicitBucketBoundaries(boundaries...))
 	}
@@ -181,16 +170,5 @@ func (d *DynamicInt64Histogram) SetBuckets(boundaries []float64) error {
 		return err
 	}
 	d.histogram = h
-	d.boundaries = boundaries
 	return nil
-}
-
-// GetBuckets returns the current bucket boundaries.
-// This method is thread-safe.
-func (d *DynamicInt64Histogram) GetBuckets() []float64 {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	result := make([]float64, len(d.boundaries))
-	copy(result, d.boundaries)
-	return result
 }
