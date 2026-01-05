@@ -138,8 +138,10 @@ const (
 
 	// session_summaries: unique index on (app_name, user_id, session_id, filter_key).
 	// Note: This index does NOT include deleted_at because MySQL treats NULL != NULL,
-	// which would allow duplicate active records. Summary data is regenerable, so we
-	// use hard delete for summaries and enforce uniqueness on the business key only.
+	// which would allow duplicate active records. To ensure uniqueness, we exclude
+	// deleted_at from the unique index. On subsequent writes, deleted_at is reset to
+	// NULL (via ON DUPLICATE KEY UPDATE), effectively "reviving" the record instead
+	// of preserving deleted historical versions.
 	sqlCreateSessionSummariesUniqueIndex = `
 		CREATE UNIQUE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name, user_id, session_id, filter_key)`
@@ -195,6 +197,7 @@ type tableIndex struct {
 	table   string   // Base table name (without prefix) like "session_states"
 	suffix  string   // Index suffix like "unique_active", "lookup", "expires"
 	columns []string // Expected columns in the index
+	unique  bool     // Whether this is a unique index
 }
 
 // expectedSchema defines the expected schema for each table
@@ -215,8 +218,8 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp", true},
 		},
 		indexes: []tableIndex{
-			{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, []string{"app_name", "user_id", "session_id", "deleted_at"}},
-			{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+			{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, []string{"app_name", "user_id", "session_id", "deleted_at"}, true},
+			{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, []string{"expires_at"}, false},
 		},
 	},
 	sqldb.TableNameSessionEvents: {
@@ -232,8 +235,8 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp", true},
 		},
 		indexes: []tableIndex{
-			{sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookup, []string{"app_name", "user_id", "session_id", "created_at"}},
-			{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+			{sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookup, []string{"app_name", "user_id", "session_id", "created_at"}, false},
+			{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, []string{"expires_at"}, false},
 		},
 	},
 	sqldb.TableNameSessionTrackEvents: {
@@ -250,8 +253,8 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp", true},
 		},
 		indexes: []tableIndex{
-			{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixLookup, []string{"app_name", "user_id", "session_id", "created_at"}},
-			{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+			{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixLookup, []string{"app_name", "user_id", "session_id", "created_at"}, false},
+			{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixExpires, []string{"expires_at"}, false},
 		},
 	},
 	sqldb.TableNameSessionSummaries: {
@@ -268,8 +271,8 @@ var expectedSchema = map[string]struct {
 		},
 		indexes: []tableIndex{
 			// Unique index on business key only (no deleted_at) to prevent duplicate active records.
-			{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive, []string{"app_name", "user_id", "session_id", "filter_key"}},
-			{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+			{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive, []string{"app_name", "user_id", "session_id", "filter_key"}, true},
+			{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, []string{"expires_at"}, false},
 		},
 	},
 	sqldb.TableNameAppStates: {
@@ -284,8 +287,8 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp", true},
 		},
 		indexes: []tableIndex{
-			{sqldb.TableNameAppStates, sqldb.IndexSuffixUniqueActive, []string{"app_name", "key", "deleted_at"}},
-			{sqldb.TableNameAppStates, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+			{sqldb.TableNameAppStates, sqldb.IndexSuffixUniqueActive, []string{"app_name", "key", "deleted_at"}, true},
+			{sqldb.TableNameAppStates, sqldb.IndexSuffixExpires, []string{"expires_at"}, false},
 		},
 	},
 	sqldb.TableNameUserStates: {
@@ -301,8 +304,8 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp", true},
 		},
 		indexes: []tableIndex{
-			{sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive, []string{"app_name", "user_id", "key", "deleted_at"}},
-			{sqldb.TableNameUserStates, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+			{sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive, []string{"app_name", "user_id", "key", "deleted_at"}, true},
+			{sqldb.TableNameUserStates, sqldb.IndexSuffixExpires, []string{"expires_at"}, false},
 		},
 	},
 }
@@ -364,9 +367,9 @@ func (s *Service) initDB(ctx context.Context) error {
 		// MySQL doesn't have "IF NOT EXISTS" for indexes in older versions
 		// We'll use a different approach: try to create and ignore duplicate key errors
 		if _, err := s.mysqlClient.Exec(ctx, sql); err != nil {
-			// Check if it's a duplicate key error (error code 1061)
-			// This is more robust than checking error message strings
-			if !isDuplicateKeyError(err) {
+			// Check if it's a duplicate index name error (error code 1061).
+			// This means the index already exists, which is safe to skip.
+			if !isDuplicateIndexNameError(err) {
 				return fmt.Errorf(
 					"create index %s on table %s failed: %w",
 					indexName,
@@ -518,21 +521,19 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 		expectedIndexName := sqldb.BuildIndexName(s.opts.tablePrefix, expected.table, expected.suffix)
 		actualColumns, exists := actualIndexes[expectedIndexName]
 		if !exists {
-			// Build CREATE INDEX statement for user reference
+			// Build CREATE INDEX statement for user reference.
 			columnsStr := strings.Join(expected.columns, ", ")
-			createSQL := fmt.Sprintf("CREATE INDEX %s ON %s(%s);",
-				expectedIndexName, fullTableName, columnsStr)
+			createSQL := buildCreateIndexSQL(expectedIndexName, fullTableName, columnsStr, expected.unique)
 			log.WarnfContext(ctx, "index %s on table %s is missing, please run: %s",
 				expectedIndexName, fullTableName, createSQL)
 			continue
 		}
 
 		if !stringSlicesEqual(actualColumns, expected.columns) {
-			// Build DROP and CREATE INDEX statements for user reference
+			// Build DROP and CREATE INDEX statements for user reference.
 			columnsStr := strings.Join(expected.columns, ", ")
 			dropSQL := fmt.Sprintf("DROP INDEX %s ON %s;", expectedIndexName, fullTableName)
-			createSQL := fmt.Sprintf("CREATE INDEX %s ON %s(%s);",
-				expectedIndexName, fullTableName, columnsStr)
+			createSQL := buildCreateIndexSQL(expectedIndexName, fullTableName, columnsStr, expected.unique)
 			log.WarnfContext(ctx, "index %s on table %s has wrong columns: got %v, want %v. "+
 				"Please drop and recreate: %s %s",
 				expectedIndexName, fullTableName, actualColumns, expected.columns, dropSQL, createSQL)
@@ -566,16 +567,26 @@ func stringSlicesEqual(a, b []string) bool {
 	return true
 }
 
-// isDuplicateKeyError checks if the error is a MySQL duplicate key error.
-func isDuplicateKeyError(err error) bool {
+// buildCreateIndexSQL builds a CREATE INDEX SQL statement.
+func buildCreateIndexSQL(indexName, tableName, columns string, unique bool) string {
+	if unique {
+		return fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s(%s);", indexName, tableName, columns)
+	}
+	return fmt.Sprintf("CREATE INDEX %s ON %s(%s);", indexName, tableName, columns)
+}
+
+// isDuplicateIndexNameError checks if the error is a MySQL duplicate index name error (1061).
+// This is used when creating indexes - if the index name already exists, we can safely skip.
+// Note: This should NOT match error 1062 (duplicate entry), which indicates a data constraint
+// violation and should not be silently ignored.
+func isDuplicateIndexNameError(err error) bool {
 	if err == nil {
 		return false
 	}
 
 	var mysqlErr *mysql.MySQLError
 	if errors.As(err, &mysqlErr) {
-		return mysqlErr.Number == sqldb.MySQLErrDuplicateKeyName ||
-			mysqlErr.Number == sqldb.MySQLErrDuplicateEntry
+		return mysqlErr.Number == sqldb.MySQLErrDuplicateKeyName
 	}
 
 	return false
