@@ -272,6 +272,7 @@ func (e *Executor) executeGraph(
 	execCtx := e.buildExecutionContext(
 		eventChan, invocation.InvocationID, execState, resumed, lastCkpt,
 	)
+	execCtx.Invocation = invocation
 	// Initialize per-execution input channels from the prepared state.
 	e.initializeChannels(execCtx, execState, true)
 	if len(restoredPending) > 0 {
