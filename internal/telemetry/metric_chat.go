@@ -30,7 +30,7 @@ var (
 	// ChatMetricTRPCAgentGoClientRequestCnt records the number of chat requests made.
 	ChatMetricTRPCAgentGoClientRequestCnt metric.Int64Counter
 	// ChatMetricGenAIClientTokenUsage records the distribution of token usage (both input and output tokens).
-	ChatMetricGenAIClientTokenUsage metric.Int64Histogram
+	ChatMetricGenAIClientTokenUsage *histogram.DynamicInt64Histogram
 	// ChatMetricGenAIClientOperationDuration records the distribution of total chat operation durations in seconds.
 	ChatMetricGenAIClientOperationDuration *histogram.DynamicFloat64Histogram
 	// ChatMetricGenAIServerTimeToFirstToken records the distribution of time to first token latency in seconds.

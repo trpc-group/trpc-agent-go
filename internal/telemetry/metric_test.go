@@ -433,27 +433,27 @@ func TestChatMetricsTracker_RecordMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create counter: %v", err)
 	}
-	ChatMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameChat, nil, "gen_ai.client.operation.duration", "", "", nil)
+	ChatMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameChat, "gen_ai.client.operation.duration")
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	ChatMetricGenAIServerTimeToFirstToken, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameChat, nil, "gen_ai.server.time_to_first_token", "", "", nil)
+	ChatMetricGenAIServerTimeToFirstToken, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameChat, "gen_ai.server.time_to_first_token")
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	ChatMetricTRPCAgentGoClientTimeToFirstToken, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameChat, nil, "trpc_agent_go.client.time_to_first_token", "", "", nil)
+	ChatMetricTRPCAgentGoClientTimeToFirstToken, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameChat, "trpc_agent_go.client.time_to_first_token")
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	ChatMetricGenAIClientTokenUsage, err = ChatMeter.Int64Histogram("gen_ai.client.token.usage")
+	ChatMetricGenAIClientTokenUsage, err = histogram.NewDynamicInt64Histogram(provider, metrics.MeterNameChat, "gen_ai.client.token.usage")
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	ChatMetricTRPCAgentGoClientTimePerOutputToken, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameChat, nil, "trpc_agent_go.client.time_per_output_token", "", "", nil)
+	ChatMetricTRPCAgentGoClientTimePerOutputToken, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameChat, "trpc_agent_go.client.time_per_output_token")
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	ChatMetricTRPCAgentGoClientOutputTokenPerTime, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameChat, nil, "trpc_agent_go.client.output_token_per_time", "", "", nil)
+	ChatMetricTRPCAgentGoClientOutputTokenPerTime, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameChat, "trpc_agent_go.client.output_token_per_time")
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
@@ -555,11 +555,11 @@ func TestChatMetricsTracker_recordDerivedMetrics(t *testing.T) {
 			ChatMeter = provider.Meter(metrics.MeterNameChat)
 
 			var err error
-			ChatMetricTRPCAgentGoClientTimePerOutputToken, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameChat, nil, "time_per_token", "", "", nil)
+			ChatMetricTRPCAgentGoClientTimePerOutputToken, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameChat, "time_per_token")
 			if err != nil {
 				t.Fatalf("failed to create histogram: %v", err)
 			}
-			ChatMetricTRPCAgentGoClientOutputTokenPerTime, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameChat, nil, "token_per_time", "", "", nil)
+			ChatMetricTRPCAgentGoClientOutputTokenPerTime, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameChat, "token_per_time")
 			if err != nil {
 				t.Fatalf("failed to create histogram: %v", err)
 			}
@@ -683,7 +683,7 @@ func TestReportExecuteToolMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create counter: %v", err)
 	}
-	ExecuteToolMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameExecuteTool, nil, "execute_tool.duration", "", "", nil)
+	ExecuteToolMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(provider, metrics.MeterNameExecuteTool, "execute_tool.duration")
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}

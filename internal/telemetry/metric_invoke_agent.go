@@ -28,7 +28,7 @@ var (
 	// InvokeAgentMetricGenAIRequestCnt records the number of invoke agent requests made.
 	InvokeAgentMetricGenAIRequestCnt metric.Int64Counter
 	// InvokeAgentMetricGenAIClientTokenUsage records the distribution of input and output token usage.
-	InvokeAgentMetricGenAIClientTokenUsage metric.Int64Histogram
+	InvokeAgentMetricGenAIClientTokenUsage *histogram.DynamicInt64Histogram
 	// InvokeAgentMetricGenAIClientTimeToFirstToken records the distribution of time to first token latency in seconds.
 	InvokeAgentMetricGenAIClientTimeToFirstToken *histogram.DynamicFloat64Histogram
 	// InvokeAgentMetricGenAIClientOperationDuration records the distribution of total agent invocation durations in seconds.

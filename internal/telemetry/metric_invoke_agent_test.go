@@ -461,7 +461,7 @@ func TestInvokeAgentTracker_RecordMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create counter: %v", err)
 	}
-	InvokeAgentMetricGenAIClientTokenUsage, err = InvokeAgentMeter.Int64Histogram("gen_ai.client.token.usage")
+	InvokeAgentMetricGenAIClientTokenUsage, err = histogram.NewDynamicInt64Histogram(provider, metrics.MeterNameInvokeAgent, "gen_ai.client.token.usage")
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
@@ -554,7 +554,7 @@ func TestInvokeAgentTracker_RecordMetrics_WithError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create counter: %v", err)
 	}
-	InvokeAgentMetricGenAIClientTokenUsage, err = InvokeAgentMeter.Int64Histogram("gen_ai.client.token.usage")
+	InvokeAgentMetricGenAIClientTokenUsage, err = histogram.NewDynamicInt64Histogram(provider, metrics.MeterNameInvokeAgent, "gen_ai.client.token.usage")
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
@@ -613,7 +613,7 @@ func TestInvokeAgentTracker_RecordMetrics_NoTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create counter: %v", err)
 	}
-	InvokeAgentMetricGenAIClientTokenUsage, err = InvokeAgentMeter.Int64Histogram("gen_ai.client.token.usage")
+	InvokeAgentMetricGenAIClientTokenUsage, err = histogram.NewDynamicInt64Histogram(provider, metrics.MeterNameInvokeAgent, "gen_ai.client.token.usage")
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}

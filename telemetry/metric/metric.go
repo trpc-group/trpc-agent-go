@@ -42,7 +42,9 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientRequestCnt: %w", err)
 	}
-	if itelemetry.ChatMetricGenAIClientTokenUsage, err = itelemetry.ChatMeter.Int64Histogram(
+	if itelemetry.ChatMetricGenAIClientTokenUsage, err = histogram.NewDynamicInt64Histogram(
+		mp,
+		metrics.MeterNameChat,
 		metrics.MetricGenAIClientTokenUsage,
 		metric.WithDescription("Token usage for client"),
 		metric.WithUnit("{token}"),
@@ -136,6 +138,11 @@ func SetHistogramBuckets(metricName string, boundaries []float64) error {
 			return fmt.Errorf("chat metric %s not initialized", metricName)
 		}
 		return itelemetry.ChatMetricGenAIClientOperationDuration.SetBuckets(boundaries)
+	case metrics.MetricGenAIClientTokenUsage:
+		if itelemetry.ChatMetricGenAIClientTokenUsage == nil {
+			return fmt.Errorf("chat metric %s not initialized", metricName)
+		}
+		return itelemetry.ChatMetricGenAIClientTokenUsage.SetBuckets(boundaries)
 	case metrics.MetricGenAIServerTimeToFirstToken:
 		if itelemetry.ChatMetricGenAIServerTimeToFirstToken == nil {
 			return fmt.Errorf("chat metric %s not initialized", metricName)
@@ -182,6 +189,11 @@ func SetInvokeAgentHistogramBuckets(metricName string, boundaries []float64) err
 			return fmt.Errorf("invoke agent metric %s not initialized", metricName)
 		}
 		return itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken.SetBuckets(boundaries)
+	case metrics.MetricGenAIClientTokenUsage:
+		if itelemetry.InvokeAgentMetricGenAIClientTokenUsage == nil {
+			return fmt.Errorf("invoke agent metric %s not initialized", metricName)
+		}
+		return itelemetry.InvokeAgentMetricGenAIClientTokenUsage.SetBuckets(boundaries)
 	case metrics.MetricGenAIClientOperationDuration:
 		if itelemetry.InvokeAgentMetricGenAIClientOperationDuration == nil {
 			return fmt.Errorf("invoke agent metric %s not initialized", metricName)
@@ -207,7 +219,9 @@ func initInvokeAgentMetrics(mp metric.MeterProvider) error {
 	); err != nil {
 		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricTRPCAgentGoClientRequestCnt, err)
 	}
-	if itelemetry.InvokeAgentMetricGenAIClientTokenUsage, err = itelemetry.InvokeAgentMeter.Int64Histogram(
+	if itelemetry.InvokeAgentMetricGenAIClientTokenUsage, err = histogram.NewDynamicInt64Histogram(
+		mp,
+		metrics.MeterNameInvokeAgent,
 		metrics.MetricGenAIClientTokenUsage,
 		metric.WithDescription("Input tokens usage"),
 		metric.WithUnit("{token}"),
