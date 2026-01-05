@@ -3989,10 +3989,12 @@ Runner 运行时开启 <code>agent.WithGraphEmitFinalModelResponses(true)</code>
 <li><code>{key}</code> / <code>{{key}}</code> → 替换为会话状态中键 <code>key</code> 对应的字符串值（可通过 <code>sess.SetState("key", ...)</code> 或 SessionService 写入）</li>
 <li><code>{key?}</code> / <code>{{key?}}</code> → 可选，缺失时替换为空</li>
 <li><code>{user:subkey}</code>、<code>{app:subkey}</code>、<code>{temp:subkey}</code>（以及其 Mustache 写法）→ 访问用户/应用/临时命名空间（SessionService 会将 app/user 作用域合并到 session，并带上前缀）</li>
+<li><code>{invocation:subkey}</code> / <code>{{invocation:subkey}}</code> → 替换为 <code>invocation.state["subkey"]</code>（可通过 <code>invocation.SetState("subkey", v)</code> 设置）</li>
 </ul>
 <p>说明：</p>
 <ul>
 <li>GraphAgent 会把当前 <code>*session.Session</code> 写入图状态的 <code>StateKeySession</code>，LLM 节点据此读取注入值</li>
+<li><code>{invocation:*}</code> 从本次运行的 <code>*agent.Invocation</code> 读取</li>
 <li>无前缀键（如 <code>research_topics</code>）需要直接存在于 <code>session.State</code></li>
 </ul>
 <p>示例：</p>
@@ -8038,7 +8040,7 @@ Runner 运行时开启 <code>agent.WithGraphEmitFinalModelResponses(true)</code>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月31日 01:23:21 UTC">2025-12-31 01:23:21</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月5日 14:05:00 UTC">2026-01-05 14:05:00</span>
   </span>
 
     
