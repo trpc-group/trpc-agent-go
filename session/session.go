@@ -389,8 +389,7 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 	if event.Response != nil && !event.IsPartial && event.IsValidContent() {
 		sess.EventMu.Lock()
 		sess.Events = append(sess.Events, *event)
-
-		// Apply filtering options
+		// Apply filtering options.
 		sess.ApplyEventFiltering(opts...)
 		sess.EventMu.Unlock()
 	}
