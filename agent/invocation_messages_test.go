@@ -12,6 +12,7 @@ package agent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -87,6 +88,36 @@ func TestWithRequestID(t *testing.T) {
 	}
 }
 
+func TestWithRunID(t *testing.T) {
+	const (
+		runID = "run-123"
+	)
+
+	var ro RunOptions
+	WithRunID(runID)(&ro)
+
+	require.Equal(t, runID, ro.RequestID)
+}
+
+func TestWithDetachedCancel(t *testing.T) {
+	var ro RunOptions
+	WithDetachedCancel(true)(&ro)
+	require.True(t, ro.DetachedCancel)
+
+	WithDetachedCancel(false)(&ro)
+	require.False(t, ro.DetachedCancel)
+}
+
+func TestWithMaxRunDuration(t *testing.T) {
+	const (
+		maxRun = time.Second
+	)
+
+	var ro RunOptions
+	WithMaxRunDuration(maxRun)(&ro)
+	require.Equal(t, maxRun, ro.MaxRunDuration)
+}
+
 func TestWithA2ARequestOptions(t *testing.T) {
 	tests := []struct {
 		name string
@@ -131,7 +162,7 @@ func TestMultipleRunOptions(t *testing.T) {
 	WithRuntimeState(state)(&ro)
 	WithKnowledgeFilter(filter)(&ro)
 	WithResume(true)(&ro)
-	WithRequestID("multi-req-123")(&ro)
+	WithRunID("multi-req-123")(&ro)
 	WithA2ARequestOptions("opt1", "opt2")(&ro)
 
 	require.Equal(t, msgs, ro.Messages)

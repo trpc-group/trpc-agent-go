@@ -186,6 +186,64 @@ Notes:
 eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
 ```
 
+#### Run ID (runID) and Run Control
+
+Each call to `Runner.Run` is a **run**. If you want to cancel a run or query
+its status, you need a run identifier (runID).
+
+You can provide your own runID (recommended) via `agent.WithRunID` (for
+example, a Universally Unique Identifier (UUID)). Runner stores it in
+`RunOptions.RequestID` and injects it into every emitted `event.Event`
+(`event.RequestID`).
+
+```go
+runID := "run-123"
+
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithRunID(runID),
+)
+if err != nil {
+    panic(err)
+}
+
+managed := r.(runner.ManagedRunner)
+status, ok := managed.RunStatus(runID)
+_ = status
+_ = ok
+
+// Cancel the run by runID.
+managed.Cancel(runID)
+```
+
+#### Detached Cancellation (background execution)
+
+In Go, `context.Context` (often named `ctx`) carries both cancellation and a
+deadline. By default, Runner stops when `ctx` is cancelled.
+
+If you want the run to continue after a parent cancellation, enable detached
+cancellation and use a timeout to bound the total runtime:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithRunID(runID),
+    agent.WithDetachedCancel(true),
+    agent.WithMaxRunDuration(30*time.Second),
+)
+```
+
+Runner enforces the earlier of:
+
+- the parent context deadline (if any)
+- `MaxRunDuration` (if set)
+
 #### Resume Interrupted Runs (tools-first resume)
 
 In long-running conversations, users may interrupt the agent while it is still
