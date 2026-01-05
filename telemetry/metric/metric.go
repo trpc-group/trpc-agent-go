@@ -130,9 +130,21 @@ func GetMeterProvider() metric.MeterProvider {
 // SetHistogramBuckets updates bucket boundaries for a specific histogram metric.
 // The metricName should be one of the defined metric names in the metrics package.
 // Note: This creates a new histogram instrument; old data is not migrated.
-func SetHistogramBuckets(metricName string, boundaries []float64) error {
+func SetHistogramBuckets(meterName string, metricName string, boundaries []float64) error {
+	switch meterName {
+	case metrics.MeterNameChat:
+		return setChatHistogramBuckets(metricName, boundaries)
+	case metrics.MeterNameExecuteTool:
+		return setExecuteToolHistogramBuckets(metricName, boundaries)
+	case metrics.MeterNameInvokeAgent:
+		return setInvokeAgentHistogramBuckets(metricName, boundaries)
+	default:
+		return fmt.Errorf("unknown or unsupported meter name: %s", meterName)
+	}
+}
+
+func setChatHistogramBuckets(metricName string, boundaries []float64) error {
 	switch metricName {
-	// Chat metrics
 	case metrics.MetricGenAIClientOperationDuration:
 		if itelemetry.ChatMetricGenAIClientOperationDuration == nil {
 			return fmt.Errorf("chat metric %s not initialized", metricName)
@@ -164,12 +176,11 @@ func SetHistogramBuckets(metricName string, boundaries []float64) error {
 		}
 		return itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime.SetBuckets(boundaries)
 	default:
-		return fmt.Errorf("unknown or unsupported histogram metric: %s", metricName)
+		return fmt.Errorf("unknown or unsupported chat histogram metric: %s", metricName)
 	}
 }
 
-// SetExecuteToolHistogramBuckets updates bucket boundaries for execute tool histogram metric.
-func SetExecuteToolHistogramBuckets(metricName string, boundaries []float64) error {
+func setExecuteToolHistogramBuckets(metricName string, boundaries []float64) error {
 	switch metricName {
 	case metrics.MetricGenAIClientOperationDuration:
 		if itelemetry.ExecuteToolMetricGenAIClientOperationDuration == nil {
@@ -181,8 +192,7 @@ func SetExecuteToolHistogramBuckets(metricName string, boundaries []float64) err
 	}
 }
 
-// SetInvokeAgentHistogramBuckets updates bucket boundaries for invoke agent histogram metric.
-func SetInvokeAgentHistogramBuckets(metricName string, boundaries []float64) error {
+func setInvokeAgentHistogramBuckets(metricName string, boundaries []float64) error {
 	switch metricName {
 	case metrics.MetricTRPCAgentGoClientTimeToFirstToken:
 		if itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken == nil {
