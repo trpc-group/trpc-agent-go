@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -368,6 +369,10 @@ type ExecutionContext struct {
 	Graph        *Graph
 	EventChan    chan<- *event.Event
 	InvocationID string
+
+	// Invocation is the per-run invocation context. Nodes may use it to
+	// read invocation-scoped state (for example, {invocation:*} placeholders).
+	Invocation *agent.Invocation
 
 	// channels holds the per-execution Pregel channels. These are constructed
 	// from the Graph's static channel definitions when the execution starts

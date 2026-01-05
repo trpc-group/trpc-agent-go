@@ -657,10 +657,12 @@ LLM 节点的 `instruction` 支持占位符注入（与 LLMAgent 规则一致）
 - `{key}` / `{{key}}` → 替换为会话状态中键 `key` 对应的字符串值（可通过 `sess.SetState("key", ...)` 或 SessionService 写入）
 - `{key?}` / `{{key?}}` → 可选，缺失时替换为空
 - `{user:subkey}`、`{app:subkey}`、`{temp:subkey}`（以及其 Mustache 写法）→ 访问用户/应用/临时命名空间（SessionService 会将 app/user 作用域合并到 session，并带上前缀）
+- `{invocation:subkey}` / `{{invocation:subkey}}` → 替换为 `invocation.state["subkey"]`（可通过 `invocation.SetState("subkey", v)` 设置）
 
 说明：
 
 - GraphAgent 会把当前 `*session.Session` 写入图状态的 `StateKeySession`，LLM 节点据此读取注入值
+- `{invocation:*}` 从本次运行的 `*agent.Invocation` 读取
 - 无前缀键（如 `research_topics`）需要直接存在于 `session.State`
 
 示例：
