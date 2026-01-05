@@ -85,6 +85,9 @@ func TestNew(t *testing.T) {
 		mock.CreateCollectionFn = func(ctx context.Context, req *qdrant.CreateCollection) error {
 			return errors.New("create failed")
 		}
+		mock.GetCollectionInfoFn = func(ctx context.Context, name string) (*qdrant.CollectionInfo, error) {
+			return nil, errors.New("get info failed")
+		}
 
 		vs, err := New(context.Background(),
 			WithClient(mock),
