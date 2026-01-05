@@ -68,8 +68,7 @@ func (s *sse) Handler() http.Handler {
 
 // handle handles an AG-UI run request.
 func (s *sse) handle(w http.ResponseWriter, r *http.Request) {
-	reqCtx := r.Context()
-	ctx := context.WithoutCancel(reqCtx)
+	ctx := r.Context()
 	log.DebugfContext(
 		ctx,
 		"agui handle: path: %s, method: %s",
@@ -134,7 +133,7 @@ func (s *sse) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	if err := s.handleEvents(reqCtx, w, eventsCh, true); err != nil {
+	if err := s.handleEvents(ctx, w, eventsCh, true); err != nil {
 		log.ErrorfContext(
 			ctx,
 			"agui handle: threadID: %s, runID: %s, write event: %v",
