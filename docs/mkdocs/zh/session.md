@@ -981,13 +981,15 @@ SHOW INDEX FROM session_summaries WHERE Key_name = 'idx_session_summaries_unique
 -- 期望结果：显示新创建的唯一索引，且不包含 deleted_at 列
 ```
 
-**注意事项**：如果使用了 `WithTablePrefix("trpc_")` 配置，表名和索引名会带有前缀：
+**注意事项**：
 
-- 表名：`trpc_session_summaries`
-- 旧索引名：`idx_trpc_session_summaries_lookup` 或 `idx_trpc_session_summaries_unique_active`
-- 新索引名：`idx_trpc_session_summaries_unique_active`
+1. 如果使用了 `WithTablePrefix("trpc_")` 配置，表名和索引名会带有前缀：
+   - 表名：`trpc_session_summaries`
+   - 旧索引名：`idx_trpc_session_summaries_lookup` 或 `idx_trpc_session_summaries_unique_active`
+   - 新索引名：`idx_trpc_session_summaries_unique_active`
+   - 请根据实际配置调整上述 SQL 中的表名和索引名。
 
-请根据实际配置调整上述 SQL 中的表名和索引名。
+2. 新索引不包含 `deleted_at` 列，这意味着软删除的 summary 记录会阻止相同业务键的新记录插入。由于 summary 数据可再生，迁移时建议硬删除软删除记录（Step 3）。如果跳过此步骤，需手动处理冲突。
 
 
 ## 高级用法

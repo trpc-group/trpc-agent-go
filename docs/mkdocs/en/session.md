@@ -980,13 +980,15 @@ SHOW INDEX FROM session_summaries WHERE Key_name = 'idx_session_summaries_unique
 -- Expected result: Shows the newly created unique index without deleted_at column
 ```
 
-**Note**: If you configured `WithTablePrefix("trpc_")`, table and index names will have a prefix:
+**Notes**:
 
-- Table name: `trpc_session_summaries`
-- Old index name: `idx_trpc_session_summaries_lookup` or `idx_trpc_session_summaries_unique_active`
-- New index name: `idx_trpc_session_summaries_unique_active`
+1. If you configured `WithTablePrefix("trpc_")`, table and index names will have a prefix:
+   - Table name: `trpc_session_summaries`
+   - Old index name: `idx_trpc_session_summaries_lookup` or `idx_trpc_session_summaries_unique_active`
+   - New index name: `idx_trpc_session_summaries_unique_active`
+   - Please adjust the table and index names in the SQL above according to your actual configuration.
 
-Please adjust the table and index names in the SQL above according to your actual configuration.
+2. The new index does not include the `deleted_at` column, which means soft-deleted summary records will block new records with the same business key. Since summary data is regenerable, it is recommended to hard delete soft-deleted records during migration (Step 3). If you skip this step, you need to handle conflicts manually.
 
 
 
