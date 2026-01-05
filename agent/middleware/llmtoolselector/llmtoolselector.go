@@ -13,6 +13,7 @@ package llmtoolselector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -238,7 +239,10 @@ func selectToolNames(
 		end := strings.LastIndex(content, "}")
 		if start >= 0 && end > start {
 			if err2 := json.Unmarshal([]byte(content[start:end+1]), &parsed); err2 != nil {
-				return nil, fmt.Errorf("LLMToolSelector: failed to parse selection JSON: %w", err)
+				return nil, fmt.Errorf(
+					"LLMToolSelector: failed to parse selection JSON: %w",
+					errors.Join(err, err2),
+				)
 			}
 		} else {
 			return nil, fmt.Errorf("LLMToolSelector: failed to parse selection JSON: %w", err)
