@@ -68,6 +68,7 @@ func TestOutputResponseProcessor_ProcessResponse(t *testing.T) {
 	// Create a test response with content
 	response := &model.Response{
 		IsPartial: false,
+		Done:      true,
 		Choices: []model.Choice{
 			{
 				Message: model.Message{
@@ -287,6 +288,7 @@ func TestOutputResponseProcessor_TypedAndStateDelta(t *testing.T) {
 
 	// Prepare response content that contains JSON object.
 	rsp := &model.Response{
+		Done: true,
 		Choices: []model.Choice{
 			{
 				Message: model.Message{
@@ -324,6 +326,7 @@ func TestOutputResponseProcessor_TypedInvalidJSON(t *testing.T) {
 	// Content contains a balanced object that is not valid JSON
 	// (unquoted key), so unmarshal will fail.
 	rsp := &model.Response{
+		Done: true,
 		Choices: []model.Choice{
 			{
 				Message: model.Message{
@@ -354,6 +357,7 @@ func TestOutputResponseProcessor_HandleOutputKey_AddNoticeError(t *testing.T) {
 	inv.AgentName = "test-agent"
 
 	rsp := &model.Response{
+		Done: true,
 		Choices: []model.Choice{
 			{
 				Message: model.Message{
