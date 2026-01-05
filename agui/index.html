@@ -1690,7 +1690,8 @@
 </span></code></pre></div></td></tr></table></div>
 <h3 id="real-time-conversation-route">Real-time conversation route</h3>
 <p>The real-time conversation route handles a real-time conversation request and streams the events produced during execution to the client via SSE. The default route is <code>/</code> and can be customised with <code>agui.WithPath</code>.</p>
-<p>For the same <code>SessionKey</code> (<code>AppName</code> + <code>userID</code> + <code>sessionID</code>), only one real-time conversation request can run at a time; repeated requests return <code>409 Conflict</code>. Also, even if the client SSE connection is closed, the backend continues executing until it finishes normally (or is cancelled / times out). By default, a single request can run for up to 1 hour. You can adjust this with <code>agui.WithTimeout(d)</code>, and set it to <code>0</code> to disable the timeout.</p>
+<p>For the same <code>SessionKey</code> (<code>AppName</code> + <code>userID</code> + <code>sessionID</code>), only one real-time conversation request can run at a time; repeated requests return <code>409 Conflict</code>.</p>
+<p>Even if the client SSE connection is closed, the backend continues executing until it finishes normally (or is cancelled / times out). By default, a single request can run for up to 1 hour. You can adjust this with <code>agui.WithTimeout(d)</code>, and set it to <code>0</code> to disable the timeout; the effective deadline is the earlier of the request context deadline and <code>agui.WithTimeout(d)</code>.</p>
 <p>A complete example is available at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default">examples/agui/server/default</a>.</p>
 <h3 id="cancel-route">Cancel route</h3>
 <p>If you want to interrupt a running real-time conversation, enable the cancel route with <code>agui.WithCancelEnabled(true)</code> (disabled by default). The default route is <code>/cancel</code> and can be customised with <code>agui.WithCancelPath</code>.</p>
@@ -2690,7 +2691,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 4, 2026 10:12:49 UTC">2026-01-04 10:12:49</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 5, 2026 02:47:25 UTC">2026-01-05 02:47:25</span>
   </span>
 
     
