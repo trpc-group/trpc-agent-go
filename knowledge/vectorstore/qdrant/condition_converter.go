@@ -85,9 +85,7 @@ func (c *qdrantFilterConverter) convertLogicalConditions(cond *searchfilter.Univ
 				return nil, err
 			}
 			if subFilter != nil {
-				result = append(result, &qdrant.Condition{
-					ConditionOneOf: &qdrant.Condition_Filter{Filter: subFilter},
-				})
+				result = append(result, qdrant.NewFilterAsCondition(subFilter))
 			}
 		} else {
 			converted, err := c.convertCondition(sub)
@@ -114,15 +112,11 @@ func (c *qdrantFilterConverter) convertCondition(cond *searchfilter.UniversalFil
 		return c.newMatchCondition(field, cond.Value), nil
 
 	case searchfilter.OperatorNotEqual:
-		return &qdrant.Condition{
-			ConditionOneOf: &qdrant.Condition_Filter{
-				Filter: &qdrant.Filter{
-					MustNot: []*qdrant.Condition{
-						c.newMatchCondition(field, cond.Value),
-					},
-				},
+		return qdrant.NewFilterAsCondition(&qdrant.Filter{
+			MustNot: []*qdrant.Condition{
+				c.newMatchCondition(field, cond.Value),
 			},
-		}, nil
+		}), nil
 
 	case searchfilter.OperatorGreaterThan:
 		return c.newRangeCondition(field, nil, toFloat64Ptr(cond.Value), nil, nil), nil
@@ -147,27 +141,19 @@ func (c *qdrantFilterConverter) convertCondition(cond *searchfilter.UniversalFil
 		if inCond == nil {
 			return nil, nil
 		}
-		return &qdrant.Condition{
-			ConditionOneOf: &qdrant.Condition_Filter{
-				Filter: &qdrant.Filter{
-					MustNot: []*qdrant.Condition{inCond},
-				},
-			},
-		}, nil
+		return qdrant.NewFilterAsCondition(&qdrant.Filter{
+			MustNot: []*qdrant.Condition{inCond},
+		}), nil
 
 	case searchfilter.OperatorLike:
 		return qdrant.NewMatchText(field, fmt.Sprintf("%v", cond.Value)), nil
 
 	case searchfilter.OperatorNotLike:
-		return &qdrant.Condition{
-			ConditionOneOf: &qdrant.Condition_Filter{
-				Filter: &qdrant.Filter{
-					MustNot: []*qdrant.Condition{
-						qdrant.NewMatchText(field, fmt.Sprintf("%v", cond.Value)),
-					},
-				},
+		return qdrant.NewFilterAsCondition(&qdrant.Filter{
+			MustNot: []*qdrant.Condition{
+				qdrant.NewMatchText(field, fmt.Sprintf("%v", cond.Value)),
 			},
-		}, nil
+		}), nil
 
 	case searchfilter.OperatorBetween:
 		values, ok := cond.Value.([]any)
@@ -187,19 +173,8 @@ func (c *qdrantFilterConverter) convertInCondition(field string, value any) (*qd
 		if len(v) == 0 {
 			return nil, nil
 		}
-		return &qdrant.Condition{
-			ConditionOneOf: &qdrant.Condition_Field{
-				Field: &qdrant.FieldCondition{
-					Key: field,
-					Match: &qdrant.Match{
-						MatchValue: &qdrant.Match_Keywords{
-							Keywords: &qdrant.RepeatedStrings{Strings: v},
-						},
-					},
-				},
-			},
-		}, nil
 
+		return qdrant.NewMatchKeywords(field, v...), nil
 	case []int:
 		if len(v) == 0 {
 			return nil, nil
@@ -226,18 +201,7 @@ func (c *qdrantFilterConverter) convertInCondition(field string, value any) (*qd
 }
 
 func (c *qdrantFilterConverter) newIntegersCondition(field string, ints []int64) *qdrant.Condition {
-	return &qdrant.Condition{
-		ConditionOneOf: &qdrant.Condition_Field{
-			Field: &qdrant.FieldCondition{
-				Key: field,
-				Match: &qdrant.Match{
-					MatchValue: &qdrant.Match_Integers{
-						Integers: &qdrant.RepeatedIntegers{Integers: ints},
-					},
-				},
-			},
-		},
-	}
+	return qdrant.NewMatchInts(field, ints...)
 }
 
 func (c *qdrantFilterConverter) convertInConditionFromAnySlice(field string, values []any) (*qdrant.Condition, error) {
@@ -254,18 +218,7 @@ func (c *qdrantFilterConverter) convertInConditionFromAnySlice(field string, val
 				strs[i] = s
 			}
 		}
-		return &qdrant.Condition{
-			ConditionOneOf: &qdrant.Condition_Field{
-				Field: &qdrant.FieldCondition{
-					Key: field,
-					Match: &qdrant.Match{
-						MatchValue: &qdrant.Match_Keywords{
-							Keywords: &qdrant.RepeatedStrings{Strings: strs},
-						},
-					},
-				},
-			},
-		}, nil
+		return qdrant.NewMatchKeywords(field, strs...), nil
 
 	case int, int32, int64:
 		ints := make([]int64, len(values))
@@ -287,11 +240,7 @@ func (c *qdrantFilterConverter) convertInConditionFromAnySlice(field string, val
 		for i, val := range values {
 			conditions[i] = c.newMatchCondition(field, val)
 		}
-		return &qdrant.Condition{
-			ConditionOneOf: &qdrant.Condition_Filter{
-				Filter: &qdrant.Filter{Should: conditions},
-			},
-		}, nil
+		return qdrant.NewFilterAsCondition(&qdrant.Filter{Should: conditions}), nil
 	}
 }
 
@@ -314,47 +263,34 @@ func (c *qdrantFilterConverter) convertInConditionReflect(field string, value an
 }
 
 func (c *qdrantFilterConverter) newMatchCondition(field string, value any) *qdrant.Condition {
-	var match *qdrant.Match
 	switch v := value.(type) {
 	case string:
-		match = &qdrant.Match{MatchValue: &qdrant.Match_Keyword{Keyword: v}}
+		return qdrant.NewMatchKeyword(field, v)
 	case int:
-		match = &qdrant.Match{MatchValue: &qdrant.Match_Integer{Integer: int64(v)}}
+		return qdrant.NewMatchInt(field, int64(v))
 	case int32:
-		match = &qdrant.Match{MatchValue: &qdrant.Match_Integer{Integer: int64(v)}}
+		return qdrant.NewMatchInt(field, int64(v))
 	case int64:
-		match = &qdrant.Match{MatchValue: &qdrant.Match_Integer{Integer: v}}
+		return qdrant.NewMatchInt(field, v)
 	case bool:
-		match = &qdrant.Match{MatchValue: &qdrant.Match_Boolean{Boolean: v}}
+		return qdrant.NewMatchBool(field, v)
 	case float32:
 		f := float64(v)
 		return c.newRangeCondition(field, &f, nil, &f, nil)
 	case float64:
 		return c.newRangeCondition(field, &v, nil, &v, nil)
 	default:
-		match = &qdrant.Match{MatchValue: &qdrant.Match_Keyword{Keyword: fmt.Sprintf("%v", v)}}
-	}
-	return &qdrant.Condition{
-		ConditionOneOf: &qdrant.Condition_Field{
-			Field: &qdrant.FieldCondition{Key: field, Match: match},
-		},
+		return qdrant.NewMatchText(field, fmt.Sprintf("%v", v))
 	}
 }
 
 func (c *qdrantFilterConverter) newRangeCondition(field string, gte, gt, lte, lt *float64) *qdrant.Condition {
-	return &qdrant.Condition{
-		ConditionOneOf: &qdrant.Condition_Field{
-			Field: &qdrant.FieldCondition{
-				Key: field,
-				Range: &qdrant.Range{
-					Gte: gte,
-					Gt:  gt,
-					Lte: lte,
-					Lt:  lt,
-				},
-			},
-		},
-	}
+	return qdrant.NewRange(field, &qdrant.Range{
+		Gte: gte,
+		Gt:  gt,
+		Lte: lte,
+		Lt:  lt,
+	})
 }
 
 func (c *qdrantFilterConverter) resolveField(field string) string {

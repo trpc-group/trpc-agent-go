@@ -88,19 +88,19 @@ func TestToFloat32Slice(t *testing.T) {
 func TestPtrHelpers(t *testing.T) {
 	t.Parallel()
 	t.Run("ptrBool", func(t *testing.T) {
-		truePtr := ptrBool(true)
-		falsePtr := ptrBool(false)
+		truePtr := qdrant.PtrOf(true)
+		falsePtr := qdrant.PtrOf(false)
 		assert.True(t, *truePtr)
 		assert.False(t, *falsePtr)
 	})
 
 	t.Run("ptrUint32", func(t *testing.T) {
-		ptr := ptrUint32(42)
+		ptr := qdrant.PtrOf(uint32(42))
 		assert.Equal(t, uint32(42), *ptr)
 	})
 
 	t.Run("ptrUint64", func(t *testing.T) {
-		ptr := ptrUint64(123456789)
+		ptr := qdrant.PtrOf(uint64(123456789))
 		assert.Equal(t, uint64(123456789), *ptr)
 	})
 }
@@ -860,20 +860,6 @@ func TestPointIDToStr_UnknownType(t *testing.T) {
 	assert.Equal(t, "", result)
 }
 
-func TestPtrFloat32If(t *testing.T) {
-	t.Parallel()
-	t.Run("condition true", func(t *testing.T) {
-		result := ptrFloat32If(true, 3.14)
-		require.NotNil(t, result)
-		assert.InDelta(t, float32(3.14), *result, 0.001)
-	})
-
-	t.Run("condition false", func(t *testing.T) {
-		result := ptrFloat32If(false, 3.14)
-		assert.Nil(t, result)
-	})
-}
-
 func TestExtractPayloadMetadata_NonStruct(t *testing.T) {
 	t.Parallel()
 	// Test when metadata field exists but is not a struct
@@ -1013,107 +999,4 @@ func TestPayloadToDocument_NoOriginalID(t *testing.T) {
 	doc := payloadToDocument(qdrant.NewID("uuid-point-id"), payload)
 
 	assert.Equal(t, "uuid-point-id", doc.ID)
-}
-
-func TestAnyToQdrantValue(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil value", func(t *testing.T) {
-		result := anyToQdrantValue(nil)
-		require.NotNil(t, result)
-		_, ok := result.Kind.(*qdrant.Value_NullValue)
-		assert.True(t, ok)
-	})
-
-	t.Run("string value", func(t *testing.T) {
-		result := anyToQdrantValue("hello")
-		require.NotNil(t, result)
-		sv, ok := result.Kind.(*qdrant.Value_StringValue)
-		require.True(t, ok)
-		assert.Equal(t, "hello", sv.StringValue)
-	})
-
-	t.Run("int value", func(t *testing.T) {
-		result := anyToQdrantValue(42)
-		require.NotNil(t, result)
-		iv, ok := result.Kind.(*qdrant.Value_IntegerValue)
-		require.True(t, ok)
-		assert.Equal(t, int64(42), iv.IntegerValue)
-	})
-
-	t.Run("int32 value", func(t *testing.T) {
-		result := anyToQdrantValue(int32(42))
-		require.NotNil(t, result)
-		iv, ok := result.Kind.(*qdrant.Value_IntegerValue)
-		require.True(t, ok)
-		assert.Equal(t, int64(42), iv.IntegerValue)
-	})
-
-	t.Run("int64 value", func(t *testing.T) {
-		result := anyToQdrantValue(int64(42))
-		require.NotNil(t, result)
-		iv, ok := result.Kind.(*qdrant.Value_IntegerValue)
-		require.True(t, ok)
-		assert.Equal(t, int64(42), iv.IntegerValue)
-	})
-
-	t.Run("float32 value", func(t *testing.T) {
-		result := anyToQdrantValue(float32(3.14))
-		require.NotNil(t, result)
-		dv, ok := result.Kind.(*qdrant.Value_DoubleValue)
-		require.True(t, ok)
-		assert.InDelta(t, 3.14, dv.DoubleValue, 0.001)
-	})
-
-	t.Run("float64 value", func(t *testing.T) {
-		result := anyToQdrantValue(3.14)
-		require.NotNil(t, result)
-		dv, ok := result.Kind.(*qdrant.Value_DoubleValue)
-		require.True(t, ok)
-		assert.InDelta(t, 3.14, dv.DoubleValue, 0.001)
-	})
-
-	t.Run("bool value", func(t *testing.T) {
-		result := anyToQdrantValue(true)
-		require.NotNil(t, result)
-		bv, ok := result.Kind.(*qdrant.Value_BoolValue)
-		require.True(t, ok)
-		assert.True(t, bv.BoolValue)
-	})
-
-	t.Run("time.Time value", func(t *testing.T) {
-		ts := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
-		result := anyToQdrantValue(ts)
-		require.NotNil(t, result)
-		iv, ok := result.Kind.(*qdrant.Value_IntegerValue)
-		require.True(t, ok)
-		assert.Equal(t, ts.Unix(), iv.IntegerValue)
-	})
-
-	t.Run("slice value", func(t *testing.T) {
-		result := anyToQdrantValue([]any{"a", "b", "c"})
-		require.NotNil(t, result)
-		lv, ok := result.Kind.(*qdrant.Value_ListValue)
-		require.True(t, ok)
-		require.NotNil(t, lv.ListValue)
-		assert.Len(t, lv.ListValue.Values, 3)
-	})
-
-	t.Run("map value", func(t *testing.T) {
-		result := anyToQdrantValue(map[string]any{"key": "value"})
-		require.NotNil(t, result)
-		sv, ok := result.Kind.(*qdrant.Value_StructValue)
-		require.True(t, ok)
-		require.NotNil(t, sv.StructValue)
-		assert.Len(t, sv.StructValue.Fields, 1)
-	})
-
-	t.Run("unsupported type returns empty string", func(t *testing.T) {
-		type CustomType struct{}
-		result := anyToQdrantValue(CustomType{})
-		require.NotNil(t, result)
-		sv, ok := result.Kind.(*qdrant.Value_StringValue)
-		require.True(t, ok)
-		assert.Equal(t, "", sv.StringValue)
-	})
 }
