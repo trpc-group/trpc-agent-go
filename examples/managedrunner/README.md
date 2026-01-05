@@ -5,7 +5,8 @@ control over it.
 
 It demonstrates:
 
-- A run identifier (runID, run identifier) with `agent.WithRunID`
+- A request identifier (requestID, request identifier) with
+  `agent.WithRequestID`
 - Detached cancellation with `agent.WithDetachedCancel(true)`
 - A maximum runtime with `agent.WithMaxRunDuration`
 - Run status with `runner.ManagedRunner.RunStatus`
@@ -48,5 +49,5 @@ go run .
 You will see three short demos:
 
 1. Parent cancellation is ignored, then the run stops by `MaxRunDuration`.
-2. A run is cancelled manually by `runID`.
+2. A run is cancelled manually by `requestID`.
 3. The earlier of parent timeout and `MaxRunDuration` is enforced.

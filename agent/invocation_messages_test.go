@@ -88,17 +88,6 @@ func TestWithRequestID(t *testing.T) {
 	}
 }
 
-func TestWithRunID(t *testing.T) {
-	const (
-		runID = "run-123"
-	)
-
-	var ro RunOptions
-	WithRunID(runID)(&ro)
-
-	require.Equal(t, runID, ro.RequestID)
-}
-
 func TestWithDetachedCancel(t *testing.T) {
 	var ro RunOptions
 	WithDetachedCancel(true)(&ro)
@@ -162,7 +151,7 @@ func TestMultipleRunOptions(t *testing.T) {
 	WithRuntimeState(state)(&ro)
 	WithKnowledgeFilter(filter)(&ro)
 	WithResume(true)(&ro)
-	WithRunID("multi-req-123")(&ro)
+	WithRequestID("multi-req-123")(&ro)
 	WithA2ARequestOptions("opt1", "opt2")(&ro)
 
 	require.Equal(t, msgs, ro.Messages)

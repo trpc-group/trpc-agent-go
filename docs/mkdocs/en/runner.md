@@ -186,37 +186,36 @@ Notes:
 eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
 ```
 
-#### Run ID (runID) and Run Control
+#### Request ID (requestID) and Run Control
 
 Each call to `Runner.Run` is a **run**. If you want to cancel a run or query
-its status, you need a run identifier (runID).
+its status, you need a request identifier (requestID).
 
-You can provide your own runID (recommended) via `agent.WithRunID` (for
-example, a Universally Unique Identifier (UUID)). Runner stores it in
-`RunOptions.RequestID` and injects it into every emitted `event.Event`
-(`event.RequestID`).
+You can provide your own requestID (recommended) via `agent.WithRequestID`
+(for example, a Universally Unique Identifier (UUID)). Runner injects it into
+every emitted `event.Event` (`event.RequestID`).
 
 ```go
-runID := "run-123"
+requestID := "req-123"
 
 eventChan, err := r.Run(
     ctx,
     userID,
     sessionID,
     message,
-    agent.WithRunID(runID),
+    agent.WithRequestID(requestID),
 )
 if err != nil {
     panic(err)
 }
 
 managed := r.(runner.ManagedRunner)
-status, ok := managed.RunStatus(runID)
+status, ok := managed.RunStatus(requestID)
 _ = status
 _ = ok
 
-// Cancel the run by runID.
-managed.Cancel(runID)
+// Cancel the run by requestID.
+managed.Cancel(requestID)
 ```
 
 #### Detached Cancellation (background execution)
@@ -233,7 +232,7 @@ eventChan, err := r.Run(
     userID,
     sessionID,
     message,
-    agent.WithRunID(runID),
+    agent.WithRequestID(requestID),
     agent.WithDetachedCancel(true),
     agent.WithMaxRunDuration(30*time.Second),
 )

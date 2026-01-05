@@ -40,12 +40,12 @@ const (
 )
 
 const (
-	runIDDetached       = "demo-run-detached"
-	sessionDetached     = "demo-session-detached"
-	runIDManualCancel   = "demo-run-manual-cancel"
-	sessionManualCancel = "demo-session-manual-cancel"
-	runIDMinDeadline    = "demo-run-min-deadline"
-	sessionMinDeadline  = "demo-session-min-deadline"
+	requestIDDetached     = "demo-run-detached"
+	sessionDetached       = "demo-session-detached"
+	requestIDManualCancel = "demo-run-manual-cancel"
+	sessionManualCancel   = "demo-session-manual-cancel"
+	requestIDMinDeadline  = "demo-run-min-deadline"
+	sessionMinDeadline    = "demo-session-min-deadline"
 )
 
 const (
@@ -107,21 +107,21 @@ func demoDetachedCancel(managedRunner runner.ManagedRunner) error {
 		demoUserID,
 		sessionDetached,
 		model.NewUserMessage(messageText),
-		agent.WithRunID(runIDDetached),
+		agent.WithRequestID(requestIDDetached),
 		agent.WithDetachedCancel(true),
 		agent.WithMaxRunDuration(maxRunDetached),
 	)
 	if err != nil {
 		return err
 	}
-	consumeEvents(managedRunner, runIDDetached, start, eventChan)
+	consumeEvents(managedRunner, requestIDDetached, start, eventChan)
 
 	fmt.Printf("  -> finished after: %s\n\n", time.Since(start))
 	return nil
 }
 
 func demoManualCancel(managedRunner runner.ManagedRunner) error {
-	fmt.Println("Demo 2: cancel a run by runID")
+	fmt.Println("Demo 2: cancel a run by requestID")
 	fmt.Printf("  cancel after:      %s\n", manualCancelAfter)
 	fmt.Printf("  max run duration:  %s\n", maxRunManualCancel)
 
@@ -131,7 +131,7 @@ func demoManualCancel(managedRunner runner.ManagedRunner) error {
 		demoUserID,
 		sessionManualCancel,
 		model.NewUserMessage(messageText),
-		agent.WithRunID(runIDManualCancel),
+		agent.WithRequestID(requestIDManualCancel),
 		agent.WithDetachedCancel(true),
 		agent.WithMaxRunDuration(maxRunManualCancel),
 	)
@@ -142,10 +142,10 @@ func demoManualCancel(managedRunner runner.ManagedRunner) error {
 	go func() {
 		time.Sleep(manualCancelAfter)
 		fmt.Println("  -> managed cancel called")
-		_ = managedRunner.Cancel(runIDManualCancel)
+		_ = managedRunner.Cancel(requestIDManualCancel)
 	}()
 
-	consumeEvents(managedRunner, runIDManualCancel, start, eventChan)
+	consumeEvents(managedRunner, requestIDManualCancel, start, eventChan)
 	fmt.Printf("  -> finished after: %s\n\n", time.Since(start))
 	return nil
 }
@@ -167,26 +167,26 @@ func demoMinDeadline(managedRunner runner.ManagedRunner) error {
 		demoUserID,
 		sessionMinDeadline,
 		model.NewUserMessage(messageText),
-		agent.WithRunID(runIDMinDeadline),
+		agent.WithRequestID(requestIDMinDeadline),
 		agent.WithDetachedCancel(true),
 		agent.WithMaxRunDuration(maxRunMinDeadline),
 	)
 	if err != nil {
 		return err
 	}
-	consumeEvents(managedRunner, runIDMinDeadline, start, eventChan)
+	consumeEvents(managedRunner, requestIDMinDeadline, start, eventChan)
 	fmt.Printf("  -> finished after: %s\n\n", time.Since(start))
 	return nil
 }
 
 func consumeEvents(
 	managedRunner runner.ManagedRunner,
-	runID string,
+	requestID string,
 	start time.Time,
 	eventChan <-chan *event.Event,
 ) {
 	done := make(chan struct{})
-	go pollStatus(managedRunner, runID, done)
+	go pollStatus(managedRunner, requestID, done)
 
 	seenRequestID := false
 	for evt := range eventChan {
@@ -195,7 +195,7 @@ func consumeEvents(
 		}
 		if !seenRequestID && evt.RequestID != "" {
 			seenRequestID = true
-			fmt.Printf("  observed request id: %s\n", evt.RequestID)
+			fmt.Printf("  observed requestID: %s\n", evt.RequestID)
 		}
 
 		elapsed := time.Since(start).Truncate(time.Millisecond)
@@ -216,7 +216,7 @@ func consumeEvents(
 
 func pollStatus(
 	managedRunner runner.ManagedRunner,
-	runID string,
+	requestID string,
 	done <-chan struct{},
 ) {
 	ticker := time.NewTicker(statusPollInterval)
@@ -226,7 +226,7 @@ func pollStatus(
 		case <-done:
 			return
 		case <-ticker.C:
-			status, ok := managedRunner.RunStatus(runID)
+			status, ok := managedRunner.RunStatus(requestID)
 			if !ok {
 				return
 			}

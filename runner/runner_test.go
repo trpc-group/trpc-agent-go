@@ -1902,7 +1902,7 @@ func TestRunner_ManagedRunner_CancelAndStatus(t *testing.T) {
 		"u",
 		"s",
 		model.NewUserMessage(""),
-		agent.WithRunID(requestID),
+		agent.WithRequestID(requestID),
 		agent.WithDetachedCancel(true),
 	)
 	require.NoError(t, err)
@@ -1936,9 +1936,9 @@ func TestRunner_ManagedRunner_CancelAndStatus(t *testing.T) {
 
 func TestRunner_Close_CancelsRunningRuns(t *testing.T) {
 	const (
-		runID    = "run-close-1"
-		maxWait  = 500 * time.Millisecond
-		interval = 10 * time.Millisecond
+		requestID = "req-close-1"
+		maxWait   = 500 * time.Millisecond
+		interval  = 10 * time.Millisecond
 	)
 
 	r := NewRunner(
@@ -1954,7 +1954,7 @@ func TestRunner_Close_CancelsRunningRuns(t *testing.T) {
 		"u",
 		"s",
 		model.NewUserMessage(""),
-		agent.WithRunID(runID),
+		agent.WithRequestID(requestID),
 	)
 	require.NoError(t, err)
 
@@ -1973,7 +1973,7 @@ func TestRunner_Close_CancelsRunningRuns(t *testing.T) {
 	case <-drainChannel(ch):
 	}
 
-	_, ok = mr.RunStatus(runID)
+	_, ok = mr.RunStatus(requestID)
 	require.False(t, ok)
 }
 

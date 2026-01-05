@@ -184,37 +184,37 @@ defer r.Close()
 eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
 ```
 
-#### RunID（run identifier，运行标识）与运行控制
+#### RequestID（request identifier，请求标识）与运行控制
 
 每次调用 `Runner.Run` 都是一轮 **run**。如果你需要取消某次 run，或者查询它的
-运行状态，就需要一个 run identifier（runID，运行标识）。
+运行状态，就需要一个 request identifier（requestID，请求标识）。
 
-推荐由调用方自己生成 runID，并通过 `agent.WithRunID` 传入（比如用 Universally
-Unique Identifier（UUID，通用唯一标识）生成一个唯一字符串）。Runner 会把它保存
-到 `RunOptions.RequestID`，并注入到每个事件 `event.Event` 的 `event.RequestID`
-字段里。
+推荐由调用方自己生成 requestID，并通过 `agent.WithRequestID` 传入（比如用
+Universally Unique Identifier（UUID，通用唯一标识）生成一个唯一字符串）。
+Runner 会把它保存到 `RunOptions.RequestID`，并注入到每个事件 `event.Event` 的
+`event.RequestID` 字段里。
 
 ```go
-runID := "run-123"
+requestID := "req-123"
 
 eventChan, err := r.Run(
     ctx,
     userID,
     sessionID,
     message,
-    agent.WithRunID(runID),
+    agent.WithRequestID(requestID),
 )
 if err != nil {
     panic(err)
 }
 
 managed := r.(runner.ManagedRunner)
-status, ok := managed.RunStatus(runID)
+status, ok := managed.RunStatus(requestID)
 _ = status
 _ = ok
 
-// 用 runID 取消本次 run。
-managed.Cancel(runID)
+// 用 requestID 取消本次 run。
+managed.Cancel(requestID)
 ```
 
 #### DetachedCancel（忽略父 ctx cancel）
@@ -230,7 +230,7 @@ eventChan, err := r.Run(
     userID,
     sessionID,
     message,
-    agent.WithRunID(runID),
+    agent.WithRequestID(requestID),
     agent.WithDetachedCancel(true),
     agent.WithMaxRunDuration(30*time.Second),
 )

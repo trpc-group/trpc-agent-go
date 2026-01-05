@@ -280,15 +280,6 @@ func WithRequestID(requestID string) RunOption {
 	}
 }
 
-// WithRunID sets the run identifier for this run.
-//
-// Runner uses the run identifier for cancellation and status queries.
-// The value is stored in RunOptions.RequestID and will be injected into all
-// emitted events.
-func WithRunID(runID string) RunOption {
-	return WithRequestID(runID)
-}
-
 // WithDetachedCancel enables running a job that ignores parent context
 // cancellation.
 //
