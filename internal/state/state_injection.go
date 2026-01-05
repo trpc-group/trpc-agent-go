@@ -105,8 +105,8 @@ func InjectSessionState(template string, invocation *agent.Invocation) (string, 
 		}
 
 		// Get the value from session state.
-		if invocation != nil && invocation.Session != nil && invocation.Session.State != nil {
-			if jsonBytes, exists := invocation.Session.State[varName]; exists {
+		if invocation != nil && invocation.Session != nil {
+			if jsonBytes, exists := invocation.Session.GetState(varName); exists {
 				return renderStateValue(jsonBytes)
 			}
 		}

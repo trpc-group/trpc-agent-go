@@ -158,6 +158,8 @@ Graph 包提供了一些内置状态键，主要用于系统内部通信：
 - `StateKeyUserInput`：用户输入（一次性，消费后清空，由 LLM 节点自动持久化）
 - `StateKeyOneShotMessages`：一次性消息（完整覆盖本轮输入，消费后清空）
 - `StateKeyLastResponse`：最后响应（用于设置最终输出，Executor 会读取此值作为结果）
+- `StateKeyLastResponseID`：最近一次响应标识符（identifier，ID）（由 LLM 节点写入；当
+  `StateKeyLastResponse` 由非模型节点写入时可能为空）
 - `StateKeyMessages`：消息历史（持久化，支持 append + MessageOp 补丁操作）
 - `StateKeyNodeResponses`：按节点存储的响应映射。键为节点 ID，值为该
   节点的最终文本响应。`StateKeyLastResponse` 用于串行路径上的最终输
@@ -208,6 +210,8 @@ schema.AddField("counter", graph.StateField{
   - `one_shot_messages`：一次性完整消息覆盖，用于下一次 LLM 调用，执行后清空
   - `messages`：持久化的消息历史（LLM/Tools 会追加），支持 MessageOp 补丁
   - `last_response`：最近一次助手文本回复
+  - `last_response_id`：生成 `last_response` 的最近一次模型响应标识符（identifier，
+    ID）。当 `last_response` 由非模型节点写入时，该值可能为空。
   - `node_responses`：map[nodeID]any，按节点保存最终文本回复。最近结果用 `last_response`
 
 - 函数节点（Function node）
@@ -221,6 +225,7 @@ schema.AddField("counter", graph.StateField{
   - 输出：
     - 向 `messages` 追加助手消息
     - 设置 `last_response`
+    - 设置 `last_response_id`
     - 设置 `node_responses[<llm_node_id>]`
 
 - Tools 节点
@@ -259,6 +264,7 @@ schema.AddField("counter", graph.StateField{
   - `one_shot_messages` → 常量 `graph.StateKeyOneShotMessages`
   - `messages` → 常量 `graph.StateKeyMessages`
   - `last_response` → 常量 `graph.StateKeyLastResponse`
+  - `last_response_id` → 常量 `graph.StateKeyLastResponseID`
   - `node_responses` → 常量 `graph.StateKeyNodeResponses`
 
 - 其他常用键
@@ -602,6 +608,27 @@ stateGraph.AddLLMNode("analyze", model,
 - Graph 在执行子 Agent 时会保留父调用的 `RequestID`（请求标识），
   确保当会话历史里已包含本轮用户输入时，不会在提示词中重复插入。
 
+#### 事件输出（流式分片 vs 最终消息）
+
+当大语言模型（Large Language Model，LLM）以流式模式被调用时，一次模型调用可能会产生
+多条事件：
+
+- 流式分片：增量文本在 `choice.Delta.Content`
+- 最终消息：完整文本在 `choice.Message.Content`
+
+在图式流程里，还存在两层“完成（done）”的含义：
+
+- 模型完成：某一次模型调用结束（通常 `Response.Done=true`）
+- 流程完成：整个图运行结束（请以 `event.IsRunnerCompletion()` 为准）
+
+默认情况下，Graph 的 LLM 节点只输出流式分片事件，不输出最终 `Done=true` 的 assistant
+消息事件。这样可以避免“中间节点的输出”被当作普通助手回复（例如被 Runner 写入会话
+（Session））。
+
+如果你希望 Graph 的 LLM 节点也输出最终 `Done=true` 的 assistant 消息事件，请在通过
+Runner 运行时开启 `agent.WithGraphEmitFinalModelResponses(true)`。该选项的详细语义、
+示例和注意事项请参见 `runner.md`。
+
 #### 三种输入范式
 
 - OneShot（`StateKeyOneShotMessages`）：
@@ -627,7 +654,7 @@ stateGraph.AddLLMNode("analyze", model,
 
 LLM 节点的 `instruction` 支持占位符注入（与 LLMAgent 规则一致）。支持原生 `{key}` 与 Mustache `{{key}}` 两种写法（Mustache 会自动规整为原生写法）：
 
-- `{key}` / `{{key}}` → 替换为 `session.State["key"]`
+- `{key}` / `{{key}}` → 替换为会话状态中键 `key` 对应的字符串值（可通过 `sess.SetState("key", ...)` 或 SessionService 写入）
 - `{key?}` / `{{key?}}` → 可选，缺失时替换为空
 - `{user:subkey}`、`{app:subkey}`、`{temp:subkey}`（以及其 Mustache 写法）→ 访问用户/应用/临时命名空间（SessionService 会将 app/user 作用域合并到 session，并带上前缀）
 
@@ -663,9 +690,8 @@ stateGraph.AddNode("retrieve", func(ctx context.Context, s graph.State) (any, er
     var input string
     if v, ok := s[graph.StateKeyUserInput].(string); ok { input = v }
     if sess, _ := s[graph.StateKeySession].(*session.Session); sess != nil {
-        if sess.State == nil { sess.State = make(session.StateMap) }
-        sess.State[session.StateTempPrefix+"retrieved_context"] = []byte(retrieved)
-        sess.State[session.StateTempPrefix+"user_input"] = []byte(input)
+        sess.SetState(session.StateTempPrefix+"retrieved_context", []byte(retrieved))
+        sess.SetState(session.StateTempPrefix+"user_input", []byte(input))
     }
     return graph.State{}, nil
 })
@@ -680,8 +706,8 @@ stateGraph.AddLLMNode("answer", mdl,
 
 占位符与会话状态的最佳实践
 
-- 短期 vs 持久：只用于本轮提示词组装的数据写到 `session.State` 的 `temp:*`；需要跨轮/跨会话保留的配置，请通过 SessionService（会话服务）更新 `user:*`/`app:*`。
-- 为什么可以直接写：LLM 节点从图状态里的会话对象读取并展开占位符，见 [graph/state_graph.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/state_graph.go)；GraphAgent 在启动时把会话对象放入图状态，见 [agent/graphagent/graph_agent.go](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/graphagent/graph_agent.go)。
+- 短期 vs 持久：只用于本轮提示词组装的数据写到 `temp:*`（建议通过 `sess.SetState` 写入）；需要跨轮/跨会话保留的配置，请通过 SessionService（会话服务）更新 `user:*`/`app:*`。
+- 为什么推荐用 SetState：LLM 节点从图状态里的会话对象读取并展开占位符，使用 `sess.SetState` 可避免不安全的并发 map 访问。
 - 服务侧护栏：内存实现禁止通过“更新用户态”的接口写 `temp:*`（以及 `app:*` via user updater），见 [session/inmemory/service.go](https://github.com/trpc-group/trpc-agent-go/blob/main/session/inmemory/service.go)。
 - 并发建议：并行分支不要同时改同一批 `session.State` 键；建议汇总到单节点合并后一次写入，或先放图状态再一次写到 `temp:*`。
 - 可观测性：若希望在完成事件中看到摘要，可额外把精简信息放入图状态（如 `metadata`）；最终事件会序列化非内部的最终状态，见 [graph/events.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go)。
@@ -2588,7 +2614,7 @@ Graph 的状态底层是 `map[string]any`，通过 `StateSchema` 提供运行时
 
 #### 常用键常量参考
 
-- 用户可见：`graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、`graph.StateKeyMessages`、`graph.StateKeyLastResponse`、`graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
+- 用户可见：`graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、`graph.StateKeyMessages`、`graph.StateKeyLastResponse`、`graph.StateKeyLastResponseID`、`graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
 - 系统内部：`session`、`exec_context`、`tool_callbacks`、`model_callbacks`、`agent_callbacks`、`current_node_id`、`parent_agent`
 - 命令/恢复：`__command__`、`__resume_map__`
 

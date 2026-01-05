@@ -257,6 +257,7 @@ trpc-agent-go 支持多种向量存储实现：
 - **TcVector**：腾讯云向量数据库，支持远程 embedding 计算和混合检索 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/tcvector)
 - **Elasticsearch**：支持 v7/v8/v9 多版本的 Elasticsearch 向量存储 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/elasticsearch)
 - **Milvus**：高性能向量数据库，支持十亿级向量搜索 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/milvus)
+- **Qdrant**：高性能向量数据库，支持高级过滤功能，支持云端和本地部署 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/qdrant)
 
 #### 向量存储配置示例
 
@@ -427,6 +428,131 @@ kb := knowledge.New(
 )
 ```
 
+##### Qdrant
+
+[Qdrant](https://qdrant.tech/) 是一个高性能向量数据库，具有高级过滤功能，支持云端和本地部署。
+
+**架构**
+
+Qdrant 集成分为两个模块，以实现更好的职责分离：
+
+- **`storage/qdrant`**: 底层客户端管理（连接、注册表、客户端构建器）
+- **`knowledge/vectorstore/qdrant`**: 用于 Knowledge 的高级向量存储实现
+
+**基础配置**
+
+```go
+import (
+    vectorqdrant "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/qdrant"
+)
+
+// 本地 Qdrant 实例（默认：localhost:6334）
+qdrantVS, err := vectorqdrant.New(ctx)
+if err != nil {
+    // 处理 error
+}
+
+// 自定义配置
+qdrantVS, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("qdrant.example.com"),
+    vectorqdrant.WithPort(6334),
+    vectorqdrant.WithCollectionName("my_documents"),
+    vectorqdrant.WithDimension(1536),  // 必须与 embedding 模型匹配
+)
+
+kb := knowledge.New(
+    knowledge.WithVectorStore(qdrantVS),
+    knowledge.WithEmbedder(embedder),
+)
+```
+
+**Qdrant Cloud 配置**
+
+```go
+qdrantVS, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("xyz-abc.cloud.qdrant.io"),
+    vectorqdrant.WithPort(6334),
+    vectorqdrant.WithAPIKey(os.Getenv("QDRANT_API_KEY")),
+    vectorqdrant.WithTLS(true),  // Qdrant Cloud 必需
+    vectorqdrant.WithCollectionName("my_documents"),
+    vectorqdrant.WithDimension(1536),
+)
+```
+
+**使用 Storage 模块（高级用法）**
+
+`storage/qdrant` 模块（`trpc.group/trpc-go/trpc-agent-go/storage/qdrant`）提供底层客户端管理，与向量存储实现分离。有两种使用方式：
+
+1. **直接使用向量存储选项**：在向量存储上配置连接
+
+```go
+vs, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("localhost"),
+    vectorqdrant.WithPort(6334),
+)
+```
+
+2. **使用 storage 模块**：创建客户端，实现多个向量存储共享
+
+```go
+client, err := qdrantstorage.NewClient(ctx,
+    qdrantstorage.WithHost("localhost"),
+    qdrantstorage.WithPort(6334),
+)
+vs, err := vectorqdrant.New(ctx, vectorqdrant.WithClient(client))
+```
+
+storage 模块还提供**注册表模式**，可在启动时注册命名实例（如 "test"、"prod"），在应用中通过名称获取。
+
+**BM25 混合检索**
+
+Qdrant 支持混合检索，结合稠密向量相似度和 BM25 关键词匹配，使用 Reciprocal Rank Fusion (RRF) 进行结果融合：
+
+```go
+qdrantVS, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("localhost"),
+    vectorqdrant.WithPort(6334),
+    vectorqdrant.WithCollectionName("my_documents"),
+    vectorqdrant.WithDimension(1536),
+    vectorqdrant.WithBM25(true),  // 启用 BM25 混合检索
+)
+```
+
+启用 BM25 后，向量存储会创建同时包含稠密向量和稀疏向量的集合。支持以下搜索模式：
+
+- **向量检索**（默认）：稠密向量相似度搜索
+- **关键词检索**：BM25 稀疏向量搜索（需要 `WithBM25(true)`）
+- **混合检索**：使用 RRF 融合稠密和稀疏结果（需要 `WithBM25(true)`）
+- **过滤检索**：仅基于元数据过滤，不使用向量相似度
+
+> **BM25 集合重要说明：**
+>
+> - **集合兼容性**：启用 BM25 和未启用 BM25 的集合具有不同的向量配置。您不能在已有的非 BM25 集合上创建 `WithBM25(true)` 的向量存储，反之亦然。向量存储在启动时会验证集合配置，如果不匹配将返回错误。
+> - **降级行为**：如果在未启用 BM25 的情况下尝试关键词或混合检索，关键词检索将返回错误，混合检索将降级为仅向量检索（如果配置了日志记录器，会输出警告日志）。
+> - **配置一致性**：连接到现有集合时，请始终使用相同的 BM25 设置。如果您使用 `WithBM25(true)` 索引了文档，则在该集合上创建新的向量存储实例时也必须使用 `WithBM25(true)`。
+
+**配置选项**
+
+| 选项 | 默认值 | 说明 |
+|------|--------|------|
+| `WithClient(client)` | `nil` | 使用预创建的客户端（来自 storage 模块） |
+| `WithHost(host)` | `"localhost"` | Qdrant 服务器主机名 |
+| `WithPort(port)` | `6334` | Qdrant gRPC 端口（1-65535） |
+| `WithAPIKey(key)` | `""` | Qdrant Cloud 认证 API 密钥 |
+| `WithTLS(enabled)` | `false` | 启用 TLS（Qdrant Cloud 必需） |
+| `WithCollectionName(name)` | `"trpc_agent_documents"` | 集合名称 |
+| `WithDimension(dim)` | `1536` | 向量维度（必须与 embedding 模型匹配） |
+| `WithDistance(d)` | `DistanceCosine` | 距离度量（Cosine、Euclid、Dot、Manhattan） |
+| `WithMaxResults(max)` | `10` | 默认搜索结果数量 |
+| `WithBM25(enabled)` | `false` | 启用 BM25 稀疏向量用于混合/关键词检索 |
+| `WithPrefetchMultiplier(n)` | `3` | 混合检索融合的预取倍数 |
+| `WithOnDiskVectors(enabled)` | `false` | 将向量存储在磁盘上（适用于大数据集） |
+| `WithOnDiskPayload(enabled)` | `false` | 将负载存储在磁盘上 |
+| `WithHNSWConfig(m, efConstruct)` | `16, 128` | HNSW 索引参数（越高 = 召回率越好，内存越多） |
+| `WithMaxRetries(n)` | `3` | 瞬态 gRPC 错误最大重试次数 |
+| `WithBaseRetryDelay(d)` | `100ms` | 初始重试延迟 |
+| `WithMaxRetryDelay(d)` | `5s` | 最大重试延迟 |
+
 ### Embedder
 
 Embedder 负责将文本转换为向量表示，是 Knowledge 系统的核心组件。目前框架主要支持 OpenAI embedding 模型：
@@ -447,24 +573,6 @@ kb := knowledge.New(
 )
 ```
 
-### Reranker
-
-Reranker 负责对检索结果的精排：
-
-```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
-)
-
-rerank := reranker.NewTopKReranker(
-    reranker.WithK(1), // 指定精排后的返回结果数，不设置的情况下默认返回所有结果
-)
-
-// 传递给 Knowledge
-kb := knowledge.New(
-    knowledge.WithReranker(rerank),
-)
-```
 
 **支持的 embedding 模型**：
 
@@ -478,6 +586,83 @@ kb := knowledge.New(
 >
 > - Retriever 和 Reranker 目前由 Knowledge 内部实现，用户无需单独配置。Knowledge 会自动处理文档检索和结果排序。
 > - `OPENAI_EMBEDDING_MODEL` 环境变量需要在代码中手动读取，框架不会自动读取。参考示例代码中的 `getEnvOrDefault("OPENAI_EMBEDDING_MODEL", "")` 实现。
+
+
+### Reranker
+
+> 📁 **示例代码**: [examples/knowledge/reranker](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/reranker)
+
+Reranker 负责对检索结果的精排，trpc-agent-go 支持多种 Reranker 实现：
+
+#### TopK (简单截断)
+
+最基础的 Reranker，仅根据检索分数截取 Top K 结果：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/topk"
+)
+
+rerank := topk.New(
+    topk.WithK(3), // 指定精排后的返回结果数
+)
+```
+
+#### Cohere (SaaS Rerank)
+
+使用 Cohere 官方 API 进行重排序，效果通常优于简单的向量检索：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/cohere"
+)
+
+// API key 通过 WithAPIKey 选项提供
+rerank := cohere.New(
+    cohere.WithAPIKey("your-api-key"),       // 必填：API key
+    cohere.WithModel("rerank-english-v3.0"), // 指定模型
+    cohere.WithTopN(5),                      // 最终返回数
+)
+```
+
+#### Infinity / TEI
+
+**术语说明**
+
+- **Infinity**: 开源高性能推理引擎，支持多种 Reranker 模型
+- **TEI (Text Embeddings Inference)**: Hugging Face 官方推理引擎，专为 Embedding 和 Rerank 优化
+
+trpc-agent-go 的 Infinity Reranker 实现可以连接任何兼容标准 Rerank API 的服务，包括使用 Infinity/TEI 自建的服务、Hugging Face Inference Endpoints 托管服务等。
+
+**使用方式**
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/infinity"
+)
+
+// 连接自建或托管的 Rerank 服务
+reranker, err := infinity.New(
+    infinity.WithEndpoint("http://localhost:7997/rerank"), // 必填：服务地址
+    infinity.WithModel("BAAI/bge-reranker-v2-m3"),         // 可选：模型名称
+    infinity.WithTopN(5),                                   // 可选：返回数量
+)
+if err != nil {
+    log.Fatalf("Failed to create reranker: %v", err)
+}
+```
+
+详细的服务部署方法和示例请参考 `examples/knowledge/reranker/infinity/` 目录。
+
+
+#### Reranker 配置到 Knowledge
+
+```go
+kb := knowledge.New(
+    knowledge.WithReranker(rerank),
+    // ... 其他配置
+)
+```
 
 ### 文档源配置
 
@@ -954,6 +1139,21 @@ vectorStore, err := vectortcvector.New(
 - **v0.4.0+ 新建集合**：自动创建 metadata JSON 索引，所有字段可查询
 - **旧版本集合**：仅支持 `WithFilterIndexFields` 中预定义的字段
 
+#### Qdrant
+
+- ✅ 支持所有元数据字段过滤
+- ✅ 支持复杂查询条件（AND、OR、比较运算符）
+- ✅ 支持 IN、NOT IN、LIKE、BETWEEN 运算符
+- ✅ 自动重试瞬态错误
+
+```go
+vectorStore, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("localhost"),
+    vectorqdrant.WithPort(6334),
+    // ... 其他配置
+)
+```
+
 #### 内存存储
 
 - ✅ 支持所有过滤器功能
@@ -1143,6 +1343,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
     vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
     vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
+    vectorqdrant "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/qdrant"
     vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
 
     // 如需支持 PDF 文件，需手动引入 PDF reader（独立 go.mod，避免引入不必要的第三方依赖）
@@ -1152,7 +1353,7 @@ import (
 func main() {
     var (
         embedderType    = flag.String("embedder", "openai", "ollama", "embedder type (openai, gemini, ollama,huggingface)")
-        vectorStoreType = flag.String("vectorstore", "inmemory", "vector store type (inmemory, pgvector, tcvector)")
+        vectorStoreType = flag.String("vectorstore", "inmemory", "vector store type (inmemory, pgvector, tcvector, qdrant)")
         modelName       = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
     )
 
@@ -1212,6 +1413,21 @@ func main() {
         )
         if err != nil {
             log.Fatalf("Failed to create tcvector store: %v", err)
+        }
+    case "qdrant":
+        port, err := strconv.Atoi(getEnvOrDefault("QDRANT_PORT", "6334"))
+        if err != nil {
+            log.Fatalf("Failed to convert QDRANT_PORT to int: %v", err)
+        }
+        vectorStore, err = vectorqdrant.New(ctx,
+            vectorqdrant.WithHost(getEnvOrDefault("QDRANT_HOST", "localhost")),
+            vectorqdrant.WithPort(port),
+            vectorqdrant.WithAPIKey(getEnvOrDefault("QDRANT_API_KEY", "")),
+            vectorqdrant.WithTLS(getEnvOrDefault("QDRANT_TLS", "") == "true"),
+            vectorqdrant.WithDimension(1536),
+        )
+        if err != nil {
+            log.Fatalf("Failed to create qdrant store: %v", err)
         }
     default: // inmemory
         vectorStore = vectorinmemory.New()
@@ -1388,6 +1604,12 @@ export ELASTICSEARCH_USERNAME=""
 export ELASTICSEARCH_PASSWORD=""
 export ELASTICSEARCH_API_KEY=""
 export ELASTICSEARCH_INDEX_NAME="trpc_agent_documents"
+
+# Qdrant 配置（当使用 -vectorstore=qdrant 时必填）
+export QDRANT_HOST="localhost"          # 或 "xyz-abc.cloud.qdrant.io"（Qdrant Cloud）
+export QDRANT_PORT="6334"
+export QDRANT_API_KEY=""                # Qdrant Cloud 必需
+export QDRANT_TLS="false"               # Qdrant Cloud 设置为 "true"
 ```
 
 ### 命令行参数
@@ -1398,10 +1620,11 @@ go run main.go -embedder openai -vectorstore inmemory
 go run main.go -embedder gemini -vectorstore pgvector
 go run main.go -embedder openai -vectorstore tcvector
 go run main.go -embedder openai -vectorstore elasticsearch -es-version v9
+go run main.go -embedder openai -vectorstore qdrant
 
 # 参数说明：
 # -embedder: 选择 embedder 类型 (openai, gemini, ollama,huggingface)， 默认为 openai
-# -vectorstore: 选择向量存储类型 (inmemory, pgvector, tcvector, elasticsearch)，默认为 inmemory
+# -vectorstore: 选择向量存储类型 (inmemory, pgvector, tcvector, elasticsearch, qdrant)，默认为 inmemory
 # -es-version: 指定 Elasticsearch 版本 (v7, v8, v9)，仅当 vectorstore=elasticsearch 时有效
 ```
 

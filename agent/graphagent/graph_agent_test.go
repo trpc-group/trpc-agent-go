@@ -1232,7 +1232,7 @@ func TestGraphAgent_BarrierWaitsForCompletion(t *testing.T) {
 	select {
 	case barrierEvt = <-ch:
 	case <-ctx.Done():
-		t.Fatalf("did not receive barrier event: %v", ctx.Err())
+		require.NoError(t, ctx.Err(), "did not receive barrier event")
 	}
 	require.NotNil(t, barrierEvt)
 	require.Equal(t, graph.ObjectTypeGraphBarrier, barrierEvt.Object)
@@ -1240,9 +1240,7 @@ func TestGraphAgent_BarrierWaitsForCompletion(t *testing.T) {
 
 	select {
 	case evt, ok := <-ch:
-		if ok {
-			t.Fatalf("unexpected event before completion: %+v", evt)
-		}
+		require.False(t, ok, "unexpected event before completion: %+v", evt)
 	default:
 	}
 
@@ -1250,19 +1248,28 @@ func TestGraphAgent_BarrierWaitsForCompletion(t *testing.T) {
 	require.NoError(t, inv.NotifyCompletion(ctx, completionID))
 
 	var received []*event.Event
+	var sawNodeBarrier bool
 	for {
 		select {
 		case evt, ok := <-ch:
 			if !ok {
 				goto done
 			}
+			if evt.Object == graph.ObjectTypeGraphNodeBarrier {
+				sawNodeBarrier = true
+			}
+			if evt.RequiresCompletion {
+				completionID := agent.GetAppendEventNoticeKey(evt.ID)
+				require.NoError(t, inv.NotifyCompletion(ctx, completionID))
+			}
 			received = append(received, evt)
 		case <-ctx.Done():
-			t.Fatalf("timed out waiting for graph events: %v", ctx.Err())
+			require.NoError(t, ctx.Err(), "timed out waiting for graph events")
 		}
 	}
 done:
 	require.NotEmpty(t, received)
+	require.True(t, sawNodeBarrier)
 	var hasGraphExec bool
 	for _, evt := range received {
 		if evt.Object == graph.ObjectTypeGraphExecution {

@@ -190,12 +190,12 @@ func (at *Tool) callWithParentInvocation(
 	)
 
 	// Run the agent and collect response.
-	evCh, err := at.agent.Run(agent.NewInvocationContext(ctx, subInv), subInv)
+	subCtx := agent.NewInvocationContext(ctx, subInv)
+	evCh, err := agent.RunWithPlugins(subCtx, subInv, at.agent)
 	if err != nil {
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
-	childCtx := agent.NewInvocationContext(ctx, subInv)
-	return at.collectResponse(at.wrapWithCallSemantics(childCtx, subInv, evCh))
+	return at.collectResponse(at.wrapWithCallSemantics(subCtx, subInv, evCh))
 }
 
 // wrapWithCompletion consumes events, notifies completion when required, and forwards to a new channel.
@@ -263,6 +263,31 @@ func (at *Tool) wrapWithCallSemantics(
 		}
 	}(runCtx)
 	return out
+}
+
+func (at *Tool) wrapWithStreamSemantics(
+	ctx context.Context,
+	inv *agent.Invocation,
+	src <-chan *event.Event,
+) <-chan *event.Event {
+	if shouldDeferStreamCompletion(ctx, inv) {
+		return src
+	}
+	return at.wrapWithCallSemantics(ctx, inv, src)
+}
+
+func shouldDeferStreamCompletion(
+	ctx context.Context,
+	inv *agent.Invocation,
+) bool {
+	if inv == nil || inv.Session == nil {
+		return false
+	}
+	callID, ok := ctx.Value(tool.ContextKeyToolCallID{}).(string)
+	if !ok || callID == "" {
+		return false
+	}
+	return appender.IsAttached(inv)
 }
 
 func (at *Tool) ensureUserMessageForCall(
@@ -423,7 +448,18 @@ func (at *Tool) collectResponse(evCh <-chan *event.Event) (string, error) {
 func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
 	stream := tool.NewStream(64)
 
+	toolCallID, hasToolCallID := tool.ToolCallIDFromContext(ctx)
+
 	runCtx := agent.CloneContext(ctx)
+	if hasToolCallID && toolCallID != "" {
+		if _, ok := tool.ToolCallIDFromContext(runCtx); !ok {
+			runCtx = context.WithValue(
+				runCtx,
+				tool.ContextKeyToolCallID{},
+				toolCallID,
+			)
+		}
+	}
 	go func(ctx context.Context) {
 		defer stream.Writer.Close()
 
@@ -448,12 +484,12 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 			)
 
 			subCtx := agent.NewInvocationContext(ctx, subInv)
-			evCh, err := at.agent.Run(subCtx, subInv)
+			evCh, err := agent.RunWithPlugins(subCtx, subInv, at.agent)
 			if err != nil {
 				_ = stream.Writer.Send(tool.StreamChunk{Content: fmt.Sprintf("agent tool run error: %v", err)}, nil)
 				return
 			}
-			wrapped := at.wrapWithCompletion(subCtx, subInv, evCh)
+			wrapped := at.wrapWithStreamSemantics(subCtx, subInv, evCh)
 
 			for ev := range wrapped {
 				if stream.Writer.Send(tool.StreamChunk{Content: ev}, nil) {

@@ -11,6 +11,8 @@ package processor
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -61,6 +63,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 
 	transferInfo := invocation.TransferInfo
 	targetAgentName := transferInfo.TargetAgentName
+	var nodeTimeout time.Duration
 
 	// Look up the target agent from the current agent's sub-agents.
 	var targetAgent agent.Agent
@@ -74,6 +77,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			"Target agent '%s' not found in sub-agents",
 			targetAgentName,
 		)
+		invocation.TransferInfo = nil
 		// Send error event.
 		agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
 			invocation.InvocationID,
@@ -82,6 +86,31 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			"Transfer failed: target agent '"+targetAgentName+"' not found",
 		))
 		return
+	}
+
+	if controller, ok := agent.GetRuntimeStateValue[agent.TransferController](
+		&invocation.RunOptions,
+		agent.RuntimeStateKeyTransferController,
+	); ok && controller != nil {
+		targetTimeout, err := controller.OnTransfer(
+			ctx,
+			invocation.AgentName,
+			targetAgentName,
+		)
+		if err != nil {
+			invocation.TransferInfo = nil
+			agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				model.ErrorTypeFlowError,
+				fmt.Sprintf(
+					"Transfer rejected: %v",
+					err,
+				),
+			))
+			return
+		}
+		nodeTimeout = targetTimeout
 	}
 
 	// Create transfer event to notify about the handoff.
@@ -145,7 +174,19 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		targetAgent.Info().Name,
 	)
 	targetCtx := agent.NewInvocationContext(ctx, targetInvocation)
-	targetEventChan, err := targetAgent.Run(targetCtx, targetInvocation)
+
+	var runCtx context.Context = targetCtx
+	if nodeTimeout > 0 {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(runCtx, nodeTimeout)
+		defer cancel()
+	}
+
+	targetEventChan, err := agent.RunWithPlugins(
+		runCtx,
+		targetInvocation,
+		targetAgent,
+	)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,

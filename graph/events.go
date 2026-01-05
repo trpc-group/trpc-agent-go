@@ -33,6 +33,8 @@ const (
 	ObjectTypeGraphExecution = "graph.execution"
 	// ObjectTypeGraphBarrier is the object type for graph-level barrier events.
 	ObjectTypeGraphBarrier = "graph.barrier"
+	// ObjectTypeGraphNodeBarrier is the object type for node-level barrier events.
+	ObjectTypeGraphNodeBarrier = "graph.node.barrier"
 	// ObjectTypeGraphNodeExecution is the object type for node execution events.
 	ObjectTypeGraphNodeExecution = "graph.node.execution"
 	// ObjectTypeGraphNodeStart is the object type for node start events.

@@ -350,6 +350,37 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 			},
 			expectedTime: time.Date(2023, 1, 1, 13, 0, 0, 0, time.UTC),
 		},
+		{
+			// Test prefix aggregation: when events have custom filterKeys like
+			// "test-filter/user-messages" but invocation's eventFilterKey is "test-filter",
+			// the processor should aggregate all summaries with matching prefix.
+			name: "prefix aggregation with custom filterKeys",
+			session: &session.Session{
+				Summaries: map[string]*session.Summary{
+					"test-filter/user-messages": {
+						Summary:   "User messages summary",
+						UpdatedAt: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+					},
+					"test-filter/tool-calls": {
+						Summary:   "Tool calls summary",
+						UpdatedAt: time.Date(2023, 1, 1, 14, 0, 0, 0, time.UTC),
+					},
+					"other-filter/misc": {
+						Summary:   "Other summary (should not be included)",
+						UpdatedAt: time.Date(2023, 1, 1, 15, 0, 0, 0, time.UTC),
+					},
+				},
+			},
+			includeContents: BranchFilterModePrefix,
+			// The aggregated summary should contain both matching summaries.
+			// Note: map iteration order is not guaranteed, so we check for non-nil
+			// and verify the latest timestamp.
+			expectedMsg: &model.Message{
+				Role: model.RoleSystem,
+				// Content will be checked separately due to non-deterministic order.
+			},
+			expectedTime: time.Date(2023, 1, 1, 14, 0, 0, 0, time.UTC),
+		},
 	}
 
 	for _, tt := range tests {
@@ -368,7 +399,14 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 			} else {
 				assert.NotNil(t, msg)
 				assert.Equal(t, tt.expectedMsg.Role, msg.Role)
-				assert.Equal(t, tt.expectedMsg.Content, msg.Content)
+				// For prefix aggregation test, check content contains expected parts.
+				if tt.name == "prefix aggregation with custom filterKeys" {
+					assert.Contains(t, msg.Content, "User messages summary")
+					assert.Contains(t, msg.Content, "Tool calls summary")
+					assert.NotContains(t, msg.Content, "Other summary")
+				} else if tt.expectedMsg.Content != "" {
+					assert.Equal(t, tt.expectedMsg.Content, msg.Content)
+				}
 			}
 			assert.Equal(t, tt.expectedTime, updatedAt)
 		})
@@ -3061,6 +3099,67 @@ func TestContentRequestProcessor_getCurrentInvocationMessages_IsolatedSubagent(t
 
 	assert.True(t, hasToolCall, "should include tool call message")
 	assert.True(t, hasToolResult, "should include tool result message")
+}
+
+func TestContentRequestProcessor_getCurrentInvocationMessages_ReasoningContentDiscardPreviousTurns(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			{
+				Author:       "agent1",
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				Timestamp:    baseTime,
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:             model.RoleAssistant,
+								Content:          "step1",
+								ReasoningContent: "think1",
+							},
+						},
+					},
+				},
+			},
+			{
+				Author:       "agent1",
+				RequestID:    "req2",
+				InvocationID: "inv1",
+				Timestamp:    baseTime.Add(time.Second),
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:             model.RoleAssistant,
+								Content:          "step2",
+								ReasoningContent: "think2",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	p := NewContentRequestProcessor()
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "agent1",
+		Session:      sess,
+		RunOptions: agent.RunOptions{
+			RequestID: "req2",
+		},
+	}
+
+	messages := p.getCurrentInvocationMessages(inv)
+	assert.Len(t, messages, 2)
+	assert.Equal(t, "", messages[0].ReasoningContent, "previous turn reasoning should be discarded")
+	assert.Equal(t, "think2", messages[1].ReasoningContent, "current turn reasoning should be preserved")
 }
 
 func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {

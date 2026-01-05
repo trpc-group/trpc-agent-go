@@ -71,7 +71,17 @@ type FSRepository struct {
 
 // NewFSRepository creates a FSRepository scanning the given roots.
 func NewFSRepository(roots ...string) (*FSRepository, error) {
-	r := &FSRepository{roots: roots, index: map[string]string{}}
+	resolved := make([]string, 0, len(roots))
+	for _, root := range roots {
+		p, err := resolveSkillsRoot(root)
+		if err != nil {
+			return nil, err
+		}
+		if p != "" {
+			resolved = append(resolved, p)
+		}
+	}
+	r := &FSRepository{roots: resolved, index: map[string]string{}}
 	if err := r.scan(); err != nil {
 		return nil, err
 	}

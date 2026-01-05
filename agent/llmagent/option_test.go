@@ -203,3 +203,21 @@ func TestWithPreloadMemory(t *testing.T) {
 		})
 	}
 }
+
+func TestWithSkillRunAllowedCommands_CopiesSlice(t *testing.T) {
+	in := []string{"echo", "ls"}
+	opts := &Options{}
+	WithSkillRunAllowedCommands(in...)(opts)
+
+	in[0] = "rm"
+	require.Equal(t, []string{"echo", "ls"}, opts.skillRunAllowedCommands)
+}
+
+func TestWithSkillRunDeniedCommands_CopiesSlice(t *testing.T) {
+	in := []string{"echo", "ls"}
+	opts := &Options{}
+	WithSkillRunDeniedCommands(in...)(opts)
+
+	in[0] = "rm"
+	require.Equal(t, []string{"echo", "ls"}, opts.skillRunDeniedCommands)
+}

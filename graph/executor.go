@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -41,6 +42,7 @@ var (
 	defaultMaxSteps              = 100
 	defaultStepTimeout           = time.Duration(0) // No timeout by default, users can set if needed.
 	defaultCheckpointSaveTimeout = 10 * time.Second // Default timeout for checkpoint save operations.
+	defaultBarrierWaitTimeout    = 5 * time.Second  // Default timeout for barrier completion waits.
 )
 
 // Executor executes a graph with the given initial state using Pregel-style BSP execution.
@@ -1146,6 +1148,60 @@ func (e *Executor) emitExecutionStepEvent(ctx context.Context, invocation *agent
 	agent.EmitEvent(ctx, invocation, execCtx.EventChan, execEvent)
 }
 
+func (e *Executor) emitNodeBarrierAndWait(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	nodeID string,
+	step int,
+) error {
+	if invocation == nil {
+		return fmt.Errorf("invocation is nil (node=%s step=%d)", nodeID, step)
+	}
+	if !barrier.Enabled(invocation) {
+		return nil
+	}
+	if execCtx == nil {
+		return fmt.Errorf("execution context is nil (inv=%s node=%s step=%d)", invocation.InvocationID, nodeID, step)
+	}
+	if execCtx.EventChan == nil {
+		return fmt.Errorf("event channel is nil (inv=%s node=%s step=%d)", invocation.InvocationID, nodeID, step)
+	}
+	barrierEvent := event.New(
+		invocation.InvocationID,
+		formatNodeAuthor(nodeID, AuthorGraphExecutor),
+		event.WithObject(ObjectTypeGraphNodeBarrier),
+	)
+	barrierEvent.RequiresCompletion = true
+	completionID := agent.GetAppendEventNoticeKey(barrierEvent.ID)
+	if noticeCh := invocation.AddNoticeChannel(ctx, completionID); noticeCh == nil {
+		return fmt.Errorf("add notice channel for node barrier (inv=%s node=%s step=%d key=%s)",
+			invocation.InvocationID, nodeID, step, completionID)
+	}
+	if err := agent.EmitEvent(ctx, invocation, execCtx.EventChan, barrierEvent); err != nil {
+		return fmt.Errorf("emit node barrier event (inv=%s node=%s step=%d): %w",
+			invocation.InvocationID, nodeID, step, err)
+	}
+	timeout := defaultBarrierWaitTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			remaining = 0
+		}
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	if err := invocation.AddNoticeChannelAndWait(ctx, completionID, timeout); err != nil {
+		return fmt.Errorf("wait for node barrier completion (inv=%s node=%s step=%d timeout=%v): %w",
+			invocation.InvocationID, nodeID, step, timeout, err)
+	}
+	return nil
+}
+
 // executeSingleTask executes a single task and handles all its events.
 func (e *Executor) executeSingleTask(
 	ctx context.Context,
@@ -1317,6 +1373,9 @@ func (e *Executor) handleCachedResult(
 	// Emit node completion event with cache-hit metadata.
 	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType,
 		step, nodeCtx.nodeStart, true)
+	if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, t.NodeID, step); err != nil {
+		return fmt.Errorf("emit node barrier: %w", err)
+	}
 	return nil
 }
 
@@ -1435,6 +1494,9 @@ func (e *Executor) finalizeSuccessfulExecution(
 
 	// Emit node completion event for the overall node run (no cache hit).
 	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType, step, nodeCtx.nodeStart, false)
+	if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, t.NodeID, step); err != nil {
+		return fmt.Errorf("emit node barrier: %w", err)
+	}
 	return nil
 }
 
@@ -1476,6 +1538,9 @@ func (e *Executor) evaluateRetryDecision(
 	if !matched {
 		// No retry policy matched -> emit error and exit.
 		e.emitNodeErrorEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType, step, retryCtx.err)
+		if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, t.NodeID, step); err != nil {
+			return false, fmt.Errorf("emit node barrier: %w", err)
+		}
 		return false, fmt.Errorf("node %s execution failed: %w", t.NodeID, retryCtx.err)
 	}
 
@@ -1504,6 +1569,9 @@ func (e *Executor) checkRetryBudget(
 	if retryCtx.attempt >= maxAttempts {
 		e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
 			WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventRetrying(false))
+		if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, nodeID, step); err != nil {
+			return true, fmt.Errorf("emit node barrier: %w", err)
+		}
 		return true, fmt.Errorf("node %s execution failed after %d attempts: %w", nodeID, retryCtx.attempt, retryCtx.err)
 	}
 
@@ -1512,6 +1580,9 @@ func (e *Executor) checkRetryBudget(
 		if time.Since(retryCtx.totalStart) >= pol.MaxElapsedTime {
 			e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
 				WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventRetrying(false))
+			if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, nodeID, step); err != nil {
+				return true, fmt.Errorf("emit node barrier: %w", err)
+			}
 			return true, fmt.Errorf("node %s retry budget exhausted (elapsed): %w", nodeID, retryCtx.err)
 		}
 	}
@@ -1538,6 +1609,9 @@ func (e *Executor) waitBeforeRetry(
 		if remain <= 0 {
 			e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
 				WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventRetrying(false))
+			if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, nodeID, step); err != nil {
+				return false, fmt.Errorf("emit node barrier: %w", err)
+			}
 			return false, fmt.Errorf("node %s execution failed: step deadline exceeded before retry: %w", nodeID, retryCtx.err)
 		}
 		if delay > remain {
@@ -1548,6 +1622,9 @@ func (e *Executor) waitBeforeRetry(
 	// Emit error event with retrying metadata.
 	e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
 		WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventNextDelay(delay), WithNodeEventRetrying(true))
+	if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, nodeID, step); err != nil {
+		return false, fmt.Errorf("emit node barrier: %w", err)
+	}
 
 	// Sleep or abort if context canceled.
 	select {
@@ -1679,7 +1756,12 @@ func (e *Executor) runBeforeCallbacks(
 	}
 	customResult, err := callbacks.RunBeforeNode(ctx, cbCtx, stateCopy)
 	if err != nil {
+		callbacks.RunOnNodeError(ctx, cbCtx, stateCopy, err)
+		e.syncResumeState(execCtx, stateCopy)
 		e.emitNodeErrorEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, err)
+		if berr := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, t.NodeID, step); berr != nil {
+			return true, fmt.Errorf("emit node barrier: %w", berr)
+		}
 		return true, fmt.Errorf("before node callback failed for node %s: %w", t.NodeID, err)
 	}
 	if customResult == nil {
@@ -1699,6 +1781,9 @@ func (e *Executor) runBeforeCallbacks(
 	}
 
 	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart, false)
+	if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, t.NodeID, step); err != nil {
+		return true, fmt.Errorf("emit node barrier: %w", err)
+	}
 	return true, nil
 }
 
@@ -1720,7 +1805,12 @@ func (e *Executor) runAfterCallbacks(
 	}
 	customResult, err := callbacks.RunAfterNode(ctx, cbCtx, stateCopy, result, nil)
 	if err != nil {
+		callbacks.RunOnNodeError(ctx, cbCtx, stateCopy, err)
+		e.syncResumeState(execCtx, stateCopy)
 		e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeType, step, err)
+		if berr := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, nodeID, step); berr != nil {
+			return nil, fmt.Errorf("emit node barrier: %w", berr)
+		}
 		return nil, fmt.Errorf("after node callback failed for node %s: %w", nodeID, err)
 	}
 	return customResult, nil

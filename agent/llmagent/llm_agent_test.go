@@ -11,6 +11,7 @@ package llmagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	transfertool "trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
 const (
@@ -39,6 +41,14 @@ const (
 	testSubAgentNameOne      = "sub1"
 	testSubAgentNameTwo      = "sub2"
 	testSubAgentNotFoundName = "notfound"
+	testTransferMessage      = "hi"
+	testToolCallTypeFunction = "function"
+	testToolCallID           = "call-1"
+	testTransferResponseID   = "r-transfer"
+	testTransferModelName    = "mock-model"
+	testTransferUserMessage  = "go"
+	testTransferInvocationID = "inv-transfer"
+	testTransferSessionID    = "s"
 )
 
 func newDummyModel() model.Model {
@@ -119,6 +129,79 @@ func TestLLMAgent_SetSubAgents(t *testing.T) {
 	found := agt.FindSubAgent(testSubAgentNameTwo)
 	require.NotNil(t, found)
 	require.Equal(t, testSubAgentNameTwo, found.Info().Name)
+}
+
+type transferTargetAgent struct {
+	name string
+	ran  bool
+}
+
+func (t *transferTargetAgent) Info() agent.Info {
+	return agent.Info{Name: t.name}
+}
+
+func (t *transferTargetAgent) Tools() []tool.Tool { return nil }
+
+func (t *transferTargetAgent) SubAgents() []agent.Agent { return nil }
+
+func (t *transferTargetAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func (t *transferTargetAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	_ = ctx
+	_ = inv
+	t.ran = true
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func TestLLMAgent_Transfer_WorksAfterSetSubAgents(t *testing.T) {
+	sub := &transferTargetAgent{name: testSimpleSubAgentName}
+
+	args, err := json.Marshal(transfertool.Request{
+		AgentName: sub.Info().Name,
+		Message:   testTransferMessage,
+	})
+	require.NoError(t, err)
+
+	mockModel := &mockModelWithResponse{
+		response: &model.Response{
+			ID:    testTransferResponseID,
+			Model: testTransferModelName,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						Type: testToolCallTypeFunction,
+						ID:   testToolCallID,
+						Function: model.FunctionDefinitionParam{
+							Name:      transfertool.TransferToolName,
+							Arguments: args,
+						},
+					}},
+				},
+			}},
+		},
+	}
+
+	agt := New(testSubAgentsMainName, WithModel(mockModel))
+	agt.SetSubAgents([]agent.Agent{sub})
+
+	inv := &agent.Invocation{
+		Message:      model.NewUserMessage(testTransferUserMessage),
+		InvocationID: testTransferInvocationID,
+		Session:      &session.Session{ID: testTransferSessionID},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	evCh, err := agt.Run(ctx, inv)
+	require.NoError(t, err)
+	for range evCh {
+	}
+	require.True(t, sub.ran)
 }
 
 // TestLLMAgent_SubAgentsReturnsCopy ensures that callers cannot mutate
@@ -683,6 +766,23 @@ func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 	})
 }
 
+func TestLLMAgent_New_WithStructuredOutputJSONSchema_AllowsTools(t *testing.T) {
+	schema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
+
+	require.NotPanics(t, func() {
+		simpleTool := dummyTool{decl: &tool.Declaration{Name: "test"}}
+		toolset := dummyToolSet{name: "test-toolset"}
+		_ = New("test",
+			WithStructuredOutputJSONSchema("test_schema", schema, true, ""),
+			WithTools([]tool.Tool{simpleTool}),
+			WithToolSets([]tool.ToolSet{toolset}),
+		)
+	})
+}
+
 // TestLLMAgent_InvocationContextAccess verifies that LLMAgent can access invocation
 // from context when called through runner (after removing duplicate injection).
 func TestLLMAgent_InvocationContextAccess(t *testing.T) {
@@ -865,6 +965,18 @@ func TestLLMAgent_OptionsWithStructuredOutputJSON(t *testing.T) {
 	require.Equal(t, model.StructuredOutputJSONSchema, opts.StructuredOutput.Type)
 	require.NotNil(t, opts.StructuredOutput.JSONSchema)
 	require.Equal(t, "MyStruct", opts.StructuredOutput.JSONSchema.Name)
+	require.True(t, opts.StructuredOutput.JSONSchema.Strict)
+	require.Equal(t, "test description", opts.StructuredOutput.JSONSchema.Description)
+}
+
+func TestLLMAgent_OptionsWithStructuredOutputJSONSchema(t *testing.T) {
+	schema := map[string]any{"type": "object"}
+	opts := &Options{}
+	WithStructuredOutputJSONSchema("", schema, true, "test description")(opts)
+	require.NotNil(t, opts.StructuredOutput)
+	require.Equal(t, model.StructuredOutputJSONSchema, opts.StructuredOutput.Type)
+	require.NotNil(t, opts.StructuredOutput.JSONSchema)
+	require.Equal(t, "output", opts.StructuredOutput.JSONSchema.Name)
 	require.True(t, opts.StructuredOutput.JSONSchema.Strict)
 	require.Equal(t, "test description", opts.StructuredOutput.JSONSchema.Description)
 }

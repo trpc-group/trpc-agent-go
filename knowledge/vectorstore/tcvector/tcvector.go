@@ -69,37 +69,33 @@ func New(opts ...Option) (*VectorStore, error) {
 		opt(&option)
 	}
 
-	// Check required options.
-	if option.instanceName == "" && (option.url == "" || option.username == "" || option.password == "") {
-		return nil, errors.New("tcvectordb instance name or (url, username, password) is required")
-	}
-	if option.database == "" {
-		return nil, errors.New("tcvectordb database is required")
-	}
-	if option.collection == "" {
-		return nil, errors.New("tcvectordb collection is required")
-	}
+	builder := storage.GetClientBuilder()
+	var builderOpts []storage.ClientBuilderOpt
 
-	builderOpts := make([]storage.ClientBuilderOpt, 0)
-
-	if option.url != "" && option.username != "" && option.password != "" {
-		// url and username and password are provided, use it.
-		builderOpts = append(builderOpts,
+	if option.instanceName != "" {
+		// Priority 1: Instance Name
+		var ok bool
+		builderOpts, ok = storage.GetTcVectorInstance(option.instanceName)
+		if !ok {
+			return nil, fmt.Errorf("tcvectordb instance %s not found", option.instanceName)
+		}
+	} else if option.url != "" {
+		// Priority 2: URL with username and password
+		builderOpts = []storage.ClientBuilderOpt{
 			storage.WithClientBuilderHTTPURL(option.url),
 			storage.WithClientBuilderUserName(option.username),
-			storage.WithClientBuilderKey(option.password))
-	} else if option.instanceName != "" {
-		// instance name is provided, use it.
-		instanceOpts, ok := storage.GetTcVectorInstance(option.instanceName)
-		if !ok {
-			return nil, errors.New("tcvectordb instance name not found")
+			storage.WithClientBuilderKey(option.password),
 		}
-		builderOpts = append(builderOpts, instanceOpts...)
 	}
 
-	c, err := storage.GetClientBuilder()(builderOpts...)
+	// Allow caller-provided extra options for custom client builders.
+	if len(option.extraOptions) > 0 {
+		builderOpts = append(builderOpts, storage.WithExtraOptions(option.extraOptions...))
+	}
+
+	c, err := builder(builderOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("tcvectordb new rpc client pool: %w", err)
+		return nil, fmt.Errorf("tcvectordb create client failed: %w", err)
 	}
 	if err = initVectorDB(c, option); err != nil {
 		return nil, err
@@ -471,7 +467,9 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 		return nil, errQueryRequired
 	}
 	if !vs.option.enableTSVector && (query.SearchMode == vectorstore.SearchModeKeyword || query.SearchMode == vectorstore.SearchModeHybrid) {
-		log.Infof("tcvectordb: keyword or hybrid search is not supported when enableTSVector is disabled, use filter/vector search instead")
+		log.InfofContext(ctx,
+			"tcvectordb: keyword or hybrid search is not supported when enableTSVector "+
+				"is disabled, use filter/vector search instead")
 		if len(query.Vector) > 0 {
 			return vs.searchByVector(ctx, query)
 		}
@@ -942,7 +940,7 @@ func (vs *VectorStore) queryMetadataBatch(
 	for _, tcDoc := range queryResult.Documents {
 		doc, _, err := vs.docBuilder(tcDoc)
 		if err != nil {
-			log.Warnf("tcvectordb get metadata batch: %v", err)
+			log.WarnfContext(ctx, "tcvectordb get metadata batch: %v", err)
 			continue
 		}
 		if doc == nil || len(doc.Metadata) == 0 {

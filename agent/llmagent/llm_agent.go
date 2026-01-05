@@ -152,11 +152,12 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 	responseProcessors = append(responseProcessors, toolcallProcessor)
 
-	// Add transfer response processor if sub-agents are configured.
-	if len(options.SubAgents) > 0 {
-		transferResponseProcessor := processor.NewTransferResponseProcessor(options.EndInvocationAfterTransfer)
-		responseProcessors = append(responseProcessors, transferResponseProcessor)
-	}
+	// Always install the transfer processor so dynamic sub-agent updates
+	// (for example, via SubAgentSetter) can enable transfer_to_agent later.
+	transferResponseProcessor := processor.NewTransferResponseProcessor(
+		options.EndInvocationAfterTransfer,
+	)
+	responseProcessors = append(responseProcessors, transferResponseProcessor)
 
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
@@ -238,9 +239,9 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	// when a skills repository is configured. This ensures the model
 	// sees available skills (names/descriptions) and any loaded
 	// SKILL.md/doc texts before deciding on tool calls.
-	if options.SkillsRepository != nil {
+	if options.skillsRepository != nil {
 		skillsProcessor := processor.NewSkillsRequestProcessor(
-			options.SkillsRepository,
+			options.skillsRepository,
 		)
 		requestProcessors = append(requestProcessors, skillsProcessor)
 	}
@@ -383,21 +384,39 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 	}
 
 	// Add skill tools when skills are enabled.
-	if options.SkillsRepository != nil {
+	if options.skillsRepository != nil {
 		allTools = append(allTools,
-			toolskill.NewLoadTool(options.SkillsRepository))
+			toolskill.NewLoadTool(options.skillsRepository))
 		// Specialized doc tools for clarity and control.
 		allTools = append(allTools,
-			toolskill.NewSelectDocsTool(options.SkillsRepository))
+			toolskill.NewSelectDocsTool(options.skillsRepository))
 		allTools = append(allTools,
-			toolskill.NewListDocsTool(options.SkillsRepository))
+			toolskill.NewListDocsTool(options.skillsRepository))
 		// Provide executor to skill_run, fallback to local.
 		exec := options.codeExecutor
 		if exec == nil {
 			exec = defaultCodeExecutor()
 		}
-		allTools = append(allTools,
-			toolskill.NewRunTool(options.SkillsRepository, exec))
+		runOpts := make(
+			[]func(*toolskill.RunTool), 0, 2,
+		)
+		if len(options.skillRunAllowedCommands) > 0 {
+			runOpts = append(runOpts,
+				toolskill.WithAllowedCommands(
+					options.skillRunAllowedCommands...,
+				),
+			)
+		}
+		if len(options.skillRunDeniedCommands) > 0 {
+			runOpts = append(runOpts,
+				toolskill.WithDeniedCommands(
+					options.skillRunDeniedCommands...,
+				),
+			)
+		}
+		allTools = append(allTools, toolskill.NewRunTool(
+			options.skillsRepository, exec, runOpts...,
+		))
 	}
 
 	return allTools, userToolNames

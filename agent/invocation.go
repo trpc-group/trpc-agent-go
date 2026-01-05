@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
@@ -82,6 +83,9 @@ type Invocation struct {
 	RunOptions RunOptions
 	// TransferInfo contains information about a pending agent transfer.
 	TransferInfo *TransferInfo
+
+	// Plugins provides runner-scoped hooks applied to this invocation.
+	Plugins PluginManager
 
 	// StructuredOutput defines how the model should produce structured output for this invocation.
 	StructuredOutput *model.StructuredOutput
@@ -258,10 +262,32 @@ func WithResume(enabled bool) RunOption {
 	}
 }
 
+// WithGraphEmitFinalModelResponses controls whether graph-based agents emit
+// final (Done=true) model responses as events.
+//
+// When disabled (default), graph Large Language Model (LLM) nodes only emit
+// streaming chunks (Done=false), which matches the pre-#901 behavior.
+func WithGraphEmitFinalModelResponses(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.GraphEmitFinalModelResponses = enabled
+	}
+}
+
 // WithRequestID sets the request id for the RunOptions.
 func WithRequestID(requestID string) RunOption {
 	return func(opts *RunOptions) {
 		opts.RequestID = requestID
+	}
+}
+
+// WithSpanAttributes sets custom span attributes for the RunOptions.
+func WithSpanAttributes(attrs ...attribute.KeyValue) RunOption {
+	return func(opts *RunOptions) {
+		if len(attrs) == 0 {
+			opts.SpanAttributes = nil
+			return
+		}
+		opts.SpanAttributes = append([]attribute.KeyValue(nil), attrs...)
 	}
 }
 
@@ -443,8 +469,25 @@ type RunOptions struct {
 	// LLM request.
 	Resume bool
 
+	// GraphEmitFinalModelResponses controls event emission for graph-based
+	// Large Language Model (LLM) nodes.
+	//
+	// When false (default), graph LLM nodes only emit streaming chunks
+	// (Done=false).
+	//
+	// When true, graph LLM nodes also emit the final model response
+	// (Done=true). In that mode, callers should be prepared to receive
+	// assistant messages from intermediate nodes.
+	//
+	// When enabled, Runner may omit echoing the final assistant message
+	// in its runner-completion event to avoid duplicates.
+	GraphEmitFinalModelResponses bool
+
 	// RequestID is the request id of the request.
 	RequestID string
+
+	// SpanAttributes carries custom span attributes for this run.
+	SpanAttributes []attribute.KeyValue
 
 	// A2ARequestOptions contains A2A client request options that will be passed to
 	// A2A agent's SendMessage and StreamMessage calls. This allows callers to pass
@@ -547,6 +590,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		RunOptions:      inv.RunOptions,
 		MemoryService:   inv.MemoryService,
 		ArtifactService: inv.ArtifactService,
+		Plugins:         inv.Plugins,
 		noticeMu:        inv.noticeMu,
 		noticeChannels:  inv.noticeChannels,
 		eventFilterKey:  inv.eventFilterKey,

@@ -94,6 +94,16 @@ func TestSelectUpdatedAt_Fallbacks(t *testing.T) {
 		got := selectUpdatedAt(tmp, prev, latest, true)
 		assert.True(t, got.Equal(latest.UTC()))
 	})
+
+	t.Run("nil session with delta falls back to latest", func(t *testing.T) {
+		got := selectUpdatedAt(nil, prev, latest, true)
+		assert.True(t, got.Equal(latest.UTC()))
+	})
+
+	t.Run("zero latestTs with delta keeps prev", func(t *testing.T) {
+		got := selectUpdatedAt(nil, prev, time.Time{}, true)
+		assert.True(t, got.Equal(prev.UTC()))
+	})
 }
 
 type fakeSummarizer struct {
@@ -313,6 +323,63 @@ func TestSummarizeSession_UsesLastIncludedTimestampWhenProvided(t *testing.T) {
 	require.Equal(t, t2.UTC(), base.Summaries[""].UpdatedAt)
 }
 
+func TestMeetsTimeCriteria(t *testing.T) {
+	now := time.Now()
+	past := now.Add(-time.Hour)
+	future := now.Add(time.Hour)
+
+	tests := []struct {
+		name     string
+		sum      *session.Summary
+		minTime  time.Time
+		expected bool
+	}{
+		{
+			name:     "nil summary should return false",
+			sum:      nil,
+			minTime:  now,
+			expected: false,
+		},
+		{
+			name:     "zero minTime should return true for any non-nil summary",
+			sum:      &session.Summary{Summary: "test", UpdatedAt: past},
+			minTime:  time.Time{},
+			expected: true,
+		},
+		{
+			name:     "summary UpdatedAt equals minTime should return true",
+			sum:      &session.Summary{Summary: "test", UpdatedAt: now},
+			minTime:  now,
+			expected: true,
+		},
+		{
+			name:     "summary UpdatedAt after minTime should return true",
+			sum:      &session.Summary{Summary: "test", UpdatedAt: future},
+			minTime:  now,
+			expected: true,
+		},
+		{
+			name:     "summary UpdatedAt before minTime should return false",
+			sum:      &session.Summary{Summary: "test", UpdatedAt: past},
+			minTime:  now,
+			expected: false,
+		},
+		{
+			name:     "nil summary with zero minTime should return false",
+			sum:      nil,
+			minTime:  time.Time{},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := meetsTimeCriteria(tt.sum, tt.minTime)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestPickSummaryText(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -346,24 +413,24 @@ func TestPickSummaryText(t *testing.T) {
 			wantOk:    true,
 		},
 		{
-			name: "all-contents summary exists but empty, should pick other non-empty",
+			name: "all-contents summary exists but empty, should return false",
 			summaries: map[string]*session.Summary{
 				"":        {Summary: ""},
 				"filter1": {Summary: "filtered summary 1"},
 			},
 			filterKey: "",
-			wantText:  "filtered summary 1",
-			wantOk:    true,
+			wantText:  "",
+			wantOk:    false,
 		},
 		{
-			name: "all-contents summary is nil, should pick other non-empty",
+			name: "all-contents summary is nil, should return false",
 			summaries: map[string]*session.Summary{
 				"":        nil,
 				"filter1": {Summary: "filtered summary 1"},
 			},
 			filterKey: "",
-			wantText:  "filtered summary 1",
-			wantOk:    true,
+			wantText:  "",
+			wantOk:    false,
 		},
 		{
 			name: "only all-contents summary exists and is non-empty",
@@ -393,13 +460,13 @@ func TestPickSummaryText(t *testing.T) {
 			wantOk:    false,
 		},
 		{
-			name: "no all-contents summary, pick first non-empty",
+			name: "no all-contents summary, should return false",
 			summaries: map[string]*session.Summary{
 				"filter1": {Summary: "filtered summary 1"},
 			},
 			filterKey: "",
-			wantText:  "filtered summary 1",
-			wantOk:    true,
+			wantText:  "",
+			wantOk:    false,
 		},
 		{
 			name: "all summaries are empty",
@@ -424,15 +491,15 @@ func TestPickSummaryText(t *testing.T) {
 			wantOk:    false,
 		},
 		{
-			name: "mixed nil and empty summaries, pick first non-empty",
+			name: "mixed nil and empty summaries, no fallback",
 			summaries: map[string]*session.Summary{
 				"":        nil,
 				"filter1": {Summary: ""},
 				"filter2": {Summary: "valid summary"},
 			},
 			filterKey: "",
-			wantText:  "valid summary",
-			wantOk:    true,
+			wantText:  "",
+			wantOk:    false,
 		},
 		{
 			name: "specific filter key exists",
@@ -455,19 +522,95 @@ func TestPickSummaryText(t *testing.T) {
 			wantOk:    true,
 		},
 		{
-			name: "specific filter key not found, no full fallback",
+			name: "specific filter key not found, no full fallback, should return false",
 			summaries: map[string]*session.Summary{
 				"filter1": {Summary: "filtered summary 1"},
 			},
 			filterKey: "nonexistent",
-			wantText:  "filtered summary 1",
-			wantOk:    true,
+			wantText:  "",
+			wantOk:    false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotText, gotOk := PickSummaryText(tt.summaries, tt.filterKey)
+			gotText, gotOk := PickSummaryText(tt.summaries, tt.filterKey, time.Time{})
+			require.Equal(t, tt.wantText, gotText)
+			require.Equal(t, tt.wantOk, gotOk)
+		})
+	}
+}
+
+func TestPickSummaryText_WithMinTime(t *testing.T) {
+	now := time.Now()
+	past := now.Add(-time.Hour)
+	future := now.Add(time.Hour)
+
+	tests := []struct {
+		name      string
+		summaries map[string]*session.Summary
+		filterKey string
+		minTime   time.Time
+		wantText  string
+		wantOk    bool
+	}{
+		{
+			name: "filter by minTime: summary before minTime should be excluded",
+			summaries: map[string]*session.Summary{
+				"": {Summary: "old summary", UpdatedAt: past},
+			},
+			filterKey: "",
+			minTime:   now,
+			wantText:  "",
+			wantOk:    false,
+		},
+		{
+			name: "filter by minTime: summary equal to minTime should be included",
+			summaries: map[string]*session.Summary{
+				"": {Summary: "current summary", UpdatedAt: now},
+			},
+			filterKey: "",
+			minTime:   now,
+			wantText:  "current summary",
+			wantOk:    true,
+		},
+		{
+			name: "filter by minTime: summary after minTime should be included",
+			summaries: map[string]*session.Summary{
+				"": {Summary: "new summary", UpdatedAt: future},
+			},
+			filterKey: "",
+			minTime:   now,
+			wantText:  "new summary",
+			wantOk:    true,
+		},
+		{
+			name: "filter by minTime: fallback when filterKey is too old",
+			summaries: map[string]*session.Summary{
+				"":        {Summary: "full summary", UpdatedAt: future},
+				"filter1": {Summary: "old filtered summary", UpdatedAt: past},
+			},
+			filterKey: "filter1",
+			minTime:   now,
+			wantText:  "full summary",
+			wantOk:    true,
+		},
+		{
+			name: "filter by minTime: both filterKey and fallback are too old",
+			summaries: map[string]*session.Summary{
+				"":        {Summary: "old full summary", UpdatedAt: past},
+				"filter1": {Summary: "old filtered summary", UpdatedAt: past},
+			},
+			filterKey: "filter1",
+			minTime:   now,
+			wantText:  "",
+			wantOk:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotText, gotOk := PickSummaryText(tt.summaries, tt.filterKey, tt.minTime)
 			require.Equal(t, tt.wantText, gotText)
 			require.Equal(t, tt.wantOk, gotOk)
 		})
@@ -606,10 +749,18 @@ func TestGetFilterKeyFromOptions(t *testing.T) {
 }
 
 func TestCreateSessionSummaryWithCascade(t *testing.T) {
+	now := time.Now()
+	// Events with multiple filterKeys to ensure parallel calls are made.
+	multiFilterKeyEvents := []event.Event{
+		makeEvent("e1", now.Add(-2*time.Minute), "user-messages"),
+		makeEvent("e2", now.Add(-1*time.Minute), "tool-calls"),
+	}
+
 	tests := []struct {
 		name              string
 		filterKey         string
 		force             bool
+		events            []event.Event
 		expectCalls       []string
 		expectError       bool
 		createSummaryFunc func(context.Context, *session.Session, string, bool) error
@@ -618,6 +769,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			name:        "filterKey is empty, only call once",
 			filterKey:   "",
 			force:       false,
+			events:      multiFilterKeyEvents,
 			expectCalls: []string{""},
 			expectError: false,
 			createSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
@@ -625,9 +777,10 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			},
 		},
 		{
-			name:        "filterKey is user-messages, call twice",
+			name:        "filterKey is user-messages, call twice (multiple filterKeys in session)",
 			filterKey:   "user-messages",
 			force:       false,
+			events:      multiFilterKeyEvents,
 			expectCalls: []string{"user-messages", ""},
 			expectError: false,
 			createSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
@@ -638,6 +791,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			name:        "first call fails, return error",
 			filterKey:   "user-messages",
 			force:       false,
+			events:      multiFilterKeyEvents,
 			expectCalls: []string{"user-messages", ""},
 			expectError: true,
 			createSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
@@ -651,6 +805,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			name:        "second call fails, return error",
 			filterKey:   "user-messages",
 			force:       false,
+			events:      multiFilterKeyEvents,
 			expectCalls: []string{"user-messages", ""},
 			expectError: true,
 			createSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
@@ -670,6 +825,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 				ID:      "test-session",
 				AppName: "test-app",
 				UserID:  "test-user",
+				Events:  tt.events,
 			}
 
 			mockFunc := func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
@@ -695,7 +851,8 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 }
 
 func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
-	// Test using method value (like s.CreateSessionSummary)
+	// Test using method value (like s.CreateSessionSummary).
+	now := time.Now()
 	type mockService struct {
 		mu        sync.Mutex
 		summaries map[string]string
@@ -706,7 +863,6 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 	createFunc := func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
 		mockSvc.mu.Lock()
 		defer mockSvc.mu.Unlock()
-
 		if mockSvc.summaries == nil {
 			mockSvc.summaries = make(map[string]string)
 		}
@@ -718,12 +874,556 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 		ID:      "test-session",
 		AppName: "test-app",
 		UserID:  "test-user",
+		// Multiple filterKeys to ensure parallel calls.
+		Events: []event.Event{
+			makeEvent("e1", now.Add(-2*time.Minute), "user-messages"),
+			makeEvent("e2", now.Add(-1*time.Minute), "tool-calls"),
+		},
 	}
 
 	err := CreateSessionSummaryWithCascade(context.Background(), sess, "user-messages", false, createFunc)
 	require.NoError(t, err)
 
-	// Should have created both summaries
+	// Should have created both summaries.
+	mockSvc.mu.Lock()
+	defer mockSvc.mu.Unlock()
 	require.Equal(t, "summary-user-messages", mockSvc.summaries["user-messages"])
 	require.Equal(t, "summary-", mockSvc.summaries[""])
+}
+
+func TestIsSingleFilterKey(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name      string
+		session   *session.Session
+		targetKey string
+		expected  bool
+	}{
+		{
+			name:      "nil session",
+			session:   nil,
+			targetKey: "app/test",
+			expected:  false,
+		},
+		{
+			name: "empty targetKey",
+			session: &session.Session{
+				ID: "s1",
+				Events: []event.Event{
+					makeEvent("e1", now, "app/test"),
+				},
+			},
+			targetKey: "",
+			expected:  false,
+		},
+		{
+			name: "all events match targetKey",
+			session: &session.Session{
+				ID: "s1",
+				Events: []event.Event{
+					makeEvent("e1", now.Add(-2*time.Minute), "app/test"),
+					makeEvent("e2", now.Add(-1*time.Minute), "app/test"),
+					makeEvent("e3", now, "app/test"),
+				},
+			},
+			targetKey: "app/test",
+			expected:  true,
+		},
+		{
+			name: "some events do not match targetKey",
+			session: &session.Session{
+				ID: "s1",
+				Events: []event.Event{
+					makeEvent("e1", now.Add(-2*time.Minute), "app/test"),
+					makeEvent("e2", now.Add(-1*time.Minute), "app/other"),
+					makeEvent("e3", now, "app/test"),
+				},
+			},
+			targetKey: "app/test",
+			expected:  false,
+		},
+		{
+			name: "empty session events",
+			session: &session.Session{
+				ID:     "s1",
+				Events: []event.Event{},
+			},
+			targetKey: "app/test",
+			expected:  true,
+		},
+		{
+			name: "events with empty filterKey match any targetKey",
+			session: &session.Session{
+				ID: "s1",
+				Events: []event.Event{
+					makeEvent("e1", now.Add(-1*time.Minute), ""),
+					makeEvent("e2", now, ""),
+				},
+			},
+			targetKey: "app/test",
+			expected:  true,
+		},
+		{
+			name: "mixed empty and matching filterKeys",
+			session: &session.Session{
+				ID: "s1",
+				Events: []event.Event{
+					makeEvent("e1", now.Add(-2*time.Minute), "app/test"),
+					makeEvent("e2", now.Add(-1*time.Minute), ""),
+					makeEvent("e3", now, "app/test"),
+				},
+			},
+			targetKey: "app/test",
+			expected:  true,
+		},
+		{
+			name: "prefix matching - child matches parent",
+			session: &session.Session{
+				ID: "s1",
+				Events: []event.Event{
+					makeEvent("e1", now.Add(-1*time.Minute), "app/test/sub"),
+					makeEvent("e2", now, "app/test/other"),
+				},
+			},
+			targetKey: "app/test",
+			expected:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isSingleFilterKey(tt.session, tt.targetKey)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestCopySummaryToKey(t *testing.T) {
+	now := time.Now()
+
+	t.Run("nil session", func(t *testing.T) {
+		// Should not panic.
+		copySummaryToKey(nil, "src", "dst")
+	})
+
+	t.Run("nil summaries", func(t *testing.T) {
+		sess := &session.Session{ID: "s1"}
+		copySummaryToKey(sess, "src", "dst")
+		require.Nil(t, sess.Summaries)
+	})
+
+	t.Run("source key not found", func(t *testing.T) {
+		sess := &session.Session{
+			ID: "s1",
+			Summaries: map[string]*session.Summary{
+				"other": {Summary: "other summary", UpdatedAt: now},
+			},
+		}
+		copySummaryToKey(sess, "src", "dst")
+		_, ok := sess.Summaries["dst"]
+		require.False(t, ok)
+	})
+
+	t.Run("source key is nil", func(t *testing.T) {
+		sess := &session.Session{
+			ID: "s1",
+			Summaries: map[string]*session.Summary{
+				"src": nil,
+			},
+		}
+		copySummaryToKey(sess, "src", "dst")
+		_, ok := sess.Summaries["dst"]
+		require.False(t, ok)
+	})
+
+	t.Run("successful copy", func(t *testing.T) {
+		sess := &session.Session{
+			ID: "s1",
+			Summaries: map[string]*session.Summary{
+				"src": {Summary: "source summary", UpdatedAt: now},
+			},
+		}
+		copySummaryToKey(sess, "src", "dst")
+		require.NotNil(t, sess.Summaries["dst"])
+		require.Equal(t, "source summary", sess.Summaries["dst"].Summary)
+		// UpdatedAt is set to zero to mark as needing persistence.
+		require.True(t, sess.Summaries["dst"].UpdatedAt.IsZero())
+	})
+
+	t.Run("overwrite existing destination", func(t *testing.T) {
+		oldTime := now.Add(-time.Hour)
+		sess := &session.Session{
+			ID: "s1",
+			Summaries: map[string]*session.Summary{
+				"src": {Summary: "new summary", UpdatedAt: now},
+				"dst": {Summary: "old summary", UpdatedAt: oldTime},
+			},
+		}
+		copySummaryToKey(sess, "src", "dst")
+		require.Equal(t, "new summary", sess.Summaries["dst"].Summary)
+		// UpdatedAt is set to zero to mark as needing persistence.
+		require.True(t, sess.Summaries["dst"].UpdatedAt.IsZero())
+	})
+
+	t.Run("copies Topics field", func(t *testing.T) {
+		sess := &session.Session{
+			ID: "s1",
+			Summaries: map[string]*session.Summary{
+				"src": {
+					Summary:   "summary with topics",
+					Topics:    []string{"topic1", "topic2", "topic3"},
+					UpdatedAt: now,
+				},
+			},
+		}
+		copySummaryToKey(sess, "src", "dst")
+		require.NotNil(t, sess.Summaries["dst"])
+		require.Equal(t, "summary with topics", sess.Summaries["dst"].Summary)
+		require.Equal(t, []string{"topic1", "topic2", "topic3"}, sess.Summaries["dst"].Topics)
+		// Verify Topics slice is a copy, not shared reference.
+		sess.Summaries["src"].Topics[0] = "modified"
+		require.Equal(t, "topic1", sess.Summaries["dst"].Topics[0])
+	})
+
+	t.Run("handles nil Topics", func(t *testing.T) {
+		sess := &session.Session{
+			ID: "s1",
+			Summaries: map[string]*session.Summary{
+				"src": {Summary: "summary without topics", UpdatedAt: now},
+			},
+		}
+		copySummaryToKey(sess, "src", "dst")
+		require.NotNil(t, sess.Summaries["dst"])
+		require.Equal(t, "summary without topics", sess.Summaries["dst"].Summary)
+		require.Nil(t, sess.Summaries["dst"].Topics)
+	})
+
+	t.Run("handles empty Topics slice", func(t *testing.T) {
+		sess := &session.Session{
+			ID: "s1",
+			Summaries: map[string]*session.Summary{
+				"src": {Summary: "summary with empty topics", Topics: []string{}, UpdatedAt: now},
+			},
+		}
+		copySummaryToKey(sess, "src", "dst")
+		require.NotNil(t, sess.Summaries["dst"])
+		require.Equal(t, "summary with empty topics", sess.Summaries["dst"].Summary)
+		require.Nil(t, sess.Summaries["dst"].Topics) // Empty slice becomes nil.
+	})
+}
+
+func TestSummarizeSession_NeedsPersistOnly(t *testing.T) {
+	now := time.Now()
+
+	t.Run("copied summary with zero UpdatedAt triggers persist only", func(t *testing.T) {
+		base := &session.Session{
+			ID:      "s1",
+			AppName: "a",
+			UserID:  "u",
+			Events: []event.Event{
+				makeEvent("e1", now.Add(-2*time.Minute), ""),
+				makeEvent("e2", now.Add(-1*time.Minute), ""),
+			},
+			Summaries: map[string]*session.Summary{
+				// Simulate a copied summary with zero UpdatedAt.
+				"": {Summary: "copied summary", UpdatedAt: time.Time{}},
+			},
+		}
+
+		s := &fakeSummarizer{allow: true, out: "should not be called"}
+		updated, err := SummarizeSession(context.Background(), s, base, "", false)
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		// Verify UpdatedAt was set to latest event timestamp.
+		base.SummariesMu.RLock()
+		sum := base.Summaries[""]
+		base.SummariesMu.RUnlock()
+		require.NotNil(t, sum)
+		require.Equal(t, "copied summary", sum.Summary) // Summary unchanged.
+		require.False(t, sum.UpdatedAt.IsZero())        // UpdatedAt now set.
+	})
+
+	t.Run("copied summary with no events uses current time", func(t *testing.T) {
+		base := &session.Session{
+			ID:      "s1",
+			AppName: "a",
+			UserID:  "u",
+			Events:  []event.Event{}, // No events.
+			Summaries: map[string]*session.Summary{
+				"": {Summary: "copied summary", UpdatedAt: time.Time{}},
+			},
+		}
+
+		s := &fakeSummarizer{allow: true, out: "should not be called"}
+		before := time.Now()
+		updated, err := SummarizeSession(context.Background(), s, base, "", false)
+		after := time.Now()
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		// Verify UpdatedAt was set to approximately current time.
+		base.SummariesMu.RLock()
+		sum := base.Summaries[""]
+		base.SummariesMu.RUnlock()
+		require.NotNil(t, sum)
+		require.False(t, sum.UpdatedAt.IsZero())
+		require.True(t, sum.UpdatedAt.After(before.Add(-time.Second)) ||
+			sum.UpdatedAt.Equal(before.Add(-time.Second)))
+		require.True(t, sum.UpdatedAt.Before(after.Add(time.Second)) ||
+			sum.UpdatedAt.Equal(after.Add(time.Second)))
+	})
+
+	t.Run("copied summary with filterKey uses filtered events timestamp", func(t *testing.T) {
+		base := &session.Session{
+			ID:      "s1",
+			AppName: "a",
+			UserID:  "u",
+			Events: []event.Event{
+				makeEvent("e1", now.Add(-2*time.Minute), "b1"),
+				makeEvent("e2", now.Add(-1*time.Minute), "b2"), // Different filterKey.
+			},
+			Summaries: map[string]*session.Summary{
+				"b1": {Summary: "copied summary for b1", UpdatedAt: time.Time{}},
+			},
+		}
+
+		s := &fakeSummarizer{allow: true, out: "should not be called"}
+		updated, err := SummarizeSession(context.Background(), s, base, "b1", false)
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		// Verify UpdatedAt was set to latest event timestamp matching b1.
+		base.SummariesMu.RLock()
+		sum := base.Summaries["b1"]
+		base.SummariesMu.RUnlock()
+		require.NotNil(t, sum)
+		require.Equal(t, "copied summary for b1", sum.Summary)
+		require.True(t, sum.UpdatedAt.Equal(now.Add(-2*time.Minute).UTC()))
+	})
+
+	t.Run("normal summary with non-zero UpdatedAt follows normal path", func(t *testing.T) {
+		base := &session.Session{
+			ID:      "s1",
+			AppName: "a",
+			UserID:  "u",
+			Events: []event.Event{
+				makeEvent("e1", now.Add(-2*time.Minute), ""),
+			},
+			Summaries: map[string]*session.Summary{
+				// Normal summary with non-zero UpdatedAt.
+				"": {Summary: "existing summary", UpdatedAt: now.Add(-3 * time.Minute)},
+			},
+		}
+
+		s := &fakeSummarizer{allow: true, out: "new summary"}
+		updated, err := SummarizeSession(context.Background(), s, base, "", false)
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		// Verify summary was updated via LLM.
+		base.SummariesMu.RLock()
+		sum := base.Summaries[""]
+		base.SummariesMu.RUnlock()
+		require.NotNil(t, sum)
+		require.Equal(t, "new summary", sum.Summary) // LLM generated new summary.
+	})
+
+	t.Run("empty summary with zero UpdatedAt does not trigger persist only", func(t *testing.T) {
+		base := &session.Session{
+			ID:      "s1",
+			AppName: "a",
+			UserID:  "u",
+			Events: []event.Event{
+				makeEvent("e1", now.Add(-1*time.Minute), ""),
+			},
+			Summaries: map[string]*session.Summary{
+				// Empty summary with zero UpdatedAt should not trigger persist only.
+				"": {Summary: "", UpdatedAt: time.Time{}},
+			},
+		}
+
+		s := &fakeSummarizer{allow: true, out: "new summary"}
+		updated, err := SummarizeSession(context.Background(), s, base, "", false)
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		// Verify summary was generated via LLM.
+		base.SummariesMu.RLock()
+		sum := base.Summaries[""]
+		base.SummariesMu.RUnlock()
+		require.NotNil(t, sum)
+		require.Equal(t, "new summary", sum.Summary)
+	})
+}
+
+func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.T) {
+	now := time.Now()
+
+	t.Run("single filterKey - LLM call once, persist twice", func(t *testing.T) {
+		var callCount int
+		var callsMu sync.Mutex
+
+		sess := &session.Session{
+			ID:      "test-session",
+			AppName: "test-app",
+			UserID:  "test-user",
+			Events: []event.Event{
+				makeEvent("e1", now.Add(-2*time.Minute), "app/math"),
+				makeEvent("e2", now.Add(-1*time.Minute), "app/math"),
+				makeEvent("e3", now, "app/math"),
+			},
+			Summaries: make(map[string]*session.Summary),
+		}
+
+		createFunc := func(ctx context.Context, s *session.Session, filterKey string, force bool) error {
+			callsMu.Lock()
+			callCount++
+			callsMu.Unlock()
+			// Simulate SummarizeSession behavior: only generate if not already present
+			// with zero UpdatedAt (copied summary).
+			s.SummariesMu.Lock()
+			if existing := s.Summaries[filterKey]; existing != nil && existing.UpdatedAt.IsZero() {
+				// Copied summary: just set proper UpdatedAt, no LLM call.
+				existing.UpdatedAt = now
+			} else {
+				// New summary: generate via LLM.
+				s.Summaries[filterKey] = &session.Summary{
+					Summary:   "summary for " + filterKey,
+					UpdatedAt: now,
+				}
+			}
+			s.SummariesMu.Unlock()
+			return nil
+		}
+
+		err := CreateSessionSummaryWithCascade(context.Background(), sess, "app/math", false, createFunc)
+		require.NoError(t, err)
+
+		// Should call createFunc twice: once for filterKey, once for full-session (persist only).
+		require.Equal(t, 2, callCount)
+
+		// Both keys should have summaries.
+		sess.SummariesMu.RLock()
+		defer sess.SummariesMu.RUnlock()
+		require.NotNil(t, sess.Summaries["app/math"])
+		require.NotNil(t, sess.Summaries[""])
+		require.Equal(t, sess.Summaries["app/math"].Summary, sess.Summaries[""].Summary)
+	})
+
+	t.Run("multiple filterKeys - two LLM calls", func(t *testing.T) {
+		var calls []string
+		var callsMu sync.Mutex
+
+		sess := &session.Session{
+			ID:      "test-session",
+			AppName: "test-app",
+			UserID:  "test-user",
+			Events: []event.Event{
+				makeEvent("e1", now.Add(-2*time.Minute), "app/math"),
+				makeEvent("e2", now.Add(-1*time.Minute), "app/science"),
+				makeEvent("e3", now, "app/math"),
+			},
+			Summaries: make(map[string]*session.Summary),
+		}
+
+		createFunc := func(ctx context.Context, s *session.Session, filterKey string, force bool) error {
+			callsMu.Lock()
+			calls = append(calls, filterKey)
+			callsMu.Unlock()
+			s.SummariesMu.Lock()
+			s.Summaries[filterKey] = &session.Summary{
+				Summary:   "summary for " + filterKey,
+				UpdatedAt: now,
+			}
+			s.SummariesMu.Unlock()
+			return nil
+		}
+
+		err := CreateSessionSummaryWithCascade(context.Background(), sess, "app/math", false, createFunc)
+		require.NoError(t, err)
+
+		// Should call createFunc twice (no optimization).
+		require.Equal(t, 2, len(calls))
+		require.Contains(t, calls, "app/math")
+		require.Contains(t, calls, "")
+	})
+
+	t.Run("single filterKey with error - error propagated", func(t *testing.T) {
+		sess := &session.Session{
+			ID:      "test-session",
+			AppName: "test-app",
+			UserID:  "test-user",
+			Events: []event.Event{
+				makeEvent("e1", now, "app/math"),
+			},
+		}
+
+		createFunc := func(ctx context.Context, s *session.Session, filterKey string, force bool) error {
+			return errors.New("LLM error")
+		}
+
+		err := CreateSessionSummaryWithCascade(context.Background(), sess, "app/math", false, createFunc)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "LLM error")
+	})
+
+	t.Run("single filterKey persist full-session fails - error propagated", func(t *testing.T) {
+		var callCount int
+
+		sess := &session.Session{
+			ID:      "test-session",
+			AppName: "test-app",
+			UserID:  "test-user",
+			Events: []event.Event{
+				makeEvent("e1", now, "app/math"),
+			},
+			Summaries: make(map[string]*session.Summary),
+		}
+
+		createFunc := func(ctx context.Context, s *session.Session, filterKey string, force bool) error {
+			callCount++
+			if filterKey == session.SummaryFilterKeyAllContents {
+				// Second call (persist full-session) fails.
+				return errors.New("persist error")
+			}
+			// First call succeeds.
+			s.SummariesMu.Lock()
+			s.Summaries[filterKey] = &session.Summary{
+				Summary:   "summary for " + filterKey,
+				UpdatedAt: now,
+			}
+			s.SummariesMu.Unlock()
+			return nil
+		}
+
+		err := CreateSessionSummaryWithCascade(context.Background(), sess, "app/math", false, createFunc)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "persist full-session summary failed")
+		require.Contains(t, err.Error(), "persist error")
+		require.Equal(t, 2, callCount)
+	})
+
+	t.Run("empty filterKey - no optimization needed", func(t *testing.T) {
+		var callCount int
+
+		sess := &session.Session{
+			ID:      "test-session",
+			AppName: "test-app",
+			UserID:  "test-user",
+			Events: []event.Event{
+				makeEvent("e1", now, "app/math"),
+			},
+		}
+
+		createFunc := func(ctx context.Context, s *session.Session, filterKey string, force bool) error {
+			callCount++
+			return nil
+		}
+
+		err := CreateSessionSummaryWithCascade(context.Background(), sess, "", false, createFunc)
+		require.NoError(t, err)
+		require.Equal(t, 1, callCount)
+	})
 }

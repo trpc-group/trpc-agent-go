@@ -19,6 +19,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const (
+	beforeToolCallbackPanic         = "before tool callback panic"
+	afterToolCallbackPanic          = "after tool callback panic"
+	toolResultMessagesCallbackPanic = "tool result messages callback panic"
+)
+
 // ToolError represents an error that occurred during tool execution.
 type ToolError struct {
 	Message string
@@ -39,6 +45,27 @@ func TestNewToolCallbacks(t *testing.T) {
 	require.NotNil(t, callbacks)
 	require.Empty(t, callbacks.BeforeTool)
 	require.Empty(t, callbacks.AfterTool)
+}
+
+func TestRunToolResultMessages_PanicRecovery(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		_ context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		panic("boom")
+	})
+
+	in := &tool.ToolResultMessagesInput{
+		ToolCallID: "call-1",
+		ToolName:   "test-tool",
+	}
+	var err error
+	require.NotPanics(t, func() {
+		_, err = callbacks.RunToolResultMessages(context.Background(), in)
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), toolResultMessagesCallbackPanic)
 }
 
 func TestRegisterBeforeTool(t *testing.T) {
@@ -125,6 +152,31 @@ func TestRunBeforeTool_Empty(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, result)
 
+}
+
+func TestRunBeforeTool_PanicRecovery(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		_ string,
+		_ *tool.Declaration,
+		_ *[]byte,
+	) (any, error) {
+		panic("boom")
+	})
+
+	args := &tool.BeforeToolArgs{
+		ToolCallID:  "call-1",
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+	}
+	var err error
+	require.NotPanics(t, func() {
+		_, err = callbacks.RunBeforeTool(context.Background(), args)
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), beforeToolCallbackPanic)
 }
 
 func TestRunBeforeTool_Skip(t *testing.T) {
@@ -294,6 +346,34 @@ func TestRunAfterTool_Empty(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, originalResult, result.CustomResult)
+}
+
+func TestRunAfterTool_PanicRecovery(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ string,
+		_ *tool.Declaration,
+		_ []byte,
+		_ any,
+		_ error,
+	) (any, error) {
+		panic("boom")
+	})
+
+	args := &tool.AfterToolArgs{
+		ToolCallID:  "call-1",
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+		Result:      map[string]any{"ok": true},
+	}
+	var err error
+	require.NotPanics(t, func() {
+		_, err = callbacks.RunAfterTool(context.Background(), args)
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), afterToolCallbackPanic)
 }
 
 func TestRunAfterTool_Override(t *testing.T) {
@@ -914,4 +994,153 @@ func TestToolCallbacks_BothOptions_ContinuesExecution(t *testing.T) {
 	require.NotNil(t, result)
 	require.Equal(t, map[string]string{"result": "2"}, result.CustomResult)
 	require.Equal(t, []int{1, 2, 3}, executed)
+}
+
+func TestToolCallbacks_Before_ToolCallID(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	expectedToolCallID := "call_abc123"
+
+	var capturedToolCallID string
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		capturedToolCallID = args.ToolCallID
+		return nil, nil
+	})
+
+	declaration := &tool.Declaration{
+		Name:        "test-tool",
+		Description: "A test tool",
+	}
+	args := []byte(`{"test": "value"}`)
+	beforeArgs := &tool.BeforeToolArgs{
+		ToolName:    "test-tool",
+		Declaration: declaration,
+		Arguments:   args,
+		ToolCallID:  expectedToolCallID,
+	}
+	result, err := callbacks.RunBeforeTool(context.Background(), beforeArgs)
+	require.NoError(t, err)
+	require.Equal(t, expectedToolCallID, capturedToolCallID)
+	require.Nil(t, result)
+}
+
+func TestToolCallbacks_After_ToolCallID(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	expectedToolCallID := "call_xyz789"
+
+	var capturedToolCallID string
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		capturedToolCallID = args.ToolCallID
+		return nil, nil
+	})
+
+	declaration := &tool.Declaration{
+		Name:        "test-tool",
+		Description: "A test tool",
+	}
+	args := []byte(`{"test": "value"}`)
+	originalResult := map[string]string{"original": "result"}
+	afterArgs := &tool.AfterToolArgs{
+		ToolName:    "test-tool",
+		Declaration: declaration,
+		Arguments:   args,
+		Result:      originalResult,
+		Error:       nil,
+		ToolCallID:  expectedToolCallID,
+	}
+	result, err := callbacks.RunAfterTool(context.Background(), afterArgs)
+	require.NoError(t, err)
+	require.Equal(t, expectedToolCallID, capturedToolCallID)
+	require.NotNil(t, result)
+}
+
+func TestToolCallbacks_Before_ToolCallID_Empty(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	var capturedToolCallID string
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		capturedToolCallID = args.ToolCallID
+		return nil, nil
+	})
+
+	declaration := &tool.Declaration{
+		Name:        "test-tool",
+		Description: "A test tool",
+	}
+	args := []byte(`{"test": "value"}`)
+	beforeArgs := &tool.BeforeToolArgs{
+		ToolName:    "test-tool",
+		Declaration: declaration,
+		Arguments:   args,
+		ToolCallID:  "",
+	}
+	result, err := callbacks.RunBeforeTool(context.Background(), beforeArgs)
+	require.NoError(t, err)
+	require.Equal(t, "", capturedToolCallID)
+	require.Nil(t, result)
+}
+
+func TestToolCallbacks_After_ToolCallID_Empty(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	var capturedToolCallID string
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		capturedToolCallID = args.ToolCallID
+		return nil, nil
+	})
+
+	declaration := &tool.Declaration{
+		Name:        "test-tool",
+		Description: "A test tool",
+	}
+	args := []byte(`{"test": "value"}`)
+	originalResult := map[string]string{"original": "result"}
+	afterArgs := &tool.AfterToolArgs{
+		ToolName:    "test-tool",
+		Declaration: declaration,
+		Arguments:   args,
+		Result:      originalResult,
+		Error:       nil,
+		ToolCallID:  "",
+	}
+	result, err := callbacks.RunAfterTool(context.Background(), afterArgs)
+	require.NoError(t, err)
+	require.Equal(t, "", capturedToolCallID)
+	require.NotNil(t, result)
+}
+
+func TestToolCallbacks_Before_ToolCallID_Multiple(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	expectedToolCallID1 := "call_111"
+	expectedToolCallID2 := "call_222"
+
+	var capturedToolCallIDs []string
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		capturedToolCallIDs = append(capturedToolCallIDs, args.ToolCallID)
+		return nil, nil
+	})
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		capturedToolCallIDs = append(capturedToolCallIDs, args.ToolCallID)
+		return nil, nil
+	})
+
+	declaration := &tool.Declaration{
+		Name:        "test-tool",
+		Description: "A test tool",
+	}
+	args := []byte(`{"test": "value"}`)
+	beforeArgs := &tool.BeforeToolArgs{
+		ToolName:    "test-tool",
+		Declaration: declaration,
+		Arguments:   args,
+		ToolCallID:  expectedToolCallID1,
+	}
+	result, err := callbacks.RunBeforeTool(context.Background(), beforeArgs)
+	require.NoError(t, err)
+	require.Equal(t, []string{expectedToolCallID1, expectedToolCallID1}, capturedToolCallIDs)
+	require.Nil(t, result)
+
+	capturedToolCallIDs = []string{}
+	beforeArgs.ToolCallID = expectedToolCallID2
+	result, err = callbacks.RunBeforeTool(context.Background(), beforeArgs)
+	require.NoError(t, err)
+	require.Equal(t, []string{expectedToolCallID2, expectedToolCallID2}, capturedToolCallIDs)
+	require.Nil(t, result)
 }

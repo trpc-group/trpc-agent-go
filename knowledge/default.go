@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/loader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/topk"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/retriever"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
@@ -122,7 +123,7 @@ func New(opts ...Option) *BuiltinKnowledge {
 			dk.queryEnhancer = query.NewPassthroughEnhancer()
 		}
 		if dk.reranker == nil {
-			dk.reranker = reranker.NewTopKReranker()
+			dk.reranker = topk.New()
 		}
 
 		dk.retriever = retriever.New(
@@ -259,7 +260,7 @@ func (dk *BuiltinKnowledge) syncReloadSource(
 	sourceName string,
 	config *loadConfig,
 ) error {
-	log.Infof("Reloading source %s with incremental sync", sourceName)
+	log.InfofContext(ctx, "Reloading source %s with incremental sync", sourceName)
 
 	// refresh DocumentInfo by source name
 	if err := dk.refreshSourceDocInfo(ctx, sourceName); err != nil {
@@ -275,7 +276,8 @@ func (dk *BuiltinKnowledge) syncReloadSource(
 
 	// Cleanup orphan documents
 	if err := dk.cleanupOrphanDocuments(ctx); err != nil {
-		log.Warnf("Failed to cleanup orphan documents after reloading source %s: %v", sourceName, err)
+		log.WarnfContext(ctx,
+			"Failed to cleanup orphan documents after reloading source %s: %v", sourceName, err)
 	}
 
 	// refresh DocumentInfo to load latest document info
@@ -283,7 +285,7 @@ func (dk *BuiltinKnowledge) syncReloadSource(
 		return fmt.Errorf("failed to update vector store metadata: %w", err)
 	}
 
-	log.Infof("Successfully reloaded source %s with sync", sourceName)
+	log.InfofContext(ctx, "Successfully reloaded source %s with sync", sourceName)
 	return nil
 }
 
@@ -294,7 +296,7 @@ func (dk *BuiltinKnowledge) reloadSource(
 	sourceName string,
 	config *loadConfig,
 ) error {
-	log.Infof("Reloading source %s with direct delete and add", sourceName)
+	log.InfofContext(ctx, "Reloading source %s with direct delete and add", sourceName)
 
 	filter := map[string]any{
 		source.MetaSourceName: sourceName,
@@ -309,7 +311,7 @@ func (dk *BuiltinKnowledge) reloadSource(
 		return fmt.Errorf("failed to reload source %s: %w", sourceName, err)
 	}
 
-	log.Infof("Successfully reloaded source %s directly", sourceName)
+	log.InfofContext(ctx, "Successfully reloaded source %s directly", sourceName)
 	return nil
 }
 
@@ -398,7 +400,7 @@ func (dk *BuiltinKnowledge) loadWithRecreate(ctx context.Context, config *loadCo
 		return fmt.Errorf("failed to count documents in vector store: %w", err)
 	}
 
-	log.Infof("Recreating vector store, deleting %d documents", count)
+	log.InfofContext(ctx, "Recreating vector store, deleting %d documents", count)
 	if err := dk.vectorStore.DeleteByFilter(ctx, vectorstore.WithDeleteAll(true)); err != nil {
 		return fmt.Errorf("failed to flush vector store: %w", err)
 	}
@@ -454,23 +456,25 @@ func (dk *BuiltinKnowledge) loadSequential(
 	stats := newSizeStats(sizeBuckets)
 
 	totalSources := len(sources)
-	log.Infof("Starting knowledge base loading with %d sources", totalSources)
+	log.InfofContext(ctx, "Starting knowledge base loading with %d sources", totalSources)
 
 	var allAddedIDs []string
 	var processedDocs int
 	for i, src := range sources {
 		sourceName := src.Name()
 		sourceType := src.Type()
-		log.Infof("Loading source %d/%d: %s (type: %s)", i+1, totalSources, sourceName, sourceType)
+		log.InfofContext(ctx, "Loading source %d/%d: %s (type: %s)",
+			i+1, totalSources, sourceName, sourceType)
 
 		srcStartTime := time.Now()
 		docs, err := src.ReadDocuments(ctx)
 		if err != nil {
-			log.Errorf("Failed to read documents from source %s: %v", sourceName, err)
+			log.ErrorfContext(ctx, "Failed to read documents from source %s: %v",
+				sourceName, err)
 			return nil, fmt.Errorf("failed to read documents from source %s: %w", sourceName, err)
 		}
 
-		log.Infof("Fetched %d document(s) from source %s", len(docs), sourceName)
+		log.InfofContext(ctx, "Fetched %d document(s) from source %s", len(docs), sourceName)
 
 		// Per-source statistics.
 		srcStats := newSizeStats(sizeBuckets)
@@ -481,16 +485,17 @@ func (dk *BuiltinKnowledge) loadSequential(
 		}
 
 		if config.showStats {
-			log.Infof("Statistics for source %s:", sourceName)
+			log.InfofContext(ctx, "Statistics for source %s:", sourceName)
 			srcStats.log(sizeBuckets)
 		}
 
-		log.Infof("Start embedding & storing documents from source %s...", sourceName)
+		log.InfofContext(ctx, "Start embedding & storing documents from source %s...", sourceName)
 
 		// Process documents with progress logging if enabled.
 		for j, doc := range docs {
 			if err := dk.addDocumentWithSync(ctx, doc, src); err != nil {
-				log.Errorf("Failed to add document from source %s: %v", sourceName, err)
+				log.ErrorfContext(ctx, "Failed to add document from source %s: %v",
+					sourceName, err)
 				return nil, fmt.Errorf("failed to add document from source %s: %w", sourceName, err)
 			}
 
@@ -507,18 +512,19 @@ func (dk *BuiltinKnowledge) loadSequential(
 					etaSrc := calcETA(srcStartTime, srcProcessed, totalSrc)
 					elapsedSrc := time.Since(srcStartTime)
 
-					log.Infof("Processed %d/%d doc(s) | source %s | elapsed %s | ETA %s",
+					log.InfofContext(ctx,
+						"Processed %d/%d doc(s) | source %s | elapsed %s | ETA %s",
 						srcProcessed, totalSrc, sourceName,
 						elapsedSrc.Truncate(time.Second),
 						etaSrc.Truncate(time.Second))
 				}
 			}
 		}
-		log.Infof("Successfully loaded source %s", sourceName)
+		log.InfofContext(ctx, "Successfully loaded source %s", sourceName)
 	}
 
 	elapsedTotal := time.Since(startTime)
-	log.Infof("Knowledge base loading completed in %s (%d sources)",
+	log.InfofContext(ctx, "Knowledge base loading completed in %s (%d sources)",
 		elapsedTotal, totalSources)
 
 	// Output statistics if requested.
@@ -565,18 +571,19 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 			defer wg.Done()
 			sourceName := source.Name()
 			sourceType := source.Type()
-			log.Infof("Loading source %d/%d: %s (type: %s)", srcIdx+1, len(sources), sourceName, sourceType)
+			log.InfofContext(ctx, "Loading source %d/%d: %s (type: %s)",
+				srcIdx+1, len(sources), sourceName, sourceType)
 			docs, err := source.ReadDocuments(ctx)
 			if err != nil {
 				errCh <- fmt.Errorf("failed to read documents from source %s: %w", sourceName, err)
 				return
 			}
-			log.Infof("Fetched %d document(s) from source %s", len(docs), sourceName)
+			log.InfofContext(ctx, "Fetched %d document(s) from source %s", len(docs), sourceName)
 			if err := dk.processDocuments(ctx, docs, config, aggr, docPool, source); err != nil {
 				errCh <- fmt.Errorf("failed to process documents for source %s: %w", sourceName, err)
 				return
 			}
-			log.Infof("Successfully loaded source %s", sourceName)
+			log.InfofContext(ctx, "Successfully loaded source %s", sourceName)
 
 			// Collect document IDs
 			mu.Lock()
@@ -835,7 +842,7 @@ func (dk *BuiltinKnowledge) refreshAllDocInfo(ctx context.Context) error {
 		dk.cacheMetaInfo[docID] = docInfo
 	}
 	dk.rebuildDocumentInfo()
-	log.Infof("Found %d existing documents in vector store", len(allMeta))
+	log.InfofContext(ctx, "Found %d existing documents in vector store", len(allMeta))
 	return nil
 }
 
@@ -911,7 +918,7 @@ func (dk *BuiltinKnowledge) shouldProcessDocument(doc *document.Document) (bool,
 
 // cleanupOrphanDocuments cleanup orphan documents
 func (dk *BuiltinKnowledge) cleanupOrphanDocuments(ctx context.Context) error {
-	log.Infof("Starting orphan document cleanup...")
+	log.InfofContext(ctx, "Starting orphan document cleanup...")
 
 	toDeleteDocIDs := make([]string, 0)
 	// find all documents that are not processed
@@ -922,16 +929,16 @@ func (dk *BuiltinKnowledge) cleanupOrphanDocuments(ctx context.Context) error {
 	}
 
 	if len(toDeleteDocIDs) == 0 {
-		log.Infof("No orphan documents to cleanup")
+		log.InfofContext(ctx, "No orphan documents to cleanup")
 		return nil
 	}
 
-	log.Infof("Cleaning up %d orphan/outdated documents", len(toDeleteDocIDs))
+	log.InfofContext(ctx, "Cleaning up %d orphan/outdated documents", len(toDeleteDocIDs))
 	if err := dk.vectorStore.DeleteByFilter(ctx, vectorstore.WithDeleteDocumentIDs(toDeleteDocIDs)); err != nil {
 		return fmt.Errorf("failed to delete orphan documents: %w", err)
 	}
 
-	log.Infof("Successfully deleted %d documents", len(toDeleteDocIDs))
+	log.InfofContext(ctx, "Successfully deleted %d documents", len(toDeleteDocIDs))
 	return nil
 }
 

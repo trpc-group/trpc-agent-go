@@ -129,7 +129,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 		var runnerFilter map[string]any
 		var runnerConditionedFilter *searchfilter.UniversalFilterCondition
 		if !ok {
-			log.Debugf("knowledge search tool: no invocation found in context")
+			log.DebugfContext(ctx, "knowledge search tool: no invocation found in context")
 		} else {
 			runnerFilter = invocation.RunOptions.KnowledgeFilter
 			runnerConditionedFilter = invocation.RunOptions.KnowledgeConditionedFilter
@@ -210,7 +210,7 @@ func NewAgenticFilterSearchTool(
 		var runnerFilter map[string]any
 		var runnerConditionedFilter *searchfilter.UniversalFilterCondition
 		if !ok {
-			log.Debugf("knowledge search tool: no invocation found in context")
+			log.DebugfContext(ctx, "knowledge search tool: no invocation found in context")
 		} else {
 			runnerFilter = invocation.RunOptions.KnowledgeFilter
 			runnerConditionedFilter = invocation.RunOptions.KnowledgeConditionedFilter

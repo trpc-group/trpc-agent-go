@@ -92,15 +92,15 @@ llmAgent := llmagent.New(
 
 LLMAgent automatically injects session state into `Instruction` and the optional `SystemPrompt` via placeholder variables. Supported patterns:
 
-- `{key}`: Replace with the string value of `session.State["key"]`
+- `{key}`: Replaced with the string value corresponding to the key `key` in the session state (write via `invocation.Session.SetState("key", ...)` or SessionService)
 - `{key?}`: Optional; if missing, replaced with an empty string
 - `{user:subkey}` / `{app:subkey}` / `{temp:subkey}`: Use user/app/temp scoped keys (session services merge app/user state into session with these prefixes)
-- `{invocation:subkey}:` Replaces with the value of fmt.Sprintf("%+v", `invocation.state["subkey"]`). (The state can be set via invocation.SetState(k, v))
+- `{invocation:subkey}`: Replaces with the value of fmt.Sprintf("%+v", `invocation.state["subkey"]`). (The state can be set via invocation.SetState(k, v))
 
 Notes:
 
 - If a non-optional key is not found, the original `{key}` is preserved (helps the LLM notice missing context)
-- Values are read from `invocation.Session.State` (Runner + SessionService set/merge this automatically)
+- Values are read from session state (Runner + SessionService set/merge this automatically)
 
 Example:
 
@@ -642,6 +642,202 @@ llmagent := llmagent.New("llmagent", llmagent.WithAgentCallbacks(callbacks))
 
 The callback mechanism allows you to precisely control the Agent's execution process and implement more complex business logic.
 
+## Structured Output
+
+Structured output ensures that agent responses conform to a predefined format, making them easier to parse and process programmatically. The framework provides multiple methods for structured output, each suited for different use cases.
+
+### Comparison of Structured Output Methods
+
+| Feature | WithStructuredOutputJSONSchema | WithStructuredOutputJSON | WithOutputSchema | WithOutputKey |
+|---------|-------------------------------|-------------------------|------------------|---------------|
+| **Tool Usage** | ✅ Allowed | ✅ Allowed | ❌ Disabled | ✅ Enabled |
+| **Schema Type** | User-provided JSON Schema | Auto-generated from Go struct | User-provided JSON Schema | N/A |
+| **Output Type** | Untyped (map/interface{}) | Typed (Go struct) | Untyped (map/interface{}) | String/Bytes |
+| **Schema Validation** | ✅ By LLM | ✅ By LLM | ✅ By LLM | ❌ None |
+| **Data Location** | Event.StructuredOutput | Event.StructuredOutput | Model response content | Session State |
+| **Primary Use Case** | Flexible schema with tools | Type-safe structured output | Simple structured responses | State storage & flow control |
+
+### WithStructuredOutputJSONSchema
+
+Provides a user-defined JSON schema for structured output while **allowing tool usage**. This is the most flexible option for agents that need both structured output and tool capabilities.
+
+**Example:**
+
+```go
+schema := map[string]any{
+    "type": "object",
+    "properties": map[string]any{
+        "name": map[string]any{
+            "type": "string",
+            "description": "Product name",
+        },
+        "price": map[string]any{
+            "type": "number",
+            "minimum": 0,
+        },
+        "category": map[string]any{
+            "type": "string",
+            "enum": []string{"electronics", "clothing", "food"},
+        },
+    },
+    "required": []string{"name", "price"},
+}
+
+agent := llmagent.New(
+    "shopping-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithStructuredOutputJSONSchema(
+        "shopping_output",      // Name
+        schema,                 // JSON schema
+        true,                   // Strict mode
+        "Product information",  // Description
+    ),
+    llmagent.WithTools([]tool.Tool{searchTool, calculatorTool}), // Tools are allowed!
+)
+
+// Access untyped output from events
+for event := range eventCh {
+    if event.StructuredOutput != nil {
+        data := event.StructuredOutput.(map[string]any)
+        name := data["name"].(string)
+        price := data["price"].(float64)
+        fmt.Printf("Product: %s, Price: $%.2f\n", name, price)
+    }
+}
+```
+
+**Best for:**
+- Complex agents requiring both structured output and tool usage
+- Working with external JSON schemas (from APIs, databases, config files)
+- Prototyping with dynamic schemas
+- Gradual typing scenarios
+
+### WithStructuredOutputJSON
+
+Auto-generates JSON schema from a Go struct and returns typed output. Provides compile-time type safety.
+
+**Example:**
+
+```go
+type ProductInfo struct {
+    Name     string  `json:"name"`
+    Price    float64 `json:"price"`
+    Category string  `json:"category"`
+}
+
+agent := llmagent.New(
+    "shopping-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithStructuredOutputJSON(
+        new(ProductInfo),           // Auto-generates schema
+        true,                       // Strict mode
+        "Product information",      // Description
+    ),
+    llmagent.WithTools([]tool.Tool{searchTool}), // Tools are allowed
+)
+
+// Access typed output from events
+for event := range eventCh {
+    if event.StructuredOutput != nil {
+        product := event.StructuredOutput.(*ProductInfo)
+        fmt.Printf("Product: %s, Price: $%.2f\n", product.Name, product.Price)
+    }
+}
+```
+
+**Best for:**
+- Type-safe applications with well-defined Go structs
+- Clean code integration
+- Compile-time type checking
+
+### WithOutputSchema (Legacy)
+
+Similar to `WithStructuredOutputJSONSchema` but **disables all tools**. This is a legacy method kept for backward compatibility.
+
+**Example:**
+
+```go
+agent := llmagent.New(
+    "weather-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithOutputSchema(weatherSchema),
+    // llmagent.WithTools(...) // ❌ Tools are disabled!
+)
+```
+
+**Limitations:**
+- ❌ Cannot use tools, function calling, or RAG
+- ❌ Response in model content (needs parsing)
+
+**Migration Tip:** If you need tool capabilities, migrate to `WithStructuredOutputJSONSchema`:
+
+```go
+// Old: Tools disabled
+agent := llmagent.New(
+    "agent",
+    llmagent.WithOutputSchema(schema),
+)
+
+// New: Tools enabled
+agent := llmagent.New(
+    "agent",
+    llmagent.WithStructuredOutputJSONSchema(
+        "agent_output",  // Name
+        schema,          // JSON schema
+        true,            // Strict mode
+        "Agent output",  // Description
+    ),
+    llmagent.WithTools([]tool.Tool{myTool1, myTool2}), // ✅ Now works!
+)
+```
+
+### WithOutputKey
+
+Stores agent output in session state under a specific key, useful for agent workflows where output needs to be accessed by downstream agents.
+
+**Example:**
+
+```go
+researchAgent := llmagent.New(
+    "researcher",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithOutputKey("research_findings"),
+)
+
+writerAgent := llmagent.New(
+    "writer",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("Based on the research: {research_findings}, write a summary."),
+)
+
+// Chain agents using session state
+chain := chainagent.New("pipeline", chainagent.WithSubAgents([]agent.Agent{
+    researchAgent,
+    writerAgent,
+}))
+```
+
+**Best for:**
+- Multi-agent workflows with data passing
+- Session state management
+- Placeholder variable access in downstream agents
+
+### Choosing the Right Method
+
+| Scenario | Recommended Method |
+|----------|-------------------|
+| Need tools + structured output | `WithStructuredOutputJSONSchema` or `WithStructuredOutputJSON` |
+| Type safety is critical | `WithStructuredOutputJSON` |
+| Working with external schemas | `WithStructuredOutputJSONSchema` |
+| Simple structured responses (no tools) | `WithOutputSchema` |
+| Multi-agent workflows | `WithOutputKey` |
+| Rapid prototyping | `WithStructuredOutputJSONSchema` |
+
+**Examples:**
+- `examples/structuredoutput/` - Demonstrates `WithStructuredOutputJSON` (typed)
+- `examples/outputschema/` - Demonstrates `WithOutputSchema` (legacy)
+- `examples/outputkey/` - Demonstrates `WithOutputKey` (session state)
+
 ## Advanced Usage
 
 The framework provides advanced features like Runner, Session, and Memory for building more complex Agent systems.
@@ -757,11 +953,8 @@ Example: per‑turn temp value via a before‑agent callback
 callbacks := agent.NewCallbacks()
 callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
   if args.Invocation != nil && args.Invocation.Session != nil {
-    if args.Invocation.Session.State == nil {
-      args.Invocation.Session.State = make(map[string][]byte)
-    }
     // Write a one-off instruction for this turn only
-    args.Invocation.Session.State["temp:sys"] = []byte("Translate to French.")
+    args.Invocation.Session.SetState("temp:sys", []byte("Translate to French."))
   }
   return nil, nil
 })
@@ -775,5 +968,5 @@ llm := llmagent.New(
 
 Caveats
 
-- In-memory `UpdateUserState` intentionally forbids `temp:*` updates; write `temp:*` directly to `invocation.Session.State` (e.g., via a callback) when you need ephemeral, per‑turn values.
+- In-memory `UpdateUserState` intentionally forbids `temp:*` updates; write `temp:*` via `invocation.Session.SetState` (e.g., via a callback) when you need ephemeral, per‑turn values.
 - Placeholders are resolved at request time; changing the stored value updates behavior on the next model request without recreating the agent.

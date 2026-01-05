@@ -257,6 +257,7 @@ trpc-agent-go supports multiple vector store implementations:
 - **TcVector**: Tencent Cloud Vector Database, supports remote embedding computation and hybrid search - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/tcvector)
 - **Elasticsearch**: Supports v7/v8/v9 multi-version Elasticsearch vector store - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/elasticsearch)
 - **Milvus**: High-performance vector database, supports billion-scale vector search - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/milvus)
+- **Qdrant**: High-performance vector database with advanced filtering, supports cloud and self-hosted deployments - [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/qdrant)
 
 #### Vector Store Configuration Examples
 
@@ -426,6 +427,131 @@ kb := knowledge.New(
 )
 ```
 
+##### Qdrant
+
+[Qdrant](https://qdrant.tech/) is a high-performance vector database with advanced filtering capabilities, supporting both cloud and self-hosted deployments.
+
+**Architecture**
+
+The Qdrant integration is split into two modules.
+
+- **`storage/qdrant`**: Low-level client management (connection, registry, client builder)
+- **`knowledge/vectorstore/qdrant`**: High-level vectorstore implementation for Knowledge
+
+**Basic Configuration**
+
+```go
+import (
+    vectorqdrant "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/qdrant"
+)
+
+// Local Qdrant instance (default: localhost:6334)
+qdrantVS, err := vectorqdrant.New(ctx)
+if err != nil {
+    // Handle error
+}
+
+// Custom configuration
+qdrantVS, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("qdrant.example.com"),
+    vectorqdrant.WithPort(6334),
+    vectorqdrant.WithCollectionName("my_documents"),
+    vectorqdrant.WithDimension(1536),  // Must match embedding model
+)
+
+kb := knowledge.New(
+    knowledge.WithVectorStore(qdrantVS),
+    knowledge.WithEmbedder(embedder),
+)
+```
+
+**Qdrant Cloud Configuration**
+
+```go
+qdrantVS, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("xyz-abc.cloud.qdrant.io"),
+    vectorqdrant.WithPort(6334),
+    vectorqdrant.WithAPIKey(os.Getenv("QDRANT_API_KEY")),
+    vectorqdrant.WithTLS(true),  // Required for Qdrant Cloud
+    vectorqdrant.WithCollectionName("my_documents"),
+    vectorqdrant.WithDimension(1536),
+)
+```
+
+**Using the Storage Module (Advanced)**
+
+The `storage/qdrant` module (`trpc.group/trpc-go/trpc-agent-go/storage/qdrant`) provides low-level client management, separate from the vectorstore implementation. You have two options:
+
+1. **Use vectorstore options directly**: Configure connection on the vectorstore
+
+```go
+vs, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("localhost"),
+    vectorqdrant.WithPort(6334),
+)
+```
+
+2. **Use storage module**: Create a client and pass it for reuse across multiple vectorstores
+
+```go
+client, err := qdrantstorage.NewClient(ctx,
+    qdrantstorage.WithHost("localhost"),
+    qdrantstorage.WithPort(6334),
+)
+vs, err := vectorqdrant.New(ctx, vectorqdrant.WithClient(client))
+```
+
+The storage module also provides a **registry pattern** to register named instances (e.g., "test", "prod") at startup and retrieve them by name throughout your application.
+
+**Hybrid Search with BM25**
+
+Qdrant supports hybrid search combining dense vector similarity and BM25 keyword matching using Reciprocal Rank Fusion (RRF):
+
+```go
+qdrantVS, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("localhost"),
+    vectorqdrant.WithPort(6334),
+    vectorqdrant.WithCollectionName("my_documents"),
+    vectorqdrant.WithDimension(1536),
+    vectorqdrant.WithBM25(true),  // Enable BM25 hybrid search
+)
+```
+
+When BM25 is enabled, the vectorstore creates a collection with both dense and sparse vectors. You can then use different search modes:
+
+- **Vector search** (default): Dense vector similarity search
+- **Keyword search**: BM25 sparse vector search (requires `WithBM25(true)`)
+- **Hybrid search**: Combines dense and sparse results using RRF fusion (requires `WithBM25(true)`)
+- **Filter search**: Metadata-only filtering without vector similarity
+
+> **Important Notes on BM25 Collections:**
+>
+> - **Collection compatibility**: BM25-enabled and non-BM25 collections have different vector configurations. You cannot create a vectorstore with `WithBM25(true)` on an existing non-BM25 collection, or vice versa. The vectorstore validates the collection configuration on startup and returns an error if there's a mismatch.
+> - **Fallback behavior**: If you attempt keyword or hybrid search without BM25 enabled, keyword search will return an error, and hybrid search will fall back to vector-only search (with a warning log if a logger is configured).
+> - **Consistent configuration**: Always use the same BM25 setting when connecting to an existing collection. If you indexed documents with `WithBM25(true)`, you must use `WithBM25(true)` when creating a new vectorstore instance on that collection.
+
+**Configuration Options**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithClient(client)` | `nil` | Use a pre-created client (from storage module) |
+| `WithHost(host)` | `"localhost"` | Qdrant server hostname |
+| `WithPort(port)` | `6334` | Qdrant gRPC port (1-65535) |
+| `WithAPIKey(key)` | `""` | API key for Qdrant Cloud authentication |
+| `WithTLS(enabled)` | `false` | Enable TLS (required for Qdrant Cloud) |
+| `WithCollectionName(name)` | `"trpc_agent_documents"` | Collection name |
+| `WithDimension(dim)` | `1536` | Vector dimension (must match embedding model) |
+| `WithDistance(d)` | `DistanceCosine` | Distance metric (Cosine, Euclid, Dot, Manhattan) |
+| `WithMaxResults(max)` | `10` | Default number of search results |
+| `WithBM25(enabled)` | `false` | Enable BM25 sparse vectors for hybrid/keyword search |
+| `WithPrefetchMultiplier(n)` | `3` | Prefetch multiplier for hybrid search fusion |
+| `WithOnDiskVectors(enabled)` | `false` | Store vectors on disk (for large datasets) |
+| `WithOnDiskPayload(enabled)` | `false` | Store payloads on disk |
+| `WithHNSWConfig(m, efConstruct)` | `16, 128` | HNSW index parameters (higher = better recall, more memory) |
+| `WithMaxRetries(n)` | `3` | Max retry attempts for transient gRPC errors |
+| `WithBaseRetryDelay(d)` | `100ms` | Initial retry delay |
+| `WithMaxRetryDelay(d)` | `5s` | Maximum retry delay |
+
 ### Embedder
 
 Embedder is responsible for converting text to vector representations and is a core component of the Knowledge system. Currently, the framework mainly supports OpenAI embedding models:
@@ -446,26 +572,6 @@ kb := knowledge.New(
 )
 ```
 
-### Reranker
-
-Reranker is responsible for the precise ranking of search results
-
-```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
-)
-
-rerank := reranker.NewTopKReranker(
-    // Specify the number of results to be returned after precision sorting. 
-    // If not set, all results will be returned by default
-    reranker.WithK(1),
-)
-
-kb := knowledge.New(
-    knowledge.WithReranker(rerank),
-)
-```
-
 **Supported embedding models**:
 
 - OpenAI embedding models (text-embedding-3-small, etc.)
@@ -478,6 +584,83 @@ kb := knowledge.New(
 >
 > - Retriever and Reranker are currently implemented internally by Knowledge, users don't need to configure them separately. Knowledge automatically handles document retrieval and result ranking.
 > - The `OPENAI_EMBEDDING_MODEL` environment variable needs to be manually read in code, the framework won't read it automatically. Refer to the `getEnvOrDefault("OPENAI_EMBEDDING_MODEL", "")` implementation in the example code.
+
+
+### Reranker
+
+> 📁 **Example Code**: [examples/knowledge/reranker](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/reranker)
+
+Reranker is responsible for the precise ranking of search results. trpc-agent-go supports multiple Reranker implementations:
+
+#### TopK (Simple Truncation)
+
+The most basic Reranker, which simply truncates the Top K results based on retrieval scores:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/topk"
+)
+
+rerank := topk.New(
+    topk.WithK(3), // Specify the number of results to return after reranking
+)
+```
+
+#### Cohere (SaaS Rerank)
+
+Uses Cohere's official API for reranking, typically providing better results than simple vector retrieval:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/cohere"
+)
+
+// API key provided via WithAPIKey option
+rerank := cohere.New(
+    cohere.WithAPIKey("your-api-key"),       // Required: API key
+    cohere.WithModel("rerank-english-v3.0"), // Specify model
+    cohere.WithTopN(5),                      // Final number of results
+)
+```
+
+#### Infinity / TEI 
+
+**Terminology**
+
+- **Infinity**: Open-source high-performance inference engine supporting multiple Reranker models
+- **TEI (Text Embeddings Inference)**: Official Hugging Face inference engine optimized for Embeddings and Reranking
+
+The Infinity Reranker implementation in trpc-agent-go can connect to any service compatible with the standard Rerank API, including self-hosted services using Infinity/TEI, Hugging Face Inference Endpoints, etc.
+
+**Usage**
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/infinity"
+)
+
+// Connect to self-hosted or managed Rerank service
+reranker, err := infinity.New(
+    infinity.WithEndpoint("http://localhost:7997/rerank"), // Required: Service endpoint
+    infinity.WithModel("BAAI/bge-reranker-v2-m3"),         // Optional: Model name
+    infinity.WithTopN(5),                                   // Optional: Result count
+)
+if err != nil {
+    log.Fatalf("Failed to create reranker: %v", err)
+}
+```
+
+For detailed deployment methods and examples, see the `examples/knowledge/reranker/infinity/` directory.
+
+#### Configure Reranker to Knowledge
+
+```go
+kb := knowledge.New(
+    knowledge.WithReranker(rerank),
+    // ... other configurations
+)
+```
+
 
 ### Document Source Configuration
 
@@ -951,6 +1134,21 @@ vectorStore, err := vectortcvector.New(
 - **v0.4.0+ new collections**: Automatically create metadata JSON index, all fields queryable
 - **Legacy collections**: Only fields in `WithFilterIndexFields` are queryable
 
+#### Qdrant
+
+- ✅ Supports all metadata field filtering
+- ✅ Supports complex query conditions (AND, OR, comparison operators)
+- ✅ Supports IN, NOT IN, LIKE, BETWEEN operators
+- ✅ Automatic retry for transient errors
+
+```go
+vectorStore, err := vectorqdrant.New(ctx,
+    vectorqdrant.WithHost("localhost"),
+    vectorqdrant.WithPort(6334),
+    // ... other configurations
+)
+```
+
 #### In-memory Storage
 
 - ✅ Supports all filter functionality
@@ -1130,6 +1328,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
     vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
     vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
+    vectorqdrant "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/qdrant"
     vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
 
     // Import PDF reader to register it (optional - has separate go.mod to avoid unnecessary dependencies).
@@ -1139,7 +1338,7 @@ import (
 func main() {
     var (
         embedderType    = flag.String("embedder", "openai", "embedder type (openai, gemini, ollama, huggingface)")
-        vectorStoreType = flag.String("vectorstore", "inmemory", "vector store type (inmemory, pgvector, tcvector)")
+        vectorStoreType = flag.String("vectorstore", "inmemory", "vector store type (inmemory, pgvector, tcvector, qdrant)")
         modelName       = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
     )
 
@@ -1199,6 +1398,21 @@ func main() {
         )
         if err != nil {
             log.Fatalf("Failed to create tcvector store: %v", err)
+        }
+    case "qdrant":
+        port, err := strconv.Atoi(getEnvOrDefault("QDRANT_PORT", "6334"))
+        if err != nil {
+            log.Fatalf("Failed to convert QDRANT_PORT to int: %v", err)
+        }
+        vectorStore, err = vectorqdrant.New(ctx,
+            vectorqdrant.WithHost(getEnvOrDefault("QDRANT_HOST", "localhost")),
+            vectorqdrant.WithPort(port),
+            vectorqdrant.WithAPIKey(getEnvOrDefault("QDRANT_API_KEY", "")),
+            vectorqdrant.WithTLS(getEnvOrDefault("QDRANT_TLS", "") == "true"),
+            vectorqdrant.WithDimension(1536),
+        )
+        if err != nil {
+            log.Fatalf("Failed to create qdrant store: %v", err)
         }
     default: // inmemory.
         vectorStore = vectorinmemory.New()
@@ -1375,6 +1589,12 @@ export ELASTICSEARCH_USERNAME=""
 export ELASTICSEARCH_PASSWORD=""
 export ELASTICSEARCH_API_KEY=""
 export ELASTICSEARCH_INDEX_NAME="trpc_agent_documents"
+
+# Qdrant configuration (required when using -vectorstore=qdrant)
+export QDRANT_HOST="localhost"          # or "xyz-abc.cloud.qdrant.io" for Qdrant Cloud
+export QDRANT_PORT="6334"
+export QDRANT_API_KEY=""                # Required for Qdrant Cloud
+export QDRANT_TLS="false"               # Set to "true" for Qdrant Cloud
 ```
 
 ### Command Line Parameters
@@ -1385,10 +1605,11 @@ go run main.go -embedder openai -vectorstore inmemory
 go run main.go -embedder gemini -vectorstore pgvector
 go run main.go -embedder openai -vectorstore tcvector
 go run main.go -embedder openai -vectorstore elasticsearch -es-version v9
+go run main.go -embedder openai -vectorstore qdrant
 
 # Parameter description:
 # -embedder: Select embedder type (openai, gemini, ollama, huggingface), default is openai.
-# -vectorstore: Select vector store type (inmemory, pgvector, tcvector, elasticsearch), default is inmemory.
+# -vectorstore: Select vector store type (inmemory, pgvector, tcvector, elasticsearch, qdrant), default is inmemory.
 # -es-version: Elasticsearch version (v7, v8, v9), only when vectorstore=elasticsearch.
 ```
 
