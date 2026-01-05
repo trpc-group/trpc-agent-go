@@ -572,26 +572,6 @@ kb := knowledge.New(
 )
 ```
 
-### Reranker
-
-Reranker is responsible for the precise ranking of search results
-
-```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
-)
-
-rerank := reranker.NewTopKReranker(
-    // Specify the number of results to be returned after precision sorting. 
-    // If not set, all results will be returned by default
-    reranker.WithK(1),
-)
-
-kb := knowledge.New(
-    knowledge.WithReranker(rerank),
-)
-```
-
 **Supported embedding models**:
 
 - OpenAI embedding models (text-embedding-3-small, etc.)
@@ -604,6 +584,83 @@ kb := knowledge.New(
 >
 > - Retriever and Reranker are currently implemented internally by Knowledge, users don't need to configure them separately. Knowledge automatically handles document retrieval and result ranking.
 > - The `OPENAI_EMBEDDING_MODEL` environment variable needs to be manually read in code, the framework won't read it automatically. Refer to the `getEnvOrDefault("OPENAI_EMBEDDING_MODEL", "")` implementation in the example code.
+
+
+### Reranker
+
+> 📁 **Example Code**: [examples/knowledge/reranker](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/reranker)
+
+Reranker is responsible for the precise ranking of search results. trpc-agent-go supports multiple Reranker implementations:
+
+#### TopK (Simple Truncation)
+
+The most basic Reranker, which simply truncates the Top K results based on retrieval scores:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/topk"
+)
+
+rerank := topk.New(
+    topk.WithK(3), // Specify the number of results to return after reranking
+)
+```
+
+#### Cohere (SaaS Rerank)
+
+Uses Cohere's official API for reranking, typically providing better results than simple vector retrieval:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/cohere"
+)
+
+// API key provided via WithAPIKey option
+rerank := cohere.New(
+    cohere.WithAPIKey("your-api-key"),       // Required: API key
+    cohere.WithModel("rerank-english-v3.0"), // Specify model
+    cohere.WithTopN(5),                      // Final number of results
+)
+```
+
+#### Infinity / TEI 
+
+**Terminology**
+
+- **Infinity**: Open-source high-performance inference engine supporting multiple Reranker models
+- **TEI (Text Embeddings Inference)**: Official Hugging Face inference engine optimized for Embeddings and Reranking
+
+The Infinity Reranker implementation in trpc-agent-go can connect to any service compatible with the standard Rerank API, including self-hosted services using Infinity/TEI, Hugging Face Inference Endpoints, etc.
+
+**Usage**
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/infinity"
+)
+
+// Connect to self-hosted or managed Rerank service
+reranker, err := infinity.New(
+    infinity.WithEndpoint("http://localhost:7997/rerank"), // Required: Service endpoint
+    infinity.WithModel("BAAI/bge-reranker-v2-m3"),         // Optional: Model name
+    infinity.WithTopN(5),                                   // Optional: Result count
+)
+if err != nil {
+    log.Fatalf("Failed to create reranker: %v", err)
+}
+```
+
+For detailed deployment methods and examples, see the `examples/knowledge/reranker/infinity/` directory.
+
+#### Configure Reranker to Knowledge
+
+```go
+kb := knowledge.New(
+    knowledge.WithReranker(rerank),
+    // ... other configurations
+)
+```
+
 
 ### Document Source Configuration
 

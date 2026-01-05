@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/loader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/topk"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/retriever"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
@@ -122,7 +123,7 @@ func New(opts ...Option) *BuiltinKnowledge {
 			dk.queryEnhancer = query.NewPassthroughEnhancer()
 		}
 		if dk.reranker == nil {
-			dk.reranker = reranker.NewTopKReranker()
+			dk.reranker = topk.New()
 		}
 
 		dk.retriever = retriever.New(
