@@ -908,16 +908,22 @@ For complete table definitions, see [session/mysql/schema.sql](https://github.co
 
 #### Migrating from Older Versions
 
-**Affected Versions**: v1.2.0 and earlier
+**Affected Versions**: v1.2.0 and earlier  
 **Fixed in Version**: v1.2.0 and later
 
-**Background**: Earlier versions of the `session_summaries` table used a unique index that included the `deleted_at` column. However, in MySQL `NULL != NULL`, which means multiple records with `deleted_at = NULL` would not trigger the unique constraint, potentially causing duplicate data.
+**Background**: Earlier versions of the `session_summaries` table had index design issues:
 
-**Affected Versions**: Users with the old lookup index `idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)`.
+- The earliest version used a unique index that included the `deleted_at` column. However, in MySQL `NULL != NULL`, which means multiple records with `deleted_at = NULL` would not trigger the unique constraint.
+- Later versions changed to a regular lookup index (non-unique), which also could not prevent duplicate data.
 
-**Old Index**: `idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)`
+Both situations could lead to duplicate data.
 
-**New Index**: `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key)`
+**Old Index** (one of the following):
+
+- `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key, deleted_at)` — unique index but includes deleted_at
+- `idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)` — regular index
+
+**New Index**: `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key)` — unique index without deleted_at
 
 **Migration Steps**:
 
@@ -927,7 +933,10 @@ For complete table definitions, see [session/mysql/schema.sql](https://github.co
 -- Please backup your data before executing!
 -- ============================================================================
 
--- Step 1: Clean up duplicate data (keep the latest record)
+-- Step 1: Check current indexes to confirm old index name
+SHOW INDEX FROM session_summaries;
+
+-- Step 2: Clean up duplicate data (keep the latest record)
 -- If there are multiple records with deleted_at = NULL, keep the one with the largest id.
 DELETE t1 FROM session_summaries t1
 INNER JOIN session_summaries t2
@@ -939,24 +948,24 @@ WHERE t1.app_name = t2.app_name
   AND t2.deleted_at IS NULL
   AND t1.id < t2.id;
 
--- Step 2: Hard delete soft-deleted records (summary data is regenerable)
+-- Step 3: Hard delete soft-deleted records (summary data is regenerable)
 -- If you need to keep soft-deleted records, skip this step, but handle conflicts
--- manually before Step 4.
+-- manually before Step 5.
 DELETE FROM session_summaries WHERE deleted_at IS NOT NULL;
 
--- Step 3: Drop the old lookup index
+-- Step 4: Drop the old index (choose the correct index name based on Step 1 results)
 -- Note: Index name may have a table prefix, adjust according to your configuration.
--- Example: idx_trpc_session_summaries_lookup
--- If the index does not exist, this will error. Use SHOW INDEX to verify the index name first.
+-- If it's a lookup index:
 DROP INDEX idx_session_summaries_lookup ON session_summaries;
+-- If it's an old unique_active index (includes deleted_at):
+-- DROP INDEX idx_session_summaries_unique_active ON session_summaries;
 
--- Step 4: Create the new unique index
+-- Step 5: Create the new unique index (without deleted_at)
 -- Note: Index name may have a table prefix, adjust according to your configuration.
--- Example: idx_trpc_session_summaries_unique_active
 CREATE UNIQUE INDEX idx_session_summaries_unique_active 
 ON session_summaries(app_name, user_id, session_id, filter_key);
 
--- Step 5: Verify migration results
+-- Step 6: Verify migration results
 SELECT COUNT(*) as duplicate_count FROM (
     SELECT app_name, user_id, session_id, filter_key, COUNT(*) as cnt
     FROM session_summaries
@@ -966,20 +975,18 @@ SELECT COUNT(*) as duplicate_count FROM (
 ) t;
 -- Expected result: duplicate_count = 0
 
--- Step 6: Verify the index was created successfully
+-- Step 7: Verify the index was created successfully
 SHOW INDEX FROM session_summaries WHERE Key_name = 'idx_session_summaries_unique_active';
--- Expected result: Shows the newly created unique index
+-- Expected result: Shows the newly created unique index without deleted_at column
 ```
 
-> Note
+**Note**: If you configured `WithTablePrefix("trpc_")`, table and index names will have a prefix:
 
-If you configured `WithTablePrefix("trpc_")`, table and index names will have a prefix:
+- Table name: `trpc_session_summaries`
+- Old index name: `idx_trpc_session_summaries_lookup` or `idx_trpc_session_summaries_unique_active`
+- New index name: `idx_trpc_session_summaries_unique_active`
 
-    - Table name: `trpc_session_summaries`
-    - Old index name: `idx_trpc_session_summaries_lookup`
-    - New index name: `idx_trpc_session_summaries_unique_active`
-
-    Please adjust the table and index names in the SQL above according to your actual configuration.
+Please adjust the table and index names in the SQL above according to your actual configuration.
 
 
 
