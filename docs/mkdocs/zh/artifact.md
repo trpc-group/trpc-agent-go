@@ -106,17 +106,35 @@ import "trpc.group/trpc-go/trpc-agent-go/artifact/s3"
 #### 使用方法
 
 ```go
-// 创建服务
-service, err := s3.NewService(os.Getenv("S3_BUCKET"))
+import (
+    "context"
+    "log"
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/artifact/s3"
+)
+
+ctx := context.Background()
+
+// 创建服务（S3 客户端会自动在内部创建）
+service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"))
 if err != nil {
     log.Fatal(err)
 }
+defer service.Close()
 
 // 使用自定义端点（用于 S3 兼容服务）
-service, err := s3.NewService(os.Getenv("S3_BUCKET"),
+service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"),
     s3.WithEndpoint(os.Getenv("S3_ENDPOINT")),
     s3.WithCredentials(os.Getenv("S3_ACCESS_KEY"), os.Getenv("S3_SECRET_KEY")),
-    s3.WithPathStyle(),  // MinIO 和某些 S3 兼容服务需要
+    s3.WithPathStyle(true),  // MinIO 和某些 S3 兼容服务需要
+)
+
+// 启用调试日志
+import "trpc.group/trpc-go/trpc-agent-go/log"
+
+service, err := s3.NewService(ctx, os.Getenv("S3_BUCKET"),
+    s3.WithLogger(log.Default),
 )
 ```
 
@@ -127,11 +145,13 @@ service, err := s3.NewService(os.Getenv("S3_BUCKET"),
 | 选项 | 描述 | 默认值 |
 |------|------|--------|
 | `WithEndpoint(url)` | S3 兼容服务的自定义端点（使用 `http://` 禁用 SSL） | AWS S3 |
-| `WithRegion(region)` | AWS 区域 | `AWS_REGION` 环境变量或 `us-east-1` |
+| `WithRegion(region)` | AWS 区域 | AWS SDK 自动检测 |
 | `WithCredentials(key, secret)` | 静态凭证 | AWS 凭证链 |
 | `WithSessionToken(token)` | 临时凭证的 STS 会话令牌 | - |
-| `WithPathStyle()` | 使用路径样式 URL（MinIO、R2 需要） | 虚拟主机样式 |
+| `WithPathStyle(bool)` | 使用路径样式 URL（MinIO、R2 需要） | 虚拟主机样式 |
 | `WithRetries(n)` | 最大重试次数 | 3 |
+| `WithClient(client)` | 使用预创建的 S3 客户端（高级用法） | 自动创建 |
+| `WithLogger(logger)` | 调试消息日志器（如制品未找到） | `nil`（无日志） |
 
 #### 凭证解析顺序
 
@@ -140,6 +160,47 @@ service, err := s3.NewService(os.Getenv("S3_BUCKET"),
 1. **环境变量**：`AWS_ACCESS_KEY_ID` 和 `AWS_SECRET_ACCESS_KEY`
 2. **共享凭证文件**：`~/.aws/credentials`（可选配合 `AWS_PROFILE`）
 3. **IAM 角色**：EC2 实例配置文件、ECS 任务角色、Lambda 执行角色等
+
+#### 高级用法：客户端管理
+
+对于高级用例，`storage/s3` 包提供了可复用的 S3 客户端，可在多个服务之间共享。适用于以下场景：
+
+- 在多个制品服务之间共享单个客户端
+- 将同一客户端复用于其他 S3 操作（如向量存储）
+- 需要对客户端生命周期进行精细控制
+
+```go
+import (
+    "context"
+    "log"
+
+    "trpc.group/trpc-go/trpc-agent-go/artifact/s3"
+    s3storage "trpc.group/trpc-go/trpc-agent-go/storage/s3"
+)
+
+ctx := context.Background()
+
+// 创建可复用的 S3 客户端
+client, err := s3storage.NewClient(ctx,
+    s3storage.WithBucket("my-bucket"),
+    s3storage.WithRegion("us-west-2"),
+    s3storage.WithEndpoint("http://localhost:9000"),
+    s3storage.WithCredentials("access-key", "secret-key"),
+    s3storage.WithPathStyle(true),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer client.Close()
+
+// 在多个服务之间共享客户端
+artifactService, _ := s3.NewService(ctx, "my-bucket", s3.WithClient(client))
+// 该客户端也可用于其他服务，如向量存储
+```
+
+> **注意**：使用 `WithClient` 时，制品服务不拥有该客户端的所有权。
+> 您必须自行负责在完成后关闭客户端。如果未提供客户端，
+> 服务会自动创建并管理一个客户端。
 
 ## 在 Agent 中的使用
 

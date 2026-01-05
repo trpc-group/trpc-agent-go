@@ -208,6 +208,8 @@ When using `WithOutputSchema`:
 - **Response Only**: Agents can only provide responses, not perform actions
 - **Schema Constraints**: All responses must conform to the defined schema
 
+**💡 Tip**: If you need both structured output AND tool usage, consider using `WithStructuredOutputJSONSchema` instead. See the comparison table below for details.
+
 ## Real-World Applications
 
 This pattern is useful for:
@@ -218,13 +220,79 @@ This pattern is useful for:
 - **Form Filling**: Automated form completion with validation
 - **Report Generation**: Standardized report formats
 
-## Comparison with Other Examples
+## Comparison with Other Structured Output Methods
 
-| Feature | Output Schema | Output Key | Output Key State |
-|---------|---------------|------------|------------------|
-| **Tool Usage** | ❌ Disabled | ✅ Enabled | ✅ Enabled |
-| **Schema Validation** | ✅ Required | ❌ None | ❌ None |
-| **Data Flow** | Direct Response | Session State | Session State + Tools |
-| **Use Case** | Structured Data | Data Storage | Complex Workflows |
+The framework provides multiple approaches for handling structured output from agents:
+
+| Feature | WithStructuredOutputJSONSchema | WithStructuredOutputJSON | WithOutputSchema | WithOutputKey |
+|---------|-------------------------------|-------------------------|------------------|---------------|
+| **Tool Usage** | ✅ Allowed | ✅ Allowed | ❌ Disabled | ✅ Enabled |
+| **Schema Type** | User-provided JSON Schema | Auto-generated from Go struct | User-provided JSON Schema | N/A |
+| **Output Type** | Untyped (map/interface{}) | Typed (Go struct) | Untyped (map/interface{}) | String/Bytes |
+| **Schema Validation** | ✅ By LLM | ✅ By LLM | ✅ By LLM | ❌ None |
+| **Data Location** | Event.StructuredOutput | Event.StructuredOutput | Model response content | Session State |
+| **Primary Use Case** | Flexible schema with tools | Type-safe structured output | Simple structured responses | State storage & flow control |
+
+### Method Details
+
+#### WithStructuredOutputJSONSchema
+- **Description**: Provides a user-defined JSON schema for structured output while **allowing tool usage**
+- **Best For**: Complex agents that need both structured output AND tool capabilities (function calling, RAG, etc.)
+- **Output**: Available in `event.StructuredOutput` as untyped `map[string]any`
+- **Example**: Agent with calculator tools that returns results in a specific JSON format
+
+#### WithStructuredOutputJSON
+- **Description**: Auto-generates JSON schema from Go struct type, returns typed output
+- **Best For**: Type-safe applications where you want compile-time type checking
+- **Output**: Available in `event.StructuredOutput` as the specified Go struct type
+- **Example**: Weather agent returning `WeatherData` struct
+
+#### WithOutputSchema (Legacy)
+- **Description**: Similar to `WithStructuredOutputJSONSchema` but **disables all tools**
+- **Best For**: Simple structured responses where tools are not needed
+- **Output**: In model response content (needs parsing)
+- **Limitation**: Cannot use tools, function calling, or RAG
+
+#### WithOutputKey
+- **Description**: Stores agent output in session state under a specific key
+- **Best For**: Agent workflows where output needs to be accessed by downstream agents
+- **Output**: Stored in session state, accessible via placeholders or state tools
+- **Example**: Research agent storing findings for a writer agent to consume
+
+### Migration Guide: WithOutputSchema → WithStructuredOutputJSONSchema
+
+If you're using `WithOutputSchema` but need tool capabilities, migrate to `WithStructuredOutputJSONSchema`:
+
+```go
+// Old: Tools disabled
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithOutputSchema(mySchema),
+    // llmagent.WithTools(...) // ❌ Won't work
+)
+
+// New: Tools enabled
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithStructuredOutputJSONSchema(
+        "my_output",     // Name
+        mySchema,        // JSON schema
+        true,            // Strict mode
+        "Agent output",  // Description
+    ),
+    llmagent.WithTools([]tool.Tool{myTool1, myTool2}), // ✅ Now works!
+)
+```
+
+**Event Handling Changes:**
+```go
+// Access structured output from events
+for event := range eventCh {
+    if event.StructuredOutput != nil {
+        structuredData := event.StructuredOutput.(map[string]any)
+        // Process structured data...
+    }
+}
+```
 
 This example demonstrates the power of schema validation for ensuring consistent, reliable data output from LLM agents.
