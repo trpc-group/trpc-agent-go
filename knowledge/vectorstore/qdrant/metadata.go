@@ -147,7 +147,7 @@ func (vs *VectorStore) UpdateMetadata(ctx context.Context, id string, metadata m
 
 	payload := make(map[string]*qdrant.Value)
 	for key, value := range metadata {
-		v, err := qdrant.NewValue(value)
+		v, err := qdrant.NewValue(sanitizeValue(value))
 		if err != nil {
 			return err
 		}
