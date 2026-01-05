@@ -10,6 +10,7 @@
 package pgvector
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -122,6 +123,82 @@ func (ub *updateBuilder) addField(field string, value any) {
 
 func (ub *updateBuilder) build() (string, []any) {
 	sql := fmt.Sprintf(`UPDATE %s SET %s WHERE %s = $1`, ub.o.table, strings.Join(ub.setParts, ", "), ub.o.idFieldName)
+	return sql, ub.args
+}
+
+type metadataUpdate struct {
+	field    string
+	argIndex int
+}
+
+// updateByFilterBuilder builds UPDATE SQL statements with filter conditions.
+type updateByFilterBuilder struct {
+	*baseSQLBuilder
+	setParts        []string
+	metadataUpdates []metadataUpdate
+}
+
+// newUpdateByFilterBuilder creates a builder for UPDATE operations with filters.
+func newUpdateByFilterBuilder(o options) *updateByFilterBuilder {
+	return &updateByFilterBuilder{
+		baseSQLBuilder: &baseSQLBuilder{
+			o:          o,
+			conditions: []string{"1=1"},
+			args:       []any{time.Now().Unix()},
+			argIndex:   2,
+		},
+		setParts:        []string{o.updatedAtFieldName + " = $1"},
+		metadataUpdates: make([]metadataUpdate, 0),
+	}
+}
+
+// addField adds a field to update.
+func (ub *updateByFilterBuilder) addField(field string, value any) {
+	ub.setParts = append(ub.setParts, fmt.Sprintf("%s = $%d", field, ub.argIndex))
+	ub.args = append(ub.args, value)
+	ub.argIndex++
+}
+
+// addMetadataField updates a specific metadata field using jsonb_set.
+// field should be the metadata key (without "metadata." prefix).
+func (ub *updateByFilterBuilder) addMetadataField(field string, value any) {
+	// Store metadata update to be combined later
+	ub.metadataUpdates = append(ub.metadataUpdates, metadataUpdate{
+		field:    field,
+		argIndex: ub.argIndex,
+	})
+
+	// Convert value to JSON string for jsonb_set
+	jsonValue, _ := json.Marshal(value)
+	ub.args = append(ub.args, string(jsonValue))
+	ub.argIndex++
+}
+
+// addEmbeddingField adds an embedding field to update.
+func (ub *updateByFilterBuilder) addEmbeddingField(value []float64) {
+	ub.setParts = append(ub.setParts, fmt.Sprintf("%s = $%d", ub.o.embeddingFieldName, ub.argIndex))
+	// Convert float64 to float32 for pgvector
+	float32Vec := make([]float32, len(value))
+	for i, v := range value {
+		float32Vec[i] = float32(v)
+	}
+	ub.args = append(ub.args, pgvector.NewVector(float32Vec))
+	ub.argIndex++
+}
+
+// build builds the UPDATE query with all conditions.
+func (ub *updateByFilterBuilder) build() (string, []any) {
+	// Combine all metadata updates into a single assignment using chained jsonb_set
+	if len(ub.metadataUpdates) > 0 {
+		expr := fmt.Sprintf("COALESCE(%s, '{}'::jsonb)", ub.o.metadataFieldName)
+		for _, update := range ub.metadataUpdates {
+			expr = fmt.Sprintf("jsonb_set(%s, '{%s}', $%d::jsonb)", expr, update.field, update.argIndex)
+		}
+		ub.setParts = append(ub.setParts, fmt.Sprintf("%s = %s", ub.o.metadataFieldName, expr))
+	}
+
+	whereClause := strings.Join(ub.conditions, " AND ")
+	sql := fmt.Sprintf(`UPDATE %s SET %s WHERE %s`, ub.o.table, strings.Join(ub.setParts, ", "), whereClause)
 	return sql, ub.args
 }
 

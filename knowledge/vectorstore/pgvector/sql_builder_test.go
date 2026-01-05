@@ -786,3 +786,127 @@ func TestQueryBuilderMultipleFilters(t *testing.T) {
 	// Verify we have multiple arguments
 	assert.GreaterOrEqual(t, len(args), 4, "Should have at least vector + 2 ids + metadata + limit")
 }
+
+// TestUpdateByFilterBuilder tests the updateByFilterBuilder functionality
+func TestUpdateByFilterBuilder(t *testing.T) {
+	t.Run("basic_field_update", func(t *testing.T) {
+		ub := newUpdateByFilterBuilder(defaultOptions)
+		ub.addField("name", "new_name")
+		ub.addIDFilter([]string{"doc1", "doc2"})
+
+		sql, args := ub.build()
+
+		assert.Contains(t, sql, "UPDATE documents SET")
+		assert.Contains(t, sql, "updated_at = $1")
+		assert.Contains(t, sql, "name = $2")
+		assert.Contains(t, sql, "WHERE")
+		assert.Contains(t, sql, "id IN")
+		assert.Len(t, args, 4) // timestamp + name + 2 ids
+	})
+
+	t.Run("multiple_fields_update", func(t *testing.T) {
+		ub := newUpdateByFilterBuilder(defaultOptions)
+		ub.addField("name", "new_name")
+		ub.addField("content", "new_content")
+		ub.addIDFilter([]string{"doc1"})
+
+		sql, args := ub.build()
+
+		assert.Contains(t, sql, "name = $2")
+		assert.Contains(t, sql, "content = $3")
+		assert.Len(t, args, 4) // timestamp + name + content + 1 id
+	})
+
+	t.Run("metadata_field_update", func(t *testing.T) {
+		ub := newUpdateByFilterBuilder(defaultOptions)
+		ub.addMetadataField("status", "archived")
+		ub.addIDFilter([]string{"doc1"})
+
+		sql, args := ub.build()
+
+		assert.Contains(t, sql, "jsonb_set")
+		assert.Contains(t, sql, "'{status}'")
+		assert.Contains(t, sql, "::jsonb")
+		assert.Len(t, args, 3) // timestamp + metadata value + 1 id
+		assert.Equal(t, `"archived"`, args[1]) // JSON encoded string
+	})
+
+	t.Run("metadata_field_with_number", func(t *testing.T) {
+		ub := newUpdateByFilterBuilder(defaultOptions)
+		ub.addMetadataField("score", 95)
+		ub.addIDFilter([]string{"doc1"})
+
+		sql, args := ub.build()
+
+		assert.Contains(t, sql, "jsonb_set")
+		assert.Contains(t, sql, "'{score}'")
+		assert.Equal(t, "95", args[1]) // JSON encoded number
+	})
+
+	t.Run("metadata_field_with_bool", func(t *testing.T) {
+		ub := newUpdateByFilterBuilder(defaultOptions)
+		ub.addMetadataField("active", true)
+		ub.addIDFilter([]string{"doc1"})
+
+		sql, args := ub.build()
+
+		assert.Contains(t, sql, "jsonb_set")
+		assert.Contains(t, sql, "'{active}'")
+		assert.Equal(t, "true", args[1]) // JSON encoded bool
+	})
+
+	t.Run("embedding_field_update", func(t *testing.T) {
+		ub := newUpdateByFilterBuilder(defaultOptions)
+		ub.addEmbeddingField([]float64{0.1, 0.2, 0.3})
+		ub.addIDFilter([]string{"doc1"})
+
+		sql, args := ub.build()
+
+		assert.Contains(t, sql, "embedding = $2")
+		assert.Len(t, args, 3) // timestamp + embedding + 1 id
+	})
+
+	t.Run("with_metadata_filter", func(t *testing.T) {
+		ub := newUpdateByFilterBuilder(defaultOptions)
+		ub.addField("name", "new_name")
+		ub.addMetadataFilter(map[string]any{"category": "test"})
+
+		sql, args := ub.build()
+
+		assert.Contains(t, sql, "metadata @>")
+		assert.Contains(t, sql, "::jsonb")
+		assert.Len(t, args, 3) // timestamp + name + metadata filter
+	})
+
+	t.Run("combined_filters_and_updates", func(t *testing.T) {
+		ub := newUpdateByFilterBuilder(defaultOptions)
+		ub.addField("name", "new_name")
+		ub.addMetadataField("status", "updated")
+		ub.addIDFilter([]string{"doc1", "doc2"})
+		ub.addMetadataFilter(map[string]any{"category": "test"})
+
+		sql, args := ub.build()
+
+		assert.Contains(t, sql, "UPDATE documents SET")
+		assert.Contains(t, sql, "name =")
+		assert.Contains(t, sql, "jsonb_set")
+		assert.Contains(t, sql, "id IN")
+		assert.Contains(t, sql, "metadata @>")
+		// timestamp + name + metadata_status + 2 ids + metadata filter
+		assert.Len(t, args, 6)
+	})
+
+	t.Run("with_filter_condition", func(t *testing.T) {
+		ub := newUpdateByFilterBuilder(defaultOptions)
+		ub.addField("name", "new_name")
+		ub.addFilterCondition(&condConvertResult{
+			cond: "created_at > $%d",
+			args: []any{1000},
+		})
+
+		sql, args := ub.build()
+
+		assert.Contains(t, sql, "created_at >")
+		assert.Len(t, args, 3) // timestamp + name + created_at value
+	})
+}
