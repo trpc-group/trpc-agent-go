@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -21,6 +22,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
 // TestMetricsEndpoint validates metrics endpoint precedence rules.
@@ -349,6 +351,110 @@ func TestInitMeterProvider(t *testing.T) {
 	}
 	if itelemetry.ExecuteToolMetricGenAIClientOperationDuration == nil {
 		t.Error("ExecuteToolMetricGenAIClientOperationDuration was not created")
+	}
+}
+
+func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
+	originalMP := itelemetry.MeterProvider
+	origChatTokenUsage := itelemetry.ChatMetricGenAIClientTokenUsage
+	defer func() {
+		itelemetry.MeterProvider = originalMP
+		itelemetry.ChatMetricGenAIClientTokenUsage = origChatTokenUsage
+	}()
+
+	reset := func(t *testing.T) {
+		t.Helper()
+		if err := InitMeterProvider(noop.NewMeterProvider()); err != nil {
+			t.Fatalf("InitMeterProvider failed: %v", err)
+		}
+	}
+
+	tests := []struct {
+		name        string
+		meterName   string
+		metricName  string
+		boundaries  []float64
+		before      func(t *testing.T)
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:       "chat: token usage",
+			meterName:  metrics.MeterNameChat,
+			metricName: metrics.MetricGenAIClientTokenUsage,
+			boundaries: []float64{1, 2, 4},
+		},
+		{
+			name:       "execute-tool: operation duration",
+			meterName:  metrics.MeterNameExecuteTool,
+			metricName: metrics.MetricGenAIClientOperationDuration,
+			boundaries: []float64{0.1, 1, 10},
+		},
+		{
+			name:       "invoke-agent: token usage",
+			meterName:  metrics.MeterNameInvokeAgent,
+			metricName: metrics.MetricGenAIClientTokenUsage,
+			boundaries: []float64{1, 2, 4},
+		},
+		{
+			name:        "unknown meter name",
+			meterName:   "unknown-meter",
+			metricName:  metrics.MetricGenAIClientTokenUsage,
+			boundaries:  []float64{1},
+			wantErr:     true,
+			errContains: "unknown or unsupported meter name",
+		},
+		{
+			name:        "unsupported chat metric",
+			meterName:   metrics.MeterNameChat,
+			metricName:  "unknown.metric",
+			boundaries:  []float64{1},
+			wantErr:     true,
+			errContains: "unknown or unsupported chat histogram metric",
+		},
+		{
+			name:        "unsupported execute-tool metric",
+			meterName:   metrics.MeterNameExecuteTool,
+			metricName:  metrics.MetricGenAIClientTokenUsage,
+			boundaries:  []float64{1},
+			wantErr:     true,
+			errContains: "unknown or unsupported execute tool histogram metric",
+		},
+		{
+			name:       "chat token usage not initialized",
+			meterName:  metrics.MeterNameChat,
+			metricName: metrics.MetricGenAIClientTokenUsage,
+			boundaries: []float64{1},
+			before: func(t *testing.T) {
+				t.Helper()
+				itelemetry.ChatMetricGenAIClientTokenUsage = nil
+			},
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reset(t)
+			if tt.before != nil {
+				tt.before(t)
+			}
+
+			err := SetHistogramBuckets(tt.meterName, tt.metricName, tt.boundaries)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("expected error to contain %q, got %q", tt.errContains, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
