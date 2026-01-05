@@ -84,7 +84,9 @@ Minimal request JSON example:
 
 The real-time conversation route handles a real-time conversation request and streams the events produced during execution to the client via SSE. The default route is `/` and can be customised with `agui.WithPath`.
 
-For the same `SessionKey` (`AppName` + `userID` + `sessionID`), only one real-time conversation request can run at a time; repeated requests return `409 Conflict`. Also, even if the client SSE connection is closed, the backend continues executing until it finishes normally (or is cancelled / times out). By default, a single request can run for up to 1 hour. You can adjust this with `agui.WithTimeout(d)`, and set it to `0` to disable the timeout.
+For the same `SessionKey` (`AppName` + `userID` + `sessionID`), only one real-time conversation request can run at a time; repeated requests return `409 Conflict`.
+
+Even if the client SSE connection is closed, the backend continues executing until it finishes normally (or is cancelled / times out). By default, a single request can run for up to 1 hour. You can adjust this with `agui.WithTimeout(d)`, and set it to `0` to disable the timeout; the effective deadline is the earlier of the request context deadline and `agui.WithTimeout(d)`.
 
 A complete example is available at [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default).
 
