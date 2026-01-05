@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/middleware/llmtoolselector"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -53,6 +54,12 @@ func NewMultiToolChatAgent(agentName, modelName string) *MultiToolChatAgent {
 		duckduckgo.NewTool(), // Original DuckDuckGo search tool
 	}
 
+	modelCallbacks := model.NewCallbacks()
+	modelCallbacks.RegisterBeforeModel(llmtoolselector.New(
+		llmtoolselector.WithModel(modelInstance),
+		llmtoolselector.WithMaxTools(2),
+	).Callback())
+
 	// Create LLM agent
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
@@ -73,6 +80,7 @@ func NewMultiToolChatAgent(agentName, modelName string) *MultiToolChatAgent {
 		//Please select the appropriate tool based on user needs and provide helpful assistance.`),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools(tools),
+		llmagent.WithModelCallbacks(modelCallbacks),
 	)
 
 	// Create runner
