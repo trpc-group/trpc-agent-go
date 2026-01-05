@@ -76,10 +76,34 @@ func IsValidToolName(toolName string) bool {
 	return ok
 }
 
-// autoMemoryTools contains tool names available in auto memory mode.
-var autoMemoryTools = map[string]struct{}{
-	memory.SearchToolName: {},
-	memory.ClearToolName:  {},
+// autoModeDefaultEnabledTools defines default enabled tools for auto memory mode.
+// When extractor is configured, these defaults are applied to enabledTools.
+var autoModeDefaultEnabledTools = map[string]bool{
+	memory.AddToolName:    true,  // Enabled for extractor operations
+	memory.UpdateToolName: true,  // Enabled for extractor operations
+	memory.DeleteToolName: true,  // Enabled for extractor operations
+	memory.ClearToolName:  false, // Disabled by default, user must explicitly enable
+	memory.LoadToolName:   false, // Disabled (not needed in auto mode)
+	memory.SearchToolName: false, // Disabled by default, user must explicitly enable
+}
+
+// ApplyAutoModeDefaults applies auto mode default enabledTools settings.
+// This function sets auto mode defaults for tools defined in autoModeDefaultEnabledTools,
+// overriding values from DefaultEnabledTools (agentic mode defaults).
+// User settings applied via WithToolEnabled after WithExtractor will override these defaults.
+// This function should be called in Service initialization after all options are applied.
+// The enabledTools map is modified in place.
+func ApplyAutoModeDefaults(enabledTools map[string]bool) {
+	if enabledTools == nil {
+		return
+	}
+	// Apply auto mode defaults for all tools in autoModeDefaultEnabledTools.
+	// This overrides DefaultEnabledTools values, but user settings applied after
+	// WithExtractor (via WithToolEnabled) will still take effect since options
+	// are applied in order.
+	for toolName, defaultValue := range autoModeDefaultEnabledTools {
+		enabledTools[toolName] = defaultValue
+	}
 }
 
 // BuildToolsList builds the tools list based on configuration.
@@ -127,19 +151,16 @@ func shouldIncludeTool(name string, ext extractor.MemoryExtractor, enabledTools 
 }
 
 // shouldIncludeAutoMemoryTool checks if an auto memory tool should be included.
-// Auto memory tools are enabled by default but can be explicitly disabled.
+// In auto mode, only search tool can be exposed to agent (if explicitly enabled).
+// Other tools (add/update/delete/clear/load) are never exposed, even if enabled.
 func shouldIncludeAutoMemoryTool(name string, enabledTools map[string]bool) bool {
-	// Only include tools that are in the auto memory tools set.
-	if _, ok := autoMemoryTools[name]; !ok {
+	// Only search tool can be exposed to agent in auto mode.
+	if name != memory.SearchToolName {
 		return false
 	}
 
-	// Check if the tool was explicitly disabled.
-	if enabled, exists := enabledTools[name]; exists && !enabled {
-		return false
-	}
-
-	return true
+	// Check if search tool is explicitly enabled.
+	return enabledTools[name]
 }
 
 // BuildSearchTokens builds tokens for searching memory content.

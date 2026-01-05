@@ -58,6 +58,8 @@ type MemoryService struct {
 func NewMemoryService(options ...ServiceOpt) *MemoryService {
 	opts := defaultOptions.clone()
 	// Apply user options.
+	// Note: WithExtractor applies auto mode defaults internally, and subsequent
+	// WithToolEnabled calls can override those defaults.
 	for _, option := range options {
 		option(&opts)
 	}

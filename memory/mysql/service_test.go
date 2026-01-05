@@ -1546,7 +1546,8 @@ func TestTools_AutoMemoryMode(t *testing.T) {
 	// Enable auto memory mode.
 	s.opts.extractor = &mockExtractor{}
 	s.opts.toolCreators = imemory.AllToolCreators
-	s.opts.enabledTools = imemory.DefaultEnabledTools
+	// Apply auto mode defaults.
+	imemory.ApplyAutoModeDefaults(s.opts.enabledTools)
 	// Re-compute tools list after changing opts to simulate auto memory mode.
 	s.precomputedTools = imemory.BuildToolsList(
 		s.opts.extractor,
@@ -1557,12 +1558,24 @@ func TestTools_AutoMemoryMode(t *testing.T) {
 
 	tools := s.Tools()
 
-	// In auto memory mode, only search and clear tools should be returned.
-	assert.Len(t, tools, 2)
+	// In auto memory mode, no tools are returned by default (search is disabled by default).
+	assert.Len(t, tools, 0, "Auto mode should return no tools by default")
+
+	// Enable search tool explicitly.
+	s.opts.enabledTools[memory.SearchToolName] = true
+	s.precomputedTools = imemory.BuildToolsList(
+		s.opts.extractor,
+		s.opts.toolCreators,
+		s.opts.enabledTools,
+		s.cachedTools,
+	)
+
+	tools = s.Tools()
+	assert.Len(t, tools, 1, "Auto mode should return search tool when explicitly enabled")
 	toolNames := make(map[string]bool)
 	for _, tool := range tools {
 		toolNames[tool.Declaration().Name] = true
 	}
-	assert.True(t, toolNames[memory.SearchToolName])
-	assert.True(t, toolNames[memory.ClearToolName])
+	assert.True(t, toolNames[memory.SearchToolName], "Search tool should be returned when enabled")
+	assert.False(t, toolNames[memory.ClearToolName], "Clear tool should not be returned via Tools()")
 }

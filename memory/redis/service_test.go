@@ -1030,12 +1030,24 @@ func TestTools_AutoMemoryMode(t *testing.T) {
 
 	tools := memoryService.Tools()
 
-	// In auto memory mode, only search and clear tools should be returned.
-	assert.Len(t, tools, 2)
+	// In auto memory mode, no tools are returned by default (search is disabled by default).
+	assert.Len(t, tools, 0, "Auto mode should return no tools by default")
+
+	// Enable search tool explicitly.
+	memoryService, err = NewService(
+		WithRedisClientURL("redis://"+mr.Addr()),
+		WithExtractor(ext),
+		WithToolEnabled(memory.SearchToolName, true),
+	)
+	require.NoError(t, err)
+	defer memoryService.Close()
+
+	tools = memoryService.Tools()
+	assert.Len(t, tools, 1, "Auto mode should return search tool when explicitly enabled")
 	toolNames := make(map[string]bool)
 	for _, tool := range tools {
 		toolNames[tool.Declaration().Name] = true
 	}
-	assert.True(t, toolNames[memory.SearchToolName])
-	assert.True(t, toolNames[memory.ClearToolName])
+	assert.True(t, toolNames[memory.SearchToolName], "Search tool should be returned when enabled")
+	assert.False(t, toolNames[memory.ClearToolName], "Clear tool should not be returned via Tools()")
 }

@@ -255,11 +255,16 @@ func WithSchema(schema string) ServiceOpt {
 }
 
 // WithExtractor sets the memory extractor for auto memory mode.
-// When enabled, write tools (add/update/delete) are not exposed to the agent.
-// Read tools (load/search) are always exposed to the agent.
+// When enabled, auto mode defaults are applied to enabledTools.
+// User settings via WithToolEnabled applied after WithExtractor will override these defaults.
 func WithExtractor(e extractor.MemoryExtractor) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.extractor = e
+		// Apply auto mode defaults immediately when extractor is set.
+		// This allows subsequent WithToolEnabled calls to override defaults.
+		if e != nil {
+			imemory.ApplyAutoModeDefaults(opts.enabledTools)
+		}
 	}
 }
 

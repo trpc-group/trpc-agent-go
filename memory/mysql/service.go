@@ -49,6 +49,9 @@ type Service struct {
 // NewService creates a new mysql memory service.
 func NewService(options ...ServiceOpt) (*Service, error) {
 	opts := defaultOptions.clone()
+	// Apply user options.
+	// Note: WithExtractor applies auto mode defaults internally, and subsequent
+	// WithToolEnabled calls can override those defaults.
 	for _, option := range options {
 		option(&opts)
 	}
