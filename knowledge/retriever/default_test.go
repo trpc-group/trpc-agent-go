@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	q "trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 	r "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/topk"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 )
 
@@ -42,7 +43,7 @@ func TestDefaultRetriever(t *testing.T) {
 		WithEmbedder(dummyEmbedder{}),
 		WithVectorStore(vs),
 		WithQueryEnhancer(q.NewPassthroughEnhancer()),
-		WithReranker(r.NewTopKReranker()),
+		WithReranker(topk.New()),
 	)
 
 	res, err := d.Retrieve(context.Background(), &Query{Text: "hi", Limit: 5})

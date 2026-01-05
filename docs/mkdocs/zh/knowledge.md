@@ -573,24 +573,6 @@ kb := knowledge.New(
 )
 ```
 
-### Reranker
-
-Reranker 负责对检索结果的精排：
-
-```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
-)
-
-rerank := reranker.NewTopKReranker(
-    reranker.WithK(1), // 指定精排后的返回结果数，不设置的情况下默认返回所有结果
-)
-
-// 传递给 Knowledge
-kb := knowledge.New(
-    knowledge.WithReranker(rerank),
-)
-```
 
 **支持的 embedding 模型**：
 
@@ -604,6 +586,83 @@ kb := knowledge.New(
 >
 > - Retriever 和 Reranker 目前由 Knowledge 内部实现，用户无需单独配置。Knowledge 会自动处理文档检索和结果排序。
 > - `OPENAI_EMBEDDING_MODEL` 环境变量需要在代码中手动读取，框架不会自动读取。参考示例代码中的 `getEnvOrDefault("OPENAI_EMBEDDING_MODEL", "")` 实现。
+
+
+### Reranker
+
+> 📁 **示例代码**: [examples/knowledge/reranker](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/reranker)
+
+Reranker 负责对检索结果的精排，trpc-agent-go 支持多种 Reranker 实现：
+
+#### TopK (简单截断)
+
+最基础的 Reranker，仅根据检索分数截取 Top K 结果：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/topk"
+)
+
+rerank := topk.New(
+    topk.WithK(3), // 指定精排后的返回结果数
+)
+```
+
+#### Cohere (SaaS Rerank)
+
+使用 Cohere 官方 API 进行重排序，效果通常优于简单的向量检索：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/cohere"
+)
+
+// API key 通过 WithAPIKey 选项提供
+rerank := cohere.New(
+    cohere.WithAPIKey("your-api-key"),       // 必填：API key
+    cohere.WithModel("rerank-english-v3.0"), // 指定模型
+    cohere.WithTopN(5),                      // 最终返回数
+)
+```
+
+#### Infinity / TEI
+
+**术语说明**
+
+- **Infinity**: 开源高性能推理引擎，支持多种 Reranker 模型
+- **TEI (Text Embeddings Inference)**: Hugging Face 官方推理引擎，专为 Embedding 和 Rerank 优化
+
+trpc-agent-go 的 Infinity Reranker 实现可以连接任何兼容标准 Rerank API 的服务，包括使用 Infinity/TEI 自建的服务、Hugging Face Inference Endpoints 托管服务等。
+
+**使用方式**
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/infinity"
+)
+
+// 连接自建或托管的 Rerank 服务
+reranker, err := infinity.New(
+    infinity.WithEndpoint("http://localhost:7997/rerank"), // 必填：服务地址
+    infinity.WithModel("BAAI/bge-reranker-v2-m3"),         // 可选：模型名称
+    infinity.WithTopN(5),                                   // 可选：返回数量
+)
+if err != nil {
+    log.Fatalf("Failed to create reranker: %v", err)
+}
+```
+
+详细的服务部署方法和示例请参考 `examples/knowledge/reranker/infinity/` 目录。
+
+
+#### Reranker 配置到 Knowledge
+
+```go
+kb := knowledge.New(
+    knowledge.WithReranker(rerank),
+    // ... 其他配置
+)
+```
 
 ### 文档源配置
 
