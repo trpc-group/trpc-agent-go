@@ -944,23 +944,35 @@ func (r *llmRunner) executeModel(
 	return result, err
 }
 
-// processInstruction resolves placeholder variables in the instruction using
-// the session state present in the graph state (if any). It supports keys like
-// {user:...}, {app:...}, and optional suffix {?} consistent with llmagent.
+// processInstruction resolves placeholder variables in the instruction.
+// It supports the same syntax as LLMAgent, including {invocation:*} values
+// stored on the current invocation.
 func (r *llmRunner) processInstruction(state State) string {
 	instr := r.instruction
 	if instr == "" {
 		return instr
 	}
-	// Extract session from graph state.
-	if sessVal, ok := state[StateKeySession]; ok {
-		if sess, ok := sessVal.(*session.Session); ok && sess != nil {
-			// Build a minimal invocation carrying only the session for injection.
-			inv := agent.NewInvocation(agent.WithInvocationSession(sess))
-			if injected, err := stateinject.InjectSessionState(instr, inv); err == nil {
-				return injected
-			}
+
+	var invocation *agent.Invocation
+	if execVal, ok := state[StateKeyExecContext]; ok {
+		if execCtx, ok := execVal.(*ExecutionContext); ok && execCtx != nil {
+			invocation = execCtx.Invocation
 		}
+	}
+
+	var sess *session.Session
+	if sessVal, ok := state[StateKeySession]; ok {
+		if s, ok := sessVal.(*session.Session); ok {
+			sess = s
+		}
+	}
+
+	if injected, err := stateinject.InjectSessionStateWithSession(
+		instr,
+		invocation,
+		sess,
+	); err == nil {
+		return injected
 	}
 	return instr
 }

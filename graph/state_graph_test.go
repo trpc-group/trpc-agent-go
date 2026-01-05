@@ -1639,7 +1639,8 @@ func (s *countingToolSet) Close() error { return nil }
 func (s *countingToolSet) Name() string { return s.name }
 
 type recordingModel struct {
-	lastTools map[string]tool.Tool
+	lastTools    map[string]tool.Tool
+	lastMessages []model.Message
 }
 
 func (m *recordingModel) GenerateContent(
@@ -1647,6 +1648,11 @@ func (m *recordingModel) GenerateContent(
 	req *model.Request,
 ) (<-chan *model.Response, error) {
 	m.lastTools = req.Tools
+	if len(req.Messages) == 0 {
+		m.lastMessages = nil
+	} else {
+		m.lastMessages = append([]model.Message(nil), req.Messages...)
+	}
 	ch := make(chan *model.Response, 1)
 	ch <- &model.Response{
 		Done: true,
@@ -1723,6 +1729,50 @@ func TestAddLLMNode_RefreshToolSetsOnRun(t *testing.T) {
 	require.NotEmpty(t, secondTools)
 
 	require.Equal(t, 2, ts.calls)
+}
+
+func TestAddLLMNode_PlaceholderInvocationState(t *testing.T) {
+	const (
+		nodeID        = "llm"
+		userInput     = "hi"
+		invocationID  = "inv"
+		agentName     = "agent"
+		invStateKey   = "case"
+		invStateValue = "case-1"
+		instruction   = "Case: {invocation:case}"
+		wantSystem    = "Case: " + invStateValue
+	)
+
+	schema := MessagesStateSchema()
+	rm := &recordingModel{}
+	sg := NewStateGraph(schema)
+	sg.AddLLMNode(nodeID, rm, instruction, nil)
+
+	g, err := sg.
+		SetEntryPoint(nodeID).
+		SetFinishPoint(nodeID).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(agent.WithInvocationID(invocationID))
+	inv.AgentName = agentName
+	inv.SetState(invStateKey, invStateValue)
+
+	eventCh, err := exec.Execute(
+		context.Background(),
+		State{StateKeyUserInput: userInput},
+		inv,
+	)
+	require.NoError(t, err)
+	for range eventCh {
+	}
+
+	require.NotEmpty(t, rm.lastMessages)
+	require.Equal(t, model.RoleSystem, rm.lastMessages[0].Role)
+	require.Equal(t, wantSystem, rm.lastMessages[0].Content)
 }
 
 func TestNewToolsNodeFunc_StaticToolSets(t *testing.T) {

@@ -59,6 +59,33 @@ func normalizePlaceholders(s string) string {
 //	state: {"capital_city": "Paris"}
 //	result: "Tell me about the city stored in Paris."
 func InjectSessionState(template string, invocation *agent.Invocation) (string, error) {
+	return injectSessionState(template, invocation, nil)
+}
+
+// InjectSessionStateWithSession injects state into template using invocation
+// state and an explicit session override.
+//
+// This is useful when the caller wants to read placeholders from a session
+// object that is not attached to the invocation, while still supporting
+// {invocation:*} placeholders.
+//
+// Precedence:
+//   - {invocation:*} reads from invocation state (invocation.GetState)
+//   - other placeholders read from the provided session when non-nil;
+//     otherwise from invocation.Session
+func InjectSessionStateWithSession(
+	template string,
+	invocation *agent.Invocation,
+	sess *session.Session,
+) (string, error) {
+	return injectSessionState(template, invocation, sess)
+}
+
+func injectSessionState(
+	template string,
+	invocation *agent.Invocation,
+	sess *session.Session,
+) (string, error) {
 	if template == "" {
 		return template, nil
 	}
@@ -105,8 +132,12 @@ func InjectSessionState(template string, invocation *agent.Invocation) (string, 
 		}
 
 		// Get the value from session state.
-		if invocation != nil && invocation.Session != nil {
-			if jsonBytes, exists := invocation.Session.GetState(varName); exists {
+		sessionToUse := sess
+		if sessionToUse == nil && invocation != nil {
+			sessionToUse = invocation.Session
+		}
+		if sessionToUse != nil {
+			if jsonBytes, exists := sessionToUse.GetState(varName); exists {
 				return renderStateValue(jsonBytes)
 			}
 		}

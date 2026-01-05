@@ -959,10 +959,12 @@ LLM nodes support placeholder injection in their `instruction` string (same rule
 - `{key}` / `{{key}}` → Replaced with the string value corresponding to the key `key` in the session state (write via `sess.SetState("key", ...)` or SessionService).
 - `{key?}` / `{{key?}}` → optional; missing values become empty
 - `{user:subkey}`, `{app:subkey}`, `{temp:subkey}` (and their Mustache forms) → access user/app/temp scopes (session services merge app/user state into session with these prefixes)
+- `{invocation:subkey}` / `{{invocation:subkey}}` → replaced with `invocation.state["subkey"]` (set via `invocation.SetState("subkey", v)`)
 
 Notes:
 
 - GraphAgent writes the current `*session.Session` into graph state under `StateKeySession`; the LLM node reads values from there
+- `{invocation:*}` values are read from the current `*agent.Invocation` for this run
 - Unprefixed keys (e.g., `research_topics`) must be present directly in `session.State`
 
 Example:
