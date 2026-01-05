@@ -181,32 +181,31 @@ knowledge/
 
 ## Agent Integration
 
-Use `NewKnowledgeSearchTool` to manually create search tools with flexible tool names and descriptions, supporting multiple knowledge bases.
+The Knowledge system provides search tools to integrate knowledge base capabilities into Agents.
+
+### Search Tools
+
+#### KnowledgeSearchTool
+
+Basic search tool supporting semantic search and static filtering:
 
 ```go
 import (
     knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
-    "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// Create search tool
 searchTool := knowledgetool.NewKnowledgeSearchTool(
     kb,
     knowledgetool.WithToolName("knowledge_search"),
     knowledgetool.WithToolDescription("Search for relevant information in the knowledge base."),
-)
-
-// Create Agent and add tools
-llmAgent := llmagent.New(
-    "knowledge-assistant",
-    llmagent.WithModel(modelInstance),
-    llmagent.WithTools([]tool.Tool{searchTool}),
+    knowledgetool.WithMaxResults(10),
+    knowledgetool.WithMinScore(0.5),
 )
 ```
 
-### Intelligent Filter Search Tool
+#### AgenticFilterSearchTool
 
-Use `NewAgenticFilterSearchTool` to create search tools with Agent dynamic filtering, where the Agent can automatically build filter conditions based on user queries:
+Intelligent filter search tool where the Agent can automatically build filter conditions based on user queries:
 
 ```go
 import (
@@ -217,22 +216,15 @@ import (
 // Get source metadata information (for intelligent filtering)
 sourcesMetadata := source.GetAllMetadata(sources)
 
-// Create intelligent filter search tool
 filterSearchTool := knowledgetool.NewAgenticFilterSearchTool(
     kb,                    // Knowledge instance
     sourcesMetadata,       // Metadata information
     knowledgetool.WithToolName("knowledge_search_with_filter"),
     knowledgetool.WithToolDescription("Search the knowledge base with intelligent metadata filtering."),
 )
-
-llmAgent := llmagent.New(
-    "knowledge-assistant",
-    llmagent.WithModel(modelInstance),
-    llmagent.WithTools([]tool.Tool{filterSearchTool}),
-)
 ```
 
-### Search Tool Configuration Options
+#### Search Tool Configuration Options
 
 Both `NewKnowledgeSearchTool` and `NewAgenticFilterSearchTool` support the following configuration options:
 
@@ -245,16 +237,35 @@ Both `NewKnowledgeSearchTool` and `NewAgenticFilterSearchTool` support the follo
 | `WithFilter(map)` | Set static metadata filter (simple AND logic) | `nil` |
 | `WithConditionedFilter(cond)` | Set complex filter conditions (supports AND/OR/nested logic) | `nil` |
 
+### Integration Methods
+
+#### Method 1: Manual Tool Addition (Recommended)
+
+Use `llmagent.WithTools` to manually add search tools with flexible configuration and support for multiple knowledge bases:
+
 ```go
-// Configuration example: limit return results and minimum score
-searchTool := knowledgetool.NewKnowledgeSearchTool(
-    kb,
-    knowledgetool.WithToolName("knowledge_search"),
-    knowledgetool.WithMaxResults(5),           // Return at most 5 results
-    knowledgetool.WithMinScore(0.7),           // Only return results with relevance >= 0.7
-    knowledgetool.WithFilter(map[string]any{   // Static filter: only search specific category
-        "category": "documentation",
-    }),
+import (
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{searchTool, filterSearchTool}),
+)
+```
+
+#### Method 2: Automatic Integration
+
+Use `llmagent.WithKnowledge(kb)` to integrate Knowledge into the Agent, and the framework will automatically register the `knowledge_search` tool.
+
+> **Note**: The automatic integration method is simple and quick, but less flexible. It doesn't allow customizing tool names, descriptions, filter conditions, or other parameters, and doesn't support integrating multiple knowledge bases simultaneously. For more fine-grained control, it's recommended to use the manual tool addition approach.
+
+```go
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithKnowledge(kb), // Automatically adds knowledge_search tool
 )
 ```
 
@@ -263,5 +274,6 @@ searchTool := knowledgetool.NewKnowledgeSearchTool(
 - [Vector Store](vectorstore/index.md) - Configure various vector database backends
 - [Embedder](embedder.md) - Text vectorization model configuration
 - [Document Sources](source.md) - File, directory, URL, and other knowledge source configuration
+- [OCR Text Recognition](ocr.md) - Configure Tesseract OCR for text extraction
 - [Filters](filter.md) - Basic filters and intelligent filters
 - [Knowledge Base Management](management.md) - Dynamic source management and status monitoring
