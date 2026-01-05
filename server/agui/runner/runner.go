@@ -165,7 +165,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		span:        span,
 	}
 	events := make(chan aguievents.Event)
-	ctx, cancel := r.newExecutionContext(agent.CloneContext(ctx), r.timeout)
+	ctx, cancel := r.newExecutionContext(ctx, r.timeout)
 	if err := r.register(input.key, ctx, cancel); err != nil {
 		cancel()
 		span.End()
@@ -387,11 +387,20 @@ func (r *runner) recordUserMessage(ctx context.Context, key session.Key, message
 	return nil
 }
 
-func (r *runner) newExecutionContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if timeout > 0 {
-		return context.WithTimeout(parent, timeout)
+func (r *runner) newExecutionContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if ok {
+		remaining := time.Until(deadline)
+		if timeout == 0 || remaining < timeout {
+			timeout = remaining
+		}
 	}
-	return context.WithCancel(parent)
+	ctx = agent.CloneContext(ctx)
+	ctx = context.WithoutCancel(ctx)
+	if timeout != 0 {
+		return context.WithTimeout(ctx, timeout)
+	}
+	return context.WithCancel(ctx)
 }
 
 func (r *runner) register(key session.Key, ctx context.Context, cancel context.CancelFunc) error {
