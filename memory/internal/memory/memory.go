@@ -92,20 +92,23 @@ var autoModeDefaultEnabledTools = map[string]bool{
 }
 
 // ApplyAutoModeDefaults applies auto mode default enabledTools settings.
-// This function sets auto mode defaults for tools defined in autoModeDefaultEnabledTools,
-// overriding values from DefaultEnabledTools (agentic mode defaults).
-// User settings applied via WithToolEnabled after WithExtractor will override these defaults.
-// This function should be called in Service initialization after all options are applied.
+// This function sets auto mode defaults only for tools that haven't been
+// explicitly set by user via WithToolEnabled.
+// User settings take precedence over auto mode defaults regardless of option order.
 // The enabledTools map is modified in place.
-func ApplyAutoModeDefaults(enabledTools map[string]bool) {
+// Parameters:
+//   - enabledTools: map of tool name to enabled status.
+//   - userExplicitlySet: map tracking which tools were explicitly set by user.
+func ApplyAutoModeDefaults(enabledTools, userExplicitlySet map[string]bool) {
 	if enabledTools == nil {
 		return
 	}
-	// Apply auto mode defaults for all tools in autoModeDefaultEnabledTools.
-	// This overrides DefaultEnabledTools values, but user settings applied after
-	// WithExtractor (via WithToolEnabled) will still take effect since options
-	// are applied in order.
+	// Apply auto mode defaults only for tools not explicitly set by user.
 	for toolName, defaultValue := range autoModeDefaultEnabledTools {
+		if userExplicitlySet[toolName] {
+			// User explicitly set this tool, don't override.
+			continue
+		}
 		enabledTools[toolName] = defaultValue
 	}
 }

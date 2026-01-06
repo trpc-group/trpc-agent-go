@@ -171,9 +171,11 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools(c.memoryService.Tools()),
 		llmagent.WithModelCallbacks(modelCallbacks),
-		// Memory preloading is disabled by default (use tools instead).
+		// Memory preloading: inject memories into system prompt before each request.
 		// Use WithPreloadMemory(N) to load the most recent N memories.
 		// Use WithPreloadMemory(-1) to load all memories.
+		// Default is 0 (disabled, use memory_search/memory_load tools instead).
+		llmagent.WithPreloadMemory(-1),
 	)
 
 	// Create runner with memory service.

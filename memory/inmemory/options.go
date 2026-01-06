@@ -35,6 +35,8 @@ type serviceOpts struct {
 	toolCreators map[string]memory.ToolCreator
 	// enabledTools are the names of tools to enable.
 	enabledTools map[string]bool
+	// userExplicitlySet tracks which tools were explicitly set by user via WithToolEnabled.
+	userExplicitlySet map[string]bool
 
 	// Memory extractor for auto memory mode.
 	// When set, write tools (add/update/delete) are not exposed to agent.
@@ -58,6 +60,9 @@ func (o serviceOpts) clone() serviceOpts {
 	for name, enabled := range o.enabledTools {
 		opts.enabledTools[name] = enabled
 	}
+
+	// Initialize userExplicitlySet map (empty for new clone).
+	opts.userExplicitlySet = make(map[string]bool)
 
 	return opts
 }
@@ -88,6 +93,8 @@ func WithCustomTool(toolName string, creator memory.ToolCreator) ServiceOpt {
 
 // WithToolEnabled sets which tool is enabled.
 // If the tool name is invalid, this option will do nothing.
+// User settings via WithToolEnabled take precedence over auto mode defaults,
+// regardless of option order.
 func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 	return func(opts *serviceOpts) {
 		// If the tool name is invalid, do nothing.
@@ -95,20 +102,16 @@ func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 			return
 		}
 		opts.enabledTools[toolName] = enabled
+		opts.userExplicitlySet[toolName] = true
 	}
 }
 
 // WithExtractor sets the memory extractor for auto memory mode.
-// When enabled, auto mode defaults are applied to enabledTools.
-// User settings via WithToolEnabled applied after WithExtractor will override these defaults.
+// When enabled, auto mode defaults are applied to enabledTools,
+// but user settings via WithToolEnabled (before or after) take precedence.
 func WithExtractor(e extractor.MemoryExtractor) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.extractor = e
-		// Apply auto mode defaults immediately when extractor is set.
-		// This allows subsequent WithToolEnabled calls to override defaults.
-		if e != nil {
-			imemory.ApplyAutoModeDefaults(opts.enabledTools)
-		}
 	}
 }
 

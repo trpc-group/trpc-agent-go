@@ -62,8 +62,9 @@ type ServiceOpts struct {
 	softDelete  bool
 
 	// Tool related settings.
-	toolCreators map[string]memory.ToolCreator
-	enabledTools map[string]bool
+	toolCreators      map[string]memory.ToolCreator
+	enabledTools      map[string]bool
+	userExplicitlySet map[string]bool
 
 	// skipDBInit skips database initialization (table and index creation).
 	// Useful when user doesn't have DDL permissions or when tables are managed externally.
@@ -94,6 +95,9 @@ func (o ServiceOpts) clone() ServiceOpts {
 	for name, enabled := range o.enabledTools {
 		opts.enabledTools[name] = enabled
 	}
+
+	// Initialize userExplicitlySet map (empty for new clone).
+	opts.userExplicitlySet = make(map[string]bool)
 
 	return opts
 }
@@ -208,12 +212,21 @@ func WithCustomTool(toolName string, creator memory.ToolCreator) ServiceOpt {
 
 // WithToolEnabled sets which tool is enabled.
 // If the tool name is invalid, this option will do nothing.
+// User settings via WithToolEnabled take precedence over auto mode defaults,
+// regardless of option order.
 func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		if !imemory.IsValidToolName(toolName) {
 			return
 		}
+		if opts.enabledTools == nil {
+			opts.enabledTools = make(map[string]bool)
+		}
+		if opts.userExplicitlySet == nil {
+			opts.userExplicitlySet = make(map[string]bool)
+		}
 		opts.enabledTools[toolName] = enabled
+		opts.userExplicitlySet[toolName] = true
 	}
 }
 
@@ -254,16 +267,11 @@ func WithSchema(schema string) ServiceOpt {
 }
 
 // WithExtractor sets the memory extractor for auto memory mode.
-// When enabled, auto mode defaults are applied to enabledTools.
-// User settings via WithToolEnabled applied after WithExtractor will override these defaults.
+// When enabled, auto mode defaults are applied to enabledTools,
+// but user settings via WithToolEnabled (before or after) take precedence.
 func WithExtractor(e extractor.MemoryExtractor) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.extractor = e
-		// Apply auto mode defaults immediately when extractor is set.
-		// This allows subsequent WithToolEnabled calls to override defaults.
-		if e != nil {
-			imemory.ApplyAutoModeDefaults(opts.enabledTools)
-		}
 	}
 }
 

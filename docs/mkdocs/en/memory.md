@@ -1204,16 +1204,52 @@ type ExtractionContext struct {
 
 **Note**: `Messages` contains all accumulated messages since the last successful extraction. When a checker returns `false`, messages are accumulated and will be included in the next extraction. This ensures no conversation context is lost when using turn-based or time-based checkers.
 
-### Tool Availability by Mode
+### Tool Control
 
-| Tool            | Agentic Mode    | Auto Mode    |
-| --------------- | --------------- | ------------ |
-| `memory_add`    | ✅ Available    | ❌ Not exposed |
-| `memory_update` | ✅ Available    | ❌ Not exposed |
-| `memory_delete` | ⚙️ Configurable | ❌ Not exposed |
-| `memory_clear`  | ⚙️ Configurable | ❌ Not exposed |
-| `memory_search` | ✅ Available    | ✅ Available |
-| `memory_load`   | ✅ Available    | ⚙️ Configurable |
+In auto extraction mode, `WithToolEnabled` controls all 6 tools, but they serve different purposes:
+
+**Front-end Tools** (exposed via `Tools()` for agent to call):
+
+| Tool            | Default | Description                              |
+| --------------- | ------- | ---------------------------------------- |
+| `memory_search` | ✅ On   | Search memories by query                 |
+| `memory_load`   | ❌ Off  | Load all or recent N memories            |
+
+**Back-end Tools** (used by extractor in background, not exposed to agent):
+
+| Tool            | Default | Description                              |
+| --------------- | ------- | ---------------------------------------- |
+| `memory_add`    | ✅ On   | Add new memories (extractor uses this)   |
+| `memory_update` | ✅ On   | Update existing memories                 |
+| `memory_delete` | ✅ On   | Delete memories                          |
+| `memory_clear`  | ❌ Off  | Clear all user memories (dangerous)      |
+
+**Configuration Examples**:
+
+```go
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithExtractor(memExtractor),
+    // Front-end: enable memory_load for agent to call.
+    memoryinmemory.WithToolEnabled(memory.LoadToolName, true),
+    // Back-end: disable memory_delete so extractor cannot delete.
+    memoryinmemory.WithToolEnabled(memory.DeleteToolName, false),
+    // Back-end: enable memory_clear for extractor (use with caution).
+    memoryinmemory.WithToolEnabled(memory.ClearToolName, true),
+)
+```
+
+**Note**: `WithToolEnabled` can be called before or after `WithExtractor` - the order does not matter.
+
+### Comparison: Agentic Mode vs Auto Mode
+
+| Tool            | Agentic Mode (no extractor)         | Auto Mode (with extractor)              |
+| --------------- | ----------------------------------- | --------------------------------------- |
+| `memory_add`    | ✅ Agent calls via `Tools()`        | ✅ Extractor uses in background         |
+| `memory_update` | ✅ Agent calls via `Tools()`        | ✅ Extractor uses in background         |
+| `memory_search` | ✅ Agent calls via `Tools()`        | ✅ Agent calls via `Tools()`            |
+| `memory_load`   | ✅ Agent calls via `Tools()`        | ⚙️ Agent calls via `Tools()` if enabled |
+| `memory_delete` | ⚙️ Agent calls via `Tools()` if enabled | ✅ Extractor uses in background      |
+| `memory_clear`  | ⚙️ Agent calls via `Tools()` if enabled | ⚙️ Extractor uses in background if enabled |
 
 ### Memory Preloading
 

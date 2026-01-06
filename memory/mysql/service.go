@@ -50,10 +50,14 @@ type Service struct {
 func NewService(options ...ServiceOpt) (*Service, error) {
 	opts := defaultOptions.clone()
 	// Apply user options.
-	// Note: WithExtractor applies auto mode defaults internally, and subsequent
-	// WithToolEnabled calls can override those defaults.
 	for _, option := range options {
 		option(&opts)
+	}
+
+	// Apply auto mode defaults after all options are applied.
+	// User settings via WithToolEnabled take precedence regardless of option order.
+	if opts.extractor != nil {
+		imemory.ApplyAutoModeDefaults(opts.enabledTools, opts.userExplicitlySet)
 	}
 
 	builderOpts := []storage.ClientBuilderOpt{

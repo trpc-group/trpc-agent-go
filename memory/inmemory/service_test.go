@@ -696,6 +696,52 @@ func TestTools_AutoMemoryMode(t *testing.T) {
 	assert.False(t, toolNames[memory.ClearToolName], "Clear tool should not be exposed via Tools()")
 }
 
+func TestTools_AutoMemoryMode_OptionOrder(t *testing.T) {
+	ext := &mockExtractor{}
+
+	// Test: WithToolEnabled BEFORE WithExtractor should still work.
+	service := NewMemoryService(
+		WithToolEnabled(memory.LoadToolName, true), // Before WithExtractor.
+		WithExtractor(ext),
+	)
+	defer service.Close()
+
+	tools := service.Tools()
+	toolNames := make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	assert.True(t, toolNames[memory.SearchToolName], "Search should be enabled")
+	assert.True(t, toolNames[memory.LoadToolName], "Load should be enabled even when set before WithExtractor")
+	assert.Len(t, tools, 2)
+
+	// Test: WithToolEnabled AFTER WithExtractor should also work.
+	service2 := NewMemoryService(
+		WithExtractor(ext),
+		WithToolEnabled(memory.LoadToolName, true), // After WithExtractor.
+	)
+	defer service2.Close()
+
+	tools2 := service2.Tools()
+	toolNames2 := make(map[string]bool)
+	for _, tool := range tools2 {
+		toolNames2[tool.Declaration().Name] = true
+	}
+	assert.True(t, toolNames2[memory.SearchToolName], "Search should be enabled")
+	assert.True(t, toolNames2[memory.LoadToolName], "Load should be enabled when set after WithExtractor")
+	assert.Len(t, tools2, 2)
+
+	// Test: Disable Search tool explicitly (before WithExtractor).
+	service3 := NewMemoryService(
+		WithToolEnabled(memory.SearchToolName, false), // Disable Search.
+		WithExtractor(ext),
+	)
+	defer service3.Close()
+
+	tools3 := service3.Tools()
+	assert.Len(t, tools3, 0, "No tools should be returned when Search is disabled")
+}
+
 func TestTools_AgenticMode(t *testing.T) {
 	service := NewMemoryService()
 

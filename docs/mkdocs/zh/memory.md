@@ -1252,16 +1252,52 @@ type ExtractionContext struct {
 
 **注意**：`Messages` 包含自上次成功提取以来累积的所有消息。当检查器返回 `false` 时，消息会被累积，并在下次提取时一并处理。这确保了使用轮数或时间检查器时不会丢失对话上下文。
 
-### 各模式工具可用性
+### 工具控制
 
-| 工具            | 工具驱动模式 | 自动提取模式 |
-| --------------- | ------------ | ------------ |
-| `memory_add`    | ✅ 可用      | ❌ 不暴露    |
-| `memory_update` | ✅ 可用      | ❌ 不暴露    |
-| `memory_delete` | ⚙️ 可配置    | ❌ 不暴露    |
-| `memory_clear`  | ⚙️ 可配置    | ❌ 不暴露    |
-| `memory_search` | ✅ 可用      | ✅ 可用      |
-| `memory_load`   | ✅ 可用      | ⚙️ 可配置    |
+在自动提取模式下，`WithToolEnabled` 可以控制所有 6 个工具的开关，但它们的作用不同：
+
+**前端工具**（通过 `Tools()` 暴露给 Agent 调用）：
+
+| 工具            | 默认  | 说明                       |
+| --------------- | ----- | -------------------------- |
+| `memory_search` | ✅ 开 | 按查询搜索记忆             |
+| `memory_load`   | ❌ 关 | 加载全部或最近 N 条记忆    |
+
+**后端工具**（提取器在后台使用，不暴露给 Agent）：
+
+| 工具            | 默认  | 说明                           |
+| --------------- | ----- | ------------------------------ |
+| `memory_add`    | ✅ 开 | 添加新记忆（提取器使用）       |
+| `memory_update` | ✅ 开 | 更新现有记忆                   |
+| `memory_delete` | ✅ 开 | 删除记忆                       |
+| `memory_clear`  | ❌ 关 | 清空用户所有记忆（危险操作）   |
+
+**配置示例**：
+
+```go
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithExtractor(memExtractor),
+    // 前端：启用 memory_load 供 Agent 调用。
+    memoryinmemory.WithToolEnabled(memory.LoadToolName, true),
+    // 后端：禁用 memory_delete，提取器将无法删除记忆。
+    memoryinmemory.WithToolEnabled(memory.DeleteToolName, false),
+    // 后端：启用 memory_clear 供提取器使用（谨慎使用）。
+    memoryinmemory.WithToolEnabled(memory.ClearToolName, true),
+)
+```
+
+**注意**：`WithToolEnabled` 可以在 `WithExtractor` 之前或之后调用，顺序不影响结果。
+
+### 两种模式对比
+
+| 工具            | 工具驱动模式（无提取器）        | 自动提取模式（有提取器）          |
+| --------------- | ------------------------------- | --------------------------------- |
+| `memory_add`    | ✅ Agent 通过 `Tools()` 调用    | ✅ 提取器在后台使用               |
+| `memory_update` | ✅ Agent 通过 `Tools()` 调用    | ✅ 提取器在后台使用               |
+| `memory_search` | ✅ Agent 通过 `Tools()` 调用    | ✅ Agent 通过 `Tools()` 调用      |
+| `memory_load`   | ✅ Agent 通过 `Tools()` 调用    | ⚙️ 启用后 Agent 通过 `Tools()` 调用 |
+| `memory_delete` | ⚙️ 启用后 Agent 通过 `Tools()` 调用 | ✅ 提取器在后台使用            |
+| `memory_clear`  | ⚙️ 启用后 Agent 通过 `Tools()` 调用 | ⚙️ 启用后提取器在后台使用      |
 
 ### 记忆预加载
 

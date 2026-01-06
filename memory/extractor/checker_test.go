@@ -202,10 +202,10 @@ func TestExtractionContext(t *testing.T) {
 
 func TestMemoryExtractorShouldExtract(t *testing.T) {
 	tests := []struct {
-		name     string
-		opts     []Option
-		ctx      *ExtractionContext
-		want     bool
+		name string
+		opts []Option
+		ctx  *ExtractionContext
+		want bool
 	}{
 		{
 			name: "no checkers always returns true",
