@@ -219,6 +219,8 @@ type Options struct {
 
 	// skillsRepository enables agent skills when non-nil.
 	skillsRepository skill.Repository
+	// skillsToolingGuidance overrides the built-in skills guidance block.
+	skillsToolingGuidance *string
 	// skillRunAllowedCommands restricts skill_run to allowlisted commands.
 	skillRunAllowedCommands []string
 	// skillRunDeniedCommands rejects denylisted commands for skill_run.
@@ -349,6 +351,22 @@ func WithRefreshToolSetsOnRun(refresh bool) Option {
 func WithSkills(repo skill.Repository) Option {
 	return func(opts *Options) {
 		opts.skillsRepository = repo
+	}
+}
+
+// WithSkillsToolingGuidance overrides the tooling/workspace guidance
+// block appended to the skills overview in the system message.
+//
+// Behavior:
+//   - Not configured: use the built-in default guidance.
+//   - Configured with empty string: omit the guidance block.
+//   - Configured with non-empty string: append the provided text.
+func WithSkillsToolingGuidance(
+	guidance string,
+) Option {
+	return func(opts *Options) {
+		text := guidance
+		opts.skillsToolingGuidance = &text
 	}
 }
 

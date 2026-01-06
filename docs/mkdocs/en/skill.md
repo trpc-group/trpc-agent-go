@@ -102,9 +102,12 @@ Key points:
 - Tools are auto‑registered with `WithSkills`: `skill_load`,
   `skill_select_docs`, `skill_list_docs`, and `skill_run` show up
   automatically; no manual wiring required.
-- Auto prompt guidance is injected in the system message so the model
-  learns to `skill_load` first, select docs with `skill_select_docs`
-  as needed, and then `skill_run` at the right time.
+- By default, the framework appends a small `Tooling and workspace guidance:`
+  block after the `Available skills:` list in the system message.
+  - Disable it (to save prompt tokens): `llmagent.WithSkillsToolingGuidance("")`.
+  - Or replace it with your own text: `llmagent.WithSkillsToolingGuidance("...")`.
+  - If you disable it, make sure your instruction tells the model when to use
+    `skill_load`, `skill_select_docs`, and `skill_run`.
   - Loader: [tool/skill/load.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go)
   - Runner: [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go)
 
