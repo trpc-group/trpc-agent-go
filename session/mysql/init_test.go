@@ -242,7 +242,7 @@ func TestInitDB_DuplicateIndexIgnored(t *testing.T) {
 	assert.Error(t, err) // Expected to fail with our simple mock
 }
 
-func TestIsDuplicateKeyError(t *testing.T) {
+func TestIsDuplicateIndexNameError(t *testing.T) {
 	tests := []struct {
 		name     string
 		err      error
@@ -264,12 +264,12 @@ func TestIsDuplicateKeyError(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "MySQL error 1062 - Duplicate entry",
+			name:     "MySQL error 1062 - Duplicate entry (should NOT match)",
 			err:      &mysql.MySQLError{Number: sqldb.MySQLErrDuplicateEntry, Message: "Duplicate entry 'test' for key 'PRIMARY'"},
-			expected: true,
+			expected: false,
 		},
 		{
-			name:     "MySQL error 1050 - Table already exists (should not be treated as duplicate key)",
+			name:     "MySQL error 1050 - Table already exists",
 			err:      &mysql.MySQLError{Number: 1050, Message: "Table 'test' already exists"},
 			expected: false,
 		},
@@ -279,15 +279,15 @@ func TestIsDuplicateKeyError(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "wrapped MySQL error 1062",
+			name:     "wrapped MySQL error 1062 (should NOT match)",
 			err:      errors.Join(errors.New("context"), &mysql.MySQLError{Number: sqldb.MySQLErrDuplicateEntry}),
-			expected: true,
+			expected: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isDuplicateKeyError(tt.err)
+			result := isDuplicateIndexNameError(tt.err)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -365,8 +365,8 @@ func TestVerifyIndexes_Scenarios(t *testing.T) {
 		{
 			name: "all indexes correct",
 			expectedIndexes: []tableIndex{
-				{"session_states", "lookup", []string{"app_name", "user_id", "session_id", "deleted_at"}},
-				{"session_states", "expires", []string{"expires_at"}},
+				{"session_states", "lookup", []string{"app_name", "user_id", "session_id", "deleted_at"}, false},
+				{"session_states", "expires", []string{"expires_at"}, false},
 			},
 			actualIndexes: map[string][]string{
 				"idx_session_states_lookup":  {"app_name", "user_id", "session_id", "deleted_at"},
@@ -378,11 +378,11 @@ func TestVerifyIndexes_Scenarios(t *testing.T) {
 		{
 			name: "missing index - should warn with CREATE statement",
 			expectedIndexes: []tableIndex{
-				{"session_states", "lookup", []string{"app_name", "user_id"}},
-				{"session_states", "expires", []string{"expires_at"}},
+				{"session_states", "lookup", []string{"app_name", "user_id"}, false},
+				{"session_states", "expires", []string{"expires_at"}, false},
 			},
 			actualIndexes: map[string][]string{
-				// lookup index is missing
+				// lookup index is missing.
 				"idx_session_states_expires": {"expires_at"},
 				"PRIMARY":                    {"id"},
 			},
@@ -391,7 +391,7 @@ func TestVerifyIndexes_Scenarios(t *testing.T) {
 		{
 			name: "wrong columns - should warn with DROP and CREATE statements",
 			expectedIndexes: []tableIndex{
-				{"session_states", "expires", []string{"expires_at"}},
+				{"session_states", "expires", []string{"expires_at"}, false},
 			},
 			actualIndexes: map[string][]string{
 				"idx_session_states_expires": {"app_name"}, // wrong column
@@ -402,7 +402,7 @@ func TestVerifyIndexes_Scenarios(t *testing.T) {
 		{
 			name: "unexpected index - should warn with DROP statement",
 			expectedIndexes: []tableIndex{
-				{"session_states", "lookup", []string{"app_name"}},
+				{"session_states", "lookup", []string{"app_name"}, false},
 			},
 			actualIndexes: map[string][]string{
 				"idx_session_states_lookup": {"app_name"},
@@ -414,14 +414,24 @@ func TestVerifyIndexes_Scenarios(t *testing.T) {
 		{
 			name: "mixed scenarios",
 			expectedIndexes: []tableIndex{
-				{"session_states", "lookup", []string{"col1", "col2"}},
-				{"session_states", "expires", []string{"col3"}},
+				{"session_states", "lookup", []string{"col1", "col2"}, false},
+				{"session_states", "expires", []string{"col3"}, false},
 			},
 			actualIndexes: map[string][]string{
-				// lookup is missing
+				// lookup is missing.
 				"idx_session_states_expires": {"col4"}, // wrong columns
 				"idx_extra":                  {"col5"}, // unexpected
 				"PRIMARY":                    {"id"},
+			},
+			wantError: false,
+		},
+		{
+			name: "missing unique index - should warn with CREATE UNIQUE INDEX",
+			expectedIndexes: []tableIndex{
+				{"session_states", "unique_active", []string{"app_name", "user_id"}, true},
+			},
+			actualIndexes: map[string][]string{
+				"PRIMARY": {"id"},
 			},
 			wantError: false,
 		},
