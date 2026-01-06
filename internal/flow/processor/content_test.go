@@ -1169,7 +1169,7 @@ func TestNewContentRequestProcessor(t *testing.T) {
 		TimelineFilterMode: "all",
 		AddSessionSummary:  false,
 		MaxHistoryRuns:     0,
-		PreloadMemory:      -1, // Default to load all memories.
+		PreloadMemory:      0, // Default to disable preloading.
 	}
 
 	tests := []struct {
@@ -1209,7 +1209,7 @@ func TestNewContentRequestProcessor(t *testing.T) {
 				TimelineFilterMode: TimelineFilterCurrentRequest,
 				AddSessionSummary:  false,
 				MaxHistoryRuns:     0,
-				PreloadMemory:      -1,
+				PreloadMemory:      0,
 			},
 		},
 
