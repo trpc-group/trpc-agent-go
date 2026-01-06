@@ -351,7 +351,7 @@ func TestToolSearch_WithSystemPrompt_EmptyUsesDefault(t *testing.T) {
 
 	// When toolKnowledge is configured and systemPrompt is empty, use the tool-knowledge prompt.
 	sel3 := mustNewSelector(t, nil, WithToolKnowledge(&ToolKnowledge{}))
-	require.Equal(t, defalutSystemPromptWithToolKnowledge, sel3.systemPrompt)
+	require.Equal(t, defaultSystemPromptWithToolKnowledge, sel3.systemPrompt)
 }
 
 func TestToolSearch_SelectToolNames_UsesDeltaContent(t *testing.T) {

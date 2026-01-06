@@ -23,12 +23,12 @@ type knowledgeIndex struct {
 	*ToolKnowledge
 }
 
-const defalutSystemPromptWithToolKnowledge = "Your goal is to identify the most relevant tools for answering the user's query." +
+const defaultSystemPromptWithToolKnowledge = "Your goal is to identify the most relevant tools for answering the user's query." +
 	"Provide a natural-language description of the kind of tool needed (e.g., 'weather information', 'currency conversion', 'stock prices')."
 
 func newToolKnowledgeSearcher(m model.Model, systemPrompt string, toolKnowledge *ToolKnowledge) *knowledgeIndex {
 	if systemPrompt == "" {
-		systemPrompt = defalutSystemPromptWithToolKnowledge
+		systemPrompt = defaultSystemPromptWithToolKnowledge
 	}
 	return &knowledgeIndex{
 		model:         m,

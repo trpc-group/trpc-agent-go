@@ -25,6 +25,7 @@ type ToolSearch struct {
 	toolIndex     toolIndex
 	maxTools      int
 	alwaysInclude []string
+	systemPrompt  string
 }
 
 // New creates a new ToolSearch.
@@ -37,7 +38,18 @@ func New(m model.Model, opts ...Option) (*ToolSearch, error) {
 	s := &ToolSearch{
 		maxTools:      cfg.MaxTools,
 		alwaysInclude: append([]string(nil), cfg.AlwaysInclude...),
+		systemPrompt:  cfg.SystemPrompt,
 	}
+
+	// Set default system prompt if empty
+	if s.systemPrompt == "" {
+		if cfg.toolKnowledge != nil {
+			s.systemPrompt = defaultSystemPromptWithToolKnowledge
+		} else {
+			s.systemPrompt = defaultSystemPrompt
+		}
+	}
+
 	if cfg.toolKnowledge != nil {
 		s.toolIndex = newToolKnowledgeSearcher(cfg.Model, cfg.SystemPrompt, cfg.toolKnowledge)
 	} else {
