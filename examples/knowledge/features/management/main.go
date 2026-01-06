@@ -159,11 +159,7 @@ func main() {
 	fmt.Println("\n7️⃣ Updating Metadata via VectorStore (LLMDocs -> category: reviewed-docs)...")
 
 	// Show document info before update
-	printDocInfo(ctx, kb, &searchfilter.UniversalFilterCondition{
-		Field:    "metadata.topic",
-		Operator: searchfilter.OperatorEqual,
-		Value:    "llm",
-	}, "Before Update:")
+	printDocInfo(ctx, kb, "Before Update:")
 
 	updates := map[string]any{
 		"metadata.category": "reviewed-docs", // Update existing field
@@ -192,11 +188,7 @@ func main() {
 		util.WaitForIndexRefresh(storeType)
 
 		// Show document info after update
-		printDocInfo(ctx, kb, &searchfilter.UniversalFilterCondition{
-			Field:    "metadata.topic",
-			Operator: searchfilter.OperatorEqual,
-			Value:    "llm",
-		}, "After Update:")
+		printDocInfo(ctx, kb, "After Update:")
 	}
 
 	fmt.Println("\n✅ Demo completed!")
@@ -240,8 +232,10 @@ func printSearchResults(result *knowledge.SearchResult) {
 	}
 }
 
-func printDocInfo(ctx context.Context, kb *knowledge.BuiltinKnowledge, filter *searchfilter.UniversalFilterCondition, label string) {
-	docInfos, err := kb.ShowDocumentInfo(ctx, knowledge.WithShowDocumentInfoFilterCondition(filter))
+func printDocInfo(ctx context.Context, kb *knowledge.BuiltinKnowledge, label string) {
+	docInfos, err := kb.ShowDocumentInfo(ctx, knowledge.WithShowDocumentInfoFilter(map[string]any{
+		"topic": "llm",
+	}))
 	if err != nil {
 		log.Printf("   ❌ Failed to fetch docInfo: %v", err)
 		return
