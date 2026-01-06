@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_track_events` (
 -- Table: session_summaries
 -- Description: Stores AI-generated session summaries
 -- Note: No created_at column because summaries use upsert pattern (overwrite on duplicate)
+-- Note: Uses unique index on business key only (no deleted_at) to prevent duplicate records
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_summaries` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
@@ -77,7 +78,7 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_summaries` (
     `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
     `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
     PRIMARY KEY (`id`),
-    KEY `idx_{{PREFIX}}session_summaries_lookup` (`app_name`,`user_id`,`session_id`,`deleted_at`),
+    UNIQUE KEY `idx_{{PREFIX}}session_summaries_unique_active` (`app_name`,`user_id`,`session_id`,`filter_key`),
     KEY `idx_{{PREFIX}}session_summaries_expires` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -143,10 +144,12 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}user_states` (
 --
 -- 6. Indexes:
 --    - All indexes are defined inline in CREATE TABLE statements
---    - UNIQUE indexes include deleted_at column
+--    - UNIQUE indexes for most tables include deleted_at column
 --    - Note: MySQL UNIQUE constraint doesn't prevent duplicate NULL values
 --    - Multiple records with deleted_at=NULL can coexist (NULL != NULL in MySQL)
 --    - Application code handles uniqueness for active records (deleted_at IS NULL)
+--    - Exception: session_summaries uses unique index WITHOUT deleted_at to prevent
+--      duplicate active records, since summary data is regenerable and uses upsert pattern
 --
 -- 7. TTL and Soft Delete:
 --    - expires_at: Used for automatic data cleanup (NULL = never expires)
