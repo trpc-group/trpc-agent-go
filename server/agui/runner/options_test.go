@@ -11,7 +11,6 @@ package runner
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -20,9 +19,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
@@ -65,6 +61,8 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, span)
 
 	assert.Equal(t, time.Hour, opts.Timeout)
+	assert.False(t, opts.GraphNodeStartActivityEnabled)
+	assert.False(t, opts.GraphNodeInterruptActivityEnabled)
 }
 
 func TestWithUserIDResolver(t *testing.T) {
@@ -106,63 +104,12 @@ func TestWithTranslatorFactory(t *testing.T) {
 
 func TestWithGraphNodeStartActivityEnabled(t *testing.T) {
 	opts := NewOptions(WithGraphNodeStartActivityEnabled(true))
-	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"}
-	tr, err := opts.TranslatorFactory(context.Background(), input)
-	assert.NoError(t, err)
-
-	meta := graph.NodeExecutionMetadata{
-		NodeID:   "node-1",
-		NodeType: graph.NodeTypeFunction,
-		Phase:    graph.ExecutionPhaseStart,
-		Attempt:  1,
-	}
-	raw, err := json.Marshal(meta)
-	assert.NoError(t, err)
-
-	evt := &agentevent.Event{
-		ID:       "node-start-1",
-		Response: &model.Response{Choices: []model.Choice{{}}},
-		StateDelta: map[string][]byte{
-			graph.MetadataKeyNode: raw,
-		},
-	}
-	events, err := tr.Translate(context.Background(), evt)
-	assert.NoError(t, err)
-	assert.Len(t, events, 1)
-
-	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
-	assert.True(t, ok)
-	assert.Equal(t, "graph.node.start", delta.ActivityType)
+	assert.True(t, opts.GraphNodeStartActivityEnabled)
 }
 
 func TestWithGraphNodeInterruptActivityEnabled(t *testing.T) {
 	opts := NewOptions(WithGraphNodeInterruptActivityEnabled(true))
-	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"}
-	tr, err := opts.TranslatorFactory(context.Background(), input)
-	assert.NoError(t, err)
-
-	meta := graph.PregelStepMetadata{
-		StepNumber:     3,
-		NodeID:         "nodeX",
-		InterruptValue: "ask",
-	}
-	raw, err := json.Marshal(meta)
-	assert.NoError(t, err)
-
-	evt := &agentevent.Event{
-		ID:       "pregel-interrupt-1",
-		Response: &model.Response{Choices: []model.Choice{{}}},
-		StateDelta: map[string][]byte{
-			graph.MetadataKeyPregel: raw,
-		},
-	}
-	events, err := tr.Translate(context.Background(), evt)
-	assert.NoError(t, err)
-	assert.Len(t, events, 1)
-
-	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
-	assert.True(t, ok)
-	assert.Equal(t, "graph.node.interrupt", delta.ActivityType)
+	assert.True(t, opts.GraphNodeInterruptActivityEnabled)
 }
 
 func TestWithTranslateCallbacks(t *testing.T) {

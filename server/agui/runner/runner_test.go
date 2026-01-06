@@ -11,6 +11,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
@@ -48,6 +50,97 @@ func TestNew(t *testing.T) {
 		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
 	assert.NoError(t, err)
 	assert.Equal(t, "user", userID)
+}
+
+func TestRunEmitsGraphNodeStartActivityWhenEnabled(t *testing.T) {
+	meta := graph.NodeExecutionMetadata{
+		NodeID:   "node-1",
+		NodeType: graph.NodeTypeFunction,
+		Phase:    graph.ExecutionPhaseStart,
+		Attempt:  1,
+	}
+	raw, err := json.Marshal(meta)
+	require.NoError(t, err)
+
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- &agentevent.Event{
+		ID: "node-start-1",
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNode: raw,
+		},
+	}
+	close(agentEvents)
+
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+
+	r := New(underlying, WithGraphNodeStartActivityEnabled(true))
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+
+	evts := collectEvents(t, eventsCh)
+	var found bool
+	for _, evt := range evts {
+		if delta, ok := evt.(*aguievents.ActivityDeltaEvent); ok {
+			assert.Equal(t, "graph.node.start", delta.ActivityType)
+			found = true
+		}
+	}
+	assert.True(t, found)
+}
+
+func TestRunEmitsGraphNodeInterruptActivityWhenEnabled(t *testing.T) {
+	meta := graph.PregelStepMetadata{
+		StepNumber:     3,
+		NodeID:         "confirm",
+		InterruptValue: "ask",
+	}
+	raw, err := json.Marshal(meta)
+	require.NoError(t, err)
+
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- &agentevent.Event{
+		ID: "pregel-interrupt-1",
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyPregel: raw,
+		},
+	}
+	close(agentEvents)
+
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+
+	r := New(underlying, WithGraphNodeInterruptActivityEnabled(true))
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+
+	evts := collectEvents(t, eventsCh)
+	var found bool
+	for _, evt := range evts {
+		if delta, ok := evt.(*aguievents.ActivityDeltaEvent); ok {
+			assert.Equal(t, "graph.node.interrupt", delta.ActivityType)
+			found = true
+		}
+	}
+	assert.True(t, found)
 }
 
 func TestRunValidatesInput(t *testing.T) {

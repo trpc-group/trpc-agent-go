@@ -224,7 +224,7 @@ func (t *customTranslator) Translate(ctx context.Context, evt *event.Event) ([]a
     return out, nil
 }
 
-func buildCustomPayload(evt *agentevent.Event) map[string]any {
+func buildCustomPayload(evt *event.Event) map[string]any {
     if evt == nil || evt.Response == nil {
         return nil
     }
@@ -237,7 +237,7 @@ func buildCustomPayload(evt *agentevent.Event) map[string]any {
 factory := func(ctx context.Context, input *adapter.RunAgentInput, opts ...translator.Option) (translator.Translator, error) {
     inner, err := translator.New(ctx, input.ThreadID, input.RunID, opts...)
     if err != nil {
-        return nil, fmt.Errrof("create inner translator: %w", err)
+        return nil, fmt.Errorf("create inner translator: %w", err)
     }
     return &customTranslator{inner: inner}, nil
 }

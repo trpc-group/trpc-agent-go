@@ -61,35 +61,39 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		}
 	}
 	run := &runner{
-		runner:             r,
-		appName:            opts.AppName,
-		translatorFactory:  opts.TranslatorFactory,
-		userIDResolver:     opts.UserIDResolver,
-		translateCallbacks: opts.TranslateCallbacks,
-		runAgentInputHook:  opts.RunAgentInputHook,
-		runOptionResolver:  opts.RunOptionResolver,
-		tracker:            tracker,
-		running:            make(map[session.Key]*sessionContext),
-		startSpan:          opts.StartSpan,
-		timeout:            opts.Timeout,
+		runner:                            r,
+		appName:                           opts.AppName,
+		translatorFactory:                 opts.TranslatorFactory,
+		graphNodeStartActivityEnabled:     opts.GraphNodeStartActivityEnabled,
+		graphNodeInterruptActivityEnabled: opts.GraphNodeInterruptActivityEnabled,
+		userIDResolver:                    opts.UserIDResolver,
+		translateCallbacks:                opts.TranslateCallbacks,
+		runAgentInputHook:                 opts.RunAgentInputHook,
+		runOptionResolver:                 opts.RunOptionResolver,
+		tracker:                           tracker,
+		running:                           make(map[session.Key]*sessionContext),
+		startSpan:                         opts.StartSpan,
+		timeout:                           opts.Timeout,
 	}
 	return run
 }
 
 // runner is the default implementation of the Runner.
 type runner struct {
-	appName            string
-	runner             trunner.Runner
-	translatorFactory  TranslatorFactory
-	userIDResolver     UserIDResolver
-	translateCallbacks *translator.Callbacks
-	runAgentInputHook  RunAgentInputHook
-	runOptionResolver  RunOptionResolver
-	tracker            track.Tracker
-	runningMu          sync.Mutex
-	running            map[session.Key]*sessionContext
-	startSpan          StartSpan
-	timeout            time.Duration
+	appName                           string
+	runner                            trunner.Runner
+	translatorFactory                 TranslatorFactory
+	graphNodeStartActivityEnabled     bool
+	graphNodeInterruptActivityEnabled bool
+	userIDResolver                    UserIDResolver
+	translateCallbacks                *translator.Callbacks
+	runAgentInputHook                 RunAgentInputHook
+	runOptionResolver                 RunOptionResolver
+	tracker                           track.Tracker
+	runningMu                         sync.Mutex
+	running                           map[session.Key]*sessionContext
+	startSpan                         StartSpan
+	timeout                           time.Duration
 }
 
 type sessionContext struct {
@@ -137,7 +141,12 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if err != nil {
 		return nil, fmt.Errorf("resolve run option: %w", err)
 	}
-	trans, err := r.translatorFactory(ctx, runAgentInput)
+	trans, err := r.translatorFactory(
+		ctx,
+		runAgentInput,
+		translator.WithGraphNodeStartActivityEnabled(r.graphNodeStartActivityEnabled),
+		translator.WithGraphNodeInterruptActivityEnabled(r.graphNodeInterruptActivityEnabled),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("create translator: %w", err)
 	}
