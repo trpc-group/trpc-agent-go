@@ -57,10 +57,12 @@ type mockOperator struct {
 	addCalls    int
 	updateCalls int
 	deleteCalls int
+	clearCalls  int
 	readErr     error
 	addErr      error
 	updateErr   error
 	deleteErr   error
+	clearErr    error
 }
 
 func newMockOperator() *mockOperator {
@@ -128,6 +130,16 @@ func (m *mockOperator) DeleteMemory(ctx context.Context, memoryKey memory.Key) e
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.deleteCalls++
+	return nil
+}
+
+func (m *mockOperator) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
+	if m.clearErr != nil {
+		return m.clearErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.clearCalls++
 	return nil
 }
 

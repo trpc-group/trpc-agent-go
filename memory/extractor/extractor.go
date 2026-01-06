@@ -63,4 +63,5 @@ const (
 	OperationAdd    OperationType = "add"
 	OperationUpdate OperationType = "update"
 	OperationDelete OperationType = "delete"
+	OperationClear  OperationType = "clear"
 )

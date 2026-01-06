@@ -73,7 +73,7 @@ func (e *memoryExtractor) Extract(
 	// Build request with tool declarations.
 	req := &model.Request{
 		Messages: e.buildMessages(messages, existing),
-		Tools:    buildToolsMap(),
+		Tools:    backgroundTools,
 	}
 
 	// Call model.

@@ -14,33 +14,25 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// writeToolDeclarations returns tool declarations for memory write operations.
-// These are used to build model request tools for auto memory extraction.
-// Only write tools (add/update/delete) are included since read tools are
-// exposed to the agent directly.
-func writeToolDeclarations() []*tool.Declaration {
-	writeTools := []tool.CallableTool{
-		memorytool.NewAddTool(),
-		memorytool.NewUpdateTool(),
-		memorytool.NewDeleteTool(),
-	}
-	declarations := make([]*tool.Declaration, 0, len(writeTools))
-	for _, t := range writeTools {
-		declarations = append(declarations, t.Declaration())
-	}
-	return declarations
+// backgroundToolCreators maps tool names to their creator functions.
+// These are the tools that can be used by the extractor in background.
+var backgroundToolCreators = map[string]func() tool.CallableTool{
+	memory.AddToolName:    memorytool.NewAddTool,
+	memory.UpdateToolName: memorytool.NewUpdateTool,
+	memory.DeleteToolName: memorytool.NewDeleteTool,
+	memory.ClearToolName:  memorytool.NewClearTool,
 }
 
-// buildToolsMap builds a map of tool name to tool for model request.
-// The tools are declaration-only and not callable.
-func buildToolsMap() map[string]tool.Tool {
-	declarations := writeToolDeclarations()
-	tools := make(map[string]tool.Tool, len(declarations))
-	for _, decl := range declarations {
-		tools[decl.Name] = &declarationOnlyTool{decl: decl}
+// backgroundTools is the pre-built map of background tools for model request.
+// These tools are declaration-only and not callable.
+var backgroundTools = func() map[string]tool.Tool {
+	tools := make(map[string]tool.Tool, len(backgroundToolCreators))
+	for name, creator := range backgroundToolCreators {
+		t := creator()
+		tools[name] = &declarationOnlyTool{decl: t.Declaration()}
 	}
 	return tools
-}
+}()
 
 // declarationOnlyTool is a tool that only provides declaration, not callable.
 type declarationOnlyTool struct {
@@ -94,6 +86,11 @@ func parseToolCallArgs(toolName string, args map[string]any) *Operation {
 		return &Operation{
 			Type:     OperationDelete,
 			MemoryID: id,
+		}
+
+	case memory.ClearToolName:
+		return &Operation{
+			Type: OperationClear,
 		}
 
 	default:

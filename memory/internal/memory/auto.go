@@ -53,6 +53,7 @@ type MemoryOperator interface {
 	AddMemory(ctx context.Context, userKey memory.UserKey, memory string, topics []string) error
 	UpdateMemory(ctx context.Context, memoryKey memory.Key, memory string, topics []string) error
 	DeleteMemory(ctx context.Context, memoryKey memory.Key) error
+	ClearMemories(ctx context.Context, userKey memory.UserKey) error
 }
 
 // AutoMemoryWorker manages async memory extraction workers.
@@ -282,6 +283,11 @@ func (w *AutoMemoryWorker) executeOperation(
 		if err := w.operator.DeleteMemory(ctx, memKey); err != nil {
 			log.WarnfContext(ctx, "auto_memory: delete memory failed for user %s/%s, memory_id=%s: %v",
 				userKey.AppName, userKey.UserID, op.MemoryID, err)
+		}
+	case extractor.OperationClear:
+		if err := w.operator.ClearMemories(ctx, userKey); err != nil {
+			log.WarnfContext(ctx, "auto_memory: clear memories failed for user %s/%s: %v",
+				userKey.AppName, userKey.UserID, err)
 		}
 	default:
 		log.WarnfContext(ctx, "auto_memory: unknown operation type '%s' for user %s/%s",

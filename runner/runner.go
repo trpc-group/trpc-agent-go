@@ -667,11 +667,6 @@ func (r *runner) captureGraphCompletion(
 // emitRunnerCompletion creates and emits the final runner completion event,
 // optionally propagating graph-level completion data.
 func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContext) {
-	// Trigger async memory extraction once at runner completion.
-	// This ensures memory extraction happens exactly once per conversation turn,
-	// rather than on every assistant response event.
-	r.enqueueAutoMemoryJob(ctx, loop.sess)
-
 	// Create runner completion event.
 	runnerCompletionEvent := event.NewResponseEvent(
 		loop.invocation.InvocationID,
@@ -902,7 +897,7 @@ func (r *runner) enqueueAutoMemoryJob(
 		UserID:  sess.UserID,
 	}
 	if err := r.memoryService.EnqueueAutoMemoryJob(ctx, userKey, messages); err != nil {
-		log.Debugf("Auto memory extraction skipped or failed: %v.", err)
+		log.DebugfContext(ctx, "Auto memory extraction skipped or failed: %v.", err)
 	}
 }
 

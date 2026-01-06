@@ -679,24 +679,31 @@ func TestTools_AutoMemoryMode(t *testing.T) {
 
 	tools := service.Tools()
 
-	// In auto memory mode, no tools are returned by default (search is disabled by default).
-	assert.Len(t, tools, 0, "Auto mode should return no tools by default")
-
-	// Enable search tool explicitly.
-	service = NewMemoryService(
-		WithExtractor(ext),
-		WithToolEnabled(memory.SearchToolName, true),
-	)
-	defer service.Close()
-
-	tools = service.Tools()
-	assert.Len(t, tools, 1, "Auto mode should return search tool when explicitly enabled")
+	// In auto memory mode, Search is enabled by default.
+	assert.Len(t, tools, 1, "Auto mode should return Search tool by default")
 	toolNames := make(map[string]bool)
 	for _, tool := range tools {
 		toolNames[tool.Declaration().Name] = true
 	}
-	assert.True(t, toolNames[memory.SearchToolName], "Search tool should be returned when enabled")
-	assert.False(t, toolNames[memory.ClearToolName], "Clear tool should not be returned via Tools()")
+	assert.True(t, toolNames[memory.SearchToolName], "Search tool should be returned by default")
+
+	// Enable Load tool explicitly.
+	service = NewMemoryService(
+		WithExtractor(ext),
+		WithToolEnabled(memory.LoadToolName, true),
+	)
+	defer service.Close()
+
+	tools = service.Tools()
+	assert.Len(t, tools, 2, "Auto mode should return Search and Load tools when Load is enabled")
+	toolNames = make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	assert.True(t, toolNames[memory.SearchToolName], "Search tool should be returned")
+	assert.True(t, toolNames[memory.LoadToolName], "Load tool should be returned when enabled")
+	assert.False(t, toolNames[memory.AddToolName], "Add tool should not be exposed via Tools()")
+	assert.False(t, toolNames[memory.ClearToolName], "Clear tool should not be exposed via Tools()")
 }
 
 func TestTools_AgenticMode(t *testing.T) {

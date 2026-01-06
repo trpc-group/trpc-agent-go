@@ -17,30 +17,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
 
-func TestWriteToolDeclarations(t *testing.T) {
-	decls := writeToolDeclarations()
-
-	require.Len(t, decls, 3)
-
-	// Verify all expected tools are present.
-	names := make(map[string]bool)
-	for _, decl := range decls {
-		names[decl.Name] = true
-		assert.NotEmpty(t, decl.Description)
-	}
-
-	assert.True(t, names[memory.AddToolName])
-	assert.True(t, names[memory.UpdateToolName])
-	assert.True(t, names[memory.DeleteToolName])
-}
-
-func TestBuildToolsMap(t *testing.T) {
-	tools := buildToolsMap()
-
-	require.Len(t, tools, 3)
+func TestBackgroundTools(t *testing.T) {
+	// All four background tools should be included.
+	require.Len(t, backgroundTools, 4)
+	assert.Contains(t, backgroundTools, memory.AddToolName)
+	assert.Contains(t, backgroundTools, memory.UpdateToolName)
+	assert.Contains(t, backgroundTools, memory.DeleteToolName)
+	assert.Contains(t, backgroundTools, memory.ClearToolName)
 
 	// Verify each tool has a valid declaration.
-	for name, tool := range tools {
+	for name, tool := range backgroundTools {
 		decl := tool.Declaration()
 		require.NotNil(t, decl)
 		assert.Equal(t, name, decl.Name)
@@ -48,9 +34,7 @@ func TestBuildToolsMap(t *testing.T) {
 }
 
 func TestDeclarationOnlyTool(t *testing.T) {
-	tools := buildToolsMap()
-
-	for _, tool := range tools {
+	for _, tool := range backgroundTools {
 		decl := tool.Declaration()
 		assert.NotNil(t, decl)
 		assert.NotEmpty(t, decl.Name)
@@ -205,6 +189,13 @@ func TestParseToolCallArgs_Delete(t *testing.T) {
 			assert.Equal(t, tt.expected, op)
 		})
 	}
+}
+
+func TestParseToolCallArgs_Clear(t *testing.T) {
+	// Clear tool takes no arguments.
+	op := parseToolCallArgs(memory.ClearToolName, map[string]any{})
+	require.NotNil(t, op)
+	assert.Equal(t, OperationClear, op.Type)
 }
 
 func TestParseToolCallArgs_UnknownTool(t *testing.T) {

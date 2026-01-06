@@ -13,7 +13,7 @@ package memory
 import (
 	"crypto/sha256"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -78,13 +78,17 @@ func IsValidToolName(toolName string) bool {
 
 // autoModeDefaultEnabledTools defines default enabled tools for auto memory mode.
 // When extractor is configured, these defaults are applied to enabledTools.
+// In auto mode:
+//   - Add/Delete/Update: run in background by extractor, not exposed to agent.
+//   - Search/Load: can be exposed to agent via Tools().
+//   - Clear: dangerous operation, disabled by default.
 var autoModeDefaultEnabledTools = map[string]bool{
-	memory.AddToolName:    true,  // Enabled for extractor operations
-	memory.UpdateToolName: true,  // Enabled for extractor operations
-	memory.DeleteToolName: true,  // Enabled for extractor operations
-	memory.ClearToolName:  false, // Disabled by default, user must explicitly enable
-	memory.LoadToolName:   false, // Disabled (not needed in auto mode)
-	memory.SearchToolName: false, // Disabled by default, user must explicitly enable
+	memory.AddToolName:    true,  // Enabled for extractor background operations.
+	memory.UpdateToolName: true,  // Enabled for extractor background operations.
+	memory.DeleteToolName: true,  // Enabled for extractor background operations.
+	memory.ClearToolName:  false, // Disabled by default, dangerous operation.
+	memory.SearchToolName: true,  // Enabled and exposed to agent via Tools().
+	memory.LoadToolName:   false, // Disabled by default, can be enabled by user.
 }
 
 // ApplyAutoModeDefaults applies auto mode default enabledTools settings.
@@ -127,7 +131,7 @@ func BuildToolsList(
 		}
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 
 	tools := make([]tool.Tool, 0, len(names))
 	for _, name := range names {
@@ -150,16 +154,22 @@ func shouldIncludeTool(name string, ext extractor.MemoryExtractor, enabledTools 
 	return enabledTools[name]
 }
 
+// autoModeExposedTools defines which tools can be exposed to agent in auto mode.
+// Only Search and Load are front-end tools; others run in background.
+var autoModeExposedTools = map[string]bool{
+	memory.SearchToolName: true,
+	memory.LoadToolName:   true,
+}
+
 // shouldIncludeAutoMemoryTool checks if an auto memory tool should be included.
-// In auto mode, only search tool can be exposed to agent (if explicitly enabled).
-// Other tools (add/update/delete/clear/load) are never exposed, even if enabled.
+// In auto mode, only Search and Load tools can be exposed to agent.
+// Other tools (Add/Update/Delete/Clear) run in background and are never exposed.
 func shouldIncludeAutoMemoryTool(name string, enabledTools map[string]bool) bool {
-	// Only search tool can be exposed to agent in auto mode.
-	if name != memory.SearchToolName {
+	// Only Search and Load tools can be exposed to agent in auto mode.
+	if !autoModeExposedTools[name] {
 		return false
 	}
-
-	// Check if search tool is explicitly enabled.
+	// Check if the tool is enabled.
 	return enabledTools[name]
 }
 
