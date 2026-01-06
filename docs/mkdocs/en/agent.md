@@ -900,6 +900,7 @@ Notes
 
 - Thread‑safe: the setters are concurrency‑safe and can be called while the service is handling requests.
 - Mid‑turn behavior: if an Agent’s current turn triggers more than one model request (e.g., due to tool calls), updates may apply to subsequent requests in the same turn. If you need per‑run stability, set or freeze the text at the start of the run.
+- Per‑run override: pass `agent.WithInstruction(...)` and/or `agent.WithGlobalInstruction(...)` to `Runner.Run(...)` to override prompts for a single request without mutating the Agent instance.
 - Per‑session personalization: for per‑user or per‑session data, prefer placeholders in the instruction and session state injection (see the “Placeholder Variables” section above).
 
 ### Alternative: Placeholder‑Driven Dynamic System Prompts

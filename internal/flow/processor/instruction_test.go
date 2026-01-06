@@ -27,6 +27,8 @@ const (
 	testInvocationID        = "test-123"
 	testDynamicInstruction  = "dynamic instruction"
 	testDynamicSystemPrompt = "dynamic system prompt"
+	testRunInstruction      = "run instruction override"
+	testRunSystemPrompt     = "run system prompt override"
 	jsonSchemaTitle         = "test schema"
 )
 
@@ -254,6 +256,43 @@ func TestInstructionProcessor_DynamicGetters(t *testing.T) {
 	if !strings.Contains(sysMsg.Content, testDynamicSystemPrompt) {
 		t.Fatalf("expected dynamic system prompt in content")
 	}
+}
+
+func TestInstructionProcessor_RunOptionsOverride(t *testing.T) {
+	ctx := context.Background()
+	req := &model.Request{
+		Messages: []model.Message{},
+	}
+	inv := &agent.Invocation{
+		AgentName:    testAgentName,
+		InvocationID: testInvocationID,
+		RunOptions: agent.RunOptions{
+			Instruction:       testRunInstruction,
+			GlobalInstruction: testRunSystemPrompt,
+		},
+	}
+	eventCh := make(chan *event.Event, 1)
+
+	processor := NewInstructionRequestProcessor(
+		testInstructionContent,
+		testSystemPromptContent,
+		WithInstructionGetter(func() string {
+			return testDynamicInstruction
+		}),
+		WithSystemPromptGetter(func() string {
+			return testDynamicSystemPrompt
+		}),
+	)
+
+	processor.ProcessRequest(ctx, inv, req, eventCh)
+
+	require.NotEmpty(t, req.Messages)
+	sysMsg := req.Messages[0]
+	require.Equal(t, model.RoleSystem, sysMsg.Role)
+	require.Contains(t, sysMsg.Content, testRunInstruction)
+	require.Contains(t, sysMsg.Content, testRunSystemPrompt)
+	require.NotContains(t, sysMsg.Content, testDynamicInstruction)
+	require.NotContains(t, sysMsg.Content, testDynamicSystemPrompt)
 }
 
 func TestInstructionProcessor_ProcessRequest_NilRequest(t *testing.T) {
