@@ -24,10 +24,9 @@ import (
 
 // Default values for auto memory configuration.
 const (
-	DefaultAsyncMemoryNum      = 1
-	DefaultMemoryQueueSize     = 10
-	DefaultMemoryJobTimeout    = 30 * time.Second
-	DefaultMaxExistingMemories = 50
+	DefaultAsyncMemoryNum   = 1
+	DefaultMemoryQueueSize  = 10
+	DefaultMemoryJobTimeout = 30 * time.Second
 )
 
 // MemoryJob represents a job for async memory extraction.
@@ -39,11 +38,10 @@ type MemoryJob struct {
 
 // AutoMemoryConfig contains configuration for auto memory extraction.
 type AutoMemoryConfig struct {
-	Extractor           extractor.MemoryExtractor
-	AsyncMemoryNum      int
-	MemoryQueueSize     int
-	MemoryJobTimeout    time.Duration
-	MaxExistingMemories int
+	Extractor        extractor.MemoryExtractor
+	AsyncMemoryNum   int
+	MemoryQueueSize  int
+	MemoryJobTimeout time.Duration
 }
 
 // MemoryOperator defines the interface for memory operations.
@@ -224,12 +222,10 @@ func (w *AutoMemoryWorker) createAutoMemory(
 		return nil
 	}
 
-	// Read existing memories.
-	maxExisting := w.config.MaxExistingMemories
-	if maxExisting <= 0 {
-		maxExisting = DefaultMaxExistingMemories
-	}
-	existing, err := w.operator.ReadMemories(ctx, userKey, maxExisting)
+	// Read all existing memories for the user.
+	// The extractor needs complete memory context to properly deduplicate,
+	// update, or delete existing memories.
+	existing, err := w.operator.ReadMemories(ctx, userKey, 0)
 	if err != nil {
 		log.WarnfContext(ctx, "auto_memory: failed to read existing memories for user %s/%s: %v",
 			userKey.AppName, userKey.UserID, err)

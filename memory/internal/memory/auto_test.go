@@ -746,25 +746,22 @@ func TestMemoryJob(t *testing.T) {
 func TestAutoMemoryConfig(t *testing.T) {
 	ext := &mockExtractor{}
 	config := AutoMemoryConfig{
-		Extractor:           ext,
-		AsyncMemoryNum:      5,
-		MemoryQueueSize:     200,
-		MemoryJobTimeout:    time.Minute,
-		MaxExistingMemories: 100,
+		Extractor:        ext,
+		AsyncMemoryNum:   5,
+		MemoryQueueSize:  200,
+		MemoryJobTimeout: time.Minute,
 	}
 
 	assert.Equal(t, ext, config.Extractor)
 	assert.Equal(t, 5, config.AsyncMemoryNum)
 	assert.Equal(t, 200, config.MemoryQueueSize)
 	assert.Equal(t, time.Minute, config.MemoryJobTimeout)
-	assert.Equal(t, 100, config.MaxExistingMemories)
 }
 
 func TestDefaultConstants(t *testing.T) {
 	assert.Equal(t, 1, DefaultAsyncMemoryNum)
 	assert.Equal(t, 10, DefaultMemoryQueueSize)
 	assert.Equal(t, 30*time.Second, DefaultMemoryJobTimeout)
-	assert.Equal(t, 50, DefaultMaxExistingMemories)
 }
 
 // mockModel is a mock implementation of model.Model for testing.

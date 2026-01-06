@@ -99,11 +99,10 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	// Initialize auto memory worker if extractor is configured.
 	if opts.extractor != nil {
 		config := imemory.AutoMemoryConfig{
-			Extractor:           opts.extractor,
-			AsyncMemoryNum:      opts.asyncMemoryNum,
-			MemoryQueueSize:     opts.memoryQueueSize,
-			MemoryJobTimeout:    opts.memoryJobTimeout,
-			MaxExistingMemories: opts.maxExistingMemories,
+			Extractor:        opts.extractor,
+			AsyncMemoryNum:   opts.asyncMemoryNum,
+			MemoryQueueSize:  opts.memoryQueueSize,
+			MemoryJobTimeout: opts.memoryJobTimeout,
 		}
 		svc.autoMemoryWorker = imemory.NewAutoMemoryWorker(config, svc)
 		svc.autoMemoryWorker.Start()

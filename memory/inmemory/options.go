@@ -41,10 +41,9 @@ type serviceOpts struct {
 	extractor extractor.MemoryExtractor
 
 	// Async memory worker configuration.
-	asyncMemoryNum      int           // Number of async workers, default 3.
-	memoryQueueSize     int           // Queue size per worker, default 100.
-	memoryJobTimeout    time.Duration // Timeout per job, default 30s.
-	maxExistingMemories int           // Max existing memories to read, default 50.
+	asyncMemoryNum   int           // Number of async workers, default 3.
+	memoryQueueSize  int           // Queue size per worker, default 100.
+	memoryJobTimeout time.Duration // Timeout per job, default 30s.
 }
 
 func (o serviceOpts) clone() serviceOpts {
@@ -137,19 +136,5 @@ func WithMemoryQueueSize(size int) ServiceOpt {
 func WithMemoryJobTimeout(timeout time.Duration) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.memoryJobTimeout = timeout
-	}
-}
-
-// WithMaxExistingMemories sets the maximum number of existing memories to read
-// when performing auto memory extraction for deduplication.
-// This is different from WithPreloadMemory (Agent layer) which controls
-// how many memories are injected into the system prompt for the LLM.
-// Default is 50.
-func WithMaxExistingMemories(max int) ServiceOpt {
-	return func(opts *serviceOpts) {
-		if max < 1 {
-			max = imemory.DefaultMaxExistingMemories
-		}
-		opts.maxExistingMemories = max
 	}
 }

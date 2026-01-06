@@ -603,20 +603,6 @@ func TestWithMemoryJobTimeout(t *testing.T) {
 	assert.Equal(t, time.Minute, service.opts.memoryJobTimeout)
 }
 
-func TestWithMaxExistingMemories(t *testing.T) {
-	t.Run("valid value", func(t *testing.T) {
-		service := NewMemoryService(WithMaxExistingMemories(100))
-		require.NotNil(t, service)
-		assert.Equal(t, 100, service.opts.maxExistingMemories)
-	})
-
-	t.Run("invalid value uses default", func(t *testing.T) {
-		service := NewMemoryService(WithMaxExistingMemories(0))
-		require.NotNil(t, service)
-		assert.Equal(t, imemory.DefaultMaxExistingMemories, service.opts.maxExistingMemories)
-	})
-}
-
 func TestEnqueueAutoMemoryJob_NoExtractor(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()

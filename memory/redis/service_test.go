@@ -966,20 +966,6 @@ func TestWithMemoryJobTimeout(t *testing.T) {
 	assert.Equal(t, time.Minute, opts.memoryJobTimeout)
 }
 
-func TestWithMaxExistingMemories(t *testing.T) {
-	t.Run("valid value", func(t *testing.T) {
-		opts := defaultOptions.clone()
-		WithMaxExistingMemories(100)(&opts)
-		assert.Equal(t, 100, opts.maxExistingMemories)
-	})
-
-	t.Run("invalid value uses default", func(t *testing.T) {
-		opts := defaultOptions.clone()
-		WithMaxExistingMemories(0)(&opts)
-		assert.Equal(t, imemory.DefaultMaxExistingMemories, opts.maxExistingMemories)
-	})
-}
-
 func TestEnqueueAutoMemoryJob_NoWorker(t *testing.T) {
 	mr := miniredis.RunT(t)
 	defer mr.Close()
