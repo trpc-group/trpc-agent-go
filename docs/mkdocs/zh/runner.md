@@ -184,6 +184,63 @@ defer r.Close()
 eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
 ```
 
+#### RequestID（request identifier，请求标识）与运行控制
+
+每次调用 `Runner.Run` 都是一轮 **run**。如果你需要取消某次 run，或者查询它的
+运行状态，就需要一个 request identifier（requestID，请求标识）。
+
+推荐由调用方自己生成 requestID，并通过 `agent.WithRequestID` 传入（比如用
+Universally Unique Identifier（UUID，通用唯一标识）生成一个唯一字符串）。
+Runner 会把它保存到 `RunOptions.RequestID`，并注入到每个事件 `event.Event` 的
+`event.RequestID` 字段里。
+
+```go
+requestID := "req-123"
+
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithRequestID(requestID),
+)
+if err != nil {
+    panic(err)
+}
+
+managed := r.(runner.ManagedRunner)
+status, ok := managed.RunStatus(requestID)
+_ = status
+_ = ok
+
+// 用 requestID 取消本次 run。
+managed.Cancel(requestID)
+```
+
+#### DetachedCancel（忽略父 ctx cancel）
+
+在 Go 里，`context.Context`（通常命名为 `ctx`）同时承载“取消信号”和“截止时间”。
+默认情况下，父 `ctx` 被取消（cancel）时，Runner 会停止这次 run。
+
+如果你希望父 `ctx` 的 cancel 不影响 run，但仍然要用超时来限制总运行时长，可以：
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithRequestID(requestID),
+    agent.WithDetachedCancel(true),
+    agent.WithMaxRunDuration(30*time.Second),
+)
+```
+
+Runner 会取以下两者中较早的时间作为真正的超时上限：
+
+- 父 `ctx` 的 deadline（如果存在）
+- `MaxRunDuration`（如果设置了）
+
 #### 中断恢复（工具优先继续执行）
 
 在真实业务里，用户可能在 Agent 还处于“工具调用阶段”时中断：
