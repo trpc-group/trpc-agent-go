@@ -348,17 +348,17 @@ for e := range eventChan {
 
 #### 🔁 开关：让 Graph 的 LLM 节点输出最终响应事件
 
-在 GraphAgent（图式智能体）里，一次 `Run` 可能会在多个节点里多次调用大语言模型
-（Large Language Model，LLM）。当开启流式输出时，一次模型调用通常会产生一串事件：
+在 GraphAgent 里，一次 `Run` 可能会在多个节点里多次调用 LLM。当开启流式输出时，
+一次模型调用通常会产生一串事件：
 
-- 分片（partial）事件：`IsPartial=true`、`Done=false`，增量文本在
+- 分片（`partial`）事件：`IsPartial=true`、`Done=false`，增量文本在
   `choice.Delta.Content`
-- 最终（final）事件：`IsPartial=false`、`Done=true`，完整文本在
+- 最终（`final`）事件：`IsPartial=false`、`Done=true`，完整文本在
   `choice.Message.Content`
 
 默认情况下，Graph 的 LLM 节点只输出分片事件，不输出最终 `Done=true` 的 assistant 消息
-事件。这样可以避免“中间节点的输出”被当作普通助手回复（例如被 Runner 写进会话
-（Session），或被上层用户界面（User Interface，UI）直接展示）。
+事件。这样可以避免“中间节点的输出”被当作普通助手回复（例如被 Runner 写进会话，或被
+上层用户界面直接展示）。
 
 如果你希望 Graph 的 LLM 节点也输出最终 `Done=true` 的 assistant 消息事件，可以开启这个
 RunOption：
@@ -375,14 +375,26 @@ eventChan, err := r.Run(
 
 行为总结：
 
-- 默认（`false`）：Graph 的 LLM 节点只输出分片事件。流程最终输出仍然可以在 Runner
-  “完成事件”的 `StateDelta[graph.StateKeyLastResponse]` 中读取。
-- 开启（`true`）：Graph 的 LLM 节点也会输出最终 `Done=true` 的 assistant 消息事件。
-  - 中间节点现在也可能产生 assistant 消息（并且 Runner 可能会把这些非分片事件写入
-    Session）。
-  - Runner 可能会在“完成事件”里不再重复回显最终 assistant 消息：当它能通过响应标识符
-    （identifier，ID）确认“同一个最终消息已经在前面的事件里出现过”时，会省略回显以避免
-    重复展示。
+先讲清楚一句话：这个开关控制的是“图里每个 LLM 节点是否要额外输出最终 `Done=true`
+的消息事件”，它不等价于“Runner 的完成事件一定会不会带 `Response.Choices`”。
+
+假设你的图是：`llm1 -> llm2 -> llm3`，最后由 `llm3` 产出最终答案：
+
+- 情况 1：`agent.WithGraphEmitFinalModelResponses(false)`（默认）
+  - `llm1/llm2/llm3`：只输出分片事件（`Done=false`），不输出最终 `Done=true` 的
+    assistant 消息事件。
+  - Runner 完成事件：为了让“只看最后一条事件也能拿到最终答案”，Runner 会把 `llm3`
+    的最终结果回显到完成事件的 `Response.Choices`（前提是图的完成事件里带了
+    `Response.Choices`）。同时，最终文本也始终能从
+    `StateDelta[graph.StateKeyLastResponse]` 读取。
+- 情况 2：`agent.WithGraphEmitFinalModelResponses(true)`
+  - `llm1/llm2/llm3`：除了分片事件外，还会各自输出最终 `Done=true` 的 assistant
+    消息事件（因此中间节点也可能出现完整 assistant 消息，Runner 也可能把这些非分片事件
+    写入会话）。
+  - Runner 完成事件：为了避免和 `llm3` 的最终消息重复展示，Runner 会用响应 ID 做去重；
+    当它确认“最终消息已在前面的事件里出现过”时，就会省略回显，因此完成事件的
+    `Response.Choices` 可能为空，这是预期行为。最终文本仍然以
+    `StateDelta[graph.StateKeyLastResponse]` 为准。
 
 建议：在 GraphAgent 场景里，请始终以 Runner “完成事件”的 `StateDelta` 作为最终输出的
 唯一来源（例如 `graph.StateKeyLastResponse`）。当开启该选项时，请把“完成事件”里的
