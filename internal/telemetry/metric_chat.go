@@ -15,10 +15,10 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/noop"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
@@ -28,23 +28,23 @@ var (
 	ChatMeter metric.Meter = MeterProvider.Meter(metrics.MeterNameChat)
 
 	// ChatMetricTRPCAgentGoClientRequestCnt records the number of chat requests made.
-	ChatMetricTRPCAgentGoClientRequestCnt metric.Int64Counter = noop.Int64Counter{}
+	ChatMetricTRPCAgentGoClientRequestCnt metric.Int64Counter
 	// ChatMetricGenAIClientTokenUsage records the distribution of token usage (both input and output tokens).
-	ChatMetricGenAIClientTokenUsage metric.Int64Histogram = noop.Int64Histogram{}
+	ChatMetricGenAIClientTokenUsage *histogram.DynamicInt64Histogram
 	// ChatMetricGenAIClientOperationDuration records the distribution of total chat operation durations in seconds.
-	ChatMetricGenAIClientOperationDuration metric.Float64Histogram = noop.Float64Histogram{}
+	ChatMetricGenAIClientOperationDuration *histogram.DynamicFloat64Histogram
 	// ChatMetricGenAIServerTimeToFirstToken records the distribution of time to first token latency in seconds.
 	// This measures the time from request start until the first token is received.
-	ChatMetricGenAIServerTimeToFirstToken metric.Float64Histogram = noop.Float64Histogram{}
+	ChatMetricGenAIServerTimeToFirstToken *histogram.DynamicFloat64Histogram
 	// ChatMetricTRPCAgentGoClientTimeToFirstToken records the distribution of time to first token latency in seconds.
 	// Note: This metric is reported alongside ChatMetricGenAIServerTimeToFirstToken with the same value.
-	ChatMetricTRPCAgentGoClientTimeToFirstToken metric.Float64Histogram = noop.Float64Histogram{}
+	ChatMetricTRPCAgentGoClientTimeToFirstToken *histogram.DynamicFloat64Histogram
 	// ChatMetricTRPCAgentGoClientTimePerOutputToken records the distribution of average time per output token in seconds.
 	// This metric measures the decode phase performance by calculating (total_duration - time_to_first_token) / (output_tokens - first_token_count).
-	ChatMetricTRPCAgentGoClientTimePerOutputToken metric.Float64Histogram = noop.Float64Histogram{}
+	ChatMetricTRPCAgentGoClientTimePerOutputToken *histogram.DynamicFloat64Histogram
 	// ChatMetricTRPCAgentGoClientOutputTokenPerTime records the distribution of output token per time for client.
 	// 1 / ChatMetricTRPCAgentGoClientTimePerOutputToken.
-	ChatMetricTRPCAgentGoClientOutputTokenPerTime metric.Float64Histogram = noop.Float64Histogram{}
+	ChatMetricTRPCAgentGoClientOutputTokenPerTime *histogram.DynamicFloat64Histogram
 )
 
 // chatAttributes is the attributes for chat metrics.
@@ -218,24 +218,36 @@ func (t *ChatMetricsTracker) RecordMetrics() func() {
 		otelAttrs := attrs.toAttributes()
 
 		// Increment chat request counter
-		ChatMetricTRPCAgentGoClientRequestCnt.Add(t.ctx, 1, metric.WithAttributes(otelAttrs...))
+		if ChatMetricTRPCAgentGoClientRequestCnt != nil {
+			ChatMetricTRPCAgentGoClientRequestCnt.Add(t.ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
 
 		// Record chat request duration
-		ChatMetricGenAIClientOperationDuration.Record(t.ctx, requestDuration.Seconds(), metric.WithAttributes(otelAttrs...))
+		if ChatMetricGenAIClientOperationDuration != nil {
+			ChatMetricGenAIClientOperationDuration.Record(t.ctx, requestDuration.Seconds(), metric.WithAttributes(otelAttrs...))
+		}
 
 		// Record time to first token (report both metrics with the same value)
-		ChatMetricGenAIServerTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
-			metric.WithAttributes(otelAttrs...))
-		ChatMetricTRPCAgentGoClientTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
-			metric.WithAttributes(otelAttrs...))
+		if ChatMetricGenAIServerTimeToFirstToken != nil {
+			ChatMetricGenAIServerTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
+				metric.WithAttributes(otelAttrs...))
+		}
+		if ChatMetricTRPCAgentGoClientTimeToFirstToken != nil {
+			ChatMetricTRPCAgentGoClientTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
+				metric.WithAttributes(otelAttrs...))
+		}
 
 		// Record input token usage
-		ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptTokens),
-			metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputTokenType))...))
+		if ChatMetricGenAIClientTokenUsage != nil {
+			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptTokens),
+				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputTokenType))...))
+		}
 
 		// Record output token usage
-		ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalCompletionTokens),
-			metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoOutputTokenType))...))
+		if ChatMetricGenAIClientTokenUsage != nil {
+			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalCompletionTokens),
+				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoOutputTokenType))...))
+		}
 
 		// Calculate and record derived metrics
 		t.recordDerivedMetrics(otelAttrs, requestDuration)
@@ -291,17 +303,25 @@ func (t *ChatMetricsTracker) recordDerivedMetrics(otelAttrs []attribute.KeyValue
 
 	if tokens > 0 && duration > 0 {
 		// Record time per output token
-		ChatMetricTRPCAgentGoClientTimePerOutputToken.Record(t.ctx, (duration / time.Duration(tokens)).Seconds(),
-			metric.WithAttributes(otelAttrs...))
+		if ChatMetricTRPCAgentGoClientTimePerOutputToken != nil {
+			ChatMetricTRPCAgentGoClientTimePerOutputToken.Record(t.ctx, (duration / time.Duration(tokens)).Seconds(),
+				metric.WithAttributes(otelAttrs...))
+		}
 		// Record output token per time
-		ChatMetricTRPCAgentGoClientOutputTokenPerTime.Record(t.ctx, float64(tokens)/duration.Seconds(),
-			metric.WithAttributes(otelAttrs...))
+		if ChatMetricTRPCAgentGoClientOutputTokenPerTime != nil {
+			ChatMetricTRPCAgentGoClientOutputTokenPerTime.Record(t.ctx, float64(tokens)/duration.Seconds(),
+				metric.WithAttributes(otelAttrs...))
+		}
 	} else if tokens == 0 && t.totalCompletionTokens > 0 && requestDuration > 0 {
 		// Record time per output token
-		ChatMetricTRPCAgentGoClientTimePerOutputToken.Record(t.ctx, (requestDuration / time.Duration(t.totalCompletionTokens)).Seconds(),
-			metric.WithAttributes(otelAttrs...))
+		if ChatMetricTRPCAgentGoClientTimePerOutputToken != nil {
+			ChatMetricTRPCAgentGoClientTimePerOutputToken.Record(t.ctx, (requestDuration / time.Duration(t.totalCompletionTokens)).Seconds(),
+				metric.WithAttributes(otelAttrs...))
+		}
 		// Record output token per time
-		ChatMetricTRPCAgentGoClientOutputTokenPerTime.Record(t.ctx, float64(t.totalCompletionTokens)/requestDuration.Seconds(),
-			metric.WithAttributes(otelAttrs...))
+		if ChatMetricTRPCAgentGoClientOutputTokenPerTime != nil {
+			ChatMetricTRPCAgentGoClientOutputTokenPerTime.Record(t.ctx, float64(t.totalCompletionTokens)/requestDuration.Seconds(),
+				metric.WithAttributes(otelAttrs...))
+		}
 	}
 }
