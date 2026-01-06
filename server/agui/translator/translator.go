@@ -32,25 +32,30 @@ type Translator interface {
 }
 
 // New creates a new event translator.
-func New(ctx context.Context, threadID, runID string) Translator {
+func New(ctx context.Context, threadID, runID string, opts ...Option) (Translator, error) {
+	options := newOptions(opts...)
 	return &translator{
-		threadID:         threadID,
-		runID:            runID,
-		lastMessageID:    "",
-		receivingMessage: false,
-		seenResponseIDs:  make(map[string]struct{}),
-		seenToolCallIDs:  make(map[string]struct{}),
-	}
+		threadID:                          threadID,
+		runID:                             runID,
+		lastMessageID:                     "",
+		receivingMessage:                  false,
+		seenResponseIDs:                   make(map[string]struct{}),
+		seenToolCallIDs:                   make(map[string]struct{}),
+		graphNodeStartActivityEnabled:     options.graphNodeStartActivityEnabled,
+		graphNodeInterruptActivityEnabled: options.graphNodeInterruptActivityEnabled,
+	}, nil
 }
 
 // translator is the default implementation of the Translator.
 type translator struct {
-	threadID         string
-	runID            string
-	lastMessageID    string
-	receivingMessage bool
-	seenResponseIDs  map[string]struct{}
-	seenToolCallIDs  map[string]struct{}
+	threadID                          string
+	runID                             string
+	lastMessageID                     string
+	receivingMessage                  bool
+	seenResponseIDs                   map[string]struct{}
+	seenToolCallIDs                   map[string]struct{}
+	graphNodeStartActivityEnabled     bool
+	graphNodeInterruptActivityEnabled bool
 }
 
 // Translate translates one trpc-agent-go event into zero or more AG-UI events.
@@ -68,8 +73,12 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 			len(event.StateDelta[graph.MetadataKeyPregel]) > 0)
 
 	// GraphAgent emits model/tool metadata via StateDelta instead of raw tool_calls.
-	events = append(events, t.graphNodeStartActivityEvents(event)...)
-	events = append(events, t.graphNodeInterruptActivityEvents(event)...)
+	if t.graphNodeStartActivityEnabled {
+		events = append(events, t.graphNodeStartActivityEvents(event)...)
+	}
+	if t.graphNodeInterruptActivityEnabled {
+		events = append(events, t.graphNodeInterruptActivityEvents(event)...)
+	}
 	events = append(events, t.graphModelEvents(event)...)
 	events = append(events, t.graphToolEvents(event)...)
 	// Handle node custom events (progress, text, custom).

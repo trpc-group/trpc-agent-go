@@ -9,6 +9,8 @@ The AG-UI translator emits `ACTIVITY_DELTA` events that the frontend can use to 
 - `activityType`: `graph.node.start` sets `/node` to the current node information.
 - `activityType`: `graph.node.interrupt` sets `/interrupt` with the interrupt payload, where `prompt` is the value passed to `graph.Interrupt(...)` (string or structured JSON).
 
+These graph activity events are disabled by default. This example enables them via AG-UI server options (`agui.WithGraphNodeStartActivityEnabled(true)` and `agui.WithGraphNodeInterruptActivityEnabled(true)`).
+
 This helps the frontend track which node is executing and render Human-in-the-Loop prompts, including during resume-from-interrupt flows.
 
 The node IDs are executed in this order:

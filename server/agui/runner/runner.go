@@ -137,6 +137,10 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if err != nil {
 		return nil, fmt.Errorf("resolve run option: %w", err)
 	}
+	trans, err := r.translatorFactory(ctx, runAgentInput)
+	if err != nil {
+		return nil, fmt.Errorf("create translator: %w", err)
+	}
 	ctx, span, err := r.startSpan(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("start span: %w", err)
@@ -160,7 +164,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 			Content: content,
 		},
 		runOption:   runOption,
-		translator:  r.translatorFactory(ctx, runAgentInput),
+		translator:  trans,
 		enableTrack: r.tracker != nil,
 		span:        span,
 	}

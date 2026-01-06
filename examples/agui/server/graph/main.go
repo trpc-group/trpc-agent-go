@@ -92,7 +92,11 @@ func main() {
 	server, err := agui.New(
 		r,
 		agui.WithPath(*path),
-		agui.WithAGUIRunnerOptions(aguirunner.WithRunOptionResolver(resolveRunOptions)),
+		agui.WithGraphNodeStartActivityEnabled(true),
+		agui.WithGraphNodeInterruptActivityEnabled(true),
+		agui.WithAGUIRunnerOptions(
+			aguirunner.WithRunOptionResolver(resolveRunOptions),
+		),
 	)
 	if err != nil {
 		log.Fatalf("create AG-UI server failed: %v", err)

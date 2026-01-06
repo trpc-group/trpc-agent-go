@@ -201,7 +201,7 @@ server, _ := agui.New(runner, agui.WithServiceFactory(NewWSService))
 ```go
 import (
     aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
-    agentevent "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/event"
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
     "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
@@ -213,8 +213,8 @@ type customTranslator struct {
     inner translator.Translator
 }
 
-func (t *customTranslator) Translate(ctx context.Context, evt *agentevent.Event) ([]aguievents.Event, error) {
-    out, err := t.inner.Translate(evt)
+func (t *customTranslator) Translate(ctx context.Context, evt *event.Event) ([]aguievents.Event, error) {
+    out, err := t.inner.Translate(ctx, evt)
     if err != nil {
         return nil, err
     }
@@ -234,8 +234,12 @@ func buildCustomPayload(evt *agentevent.Event) map[string]any {
     }
 }
 
-factory := func(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
-    return &customTranslator{inner: translator.New(input.ThreadID, input.RunID)}
+factory := func(ctx context.Context, input *adapter.RunAgentInput, opts ...translator.Option) (translator.Translator, error) {
+    inner, err := translator.New(ctx, input.ThreadID, input.RunID, opts...)
+    if err != nil {
+        return nil, fmt.Errrof("create inner translator: %w", err)
+    }
+    return &customTranslator{inner: inner}, nil
 }
 
 runner := runner.NewRunner(agent.Info().Name, agent)
@@ -645,6 +649,71 @@ if err != nil {
 
 In this case, the real-time conversation route will be `/agui/chat`, the cancel route will be `/agui/cancel`, and the message snapshot route will be `/agui/history`.
 
+### GraphAgent Node Activity Events
+
+With `GraphAgent`, a single run typically executes multiple nodes along the graph. To help the frontend highlight the active node and render Human-in-the-Loop (HITL) prompts, the framework can emit two additional `ACTIVITY_DELTA` events. For the event format, see the [AG-UI official docs](https://docs.ag-ui.com/concepts/events#activitydelta). They are disabled by default and can be enabled per event.
+
+#### Node start (`graph.node.start`)
+
+This event is disabled by default; enable it via `agui.WithGraphNodeStartActivityEnabled(true)` when constructing the AG-UI server.
+
+```go
+server, err := agui.New(
+	runner,
+	agui.WithGraphNodeStartActivityEnabled(true),
+)
+```
+
+`activityType` is `graph.node.start`: emitted before the node actually runs. It is also emitted before resuming from an interrupt. The `patch` writes the current node via `add /node`:
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.start",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node"
+      }
+    }
+  ]
+}
+```
+
+#### Interrupt (`graph.node.interrupt`)
+
+This event is disabled by default; enable it via `agui.WithGraphNodeInterruptActivityEnabled(true)` when constructing the AG-UI server.
+
+```go
+server, err := agui.New(
+	runner,
+	agui.WithGraphNodeInterruptActivityEnabled(true),
+)
+```
+
+`activityType` is `graph.node.interrupt`: emitted when the graph execution is interrupted. This happens when a node calls `graph.Interrupt(...)` and there is no available resume value. The `patch` writes `nodeId` and `prompt` via `add /interrupt`, where `prompt` is the 4th argument passed to `graph.Interrupt(ctx, state, key, prompt)`, either a string or structured JSON:
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.interrupt",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/interrupt",
+      "value": {
+        "nodeId": "confirm",
+        "prompt": "Confirm continuing after the recipe amounts are calculated."
+      }
+    }
+  ]
+}
+```
+
+For a complete example, see [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph).
+
 ## Best Practices
 
 ### Generating Documents
@@ -692,51 +761,3 @@ The effect is shown below. For a full example, refer to
 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report).
 
 ![report](../assets/gif/agui/report.gif)
-
-### GraphAgent Node Execution Progress
-
-With `GraphAgent`, a single run typically executes multiple nodes along the graph. To help the frontend clearly show “which node is currently executing” and render Human-in-the-Loop (HITL) prompts when a graph interrupts, the framework emits `ACTIVITY_DELTA` events:
-
-- `activityType == "graph.node.start"`: emitted before the node actually runs. It is also emitted before resuming from an interrupt, which makes it suitable for consistent progress tracking.
-- `activityType == "graph.node.interrupt"`: emitted when the graph execution is interrupted, which is useful for rendering a prompt and collecting user input.
-
-Below are two example `ACTIVITY_DELTA` events (the `patch` follows [JSON Patch](https://jsonpatch.com/)).
-
-Node start (`graph.node.start`):
-
-```json
-{
-  "type": "ACTIVITY_DELTA",
-  "activityType": "graph.node.start",
-  "patch": [
-    {
-      "op": "add",
-      "path": "/node",
-      "value": {
-        "nodeId": "plan_llm_node"
-      }
-    }
-  ]
-}
-```
-
-Interrupt (`graph.node.interrupt`):
-
-```json
-{
-  "type": "ACTIVITY_DELTA",
-  "activityType": "graph.node.interrupt",
-  "patch": [
-    {
-      "op": "add",
-      "path": "/interrupt",
-      "value": {
-        "nodeId": "confirm",
-        "prompt": "Confirm continuing after the recipe amounts are calculated."
-      }
-    }
-  ]
-}
-```
-
-For a complete example, see [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph).

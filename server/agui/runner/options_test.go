@@ -11,6 +11,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -19,6 +20,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
@@ -36,9 +40,12 @@ func TestNewOptionsDefaults(t *testing.T) {
 
 	assert.NotNil(t, opts.TranslatorFactory)
 	input := &adapter.RunAgentInput{ThreadID: "thread-1", RunID: "run-1"}
-	tr := opts.TranslatorFactory(context.Background(), input)
+	tr, err := opts.TranslatorFactory(context.Background(), input)
+	assert.NoError(t, err)
 	assert.NotNil(t, tr)
-	assert.IsType(t, translator.New(context.Background(), "", ""), tr)
+	expected, err := translator.New(context.Background(), "", "")
+	assert.NoError(t, err)
+	assert.IsType(t, expected, tr)
 
 	assert.NotNil(t, opts.RunAgentInputHook)
 	modified, err := opts.RunAgentInputHook(context.Background(), input)
@@ -77,22 +84,85 @@ func TestWithUserIDResolver(t *testing.T) {
 }
 
 func TestWithTranslatorFactory(t *testing.T) {
-	customTranslator := translator.New(context.Background(), "custom-thread", "custom-run")
+	customTranslator, err := translator.New(context.Background(), "custom-thread", "custom-run")
+	assert.NoError(t, err)
 	factoryCalled := false
 	opts := NewOptions(
 		WithTranslatorFactory(
-			func(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
+			func(ctx context.Context, input *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
 				factoryCalled = true
-				return customTranslator
+				return customTranslator, nil
 			},
 		),
 	)
 
 	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"}
-	tr := opts.TranslatorFactory(context.Background(), input)
+	tr, err := opts.TranslatorFactory(context.Background(), input)
+	assert.NoError(t, err)
 
 	assert.True(t, factoryCalled)
 	assert.Equal(t, customTranslator, tr)
+}
+
+func TestWithGraphNodeStartActivityEnabled(t *testing.T) {
+	opts := NewOptions(WithGraphNodeStartActivityEnabled(true))
+	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"}
+	tr, err := opts.TranslatorFactory(context.Background(), input)
+	assert.NoError(t, err)
+
+	meta := graph.NodeExecutionMetadata{
+		NodeID:   "node-1",
+		NodeType: graph.NodeTypeFunction,
+		Phase:    graph.ExecutionPhaseStart,
+		Attempt:  1,
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "node-start-1",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNode: raw,
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "graph.node.start", delta.ActivityType)
+}
+
+func TestWithGraphNodeInterruptActivityEnabled(t *testing.T) {
+	opts := NewOptions(WithGraphNodeInterruptActivityEnabled(true))
+	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"}
+	tr, err := opts.TranslatorFactory(context.Background(), input)
+	assert.NoError(t, err)
+
+	meta := graph.PregelStepMetadata{
+		StepNumber:     3,
+		NodeID:         "nodeX",
+		InterruptValue: "ask",
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "pregel-interrupt-1",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyPregel: raw,
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "graph.node.interrupt", delta.ActivityType)
 }
 
 func TestWithTranslateCallbacks(t *testing.T) {
