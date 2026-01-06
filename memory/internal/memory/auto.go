@@ -71,7 +71,6 @@ type AutoMemoryWorker struct {
 
 // extractionState tracks extraction state for a user.
 type extractionState struct {
-	totalTurns    int
 	lastExtractAt *time.Time
 	// pendingMessages accumulates messages from turns that were not extracted.
 	pendingMessages []model.Message
@@ -158,7 +157,6 @@ func (w *AutoMemoryWorker) EnqueueJob(
 
 	// Get or create extraction state for this user.
 	state := w.getOrCreateState(userKey)
-	state.totalTurns++
 
 	// Accumulate current turn messages.
 	state.pendingMessages = append(state.pendingMessages, messages...)
@@ -167,7 +165,6 @@ func (w *AutoMemoryWorker) EnqueueJob(
 	extractCtx := &extractor.ExtractionContext{
 		UserKey:       userKey,
 		Messages:      state.pendingMessages,
-		TotalTurns:    state.totalTurns,
 		LastExtractAt: state.lastExtractAt,
 	}
 

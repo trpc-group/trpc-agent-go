@@ -1210,29 +1210,29 @@ adminService := memoryinmemory.NewMemoryService(
 
 #### 可用的检查器
 
-| 检查器               | 说明                                 | 示例                                             |
-| -------------------- | ------------------------------------ | ------------------------------------------------ |
-| `CheckTurnThreshold` | 当累计轮数达到阈值时触发             | `CheckTurnThreshold(5)` - 每 5 轮触发一次        |
-| `CheckTimeInterval`  | 当距上次提取超过指定时间间隔时触发   | `CheckTimeInterval(3*time.Minute)` - 每 3 分钟   |
-| `ChecksAll`          | 组合多个检查器，使用 AND 逻辑        | 所有检查器都通过才触发                           |
-| `ChecksAny`          | 组合多个检查器，使用 OR 逻辑         | 任一检查器通过即触发                             |
+| 检查器                 | 说明                                 | 示例                                             |
+| ---------------------- | ------------------------------------ | ------------------------------------------------ |
+| `CheckMessageThreshold`| 当累积消息数超过阈值时触发           | `CheckMessageThreshold(5)` - 消息数 > 5 时触发   |
+| `CheckTimeInterval`    | 当距上次提取超过指定时间间隔时触发   | `CheckTimeInterval(3*time.Minute)` - 每 3 分钟   |
+| `ChecksAll`            | 组合多个检查器，使用 AND 逻辑        | 所有检查器都通过才触发                           |
+| `ChecksAny`            | 组合多个检查器，使用 OR 逻辑         | 任一检查器通过即触发                             |
 
 #### 检查器配置示例
 
 ```go
-// 示例 1：每 5 轮或每 3 分钟提取一次（OR 逻辑）。
+// 示例 1：消息数 > 5 或每 3 分钟提取一次（OR 逻辑）。
 memExtractor := extractor.NewExtractor(
     extractorModel,
     extractor.WithCheckersAny(
-        extractor.CheckTurnThreshold(5),
+        extractor.CheckMessageThreshold(5),
         extractor.CheckTimeInterval(3*time.Minute),
     ),
 )
 
-// 示例 2：每 10 轮且每 5 分钟提取一次（AND 逻辑）。
+// 示例 2：消息数 > 10 且每 5 分钟提取一次（AND 逻辑）。
 memExtractor := extractor.NewExtractor(
     extractorModel,
-    extractor.WithChecker(extractor.CheckTurnThreshold(10)),
+    extractor.WithChecker(extractor.CheckMessageThreshold(10)),
     extractor.WithChecker(extractor.CheckTimeInterval(5*time.Minute)),
 )
 ```
@@ -1245,7 +1245,6 @@ memExtractor := extractor.NewExtractor(
 type ExtractionContext struct {
     UserKey       memory.UserKey  // 用户标识。
     Messages      []model.Message // 自上次提取以来累积的消息。
-    TotalTurns    int             // 自进程启动以来的累计对话轮数。
     LastExtractAt *time.Time      // 上次提取时间戳，首次提取时为 nil。
 }
 ```

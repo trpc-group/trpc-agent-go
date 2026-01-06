@@ -27,9 +27,6 @@ type ExtractionContext struct {
 	// in the next extraction. This ensures no conversation context is lost.
 	Messages []model.Message
 
-	// TotalTurns is the total conversation turns since process start.
-	TotalTurns int
-
 	// LastExtractAt is the last extraction timestamp, nil if never extracted.
 	LastExtractAt *time.Time
 }
@@ -40,17 +37,16 @@ type ExtractionContext struct {
 // Multiple checkers can be composed using ChecksAll (AND) or ChecksAny (OR).
 type Checker func(ctx *ExtractionContext) bool
 
-// CheckTurnThreshold creates a checker that triggers every N turns.
-// Example: CheckTurnThreshold(20) triggers at turn 20, 40, 60, etc.
-func CheckTurnThreshold(n int) Checker {
+// CheckMessageThreshold creates a checker that triggers when the number of
+// accumulated messages exceeds the specified threshold.
+func CheckMessageThreshold(n int) Checker {
 	return func(ctx *ExtractionContext) bool {
-		return ctx.TotalTurns > 0 && ctx.TotalTurns%n == 0
+		return len(ctx.Messages) > n
 	}
 }
 
 // CheckTimeInterval creates a checker that triggers if last extraction
 // was more than the given duration ago.
-// Example: CheckTimeInterval(3*time.Minute) triggers every 3 minutes.
 func CheckTimeInterval(interval time.Duration) Checker {
 	return func(ctx *ExtractionContext) bool {
 		if ctx.LastExtractAt == nil {

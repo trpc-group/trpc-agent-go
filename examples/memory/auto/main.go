@@ -110,14 +110,14 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 		// By default, extraction happens on every turn.
 		// Use checkers to control extraction frequency:
 		//
-		// Example 1: Extract every 5 turns OR every 3 minutes (OR logic).
+		// Example 1: Extract when messages > 5 OR every 3 minutes (OR logic).
 		// extractor.WithCheckersAny(
-		//     extractor.CheckTurnThreshold(5),
+		//     extractor.CheckMessageThreshold(5),
 		//     extractor.CheckTimeInterval(3*time.Minute),
 		// ),
 		//
-		// Example 2: Extract every 10 turns AND every 5 minutes (AND logic).
-		// extractor.WithChecker(extractor.CheckTurnThreshold(10)),
+		// Example 2: Extract when messages > 10 AND every 5 minutes (AND logic).
+		// extractor.WithChecker(extractor.CheckMessageThreshold(10)),
 		// extractor.WithChecker(extractor.CheckTimeInterval(5*time.Minute)),
 	)
 

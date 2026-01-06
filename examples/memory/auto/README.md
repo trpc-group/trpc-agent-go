@@ -90,7 +90,7 @@ Checkers control when memory extraction should be triggered. By default, extract
 
 | Checker                | Description                                              | Example                                     |
 | ---------------------- | -------------------------------------------------------- | ------------------------------------------- |
-| `CheckTurnThreshold`   | Triggers when total turns reach threshold                | `CheckTurnThreshold(5)` - every 5 turns     |
+| `CheckMessageThreshold`| Triggers when accumulated messages exceed threshold      | `CheckMessageThreshold(5)` - when messages > 5 |
 | `CheckTimeInterval`    | Triggers when time since last extraction exceeds interval | `CheckTimeInterval(3*time.Minute)` - every 3 min |
 | `ChecksAll`            | Combines checkers with AND logic                         | All checkers must pass                      |
 | `ChecksAny`            | Combines checkers with OR logic                          | Any checker passing triggers extraction     |
@@ -98,26 +98,26 @@ Checkers control when memory extraction should be triggered. By default, extract
 #### Checker Configuration Examples
 
 ```go
-// Example 1: Extract every 5 turns OR every 3 minutes (OR logic).
+// Example 1: Extract when messages > 5 OR every 3 minutes (OR logic).
 memExtractor := extractor.NewExtractor(
     extractorModel,
     extractor.WithCheckersAny(
-        extractor.CheckTurnThreshold(5),
+        extractor.CheckMessageThreshold(5),
         extractor.CheckTimeInterval(3*time.Minute),
     ),
 )
 
-// Example 2: Extract every 10 turns AND every 5 minutes (AND logic).
+// Example 2: Extract when messages > 10 AND every 5 minutes (AND logic).
 memExtractor := extractor.NewExtractor(
     extractorModel,
-    extractor.WithChecker(extractor.CheckTurnThreshold(10)),
+    extractor.WithChecker(extractor.CheckMessageThreshold(10)),
     extractor.WithChecker(extractor.CheckTimeInterval(5*time.Minute)),
 )
 
 memExtractor := extractor.NewExtractor(
     extractorModel,
     extractor.WithChecker(customChecker),
-    extractor.WithChecker(extractor.CheckTurnThreshold(10)),
+    extractor.WithChecker(extractor.CheckMessageThreshold(10)),
 )
 ```
 
@@ -129,7 +129,6 @@ The `ExtractionContext` provides information for checker decisions:
 type ExtractionContext struct {
     UserKey       memory.UserKey  // User identifier.
     Messages      []model.Message // Accumulated messages since last extraction.
-    TotalTurns    int             // Total conversation turns since process start.
     LastExtractAt *time.Time      // Last extraction timestamp, nil if never extracted.
 }
 ```
