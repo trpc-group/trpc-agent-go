@@ -237,3 +237,4 @@ func TestBuildReaderOptions(t *testing.T) {
 		require.Len(t, opts, 1)
 	})
 }
+

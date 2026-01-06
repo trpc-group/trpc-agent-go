@@ -6,8 +6,8 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package knowledge provides internal utilities for knowledge management.
-package knowledge
+// Package vectorstore provides internal utilities for vector store operations.
+package vectorstore
 
 import "math"
 
@@ -166,3 +166,5 @@ func InvertScores(scores []float64) []float64 {
 	}
 	return result
 }
+
+

@@ -73,3 +73,31 @@ func WithOCRExtractor(extractor ocr.Extractor) Option {
 		s.ocrExtractor = extractor
 	}
 }
+
+// WithContentFilter sets characters to be removed from document content before chunking.
+// This is a convenience function that creates a CharFilter preprocessor.
+// This option will be passed to all sub-sources when auto-detecting the source type.
+//
+// Example:
+//
+//	source := auto.New(inputs, auto.WithContentFilter("\n", "\t", "\r"))
+func WithContentFilter(charsToRemove ...string) Option {
+	return func(s *Source) {
+		s.contentFilterChars = append(s.contentFilterChars, charsToRemove...)
+	}
+}
+
+// WithContentDedup collapses consecutive repeated characters into a single occurrence.
+// For example, "\t\t\t\t" becomes "\t", "   " becomes " ".
+// This option will be passed to all sub-sources when auto-detecting the source type.
+//
+// Example:
+//
+//	source := auto.New(inputs, auto.WithContentDedup("\t", " ", "\n"))
+//	// Input:  "hello\t\t\tworld   foo\n\n\nbar"
+//	// Output: "hello\tworld foo\nbar"
+func WithContentDedup(charsToDedup ...string) Option {
+	return func(s *Source) {
+		s.contentDedupChars = append(s.contentDedupChars, charsToDedup...)
+	}
+}

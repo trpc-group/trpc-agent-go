@@ -25,6 +25,7 @@ import (
 	pdfcpuAPI "github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
+	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/knowledge/document/internal/document"
@@ -47,6 +48,7 @@ type Reader struct {
 	chunk            bool
 	chunkingStrategy chunking.Strategy
 	ocrExtractor     ocr.Extractor
+	preProcessors    []processor.PreProcessor
 }
 
 // New creates a new PDF reader with the given options.
@@ -69,6 +71,7 @@ func New(opts ...reader.Option) reader.Reader {
 		chunk:            config.Chunk,
 		chunkingStrategy: strategy,
 		ocrExtractor:     config.OCRExtractor,
+		preProcessors:    config.PreProcessors,
 	}
 }
 
@@ -208,6 +211,14 @@ func (r *Reader) readFromFileTextOnly(filePath, name string) ([]*document.Docume
 	}
 
 	doc := idocument.CreateDocument(text, name)
+
+	// Apply preprocessors.
+	doc, err = processor.ApplyPreProcessors(doc, r.preProcessors...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply preprocessors: %w", err)
+	}
+
+	// Apply chunking if enabled.
 	if r.chunk {
 		return r.chunkDocument(doc)
 	}
@@ -250,6 +261,14 @@ func (r *Reader) extractTextFromReader(reader io.Reader, name string) ([]*docume
 	}
 
 	doc := idocument.CreateDocument(text, name)
+
+	// Apply preprocessors.
+	doc, err = processor.ApplyPreProcessors(doc, r.preProcessors...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply preprocessors: %w", err)
+	}
+
+	// Apply chunking if enabled.
 	if r.chunk {
 		return r.chunkDocument(doc)
 	}
@@ -275,6 +294,14 @@ func (r *Reader) readFromReaderWithOCR(ctx context.Context, readSeeker io.ReadSe
 	}
 
 	doc := idocument.CreateDocument(allText.String(), name)
+
+	// Apply preprocessors.
+	doc, err = processor.ApplyPreProcessors(doc, r.preProcessors...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply preprocessors: %w", err)
+	}
+
+	// Apply chunking if enabled.
 	if r.chunk {
 		return r.chunkDocument(doc)
 	}

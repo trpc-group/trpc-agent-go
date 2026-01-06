@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
@@ -30,6 +31,7 @@ type ReaderConfig struct {
 	chunkOverlap           int
 	customChunkingStrategy chunking.Strategy
 	ocrExtractor           ocr.Extractor
+	preProcessors          []processor.PreProcessor
 }
 
 // ReaderOption is a functional option for configuring readers.
@@ -63,6 +65,13 @@ func WithOCRExtractor(extractor ocr.Extractor) ReaderOption {
 	}
 }
 
+// WithPreProcessors sets the preprocessors for document processing.
+func WithPreProcessors(processors ...processor.PreProcessor) ReaderOption {
+	return func(c *ReaderConfig) {
+		c.preProcessors = processors
+	}
+}
+
 // GetReaders returns all available readers configured with the given options.
 func GetReaders(opts ...ReaderOption) map[string]reader.Reader {
 	config := &ReaderConfig{}
@@ -81,7 +90,7 @@ func GetReaders(opts ...ReaderOption) map[string]reader.Reader {
 func buildReaderOptions(config *ReaderConfig) []reader.Option {
 	var opts []reader.Option
 
-	// Pass all configurations to readers, let reader layer handle priority
+	// Pass chunking configurations to readers
 	if config.chunkSize > 0 {
 		opts = append(opts, reader.WithChunkSize(config.chunkSize))
 	}
@@ -91,8 +100,13 @@ func buildReaderOptions(config *ReaderConfig) []reader.Option {
 	if config.customChunkingStrategy != nil {
 		opts = append(opts, reader.WithCustomChunkingStrategy(config.customChunkingStrategy))
 	}
+
 	if config.ocrExtractor != nil {
 		opts = append(opts, reader.WithOCRExtractor(config.ocrExtractor))
+	}
+
+	if len(config.preProcessors) > 0 {
+		opts = append(opts, reader.WithPreProcessors(config.preProcessors...))
 	}
 
 	return opts
@@ -167,3 +181,4 @@ func GetFileTypeFromContentType(contentType, fileName string) string {
 func GetReadersWithChunkConfig(chunkSize, overlap int) map[string]reader.Reader {
 	return GetReaders(WithChunkSize(chunkSize), WithChunkOverlap(overlap))
 }
+

@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/gonfva/docxlib"
+	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/knowledge/document/internal/document"
@@ -40,6 +41,7 @@ func init() {
 type Reader struct {
 	chunk            bool
 	chunkingStrategy chunking.Strategy
+	preProcessors    []processor.PreProcessor
 }
 
 // New creates a new DOCX reader with the given options.
@@ -60,6 +62,7 @@ func New(opts ...reader.Option) reader.Reader {
 	return &Reader{
 		chunk:            config.Chunk,
 		chunkingStrategy: strategy,
+		preProcessors:    config.PreProcessors,
 	}
 }
 
@@ -112,6 +115,13 @@ func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
 
 	// Create document.
 	docResult := idocument.CreateDocument(textContent, fileName)
+
+	// Apply preprocessors.
+	docResult, err = processor.ApplyPreProcessors(docResult, r.preProcessors...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply preprocessors: %w", err)
+	}
+
 	// Apply chunking if enabled.
 	if r.chunk {
 		return r.chunkDocument(docResult)
@@ -142,9 +152,9 @@ func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
 }
 
 // readFromReader reads DOCX content from an io.Reader and returns a list of documents.
-func (r *Reader) readFromReader(reader io.Reader, name string) ([]*document.Document, error) {
+func (r *Reader) readFromReader(rd io.Reader, name string) ([]*document.Document, error) {
 	// Read all data from the reader.
-	data, err := io.ReadAll(reader)
+	data, err := io.ReadAll(rd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
@@ -187,6 +197,13 @@ func (r *Reader) readFromReader(reader io.Reader, name string) ([]*document.Docu
 
 	// Create document.
 	docResult := idocument.CreateDocument(textContent, name)
+
+	// Apply preprocessors.
+	docResult, err = processor.ApplyPreProcessors(docResult, r.preProcessors...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply preprocessors: %w", err)
+	}
+
 	// Apply chunking if enabled.
 	if r.chunk {
 		return r.chunkDocument(docResult)

@@ -19,6 +19,8 @@ import (
 	"os"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor/chardedup"
+	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor/charfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
@@ -44,6 +46,8 @@ type Source struct {
 	chunkOverlap           int
 	customChunkingStrategy chunking.Strategy
 	ocrExtractor           ocr.Extractor
+	contentFilterChars     []string
+	contentDedupChars      []string
 }
 
 // New creates a new auto knowledge source.
@@ -79,6 +83,12 @@ func (s *Source) initializeReaders() {
 	}
 	if s.customChunkingStrategy != nil {
 		opts = append(opts, reader.WithCustomChunkingStrategy(s.customChunkingStrategy))
+	}
+	if len(s.contentFilterChars) > 0 {
+		opts = append(opts, reader.WithPreProcessors(charfilter.New(s.contentFilterChars...)))
+	}
+	if len(s.contentDedupChars) > 0 {
+		opts = append(opts, reader.WithPreProcessors(chardedup.New(s.contentDedupChars...)))
 	}
 
 	s.textReader = text.New(opts...)
@@ -148,11 +158,17 @@ func (s *Source) isFile(input string) bool {
 
 // processAsURL processes the input as a URL.
 func (s *Source) processAsURL(ctx context.Context, input string) ([]*document.Document, error) {
-	urlSource := urlsource.New(
-		[]string{input},
-		urlsource.WithChunkSize(s.chunkSize),
-		urlsource.WithChunkOverlap(s.chunkOverlap),
-	)
+	var opts []urlsource.Option
+	opts = append(opts, urlsource.WithChunkSize(s.chunkSize))
+	opts = append(opts, urlsource.WithChunkOverlap(s.chunkOverlap))
+	if len(s.contentFilterChars) > 0 {
+		opts = append(opts, urlsource.WithContentFilter(s.contentFilterChars...))
+	}
+	if len(s.contentDedupChars) > 0 {
+		opts = append(opts, urlsource.WithContentDedup(s.contentDedupChars...))
+	}
+
+	urlSource := urlsource.New([]string{input}, opts...)
 	// Copy metadata.
 	for k, v := range s.metadata {
 		urlSource.SetMetadata(k, v)
@@ -179,6 +195,12 @@ func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*docum
 
 	if s.ocrExtractor != nil {
 		opts = append(opts, dirsource.WithOCRExtractor(s.ocrExtractor))
+	}
+	if len(s.contentFilterChars) > 0 {
+		opts = append(opts, dirsource.WithContentFilter(s.contentFilterChars...))
+	}
+	if len(s.contentDedupChars) > 0 {
+		opts = append(opts, dirsource.WithContentDedup(s.contentDedupChars...))
 	}
 	dirSource := dirsource.New([]string{input}, opts...)
 	// Copy metadata.
@@ -207,6 +229,12 @@ func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.D
 
 	if s.ocrExtractor != nil {
 		opts = append(opts, filesource.WithOCRExtractor(s.ocrExtractor))
+	}
+	if len(s.contentFilterChars) > 0 {
+		opts = append(opts, filesource.WithContentFilter(s.contentFilterChars...))
+	}
+	if len(s.contentDedupChars) > 0 {
+		opts = append(opts, filesource.WithContentDedup(s.contentDedupChars...))
 	}
 	fileSource := filesource.New([]string{input}, opts...)
 

@@ -11,6 +11,8 @@
 package dir
 
 import (
+	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor/chardedup"
+	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor/charfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 )
@@ -85,5 +87,35 @@ func WithChunkOverlap(overlap int) Option {
 func WithOCRExtractor(extractor ocr.Extractor) Option {
 	return func(s *Source) {
 		s.ocrExtractor = extractor
+	}
+}
+
+// WithContentFilter sets characters to be removed from document content before chunking.
+// This is a convenience function that creates a CharFilter preprocessor.
+//
+// Example:
+//
+//	source := dir.New(paths, dir.WithContentFilter("\n", "\t", "\r"))
+func WithContentFilter(charsToRemove ...string) Option {
+	return func(s *Source) {
+		if len(charsToRemove) > 0 {
+			s.preProcessors = append(s.preProcessors, charfilter.New(charsToRemove...))
+		}
+	}
+}
+
+// WithContentDedup collapses consecutive repeated characters into a single occurrence.
+// For example, "\t\t\t\t" becomes "\t", "   " becomes " ".
+//
+// Example:
+//
+//	source := dir.New(paths, dir.WithContentDedup("\t", " ", "\n"))
+//	// Input:  "hello\t\t\tworld   foo\n\n\nbar"
+//	// Output: "hello\tworld foo\nbar"
+func WithContentDedup(charsToDedup ...string) Option {
+	return func(s *Source) {
+		if len(charsToDedup) > 0 {
+			s.preProcessors = append(s.preProcessors, chardedup.New(charsToDedup...))
+		}
 	}
 }

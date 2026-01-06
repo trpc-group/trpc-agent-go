@@ -17,12 +17,13 @@ import (
 	"os"
 	"path/filepath"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor"
+	isource "trpc.group/trpc-go/trpc-agent-go/internal/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
-	isource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/internal/source"
 )
 
 const (
@@ -39,6 +40,7 @@ type Source struct {
 	chunkOverlap           int
 	customChunkingStrategy chunking.Strategy
 	ocrExtractor           ocr.Extractor
+	preProcessors          []processor.PreProcessor
 }
 
 // New creates a new file knowledge source.
@@ -69,6 +71,9 @@ func New(filePaths []string, opts ...Option) *Source {
 	}
 	if s.ocrExtractor != nil {
 		readerOpts = append(readerOpts, isource.WithOCRExtractor(s.ocrExtractor))
+	}
+	if len(s.preProcessors) > 0 {
+		readerOpts = append(readerOpts, isource.WithPreProcessors(s.preProcessors...))
 	}
 
 	// Initialize readers with configuration

@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/knowledge/document/internal/document"
@@ -39,6 +40,7 @@ func init() {
 type Reader struct {
 	chunk            bool
 	chunkingStrategy chunking.Strategy
+	preProcessors    []processor.PreProcessor
 }
 
 // New creates a new text reader with the given options.
@@ -59,6 +61,7 @@ func New(opts ...reader.Option) reader.Reader {
 	return &Reader{
 		chunk:            config.Chunk,
 		chunkingStrategy: strategy,
+		preProcessors:    config.PreProcessors,
 	}
 }
 
@@ -76,15 +79,21 @@ func buildDefaultChunkingStrategy(chunkSize, overlap int) chunking.Strategy {
 }
 
 // ReadFromReader reads text content from an io.Reader and returns a list of documents.
-func (r *Reader) ReadFromReader(name string, reader io.Reader) ([]*document.Document, error) {
+func (r *Reader) ReadFromReader(name string, rd io.Reader) ([]*document.Document, error) {
 	// Read content from reader.
-	content, err := io.ReadAll(reader)
+	content, err := io.ReadAll(rd)
 	if err != nil {
 		return nil, err
 	}
 
 	// Create document.
 	doc := idocument.CreateDocument(string(content), name)
+
+	// Apply preprocessors.
+	doc, err = processor.ApplyPreProcessors(doc, r.preProcessors...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply preprocessors: %w", err)
+	}
 
 	// Apply chunking if enabled.
 	if r.chunk {
@@ -107,6 +116,12 @@ func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
 
 	// Create document.
 	doc := idocument.CreateDocument(string(content), fileName)
+
+	// Apply preprocessors.
+	doc, err = processor.ApplyPreProcessors(doc, r.preProcessors...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply preprocessors: %w", err)
+	}
 
 	// Apply chunking if enabled.
 	if r.chunk {
