@@ -1215,17 +1215,17 @@ llmAgent := llmagent.New(
     llmagent.WithModel(model),
     llmagent.WithTools(memoryService.Tools()),
     // 预加载选项：
-    // llmagent.WithPreloadMemory(-1),  // 加载全部（默认）。
+    // llmagent.WithPreloadMemory(0),   // 禁用预加载（默认）。
+    // llmagent.WithPreloadMemory(10),  // 加载最近 10 条（推荐用于生产环境）。
+    // llmagent.WithPreloadMemory(-1),  // 加载全部。
     //                                  // ⚠️ 警告：全量加载可能显著增加 token 使用量和 API 成本，
     //                                  //     特别是对于存储了大量记忆的用户。生产环境建议使用正数限制。
-    // llmagent.WithPreloadMemory(0),   // 禁用预加载。
-    // llmagent.WithPreloadMemory(10),  // 加载最近 10 条（推荐用于生产环境）。
 )
 ```
 
 启用预加载后，记忆会自动注入到系统提示词中，让 Agent 无需显式工具调用就能获得用户上下文。
 
-**⚠️ 重要提示**：默认配置（`-1`）会加载所有记忆，这可能会增加**Token 使用量**和**API 成本**。
+**⚠️ 重要提示**：配置为 `-1` 会加载所有记忆，这可能会显著增加**Token 使用量**和**API 成本**。默认情况下预加载是禁用的（`0`），推荐使用正数限制（如 `10-50`）来平衡性能和成本。
 
 ### 混合方案
 

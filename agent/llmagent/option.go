@@ -28,16 +28,6 @@ import (
 const (
 	defaultChannelBufferSize = 256
 
-	// defaultPreloadMemory is the default value for PreloadMemory.
-	// PreloadMemory configuration values:
-	//   - 0: Disable preloading (use tools instead).
-	//   - N > 0: Load the most recent N memories.
-	//   - -1 (default): Load all memories.
-	//     WARNING: Loading all memories may significantly increase token usage
-	//     and API costs, especially for users with many stored memories.
-	//     Consider using a positive limit (e.g., 10-50) for production use.
-	defaultPreloadMemory = -1
-
 	// defaultModelName is the model name used when only WithModel is set
 	// without WithModels.
 	defaultModelName = "__default__"
@@ -98,8 +88,15 @@ var (
 		// that downstream agents see a consolidated user message stream unless
 		// explicitly opted into preserving assistant/tool roles.
 		PreserveSameBranch: false,
-		// Default to preload all memories.
-		PreloadMemory: defaultPreloadMemory,
+		// Default to disable memory preloading (use tools instead).
+		// PreloadMemory configuration values:
+		//   - 0 (default): Disable preloading (use tools instead).
+		//   - N > 0: Load the most recent N memories.
+		//   - -1: Load all memories.
+		//     WARNING: Loading all memories may significantly increase token usage
+		//     and API costs, especially for users with many stored memories.
+		//     Consider using a positive limit (e.g., 10-50) for production use.
+		PreloadMemory: 0,
 	}
 )
 
@@ -248,8 +245,8 @@ type Options struct {
 
 	// PreloadMemory sets the number of memories to preload into system prompt.
 	// When > 0, the specified number of most recent memories are loaded.
-	// When 0, no memories are preloaded (use tools instead).
-	// When < 0 (default), all memories are loaded.
+	// When 0 (default), no memories are preloaded (use tools instead).
+	// When < 0, all memories are loaded.
 	PreloadMemory int
 }
 
@@ -696,12 +693,12 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 }
 
 // WithPreloadMemory sets the number of memories to preload into system prompt.
-//   - Set to 0 to disable preloading (use tools instead).
-//   - Set to -1 (default) to load all memories.
+//   - Set to 0 (default) to disable preloading (use tools instead).
+//   - Set to N (N > 0) to load the most recent N memories.
+//   - Set to -1 to load all memories.
 //     WARNING: Loading all memories may significantly increase token usage
 //     and API costs, especially for users with many stored memories.
 //     Consider using a positive limit (e.g., 10-50) for production use.
-//   - Set to N (N > 0) to load the most recent N memories.
 func WithPreloadMemory(limit int) Option {
 	return func(opts *Options) {
 		opts.PreloadMemory = limit

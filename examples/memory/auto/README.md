@@ -265,7 +265,7 @@ In subsequent conversations, the agent can search these memories to provide pers
 
 ## Memory Preloading
 
-By default, memories are preloaded into the system prompt. This means the agent has context about the user without needing to call `memory_search`:
+By default, memories are not preloaded into the system prompt. The agent uses tools to access memories when needed. You can enable preloading by configuring `WithPreloadMemory`:
 
 ```go
 llmAgent := llmagent.New(
@@ -273,9 +273,9 @@ llmAgent := llmagent.New(
     llmagent.WithModel(model),
     llmagent.WithTools(memoryService.Tools()),
     // Preload options:
-    // llmagent.WithPreloadMemory(-1),  // Load all (default).
-    // llmagent.WithPreloadMemory(0),   // Disable preloading.
+    // llmagent.WithPreloadMemory(0),   // Disable preloading (default).
     // llmagent.WithPreloadMemory(10),  // Load 10 most recent.
+    // llmagent.WithPreloadMemory(-1),  // Load all.
 )
 ```
 
