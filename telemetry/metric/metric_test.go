@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -21,6 +22,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
 // TestMetricsEndpoint validates metrics endpoint precedence rules.
@@ -349,6 +351,307 @@ func TestInitMeterProvider(t *testing.T) {
 	}
 	if itelemetry.ExecuteToolMetricGenAIClientOperationDuration == nil {
 		t.Error("ExecuteToolMetricGenAIClientOperationDuration was not created")
+	}
+}
+
+func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
+	originalMP := itelemetry.MeterProvider
+	origChatOpDur := itelemetry.ChatMetricGenAIClientOperationDuration
+	origChatTokenUsage := itelemetry.ChatMetricGenAIClientTokenUsage
+	origChatTTFT := itelemetry.ChatMetricGenAIServerTimeToFirstToken
+	origChatLegacyTTFT := itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken
+	origChatTimePerToken := itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken
+	origChatTokenPerTime := itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime
+	origExecOpDur := itelemetry.ExecuteToolMetricGenAIClientOperationDuration
+	origInvokeTTFT := itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken
+	origInvokeTokenUsage := itelemetry.InvokeAgentMetricGenAIClientTokenUsage
+	origInvokeOpDur := itelemetry.InvokeAgentMetricGenAIClientOperationDuration
+	defer func() {
+		itelemetry.MeterProvider = originalMP
+		itelemetry.ChatMetricGenAIClientOperationDuration = origChatOpDur
+		itelemetry.ChatMetricGenAIClientTokenUsage = origChatTokenUsage
+		itelemetry.ChatMetricGenAIServerTimeToFirstToken = origChatTTFT
+		itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = origChatLegacyTTFT
+		itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = origChatTimePerToken
+		itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = origChatTokenPerTime
+		itelemetry.ExecuteToolMetricGenAIClientOperationDuration = origExecOpDur
+		itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken = origInvokeTTFT
+		itelemetry.InvokeAgentMetricGenAIClientTokenUsage = origInvokeTokenUsage
+		itelemetry.InvokeAgentMetricGenAIClientOperationDuration = origInvokeOpDur
+	}()
+
+	reset := func(t *testing.T) {
+		t.Helper()
+		if err := InitMeterProvider(noop.NewMeterProvider()); err != nil {
+			t.Fatalf("InitMeterProvider failed: %v", err)
+		}
+	}
+
+	nilChatMetric := func(metricName string) func(t *testing.T) {
+		return func(t *testing.T) {
+			t.Helper()
+			switch metricName {
+			case metrics.MetricGenAIClientOperationDuration:
+				itelemetry.ChatMetricGenAIClientOperationDuration = nil
+			case metrics.MetricGenAIClientTokenUsage:
+				itelemetry.ChatMetricGenAIClientTokenUsage = nil
+			case metrics.MetricGenAIServerTimeToFirstToken:
+				itelemetry.ChatMetricGenAIServerTimeToFirstToken = nil
+			case metrics.MetricTRPCAgentGoClientTimeToFirstToken:
+				itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = nil
+			case metrics.MetricTRPCAgentGoClientTimePerOutputToken:
+				itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = nil
+			case metrics.MetricTRPCAgentGoClientOutputTokenPerTime:
+				itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = nil
+			}
+		}
+	}
+
+	nilExecuteToolMetric := func(metricName string) func(t *testing.T) {
+		return func(t *testing.T) {
+			t.Helper()
+			switch metricName {
+			case metrics.MetricGenAIClientOperationDuration:
+				itelemetry.ExecuteToolMetricGenAIClientOperationDuration = nil
+			}
+		}
+	}
+
+	nilInvokeAgentMetric := func(metricName string) func(t *testing.T) {
+		return func(t *testing.T) {
+			t.Helper()
+			switch metricName {
+			case metrics.MetricTRPCAgentGoClientTimeToFirstToken:
+				itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken = nil
+			case metrics.MetricGenAIClientTokenUsage:
+				itelemetry.InvokeAgentMetricGenAIClientTokenUsage = nil
+			case metrics.MetricGenAIClientOperationDuration:
+				itelemetry.InvokeAgentMetricGenAIClientOperationDuration = nil
+			}
+		}
+	}
+
+	tests := []struct {
+		name        string
+		meterName   string
+		metricName  string
+		boundaries  []float64
+		before      func(t *testing.T)
+		wantErr     bool
+		errContains string
+	}{
+		// --- Chat success cases (cover every switch branch) ---
+		{
+			name:       "chat: operation duration",
+			meterName:  metrics.MeterNameChat,
+			metricName: metrics.MetricGenAIClientOperationDuration,
+			boundaries: []float64{0.1, 1, 10},
+		},
+		{
+			name:       "chat: token usage",
+			meterName:  metrics.MeterNameChat,
+			metricName: metrics.MetricGenAIClientTokenUsage,
+			boundaries: []float64{1, 2, 4},
+		},
+		{
+			name:       "chat: server time to first token",
+			meterName:  metrics.MeterNameChat,
+			metricName: metrics.MetricGenAIServerTimeToFirstToken,
+			boundaries: []float64{0.01, 0.1, 1},
+		},
+		{
+			name:       "chat: legacy time to first token",
+			meterName:  metrics.MeterNameChat,
+			metricName: metrics.MetricTRPCAgentGoClientTimeToFirstToken,
+			boundaries: []float64{0.01, 0.1, 1},
+		},
+		{
+			name:       "chat: time per output token",
+			meterName:  metrics.MeterNameChat,
+			metricName: metrics.MetricTRPCAgentGoClientTimePerOutputToken,
+			boundaries: []float64{0.001, 0.01, 0.1},
+		},
+		{
+			name:       "chat: output token per time",
+			meterName:  metrics.MeterNameChat,
+			metricName: metrics.MetricTRPCAgentGoClientOutputTokenPerTime,
+			boundaries: []float64{1, 10, 100},
+		},
+		// --- Execute-tool success ---
+		{
+			name:       "execute-tool: operation duration",
+			meterName:  metrics.MeterNameExecuteTool,
+			metricName: metrics.MetricGenAIClientOperationDuration,
+			boundaries: []float64{0.1, 1, 10},
+		},
+		// --- Invoke-agent success cases (cover every switch branch) ---
+		{
+			name:       "invoke-agent: time to first token",
+			meterName:  metrics.MeterNameInvokeAgent,
+			metricName: metrics.MetricTRPCAgentGoClientTimeToFirstToken,
+			boundaries: []float64{0.01, 0.1, 1},
+		},
+		{
+			name:       "invoke-agent: token usage",
+			meterName:  metrics.MeterNameInvokeAgent,
+			metricName: metrics.MetricGenAIClientTokenUsage,
+			boundaries: []float64{1, 2, 4},
+		},
+		{
+			name:       "invoke-agent: operation duration",
+			meterName:  metrics.MeterNameInvokeAgent,
+			metricName: metrics.MetricGenAIClientOperationDuration,
+			boundaries: []float64{0.1, 1, 10},
+		},
+
+		// --- Default/unsupported branches ---
+		{
+			name:        "unknown meter name",
+			meterName:   "unknown-meter",
+			metricName:  metrics.MetricGenAIClientTokenUsage,
+			boundaries:  []float64{1},
+			wantErr:     true,
+			errContains: "unknown or unsupported meter name",
+		},
+		{
+			name:        "unsupported chat metric",
+			meterName:   metrics.MeterNameChat,
+			metricName:  "unknown.metric",
+			boundaries:  []float64{1},
+			wantErr:     true,
+			errContains: "unknown or unsupported chat histogram metric",
+		},
+		{
+			name:        "unsupported execute-tool metric",
+			meterName:   metrics.MeterNameExecuteTool,
+			metricName:  metrics.MetricGenAIClientTokenUsage,
+			boundaries:  []float64{1},
+			wantErr:     true,
+			errContains: "unknown or unsupported execute tool histogram metric",
+		},
+		{
+			name:        "unsupported invoke-agent metric",
+			meterName:   metrics.MeterNameInvokeAgent,
+			metricName:  "unknown.metric",
+			boundaries:  []float64{1},
+			wantErr:     true,
+			errContains: "unknown or unsupported invoke agent histogram metric",
+		},
+
+		// --- Not initialized guards for every branch ---
+		{
+			name:        "chat operation duration not initialized",
+			meterName:   metrics.MeterNameChat,
+			metricName:  metrics.MetricGenAIClientOperationDuration,
+			boundaries:  []float64{1},
+			before:      nilChatMetric(metrics.MetricGenAIClientOperationDuration),
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+		{
+			name:        "chat token usage not initialized",
+			meterName:   metrics.MeterNameChat,
+			metricName:  metrics.MetricGenAIClientTokenUsage,
+			boundaries:  []float64{1},
+			before:      nilChatMetric(metrics.MetricGenAIClientTokenUsage),
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+		{
+			name:        "chat server time to first token not initialized",
+			meterName:   metrics.MeterNameChat,
+			metricName:  metrics.MetricGenAIServerTimeToFirstToken,
+			boundaries:  []float64{1},
+			before:      nilChatMetric(metrics.MetricGenAIServerTimeToFirstToken),
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+		{
+			name:        "chat legacy time to first token not initialized",
+			meterName:   metrics.MeterNameChat,
+			metricName:  metrics.MetricTRPCAgentGoClientTimeToFirstToken,
+			boundaries:  []float64{1},
+			before:      nilChatMetric(metrics.MetricTRPCAgentGoClientTimeToFirstToken),
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+		{
+			name:        "chat time per output token not initialized",
+			meterName:   metrics.MeterNameChat,
+			metricName:  metrics.MetricTRPCAgentGoClientTimePerOutputToken,
+			boundaries:  []float64{1},
+			before:      nilChatMetric(metrics.MetricTRPCAgentGoClientTimePerOutputToken),
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+		{
+			name:        "chat output token per time not initialized",
+			meterName:   metrics.MeterNameChat,
+			metricName:  metrics.MetricTRPCAgentGoClientOutputTokenPerTime,
+			boundaries:  []float64{1},
+			before:      nilChatMetric(metrics.MetricTRPCAgentGoClientOutputTokenPerTime),
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+		{
+			name:        "execute-tool operation duration not initialized",
+			meterName:   metrics.MeterNameExecuteTool,
+			metricName:  metrics.MetricGenAIClientOperationDuration,
+			boundaries:  []float64{1},
+			before:      nilExecuteToolMetric(metrics.MetricGenAIClientOperationDuration),
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+		{
+			name:        "invoke-agent time to first token not initialized",
+			meterName:   metrics.MeterNameInvokeAgent,
+			metricName:  metrics.MetricTRPCAgentGoClientTimeToFirstToken,
+			boundaries:  []float64{1},
+			before:      nilInvokeAgentMetric(metrics.MetricTRPCAgentGoClientTimeToFirstToken),
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+		{
+			name:        "invoke-agent token usage not initialized",
+			meterName:   metrics.MeterNameInvokeAgent,
+			metricName:  metrics.MetricGenAIClientTokenUsage,
+			boundaries:  []float64{1},
+			before:      nilInvokeAgentMetric(metrics.MetricGenAIClientTokenUsage),
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+		{
+			name:        "invoke-agent operation duration not initialized",
+			meterName:   metrics.MeterNameInvokeAgent,
+			metricName:  metrics.MetricGenAIClientOperationDuration,
+			boundaries:  []float64{1},
+			before:      nilInvokeAgentMetric(metrics.MetricGenAIClientOperationDuration),
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reset(t)
+			if tt.before != nil {
+				tt.before(t)
+			}
+
+			err := SetHistogramBuckets(tt.meterName, tt.metricName, tt.boundaries)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("expected error to contain %q, got %q", tt.errContains, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
