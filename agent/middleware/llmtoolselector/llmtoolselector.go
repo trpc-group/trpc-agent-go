@@ -44,9 +44,7 @@ func New(opts ...Option) *LLMToolSelector {
 		systemPrompt: defaultSystemPrompt,
 	}
 	for _, opt := range opts {
-		if opt != nil {
-			opt(s)
-		}
+		opt(s)
 	}
 	return s
 }
@@ -58,11 +56,7 @@ func WithModel(m model.Model) Option {
 
 // WithSystemPrompt sets the system prompt used for tool selection.
 func WithSystemPrompt(prompt string) Option {
-	return func(s *LLMToolSelector) {
-		if prompt != "" {
-			s.systemPrompt = prompt
-		}
-	}
+	return func(s *LLMToolSelector) { s.systemPrompt = prompt }
 }
 
 // WithMaxTools sets the maximum number of tools to select.
@@ -71,11 +65,11 @@ func WithMaxTools(maxTools int) Option {
 	return func(s *LLMToolSelector) { s.maxTools = maxTools }
 }
 
-// WithAlwaysInclude sets tool names that are always included regardless of
+// WithAlwaysInclude adds tool names that are always included regardless of
 // selection. These do not count against `maxTools`.
 func WithAlwaysInclude(names ...string) Option {
 	return func(s *LLMToolSelector) {
-		s.alwaysInclude = append([]string(nil), names...)
+		s.alwaysInclude = append(s.alwaysInclude, names...)
 	}
 }
 

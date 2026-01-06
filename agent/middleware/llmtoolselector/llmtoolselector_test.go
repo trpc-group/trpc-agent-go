@@ -332,10 +332,12 @@ func TestLLMToolSelector_Callback_NilArgs_NoOp(t *testing.T) {
 	require.Nil(t, res)
 }
 
-func TestLLMToolSelector_WithSystemPrompt_EmptyDoesNotOverride(t *testing.T) {
-	var nilOpt Option
-	sel := New(nilOpt, WithSystemPrompt(""))
-	require.Equal(t, defaultSystemPrompt, sel.systemPrompt)
+func TestLLMToolSelector_WithSystemPrompt_EmptyDoesOverride(t *testing.T) {
+	sel0 := New()
+	require.Equal(t, defaultSystemPrompt, sel0.systemPrompt)
+
+	sel1 := New(WithSystemPrompt(""))
+	require.Empty(t, sel1.systemPrompt)
 
 	sel2 := New(WithSystemPrompt("custom"))
 	require.Equal(t, "custom", sel2.systemPrompt)
