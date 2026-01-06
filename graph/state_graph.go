@@ -1401,14 +1401,7 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 				})
 			}
 
-			b, err := json.Marshal(responses)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"failed to marshal tool node response: %w",
-					err,
-				)
-			}
-
+			b, _ := json.Marshal(responses)
 			upd[StateKeyNodeResponses] = map[string]any{
 				nodeID: string(b),
 			}
