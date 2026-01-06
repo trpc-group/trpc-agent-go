@@ -5108,3 +5108,277 @@ func TestAccumulatorWithFixedIndices(t *testing.T) {
 		assert.Equal(t, `{"arg": "value1"}{"arg": "value2"}`, acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
 	})
 }
+// TestModel_GenerateContent_StreamingExtraFields tests that ExtraFields (e.g., Gemini 3's thought_signature)
+// are correctly collected during streaming and passed through in the final response.
+func TestModel_GenerateContent_StreamingExtraFields(t *testing.T) {
+	tests := []struct {
+		name                 string
+		chunks               []string
+		expectedExtraContent string // Expected extra_content.google.thought_signature value
+		useIndex             bool   // Whether the chunk uses index instead of ID for ExtraFields
+	}{
+		{
+			name: "ExtraFields_with_ID",
+			chunks: []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gemini-3-pro","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gemini-3-pro","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc123","type":"function","function":{"name":"multiply","arguments":"{\"a\":83,\"b\":83}"},"extra_content":{"google":{"thought_signature":"sig_abc123"}}}]},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gemini-3-pro","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,
+			},
+			expectedExtraContent: "sig_abc123",
+			useIndex:             false,
+		},
+		{
+			name: "ExtraFields_with_index_only",
+			chunks: []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gemini-3-pro","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gemini-3-pro","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"type":"function","function":{"name":"multiply","arguments":"{\"a\":83,\"b\":83}"},"extra_content":{"google":{"thought_signature":"sig_index_1"}}}]},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gemini-3-pro","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,
+			},
+			expectedExtraContent: "sig_index_1",
+			useIndex:             true,
+		},
+		{
+			name: "Multiple_ToolCalls_with_ExtraFields",
+			chunks: []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gemini-3-pro","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gemini-3-pro","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_first","type":"function","function":{"name":"add","arguments":"{\"a\":1,\"b\":2}"},"extra_content":{"google":{"thought_signature":"sig_first"}}}]},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gemini-3-pro","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_second","type":"function","function":{"name":"multiply","arguments":"{\"a\":3,\"b\":4}"},"extra_content":{"google":{"thought_signature":"sig_second"}}}]},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gemini-3-pro","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,
+			},
+			expectedExtraContent: "sig_first", // Verify first tool call's extra content
+			useIndex:             false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+					http.Error(w, "not found", http.StatusNotFound)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Cache-Control", "no-cache")
+				w.Header().Set("Connection", "keep-alive")
+
+				for _, chunk := range tt.chunks {
+					fmt.Fprintf(w, "%s\n\n", chunk)
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+			}))
+			defer server.Close()
+
+			m := New("gemini-3-pro", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+			req := &model.Request{
+				Messages:         []model.Message{{Role: model.RoleUser, Content: "Calculate 83 * 83"}},
+				GenerationConfig: model.GenerationConfig{Stream: true},
+			}
+
+			ctx := context.Background()
+			responseChan, err := m.GenerateContent(ctx, req)
+			require.NoError(t, err)
+
+			var toolCallResponse *model.Response
+			for response := range responseChan {
+				require.Nil(t, response.Error)
+				if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
+					toolCallResponse = response
+				}
+			}
+
+			require.NotNil(t, toolCallResponse, "No tool calls found in response")
+
+			toolCalls := toolCallResponse.Choices[0].Message.ToolCalls
+			require.Greater(t, len(toolCalls), 0, "Expected at least one tool call")
+
+			// Verify ExtraFields were collected and passed through.
+			tc := toolCalls[0]
+			require.NotNil(t, tc.ExtraFields, "ExtraFields should not be nil")
+
+			extraContent, ok := tc.ExtraFields["extra_content"].(map[string]any)
+			require.True(t, ok, "extra_content should be a map")
+
+			google, ok := extraContent["google"].(map[string]any)
+			require.True(t, ok, "google should be a map")
+
+			sig, ok := google["thought_signature"].(string)
+			require.True(t, ok, "thought_signature should be a string")
+			assert.Equal(t, tt.expectedExtraContent, sig)
+
+			// For multiple tool calls test, verify second tool call too.
+			if tt.name == "Multiple_ToolCalls_with_ExtraFields" && len(toolCalls) >= 2 {
+				tc2 := toolCalls[1]
+				require.NotNil(t, tc2.ExtraFields, "Second tool call ExtraFields should not be nil")
+				extraContent2, ok := tc2.ExtraFields["extra_content"].(map[string]any)
+				require.True(t, ok)
+				google2, ok := extraContent2["google"].(map[string]any)
+				require.True(t, ok)
+				sig2, ok := google2["thought_signature"].(string)
+				require.True(t, ok)
+				assert.Equal(t, "sig_second", sig2)
+			}
+		})
+	}
+}
+
+func TestConvertExtraFields(t *testing.T) {
+	t.Run("returns nil when extraFields is nil", func(t *testing.T) {
+		result := convertExtraFields(nil)
+		assert.Nil(t, result)
+	})
+
+	t.Run("returns nil when extraFields is empty", func(t *testing.T) {
+		extraFields := make(map[string]respjson.Field)
+		result := convertExtraFields(extraFields)
+		assert.Nil(t, result)
+	})
+
+	t.Run("converts extra_content with thought_signature", func(t *testing.T) {
+		extraFields := parseToolCallExtraFields(t, `{
+			"id": "call_123",
+			"type": "function",
+			"function": {"name": "test", "arguments": "{}"},
+			"extra_content": {"google": {"thought_signature": "nested_sig_456"}}
+		}`)
+		result := convertExtraFields(extraFields)
+		require.NotNil(t, result)
+		extraContent, ok := result["extra_content"].(map[string]any)
+		require.True(t, ok)
+		google, ok := extraContent["google"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "nested_sig_456", google["thought_signature"])
+	})
+
+	t.Run("converts multiple extra fields", func(t *testing.T) {
+		extraFields := parseToolCallExtraFields(t, `{
+			"id": "call_123",
+			"type": "function",
+			"function": {"name": "test", "arguments": "{}"},
+			"custom_field": "custom_value",
+			"extra_content": {"google": {"thought_signature": "sig123"}}
+		}`)
+		result := convertExtraFields(extraFields)
+		require.NotNil(t, result)
+		assert.Equal(t, "custom_value", result["custom_field"])
+		extraContent, ok := result["extra_content"].(map[string]any)
+		require.True(t, ok)
+		google, ok := extraContent["google"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "sig123", google["thought_signature"])
+	})
+}
+
+// parseToolCallExtraFields parses a JSON string into a ChatCompletionMessageToolCall
+// and returns its ExtraFields. This allows testing with properly populated respjson.Field values.
+func parseToolCallExtraFields(t *testing.T, jsonStr string) map[string]respjson.Field {
+	t.Helper()
+	var toolCall openai.ChatCompletionMessageToolCall
+	err := json.Unmarshal([]byte(jsonStr), &toolCall)
+	require.NoError(t, err)
+	return toolCall.JSON.ExtraFields
+}
+
+// TestConvertToolCalls_ExtraFields tests that convertToolCalls
+// correctly handles ExtraFields for transparent passthrough.
+func TestConvertToolCalls_ExtraFields(t *testing.T) {
+	m := New("test-model")
+
+	t.Run("no extra_fields", func(t *testing.T) {
+		toolCalls := []model.ToolCall{
+			{
+				ID:   "call-1",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "test_func",
+					Arguments: []byte(`{"arg": "value"}`),
+				},
+			},
+		}
+
+		result := m.convertToolCalls(toolCalls)
+
+		require.Len(t, result, 1)
+		assert.Equal(t, "call-1", result[0].ID)
+		assert.Equal(t, "test_func", result[0].Function.Name)
+	})
+
+	t.Run("with extra_fields passes through", func(t *testing.T) {
+		toolCalls := []model.ToolCall{
+			{
+				ID:   "call-1",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "test_func",
+					Arguments: []byte(`{}`),
+				},
+				ExtraFields: map[string]any{
+					"extra_content": map[string]any{
+						"google": map[string]any{
+							"thought_signature": "sig123",
+						},
+					},
+				},
+			},
+		}
+
+		result := m.convertToolCalls(toolCalls)
+
+		require.Len(t, result, 1)
+		assert.Equal(t, "call-1", result[0].ID)
+	})
+
+	t.Run("multiple tool calls with and without extra_fields", func(t *testing.T) {
+		toolCalls := []model.ToolCall{
+			{
+				ID:   "call-1",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "func1",
+					Arguments: []byte(`{}`),
+				},
+				ExtraFields: map[string]any{
+					"extra_content": map[string]any{
+						"google": map[string]any{
+							"thought_signature": "sig1",
+						},
+					},
+				},
+			},
+			{
+				ID:   "call-2",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "func2",
+					Arguments: []byte(`{}`),
+				},
+				ExtraFields: map[string]any{
+					"extra_content": map[string]any{
+						"google": map[string]any{
+							"thought_signature": "sig2",
+						},
+					},
+				},
+			},
+			{
+				ID:   "call-3",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "func3",
+					Arguments: []byte(`{}`),
+				},
+				// No extra fields
+			},
+		}
+
+		result := m.convertToolCalls(toolCalls)
+
+		require.Len(t, result, 3)
+		assert.Equal(t, "call-1", result[0].ID)
+		assert.Equal(t, "call-2", result[1].ID)
+		assert.Equal(t, "call-3", result[2].ID)
+	})
+}
