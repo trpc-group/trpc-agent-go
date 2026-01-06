@@ -82,115 +82,179 @@ func WithAlwaysInclude(names ...string) Option {
 // Callback returns a BeforeModel callback that performs tool selection.
 func (s *LLMToolSelector) Callback() model.BeforeModelCallbackStructured {
 	return func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
-		if args == nil || args.Request == nil {
+		req := requestFromBeforeModelArgs(args)
+		if req == nil {
 			return nil, nil
 		}
-		if len(args.Request.Tools) == 0 {
+		if len(req.Tools) == 0 {
 			return nil, nil
 		}
-		if s.model == nil {
-			return nil, fmt.Errorf("LLMToolSelector: selection model is nil; set via WithModel")
+		if err := s.ensureSelectionModel(); err != nil {
+			return nil, err
 		}
 
-		baseTools := args.Request.Tools
-
-		// Validate always-include tools exist.
-		if len(s.alwaysInclude) > 0 {
-			missing := make([]string, 0)
-			for _, name := range s.alwaysInclude {
-				if _, ok := baseTools[name]; !ok {
-					missing = append(missing, name)
-				}
-			}
-			if len(missing) > 0 {
-				sort.Strings(missing)
-				available := make([]string, 0, len(baseTools))
-				for name := range baseTools {
-					available = append(available, name)
-				}
-				sort.Strings(available)
-				return nil, fmt.Errorf(
-					"LLMToolSelector: tools in always_include not found in request: %v; available tools: %v",
-					missing, available,
-				)
-			}
+		baseTools := req.Tools
+		if err := s.validateAlwaysIncludeToolsExist(baseTools); err != nil {
+			return nil, err
 		}
 
-		// Prepare candidate tools for selection (exclude always-include).
-		candidateNames := make([]string, 0, len(baseTools))
-		candidateTools := make(map[string]tool.Tool, len(baseTools))
-		always := make(map[string]bool, len(s.alwaysInclude))
-		for _, name := range s.alwaysInclude {
-			always[name] = true
-		}
-		for name, t := range baseTools {
-			if always[name] {
-				continue
-			}
-			candidateNames = append(candidateNames, name)
-			candidateTools[name] = t
-		}
-
-		// If no tools are available for selection, nothing to do.
+		candidateNames, candidateTools := s.buildCandidateTools(baseTools)
 		if len(candidateNames) == 0 {
+			// If no tools are available for selection, nothing to do.
 			return nil, nil
 		}
-		sort.Strings(candidateNames)
 
-		lastUser, ok := findLastUserMessage(args.Request.Messages)
-		if !ok {
-			return nil, fmt.Errorf("LLMToolSelector: no user message found in request messages")
-		}
-
-		systemMsg := s.systemPrompt
-		if s.maxTools > 0 {
-			systemMsg += fmt.Sprintf(
-				"\nIMPORTANT: List the tool names in order of relevance, with the most relevant first. "+
-					"If you exceed the maximum number of tools, only the first %d will be used.",
-				s.maxTools,
-			)
-		}
-		systemMsg += "\n\nAvailable tools:\n" + renderToolList(candidateTools, candidateNames)
-
-		selectionReq := &model.Request{
-			Messages: []model.Message{
-				model.NewSystemMessage(systemMsg),
-				lastUser,
-			},
-			GenerationConfig: model.GenerationConfig{
-				Stream: false,
-			},
-			StructuredOutput: &model.StructuredOutput{
-				Type: model.StructuredOutputJSONSchema,
-				JSONSchema: &model.JSONSchemaConfig{
-					Name:        "tool_selection",
-					Schema:      toolSelectionSchema(candidateNames),
-					Strict:      true,
-					Description: "Tools to use. Place the most relevant tools first.",
-				},
-			},
-		}
-
-		selectedNames, err := selectToolNames(ctx, s.model, selectionReq, candidateNames)
+		lastUser, err := lastUserMessage(req.Messages)
 		if err != nil {
 			return nil, err
 		}
 
-		if s.maxTools > 0 && len(selectedNames) > s.maxTools {
-			selectedNames = selectedNames[:s.maxTools]
+		selectionReq := s.buildSelectionRequest(lastUser, candidateTools, candidateNames)
+		selectedNames, err := selectToolNames(ctx, s.model, selectionReq, candidateNames)
+		if err != nil {
+			return nil, err
 		}
+		selectedNames = s.applyMaxTools(selectedNames)
 
 		// Rebuild request tools map.
-		newTools := make(map[string]tool.Tool, len(selectedNames)+len(s.alwaysInclude))
-		for _, name := range selectedNames {
-			newTools[name] = baseTools[name]
-		}
-		for _, name := range s.alwaysInclude {
-			newTools[name] = baseTools[name]
-		}
-		args.Request.Tools = newTools
+		req.Tools = s.buildSelectedTools(baseTools, selectedNames)
 		return nil, nil
 	}
+}
+
+func requestFromBeforeModelArgs(args *model.BeforeModelArgs) *model.Request {
+	if args == nil || args.Request == nil {
+		return nil
+	}
+	return args.Request
+}
+
+func (s *LLMToolSelector) ensureSelectionModel() error {
+	if s.model == nil {
+		return fmt.Errorf("LLMToolSelector: selection model is nil; set via WithModel")
+	}
+	return nil
+}
+
+func (s *LLMToolSelector) validateAlwaysIncludeToolsExist(baseTools map[string]tool.Tool) error {
+	if len(s.alwaysInclude) == 0 {
+		return nil
+	}
+
+	missing := make([]string, 0)
+	for _, name := range s.alwaysInclude {
+		if _, ok := baseTools[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	sort.Strings(missing)
+	available := sortedToolNames(baseTools)
+	return fmt.Errorf(
+		"LLMToolSelector: tools in always_include not found in request: %v; available tools: %v",
+		missing, available,
+	)
+}
+
+func sortedToolNames(tools map[string]tool.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for name := range tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (s *LLMToolSelector) buildCandidateTools(baseTools map[string]tool.Tool) ([]string, map[string]tool.Tool) {
+	// Prepare candidate tools for selection (exclude always-include).
+	candidateNames := make([]string, 0, len(baseTools))
+	candidateTools := make(map[string]tool.Tool, len(baseTools))
+
+	always := make(map[string]bool, len(s.alwaysInclude))
+	for _, name := range s.alwaysInclude {
+		always[name] = true
+	}
+
+	for name, t := range baseTools {
+		if always[name] {
+			continue
+		}
+		candidateNames = append(candidateNames, name)
+		candidateTools[name] = t
+	}
+	sort.Strings(candidateNames)
+	return candidateNames, candidateTools
+}
+
+func lastUserMessage(messages []model.Message) (model.Message, error) {
+	lastUser, ok := findLastUserMessage(messages)
+	if !ok {
+		return model.Message{}, fmt.Errorf("LLMToolSelector: no user message found in request messages")
+	}
+	return lastUser, nil
+}
+
+func (s *LLMToolSelector) buildSelectionRequest(
+	lastUser model.Message,
+	candidateTools map[string]tool.Tool,
+	candidateNames []string,
+) *model.Request {
+	systemMsg := s.buildSystemMessage(candidateTools, candidateNames)
+	return &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage(systemMsg),
+			lastUser,
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+		StructuredOutput: &model.StructuredOutput{
+			Type: model.StructuredOutputJSONSchema,
+			JSONSchema: &model.JSONSchemaConfig{
+				Name:        "tool_selection",
+				Schema:      toolSelectionSchema(candidateNames),
+				Strict:      true,
+				Description: "Tools to use. Place the most relevant tools first.",
+			},
+		},
+	}
+}
+
+func (s *LLMToolSelector) buildSystemMessage(candidateTools map[string]tool.Tool, candidateNames []string) string {
+	systemMsg := s.systemPrompt
+	if s.maxTools > 0 {
+		systemMsg += fmt.Sprintf(
+			"\nIMPORTANT: List the tool names in order of relevance, with the most relevant first. "+
+				"If you exceed the maximum number of tools, only the first %d will be used.",
+			s.maxTools,
+		)
+	}
+	systemMsg += "\n\nAvailable tools:\n" + renderToolList(candidateTools, candidateNames)
+	return systemMsg
+}
+
+func (s *LLMToolSelector) applyMaxTools(selectedNames []string) []string {
+	if s.maxTools > 0 && len(selectedNames) > s.maxTools {
+		return selectedNames[:s.maxTools]
+	}
+	return selectedNames
+}
+
+func (s *LLMToolSelector) buildSelectedTools(
+	baseTools map[string]tool.Tool,
+	selectedNames []string,
+) map[string]tool.Tool {
+	newTools := make(map[string]tool.Tool, len(selectedNames)+len(s.alwaysInclude))
+	for _, name := range selectedNames {
+		newTools[name] = baseTools[name]
+	}
+	for _, name := range s.alwaysInclude {
+		newTools[name] = baseTools[name]
+	}
+	return newTools
 }
 
 type toolSelectionResponse struct {
