@@ -27,19 +27,21 @@ interactions.
 
 Memory supports two modes for creating and managing memories. Choose based on your scenario:
 
+Auto Mode is available in versions >= 1.2.0 and is recommended as the default choice.
+
 | Aspect              | Agentic Mode (Tools)                           | Auto Mode (Extractor)                                     |
 | ------------------- | ---------------------------------------------- | --------------------------------------------------------- |
 | **How it works**    | Agent decides when to call memory tools        | System extracts memories automatically from conversations |
 | **User experience** | Visible - user sees tool calls                 | Transparent - memories created silently in background     |
 | **Control**         | Agent has full control over what to remember   | Extractor decides based on conversation analysis          |
-| **Available tools** | All 6 tools                                    | Search and clear tools (search, clear)                    |
+| **Available tools** | All 6 tools                                    | Search tool (search), optional load tool (load)                    |
 | **Processing**      | Synchronous - during response generation       | Asynchronous - background workers after response          |
 | **Best for**        | Precise control, user-driven memory management | Natural conversations, hands-off memory building          |
 
 **Selection Guide**:
 
 - **Agentic Mode**: Agent automatically decides when to call memory tools based on conversation content (e.g., when user mentions personal information or preferences), user sees tool calls, suitable for scenarios requiring precise control over memory content
-- **Auto Mode**: Natural conversation flow, system passively learns about users, simplified UX
+- **Auto Mode (>= 1.2.0, recommended)**: Natural conversation flow, system passively learns about users, simplified UX
 
 ## Core Values
 
@@ -115,7 +117,7 @@ export OPENAI_API_KEY="your-openai-api-key"
 export OPENAI_BASE_URL="your-openai-base-url"
 ```
 
-### Agentic Mode Configuration (Default)
+### Agentic Mode Configuration (Optional)
 
 In Agentic mode, the Agent automatically decides when to call memory tools
 based on conversation content to manage memories. Configuration involves three steps:
@@ -191,7 +193,7 @@ Agent: Nice to meet you, Alice! I'll remember that you work at TechCorp.
 Agent: I've saved that information. How can I help you today?
 ```
 
-### Auto Mode Configuration
+### Auto Mode Configuration (>= 1.2.0, Recommended)
 
 In Auto mode, an LLM-based extractor analyzes conversations and automatically
 creates memories. **The only difference from Agentic mode is in Step 1: add an Extractor**.
@@ -229,13 +231,14 @@ func main() {
     defer memoryService.Close()
 
     // Step 2: Create Agent and register memory tools.
-    // Note: With Extractor configured, only search and clear tools are available.
+    // Note: With Extractor configured, Tools() exposes Search by default.
+    // Load can be enabled explicitly.
     chatModel := openai.New("deepseek-chat")
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(chatModel),
         llmagent.WithDescription("An assistant with automatic memory."),
-        llmagent.WithTools(memoryService.Tools()), // Only search and clear tools.
+        llmagent.WithTools(memoryService.Tools()), // Search by default; Load is optional.
     )
 
     // Step 3: Create Runner with memory service.
@@ -281,7 +284,7 @@ Agent: Nice to meet you, Alice! It's great to connect with someone from TechCorp
 | **Step 1**          | `NewMemoryService()`                | `NewMemoryService(WithExtractor(ext))` |
 | **Step 2**          | `WithTools(memoryService.Tools())`  | `WithTools(memoryService.Tools())`     |
 | **Step 3**          | `WithMemoryService(memoryService)`  | `WithMemoryService(memoryService)`     |
-| **Available tools** | add/update/delete/clear/search/load | search                                 |
+| **Available tools** | add/update/delete/clear/search/load | search (default) / load (optional)                                 |
 | **Memory creation** | Agent actively calls tools          | Background auto extraction             |
 
 ## Core Concepts
@@ -410,24 +413,28 @@ The memory service provides 6 tools. Common tools are enabled by default, while 
 | `memory_add`    | Add new memory | ✅ Default      | ❌ Unavailable       | Create new memory entry                               |
 | `memory_update` | Update memory  | ✅ Default      | ❌ Unavailable       | Modify existing memory                                |
 | `memory_search` | Search memory  | ✅ Default      | ✅ Default           | Find by keywords                                      |
-| `memory_load`   | Load memories  | ✅ Default      | ❌ Unavailable       | Load recent memories                                  |
+| `memory_load`   | Load memories  | ✅ Default      | ⚙️ Configurable      | Load recent memories                                  |
 | `memory_delete` | Delete memory  | ⚙️ Configurable | ❌ Unavailable       | Delete single memory                                  |
-| `memory_clear`  | Clear memories | ⚙️ Configurable | ⚙️ Configurable      | Delete all memories, disabled by default in auto mode |
+| `memory_clear`  | Clear memories | ⚙️ Configurable | ❌ Unavailable        | Delete all memories (not exposed in Auto mode)        |
 
 **Notes**:
 
 - **Agentic Mode**: Agent actively calls tools to manage memory, all tools are configurable
   - Default enabled tools: `memory_add`, `memory_update`, `memory_search`, `memory_load`
   - Default disabled tools: `memory_delete`, `memory_clear`
-- **Auto Extraction Mode**: LLM extractor automatically handles write operations, search tool enabled by default, clear tool disabled by default, both configurable
+- **Auto Mode**: LLM extractor handles write operations in background. Tools() exposes Search by default; Load can be enabled.
   - Default enabled tools: `memory_search`
-  - Default disabled tools: `memory_clear`
-  - Unavailable tools: `memory_add`, `memory_update`, `memory_delete`, `memory_load`
+  - Default disabled tools: `memory_load`
+  - Not exposed tools: `memory_add`, `memory_update`, `memory_delete`, `memory_clear`
 - **Default**: Available immediately when service is created, no extra configuration needed
 - **Configurable**: Can be enabled/disabled via `WithToolEnabled()`
 - **Unavailable**: Tool cannot be used in this mode
 
 #### Enable/Disable Tools
+
+Note: In Auto mode, `WithToolEnabled()` only affects whether `memory_search` and
+`memory_load` are exposed via `Tools()`. `memory_add`, `memory_update`,
+`memory_delete`, and `memory_clear` are not exposed to the Agent.
 
 ```go
 // Scenario 1: User manageable (allow single deletion)
@@ -456,6 +463,10 @@ memoryService := memoryinmemory.NewMemoryService(
   implement custom tools or extend the service with policy options (e.g. allow/overwrite/ignore).
 
 ### Custom Tool Implementation
+
+Note: In Auto mode, `Tools()` only exposes `memory_search` and `memory_load`.
+If you need to expose tools like `memory_clear`, use Agentic mode or call
+`ClearMemories()` from your application code.
 
 You can override default tools with custom implementations. See
 `memory/tool/tool.go` for reference on how to implement custom tools.
@@ -1136,7 +1147,7 @@ adminService := memoryinmemory.NewMemoryService(
 
 ## Advanced Configuration
 
-### Auto Mode Configuration Options
+### Auto Mode Configuration Options (>= 1.2.0)
 
 | Option                     | Description                            | Default        |
 | -------------------------- | -------------------------------------- | -------------- |
@@ -1149,12 +1160,12 @@ adminService := memoryinmemory.NewMemoryService(
 
 | Tool            | Agentic Mode    | Auto Mode    |
 | --------------- | --------------- | ------------ |
-| `memory_add`    | ✅ Available    | ❌ Hidden    |
-| `memory_update` | ✅ Available    | ❌ Hidden    |
-| `memory_delete` | ⚙️ Configurable | ❌ Hidden    |
-| `memory_clear`  | ⚙️ Configurable | ❌ Hidden    |
+| `memory_add`    | ✅ Available    | ❌ Not exposed |
+| `memory_update` | ✅ Available    | ❌ Not exposed |
+| `memory_delete` | ⚙️ Configurable | ❌ Not exposed |
+| `memory_clear`  | ⚙️ Configurable | ❌ Not exposed |
 | `memory_search` | ✅ Available    | ✅ Available |
-| `memory_load`   | ✅ Available    | ❌ Hidden    |
+| `memory_load`   | ✅ Available    | ⚙️ Configurable |
 
 ### Memory Preloading
 
@@ -1203,7 +1214,7 @@ memoryService := memoryinmemory.NewMemoryService(
 llmAgent := llmagent.New(
     "assistant",
     llmagent.WithModel(model),
-    llmagent.WithTools(memoryService.Tools()),  // search only.
+    llmagent.WithTools(memoryService.Tools()),  // Search by default; Load is optional.
     llmagent.WithPreloadMemory(10),             // Preload recent memories.
 )
 ```

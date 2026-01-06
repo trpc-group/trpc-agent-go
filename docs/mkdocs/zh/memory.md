@@ -16,19 +16,21 @@ Memory 用于管理与用户相关的长期信息，隔离维度为 `<appName, u
 
 Memory 支持两种模式来创建和管理记忆，根据你的场景选择合适的模式：
 
+自动提取模式（Auto）在 v1.2.0 及以上版本可用，且推荐作为默认选择。
+
 | 维度         | 工具驱动模式（Agentic）      | 自动提取模式（Auto）            |
 | ------------ | ---------------------------- | ------------------------------- |
 | **工作方式** | Agent 决定何时调用记忆工具   | 系统自动从对话中提取记忆        |
 | **用户体验** | 可见 - 用户可见工具调用过程  | 透明 - 后台静默创建记忆         |
 | **控制权**   | Agent 完全控制记什么         | 提取器根据对话分析决定          |
-| **可用工具** | 全部 6 个工具                | 搜索和清空工具（search、clear） |
+| **可用工具** | 全部 6 个工具                | 搜索工具（search），可选加载工具（load） |
 | **处理方式** | 同步 - 响应生成过程中        | 异步 - 响应后由后台 worker 处理 |
 | **适用场景** | 精确控制、用户主导的记忆管理 | 自然对话、无感知的记忆积累      |
 
 **选择建议**：
 
 - **工具驱动模式**：Agent 会根据对话内容自动判断是否需要调用记忆工具（如用户提到个人信息、偏好等），用户可见工具调用过程，适合需要精确控制记忆内容的场景
-- **自动提取模式**：希望自然对话流、系统被动学习用户信息、简化用户体验
+- **自动提取模式（>= 1.2.0，推荐）**：希望自然对话流、系统被动学习用户信息、简化用户体验
 
 ## 核心价值
 
@@ -110,7 +112,7 @@ export PG_PASSWORD="password"
 export PG_DATABASE="memory_db"
 ```
 
-### 工具驱动模式配置（Agentic Mode，默认）
+### 工具驱动模式配置（Agentic Mode，可选）
 
 工具驱动模式下，Agent 会根据对话内容自动判断是否需要调用记忆工具来管理记忆。配置分为三步：
 
@@ -181,7 +183,7 @@ Agent：你好张三！很高兴认识你。我会记住你在腾讯工作。
 Agent：我已经保存了这些信息。今天有什么可以帮你的？
 ```
 
-### 自动提取模式配置（Auto Mode）
+### 自动提取模式配置（Auto Mode，>= 1.2.0，推荐）
 
 自动提取模式下，基于 LLM 的提取器分析对话并自动创建记忆。**与工具驱动模式的区别仅在步骤 1：多配置一个 Extractor**。
 
@@ -218,13 +220,13 @@ func main() {
     defer memoryService.Close()
 
     // 步骤 2：创建 Agent 并注册记忆工具
-    // 注意：配置了 Extractor 后，只有 search 和 clear 工具可用。
+    // 注意：配置了 Extractor 后，默认只暴露 search 工具，load 可显式开启。
     chatModel := openai.New("deepseek-chat")
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(chatModel),
         llmagent.WithDescription("具有自动记忆能力的智能助手"),
-        llmagent.WithTools(memoryService.Tools()), // 只有 search 和 clear 工具
+        llmagent.WithTools(memoryService.Tools()), // 默认只有 search 工具（load 可选）。
     )
 
     // 步骤 3：创建 Runner 并设置记忆服务
@@ -267,7 +269,7 @@ Agent：你好张三！很高兴认识腾讯的朋友。今天有什么可以帮
 | **步骤 1**   | `NewMemoryService()`                | `NewMemoryService(WithExtractor(ext))` |
 | **步骤 2**   | `WithTools(memoryService.Tools())`  | `WithTools(memoryService.Tools())`     |
 | **步骤 3**   | `WithMemoryService(memoryService)`  | `WithMemoryService(memoryService)`     |
-| **可用工具** | add/update/delete/clear/search/load | search                                 |
+| **可用工具** | add/update/delete/clear/search/load | search（默认）/load（可选）                                 |
 | **记忆创建** | Agent 主动调用工具                  | 后台自动提取                           |
 
 ## 核心概念
@@ -500,24 +502,28 @@ if err != nil {
 | `memory_add`    | 添加新记忆 | ✅ 默认启用  | ❌ 不可用    | 创建新记忆条目         |
 | `memory_update` | 更新记忆   | ✅ 默认启用  | ❌ 不可用    | 修改现有记忆           |
 | `memory_search` | 搜索记忆   | ✅ 默认启用  | ✅ 默认启用  | 根据关键词查找         |
-| `memory_load`   | 加载记忆   | ✅ 默认启用  | ❌ 不可用    | 加载最近的记忆         |
+| `memory_load`   | 加载记忆   | ✅ 默认启用  | ⚙️ 可配置    | 加载最近的记忆         |
 | `memory_delete` | 删除记忆   | ⚙️ 可配置    | ❌ 不可用    | 删除单条记忆           |
-| `memory_clear`  | 清空记忆   | ⚙️ 可配置    | ⚙️ 可配置    | 删除所有记忆，默认禁用 |
+| `memory_clear`  | 清空记忆   | ⚙️ 可配置    | ❌ 不可用    | 删除所有记忆（Auto 模式不暴露） |
 
 **说明**：
 
 - **工具驱动模式**：Agent 主动调用工具管理记忆，所有工具均可配置
   - 默认启用工具：`memory_add`、`memory_update`、`memory_search`、`memory_load`
   - 默认禁用工具：`memory_delete`、`memory_clear`
-- **自动提取模式**：LLM 提取器自动管理写入操作，搜索工具默认启用、清空工具默认禁用，均可配置
+- **自动提取模式**：LLM 提取器自动管理写入操作，默认只暴露搜索工具，加载工具可选开启
   - 默认启用工具：`memory_search`
-  - 默认禁用工具：`memory_clear`
-  - 不可用工具：`memory_add`、`memory_update`、`memory_delete`、`memory_load`
+  - 默认禁用工具：`memory_load`
+  - 不暴露工具：`memory_add`、`memory_update`、`memory_delete`、`memory_clear`
 - **默认启用**：创建服务时自动可用，无需额外配置
 - **可配置**：可以通过 `WithToolEnabled()` 启用或禁用
 - **不可用**：该模式下无法使用此工具
 
 #### 启用/禁用工具
+
+提示：在 Auto 模式下，`WithToolEnabled()` 只会影响 `memory_search` 和 `memory_load`
+是否通过 `Tools()` 暴露；`memory_add`、`memory_update`、`memory_delete`、`memory_clear`
+不会暴露给 Agent。
 
 ```go
 // 场景 1：用户可管理（允许删除单条记忆）
@@ -544,6 +550,10 @@ memoryService := memoryinmemory.NewMemoryService(
 - 如需“允许重复/只返回已存在/忽略重复”等策略，可通过自定义工具或扩展服务策略配置实现。
 
 ### 自定义工具实现
+
+提示：在 Auto 模式下，`Tools()` 只会暴露 `memory_search` 和 `memory_load`。
+如果你需要对用户暴露 `memory_clear` 等工具，请使用工具驱动模式，或在业务侧直接调用
+`ClearMemories()`。
 
 你可以用自定义实现覆盖默认工具。参考 [memory/tool/tool.go](https://github.com/trpc-group/trpc-agent-go/blob/main/memory/tool/tool.go) 了解如何实现自定义工具：
 
@@ -1198,12 +1208,12 @@ adminService := memoryinmemory.NewMemoryService(
 
 | 工具            | 工具驱动模式 | 自动提取模式 |
 | --------------- | ------------ | ------------ |
-| `memory_add`    | ✅ 可用      | ❌ 隐藏      |
-| `memory_update` | ✅ 可用      | ❌ 隐藏      |
-| `memory_delete` | ⚙️ 可配置    | ❌ 隐藏      |
-| `memory_clear`  | ⚙️ 可配置    | ❌ 隐藏      |
+| `memory_add`    | ✅ 可用      | ❌ 不暴露    |
+| `memory_update` | ✅ 可用      | ❌ 不暴露    |
+| `memory_delete` | ⚙️ 可配置    | ❌ 不暴露    |
+| `memory_clear`  | ⚙️ 可配置    | ❌ 不暴露    |
 | `memory_search` | ✅ 可用      | ✅ 可用      |
-| `memory_load`   | ✅ 可用      | ❌ 隐藏      |
+| `memory_load`   | ✅ 可用      | ⚙️ 可配置    |
 
 ### 记忆预加载
 
@@ -1244,7 +1254,7 @@ memoryService := memoryinmemory.NewMemoryService(
 llmAgent := llmagent.New(
     "assistant",
     llmagent.WithModel(model),
-    llmagent.WithTools(memoryService.Tools()),  // 只有 search 和 clear。
+    llmagent.WithTools(memoryService.Tools()),  // 默认只有 search（load 可选）。
     llmagent.WithPreloadMemory(10),             // 预加载最近记忆。
 )
 ```
