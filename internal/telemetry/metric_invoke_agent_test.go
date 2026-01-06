@@ -16,11 +16,14 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
@@ -458,15 +461,23 @@ func TestInvokeAgentTracker_RecordMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create counter: %v", err)
 	}
-	InvokeAgentMetricGenAIClientTokenUsage, err = InvokeAgentMeter.Int64Histogram("gen_ai.client.token.usage")
+	InvokeAgentMetricGenAIClientTokenUsage, err = histogram.NewDynamicInt64Histogram(provider, metrics.MeterNameInvokeAgent, "gen_ai.client.token.usage")
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	InvokeAgentMetricGenAIClientTimeToFirstToken, err = InvokeAgentMeter.Float64Histogram("gen_ai.client.time_to_first_token")
+	InvokeAgentMetricGenAIClientTimeToFirstToken, err = histogram.NewDynamicFloat64Histogram(
+		provider,
+		metrics.MeterNameInvokeAgent,
+		metrics.MetricTRPCAgentGoClientTimeToFirstToken,
+		metric.WithDescription("Time to first token for client"), metric.WithUnit("s"))
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	InvokeAgentMetricGenAIClientOperationDuration, err = InvokeAgentMeter.Float64Histogram("gen_ai.client.operation.duration")
+	InvokeAgentMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(
+		provider,
+		metrics.MeterNameInvokeAgent,
+		metrics.MetricGenAIClientOperationDuration,
+		metric.WithDescription("Duration of client operation"), metric.WithUnit("s"))
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
@@ -543,15 +554,23 @@ func TestInvokeAgentTracker_RecordMetrics_WithError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create counter: %v", err)
 	}
-	InvokeAgentMetricGenAIClientTokenUsage, err = InvokeAgentMeter.Int64Histogram("gen_ai.client.token.usage")
+	InvokeAgentMetricGenAIClientTokenUsage, err = histogram.NewDynamicInt64Histogram(provider, metrics.MeterNameInvokeAgent, "gen_ai.client.token.usage")
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	InvokeAgentMetricGenAIClientTimeToFirstToken, err = InvokeAgentMeter.Float64Histogram("gen_ai.client.time_to_first_token")
+	InvokeAgentMetricGenAIClientTimeToFirstToken, err = histogram.NewDynamicFloat64Histogram(
+		provider,
+		metrics.MeterNameInvokeAgent,
+		metrics.MetricTRPCAgentGoClientTimeToFirstToken,
+		metric.WithDescription("Time to first token for client"), metric.WithUnit("s"))
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	InvokeAgentMetricGenAIClientOperationDuration, err = InvokeAgentMeter.Float64Histogram("gen_ai.client.operation.duration")
+	InvokeAgentMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(
+		provider,
+		metrics.MeterNameInvokeAgent,
+		metrics.MetricGenAIClientOperationDuration,
+		metric.WithDescription("Duration of client operation"), metric.WithUnit("s"))
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
@@ -594,15 +613,23 @@ func TestInvokeAgentTracker_RecordMetrics_NoTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create counter: %v", err)
 	}
-	InvokeAgentMetricGenAIClientTokenUsage, err = InvokeAgentMeter.Int64Histogram("gen_ai.client.token.usage")
+	InvokeAgentMetricGenAIClientTokenUsage, err = histogram.NewDynamicInt64Histogram(provider, metrics.MeterNameInvokeAgent, "gen_ai.client.token.usage")
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	InvokeAgentMetricGenAIClientTimeToFirstToken, err = InvokeAgentMeter.Float64Histogram("gen_ai.client.time_to_first_token")
+	InvokeAgentMetricGenAIClientTimeToFirstToken, err = histogram.NewDynamicFloat64Histogram(
+		provider,
+		metrics.MeterNameInvokeAgent,
+		metrics.MetricTRPCAgentGoClientTimeToFirstToken,
+		metric.WithDescription("Time to first token for client"), metric.WithUnit("s"))
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
-	InvokeAgentMetricGenAIClientOperationDuration, err = InvokeAgentMeter.Float64Histogram("gen_ai.client.operation.duration")
+	InvokeAgentMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(
+		provider,
+		metrics.MeterNameInvokeAgent,
+		metrics.MetricGenAIClientOperationDuration,
+		metric.WithDescription("Duration of client operation"), metric.WithUnit("s"))
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
