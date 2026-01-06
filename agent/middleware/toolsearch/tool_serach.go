@@ -1,0 +1,178 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package toolsearch provides an LLM-based tool selector.
+package toolsearch
+
+import (
+	"context"
+	"fmt"
+	"sort"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+// ToolSearch uses an LLM to select relevant tools before the main
+// model call by mutating `args.Request.Tools` in a BeforeModel callback.
+type ToolSearch struct {
+	toolIndex     toolIndex
+	maxTools      int
+	alwaysInclude []string
+}
+
+// New creates a new ToolSearch.
+func New(m model.Model, opts ...Option) (*ToolSearch, error) {
+	cfg := &Config{Model: m}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	s := &ToolSearch{
+		maxTools:      cfg.MaxTools,
+		alwaysInclude: append([]string(nil), cfg.AlwaysInclude...),
+	}
+	if cfg.toolKnowledge != nil {
+		s.toolIndex = newToolKnowledgeSearcher(cfg.Model, cfg.SystemPrompt, cfg.toolKnowledge)
+	} else {
+		s.toolIndex = newLlmCandidateSearcher(cfg.Model, cfg.SystemPrompt)
+	}
+	return s, nil
+}
+
+// Callback returns a BeforeModel callback that performs tool selection.
+func (s *ToolSearch) Callback() model.BeforeModelCallbackStructured {
+	return func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+		req := requestFromBeforeModelArgs(args)
+		if req == nil {
+			return nil, nil
+		}
+		if len(req.Tools) == 0 {
+			return nil, nil
+		}
+
+		baseTools := req.Tools
+		if err := s.validateAlwaysIncludeToolsExist(baseTools); err != nil {
+			return nil, err
+		}
+
+		candidateNames, candidateTools := s.buildCandidateTools(baseTools)
+		if len(candidateNames) == 0 {
+			// If no tools are available for selection, nothing to do.
+			return nil, nil
+		}
+
+		lastUser, err := lastUserMessage(req.Messages)
+		if err != nil {
+			return nil, err
+		}
+
+		query, err := s.toolIndex.rewriteQuery(ctx, lastUser.Content)
+		if err != nil {
+			return nil, err
+		}
+		if query == "" {
+			return nil, nil
+		}
+		if err := s.toolIndex.upsert(ctx, candidateTools); err != nil {
+			return nil, err
+		}
+		selectedTools, err := s.toolIndex.search(ctx, query, s.maxTools)
+		if err != nil {
+			return nil, err
+		}
+
+		// Rebuild request tools map.
+		req.Tools = buildSelectedTools(baseTools, selectedTools, s.alwaysInclude)
+		return nil, nil
+	}
+}
+
+func requestFromBeforeModelArgs(args *model.BeforeModelArgs) *model.Request {
+	if args == nil || args.Request == nil {
+		return nil
+	}
+	return args.Request
+}
+
+func (s *ToolSearch) validateAlwaysIncludeToolsExist(baseTools map[string]tool.Tool) error {
+	if len(s.alwaysInclude) == 0 {
+		return nil
+	}
+
+	missing := make([]string, 0)
+	for _, name := range s.alwaysInclude {
+		if _, ok := baseTools[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	sort.Strings(missing)
+	available := sortedToolNames(baseTools)
+	return fmt.Errorf(
+		"ToolSearch: tools in always_include not found in request: %v; available tools: %v",
+		missing, available,
+	)
+}
+
+func sortedToolNames(tools map[string]tool.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for name := range tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (s *ToolSearch) buildCandidateTools(baseTools map[string]tool.Tool) ([]string, map[string]tool.Tool) {
+	// Prepare candidate tools for selection (exclude always-include).
+	candidateNames := make([]string, 0, len(baseTools))
+	candidateTools := make(map[string]tool.Tool, len(baseTools))
+
+	always := make(map[string]bool, len(s.alwaysInclude))
+	for _, name := range s.alwaysInclude {
+		always[name] = true
+	}
+
+	for name, t := range baseTools {
+		if always[name] {
+			continue
+		}
+		candidateNames = append(candidateNames, name)
+		candidateTools[name] = t
+	}
+	sort.Strings(candidateNames)
+	return candidateNames, candidateTools
+}
+
+func lastUserMessage(messages []model.Message) (model.Message, error) {
+	lastUser, ok := findLastUserMessage(messages)
+	if !ok {
+		return model.Message{}, fmt.Errorf("ToolSearch: no user message found in request messages")
+	}
+	return lastUser, nil
+}
+
+func buildSelectedTools(
+	baseTools map[string]tool.Tool,
+	selected map[string]tool.Tool,
+	alwaysInclude []string,
+) map[string]tool.Tool {
+	newTools := make(map[string]tool.Tool, len(selected)+len(alwaysInclude))
+	for name := range selected {
+		newTools[name] = baseTools[name]
+	}
+	for _, name := range alwaysInclude {
+		newTools[name] = baseTools[name]
+	}
+	return newTools
+}

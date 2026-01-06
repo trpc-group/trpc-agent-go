@@ -7,7 +7,7 @@
 //
 //
 
-package llmtoolselector
+package toolsearch
 
 import (
 	"context"
@@ -20,6 +20,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+func mustNewSelector(t *testing.T, m model.Model, opts ...Option) *ToolSearch {
+	t.Helper()
+	sel, err := New(m, opts...)
+	require.NoError(t, err)
+	return sel
+}
 
 type testTool struct {
 	decl tool.Declaration
@@ -72,8 +79,8 @@ func (m *stubModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 
 func (m *stubModel) Info() model.Info { return model.Info{Name: "stub"} }
 
-func TestLLMToolSelector_NoTools_NoOp(t *testing.T) {
-	mw := New(WithModel(&staticSelectionModel{content: `{"tools":[]}`})) // model unused
+func TestToolSearch_NoTools_NoOp(t *testing.T) {
+	mw := mustNewSelector(t, &staticSelectionModel{content: `{"tools":[]}`}) // model unused
 	cb := mw.Callback()
 
 	req := &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}}
@@ -82,9 +89,9 @@ func TestLLMToolSelector_NoTools_NoOp(t *testing.T) {
 	require.Nil(t, req.Tools)
 }
 
-func TestLLMToolSelector_AlwaysIncludeMissing_Error(t *testing.T) {
-	mw := New(
-		WithModel(&staticSelectionModel{content: `{"tools":["calculator"]}`}),
+func TestToolSearch_AlwaysIncludeMissing_Error(t *testing.T) {
+	mw := mustNewSelector(t,
+		&staticSelectionModel{content: `{"tools":["calculator"]}`},
 		WithAlwaysInclude("missing_tool"),
 	)
 	cb := mw.Callback()
@@ -99,8 +106,8 @@ func TestLLMToolSelector_AlwaysIncludeMissing_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestLLMToolSelector_InvalidSelection_Error(t *testing.T) {
-	mw := New(WithModel(&staticSelectionModel{content: `{"tools":["nope"]}`})) // invalid tool
+func TestToolSearch_InvalidSelection_Error(t *testing.T) {
+	mw := mustNewSelector(t, &staticSelectionModel{content: `{"tools":["nope"]}`}) // invalid tool
 	cb := mw.Callback()
 
 	req := &model.Request{
@@ -113,9 +120,9 @@ func TestLLMToolSelector_InvalidSelection_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestLLMToolSelector_MaxToolsAndAlwaysInclude(t *testing.T) {
-	mw := New(
-		WithModel(&staticSelectionModel{content: `{"tools":["calculator"]}`}),
+func TestToolSearch_MaxToolsAndAlwaysInclude(t *testing.T) {
+	mw := mustNewSelector(t,
+		&staticSelectionModel{content: `{"tools":["calculator"]}`},
 		WithMaxTools(1),
 		WithAlwaysInclude("current_time"),
 	)
@@ -138,9 +145,9 @@ func TestLLMToolSelector_MaxToolsAndAlwaysInclude(t *testing.T) {
 	require.NotNil(t, req.Tools["current_time"])
 }
 
-func TestLLMToolSelector_NoSelectableTools_NoOp(t *testing.T) {
-	mw := New(
-		WithModel(&staticSelectionModel{content: `{"tools":["calculator"]}`}),
+func TestToolSearch_NoSelectableTools_NoOp(t *testing.T) {
+	mw := mustNewSelector(t,
+		&staticSelectionModel{content: `{"tools":["calculator"]}`},
 		WithAlwaysInclude("calculator"),
 	)
 	cb := mw.Callback()
@@ -158,10 +165,10 @@ func TestLLMToolSelector_NoSelectableTools_NoOp(t *testing.T) {
 	require.NotNil(t, req.Tools["calculator"])
 }
 
-func TestLLMToolSelector_SelectToolNames_ParseFallback_JoinErrors(t *testing.T) {
+func TestToolSearch_SelectToolNames_ParseFallback_JoinErrors(t *testing.T) {
 	// First unmarshal fails because of prefix/suffix; fallback substring also fails due to invalid JSON.
 	content := `prefix {"tools":["calculator"],} suffix`
-	mw := New(WithModel(&staticSelectionModel{content: content}))
+	mw := mustNewSelector(t, &staticSelectionModel{content: content})
 	cb := mw.Callback()
 
 	req := &model.Request{
@@ -177,8 +184,8 @@ func TestLLMToolSelector_SelectToolNames_ParseFallback_JoinErrors(t *testing.T) 
 	require.Contains(t, err.Error(), "\n")
 }
 
-func TestLLMToolSelector_SelectToolNames_ParseError_NoBraces(t *testing.T) {
-	mw := New(WithModel(&staticSelectionModel{content: "not-json"}))
+func TestToolSearch_SelectToolNames_ParseError_NoBraces(t *testing.T) {
+	mw := mustNewSelector(t, &staticSelectionModel{content: "not-json"})
 	cb := mw.Callback()
 
 	req := &model.Request{
@@ -194,8 +201,8 @@ func TestLLMToolSelector_SelectToolNames_ParseError_NoBraces(t *testing.T) {
 	require.NotContains(t, err.Error(), "\n")
 }
 
-func TestLLMToolSelector_SelectToolNames_ModelError(t *testing.T) {
-	mw := New(WithModel(&stubModel{
+func TestToolSearch_SelectToolNames_ModelError(t *testing.T) {
+	mw := mustNewSelector(t, &stubModel{
 		responses: []*model.Response{
 			{
 				ID:     "sel",
@@ -203,7 +210,7 @@ func TestLLMToolSelector_SelectToolNames_ModelError(t *testing.T) {
 				Error:  &model.ResponseError{Message: "rate limited", Type: model.ErrorTypeAPIError},
 			},
 		},
-	}))
+	})
 	cb := mw.Callback()
 
 	req := &model.Request{
@@ -218,8 +225,8 @@ func TestLLMToolSelector_SelectToolNames_ModelError(t *testing.T) {
 	require.Contains(t, err.Error(), "rate limited")
 }
 
-func TestLLMToolSelector_SelectToolNames_GenerateContentError(t *testing.T) {
-	mw := New(WithModel(&stubModel{genErr: errors.New("transport down")}))
+func TestToolSearch_SelectToolNames_GenerateContentError(t *testing.T) {
+	mw := mustNewSelector(t, &stubModel{genErr: errors.New("transport down")})
 	cb := mw.Callback()
 
 	req := &model.Request{
@@ -234,12 +241,12 @@ func TestLLMToolSelector_SelectToolNames_GenerateContentError(t *testing.T) {
 	require.Contains(t, err.Error(), "transport down")
 }
 
-func TestLLMToolSelector_SelectToolNames_EmptyResponse(t *testing.T) {
-	mw := New(WithModel(&stubModel{
+func TestToolSearch_SelectToolNames_EmptyResponse(t *testing.T) {
+	mw := mustNewSelector(t, &stubModel{
 		responses: []*model.Response{
 			{ID: "sel", Object: model.ObjectTypeChatCompletion, Choices: nil},
 		},
-	}))
+	})
 	cb := mw.Callback()
 
 	req := &model.Request{
@@ -254,8 +261,8 @@ func TestLLMToolSelector_SelectToolNames_EmptyResponse(t *testing.T) {
 	require.Contains(t, err.Error(), "empty response")
 }
 
-func TestLLMToolSelector_SelectToolNames_EmptyContent(t *testing.T) {
-	mw := New(WithModel(&stubModel{
+func TestToolSearch_SelectToolNames_EmptyContent(t *testing.T) {
+	mw := mustNewSelector(t, &stubModel{
 		responses: []*model.Response{
 			{
 				ID:     "sel",
@@ -265,7 +272,7 @@ func TestLLMToolSelector_SelectToolNames_EmptyContent(t *testing.T) {
 				},
 			},
 		},
-	}))
+	})
 	cb := mw.Callback()
 
 	req := &model.Request{
@@ -280,8 +287,8 @@ func TestLLMToolSelector_SelectToolNames_EmptyContent(t *testing.T) {
 	require.Contains(t, err.Error(), "content is empty")
 }
 
-func TestLLMToolSelector_NoUserMessage_Error(t *testing.T) {
-	mw := New(WithModel(&staticSelectionModel{content: `{"tools":["calculator"]}`}))
+func TestToolSearch_NoUserMessage_Error(t *testing.T) {
+	mw := mustNewSelector(t, &staticSelectionModel{content: `{"tools":["calculator"]}`})
 	cb := mw.Callback()
 
 	req := &model.Request{
@@ -296,8 +303,8 @@ func TestLLMToolSelector_NoUserMessage_Error(t *testing.T) {
 	require.Contains(t, err.Error(), "no user message")
 }
 
-func TestLLMToolSelector_DedupSelectedTools(t *testing.T) {
-	mw := New(WithModel(&staticSelectionModel{content: `{"tools":["calculator","calculator"]}`}))
+func TestToolSearch_DedupSelectedTools(t *testing.T) {
+	mw := mustNewSelector(t, &staticSelectionModel{content: `{"tools":["calculator","calculator"]}`})
 	cb := mw.Callback()
 
 	req := &model.Request{
@@ -317,8 +324,8 @@ func TestLLMToolSelector_DedupSelectedTools(t *testing.T) {
 	}
 }
 
-func TestLLMToolSelector_Callback_NilArgs_NoOp(t *testing.T) {
-	mw := New(WithModel(&staticSelectionModel{content: `{"tools":["calculator"]}`}))
+func TestToolSearch_Callback_NilArgs_NoOp(t *testing.T) {
+	mw := mustNewSelector(t, &staticSelectionModel{content: `{"tools":["calculator"]}`})
 	cb := mw.Callback()
 
 	// Nil args should be a no-op.
@@ -332,19 +339,23 @@ func TestLLMToolSelector_Callback_NilArgs_NoOp(t *testing.T) {
 	require.Nil(t, res)
 }
 
-func TestLLMToolSelector_WithSystemPrompt_EmptyDoesOverride(t *testing.T) {
-	sel0 := New()
+func TestToolSearch_WithSystemPrompt_EmptyUsesDefault(t *testing.T) {
+	sel0 := mustNewSelector(t, nil)
 	require.Equal(t, defaultSystemPrompt, sel0.systemPrompt)
 
-	sel1 := New(WithSystemPrompt(""))
-	require.Empty(t, sel1.systemPrompt)
+	sel1 := mustNewSelector(t, nil, WithSystemPrompt(""))
+	require.Equal(t, defaultSystemPrompt, sel1.systemPrompt)
 
-	sel2 := New(WithSystemPrompt("custom"))
+	sel2 := mustNewSelector(t, nil, WithSystemPrompt("custom"))
 	require.Equal(t, "custom", sel2.systemPrompt)
+
+	// When toolKnowledge is configured and systemPrompt is empty, use the tool-knowledge prompt.
+	sel3 := mustNewSelector(t, nil, WithToolKnowledge(&ToolKnowledge{}))
+	require.Equal(t, defalutSystemPromptWithToolKnowledge, sel3.systemPrompt)
 }
 
-func TestLLMToolSelector_SelectToolNames_UsesDeltaContent(t *testing.T) {
-	mw := New(WithModel(&stubModel{
+func TestToolSearch_SelectToolNames_UsesDeltaContent(t *testing.T) {
+	mw := mustNewSelector(t, &stubModel{
 		responses: []*model.Response{
 			{
 				ID:     "sel",
@@ -357,7 +368,7 @@ func TestLLMToolSelector_SelectToolNames_UsesDeltaContent(t *testing.T) {
 				},
 			},
 		},
-	}))
+	})
 	cb := mw.Callback()
 
 	req := &model.Request{
@@ -372,8 +383,8 @@ func TestLLMToolSelector_SelectToolNames_UsesDeltaContent(t *testing.T) {
 	require.NotNil(t, req.Tools["calculator"])
 }
 
-func TestLLMToolSelector_SelectToolNames_SkipsNilAndPartialResponses(t *testing.T) {
-	mw := New(WithModel(&stubModel{
+func TestToolSearch_SelectToolNames_SkipsNilAndPartialResponses(t *testing.T) {
+	mw := mustNewSelector(t, &stubModel{
 		responses: []*model.Response{
 			nil,
 			{
@@ -402,7 +413,7 @@ func TestLLMToolSelector_SelectToolNames_SkipsNilAndPartialResponses(t *testing.
 				Done: true,
 			},
 		},
-	}))
+	})
 	cb := mw.Callback()
 
 	req := &model.Request{
