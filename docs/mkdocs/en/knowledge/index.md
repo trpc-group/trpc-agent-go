@@ -167,7 +167,9 @@ knowledge/
 │   └── huggingface/     # HuggingFace embedding model
 ├── reranker/             # Result reranking
 │   ├── reranker.go      # Reranker interface definition
-│   └── topk.go          # Return TopK retrieval results
+│   ├── topk/            # TopK simple truncation implementation
+│   ├── cohere/          # Cohere SaaS Rerank implementation
+│   └── infinity/        # Infinity/TEI standard Rerank API implementation
 ├── document/             # Document processing
 │   ├── document.go      # Document structure definition
 │   └── reader/          # Document readers (supports txt/md/csv/json/docx/pdf, etc.)

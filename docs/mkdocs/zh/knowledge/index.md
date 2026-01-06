@@ -164,7 +164,9 @@ knowledge/
 │   └── huggingface/     # HuggingFace embedding 模型
 ├── reranker/             # 结果重排
 │   ├── reranker.go      # Reranker 接口定义
-│   └── topk.go          # 返回 TopK 的检索结果
+│   ├── topk/            # TopK 简单截断实现
+│   ├── cohere/          # Cohere SaaS Rerank 实现
+│   └── infinity/        # Infinity/TEI 标准 Rerank API 实现
 ├── document/             # 文档处理
 │   ├── document.go      # Document 结构定义
 │   └── reader/          # 文档读取器（支持 txt/md/csv/json/docx/pdf 等格式）
@@ -270,7 +272,8 @@ llmAgent := llmagent.New(
 
 - [向量存储](vectorstore/index.md) - 配置各种向量数据库后端
 - [Embedder](embedder.md) - 文本向量化模型配置
+- [Reranker](reranker.md) - 检索结果精排
 - [文档源](source.md) - 文件、目录、URL 等知识来源配置
-- [OCR 文字识别](ocr.md) - 配置 Tesseract OCR 提取文本
+- [OCR 图片文字识别](ocr.md) - 配置 Tesseract OCR 提取文本
 - [过滤器](filter.md) - 基础过滤器和智能过滤器
 - [知识库管理](management.md) - 动态源管理和状态监控
