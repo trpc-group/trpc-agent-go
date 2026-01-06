@@ -5108,6 +5108,7 @@ func TestAccumulatorWithFixedIndices(t *testing.T) {
 		assert.Equal(t, `{"arg": "value1"}{"arg": "value2"}`, acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
 	})
 }
+
 // TestModel_GenerateContent_StreamingExtraFields tests that ExtraFields (e.g., Gemini 3's thought_signature)
 // are correctly collected during streaming and passed through in the final response.
 func TestModel_GenerateContent_StreamingExtraFields(t *testing.T) {
