@@ -1156,6 +1156,54 @@ adminService := memoryinmemory.NewMemoryService(
 | `WithMemoryQueueSize(n)`   | Size of memory job queue               | 10             |
 | `WithMemoryJobTimeout(d)`  | Timeout for each extraction job        | 30s            |
 
+### Extraction Checkers (>= 1.3.0)
+
+Checkers control when memory extraction should be triggered. By default, extraction happens on every conversation turn. Use checkers to optimize extraction frequency and reduce LLM costs.
+
+#### Available Checkers
+
+| Checker                | Description                                              | Example                                     |
+| ---------------------- | -------------------------------------------------------- | ------------------------------------------- |
+| `CheckTurnThreshold`   | Triggers when total turns reach threshold                | `CheckTurnThreshold(5)` - every 5 turns     |
+| `CheckTimeInterval`    | Triggers when time since last extraction exceeds interval | `CheckTimeInterval(3*time.Minute)` - every 3 min |
+| `ChecksAll`            | Combines checkers with AND logic                         | All checkers must pass                      |
+| `ChecksAny`            | Combines checkers with OR logic                          | Any checker passing triggers extraction     |
+
+#### Checker Configuration Examples
+
+```go
+// Example 1: Extract every 5 turns OR every 3 minutes (OR logic).
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithCheckersAny(
+        extractor.CheckTurnThreshold(5),
+        extractor.CheckTimeInterval(3*time.Minute),
+    ),
+)
+
+// Example 2: Extract every 10 turns AND every 5 minutes (AND logic).
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithChecker(extractor.CheckTurnThreshold(10)),
+    extractor.WithChecker(extractor.CheckTimeInterval(5*time.Minute)),
+)
+```
+
+#### ExtractionContext
+
+The `ExtractionContext` provides information for checker decisions:
+
+```go
+type ExtractionContext struct {
+    UserKey       memory.UserKey  // User identifier.
+    Messages      []model.Message // Accumulated messages since last extraction.
+    TotalTurns    int             // Total conversation turns since process start.
+    LastExtractAt *time.Time      // Last extraction timestamp, nil if never extracted.
+}
+```
+
+**Note**: `Messages` contains all accumulated messages since the last successful extraction. When a checker returns `false`, messages are accumulated and will be included in the next extraction. This ensures no conversation context is lost when using turn-based or time-based checkers.
+
 ### Tool Availability by Mode
 
 | Tool            | Agentic Mode    | Auto Mode    |

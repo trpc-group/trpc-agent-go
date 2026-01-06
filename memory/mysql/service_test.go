@@ -1445,6 +1445,10 @@ func (m *mockExtractor) Extract(
 	return nil, nil
 }
 
+func (m *mockExtractor) ShouldExtract(ctx *extractor.ExtractionContext) bool {
+	return true
+}
+
 func (m *mockExtractor) SetPrompt(prompt string) {}
 
 func (m *mockExtractor) SetModel(mdl model.Model) {}

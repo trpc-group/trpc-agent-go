@@ -62,13 +62,27 @@ type AutoMemoryWorker struct {
 	wg       sync.WaitGroup
 	mu       sync.RWMutex
 	started  bool
+
+	// stateMu protects extractionStates map.
+	stateMu sync.RWMutex
+	// extractionStates tracks extraction state per user.
+	extractionStates map[string]*extractionState
+}
+
+// extractionState tracks extraction state for a user.
+type extractionState struct {
+	totalTurns    int
+	lastExtractAt *time.Time
+	// pendingMessages accumulates messages from turns that were not extracted.
+	pendingMessages []model.Message
 }
 
 // NewAutoMemoryWorker creates a new auto memory worker.
 func NewAutoMemoryWorker(config AutoMemoryConfig, operator MemoryOperator) *AutoMemoryWorker {
 	return &AutoMemoryWorker{
-		config:   config,
-		operator: operator,
+		config:           config,
+		operator:         operator,
+		extractionStates: make(map[string]*extractionState),
 	}
 }
 
@@ -142,11 +156,41 @@ func (w *AutoMemoryWorker) EnqueueJob(
 		return nil
 	}
 
+	// Get or create extraction state for this user.
+	state := w.getOrCreateState(userKey)
+	state.totalTurns++
+
+	// Accumulate current turn messages.
+	state.pendingMessages = append(state.pendingMessages, messages...)
+
+	// Build extraction context.
+	extractCtx := &extractor.ExtractionContext{
+		UserKey:       userKey,
+		Messages:      state.pendingMessages,
+		TotalTurns:    state.totalTurns,
+		LastExtractAt: state.lastExtractAt,
+	}
+
+	// Check if extraction should proceed.
+	if !w.config.Extractor.ShouldExtract(extractCtx) {
+		log.DebugfContext(ctx, "auto_memory: skipped by checker for user %s/%s",
+			userKey.AppName, userKey.UserID)
+		return nil
+	}
+
+	// Capture messages to extract and clear pending.
+	messagesToExtract := state.pendingMessages
+	state.pendingMessages = nil
+
+	// Update lastExtractAt.
+	now := time.Now()
+	state.lastExtractAt = &now
+
 	// Create job with detached context.
 	job := &MemoryJob{
 		Ctx:      context.WithoutCancel(ctx),
 		UserKey:  userKey,
-		Messages: messages,
+		Messages: messagesToExtract,
 	}
 	// Try to enqueue the job asynchronously.
 	if w.tryEnqueueJob(ctx, userKey, job) {
@@ -155,7 +199,7 @@ func (w *AutoMemoryWorker) EnqueueJob(
 	// Fall back to synchronous processing.
 	log.DebugfContext(ctx, "auto_memory: queue full, processing synchronously for user %s/%s",
 		userKey.AppName, userKey.UserID)
-	return w.createAutoMemory(ctx, userKey, messages)
+	return w.createAutoMemory(ctx, userKey, messagesToExtract)
 }
 
 // tryEnqueueJob attempts to enqueue a memory job.
@@ -297,4 +341,24 @@ func hashUserKey(userKey memory.UserKey) int {
 	h.Write([]byte(userKey.AppName))
 	h.Write([]byte(userKey.UserID))
 	return int(h.Sum32())
+}
+
+// getOrCreateState returns the extraction state for a user, creating if needed.
+func (w *AutoMemoryWorker) getOrCreateState(userKey memory.UserKey) *extractionState {
+	key := userKey.AppName + "/" + userKey.UserID
+	w.stateMu.RLock()
+	state, ok := w.extractionStates[key]
+	w.stateMu.RUnlock()
+	if ok {
+		return state
+	}
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	// Double-check after acquiring write lock.
+	if state, ok = w.extractionStates[key]; ok {
+		return state
+	}
+	state = &extractionState{}
+	w.extractionStates[key] = state
+	return state
 }

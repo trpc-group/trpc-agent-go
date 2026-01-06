@@ -101,9 +101,25 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 	chatModel := openai.New(c.modelName)
 	extractModel := openai.New(c.extractorModel)
 
-	// Create memory extractor.
+	// Create memory extractor with optional extraction checkers.
 	// The extractor uses LLM to analyze conversations and extract memories.
-	memExtractor := extractor.NewExtractor(extractModel)
+	// Checkers control when extraction should be triggered.
+	memExtractor := extractor.NewExtractor(
+		extractModel,
+		// Optional: configure extraction checkers.
+		// By default, extraction happens on every turn.
+		// Use checkers to control extraction frequency:
+		//
+		// Example 1: Extract every 5 turns OR every 3 minutes (OR logic).
+		// extractor.WithCheckersAny(
+		//     extractor.CheckTurnThreshold(5),
+		//     extractor.CheckTimeInterval(3*time.Minute),
+		// ),
+		//
+		// Example 2: Extract every 10 turns AND every 5 minutes (AND logic).
+		// extractor.WithChecker(extractor.CheckTurnThreshold(10)),
+		// extractor.WithChecker(extractor.CheckTimeInterval(5*time.Minute)),
+	)
 
 	// Create memory service with auto extraction enabled.
 	// When extractor is set, write tools (add/update/delete) are hidden, but

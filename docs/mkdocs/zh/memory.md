@@ -1204,6 +1204,54 @@ adminService := memoryinmemory.NewMemoryService(
 | `WithMemoryQueueSize(n)`   | 记忆任务队列大小                | 10          |
 | `WithMemoryJobTimeout(d)`  | 每个提取任务的超时时间          | 30s         |
 
+### 提取检查器（Extraction Checkers，>= 1.3.0）
+
+检查器（Checker）用于控制何时触发记忆提取。默认情况下，每轮对话都会触发提取。使用检查器可以优化提取频率，降低 LLM 调用成本。
+
+#### 可用的检查器
+
+| 检查器               | 说明                                 | 示例                                             |
+| -------------------- | ------------------------------------ | ------------------------------------------------ |
+| `CheckTurnThreshold` | 当累计轮数达到阈值时触发             | `CheckTurnThreshold(5)` - 每 5 轮触发一次        |
+| `CheckTimeInterval`  | 当距上次提取超过指定时间间隔时触发   | `CheckTimeInterval(3*time.Minute)` - 每 3 分钟   |
+| `ChecksAll`          | 组合多个检查器，使用 AND 逻辑        | 所有检查器都通过才触发                           |
+| `ChecksAny`          | 组合多个检查器，使用 OR 逻辑         | 任一检查器通过即触发                             |
+
+#### 检查器配置示例
+
+```go
+// 示例 1：每 5 轮或每 3 分钟提取一次（OR 逻辑）。
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithCheckersAny(
+        extractor.CheckTurnThreshold(5),
+        extractor.CheckTimeInterval(3*time.Minute),
+    ),
+)
+
+// 示例 2：每 10 轮且每 5 分钟提取一次（AND 逻辑）。
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithChecker(extractor.CheckTurnThreshold(10)),
+    extractor.WithChecker(extractor.CheckTimeInterval(5*time.Minute)),
+)
+```
+
+#### ExtractionContext
+
+`ExtractionContext` 为检查器提供决策所需的上下文信息：
+
+```go
+type ExtractionContext struct {
+    UserKey       memory.UserKey  // 用户标识。
+    Messages      []model.Message // 自上次提取以来累积的消息。
+    TotalTurns    int             // 自进程启动以来的累计对话轮数。
+    LastExtractAt *time.Time      // 上次提取时间戳，首次提取时为 nil。
+}
+```
+
+**注意**：`Messages` 包含自上次成功提取以来累积的所有消息。当检查器返回 `false` 时，消息会被累积，并在下次提取时一并处理。这确保了使用轮数或时间检查器时不会丢失对话上下文。
+
 ### 各模式工具可用性
 
 | 工具            | 工具驱动模式 | 自动提取模式 |

@@ -27,6 +27,11 @@ type MemoryExtractor interface {
 	Extract(ctx context.Context, messages []model.Message,
 		existing []*memory.Entry) ([]*Operation, error)
 
+	// ShouldExtract checks if extraction should be triggered based on context.
+	// Returns true if extraction should proceed, false to skip.
+	// When no checkers are configured, always returns true.
+	ShouldExtract(ctx *ExtractionContext) bool
+
 	// SetPrompt updates the extractor's prompt dynamically.
 	// The prompt will be used as the system message for memory extraction.
 	// If an empty prompt is provided, it will be ignored and the current

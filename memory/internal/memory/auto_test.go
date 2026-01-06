@@ -42,6 +42,10 @@ func (m *mockExtractor) Extract(
 	return m.ops, nil
 }
 
+func (m *mockExtractor) ShouldExtract(ctx *extractor.ExtractionContext) bool {
+	return true // Always extract by default.
+}
+
 func (m *mockExtractor) SetPrompt(prompt string) {}
 
 func (m *mockExtractor) SetModel(model model.Model) {}
@@ -418,6 +422,10 @@ func (e *blockingExtractor) Extract(
 ) ([]*extractor.Operation, error) {
 	<-e.blockCh
 	return nil, nil
+}
+
+func (e *blockingExtractor) ShouldExtract(ctx *extractor.ExtractionContext) bool {
+	return true
 }
 
 func (e *blockingExtractor) SetPrompt(prompt string) {}
@@ -910,4 +918,333 @@ func TestAutoMemoryWorker_EnqueueJob_RaceWithStop(t *testing.T) {
 
 	wg.Wait()
 	worker.Stop()
+}
+
+// checkerExtractor is a mock extractor that tracks ShouldExtract calls.
+type checkerExtractor struct {
+	shouldExtract bool
+	extractCalls  int
+	mu            sync.Mutex
+}
+
+func (e *checkerExtractor) Extract(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*extractor.Operation, error) {
+	e.mu.Lock()
+	e.extractCalls++
+	e.mu.Unlock()
+	return nil, nil
+}
+
+func (e *checkerExtractor) ShouldExtract(ctx *extractor.ExtractionContext) bool {
+	return e.shouldExtract
+}
+
+func (e *checkerExtractor) SetPrompt(prompt string) {}
+
+func (e *checkerExtractor) SetModel(m model.Model) {}
+
+func (e *checkerExtractor) Metadata() map[string]any {
+	return map[string]any{}
+}
+
+func (e *checkerExtractor) getExtractCalls() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.extractCalls
+}
+
+func TestAutoMemoryWorker_ShouldExtract_Skipped(t *testing.T) {
+	ext := &checkerExtractor{shouldExtract: false}
+	op := newMockOperator()
+	config := AutoMemoryConfig{
+		Extractor: ext,
+	}
+
+	worker := NewAutoMemoryWorker(config, op)
+	worker.Start()
+	defer worker.Stop()
+
+	// Enqueue job - should be skipped by checker.
+	err := worker.EnqueueJob(context.Background(), memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-1",
+	}, []model.Message{
+		model.NewUserMessage("hello"),
+	})
+
+	require.NoError(t, err)
+
+	// Give time for async processing.
+	time.Sleep(50 * time.Millisecond)
+
+	// Extract should not be called since ShouldExtract returns false.
+	assert.Equal(t, 0, ext.getExtractCalls())
+}
+
+func TestAutoMemoryWorker_ShouldExtract_Proceeds(t *testing.T) {
+	ext := &checkerExtractor{shouldExtract: true}
+	op := newMockOperator()
+	config := AutoMemoryConfig{
+		Extractor: ext,
+	}
+
+	worker := NewAutoMemoryWorker(config, op)
+	worker.Start()
+	defer worker.Stop()
+
+	// Enqueue job - should proceed.
+	err := worker.EnqueueJob(context.Background(), memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-1",
+	}, []model.Message{
+		model.NewUserMessage("hello"),
+	})
+
+	require.NoError(t, err)
+
+	// Give time for async processing.
+	time.Sleep(50 * time.Millisecond)
+
+	// Extract should be called since ShouldExtract returns true.
+	assert.Equal(t, 1, ext.getExtractCalls())
+}
+
+func TestAutoMemoryWorker_ExtractionState_TotalTurns(t *testing.T) {
+	var capturedCtx *extractor.ExtractionContext
+	ext := &mockExtractorWithCapture{
+		shouldExtract: true,
+		captureCtx:    func(ctx *extractor.ExtractionContext) { capturedCtx = ctx },
+	}
+	op := newMockOperator()
+	config := AutoMemoryConfig{
+		Extractor: ext,
+	}
+
+	worker := NewAutoMemoryWorker(config, op)
+
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-1",
+	}
+	messages := []model.Message{model.NewUserMessage("hello")}
+
+	// First call.
+	_ = worker.EnqueueJob(context.Background(), userKey, messages)
+	assert.Equal(t, 1, capturedCtx.TotalTurns)
+	assert.Nil(t, capturedCtx.LastExtractAt)
+
+	// Second call.
+	_ = worker.EnqueueJob(context.Background(), userKey, messages)
+	assert.Equal(t, 2, capturedCtx.TotalTurns)
+	assert.NotNil(t, capturedCtx.LastExtractAt)
+
+	// Third call.
+	_ = worker.EnqueueJob(context.Background(), userKey, messages)
+	assert.Equal(t, 3, capturedCtx.TotalTurns)
+}
+
+func TestAutoMemoryWorker_ExtractionState_PerUser(t *testing.T) {
+	var capturedCtx *extractor.ExtractionContext
+	ext := &mockExtractorWithCapture{
+		shouldExtract: true,
+		captureCtx:    func(ctx *extractor.ExtractionContext) { capturedCtx = ctx },
+	}
+	op := newMockOperator()
+	config := AutoMemoryConfig{
+		Extractor: ext,
+	}
+
+	worker := NewAutoMemoryWorker(config, op)
+
+	messages := []model.Message{model.NewUserMessage("hello")}
+
+	// User 1 first call.
+	_ = worker.EnqueueJob(context.Background(), memory.UserKey{
+		AppName: "app",
+		UserID:  "user-1",
+	}, messages)
+	assert.Equal(t, 1, capturedCtx.TotalTurns)
+
+	// User 2 first call (should have its own counter).
+	_ = worker.EnqueueJob(context.Background(), memory.UserKey{
+		AppName: "app",
+		UserID:  "user-2",
+	}, messages)
+	assert.Equal(t, 1, capturedCtx.TotalTurns)
+
+	// User 1 second call.
+	_ = worker.EnqueueJob(context.Background(), memory.UserKey{
+		AppName: "app",
+		UserID:  "user-1",
+	}, messages)
+	assert.Equal(t, 2, capturedCtx.TotalTurns)
+}
+
+// mockExtractorWithCapture captures ExtractionContext for testing.
+type mockExtractorWithCapture struct {
+	shouldExtract bool
+	captureCtx    func(*extractor.ExtractionContext)
+}
+
+func (e *mockExtractorWithCapture) Extract(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*extractor.Operation, error) {
+	return nil, nil
+}
+
+func (e *mockExtractorWithCapture) ShouldExtract(ctx *extractor.ExtractionContext) bool {
+	if e.captureCtx != nil {
+		e.captureCtx(ctx)
+	}
+	return e.shouldExtract
+}
+
+func (e *mockExtractorWithCapture) SetPrompt(prompt string) {}
+
+func (e *mockExtractorWithCapture) SetModel(m model.Model) {}
+
+func (e *mockExtractorWithCapture) Metadata() map[string]any {
+	return map[string]any{}
+}
+
+func TestAutoMemoryWorker_PendingMessages_Accumulation(t *testing.T) {
+	var capturedMessages []model.Message
+	ext := &mockExtractorWithCapture{
+		shouldExtract: false, // Don't extract, accumulate messages.
+		captureCtx: func(ctx *extractor.ExtractionContext) {
+			capturedMessages = ctx.Messages
+		},
+	}
+	op := newMockOperator()
+	config := AutoMemoryConfig{
+		Extractor: ext,
+	}
+
+	worker := NewAutoMemoryWorker(config, op)
+
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-1",
+	}
+
+	// First turn - not extracted.
+	msg1 := model.NewUserMessage("hello")
+	_ = worker.EnqueueJob(context.Background(), userKey, []model.Message{msg1})
+	assert.Len(t, capturedMessages, 1)
+	assert.Equal(t, "hello", capturedMessages[0].Content)
+
+	// Second turn - not extracted, messages should accumulate.
+	msg2 := model.NewUserMessage("world")
+	_ = worker.EnqueueJob(context.Background(), userKey, []model.Message{msg2})
+	assert.Len(t, capturedMessages, 2)
+	assert.Equal(t, "hello", capturedMessages[0].Content)
+	assert.Equal(t, "world", capturedMessages[1].Content)
+
+	// Third turn - not extracted, messages should continue accumulating.
+	msg3 := model.NewUserMessage("foo")
+	_ = worker.EnqueueJob(context.Background(), userKey, []model.Message{msg3})
+	assert.Len(t, capturedMessages, 3)
+}
+
+func TestAutoMemoryWorker_PendingMessages_ClearedAfterExtraction(t *testing.T) {
+	extractCount := 0
+	var capturedMessages []model.Message
+	ext := &mockExtractorWithCapture{
+		shouldExtract: false,
+		captureCtx: func(ctx *extractor.ExtractionContext) {
+			capturedMessages = ctx.Messages
+		},
+	}
+	op := newMockOperator()
+	config := AutoMemoryConfig{
+		Extractor: ext,
+	}
+
+	worker := NewAutoMemoryWorker(config, op)
+
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-1",
+	}
+
+	// First two turns - not extracted.
+	_ = worker.EnqueueJob(context.Background(), userKey, []model.Message{
+		model.NewUserMessage("msg1"),
+	})
+	_ = worker.EnqueueJob(context.Background(), userKey, []model.Message{
+		model.NewUserMessage("msg2"),
+	})
+	assert.Len(t, capturedMessages, 2)
+
+	// Now enable extraction.
+	ext.shouldExtract = true
+	ext.captureCtx = func(ctx *extractor.ExtractionContext) {
+		capturedMessages = ctx.Messages
+		extractCount++
+	}
+
+	// Third turn - should extract all accumulated messages.
+	_ = worker.EnqueueJob(context.Background(), userKey, []model.Message{
+		model.NewUserMessage("msg3"),
+	})
+	assert.Len(t, capturedMessages, 3)
+	assert.Equal(t, "msg1", capturedMessages[0].Content)
+	assert.Equal(t, "msg2", capturedMessages[1].Content)
+	assert.Equal(t, "msg3", capturedMessages[2].Content)
+
+	// Fourth turn - pending should be cleared, only new message.
+	_ = worker.EnqueueJob(context.Background(), userKey, []model.Message{
+		model.NewUserMessage("msg4"),
+	})
+	assert.Len(t, capturedMessages, 1)
+	assert.Equal(t, "msg4", capturedMessages[0].Content)
+}
+
+func TestAutoMemoryWorker_PendingMessages_PerUser(t *testing.T) {
+	var capturedMessages []model.Message
+	ext := &mockExtractorWithCapture{
+		shouldExtract: false,
+		captureCtx: func(ctx *extractor.ExtractionContext) {
+			capturedMessages = ctx.Messages
+		},
+	}
+	op := newMockOperator()
+	config := AutoMemoryConfig{
+		Extractor: ext,
+	}
+
+	worker := NewAutoMemoryWorker(config, op)
+
+	// User 1 accumulates messages.
+	_ = worker.EnqueueJob(context.Background(), memory.UserKey{
+		AppName: "app",
+		UserID:  "user-1",
+	}, []model.Message{model.NewUserMessage("user1-msg1")})
+	assert.Len(t, capturedMessages, 1)
+
+	_ = worker.EnqueueJob(context.Background(), memory.UserKey{
+		AppName: "app",
+		UserID:  "user-1",
+	}, []model.Message{model.NewUserMessage("user1-msg2")})
+	assert.Len(t, capturedMessages, 2)
+
+	// User 2 has its own pending messages.
+	_ = worker.EnqueueJob(context.Background(), memory.UserKey{
+		AppName: "app",
+		UserID:  "user-2",
+	}, []model.Message{model.NewUserMessage("user2-msg1")})
+	assert.Len(t, capturedMessages, 1) // Only user2's message.
+	assert.Equal(t, "user2-msg1", capturedMessages[0].Content)
+
+	// User 1 still has accumulated messages.
+	_ = worker.EnqueueJob(context.Background(), memory.UserKey{
+		AppName: "app",
+		UserID:  "user-1",
+	}, []model.Message{model.NewUserMessage("user1-msg3")})
+	assert.Len(t, capturedMessages, 3) // user1's 3 messages.
 }

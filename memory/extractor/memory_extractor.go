@@ -28,8 +28,9 @@ const (
 
 // memoryExtractor implements the MemoryExtractor interface.
 type memoryExtractor struct {
-	model  model.Model
-	prompt string
+	model    model.Model
+	prompt   string
+	checkers []Checker
 }
 
 // Option is a function that configures a MemoryExtractor.
@@ -41,6 +42,29 @@ func WithPrompt(prompt string) Option {
 	return func(e *memoryExtractor) {
 		if prompt != "" {
 			e.prompt = prompt
+		}
+	}
+}
+
+// WithChecker adds an extraction checker.
+// Multiple calls append checkers, combined with AND logic by default.
+// When checkers are configured, ShouldExtract returns true only if all
+// checkers pass.
+func WithChecker(c Checker) Option {
+	return func(e *memoryExtractor) {
+		if c != nil {
+			e.checkers = append(e.checkers, c)
+		}
+	}
+}
+
+// WithCheckersAny sets checkers with OR logic.
+// Any checker passing will trigger extraction.
+// This replaces any previously configured checkers.
+func WithCheckersAny(checks ...Checker) Option {
+	return func(e *memoryExtractor) {
+		if len(checks) > 0 {
+			e.checkers = []Checker{ChecksAny(checks...)}
 		}
 	}
 }
@@ -114,6 +138,22 @@ func (e *memoryExtractor) SetModel(m model.Model) {
 	if m != nil {
 		e.model = m
 	}
+}
+
+// ShouldExtract checks if extraction should be triggered based on context.
+// Returns true if extraction should proceed, false to skip.
+// When no checkers are configured, always returns true.
+func (e *memoryExtractor) ShouldExtract(ctx *ExtractionContext) bool {
+	if len(e.checkers) == 0 {
+		return true
+	}
+	// All checkers must pass (AND logic).
+	for _, check := range e.checkers {
+		if !check(ctx) {
+			return false
+		}
+	}
+	return true
 }
 
 // Metadata returns metadata about the extractor configuration.
