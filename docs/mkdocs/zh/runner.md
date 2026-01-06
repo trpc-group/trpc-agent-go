@@ -376,7 +376,8 @@ eventChan, err := r.Run(
 行为总结：
 
 先讲清楚一句话：这个开关控制的是“图里每个 LLM 节点是否要额外输出最终 `Done=true`
-的消息事件”，它不等价于“Runner 的完成事件一定会不会带 `Response.Choices`”。
+的消息事件”，它不等价于“Runner 的完成事件一定会带（或一定不会带）
+`Response.Choices`”。
 
 假设你的图是：`llm1 -> llm2 -> llm3`，最后由 `llm3` 产出最终答案：
 
