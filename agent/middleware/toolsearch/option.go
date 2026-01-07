@@ -19,6 +19,9 @@ type Config struct {
 	SystemPrompt  string
 	MaxTools      int
 	AlwaysInclude []string
+	// FailOpen controls whether ToolSearch should "fail open" and fallback to
+	// the original full tool set (i.e. do nothing)
+	FailOpen bool
 }
 
 // Option configures ToolSearch by mutating a Config.
@@ -48,4 +51,10 @@ func WithAlwaysInclude(names ...string) Option {
 	return func(c *Config) {
 		c.AlwaysInclude = append(c.AlwaysInclude, names...)
 	}
+}
+
+// WithFailOpen enables fail-open behavior: on missing user message or search error,
+// ToolSearch will not return an error and will leave req.Tools unchanged.
+func WithFailOpen() Option {
+	return func(c *Config) { c.FailOpen = true }
 }

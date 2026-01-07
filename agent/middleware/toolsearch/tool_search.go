@@ -25,6 +25,7 @@ type ToolSearch struct {
 	searcher      searcher
 	maxTools      int
 	alwaysInclude []string
+	failOpen      bool
 }
 
 // New creates a new ToolSearch.
@@ -40,6 +41,7 @@ func New(m model.Model, opts ...Option) (*ToolSearch, error) {
 	s := &ToolSearch{
 		maxTools:      cfg.MaxTools,
 		alwaysInclude: append([]string(nil), cfg.AlwaysInclude...),
+		failOpen:      cfg.FailOpen,
 	}
 	if s.maxTools <= 0 {
 		s.maxTools = defaultMaxTools
@@ -55,7 +57,13 @@ func New(m model.Model, opts ...Option) (*ToolSearch, error) {
 
 // Callback returns a BeforeModel callback that performs tool selection.
 func (s *ToolSearch) Callback() model.BeforeModelCallbackStructured {
-	return func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+	return func(ctx context.Context, args *model.BeforeModelArgs) (res *model.BeforeModelResult, err error) {
+		defer func() {
+			if err != nil && s.failOpen {
+				// Fallback to original full tool set (do not mutate req.Tools).
+				err = nil
+			}
+		}()
 		req := requestFromBeforeModelArgs(args)
 		if req == nil {
 			return nil, nil

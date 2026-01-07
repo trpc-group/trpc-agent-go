@@ -36,6 +36,9 @@ func TestNew_DefaultMaxToolsAndSearcherChoice(t *testing.T) {
 	if _, ok := s1.searcher.(*llmSearch); !ok {
 		t.Fatalf("searcher type = %T, want *llmSearch", s1.searcher)
 	}
+	if s1.failOpen {
+		t.Fatalf("fallback should default to false")
+	}
 
 	// WithToolKnowledge switches to knowledge searcher.
 	s2, err := New(m, WithToolKnowledge(&ToolKnowledge{}))
@@ -44,6 +47,14 @@ func TestNew_DefaultMaxToolsAndSearcherChoice(t *testing.T) {
 	}
 	if _, ok := s2.searcher.(*knowledgeSearcher); !ok {
 		t.Fatalf("searcher type = %T, want *knowledgeSearcher", s2.searcher)
+	}
+
+	s3, err := New(m, WithFailOpen())
+	if err != nil {
+		t.Fatalf("New err: %v", err)
+	}
+	if !s3.failOpen {
+		t.Fatalf("fallback flag not applied")
 	}
 }
 
@@ -151,6 +162,41 @@ func TestCallback_NoUserMessageErrors(t *testing.T) {
 	}
 }
 
+func TestCallback_NoUserMessage_FallbackToOriginalTools(t *testing.T) {
+	t.Parallel()
+
+	ts := &ToolSearch{
+		searcher: &fakeSearcher{},
+		maxTools: 2,
+		failOpen: true,
+	}
+	req := &model.Request{
+		Messages: []model.Message{model.NewSystemMessage("sys")},
+		Tools: map[string]tool.Tool{
+			"t1": fakeTool{decl: &tool.Declaration{Name: "t1"}},
+		},
+	}
+	// Snapshot tools before callback.
+	origSnapshot := make(map[string]tool.Tool, len(req.Tools))
+	for k, v := range req.Tools {
+		origSnapshot[k] = v
+	}
+
+	_, err := ts.Callback()(context.Background(), &model.BeforeModelArgs{Request: req})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	// Should not mutate tools.
+	if len(req.Tools) != len(origSnapshot) {
+		t.Fatalf("tools map size changed: %d -> %d", len(origSnapshot), len(req.Tools))
+	}
+	for k, v := range origSnapshot {
+		if req.Tools[k] != v {
+			t.Fatalf("tools map changed at key %q", k)
+		}
+	}
+}
+
 func TestCallback_SearcherErrorPropagates(t *testing.T) {
 	t.Parallel()
 
@@ -169,6 +215,42 @@ func TestCallback_SearcherErrorPropagates(t *testing.T) {
 	_, err := ts.Callback()(context.Background(), &model.BeforeModelArgs{Request: req})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err = %v, want %v", err, wantErr)
+	}
+}
+
+func TestCallback_SearcherError_FallbackToOriginalTools(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("boom")
+	fs := &fakeSearcher{err: wantErr}
+	ts := &ToolSearch{
+		searcher: fs,
+		maxTools: 2,
+		failOpen: true,
+	}
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+		Tools: map[string]tool.Tool{
+			"a": fakeTool{decl: &tool.Declaration{Name: "a"}},
+		},
+	}
+	origSnapshot := make(map[string]tool.Tool, len(req.Tools))
+	for k, v := range req.Tools {
+		origSnapshot[k] = v
+	}
+
+	_, err := ts.Callback()(context.Background(), &model.BeforeModelArgs{Request: req})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	// Should not mutate tools.
+	if len(req.Tools) != len(origSnapshot) {
+		t.Fatalf("tools map size changed: %d -> %d", len(origSnapshot), len(req.Tools))
+	}
+	for k, v := range origSnapshot {
+		if req.Tools[k] != v {
+			t.Fatalf("tools map changed at key %q", k)
+		}
 	}
 }
 

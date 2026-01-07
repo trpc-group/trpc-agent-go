@@ -131,12 +131,12 @@ func searchTools(ctx context.Context, m model.Model, req *model.Request, tools m
 		if start >= 0 && end > start {
 			if err2 := json.Unmarshal([]byte(content[start:end+1]), &parsed); err2 != nil {
 				return nil, fmt.Errorf(
-					"selecting tools: failed to parse selection JSON: %w",
+					"searching tools: failed to parse selection JSON: %w",
 					errors.Join(err, err2),
 				)
 			}
 		} else {
-			return nil, fmt.Errorf("selecting tools: failed to parse selection JSON: %w", err)
+			return nil, fmt.Errorf("searching tools: failed to parse selection JSON: %w", err)
 		}
 	}
 
@@ -159,7 +159,7 @@ func searchTools(ctx context.Context, m model.Model, req *model.Request, tools m
 		}
 	}
 	if len(invalid) > 0 {
-		return nil, fmt.Errorf("selecting tools: model selected invalid tools: %v", invalid)
+		return nil, fmt.Errorf("searching tools: model selected invalid tools: %v", invalid)
 	}
 	return selected, nil
 }
