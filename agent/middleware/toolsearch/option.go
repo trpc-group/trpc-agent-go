@@ -53,8 +53,7 @@ func WithAlwaysInclude(names ...string) Option {
 	}
 }
 
-// WithFailOpen enables fail-open behavior: on missing user message or search error,
-// ToolSearch will not return an error and will leave req.Tools unchanged.
+// WithFailOpen enables fail-open behavior: ToolSearch will not return an error and will not mutate req.Tools.
 func WithFailOpen() Option {
 	return func(c *Config) { c.FailOpen = true }
 }
