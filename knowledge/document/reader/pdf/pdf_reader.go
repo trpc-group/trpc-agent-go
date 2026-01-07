@@ -25,12 +25,14 @@ import (
 	pdfcpuAPI "github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
-	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/knowledge/document/internal/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+
+	itransform "trpc.group/trpc-go/trpc-agent-go/internal/knowledge/transform"
 )
 
 var (
@@ -48,7 +50,7 @@ type Reader struct {
 	chunk            bool
 	chunkingStrategy chunking.Strategy
 	ocrExtractor     ocr.Extractor
-	preProcessors    []processor.PreProcessor
+	transformers     []transform.Transformer
 }
 
 // New creates a new PDF reader with the given options.
@@ -71,7 +73,7 @@ func New(opts ...reader.Option) reader.Reader {
 		chunk:            config.Chunk,
 		chunkingStrategy: strategy,
 		ocrExtractor:     config.OCRExtractor,
-		preProcessors:    config.PreProcessors,
+		transformers:     config.Transformers,
 	}
 }
 
@@ -97,8 +99,8 @@ func (r *Reader) Close() error {
 }
 
 // ReadFromReader reads PDF content from an io.Reader and returns a list of documents.
-func (r *Reader) ReadFromReader(name string, reader io.Reader) ([]*document.Document, error) {
-	return r.readFromReaderWithContext(context.Background(), reader, name)
+func (r *Reader) ReadFromReader(name string, rd io.Reader) ([]*document.Document, error) {
+	return r.readFromReaderWithContext(context.Background(), rd, name)
 }
 
 // ReadFromFile reads PDF content from a file path and returns a list of documents.
@@ -162,9 +164,9 @@ func (r *Reader) ReadFromURLWithContext(ctx context.Context, urlStr string) ([]*
 }
 
 // readFromReaderWithContext reads PDF content from an io.Reader with context support.
-func (r *Reader) readFromReaderWithContext(ctx context.Context, reader io.Reader, name string) ([]*document.Document, error) {
+func (r *Reader) readFromReaderWithContext(ctx context.Context, rd io.Reader, name string) ([]*document.Document, error) {
 	// Read all content to create a ReadSeeker
-	content, err := io.ReadAll(reader)
+	content, err := io.ReadAll(rd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read PDF content: %w", err)
 	}
@@ -212,17 +214,27 @@ func (r *Reader) readFromFileTextOnly(filePath, name string) ([]*document.Docume
 
 	doc := idocument.CreateDocument(text, name)
 
-	// Apply preprocessors.
-	doc, err = processor.ApplyPreProcessors(doc, r.preProcessors...)
+	// Apply preprocess.
+	docs, err := itransform.ApplyPreprocess([]*document.Document{doc}, r.transformers...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to apply preprocessors: %w", err)
+		return nil, fmt.Errorf("failed to apply preprocess: %w", err)
 	}
 
 	// Apply chunking if enabled.
 	if r.chunk {
-		return r.chunkDocument(doc)
+		docs, err = r.chunkDocuments(docs)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return []*document.Document{doc}, nil
+
+	// Apply postprocess.
+	docs, err = itransform.ApplyPostprocess(docs, r.transformers...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply postprocess: %w", err)
+	}
+
+	return docs, nil
 }
 
 // readFromFileWithOCR reads PDF content from a file path with OCR support.
@@ -240,14 +252,14 @@ func (r *Reader) readFromFileWithOCR(ctx context.Context, filePath, name string)
 
 // extractTextFromReader reads text from a PDF reader without OCR support.
 // This is more efficient as it doesn't require a temporary file.
-func (r *Reader) extractTextFromReader(reader io.Reader, name string) ([]*document.Document, error) {
+func (r *Reader) extractTextFromReader(rd io.Reader, name string) ([]*document.Document, error) {
 	// If reader is already a ReadSeeker, use it directly
 	var readSeeker io.ReadSeeker
-	if rs, ok := reader.(io.ReadSeeker); ok {
+	if rs, ok := rd.(io.ReadSeeker); ok {
 		readSeeker = rs
 	} else {
 		// Read all content to create a ReadSeeker
-		content, err := io.ReadAll(reader)
+		content, err := io.ReadAll(rd)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read PDF content: %w", err)
 		}
@@ -262,17 +274,27 @@ func (r *Reader) extractTextFromReader(reader io.Reader, name string) ([]*docume
 
 	doc := idocument.CreateDocument(text, name)
 
-	// Apply preprocessors.
-	doc, err = processor.ApplyPreProcessors(doc, r.preProcessors...)
+	// Apply preprocess.
+	docs, err := itransform.ApplyPreprocess([]*document.Document{doc}, r.transformers...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to apply preprocessors: %w", err)
+		return nil, fmt.Errorf("failed to apply preprocess: %w", err)
 	}
 
 	// Apply chunking if enabled.
 	if r.chunk {
-		return r.chunkDocument(doc)
+		docs, err = r.chunkDocuments(docs)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return []*document.Document{doc}, nil
+
+	// Apply postprocess.
+	docs, err = itransform.ApplyPostprocess(docs, r.transformers...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply postprocess: %w", err)
+	}
+
+	return docs, nil
 }
 
 // readFromReaderWithOCR reads PDF content from a ReadSeeker with OCR support.
@@ -295,17 +317,27 @@ func (r *Reader) readFromReaderWithOCR(ctx context.Context, readSeeker io.ReadSe
 
 	doc := idocument.CreateDocument(allText.String(), name)
 
-	// Apply preprocessors.
-	doc, err = processor.ApplyPreProcessors(doc, r.preProcessors...)
+	// Apply preprocess.
+	docs, err := itransform.ApplyPreprocess([]*document.Document{doc}, r.transformers...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to apply preprocessors: %w", err)
+		return nil, fmt.Errorf("failed to apply preprocess: %w", err)
 	}
 
 	// Apply chunking if enabled.
 	if r.chunk {
-		return r.chunkDocument(doc)
+		docs, err = r.chunkDocuments(docs)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return []*document.Document{doc}, nil
+
+	// Apply postprocess.
+	docs, err = itransform.ApplyPostprocess(docs, r.transformers...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply postprocess: %w", err)
+	}
+
+	return docs, nil
 }
 
 // extractContentByPage extracts text and OCR content for each page separately.
@@ -474,12 +506,21 @@ func (r *Reader) getImageDataFromPDFCPUImage(img model.Image) ([]byte, error) {
 	return nil, fmt.Errorf("no image data available")
 }
 
-// chunkDocument applies chunking to a document.
-func (r *Reader) chunkDocument(doc *document.Document) ([]*document.Document, error) {
+// chunkDocuments applies chunking to documents.
+func (r *Reader) chunkDocuments(docs []*document.Document) ([]*document.Document, error) {
 	if r.chunkingStrategy == nil {
 		r.chunkingStrategy = chunking.NewFixedSizeChunking()
 	}
-	return r.chunkingStrategy.Chunk(doc)
+
+	var result []*document.Document
+	for _, doc := range docs {
+		chunks, err := r.chunkingStrategy.Chunk(doc)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, chunks...)
+	}
+	return result, nil
 }
 
 // extractFileNameFromURL extracts a file name from a URL.

@@ -20,11 +20,13 @@ import (
 	"strings"
 
 	"github.com/gonfva/docxlib"
-	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/knowledge/document/internal/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+
+	itransform "trpc.group/trpc-go/trpc-agent-go/internal/knowledge/transform"
 )
 
 var (
@@ -41,7 +43,7 @@ func init() {
 type Reader struct {
 	chunk            bool
 	chunkingStrategy chunking.Strategy
-	preProcessors    []processor.PreProcessor
+	transformers     []transform.Transformer
 }
 
 // New creates a new DOCX reader with the given options.
@@ -62,7 +64,7 @@ func New(opts ...reader.Option) reader.Reader {
 	return &Reader{
 		chunk:            config.Chunk,
 		chunkingStrategy: strategy,
-		preProcessors:    config.PreProcessors,
+		transformers:     config.Transformers,
 	}
 }
 
@@ -80,8 +82,8 @@ func buildDefaultChunkingStrategy(chunkSize, overlap int) chunking.Strategy {
 }
 
 // ReadFromReader reads DOCX content from an io.Reader and returns a list of documents.
-func (r *Reader) ReadFromReader(name string, reader io.Reader) ([]*document.Document, error) {
-	return r.readFromReader(reader, name)
+func (r *Reader) ReadFromReader(name string, rd io.Reader) ([]*document.Document, error) {
+	return r.readFromReader(rd, name)
 }
 
 // ReadFromFile reads DOCX content from a file path and returns a list of documents.
@@ -116,17 +118,27 @@ func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
 	// Create document.
 	docResult := idocument.CreateDocument(textContent, fileName)
 
-	// Apply preprocessors.
-	docResult, err = processor.ApplyPreProcessors(docResult, r.preProcessors...)
+	// Apply preprocess.
+	docs, err := itransform.ApplyPreprocess([]*document.Document{docResult}, r.transformers...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to apply preprocessors: %w", err)
+		return nil, fmt.Errorf("failed to apply preprocess: %w", err)
 	}
 
 	// Apply chunking if enabled.
 	if r.chunk {
-		return r.chunkDocument(docResult)
+		docs, err = r.chunkDocuments(docs)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return []*document.Document{docResult}, nil
+
+	// Apply postprocess.
+	docs, err = itransform.ApplyPostprocess(docs, r.transformers...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply postprocess: %w", err)
+	}
+
+	return docs, nil
 }
 
 // ReadFromURL reads DOCX content from a URL and returns a list of documents.
@@ -198,17 +210,27 @@ func (r *Reader) readFromReader(rd io.Reader, name string) ([]*document.Document
 	// Create document.
 	docResult := idocument.CreateDocument(textContent, name)
 
-	// Apply preprocessors.
-	docResult, err = processor.ApplyPreProcessors(docResult, r.preProcessors...)
+	// Apply preprocess.
+	docs, err := itransform.ApplyPreprocess([]*document.Document{docResult}, r.transformers...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to apply preprocessors: %w", err)
+		return nil, fmt.Errorf("failed to apply preprocess: %w", err)
 	}
 
 	// Apply chunking if enabled.
 	if r.chunk {
-		return r.chunkDocument(docResult)
+		docs, err = r.chunkDocuments(docs)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return []*document.Document{docResult}, nil
+
+	// Apply postprocess.
+	docs, err = itransform.ApplyPostprocess(docs, r.transformers...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply postprocess: %w", err)
+	}
+
+	return docs, nil
 }
 
 // extractTextFromDoc extracts all text content from a docxlib document.
@@ -251,12 +273,21 @@ func (r *Reader) extractTextFromDoc(doc *docxlib.DocxLib) string {
 	return strings.TrimSpace(textContent.String())
 }
 
-// chunkDocument applies chunking to a document.
-func (r *Reader) chunkDocument(doc *document.Document) ([]*document.Document, error) {
+// chunkDocuments applies chunking to documents.
+func (r *Reader) chunkDocuments(docs []*document.Document) ([]*document.Document, error) {
 	if r.chunkingStrategy == nil {
 		r.chunkingStrategy = chunking.NewFixedSizeChunking()
 	}
-	return r.chunkingStrategy.Chunk(doc)
+
+	var result []*document.Document
+	for _, doc := range docs {
+		chunks, err := r.chunkingStrategy.Chunk(doc)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, chunks...)
+	}
+	return result, nil
 }
 
 // extractFileNameFromURL extracts a file name from a URL.

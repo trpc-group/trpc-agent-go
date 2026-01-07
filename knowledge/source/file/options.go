@@ -11,10 +11,9 @@
 package file
 
 import (
-	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor/chardedup"
-	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor/charfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 // Option represents a functional option for configuring FileSource.
@@ -76,32 +75,17 @@ func WithOCRExtractor(extractor ocr.Extractor) Option {
 	}
 }
 
-// WithContentFilter sets characters to be removed from document content before chunking.
-// This is a convenience function that creates a CharFilter preprocessor.
+// WithTransformers sets transformers for document processing.
+// Transformers are applied before and after chunking.
 //
 // Example:
 //
-//	source := file.New(paths, file.WithContentFilter("\n", "\t", "\r"))
-func WithContentFilter(charsToRemove ...string) Option {
+//	source := file.New(paths, file.WithTransformers(
+//	    transform.NewCharFilter("\n", "\t"),
+//	    transform.NewCharDedup(" "),
+//	))
+func WithTransformers(transformers ...transform.Transformer) Option {
 	return func(s *Source) {
-		if len(charsToRemove) > 0 {
-			s.preProcessors = append(s.preProcessors, charfilter.New(charsToRemove...))
-		}
-	}
-}
-
-// WithContentDedup collapses consecutive repeated characters into a single occurrence.
-// For example, "\t\t\t\t" becomes "\t", "   " becomes " ".
-//
-// Example:
-//
-//	source := file.New(paths, file.WithContentDedup("\t", " ", "\n"))
-//	// Input:  "hello\t\t\tworld   foo\n\n\nbar"
-//	// Output: "hello\tworld foo\nbar"
-func WithContentDedup(charsToDedup ...string) Option {
-	return func(s *Source) {
-		if len(charsToDedup) > 0 {
-			s.preProcessors = append(s.preProcessors, chardedup.New(charsToDedup...))
-		}
+		s.transformers = append(s.transformers, transformers...)
 	}
 }

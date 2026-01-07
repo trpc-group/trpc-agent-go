@@ -19,8 +19,6 @@ import (
 	"os"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor/chardedup"
-	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor/charfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
@@ -30,6 +28,7 @@ import (
 	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 	urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 const (
@@ -46,8 +45,7 @@ type Source struct {
 	chunkOverlap           int
 	customChunkingStrategy chunking.Strategy
 	ocrExtractor           ocr.Extractor
-	contentFilterChars     []string
-	contentDedupChars      []string
+	transformers           []transform.Transformer
 }
 
 // New creates a new auto knowledge source.
@@ -84,11 +82,8 @@ func (s *Source) initializeReaders() {
 	if s.customChunkingStrategy != nil {
 		opts = append(opts, reader.WithCustomChunkingStrategy(s.customChunkingStrategy))
 	}
-	if len(s.contentFilterChars) > 0 {
-		opts = append(opts, reader.WithPreProcessors(charfilter.New(s.contentFilterChars...)))
-	}
-	if len(s.contentDedupChars) > 0 {
-		opts = append(opts, reader.WithPreProcessors(chardedup.New(s.contentDedupChars...)))
+	if len(s.transformers) > 0 {
+		opts = append(opts, reader.WithTransformers(s.transformers...))
 	}
 
 	s.textReader = text.New(opts...)
@@ -161,11 +156,8 @@ func (s *Source) processAsURL(ctx context.Context, input string) ([]*document.Do
 	var opts []urlsource.Option
 	opts = append(opts, urlsource.WithChunkSize(s.chunkSize))
 	opts = append(opts, urlsource.WithChunkOverlap(s.chunkOverlap))
-	if len(s.contentFilterChars) > 0 {
-		opts = append(opts, urlsource.WithContentFilter(s.contentFilterChars...))
-	}
-	if len(s.contentDedupChars) > 0 {
-		opts = append(opts, urlsource.WithContentDedup(s.contentDedupChars...))
+	if len(s.transformers) > 0 {
+		opts = append(opts, urlsource.WithTransformers(s.transformers...))
 	}
 
 	urlSource := urlsource.New([]string{input}, opts...)
@@ -196,11 +188,8 @@ func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*docum
 	if s.ocrExtractor != nil {
 		opts = append(opts, dirsource.WithOCRExtractor(s.ocrExtractor))
 	}
-	if len(s.contentFilterChars) > 0 {
-		opts = append(opts, dirsource.WithContentFilter(s.contentFilterChars...))
-	}
-	if len(s.contentDedupChars) > 0 {
-		opts = append(opts, dirsource.WithContentDedup(s.contentDedupChars...))
+	if len(s.transformers) > 0 {
+		opts = append(opts, dirsource.WithTransformers(s.transformers...))
 	}
 	dirSource := dirsource.New([]string{input}, opts...)
 	// Copy metadata.
@@ -230,11 +219,8 @@ func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.D
 	if s.ocrExtractor != nil {
 		opts = append(opts, filesource.WithOCRExtractor(s.ocrExtractor))
 	}
-	if len(s.contentFilterChars) > 0 {
-		opts = append(opts, filesource.WithContentFilter(s.contentFilterChars...))
-	}
-	if len(s.contentDedupChars) > 0 {
-		opts = append(opts, filesource.WithContentDedup(s.contentDedupChars...))
+	if len(s.transformers) > 0 {
+		opts = append(opts, filesource.WithTransformers(s.transformers...))
 	}
 	fileSource := filesource.New([]string{input}, opts...)
 

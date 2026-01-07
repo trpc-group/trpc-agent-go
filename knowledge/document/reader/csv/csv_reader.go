@@ -19,11 +19,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/knowledge/document/internal/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+
+	itransform "trpc.group/trpc-go/trpc-agent-go/internal/knowledge/transform"
 )
 
 var (
@@ -40,7 +42,7 @@ func init() {
 type Reader struct {
 	chunk            bool
 	chunkingStrategy chunking.Strategy
-	preProcessors    []processor.PreProcessor
+	transformers     []transform.Transformer
 }
 
 // New creates a new CSV reader with the given options.
@@ -61,7 +63,7 @@ func New(opts ...reader.Option) reader.Reader {
 	return &Reader{
 		chunk:            config.Chunk,
 		chunkingStrategy: strategy,
-		preProcessors:    config.PreProcessors,
+		transformers:     config.Transformers,
 	}
 }
 
@@ -89,16 +91,28 @@ func (r *Reader) ReadFromReader(name string, rd io.Reader) ([]*document.Document
 	textContent := r.csvToText(string(content))
 	// Create document.
 	doc := idocument.CreateDocument(textContent, name)
-	// Apply preprocessors.
-	doc, err = processor.ApplyPreProcessors(doc, r.preProcessors...)
+
+	// Apply preprocess.
+	docs, err := itransform.ApplyPreprocess([]*document.Document{doc}, r.transformers...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to apply preprocessors: %w", err)
+		return nil, fmt.Errorf("failed to apply preprocess: %w", err)
 	}
+
 	// Apply chunking if enabled.
 	if r.chunk {
-		return r.chunkDocument(doc)
+		docs, err = r.chunkDocuments(docs)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return []*document.Document{doc}, nil
+
+	// Apply postprocess.
+	docs, err = itransform.ApplyPostprocess(docs, r.transformers...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply postprocess: %w", err)
+	}
+
+	return docs, nil
 }
 
 // ReadFromFile reads CSV content from a file path and returns a list of documents.
@@ -114,16 +128,28 @@ func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
 	textContent := r.csvToText(string(content))
 	// Create document.
 	doc := idocument.CreateDocument(textContent, fileName)
-	// Apply preprocessors.
-	doc, err = processor.ApplyPreProcessors(doc, r.preProcessors...)
+
+	// Apply preprocess.
+	docs, err := itransform.ApplyPreprocess([]*document.Document{doc}, r.transformers...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to apply preprocessors: %w", err)
+		return nil, fmt.Errorf("failed to apply preprocess: %w", err)
 	}
+
 	// Apply chunking if enabled.
 	if r.chunk {
-		return r.chunkDocument(doc)
+		docs, err = r.chunkDocuments(docs)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return []*document.Document{doc}, nil
+
+	// Apply postprocess.
+	docs, err = itransform.ApplyPostprocess(docs, r.transformers...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply postprocess: %w", err)
+	}
+
+	return docs, nil
 }
 
 // ReadFromURL reads CSV content from a URL and returns a list of documents.
@@ -174,12 +200,21 @@ func (r *Reader) csvToText(csvContent string) string {
 	return strings.Join(processedLines, "\n")
 }
 
-// chunkDocument applies chunking to a document.
-func (r *Reader) chunkDocument(doc *document.Document) ([]*document.Document, error) {
+// chunkDocuments applies chunking to documents.
+func (r *Reader) chunkDocuments(docs []*document.Document) ([]*document.Document, error) {
 	if r.chunkingStrategy == nil {
 		r.chunkingStrategy = chunking.NewFixedSizeChunking()
 	}
-	return r.chunkingStrategy.Chunk(doc)
+
+	var result []*document.Document
+	for _, doc := range docs {
+		chunks, err := r.chunkingStrategy.Chunk(doc)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, chunks...)
+	}
+	return result, nil
 }
 
 // extractFileNameFromURL extracts a file name from a URL.

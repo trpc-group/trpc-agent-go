@@ -7,8 +7,7 @@
 //
 //
 
-// Package chardedup provides character deduplication preprocessor for documents.
-package chardedup
+package transform
 
 import (
 	"regexp"
@@ -20,20 +19,18 @@ import (
 // CharDedup collapses consecutive repeated characters/strings into a single occurrence.
 // For example, "\t\t\t\t" becomes "\t", "   " becomes " ".
 type CharDedup struct {
-	// patterns contains compiled regex patterns for each character to deduplicate.
-	patterns []*regexp.Regexp
-	// replacements contains the single character replacement for each pattern.
+	patterns     []*regexp.Regexp
 	replacements []string
 }
 
-// New creates a CharDedup that collapses consecutive occurrences of the specified strings.
+// NewCharDedup creates a CharDedup that collapses consecutive occurrences of the specified strings.
 //
 // Example:
 //
-//	dedup := New("\t", " ", "\n")
+//	dedup := transform.NewCharDedup("\t", " ", "\n")
 //	// Input:  "hello\t\t\tworld   foo\n\n\nbar"
 //	// Output: "hello\tworld foo\nbar"
-func New(charsToDedup ...string) *CharDedup {
+func NewCharDedup(charsToDedup ...string) *CharDedup {
 	patterns := make([]*regexp.Regexp, 0, len(charsToDedup))
 	replacements := make([]string, 0, len(charsToDedup))
 
@@ -54,14 +51,31 @@ func New(charsToDedup ...string) *CharDedup {
 	}
 }
 
-// Process applies the character deduplication to a document.
-func (cd *CharDedup) Process(doc *document.Document) (*document.Document, error) {
-	if doc == nil {
-		return nil, nil
+// Preprocess applies the character deduplication to documents before chunking.
+func (cd *CharDedup) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	return cd.transform(docs)
+}
+
+// Postprocess returns documents unchanged (no-op for CharDedup).
+func (cd *CharDedup) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+// transform applies the character deduplication transformation to documents.
+func (cd *CharDedup) transform(docs []*document.Document) ([]*document.Document, error) {
+	if len(docs) == 0 {
+		return docs, nil
 	}
 
-	deduped := cd.dedupContent(doc.Content)
-	return cd.createProcessedDoc(doc, deduped), nil
+	result := make([]*document.Document, 0, len(docs))
+	for _, doc := range docs {
+		if doc == nil {
+			continue
+		}
+		deduped := cd.dedupContent(doc.Content)
+		result = append(result, cd.createProcessedDoc(doc, deduped))
+	}
+	return result, nil
 }
 
 // dedupContent applies all deduplication patterns to the content.
@@ -77,7 +91,6 @@ func (cd *CharDedup) dedupContent(content string) string {
 
 // createProcessedDoc creates a new document with processed content.
 func (cd *CharDedup) createProcessedDoc(original *document.Document, content string) *document.Document {
-	// Copy metadata
 	metadata := make(map[string]any)
 	for k, v := range original.Metadata {
 		metadata[k] = v
@@ -93,7 +106,7 @@ func (cd *CharDedup) createProcessedDoc(original *document.Document, content str
 	}
 }
 
-// Name returns the name of this processor.
+// Name returns the name of this transformer.
 func (cd *CharDedup) Name() string {
 	return "CharDedup"
 }

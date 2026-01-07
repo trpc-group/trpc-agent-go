@@ -14,10 +14,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/json"
@@ -31,7 +31,7 @@ type ReaderConfig struct {
 	chunkOverlap           int
 	customChunkingStrategy chunking.Strategy
 	ocrExtractor           ocr.Extractor
-	preProcessors          []processor.PreProcessor
+	transformers           []transform.Transformer
 }
 
 // ReaderOption is a functional option for configuring readers.
@@ -65,10 +65,10 @@ func WithOCRExtractor(extractor ocr.Extractor) ReaderOption {
 	}
 }
 
-// WithPreProcessors sets the preprocessors for document processing.
-func WithPreProcessors(processors ...processor.PreProcessor) ReaderOption {
+// WithTransformers sets the transformers for document processing.
+func WithTransformers(transformers ...transform.Transformer) ReaderOption {
 	return func(c *ReaderConfig) {
-		c.preProcessors = processors
+		c.transformers = transformers
 	}
 }
 
@@ -105,8 +105,8 @@ func buildReaderOptions(config *ReaderConfig) []reader.Option {
 		opts = append(opts, reader.WithOCRExtractor(config.ocrExtractor))
 	}
 
-	if len(config.preProcessors) > 0 {
-		opts = append(opts, reader.WithPreProcessors(config.preProcessors...))
+	if len(config.transformers) > 0 {
+		opts = append(opts, reader.WithTransformers(config.transformers...))
 	}
 
 	return opts
@@ -181,4 +181,5 @@ func GetFileTypeFromContentType(contentType, fileName string) string {
 func GetReadersWithChunkConfig(chunkSize, overlap int) map[string]reader.Reader {
 	return GetReaders(WithChunkSize(chunkSize), WithChunkOverlap(overlap))
 }
+
 

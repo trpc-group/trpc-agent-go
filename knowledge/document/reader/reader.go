@@ -14,10 +14,10 @@ package reader
 import (
 	"io"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/knowledge/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 // Config holds configuration for readers.
@@ -27,7 +27,7 @@ type Config struct {
 	ChunkOverlap           int
 	CustomChunkingStrategy chunking.Strategy
 	OCRExtractor           ocr.Extractor
-	PreProcessors          []processor.PreProcessor
+	Transformers           []transform.Transformer
 }
 
 // Option is a functional option for configuring readers.
@@ -74,11 +74,11 @@ func WithOCRExtractor(extractor ocr.Extractor) Option {
 	}
 }
 
-// WithPreProcessors sets the preprocessors for document processing.
-// Preprocessors are applied to documents before chunking.
-func WithPreProcessors(processors ...processor.PreProcessor) Option {
+// WithTransformers sets the transformers for document processing.
+// Transformers are applied to documents before and after chunking.
+func WithTransformers(transformers ...transform.Transformer) Option {
 	return func(c *Config) {
-		c.PreProcessors = processors
+		c.Transformers = append(c.Transformers, transformers...)
 	}
 }
 
