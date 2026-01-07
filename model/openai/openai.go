@@ -1066,7 +1066,7 @@ func (m *Model) accumulateChunk(
 		acc.AddChunk(sanitizedChunk)
 		if m.accumulateChunkUsage != nil {
 			accUsage, chunkUsage := completionUsageToModelUsage(acc.Usage), completionUsageToModelUsage(chunk.Usage)
-			usage := inverseOPENAISKDAddChunkUsage(accUsage, chunkUsage)
+			usage := inverseOpenAISDKAddChunkUsage(accUsage, chunkUsage)
 			usage = m.accumulateChunkUsage(usage, chunkUsage)
 			acc.Usage = modelUsageToCompletionUsage(usage)
 		}

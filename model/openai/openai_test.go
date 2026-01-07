@@ -3124,7 +3124,7 @@ func TestInverseOPENAISKDAddChunkUsage(t *testing.T) {
 			TotalTokens:      15,
 		}
 
-		result := inverseOPENAISKDAddChunkUsage(currentUsage, delta)
+		result := inverseOpenAISDKAddChunkUsage(currentUsage, delta)
 
 		assert.Equal(t, 90, result.PromptTokens, "expected prompt tokens to be 90 (100 - 10)")
 		assert.Equal(t, 45, result.CompletionTokens, "expected completion tokens to be 45 (50 - 5)")
@@ -3143,7 +3143,7 @@ func TestInverseOPENAISKDAddChunkUsage(t *testing.T) {
 			TotalTokens:      0,
 		}
 
-		result := inverseOPENAISKDAddChunkUsage(currentUsage, delta)
+		result := inverseOpenAISDKAddChunkUsage(currentUsage, delta)
 
 		assert.Equal(t, 100, result.PromptTokens, "expected prompt tokens to remain 100")
 		assert.Equal(t, 50, result.CompletionTokens, "expected completion tokens to remain 50")
@@ -3162,7 +3162,7 @@ func TestInverseOPENAISKDAddChunkUsage(t *testing.T) {
 			TotalTokens:      30,
 		}
 
-		result := inverseOPENAISKDAddChunkUsage(currentUsage, delta)
+		result := inverseOpenAISDKAddChunkUsage(currentUsage, delta)
 
 		assert.Equal(t, -10, result.PromptTokens, "expected prompt tokens to be -10 (10 - 20)")
 		assert.Equal(t, -5, result.CompletionTokens, "expected completion tokens to be -5 (5 - 10)")
