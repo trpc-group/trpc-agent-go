@@ -22,21 +22,25 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+// ToolKnowledge is a tool knowledge base that uses a vector store to store tools and their embeddings.
 type ToolKnowledge struct {
 	s     vectorstore.VectorStore
 	e     embedder.Embedder
 	tools map[string]tool.Tool
 }
 
+// ToolKnowledgeOption is a function that configures the ToolKnowledge.
 type ToolKnowledgeOption func(*ToolKnowledge)
 
+// WithVectorStore sets the vector store for the ToolKnowledge.
 func WithVectorStore(s vectorstore.VectorStore) ToolKnowledgeOption {
 	return func(k *ToolKnowledge) {
 		k.s = s
 	}
 }
 
-func NewToolKnowledge(e embedder.Embedder, opts ...ToolKnowledgeOption) *ToolKnowledge {
+// NewToolKnowledge creates a new ToolKnowledge.
+func NewToolKnowledge(e embedder.Embedder, opts ...ToolKnowledgeOption) (*ToolKnowledge, error) {
 	k := &ToolKnowledge{
 		s:     inmemory.New(), // default vector store
 		e:     e,
@@ -47,7 +51,7 @@ func NewToolKnowledge(e embedder.Embedder, opts ...ToolKnowledgeOption) *ToolKno
 			opt(k)
 		}
 	}
-	return k
+	return k, nil
 }
 
 func (k *ToolKnowledge) search(ctx context.Context, query string, topK int) (map[string]tool.Tool, error) {

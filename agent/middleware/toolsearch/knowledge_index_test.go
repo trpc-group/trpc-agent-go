@@ -53,13 +53,15 @@ type nilTool struct{}
 func (nilTool) Declaration() *tool.Declaration { return nil }
 
 func TestNewToolKnowledge_DefaultAndOverrideVectorStore(t *testing.T) {
-	k0 := NewToolKnowledge(nil)
+	k0, err := NewToolKnowledge(nil)
+	require.NoError(t, err)
 	require.NotNil(t, k0)
 	require.NotNil(t, k0.s)
 	_, ok := k0.s.(*inmemory.VectorStore)
 	require.True(t, ok, "default VectorStore should be inmemory.VectorStore")
 
 	custom := inmemory.New()
-	k1 := NewToolKnowledge(nil, WithVectorStore(custom))
+	k1, err := NewToolKnowledge(nil, WithVectorStore(custom))
+	require.NoError(t, err)
 	require.Same(t, custom, k1.s)
 }
