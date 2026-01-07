@@ -1982,7 +1982,7 @@ sg.AddEdge(nodeSplit, nodeB)
 sg.AddJoinEdge([]string{nodeA, nodeB}, nodeJoin)
 ```
 
-`AddJoinEdge` 会创建一个内部 barrier（屏障）通道，只有当 `froms` 里的每个
+`AddJoinEdge` 会创建一个内部 barrier（屏障）通道，只有当上游节点列表里的每个
 节点都“报到”后才触发 `to`。触发后屏障会重置，因此在循环图里可以再次汇聚。
 
 参考示例：`examples/graph/join_edge`。

@@ -508,8 +508,8 @@ func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 
 // AddJoinEdge adds a join edge that waits for all start nodes to complete
 // before triggering the end node.
-func (sg *StateGraph) AddJoinEdge(froms []string, to string) *StateGraph {
-	starts := normalizeJoinStarts(froms)
+func (sg *StateGraph) AddJoinEdge(fromNodes []string, to string) *StateGraph {
+	starts := normalizeJoinStarts(fromNodes)
 	if to == "" || to == Start || len(starts) == 0 {
 		return sg
 	}
@@ -544,13 +544,13 @@ func (sg *StateGraph) AddJoinEdge(froms []string, to string) *StateGraph {
 	return sg
 }
 
-func normalizeJoinStarts(froms []string) []string {
-	if len(froms) == 0 {
+func normalizeJoinStarts(fromNodes []string) []string {
+	if len(fromNodes) == 0 {
 		return nil
 	}
-	seen := make(map[string]bool, len(froms))
-	out := make([]string, 0, len(froms))
-	for _, from := range froms {
+	seen := make(map[string]bool, len(fromNodes))
+	out := make([]string, 0, len(fromNodes))
+	for _, from := range fromNodes {
 		if from == "" || from == Start || from == End {
 			continue
 		}

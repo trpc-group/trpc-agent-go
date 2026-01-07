@@ -8,11 +8,11 @@ In a graph workflow, it is common to **fan out** work into multiple branches
 (run multiple nodes in parallel), then **fan in** the results (continue only
 after all branches are done).
 
-`AddJoinEdge(froms, to)` provides this **wait-all fan-in** behavior:
+`AddJoinEdge(fromNodes, to)` provides this **wait-all fan-in** behavior:
 
-- `froms`: the upstream node IDs that must all finish
-- `to`: the downstream node ID that should run **once**, only after all `froms`
-  have completed
+- `fromNodes`: the upstream node IDs that must all finish
+- `to`: the downstream node ID that should run **once**, only after all
+  `fromNodes` have completed
 
 ## Graph Shape
 
@@ -39,4 +39,3 @@ go run . -sleep-a 200ms -sleep-b 50ms
 
 The output prints the final execution order stored in state. The relative order
 between `a` and `b` may vary, but `join` always appears after both.
-
