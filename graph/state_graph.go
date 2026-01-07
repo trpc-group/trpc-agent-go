@@ -15,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -476,6 +478,11 @@ func (sg *StateGraph) AddSubgraphNode(id string, opts ...Option) *StateGraph {
 // channelUpdateMarker value for marking channel updates.
 const channelUpdateMarker = "update"
 
+const (
+	joinChannelFromSeparator = ":from:"
+	joinChannelListSeparator = "+"
+)
+
 // AddEdge adds a normal edge between two nodes.
 // This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
@@ -497,6 +504,64 @@ func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 	}
 	sg.graph.addNodeWriter(from, writer)
 	return sg
+}
+
+// AddJoinEdge adds a join edge that waits for all start nodes to complete
+// before triggering the end node.
+func (sg *StateGraph) AddJoinEdge(froms []string, to string) *StateGraph {
+	starts := normalizeJoinStarts(froms)
+	if to == "" || to == Start || len(starts) == 0 {
+		return sg
+	}
+
+	for _, from := range starts {
+		edge := &Edge{
+			From: from,
+			To:   to,
+		}
+		sg.graph.addEdge(edge)
+	}
+
+	joinKey := strings.Join(starts, joinChannelListSeparator)
+	channelName := ChannelJoinPrefix + to + joinChannelFromSeparator +
+		joinKey
+
+	sg.graph.addChannel(channelName, channel.BehaviorBarrier)
+	if ch, ok := sg.graph.getChannel(channelName); ok && ch != nil {
+		ch.SetBarrierExpected(starts)
+	}
+
+	sg.graph.addNodeTriggerChannel(to, channelName)
+	sg.graph.addNodeTrigger(channelName, to)
+
+	for _, from := range starts {
+		writer := channelWriteEntry{
+			Channel: channelName,
+			Value:   from,
+		}
+		sg.graph.addNodeWriter(from, writer)
+	}
+	return sg
+}
+
+func normalizeJoinStarts(froms []string) []string {
+	if len(froms) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(froms))
+	out := make([]string, 0, len(froms))
+	for _, from := range froms {
+		if from == "" || from == Start || from == End {
+			continue
+		}
+		if seen[from] {
+			continue
+		}
+		seen[from] = true
+		out = append(out, from)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // AddConditionalEdges adds conditional routing from a node.
