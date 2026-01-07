@@ -41,6 +41,9 @@ func New(m model.Model, opts ...Option) (*ToolSearch, error) {
 		maxTools:      cfg.MaxTools,
 		alwaysInclude: append([]string(nil), cfg.AlwaysInclude...),
 	}
+	if s.maxTools <= 0 {
+		s.maxTools = defaultMaxTools
+	}
 
 	if cfg.toolKnowledge != nil {
 		s.toolIndex = newKnowledgeIndex(cfg.Model, cfg.SystemPrompt, cfg.toolKnowledge)

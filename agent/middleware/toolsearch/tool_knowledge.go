@@ -67,7 +67,14 @@ func (k *ToolKnowledge) search(ctx context.Context, candidates map[string]tool.T
 	for name := range candidates {
 		names = append(names, name)
 	}
-	results, err := k.s.Search(ctx, &vectorstore.SearchQuery{Vector: embedding, SearchMode: vectorstore.SearchModeVector, Limit: topK, Filter: &vectorstore.SearchFilter{IDs: names}})
+	results, err := k.s.Search(ctx, &vectorstore.SearchQuery{
+		Vector:     embedding,
+		SearchMode: vectorstore.SearchModeVector,
+		Limit:      topK,
+		Filter: &vectorstore.SearchFilter{
+			IDs: names,
+		},
+	})
 	if err != nil {
 		return nil, err
 	}

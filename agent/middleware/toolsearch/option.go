@@ -35,10 +35,12 @@ func WithSystemPrompt(prompt string) Option {
 }
 
 // WithMaxTools sets the maximum number of tools to select.
-// If maxTools <= 0, there is no limit.
+// If maxTools <= 0, the maximum number of tools is defaultMaxTools.
 func WithMaxTools(maxTools int) Option {
 	return func(c *Config) { c.MaxTools = maxTools }
 }
+
+const defaultMaxTools = 10000
 
 // WithAlwaysInclude adds tool names that are always included regardless of
 // selection. These do not count against `maxTools`.

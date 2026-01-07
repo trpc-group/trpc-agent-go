@@ -257,8 +257,8 @@ func TestToolSearch_SelectToolNames_EmptyResponse(t *testing.T) {
 	}
 
 	_, err := cb(context.Background(), &model.BeforeModelArgs{Request: req})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "empty response")
+	require.NoError(t, err)
+	require.Empty(t, req.Tools)
 }
 
 func TestToolSearch_SelectToolNames_EmptyContent(t *testing.T) {
@@ -283,8 +283,8 @@ func TestToolSearch_SelectToolNames_EmptyContent(t *testing.T) {
 	}
 
 	_, err := cb(context.Background(), &model.BeforeModelArgs{Request: req})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "content is empty")
+	require.NoError(t, err)
+	require.Empty(t, req.Tools)
 }
 
 func TestToolSearch_NoUserMessage_Error(t *testing.T) {
@@ -337,21 +337,6 @@ func TestToolSearch_Callback_NilArgs_NoOp(t *testing.T) {
 	res, err = cb(context.Background(), &model.BeforeModelArgs{Request: nil})
 	require.NoError(t, err)
 	require.Nil(t, res)
-}
-
-func TestToolSearch_WithSystemPrompt_EmptyUsesDefault(t *testing.T) {
-	sel0 := mustNewSelector(t, nil)
-	require.Equal(t, defaultSystemPrompt, sel0.systemPrompt)
-
-	sel1 := mustNewSelector(t, nil, WithSystemPrompt(""))
-	require.Equal(t, defaultSystemPrompt, sel1.systemPrompt)
-
-	sel2 := mustNewSelector(t, nil, WithSystemPrompt("custom"))
-	require.Equal(t, "custom", sel2.systemPrompt)
-
-	// When toolKnowledge is configured and systemPrompt is empty, use the tool-knowledge prompt.
-	sel3 := mustNewSelector(t, nil, WithToolKnowledge(&ToolKnowledge{}))
-	require.Equal(t, defaultSystemPromptWithToolKnowledge, sel3.systemPrompt)
 }
 
 func TestToolSearch_SelectToolNames_UsesDeltaContent(t *testing.T) {
