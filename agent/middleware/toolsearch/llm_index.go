@@ -26,34 +26,23 @@ import (
 // It intentionally uses the existing request-building/parsing code paths to keep behavior
 // consistent with the middleware callback.
 type llmIndex struct {
-	model          model.Model
-	systemPrompt   string
-	candidateTools map[string]tool.Tool
+	model        model.Model
+	systemPrompt string
 }
 
 const defaultSystemPrompt = "Your goal is to select the most relevant tools for answering the user's query."
 
-func newLlmCandidateSearcher(model model.Model, systemPrompt string) *llmIndex {
+func newLlmIndex(model model.Model, systemPrompt string) *llmIndex {
 	if systemPrompt == "" {
 		systemPrompt = defaultSystemPrompt
 	}
 	return &llmIndex{
-		model:          model,
-		systemPrompt:   systemPrompt,
-		candidateTools: make(map[string]tool.Tool),
+		model:        model,
+		systemPrompt: systemPrompt,
 	}
 }
 
-func (s *llmIndex) upsert(ctx context.Context, candidateTools map[string]tool.Tool) error {
-	s.candidateTools = candidateTools
-	return nil
-}
-
-func (s *llmIndex) rewriteQuery(ctx context.Context, query string) (string, error) {
-	return query, nil
-}
-
-func (s *llmIndex) search(ctx context.Context, query string, topK int) (map[string]tool.Tool, error) {
+func (s *llmIndex) search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) ([]string, error) {
 	systemMsg := s.systemPrompt
 	if topK > 0 {
 		systemMsg += fmt.Sprintf(
@@ -62,7 +51,7 @@ func (s *llmIndex) search(ctx context.Context, query string, topK int) (map[stri
 			topK,
 		)
 	}
-	systemMsg += "\n\nAvailable tools:\n" + renderToolList(s.candidateTools)
+	systemMsg += "\n\nAvailable tools:\n" + renderToolList(candidates)
 	req := &model.Request{
 		Messages: []model.Message{
 			model.NewSystemMessage(systemMsg),
@@ -73,14 +62,14 @@ func (s *llmIndex) search(ctx context.Context, query string, topK int) (map[stri
 			Type: model.StructuredOutputJSONSchema,
 			JSONSchema: &model.JSONSchemaConfig{
 				Name:        "tool_selection",
-				Schema:      toolSelectionSchema(s.candidateTools),
+				Schema:      toolSelectionSchema(candidates),
 				Strict:      true,
 				Description: "Tools to use. Place the most relevant tools first.",
 			},
 		},
 	}
 
-	selectedNames, err := selectToolNames(ctx, s.model, req, s.candidateTools)
+	selectedNames, err := selectToolNames(ctx, s.model, req, candidates)
 	if err != nil {
 		return nil, err
 	}
@@ -88,11 +77,7 @@ func (s *llmIndex) search(ctx context.Context, query string, topK int) (map[stri
 		selectedNames = selectedNames[:topK]
 	}
 
-	selected := make(map[string]tool.Tool, len(selectedNames))
-	for _, name := range selectedNames {
-		selected[name] = s.candidateTools[name]
-	}
-	return selected, nil
+	return selectedNames, nil
 }
 
 type toolSelectionResponse struct {

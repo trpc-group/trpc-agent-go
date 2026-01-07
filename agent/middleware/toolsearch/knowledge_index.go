@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type knowledgeIndex struct {
@@ -26,7 +27,7 @@ type knowledgeIndex struct {
 const defaultSystemPromptWithToolKnowledge = "Your goal is to identify the most relevant tools for answering the user's query. " +
 	"Provide a natural-language description of the kind of tool needed (e.g., 'weather information', 'currency conversion', 'stock prices')."
 
-func newToolKnowledgeSearcher(m model.Model, systemPrompt string, toolKnowledge *ToolKnowledge) *knowledgeIndex {
+func newKnowledgeIndex(m model.Model, systemPrompt string, toolKnowledge *ToolKnowledge) *knowledgeIndex {
 	if systemPrompt == "" {
 		systemPrompt = defaultSystemPromptWithToolKnowledge
 	}
@@ -35,6 +36,17 @@ func newToolKnowledgeSearcher(m model.Model, systemPrompt string, toolKnowledge 
 		systemPrompt:  systemPrompt,
 		ToolKnowledge: toolKnowledge,
 	}
+}
+
+func (s *knowledgeIndex) search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) ([]string, error) {
+	query, err := s.rewriteQuery(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ToolKnowledge.upsert(ctx, candidates); err != nil {
+		return nil, err
+	}
+	return s.ToolKnowledge.search(ctx, candidates, query, topK)
 }
 
 func (s *knowledgeIndex) rewriteQuery(ctx context.Context, query string) (string, error) {
@@ -47,7 +59,7 @@ func (s *knowledgeIndex) rewriteQuery(ctx context.Context, query string) (string
 	}
 	respCh, err := s.model.GenerateContent(ctx, req)
 	if err != nil {
-		return "", fmt.Errorf("RewriteQuery: selection model call failed: %w", err)
+		return "", fmt.Errorf("rewriting query: selection model call failed: %w", err)
 	}
 
 	var final *model.Response
@@ -56,7 +68,7 @@ func (s *knowledgeIndex) rewriteQuery(ctx context.Context, query string) (string
 			continue
 		}
 		if r.Error != nil {
-			return "", fmt.Errorf("ToolSearch: selection model returned error: %s", r.Error.Message)
+			return "", fmt.Errorf("rewriting query: selection model returned error: %s", r.Error.Message)
 		}
 		if !r.IsPartial {
 			final = r

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
@@ -24,8 +25,10 @@ import (
 
 // ToolKnowledge is a tool knowledge base that uses a vector store to store tools and their embeddings.
 type ToolKnowledge struct {
-	s     vectorstore.VectorStore
-	e     embedder.Embedder
+	s vectorstore.VectorStore
+	e embedder.Embedder
+
+	mu    sync.RWMutex
 	tools map[string]tool.Tool
 }
 
@@ -45,6 +48,7 @@ func NewToolKnowledge(e embedder.Embedder, opts ...ToolKnowledgeOption) (*ToolKn
 		s:     inmemory.New(), // default vector store
 		e:     e,
 		tools: make(map[string]tool.Tool),
+		mu:    sync.RWMutex{},
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -54,29 +58,29 @@ func NewToolKnowledge(e embedder.Embedder, opts ...ToolKnowledgeOption) (*ToolKn
 	return k, nil
 }
 
-func (k *ToolKnowledge) search(ctx context.Context, query string, topK int) (map[string]tool.Tool, error) {
-	if err := k.ensureReady(); err != nil {
-		return nil, err
-	}
+func (k *ToolKnowledge) search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) ([]string, error) {
 	embedding, err := k.e.GetEmbedding(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	results, err := k.s.Search(ctx, &vectorstore.SearchQuery{Vector: embedding, SearchMode: vectorstore.SearchModeVector, Limit: topK})
+	names := make([]string, 0, len(candidates))
+	for name := range candidates {
+		names = append(names, name)
+	}
+	results, err := k.s.Search(ctx, &vectorstore.SearchQuery{Vector: embedding, SearchMode: vectorstore.SearchModeVector, Limit: topK, Filter: &vectorstore.SearchFilter{IDs: names}})
 	if err != nil {
 		return nil, err
 	}
-	tools := make(map[string]tool.Tool, len(results.Results))
+	tools := make([]string, 0, len(results.Results))
 	for _, result := range results.Results {
-		tools[result.Document.ID] = k.tools[result.Document.ID]
+		tools = append(tools, result.Document.ID)
 	}
 	return tools, nil
 }
 
 func (k *ToolKnowledge) upsert(ctx context.Context, ts map[string]tool.Tool) error {
-	if err := k.ensureReady(); err != nil {
-		return err
-	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	for name, t := range ts {
 		if _, ok := k.tools[name]; ok {
 			continue
@@ -85,23 +89,11 @@ func (k *ToolKnowledge) upsert(ctx context.Context, ts map[string]tool.Tool) err
 		if err != nil {
 			return err
 		}
+
 		if err := k.s.Add(ctx, &document.Document{ID: name}, embedding); err != nil {
 			return err
 		}
 		k.tools[name] = t
-	}
-	return nil
-}
-
-func (k *ToolKnowledge) ensureReady() error {
-	if k.s == nil {
-		k.s = inmemory.New()
-	}
-	if k.tools == nil {
-		k.tools = make(map[string]tool.Tool)
-	}
-	if k.e == nil {
-		return fmt.Errorf("ensuring ToolKnowledge is ready: embedder is nil")
 	}
 	return nil
 }

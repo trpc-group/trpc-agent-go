@@ -16,7 +16,5 @@ import (
 )
 
 type toolIndex interface {
-	search(ctx context.Context, query string, topK int) (map[string]tool.Tool, error)
-	upsert(ctx context.Context, candidateTools map[string]tool.Tool) error
-	rewriteQuery(ctx context.Context, query string) (string, error)
+	search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) ([]string, error)
 }

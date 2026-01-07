@@ -25,7 +25,6 @@ type ToolSearch struct {
 	toolIndex     toolIndex
 	maxTools      int
 	alwaysInclude []string
-	systemPrompt  string
 }
 
 // New creates a new ToolSearch.
@@ -41,22 +40,12 @@ func New(m model.Model, opts ...Option) (*ToolSearch, error) {
 	s := &ToolSearch{
 		maxTools:      cfg.MaxTools,
 		alwaysInclude: append([]string(nil), cfg.AlwaysInclude...),
-		systemPrompt:  cfg.SystemPrompt,
-	}
-
-	// Set default system prompt if empty
-	if s.systemPrompt == "" {
-		if cfg.toolKnowledge != nil {
-			s.systemPrompt = defaultSystemPromptWithToolKnowledge
-		} else {
-			s.systemPrompt = defaultSystemPrompt
-		}
 	}
 
 	if cfg.toolKnowledge != nil {
-		s.toolIndex = newToolKnowledgeSearcher(cfg.Model, cfg.SystemPrompt, cfg.toolKnowledge)
+		s.toolIndex = newKnowledgeIndex(cfg.Model, cfg.SystemPrompt, cfg.toolKnowledge)
 	} else {
-		s.toolIndex = newLlmCandidateSearcher(cfg.Model, cfg.SystemPrompt)
+		s.toolIndex = newLlmIndex(cfg.Model, cfg.SystemPrompt)
 	}
 	return s, nil
 }
@@ -88,17 +77,7 @@ func (s *ToolSearch) Callback() model.BeforeModelCallbackStructured {
 			return nil, err
 		}
 
-		query, err := s.toolIndex.rewriteQuery(ctx, lastUser.Content)
-		if err != nil {
-			return nil, err
-		}
-		if query == "" {
-			return nil, nil
-		}
-		if err := s.toolIndex.upsert(ctx, candidateTools); err != nil {
-			return nil, err
-		}
-		selectedTools, err := s.toolIndex.search(ctx, query, s.maxTools)
+		selectedTools, err := s.toolIndex.search(ctx, candidateTools, lastUser.Content, s.maxTools)
 		if err != nil {
 			return nil, err
 		}
@@ -179,15 +158,17 @@ func lastUserMessage(messages []model.Message) (model.Message, error) {
 
 func buildSelectedTools(
 	baseTools map[string]tool.Tool,
-	selected map[string]tool.Tool,
+	selected []string,
 	alwaysInclude []string,
 ) map[string]tool.Tool {
 	newTools := make(map[string]tool.Tool, len(selected)+len(alwaysInclude))
-	for name := range selected {
+	for _, name := range selected {
 		newTools[name] = baseTools[name]
 	}
 	for _, name := range alwaysInclude {
-		newTools[name] = baseTools[name]
+		if _, ok := newTools[name]; !ok {
+			newTools[name] = baseTools[name]
+		}
 	}
 	return newTools
 }
