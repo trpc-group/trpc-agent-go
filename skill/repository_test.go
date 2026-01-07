@@ -122,6 +122,90 @@ func TestFSRepository_Summaries_And_Get_WithDocs(t *testing.T) {
 	require.False(t, names["img.bin"])
 }
 
+func TestFSRepository_Get_IncludesNestedDocs(t *testing.T) {
+	const (
+		skillName   = "one"
+		nestedDir   = "docs"
+		nestedDoc   = "A.md"
+		topLevelDoc = "b.txt"
+		nestedBin   = "img.bin"
+	)
+
+	root := t.TempDir()
+	sdir := writeSkill(t, root, skillName)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sdir, topLevelDoc),
+		[]byte("doc b"),
+		0o644,
+	))
+
+	ndir := filepath.Join(sdir, nestedDir)
+	require.NoError(t, os.MkdirAll(ndir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(ndir, nestedDoc),
+		[]byte("doc A"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(ndir, nestedBin),
+		[]byte{1, 2},
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(ndir, skillFile),
+		[]byte("nested skill"),
+		0o644,
+	))
+
+	r, err := NewFSRepository(root)
+	require.NoError(t, err)
+
+	sk, err := r.Get(skillName)
+	require.NoError(t, err)
+
+	got := map[string]string{}
+	for _, d := range sk.Docs {
+		got[d.Path] = d.Content
+	}
+
+	require.Equal(t, "doc A", got["docs/A.md"])
+	require.Equal(t, "doc b", got[topLevelDoc])
+	require.NotContains(t, got, "docs/img.bin")
+	require.NotContains(t, got, "docs/SKILL.md")
+}
+
+func TestFSRepository_Get_SkipsUnreadableDocs(t *testing.T) {
+	const (
+		skillName = "one"
+		docName   = "SECRET.md"
+	)
+
+	root := t.TempDir()
+	sdir := writeSkill(t, root, skillName)
+
+	docPath := filepath.Join(sdir, docName)
+	require.NoError(t, os.WriteFile(
+		docPath,
+		[]byte("secret"),
+		0o644,
+	))
+	if err := os.Chmod(docPath, 0o000); err != nil {
+		t.Skipf("chmod not supported: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(docPath, 0o644) })
+
+	r, err := NewFSRepository(root)
+	require.NoError(t, err)
+
+	sk, err := r.Get(skillName)
+	require.NoError(t, err)
+
+	for _, d := range sk.Docs {
+		require.NotEqual(t, docName, d.Path)
+	}
+}
+
 func TestParseHelpers_And_DocFlags(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "SKILL.md")
