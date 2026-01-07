@@ -945,23 +945,35 @@ func (r *llmRunner) executeModel(
 	return result, err
 }
 
-// processInstruction resolves placeholder variables in the instruction using
-// the session state present in the graph state (if any). It supports keys like
-// {user:...}, {app:...}, and optional suffix {?} consistent with llmagent.
+// processInstruction resolves placeholder variables in the instruction.
+// It supports the same syntax as LLMAgent, including {invocation:*} values
+// stored on the current invocation.
 func (r *llmRunner) processInstruction(state State) string {
 	instr := r.instruction
 	if instr == "" {
 		return instr
 	}
-	// Extract session from graph state.
-	if sessVal, ok := state[StateKeySession]; ok {
-		if sess, ok := sessVal.(*session.Session); ok && sess != nil {
-			// Build a minimal invocation carrying only the session for injection.
-			inv := agent.NewInvocation(agent.WithInvocationSession(sess))
-			if injected, err := stateinject.InjectSessionState(instr, inv); err == nil {
-				return injected
-			}
+
+	var invocation *agent.Invocation
+	if execVal, ok := state[StateKeyExecContext]; ok {
+		if execCtx, ok := execVal.(*ExecutionContext); ok && execCtx != nil {
+			invocation = execCtx.Invocation
 		}
+	}
+
+	var sess *session.Session
+	if sessVal, ok := state[StateKeySession]; ok {
+		if s, ok := sessVal.(*session.Session); ok {
+			sess = s
+		}
+	}
+
+	if injected, err := stateinject.InjectSessionStateWithSession(
+		instr,
+		invocation,
+		sess,
+	); err == nil {
+		return injected
 	}
 	return instr
 }
@@ -1365,9 +1377,37 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 		if err != nil {
 			return nil, err
 		}
-		return State{
-			StateKeyMessages: newMessages,
-		}, nil
+		upd := State{StateKeyMessages: newMessages}
+
+		if len(newMessages) > 0 {
+			upd[StateKeyLastToolResponse] =
+				newMessages[len(newMessages)-1].Content
+		}
+
+		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
+		if nodeID != "" {
+			type toolNodeResponse struct {
+				ToolID   string          `json:"tool_id"`
+				ToolName string          `json:"tool_name"`
+				Output   json.RawMessage `json:"output"`
+			}
+
+			responses := make([]toolNodeResponse, 0, len(newMessages))
+			for _, msg := range newMessages {
+				responses = append(responses, toolNodeResponse{
+					ToolID:   msg.ToolID,
+					ToolName: msg.ToolName,
+					Output:   json.RawMessage(msg.Content),
+				})
+			}
+
+			b, _ := json.Marshal(responses)
+			upd[StateKeyNodeResponses] = map[string]any{
+				nodeID: string(b),
+			}
+		}
+
+		return upd, nil
 	}
 }
 
@@ -2475,6 +2515,10 @@ func MessagesStateSchema() *StateSchema {
 		Reducer: DefaultReducer,
 	})
 	schema.AddField(StateKeyLastResponse, StateField{
+		Type:    reflect.TypeOf(""),
+		Reducer: DefaultReducer,
+	})
+	schema.AddField(StateKeyLastToolResponse, StateField{
 		Type:    reflect.TypeOf(""),
 		Reducer: DefaultReducer,
 	})

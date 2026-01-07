@@ -763,13 +763,18 @@ func audioToBase64(audio *model.Audio) string {
 func (m *Model) convertToolCalls(toolCalls []model.ToolCall) []openai.ChatCompletionMessageToolCallParam {
 	var result []openai.ChatCompletionMessageToolCallParam
 	for _, toolCall := range toolCalls {
-		result = append(result, openai.ChatCompletionMessageToolCallParam{
+		param := openai.ChatCompletionMessageToolCallParam{
 			ID: toolCall.ID,
 			Function: openai.ChatCompletionMessageToolCallFunctionParam{
 				Name:      toolCall.Function.Name,
 				Arguments: string(toolCall.Function.Arguments),
 			},
-		})
+		}
+		// Pass through ExtraFields transparently (e.g., Gemini 3's thought_signature).
+		if len(toolCall.ExtraFields) > 0 {
+			param.SetExtraFields(toolCall.ExtraFields)
+		}
+		result = append(result, param)
 	}
 	return result
 }
@@ -830,6 +835,8 @@ func (m *Model) handleStreamingResponse(
 	acc := openai.ChatCompletionAccumulator{}
 	// Track ID -> Index mapping.
 	idToIndexMap := make(map[string]int)
+	// Track ExtraFields by tool call ID (SDK accumulator doesn't preserve ExtraFields).
+	extraFieldsMap := make(map[string]map[string]any)
 	// Aggregate reasoning deltas for final message fallback (some providers don't retain it in accumulator).
 	var reasoningBuf bytes.Buffer
 	// Track next available index for tool calls (for providers that don't set correct indices).
@@ -846,6 +853,22 @@ func (m *Model) handleStreamingResponse(
 		// Fix tool call indices for providers that return all indices as 0.
 		// This must be done before updateToolCallIndexMapping and accumulation.
 		chunk = fixToolCallIndices(chunk, idToIndexMap, &nextToolCallIndex)
+
+		// Collect ExtraFields from chunk tool_calls (SDK accumulator doesn't preserve ExtraFields).
+		if len(chunk.Choices) > 0 && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
+			for _, tc := range chunk.Choices[0].Delta.ToolCalls {
+				if extraFields := convertExtraFields(tc.JSON.ExtraFields); len(extraFields) > 0 {
+					// Use ID if available, otherwise use index as key.
+					key := tc.ID
+					if key == "" && tc.Index != 0 {
+						key = fmt.Sprintf("index_%d", tc.Index)
+					}
+					if key != "" {
+						extraFieldsMap[key] = extraFields
+					}
+				}
+			}
+		}
 
 		// Track ID -> Index mapping when ID is present (first chunk of each tool call).
 		m.updateToolCallIndexMapping(chunk, idToIndexMap)
@@ -896,7 +919,7 @@ func (m *Model) handleStreamingResponse(
 	}
 
 	// Send final response with usage information if available.
-	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, reasoningBuf.String(), responseChan)
+	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), responseChan)
 
 	// Call the stream complete callback after final response is sent
 	if m.chatStreamCompleteCallback != nil {
@@ -1157,6 +1180,28 @@ func extractReasoningContent(extraFields map[string]respjson.Field) string {
 	return ""
 }
 
+// convertExtraFields converts SDK's respjson.Field map to a generic map[string]any.
+// This preserves all extra fields from the API response (e.g., Gemini 3's thought_signature)
+// for transparent passthrough to subsequent requests.
+func convertExtraFields(extraFields map[string]respjson.Field) map[string]any {
+	if len(extraFields) == 0 {
+		return nil
+	}
+
+	result := make(map[string]any, len(extraFields))
+	for key, field := range extraFields {
+		var value any
+		if err := json.Unmarshal([]byte(field.Raw()), &value); err == nil {
+			result[key] = value
+		}
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
 // createPartialResponse creates a partial response from a chunk.
 func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.Response {
 	response := &model.Response{
@@ -1230,6 +1275,7 @@ func (m *Model) sendFinalResponse(
 	stream *ssestream.Stream[openai.ChatCompletionChunk],
 	acc openai.ChatCompletionAccumulator,
 	idToIndexMap map[string]int,
+	extraFieldsMap map[string]map[string]any,
 	aggregatedReasoning string,
 	responseChan chan<- *model.Response,
 ) {
@@ -1240,7 +1286,7 @@ func (m *Model) sendFinalResponse(
 
 		if len(acc.Choices) > 0 && len(acc.Choices[0].Message.ToolCalls) > 0 {
 			hasToolCall = true
-			accumulatedToolCalls = m.processAccumulatedToolCalls(acc, idToIndexMap)
+			accumulatedToolCalls = m.processAccumulatedToolCalls(acc, idToIndexMap, extraFieldsMap)
 		}
 
 		// If accumulator is empty but we have aggregated reasoning, create a response with it.
@@ -1298,6 +1344,7 @@ func (m *Model) sendFinalResponse(
 func (m *Model) processAccumulatedToolCalls(
 	acc openai.ChatCompletionAccumulator,
 	idToIndexMap map[string]int,
+	extraFieldsMap map[string]map[string]any,
 ) []model.ToolCall {
 	accumulatedToolCalls := make([]model.ToolCall, 0, len(acc.Choices[0].Message.ToolCalls))
 
@@ -1323,10 +1370,19 @@ func (m *Model) processAccumulatedToolCalls(
 			synthesizedID = fmt.Sprintf("auto_call_%d", originalIndex)
 		}
 
+		// Look up ExtraFields by ID first, then by index.
+		var extraFields map[string]any
+		if ef, ok := extraFieldsMap[toolCall.ID]; ok {
+			extraFields = ef
+		} else if ef, ok := extraFieldsMap[fmt.Sprintf("index_%d", originalIndex)]; ok {
+			extraFields = ef
+		}
+
 		accumulatedToolCalls = append(accumulatedToolCalls, model.ToolCall{
-			Index: func() *int { idx := originalIndex; return &idx }(),
-			ID:    synthesizedID,
-			Type:  functionToolType, // OpenAI supports function tools for now.
+			Index:       func() *int { idx := originalIndex; return &idx }(),
+			ID:          synthesizedID,
+			Type:        functionToolType, // OpenAI supports function tools for now.
+			ExtraFields: extraFields,
 			Function: model.FunctionDefinitionParam{
 				Name:      toolCall.Function.Name,
 				Arguments: []byte(toolCall.Function.Arguments),
@@ -1454,8 +1510,9 @@ func (m *Model) handleNonStreamingResponse(
 					synthesizedID = fmt.Sprintf("auto_call_%d", j)
 				}
 				response.Choices[i].Message.ToolCalls[j] = model.ToolCall{
-					ID:   synthesizedID,
-					Type: string(toolCall.Type),
+					ID:          synthesizedID,
+					Type:        string(toolCall.Type),
+					ExtraFields: convertExtraFields(toolCall.JSON.ExtraFields),
 					Function: model.FunctionDefinitionParam{
 						Name:      toolCall.Function.Name,
 						Arguments: []byte(toolCall.Function.Arguments),
