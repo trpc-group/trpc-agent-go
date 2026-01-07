@@ -29,14 +29,32 @@ const (
 	DefaultMemoryLimit = 1000
 )
 
-// GenerateMemoryID generates a unique ID for memory based on content.
-// Uses SHA256 hash of memory content and topics for consistent ID generation.
-func GenerateMemoryID(mem *memory.Memory) string {
-	content := fmt.Sprintf("memory:%s", mem.Memory)
+// GenerateMemoryID generates a unique ID for memory based on content and user context.
+// Uses SHA256 hash of memory content, sorted topics, app name, and user ID for consistent ID generation.
+// This ensures that:
+// 1. Same content with different topic order produces the same ID.
+// 2. Different users with same content produce different IDs.
+func GenerateMemoryID(mem *memory.Memory, appName, userID string) string {
+	var builder strings.Builder
+	builder.WriteString("memory:")
+	builder.WriteString(mem.Memory)
+
 	if len(mem.Topics) > 0 {
-		content += fmt.Sprintf("|topics:%s", strings.Join(mem.Topics, ","))
+		// Sort topics to ensure consistent ordering.
+		sortedTopics := make([]string, len(mem.Topics))
+		copy(sortedTopics, mem.Topics)
+		slices.Sort(sortedTopics)
+		builder.WriteString("|topics:")
+		builder.WriteString(strings.Join(sortedTopics, ","))
 	}
-	hash := sha256.Sum256([]byte(content))
+
+	// Include app name and user ID to prevent cross-user conflicts.
+	builder.WriteString("|app:")
+	builder.WriteString(appName)
+	builder.WriteString("|user:")
+	builder.WriteString(userID)
+
+	hash := sha256.Sum256([]byte(builder.String()))
 	return fmt.Sprintf("%x", hash)
 }
 

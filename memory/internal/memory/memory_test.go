@@ -594,6 +594,9 @@ func TestMatchMemoryEntry_WhitespaceQuery(t *testing.T) {
 }
 
 func TestGenerateMemoryID(t *testing.T) {
+	const testAppName = "test-app"
+	const testUserID = "user-1"
+
 	tests := []struct {
 		name     string
 		memory   *memory.Memory
@@ -627,10 +630,10 @@ func TestGenerateMemoryID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			id := GenerateMemoryID(tt.memory)
+			id := GenerateMemoryID(tt.memory, testAppName, testUserID)
 			assert.NotEmpty(t, id)
 			// Verify consistency: same input should produce same output.
-			id2 := GenerateMemoryID(tt.memory)
+			id2 := GenerateMemoryID(tt.memory, testAppName, testUserID)
 			assert.Equal(t, id, id2)
 			// Verify length: SHA256 produces 64 hex characters.
 			assert.Len(t, id, 64)
@@ -640,25 +643,35 @@ func TestGenerateMemoryID(t *testing.T) {
 	t.Run("different memories produce different IDs", func(t *testing.T) {
 		mem1 := &memory.Memory{Memory: "User likes coffee"}
 		mem2 := &memory.Memory{Memory: "User likes tea"}
-		id1 := GenerateMemoryID(mem1)
-		id2 := GenerateMemoryID(mem2)
+		id1 := GenerateMemoryID(mem1, testAppName, testUserID)
+		id2 := GenerateMemoryID(mem2, testAppName, testUserID)
 		assert.NotEqual(t, id1, id2)
 	})
 
 	t.Run("same content different topics produce different IDs", func(t *testing.T) {
 		mem1 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"food"}}
 		mem2 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"drink"}}
-		id1 := GenerateMemoryID(mem1)
-		id2 := GenerateMemoryID(mem2)
+		id1 := GenerateMemoryID(mem1, testAppName, testUserID)
+		id2 := GenerateMemoryID(mem2, testAppName, testUserID)
 		assert.NotEqual(t, id1, id2)
 	})
 
-	t.Run("topics order affects ID", func(t *testing.T) {
+	t.Run("topics order does not affect ID", func(t *testing.T) {
 		mem1 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"a", "b"}}
 		mem2 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"b", "a"}}
-		id1 := GenerateMemoryID(mem1)
-		id2 := GenerateMemoryID(mem2)
-		// Different order produces different IDs.
+		id1 := GenerateMemoryID(mem1, testAppName, testUserID)
+		id2 := GenerateMemoryID(mem2, testAppName, testUserID)
+		// Same order after sorting produces same IDs.
+		assert.Equal(t, id1, id2)
+	})
+
+	t.Run("different users produce different IDs", func(t *testing.T) {
+		mem := &memory.Memory{Memory: "User likes coffee"}
+		id1 := GenerateMemoryID(mem, "app1", "user1")
+		id2 := GenerateMemoryID(mem, "app1", "user2")
+		id3 := GenerateMemoryID(mem, "app2", "user1")
 		assert.NotEqual(t, id1, id2)
+		assert.NotEqual(t, id1, id3)
+		assert.NotEqual(t, id2, id3)
 	})
 }

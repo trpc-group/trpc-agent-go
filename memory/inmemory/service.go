@@ -130,7 +130,7 @@ func createMemoryEntry(appName, userID, memoryStr string, topics []string) *memo
 	}
 
 	return &memory.Entry{
-		ID:        imemory.GenerateMemoryID(memoryObj), // Generate ID.
+		ID:        imemory.GenerateMemoryID(memoryObj, appName, userID), // Generate ID.
 		AppName:   appName,
 		UserID:    userID,
 		Memory:    memoryObj,

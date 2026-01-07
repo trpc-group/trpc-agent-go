@@ -197,7 +197,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		LastUpdated: &now,
 	}
 	entry := &memory.Entry{
-		ID:        imemory.GenerateMemoryID(mem),
+		ID:        imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID),
 		AppName:   userKey.AppName,
 		Memory:    mem,
 		UserID:    userKey.UserID,
