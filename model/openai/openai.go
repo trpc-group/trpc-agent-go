@@ -855,46 +855,14 @@ func (m *Model) handleStreamingResponse(
 		chunk = fixToolCallIndices(chunk, idToIndexMap, &nextToolCallIndex)
 
 		// Collect ExtraFields from chunk tool_calls (SDK accumulator doesn't preserve ExtraFields).
-		if len(chunk.Choices) > 0 && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
-			for _, tc := range chunk.Choices[0].Delta.ToolCalls {
-				if extraFields := convertExtraFields(tc.JSON.ExtraFields); len(extraFields) > 0 {
-					// Use ID if available, otherwise use index as key.
-					key := tc.ID
-					if key == "" && tc.Index != 0 {
-						key = fmt.Sprintf("index_%d", tc.Index)
-					}
-					if key != "" {
-						extraFieldsMap[key] = extraFields
-					}
-				}
-			}
-		}
+		m.collectExtraFieldsFromChunk(chunk, extraFieldsMap)
 
 		// Track ID -> Index mapping when ID is present (first chunk of each tool call).
 		m.updateToolCallIndexMapping(chunk, idToIndexMap)
 
-		// Always accumulate for correctness (tool call deltas are assembled later),
+		// Accumulate chunk for correctness (tool call deltas are assembled later),
 		// but skip chunks with reasoning content that would cause the SDK accumulator to panic.
-		if !m.hasReasoningContent(chunk.Choices) {
-			// Sanitize chunks before feeding them into the upstream accumulator to
-			// avoid known panics when JSON.ToolCalls is marked present but the
-			// typed ToolCalls slice is empty, especially on finish_reason chunks.
-			sanitizedChunk := sanitizeChunkForAccumulator(chunk)
-			acc.AddChunk(sanitizedChunk)
-			if m.accumulateChunkUsage != nil {
-				accUsage, chunkUsage := completionUsageToModelUsage(acc.Usage), completionUsageToModelUsage(chunk.Usage)
-				usage := inverseOPENAISKDAddChunkUsage(accUsage, chunkUsage)
-				usage = m.accumulateChunkUsage(usage, chunkUsage)
-				acc.Usage = modelUsageToCompletionUsage(usage)
-			}
-		}
-
-		// Aggregate reasoning delta (if any) for final response fallback.
-		if len(chunk.Choices) > 0 {
-			if reasoningContent := extractReasoningContent(chunk.Choices[0].Delta.JSON.ExtraFields); reasoningContent != "" {
-				reasoningBuf.WriteString(reasoningContent)
-			}
-		}
+		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
 		// Suppress chunks that carry no meaningful visible delta (including
 		// tool_call deltas, which we'll surface only in the final response).
@@ -909,11 +877,7 @@ func (m *Model) handleStreamingResponse(
 			m.chatChunkCallback(ctx, &chatRequest, &chunk)
 		}
 
-		response := m.createPartialResponse(chunk)
-
-		select {
-		case responseChan <- response:
-		case <-ctx.Done():
+		if err := m.sendPartialResponse(ctx, chunk, responseChan); err != nil {
 			return
 		}
 	}
@@ -921,14 +885,8 @@ func (m *Model) handleStreamingResponse(
 	// Send final response with usage information if available.
 	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), responseChan)
 
-	// Call the stream complete callback after final response is sent
-	if m.chatStreamCompleteCallback != nil {
-		var callbackAcc *openai.ChatCompletionAccumulator
-		if stream.Err() == nil {
-			callbackAcc = &acc
-		}
-		m.chatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, stream.Err())
-	}
+	// Call the stream complete callback after final response is sent.
+	m.handleStreamCompleteCallback(ctx, chatRequest, acc, stream.Err())
 }
 
 // sanitizeChunkForAccumulator returns a defensive copy of the given chunk that
@@ -1066,6 +1024,93 @@ func (m *Model) updateToolCallIndexMapping(chunk openai.ChatCompletionChunk, idT
 			idToIndexMap[toolCall.ID] = index
 		}
 	}
+}
+
+// collectExtraFieldsFromChunk collects ExtraFields from chunk tool_calls.
+func (m *Model) collectExtraFieldsFromChunk(
+	chunk openai.ChatCompletionChunk,
+	extraFieldsMap map[string]map[string]any,
+) {
+	if len(chunk.Choices) == 0 || len(chunk.Choices[0].Delta.ToolCalls) == 0 {
+		return
+	}
+	for _, tc := range chunk.Choices[0].Delta.ToolCalls {
+		extraFields := convertExtraFields(tc.JSON.ExtraFields)
+		if len(extraFields) == 0 {
+			continue
+		}
+		// Use ID if available, otherwise use index as key.
+		key := tc.ID
+		if key == "" && tc.Index != 0 {
+			key = fmt.Sprintf("index_%d", tc.Index)
+		}
+		if key != "" {
+			extraFieldsMap[key] = extraFields
+		}
+	}
+}
+
+// accumulateChunk accumulates the chunk into the accumulator and reasoning buffer.
+func (m *Model) accumulateChunk(
+	chunk openai.ChatCompletionChunk,
+	acc *openai.ChatCompletionAccumulator,
+	reasoningBuf *bytes.Buffer,
+) {
+	// Always accumulate for correctness (tool call deltas are assembled later),
+	// but skip chunks with reasoning content that would cause the SDK accumulator to panic.
+	if !m.hasReasoningContent(chunk.Choices) {
+		// Sanitize chunks before feeding them into the upstream accumulator to
+		// avoid known panics when JSON.ToolCalls is marked present but the
+		// typed ToolCalls slice is empty, especially on finish_reason chunks.
+		sanitizedChunk := sanitizeChunkForAccumulator(chunk)
+		acc.AddChunk(sanitizedChunk)
+		if m.accumulateChunkUsage != nil {
+			accUsage, chunkUsage := completionUsageToModelUsage(acc.Usage), completionUsageToModelUsage(chunk.Usage)
+			usage := inverseOPENAISKDAddChunkUsage(accUsage, chunkUsage)
+			usage = m.accumulateChunkUsage(usage, chunkUsage)
+			acc.Usage = modelUsageToCompletionUsage(usage)
+		}
+	}
+
+	// Aggregate reasoning delta (if any) for final response fallback.
+	if len(chunk.Choices) > 0 {
+		reasoningContent := extractReasoningContent(chunk.Choices[0].Delta.JSON.ExtraFields)
+		if reasoningContent != "" {
+			reasoningBuf.WriteString(reasoningContent)
+		}
+	}
+}
+
+// sendPartialResponse creates and sends a partial response from a chunk.
+func (m *Model) sendPartialResponse(
+	ctx context.Context,
+	chunk openai.ChatCompletionChunk,
+	responseChan chan<- *model.Response,
+) error {
+	response := m.createPartialResponse(chunk)
+	select {
+	case responseChan <- response:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// handleStreamCompleteCallback handles the stream complete callback.
+func (m *Model) handleStreamCompleteCallback(
+	ctx context.Context,
+	chatRequest openai.ChatCompletionNewParams,
+	acc openai.ChatCompletionAccumulator,
+	streamErr error,
+) {
+	if m.chatStreamCompleteCallback == nil {
+		return
+	}
+	var callbackAcc *openai.ChatCompletionAccumulator
+	if streamErr == nil {
+		callbackAcc = &acc
+	}
+	m.chatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, streamErr)
 }
 
 // shouldSuppressChunk returns true when the chunk contains no meaningful delta
