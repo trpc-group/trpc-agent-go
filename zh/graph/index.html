@@ -3260,13 +3260,14 @@
 <li><code>StateKeyUserInput</code>：用户输入（一次性，消费后清空，由 LLM 节点自动持久化）</li>
 <li><code>StateKeyOneShotMessages</code>：一次性消息（完整覆盖本轮输入，消费后清空）</li>
 <li><code>StateKeyLastResponse</code>：最后响应（用于设置最终输出，Executor 会读取此值作为结果）</li>
+<li><code>StateKeyLastToolResponse</code>：最近一次工具输出（JSON 字符串，由 Tools 节点写入）</li>
 <li><code>StateKeyLastResponseID</code>：最近一次响应标识符（identifier，ID）（由 LLM 节点写入；当
   <code>StateKeyLastResponse</code> 由非模型节点写入时可能为空）</li>
 <li><code>StateKeyMessages</code>：消息历史（持久化，支持 append + MessageOp 补丁操作）</li>
-<li><code>StateKeyNodeResponses</code>：按节点存储的响应映射。键为节点 ID，值为该
-  节点的最终文本响应。<code>StateKeyLastResponse</code> 用于串行路径上的最终输
-  出；当多个并行节点在某处汇合时，应从 <code>StateKeyNodeResponses</code> 中按节
-  点读取各自的输出。</li>
+<li><code>StateKeyNodeResponses</code>：按节点存储的输出映射。键为节点 ID，值为该
+  节点的最终输出。对 LLM / Agent 节点而言是最终文本响应；对 Tools 节
+  点而言是工具输出的 JSON 数组字符串（每项包含 <code>tool_id</code>、<code>tool_name</code>
+  和 <code>output</code>）。</li>
 <li><code>StateKeyMetadata</code>：元数据（用户可用的通用元数据存储）</li>
 </ul>
 <p><strong>系统内部键</strong>（用户不应直接使用）：</p>
@@ -5723,7 +5724,10 @@ Runner 运行时开启 <code>agent.WithGraphEmitFinalModelResponses(true)</code>
 <span class="normal"><a href="#__codelineno-47-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-47-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-47-10">10</a></span>
-<span class="normal"><a href="#__codelineno-47-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-47-11">11</a></span>
+<span class="normal"><a href="#__codelineno-47-12">12</a></span>
+<span class="normal"><a href="#__codelineno-47-13">13</a></span>
+<span class="normal"><a href="#__codelineno-47-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/graph&quot;</span>
 </span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3"></a><span class="p">)</span>
 </span><span id="__span-47-4"><a id="__codelineno-47-4" name="__codelineno-47-4"></a>
@@ -5734,8 +5738,16 @@ Runner 运行时开启 <code>agent.WithGraphEmitFinalModelResponses(true)</code>
 </span><span id="__span-47-9"><a id="__codelineno-47-9" name="__codelineno-47-9"></a><span class="c1">// 如需并行，应该使用多个节点 + 并行边</span>
 </span><span id="__span-47-10"><a id="__codelineno-47-10" name="__codelineno-47-10"></a><span class="c1">// 配对规则：从 messages 尾部回溯定位最近的 assistant(tool_calls)</span>
 </span><span id="__span-47-11"><a id="__codelineno-47-11" name="__codelineno-47-11"></a><span class="c1">// 消息，遇到新的 user 即停止，确保与本轮工具调用配对。</span>
+</span><span id="__span-47-12"><a id="__codelineno-47-12" name="__codelineno-47-12"></a><span class="c1">// 输出：追加工具消息到 graph.StateKeyMessages，设置</span>
+</span><span id="__span-47-13"><a id="__codelineno-47-13" name="__codelineno-47-13"></a><span class="c1">// graph.StateKeyLastToolResponse，并将</span>
+</span><span id="__span-47-14"><a id="__codelineno-47-14" name="__codelineno-47-14"></a><span class="c1">// graph.StateKeyNodeResponses[nodeTools] 写为 JSON 数组字符串。</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="state">将工具结果写入 State</h4>
+<p>Tools 节点已直接暴露输出：</p>
+<ul>
+<li><code>graph.StateKeyLastToolResponse</code>：本次节点执行中最后一个工具输出的 JSON 字符串</li>
+<li><code>graph.StateKeyNodeResponses[&lt;tools_node_id&gt;]</code>：本次节点执行的所有工具输出（JSON 数组字符串）</li>
+</ul>
 <p>在 Tools 节点之后，添加一个函数节点，从 <code>graph.StateKeyMessages</code> 汇总工具结果并写入结构化 State：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-48-2"> 2</a></span>
@@ -6994,6 +7006,7 @@ Runner 运行时开启 <code>agent.WithGraphEmitFinalModelResponses(true)</code>
 <p>工具节点（Tools）</p>
 <ul>
 <li>自 <code>graph.StateKeyMessages</code> 尾部配对当前轮的 <code>assistant(tool_calls)</code>，按顺序追加工具返回到 <code>graph.StateKeyMessages</code></li>
+<li>输出：设置 <code>graph.StateKeyLastToolResponse</code>，并写入 <code>graph.StateKeyNodeResponses[&lt;tools_node_id&gt;]</code>（JSON 数组字符串）</li>
 <li>多个工具按 LLM 返回顺序顺序执行</li>
 </ul>
 </li>
@@ -7029,7 +7042,7 @@ Runner 运行时开启 <code>agent.WithGraphEmitFinalModelResponses(true)</code>
 <li>
 <p>常用 State 键（用户可见）</p>
 <ul>
-<li><code>graph.StateKeyUserInput</code>、<code>graph.StateKeyOneShotMessages</code>、<code>graph.StateKeyMessages</code>、<code>graph.StateKeyLastResponse</code>、<code>graph.StateKeyNodeResponses</code>、<code>graph.StateKeyMetadata</code></li>
+<li><code>graph.StateKeyUserInput</code>、<code>graph.StateKeyOneShotMessages</code>、<code>graph.StateKeyMessages</code>、<code>graph.StateKeyLastResponse</code>、<code>graph.StateKeyLastToolResponse</code>、<code>graph.StateKeyNodeResponses</code>、<code>graph.StateKeyMetadata</code></li>
 </ul>
 </li>
 </ul>
@@ -8040,7 +8053,7 @@ Runner 运行时开启 <code>agent.WithGraphEmitFinalModelResponses(true)</code>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月5日 14:05:00 UTC">2026-01-05 14:05:00</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月7日 01:21:52 UTC">2026-01-07 01:21:52</span>
   </span>
 
     
