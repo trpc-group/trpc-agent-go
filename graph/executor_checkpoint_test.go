@@ -648,9 +648,7 @@ func TestExecutor_JoinEdge_ResumeRestoresBarrierSet(t *testing.T) {
 	}
 
 	starts := []string{"b", "c"}
-	joinKey := strings.Join(starts, joinChannelListSeparator)
-	joinChan := ChannelJoinPrefix + "join" + joinChannelFromSeparator +
-		joinKey
+	joinChan := joinChannelName("join", starts)
 
 	tuple := saver.findLoopCheckpointWithBarrierSet(joinChan, "b", "c")
 	require.NotNil(t, tuple)

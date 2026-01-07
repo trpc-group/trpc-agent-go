@@ -11,12 +11,14 @@ package graph
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -480,7 +482,7 @@ const channelUpdateMarker = "update"
 
 const (
 	joinChannelFromSeparator = ":from:"
-	joinChannelListSeparator = "+"
+	joinKeyLenBytes          = 8
 )
 
 // AddEdge adds a normal edge between two nodes.
@@ -522,9 +524,7 @@ func (sg *StateGraph) AddJoinEdge(fromNodes []string, to string) *StateGraph {
 		sg.graph.addEdge(edge)
 	}
 
-	joinKey := strings.Join(starts, joinChannelListSeparator)
-	channelName := ChannelJoinPrefix + to + joinChannelFromSeparator +
-		joinKey
+	channelName := joinChannelName(to, starts)
 
 	sg.graph.addChannel(channelName, channel.BehaviorBarrier)
 	if ch, ok := sg.graph.getChannel(channelName); ok && ch != nil {
@@ -542,6 +542,22 @@ func (sg *StateGraph) AddJoinEdge(fromNodes []string, to string) *StateGraph {
 		sg.graph.addNodeWriter(from, writer)
 	}
 	return sg
+}
+
+func joinChannelName(to string, starts []string) string {
+	joinKey := joinKeyForStarts(starts)
+	return ChannelJoinPrefix + to + joinChannelFromSeparator + joinKey
+}
+
+func joinKeyForStarts(starts []string) string {
+	h := sha256.New()
+	for _, start := range starts {
+		var lenBuf [joinKeyLenBytes]byte
+		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(start)))
+		_, _ = h.Write(lenBuf[:])
+		_, _ = h.Write([]byte(start))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func normalizeJoinStarts(fromNodes []string) []string {
