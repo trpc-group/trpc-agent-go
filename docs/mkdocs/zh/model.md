@@ -704,6 +704,7 @@ eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
 **按模型覆盖提示词（LLMAgent）**：
 
 - 使用 `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions` 按 `model.Info().Name` 覆盖提示词；未命中映射时回退到 Agent 默认提示词。
+- 可运行示例见 [examples/model/promptmap](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/promptmap)。
 
 ##### 使用示例
 
@@ -1810,6 +1811,7 @@ eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
 **按模型覆盖提示词（LLMAgent）**：
 
 - 使用 `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions` 按 `model.Info().Name` 覆盖提示词；未命中映射时回退到 Agent 默认提示词。
+- 可运行示例见 [examples/model/promptmap](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/promptmap)。
 
 ##### 使用示例
 

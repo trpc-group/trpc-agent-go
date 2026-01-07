@@ -887,6 +887,51 @@ _ = ch; _ = err
 - 按模型覆盖：如果 Agent 可能切换模型，可用 `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions`（或对应的 setter）按 `model.Info().Name` 覆盖提示词；未命中映射时回退到 Agent 默认提示词。
 - 个性化上下文：若需按用户/会话动态注入内容，优先使用指令中的占位符加会话状态注入（见上文“占位符变量”一节）。
 
+### 按模型覆盖提示词
+
+如果一个 Agent 会在运行时切换不同模型，你可以按模型为 Instruction
+与 Global Instruction（系统提示词）配置不同的文本。
+
+匹配逻辑是：先用当前模型的 `model.Info().Name` 查映射；命中则使用映射值；
+否则回退到 Agent 的默认提示词。
+
+示例
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+models := map[string]model.Model{
+    "gpt-4o-mini": openai.New("gpt-4o-mini"),
+    "gpt-4o":      openai.New("gpt-4o"),
+}
+
+llm := llmagent.New(
+    "support-bot",
+    llmagent.WithModels(models),
+    llmagent.WithModel(models["gpt-4o-mini"]), // Default model.
+
+    // Fallback prompts when no mapping exists.
+    llmagent.WithGlobalInstruction("System: You are a helpful assistant."),
+    llmagent.WithInstruction("Start every answer with DEFAULT:"),
+
+    // Per-model prompt mapping.
+    llmagent.WithModelGlobalInstructions(map[string]string{
+        "gpt-4o-mini": "System: You are in FAST mode.",
+        "gpt-4o":      "System: You are in SMART mode.",
+    }),
+    llmagent.WithModelInstructions(map[string]string{
+        "gpt-4o-mini": "Start every answer with FAST:",
+        "gpt-4o":      "Start every answer with SMART:",
+    }),
+)
+```
+
+另见：`examples/model/promptmap`。
+
 ### 另一种方式：用占位符驱动动态 System Prompt
 
 如果不想在运行时调用 setter，也可以把 Instruction 写成模板，然后用会话状态（Session/App/User/Temp）来“喂”值。指令处理器会在每次请求时注入占位符。

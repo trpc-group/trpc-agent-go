@@ -707,6 +707,7 @@ eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
 **Model-specific Prompts (LLMAgent)**:
 
 - Use `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions` to override prompts by `model.Info().Name` when the Agent switches models; it falls back to the Agent defaults when no mapping exists.
+- For a runnable example, see [examples/model/promptmap](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/promptmap).
 
 ##### Usage Example
 
@@ -1816,6 +1817,7 @@ eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
 **Model-specific Prompts (LLMAgent)**:
 
 - Use `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions` to override prompts by `model.Info().Name` when the Agent switches models; it falls back to the Agent defaults when no mapping exists.
+- For a runnable example, see [examples/model/promptmap](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/promptmap).
 
 ##### Usage Example
 
