@@ -27,6 +27,9 @@ const (
 	StateKeyOneShotMessages = "one_shot_messages"
 	// StateKeyLastResponse is the key of the last response.
 	StateKeyLastResponse = "last_response"
+	// StateKeyLastToolResponse stores the last tool output as a JSON string.
+	// It is set by Tools nodes after successful tool execution.
+	StateKeyLastToolResponse = "last_tool_response"
 	// StateKeyNodeResponses is the key of the node responses.
 	StateKeyNodeResponses = "node_responses"
 	// StateKeySession is the key of the session.

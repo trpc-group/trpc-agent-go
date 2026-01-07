@@ -156,10 +156,13 @@ func TestGetStateValue(t *testing.T) {
 
 	t.Run("built-in state keys", func(t *testing.T) {
 		state := State{
-			StateKeyUserInput:     "user input",
-			StateKeyLastResponse:  "last response",
-			StateKeyCurrentNodeID: "node-123",
-			StateKeyMessages:      []model.Message{{Role: model.RoleUser, Content: "test"}},
+			StateKeyUserInput:        "user input",
+			StateKeyLastResponse:     "last response",
+			StateKeyLastToolResponse: "last tool response",
+			StateKeyCurrentNodeID:    "node-123",
+			StateKeyMessages: []model.Message{
+				{Role: model.RoleUser, Content: "test"},
+			},
 			StateKeyNodeResponses: map[string]any{"key": "value"},
 		}
 
@@ -172,6 +175,14 @@ func TestGetStateValue(t *testing.T) {
 		lastResponse, ok := GetStateValue[string](state, StateKeyLastResponse)
 		assert.True(t, ok)
 		assert.Equal(t, "last response", lastResponse)
+
+		// Test StateKeyLastToolResponse.
+		lastToolResponse, ok := GetStateValue[string](
+			state,
+			StateKeyLastToolResponse,
+		)
+		assert.True(t, ok)
+		assert.Equal(t, "last tool response", lastToolResponse)
 
 		// Test StateKeyCurrentNodeID.
 		nodeID, ok := GetStateValue[string](state, StateKeyCurrentNodeID)

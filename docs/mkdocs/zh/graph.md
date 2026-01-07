@@ -158,13 +158,14 @@ Graph 包提供了一些内置状态键，主要用于系统内部通信：
 - `StateKeyUserInput`：用户输入（一次性，消费后清空，由 LLM 节点自动持久化）
 - `StateKeyOneShotMessages`：一次性消息（完整覆盖本轮输入，消费后清空）
 - `StateKeyLastResponse`：最后响应（用于设置最终输出，Executor 会读取此值作为结果）
+- `StateKeyLastToolResponse`：最近一次工具输出（JSON 字符串，由 Tools 节点写入）
 - `StateKeyLastResponseID`：最近一次响应标识符（identifier，ID）（由 LLM 节点写入；当
   `StateKeyLastResponse` 由非模型节点写入时可能为空）
 - `StateKeyMessages`：消息历史（持久化，支持 append + MessageOp 补丁操作）
-- `StateKeyNodeResponses`：按节点存储的响应映射。键为节点 ID，值为该
-  节点的最终文本响应。`StateKeyLastResponse` 用于串行路径上的最终输
-  出；当多个并行节点在某处汇合时，应从 `StateKeyNodeResponses` 中按节
-  点读取各自的输出。
+- `StateKeyNodeResponses`：按节点存储的输出映射。键为节点 ID，值为该
+  节点的最终输出。对 LLM / Agent 节点而言是最终文本响应；对 Tools 节
+  点而言是工具输出的 JSON 数组字符串（每项包含 `tool_id`、`tool_name`
+  和 `output`）。
 - `StateKeyMetadata`：元数据（用户可用的通用元数据存储）
 
 **系统内部键**（用户不应直接使用）：
@@ -1823,9 +1824,17 @@ sg.AddToolsNode(nodeTools, tools)
 // 如需并行，应该使用多个节点 + 并行边
 // 配对规则：从 messages 尾部回溯定位最近的 assistant(tool_calls)
 // 消息，遇到新的 user 即停止，确保与本轮工具调用配对。
+// 输出：追加工具消息到 graph.StateKeyMessages，设置
+// graph.StateKeyLastToolResponse，并将
+// graph.StateKeyNodeResponses[nodeTools] 写为 JSON 数组字符串。
 ```
 
 #### 将工具结果写入 State
+
+Tools 节点已直接暴露输出：
+
+- `graph.StateKeyLastToolResponse`：本次节点执行中最后一个工具输出的 JSON 字符串
+- `graph.StateKeyNodeResponses[<tools_node_id>]`：本次节点执行的所有工具输出（JSON 数组字符串）
 
 在 Tools 节点之后，添加一个函数节点，从 `graph.StateKeyMessages` 汇总工具结果并写入结构化 State：
 
@@ -2774,6 +2783,7 @@ stateGraph.
 - 工具节点（Tools）
 
   - 自 `graph.StateKeyMessages` 尾部配对当前轮的 `assistant(tool_calls)`，按顺序追加工具返回到 `graph.StateKeyMessages`
+  - 输出：设置 `graph.StateKeyLastToolResponse`，并写入 `graph.StateKeyNodeResponses[<tools_node_id>]`（JSON 数组字符串）
   - 多个工具按 LLM 返回顺序顺序执行
 
 - Agent 节点
@@ -2799,7 +2809,7 @@ stateGraph.
 
 - 常用 State 键（用户可见）
 
-  - `graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、`graph.StateKeyMessages`、`graph.StateKeyLastResponse`、`graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
+  - `graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、`graph.StateKeyMessages`、`graph.StateKeyLastResponse`、`graph.StateKeyLastToolResponse`、`graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
 
 - 节点级可选项
 
