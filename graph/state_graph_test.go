@@ -615,6 +615,38 @@ func TestBuilderJoinEdges(t *testing.T) {
 	require.True(t, hasJoinWriter(nodeB.writers, joinChan, "b"))
 }
 
+func TestNormalizeJoinStarts(t *testing.T) {
+	require.Nil(t, normalizeJoinStarts(nil))
+	require.Nil(t, normalizeJoinStarts([]string{}))
+
+	in := []string{"b", "", Start, "a", "b", End}
+	require.Equal(t, []string{"a", "b"}, normalizeJoinStarts(in))
+}
+
+func TestBuilderJoinEdges_IgnoresInvalidInput(t *testing.T) {
+	builder := NewStateGraph(NewStateSchema())
+
+	testFunc := func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	}
+
+	graph, err := builder.
+		AddNode("a", testFunc).
+		AddNode("b", testFunc).
+		SetEntryPoint("a").
+		AddJoinEdge(nil, "b").
+		AddJoinEdge([]string{""}, "b").
+		AddJoinEdge([]string{"a"}, "").
+		AddJoinEdge([]string{"a"}, Start).
+		SetFinishPoint("b").
+		Compile()
+	require.NoError(t, err)
+
+	for name := range graph.getAllChannels() {
+		require.False(t, strings.HasPrefix(name, ChannelJoinPrefix))
+	}
+}
+
 func hasJoinWriter(
 	writers []channelWriteEntry,
 	channelName string,
