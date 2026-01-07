@@ -1377,9 +1377,37 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 		if err != nil {
 			return nil, err
 		}
-		return State{
-			StateKeyMessages: newMessages,
-		}, nil
+		upd := State{StateKeyMessages: newMessages}
+
+		if len(newMessages) > 0 {
+			upd[StateKeyLastToolResponse] =
+				newMessages[len(newMessages)-1].Content
+		}
+
+		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
+		if nodeID != "" {
+			type toolNodeResponse struct {
+				ToolID   string          `json:"tool_id"`
+				ToolName string          `json:"tool_name"`
+				Output   json.RawMessage `json:"output"`
+			}
+
+			responses := make([]toolNodeResponse, 0, len(newMessages))
+			for _, msg := range newMessages {
+				responses = append(responses, toolNodeResponse{
+					ToolID:   msg.ToolID,
+					ToolName: msg.ToolName,
+					Output:   json.RawMessage(msg.Content),
+				})
+			}
+
+			b, _ := json.Marshal(responses)
+			upd[StateKeyNodeResponses] = map[string]any{
+				nodeID: string(b),
+			}
+		}
+
+		return upd, nil
 	}
 }
 
@@ -2487,6 +2515,10 @@ func MessagesStateSchema() *StateSchema {
 		Reducer: DefaultReducer,
 	})
 	schema.AddField(StateKeyLastResponse, StateField{
+		Type:    reflect.TypeOf(""),
+		Reducer: DefaultReducer,
+	})
+	schema.AddField(StateKeyLastToolResponse, StateField{
 		Type:    reflect.TypeOf(""),
 		Reducer: DefaultReducer,
 	})
