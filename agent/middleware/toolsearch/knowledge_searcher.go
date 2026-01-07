@@ -75,7 +75,7 @@ func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (str
 		}
 	}
 	if final == nil || len(final.Choices) == 0 {
-		return "", nil
+		return "", fmt.Errorf("rewriting query: selection model returned empty response")
 	}
 
 	content := strings.TrimSpace(final.Choices[0].Message.Content)
@@ -83,7 +83,7 @@ func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (str
 		content = strings.TrimSpace(final.Choices[0].Delta.Content)
 	}
 	if content == "" {
-		return "", nil
+		return "", fmt.Errorf("rewriting query: selection model returned empty content")
 	}
 	return content, nil
 }

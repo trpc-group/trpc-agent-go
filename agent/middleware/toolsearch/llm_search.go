@@ -78,7 +78,7 @@ func (s *llmSearch) Search(ctx context.Context, candidates map[string]tool.Tool,
 		},
 	}
 
-	selectedNames, err := selectToolNames(ctx, s.model, req, candidates)
+	selectedNames, err := searchTools(ctx, s.model, req, candidates)
 	if err != nil {
 		return nil, err
 	}
@@ -89,19 +89,14 @@ func (s *llmSearch) Search(ctx context.Context, candidates map[string]tool.Tool,
 	return selectedNames, nil
 }
 
-type toolSelectionResponse struct {
+type searchToolResponse struct {
 	Tools []string `json:"tools"`
 }
 
-func selectToolNames(
-	ctx context.Context,
-	m model.Model,
-	req *model.Request,
-	tools map[string]tool.Tool,
-) ([]string, error) {
+func searchTools(ctx context.Context, m model.Model, req *model.Request, tools map[string]tool.Tool) ([]string, error) {
 	respCh, err := m.GenerateContent(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("ToolSearch: selection model call failed: %w", err)
+		return nil, fmt.Errorf("searching tools: model call failed: %w", err)
 	}
 
 	var final *model.Response
@@ -110,14 +105,14 @@ func selectToolNames(
 			continue
 		}
 		if r.Error != nil {
-			return nil, fmt.Errorf("ToolSearch: selection model returned error: %s", r.Error.Message)
+			return nil, fmt.Errorf("searching tools: model returned error: %s", r.Error.Message)
 		}
 		if !r.IsPartial {
 			final = r
 		}
 	}
 	if final == nil || len(final.Choices) == 0 {
-		return nil, nil
+		return nil, fmt.Errorf("searching tools: model returned empty response")
 	}
 
 	content := strings.TrimSpace(final.Choices[0].Message.Content)
@@ -125,10 +120,10 @@ func selectToolNames(
 		content = strings.TrimSpace(final.Choices[0].Delta.Content)
 	}
 	if content == "" {
-		return nil, nil
+		return nil, fmt.Errorf("searching tools: model returned empty content")
 	}
 
-	var parsed toolSelectionResponse
+	var parsed searchToolResponse
 	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
 		// Best-effort: extract a JSON object from surrounding text.
 		start := strings.Index(content, "{")
@@ -136,12 +131,12 @@ func selectToolNames(
 		if start >= 0 && end > start {
 			if err2 := json.Unmarshal([]byte(content[start:end+1]), &parsed); err2 != nil {
 				return nil, fmt.Errorf(
-					"ToolSearch: failed to parse selection JSON: %w",
+					"selecting tools: failed to parse selection JSON: %w",
 					errors.Join(err, err2),
 				)
 			}
 		} else {
-			return nil, fmt.Errorf("ToolSearch: failed to parse selection JSON: %w", err)
+			return nil, fmt.Errorf("selecting tools: failed to parse selection JSON: %w", err)
 		}
 	}
 
@@ -164,7 +159,7 @@ func selectToolNames(
 		}
 	}
 	if len(invalid) > 0 {
-		return nil, fmt.Errorf("ToolSearch: model selected invalid tools: %v", invalid)
+		return nil, fmt.Errorf("selecting tools: model selected invalid tools: %v", invalid)
 	}
 	return selected, nil
 }

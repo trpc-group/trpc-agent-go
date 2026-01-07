@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
 func TestKnowledgeSearcher_RewriteQuery(t *testing.T) {
@@ -57,6 +57,35 @@ func TestKnowledgeSearcher_RewriteQuery(t *testing.T) {
 		}
 		if got != "rewritten" {
 			t.Fatalf("got %q", got)
+		}
+	})
+
+	t.Run("empty_final_errors", func(t *testing.T) {
+		m := &fakeModel{
+			generate: func(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+				return respCh(&model.Response{}), nil
+			},
+		}
+		s := newKnowledgeSearcher(m, "", &ToolKnowledge{})
+		_, err := s.rewriteQuery(context.Background(), "q")
+		if err == nil || !strings.Contains(err.Error(), "empty response") {
+			t.Fatalf("unexpected err: %v", err)
+		}
+	})
+
+	t.Run("empty_content_errors", func(t *testing.T) {
+		m := &fakeModel{
+			generate: func(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+				return respCh(&model.Response{
+					IsPartial: false,
+					Choices:   []model.Choice{{Message: model.Message{Content: "   "}}},
+				}), nil
+			},
+		}
+		s := newKnowledgeSearcher(m, "", &ToolKnowledge{})
+		_, err := s.rewriteQuery(context.Background(), "q")
+		if err == nil || !strings.Contains(err.Error(), "empty content") {
+			t.Fatalf("unexpected err: %v", err)
 		}
 	})
 }
@@ -187,5 +216,3 @@ func TestToolKnowledge_UpsertAndSearch_ErrorPaths(t *testing.T) {
 		}
 	})
 }
-
-

@@ -116,7 +116,7 @@ type fakeVectorStore struct {
 	searchErr error
 	// searchResultIDs defines the IDs returned by Search, in order.
 	searchResultIDs []string
-	lastSearchQuery  *vectorstore.SearchQuery
+	lastSearchQuery *vectorstore.SearchQuery
 }
 
 var _ vectorstore.VectorStore = (*fakeVectorStore)(nil)
@@ -161,7 +161,9 @@ func (s *fakeVectorStore) Search(ctx context.Context, query *vectorstore.SearchQ
 	return out, nil
 }
 
-func (s *fakeVectorStore) DeleteByFilter(ctx context.Context, opts ...vectorstore.DeleteOption) error { return nil }
+func (s *fakeVectorStore) DeleteByFilter(ctx context.Context, opts ...vectorstore.DeleteOption) error {
+	return nil
+}
 func (s *fakeVectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
 	return 0, nil
 }
@@ -169,5 +171,3 @@ func (s *fakeVectorStore) GetMetadata(ctx context.Context, opts ...vectorstore.G
 	return nil, nil
 }
 func (s *fakeVectorStore) Close() error { return nil }
-
-

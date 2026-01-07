@@ -261,5 +261,3 @@ func TestHelpers_BuildCandidateToolsAndSelectedTools(t *testing.T) {
 		t.Fatalf("keep should be always included")
 	}
 }
-
-

@@ -11,7 +11,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-func TestSelectToolNames_ModelCallError(t *testing.T) {
+func TestSearchTools_ModelCallError(t *testing.T) {
 	t.Parallel()
 
 	m := &fakeModel{
@@ -19,13 +19,13 @@ func TestSelectToolNames_ModelCallError(t *testing.T) {
 			return nil, errors.New("net down")
 		},
 	}
-	_, err := selectToolNames(context.Background(), m, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
-	if err == nil || !strings.Contains(err.Error(), "selection model call failed") {
+	_, err := searchTools(context.Background(), m, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
+	if err == nil || !strings.Contains(err.Error(), "model call failed") {
 		t.Fatalf("unexpected err: %v", err)
 	}
 }
 
-func TestSelectToolNames_ResponseError(t *testing.T) {
+func TestSearchTools_ResponseError(t *testing.T) {
 	t.Parallel()
 
 	m := &fakeModel{
@@ -33,13 +33,13 @@ func TestSelectToolNames_ResponseError(t *testing.T) {
 			return respCh(&model.Response{Error: &model.ResponseError{Message: "rate limit"}}), nil
 		},
 	}
-	_, err := selectToolNames(context.Background(), m, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
-	if err == nil || !strings.Contains(err.Error(), "selection model returned error") {
+	_, err := searchTools(context.Background(), m, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
+	if err == nil || !strings.Contains(err.Error(), "model returned error") {
 		t.Fatalf("unexpected err: %v", err)
 	}
 }
 
-func TestSelectToolNames_EmptyFinalOrEmptyContentReturnsNil(t *testing.T) {
+func TestSearchTools_EmptyFinalOrEmptyContentErrors(t *testing.T) {
 	t.Parallel()
 
 	m1 := &fakeModel{
@@ -47,12 +47,9 @@ func TestSelectToolNames_EmptyFinalOrEmptyContentReturnsNil(t *testing.T) {
 			return respCh(&model.Response{}), nil
 		},
 	}
-	got, err := selectToolNames(context.Background(), m1, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if got != nil {
-		t.Fatalf("got = %v, want nil", got)
+	_, err := searchTools(context.Background(), m1, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
+	if err == nil || !strings.Contains(err.Error(), "empty response") {
+		t.Fatalf("unexpected err: %v", err)
 	}
 
 	m2 := &fakeModel{
@@ -62,16 +59,13 @@ func TestSelectToolNames_EmptyFinalOrEmptyContentReturnsNil(t *testing.T) {
 			}), nil
 		},
 	}
-	got, err = selectToolNames(context.Background(), m2, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if got != nil {
-		t.Fatalf("got = %v, want nil", got)
+	_, err = searchTools(context.Background(), m2, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
+	if err == nil || !strings.Contains(err.Error(), "empty content") {
+		t.Fatalf("unexpected err: %v", err)
 	}
 }
 
-func TestSelectToolNames_ParsesAndDedupes(t *testing.T) {
+func TestSearchTools_ParsesAndDedupes(t *testing.T) {
 	t.Parallel()
 
 	m := &fakeModel{
@@ -87,7 +81,7 @@ func TestSelectToolNames_ParsesAndDedupes(t *testing.T) {
 		"a": fakeTool{decl: &tool.Declaration{Name: "a"}},
 		"b": fakeTool{decl: &tool.Declaration{Name: "b"}},
 	}
-	got, err := selectToolNames(context.Background(), m, &model.Request{}, tools)
+	got, err := searchTools(context.Background(), m, &model.Request{}, tools)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -97,7 +91,7 @@ func TestSelectToolNames_ParsesAndDedupes(t *testing.T) {
 	}
 }
 
-func TestSelectToolNames_UsesDeltaContentIfMessageEmpty(t *testing.T) {
+func TestSearchTools_UsesDeltaContentIfMessageEmpty(t *testing.T) {
 	t.Parallel()
 
 	m := &fakeModel{
@@ -111,7 +105,7 @@ func TestSelectToolNames_UsesDeltaContentIfMessageEmpty(t *testing.T) {
 	tools := map[string]tool.Tool{
 		"a": fakeTool{decl: &tool.Declaration{Name: "a"}},
 	}
-	got, err := selectToolNames(context.Background(), m, &model.Request{}, tools)
+	got, err := searchTools(context.Background(), m, &model.Request{}, tools)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -120,7 +114,7 @@ func TestSelectToolNames_UsesDeltaContentIfMessageEmpty(t *testing.T) {
 	}
 }
 
-func TestSelectToolNames_ParsesJSONFromSurroundingText(t *testing.T) {
+func TestSearchTools_ParsesJSONFromSurroundingText(t *testing.T) {
 	t.Parallel()
 
 	m := &fakeModel{
@@ -132,7 +126,7 @@ func TestSelectToolNames_ParsesJSONFromSurroundingText(t *testing.T) {
 	tools := map[string]tool.Tool{
 		"a": fakeTool{decl: &tool.Declaration{Name: "a"}},
 	}
-	got, err := selectToolNames(context.Background(), m, &model.Request{}, tools)
+	got, err := searchTools(context.Background(), m, &model.Request{}, tools)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -141,7 +135,7 @@ func TestSelectToolNames_ParsesJSONFromSurroundingText(t *testing.T) {
 	}
 }
 
-func TestSelectToolNames_InvalidOrUnparseableErrors(t *testing.T) {
+func TestSearchTools_InvalidOrUnparsableErrors(t *testing.T) {
 	t.Parallel()
 
 	tools := map[string]tool.Tool{
@@ -154,19 +148,19 @@ func TestSelectToolNames_InvalidOrUnparseableErrors(t *testing.T) {
 				return respCh(&model.Response{Choices: []model.Choice{{Message: model.Message{Content: `{"tools":["nope"]}`}}}}), nil
 			},
 		}
-		_, err := selectToolNames(context.Background(), m, &model.Request{}, tools)
+		_, err := searchTools(context.Background(), m, &model.Request{}, tools)
 		if err == nil || !strings.Contains(err.Error(), "invalid tools") {
 			t.Fatalf("unexpected err: %v", err)
 		}
 	})
 
-	t.Run("unparseable_json", func(t *testing.T) {
+	t.Run("unparsable_json", func(t *testing.T) {
 		m := &fakeModel{
 			generate: func(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
 				return respCh(&model.Response{Choices: []model.Choice{{Message: model.Message{Content: "not json at all"}}}}), nil
 			},
 		}
-		_, err := selectToolNames(context.Background(), m, &model.Request{}, tools)
+		_, err := searchTools(context.Background(), m, &model.Request{}, tools)
 		if err == nil || !strings.Contains(err.Error(), "failed to parse selection JSON") {
 			t.Fatalf("unexpected err: %v", err)
 		}
@@ -217,5 +211,3 @@ func TestRenderToolListAndSchema(t *testing.T) {
 		t.Fatalf("enum = %v", enum)
 	}
 }
-
-
