@@ -10,6 +10,7 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -5382,4 +5383,415 @@ func TestConvertToolCalls_ExtraFields(t *testing.T) {
 		assert.Equal(t, "call-2", result[1].ID)
 		assert.Equal(t, "call-3", result[2].ID)
 	})
+}
+
+// parseChunkWithExtraFields parses a JSON string into a ChatCompletionChunk
+// and returns it with properly populated respjson.Field values for ExtraFields.
+func parseChunkWithExtraFields(t *testing.T, jsonStr string) openai.ChatCompletionChunk {
+	t.Helper()
+	var chunk openai.ChatCompletionChunk
+	err := json.Unmarshal([]byte(jsonStr), &chunk)
+	require.NoError(t, err)
+	return chunk
+}
+
+// TestModel_collectExtraFieldsFromChunk tests the collectExtraFieldsFromChunk method.
+func TestModel_collectExtraFieldsFromChunk(t *testing.T) {
+	m := New("test-model", WithAPIKey("test-key"))
+
+	t.Run("empty chunk choices", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{}
+		extraFieldsMap := make(map[string]map[string]any)
+		m.collectExtraFieldsFromChunk(chunk, extraFieldsMap)
+		assert.Empty(t, extraFieldsMap)
+	})
+
+	t.Run("no tool calls in delta", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{Delta: openai.ChatCompletionChunkChoiceDelta{}},
+			},
+		}
+		extraFieldsMap := make(map[string]map[string]any)
+		m.collectExtraFieldsFromChunk(chunk, extraFieldsMap)
+		assert.Empty(t, extraFieldsMap)
+	})
+
+	t.Run("tool call with ID and extra fields", func(t *testing.T) {
+		chunk := parseChunkWithExtraFields(t, `{
+			"id": "test-id",
+			"object": "chat.completion.chunk",
+			"created": 1699200000,
+			"model": "test-model",
+			"choices": [{
+				"index": 0,
+				"delta": {
+					"tool_calls": [{
+						"index": 0,
+						"id": "call_123",
+						"type": "function",
+						"function": {"name": "test_func", "arguments": "{}"},
+						"extra_key": "extra_value"
+					}]
+				}
+			}]
+		}`)
+		extraFieldsMap := make(map[string]map[string]any)
+		m.collectExtraFieldsFromChunk(chunk, extraFieldsMap)
+		assert.Contains(t, extraFieldsMap, "call_123")
+	})
+
+	t.Run("tool call with index but no ID", func(t *testing.T) {
+		chunk := parseChunkWithExtraFields(t, `{
+			"id": "test-id",
+			"object": "chat.completion.chunk",
+			"created": 1699200000,
+			"model": "test-model",
+			"choices": [{
+				"index": 0,
+				"delta": {
+					"tool_calls": [{
+						"index": 1,
+						"type": "function",
+						"function": {"name": "test_func", "arguments": "{}"},
+						"extra_key": "extra_value"
+					}]
+				}
+			}]
+		}`)
+		extraFieldsMap := make(map[string]map[string]any)
+		m.collectExtraFieldsFromChunk(chunk, extraFieldsMap)
+		assert.Contains(t, extraFieldsMap, "index_1")
+	})
+
+	t.Run("tool call with no extra fields", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								ID:    "call_456",
+								Index: 0,
+							},
+						},
+					},
+				},
+			},
+		}
+		extraFieldsMap := make(map[string]map[string]any)
+		m.collectExtraFieldsFromChunk(chunk, extraFieldsMap)
+		assert.Empty(t, extraFieldsMap)
+	})
+}
+
+// TestModel_accumulateChunk tests the accumulateChunk method.
+func TestModel_accumulateChunk(t *testing.T) {
+	m := New("test-model", WithAPIKey("test-key"))
+
+	t.Run("accumulate normal chunk without reasoning", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			ID:      "test-id",
+			Object:  "chat.completion.chunk",
+			Created: 1699200000,
+			Model:   "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Index: 0,
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						Content: "Hello",
+					},
+				},
+			},
+		}
+		acc := openai.ChatCompletionAccumulator{}
+		var reasoningBuf bytes.Buffer
+
+		m.accumulateChunk(chunk, &acc, &reasoningBuf)
+
+		assert.NotEmpty(t, acc.Choices)
+		assert.Equal(t, "", reasoningBuf.String())
+	})
+
+	t.Run("skip chunk with reasoning content", func(t *testing.T) {
+		chunk := parseChunkWithExtraFields(t, `{
+			"id": "test-id",
+			"object": "chat.completion.chunk",
+			"created": 1699200000,
+			"model": "test-model",
+			"choices": [{
+				"index": 0,
+				"delta": {
+					"reasoning_content": "First reasoning"
+				}
+			}]
+		}`)
+		acc := openai.ChatCompletionAccumulator{}
+		var reasoningBuf bytes.Buffer
+
+		m.accumulateChunk(chunk, &acc, &reasoningBuf)
+
+		assert.Equal(t, "First reasoning", reasoningBuf.String())
+		assert.Empty(t, acc.Choices)
+	})
+
+	t.Run("accumulate with custom usage function", func(t *testing.T) {
+		customAccFunc := func(u model.Usage, delta model.Usage) model.Usage {
+			return model.Usage{
+				PromptTokens:     u.PromptTokens + delta.PromptTokens*2,
+				CompletionTokens: u.CompletionTokens + delta.CompletionTokens*2,
+				TotalTokens:      u.TotalTokens + delta.TotalTokens*2,
+			}
+		}
+		m := New("test-model", WithAPIKey("test-key"), WithAccumulateChunkTokenUsage(customAccFunc))
+
+		chunk := openai.ChatCompletionChunk{
+			ID:      "test-id",
+			Object:  "chat.completion.chunk",
+			Created: 1699200000,
+			Model:   "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Index: 0,
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						Content: "Hello",
+					},
+				},
+			},
+			Usage: openai.CompletionUsage{
+				PromptTokens:     10,
+				CompletionTokens: 5,
+				TotalTokens:      15,
+			},
+		}
+		acc := openai.ChatCompletionAccumulator{}
+		var reasoningBuf bytes.Buffer
+
+		m.accumulateChunk(chunk, &acc, &reasoningBuf)
+
+		assert.Equal(t, int64(20), acc.Usage.PromptTokens)
+		assert.Equal(t, int64(10), acc.Usage.CompletionTokens)
+	})
+}
+
+// TestModel_sendPartialResponse tests the sendPartialResponse method.
+func TestModel_sendPartialResponse(t *testing.T) {
+	m := New("test-model", WithAPIKey("test-key"))
+
+	t.Run("successfully send response", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			ID:      "test-id",
+			Object:  "chat.completion.chunk",
+			Created: 1699200000,
+			Model:   "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Index: 0,
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						Content: "Hello",
+					},
+				},
+			},
+		}
+		responseChan := make(chan *model.Response, 1)
+		ctx := context.Background()
+
+		err := m.sendPartialResponse(ctx, chunk, responseChan)
+
+		assert.NoError(t, err)
+		assert.Len(t, responseChan, 1)
+		response := <-responseChan
+		assert.Equal(t, "test-id", response.ID)
+		assert.True(t, response.IsPartial)
+		assert.False(t, response.Done)
+	})
+
+	t.Run("context cancelled", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			ID:      "test-id",
+			Object:  "chat.completion.chunk",
+			Created: 1699200000,
+			Model:   "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Index: 0,
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						Content: "Hello",
+					},
+				},
+			},
+		}
+		responseChan := make(chan *model.Response)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := m.sendPartialResponse(ctx, chunk, responseChan)
+
+		assert.Error(t, err)
+		assert.Equal(t, context.Canceled, err)
+	})
+}
+
+// TestModel_handleStreamCompleteCallback tests the handleStreamCompleteCallback method.
+func TestModel_handleStreamCompleteCallback(t *testing.T) {
+	t.Run("callback not set", func(t *testing.T) {
+		m := New("test-model", WithAPIKey("test-key"))
+		chatRequest := openai.ChatCompletionNewParams{}
+		acc := openai.ChatCompletionAccumulator{}
+
+		m.handleStreamCompleteCallback(context.Background(), chatRequest, acc, nil)
+	})
+
+	t.Run("callback called with no error", func(t *testing.T) {
+		var callbackCalled bool
+		var capturedAcc *openai.ChatCompletionAccumulator
+		var capturedErr error
+
+		callback := func(ctx context.Context, req *openai.ChatCompletionNewParams, acc *openai.ChatCompletionAccumulator, streamErr error) {
+			callbackCalled = true
+			capturedAcc = acc
+			capturedErr = streamErr
+		}
+
+		m := New("test-model", WithAPIKey("test-key"), WithChatStreamCompleteCallback(callback))
+		chatRequest := openai.ChatCompletionNewParams{}
+		acc := openai.ChatCompletionAccumulator{}
+
+		m.handleStreamCompleteCallback(context.Background(), chatRequest, acc, nil)
+
+		assert.True(t, callbackCalled)
+		assert.NotNil(t, capturedAcc)
+		assert.NoError(t, capturedErr)
+	})
+
+	t.Run("callback called with error", func(t *testing.T) {
+		var callbackCalled bool
+		var capturedAcc *openai.ChatCompletionAccumulator
+		var capturedErr error
+
+		callback := func(ctx context.Context, req *openai.ChatCompletionNewParams, acc *openai.ChatCompletionAccumulator, streamErr error) {
+			callbackCalled = true
+			capturedAcc = acc
+			capturedErr = streamErr
+		}
+
+		m := New("test-model", WithAPIKey("test-key"), WithChatStreamCompleteCallback(callback))
+		chatRequest := openai.ChatCompletionNewParams{}
+		acc := openai.ChatCompletionAccumulator{}
+		streamError := fmt.Errorf("stream error")
+
+		m.handleStreamCompleteCallback(context.Background(), chatRequest, acc, streamError)
+
+		assert.True(t, callbackCalled)
+		assert.Nil(t, capturedAcc)
+		assert.Error(t, capturedErr)
+		assert.Equal(t, "stream error", capturedErr.Error())
+	})
+}
+
+// TestModel_StreamingResponse_ReasoningChunkNotSuppressed tests that chunks with
+// reasoning content are not suppressed even when shouldSuppressChunk returns true.
+func TestModel_StreamingResponse_ReasoningChunkNotSuppressed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		// Send chunks with reasoning content but no regular content.
+		// These should NOT be suppressed even though they would normally be.
+		chunks := []string{
+			`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"thinking step 1"},"finish_reason":null}]}`,
+			`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"reasoning_content":" thinking step 2"},"finish_reason":null}]}`,
+			`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"content":"Final answer"},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		}
+
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "%s\n\n", chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	m := New("test-model", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "Test"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	var reasoningChunks int
+	for response := range responseChan {
+		responses = append(responses, response)
+		require.Nil(t, response.Error)
+		if len(response.Choices) > 0 && response.Choices[0].Delta.ReasoningContent != "" {
+			reasoningChunks++
+		}
+	}
+
+	// Verify we received reasoning chunks despite them having no regular content.
+	assert.Greater(t, reasoningChunks, 0, "Expected to receive reasoning chunks")
+	assert.Greater(t, len(responses), 1, "Expected multiple responses")
+}
+
+// TestModel_StreamingResponse_ContextCancellation tests that context cancellation
+// is properly handled during streaming.
+func TestModel_StreamingResponse_ContextCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		// Send a few chunks then wait for context cancellation.
+		for i := 0; i < 5; i++ {
+			chunk := fmt.Sprintf(`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"delta":{"content":"chunk %d"},"finish_reason":null}]}`, i)
+			fmt.Fprintf(w, "%s\n\n", chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}))
+	defer server.Close()
+
+	m := New("test-model", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "Test"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	responseChan, err := m.GenerateContent(ctx, req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	// Read a few responses then cancel.
+	for response := range responseChan {
+		responses = append(responses, response)
+		if len(responses) >= 2 {
+			cancel()
+			// Continue reading to drain the channel.
+		}
+	}
+
+	// Should have received at least 2 responses before cancellation.
+	assert.GreaterOrEqual(t, len(responses), 2, "Expected at least 2 responses before cancellation")
 }
