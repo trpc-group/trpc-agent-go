@@ -345,7 +345,7 @@ sessionService := inmemory.NewSessionService(
 
 ## 存储后端对比
 
-tRPC-Agent-Go 提供四种会话存储后端，满足不同场景需求：
+tRPC-Agent-Go 提供五种会话存储后端，满足不同场景需求：
 
 | 存储类型   | 适用场景           | 优势                              | 劣势                     |
 | ---------- | ------------------ | --------------------------------- | ------------------------ |
@@ -785,7 +785,7 @@ sessionService, err := mysql.NewService(
 // - 连接 localhost:3306，数据库 trpc_sessions
 // - 每个会话最多 1000 个事件
 // - 数据永不过期
-// - 2 个异步持久化 worker
+// - 默认 10 个异步持久化 worker（可通过 WithAsyncPersisterNum 调整）
 
 // 生产环境完整配置
 sessionService, err := mysql.NewService(
