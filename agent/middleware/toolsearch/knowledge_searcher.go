@@ -18,38 +18,38 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-type knowledgeIndex struct {
-	model        model.Model
-	systemPrompt string
-	*ToolKnowledge
+type knowledgeSearcher struct {
+	model         model.Model
+	systemPrompt  string
+	toolKnowledge *ToolKnowledge
 }
 
 const defaultSystemPromptWithToolKnowledge = "Your goal is to identify the most relevant tools for answering the user's query. " +
 	"Provide a natural-language description of the kind of tool needed (e.g., 'weather information', 'currency conversion', 'stock prices')."
 
-func newKnowledgeIndex(m model.Model, systemPrompt string, toolKnowledge *ToolKnowledge) *knowledgeIndex {
+func newKnowledgeSearcher(m model.Model, systemPrompt string, toolKnowledge *ToolKnowledge) *knowledgeSearcher {
 	if systemPrompt == "" {
 		systemPrompt = defaultSystemPromptWithToolKnowledge
 	}
-	return &knowledgeIndex{
+	return &knowledgeSearcher{
 		model:         m,
 		systemPrompt:  systemPrompt,
-		ToolKnowledge: toolKnowledge,
+		toolKnowledge: toolKnowledge,
 	}
 }
 
-func (s *knowledgeIndex) search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) ([]string, error) {
+func (s *knowledgeSearcher) Search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) ([]string, error) {
 	query, err := s.rewriteQuery(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.ToolKnowledge.upsert(ctx, candidates); err != nil {
+	if err := s.toolKnowledge.upsert(ctx, candidates); err != nil {
 		return nil, err
 	}
-	return s.ToolKnowledge.search(ctx, candidates, query, topK)
+	return s.toolKnowledge.search(ctx, candidates, query, topK)
 }
 
-func (s *knowledgeIndex) rewriteQuery(ctx context.Context, query string) (string, error) {
+func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (string, error) {
 	req := &model.Request{
 		Messages: []model.Message{
 			model.NewSystemMessage(s.systemPrompt),

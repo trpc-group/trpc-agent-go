@@ -14,35 +14,36 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// llmIndex implements the local searcher interface by asking an LLM to pick
+// llmSearch implements the local searcher interface by asking an LLM to pick
 // tool names from a provided candidate set.
 //
 // It intentionally uses the existing request-building/parsing code paths to keep behavior
 // consistent with the middleware callback.
-type llmIndex struct {
+type llmSearch struct {
 	model        model.Model
 	systemPrompt string
 }
 
 const defaultSystemPrompt = "Your goal is to select the most relevant tools for answering the user's query."
 
-func newLlmIndex(model model.Model, systemPrompt string) *llmIndex {
+func newLlmSearch(model model.Model, systemPrompt string) *llmSearch {
 	if systemPrompt == "" {
 		systemPrompt = defaultSystemPrompt
 	}
-	return &llmIndex{
+	return &llmSearch{
 		model:        model,
 		systemPrompt: systemPrompt,
 	}
 }
 
-func (s *llmIndex) search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) ([]string, error) {
+func (s *llmSearch) Search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) ([]string, error) {
 	systemMsg := s.systemPrompt
 	if topK > 0 {
 		systemMsg += fmt.Sprintf(
@@ -51,7 +52,15 @@ func (s *llmIndex) search(ctx context.Context, candidates map[string]tool.Tool, 
 			topK,
 		)
 	}
-	systemMsg += "\n\nAvailable tools:\n" + renderToolList(candidates)
+
+	tools := make([]tool.Tool, 0, len(candidates))
+	for _, t := range candidates {
+		tools = append(tools, t)
+	}
+	sort.Slice(tools, func(i, j int) bool {
+		return tools[i].Declaration().Name < tools[j].Declaration().Name
+	})
+	systemMsg += "\n\nAvailable tools:\n" + renderToolList(tools)
 	req := &model.Request{
 		Messages: []model.Message{
 			model.NewSystemMessage(systemMsg),
@@ -62,7 +71,7 @@ func (s *llmIndex) search(ctx context.Context, candidates map[string]tool.Tool, 
 			Type: model.StructuredOutputJSONSchema,
 			JSONSchema: &model.JSONSchemaConfig{
 				Name:        "tool_selection",
-				Schema:      toolSelectionSchema(candidates),
+				Schema:      toolSelectionSchema(tools),
 				Strict:      true,
 				Description: "Tools to use. Place the most relevant tools first.",
 			},
@@ -90,10 +99,6 @@ func selectToolNames(
 	req *model.Request,
 	tools map[string]tool.Tool,
 ) ([]string, error) {
-	names := make([]string, 0, len(tools))
-	for name := range tools {
-		names = append(names, name)
-	}
 	respCh, err := m.GenerateContent(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("ToolSearch: selection model call failed: %w", err)
@@ -173,31 +178,22 @@ func findLastUserMessage(messages []model.Message) (model.Message, bool) {
 	return model.Message{}, false
 }
 
-func renderToolList(tools map[string]tool.Tool) string {
+func renderToolList(tools []tool.Tool) string {
 	var b strings.Builder
-	for name := range tools {
-		t := tools[name]
-		if t == nil {
-			continue
-		}
-		decl := t.Declaration()
-		desc := ""
-		if decl != nil {
-			desc = decl.Description
-		}
+	for _, t := range tools {
 		b.WriteString("- ")
-		b.WriteString(name)
+		b.WriteString(t.Declaration().Name)
 		b.WriteString(": ")
-		b.WriteString(desc)
+		b.WriteString(t.Declaration().Description)
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func toolSelectionSchema(tools map[string]tool.Tool) map[string]any {
+func toolSelectionSchema(tools []tool.Tool) map[string]any {
 	enum := make([]string, 0, len(tools))
-	for name := range tools {
-		enum = append(enum, name)
+	for _, t := range tools {
+		enum = append(enum, t.Declaration().Name)
 	}
 	return map[string]any{
 		"type": "object",

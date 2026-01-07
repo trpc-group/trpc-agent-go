@@ -22,7 +22,7 @@ import (
 // ToolSearch uses an LLM to select relevant tools before the main
 // model call by mutating `args.Request.Tools` in a BeforeModel callback.
 type ToolSearch struct {
-	toolIndex     toolIndex
+	searcher      searcher
 	maxTools      int
 	alwaysInclude []string
 }
@@ -46,9 +46,9 @@ func New(m model.Model, opts ...Option) (*ToolSearch, error) {
 	}
 
 	if cfg.toolKnowledge != nil {
-		s.toolIndex = newKnowledgeIndex(cfg.Model, cfg.SystemPrompt, cfg.toolKnowledge)
+		s.searcher = newKnowledgeSearcher(cfg.Model, cfg.SystemPrompt, cfg.toolKnowledge)
 	} else {
-		s.toolIndex = newLlmIndex(cfg.Model, cfg.SystemPrompt)
+		s.searcher = newLlmSearch(cfg.Model, cfg.SystemPrompt)
 	}
 	return s, nil
 }
@@ -69,8 +69,8 @@ func (s *ToolSearch) Callback() model.BeforeModelCallbackStructured {
 			return nil, err
 		}
 
-		candidateNames, candidateTools := s.buildCandidateTools(baseTools)
-		if len(candidateNames) == 0 {
+		candidateTools := s.buildCandidateTools(baseTools)
+		if len(candidateTools) == 0 {
 			// If no tools are available for selection, nothing to do.
 			return nil, nil
 		}
@@ -80,7 +80,7 @@ func (s *ToolSearch) Callback() model.BeforeModelCallbackStructured {
 			return nil, err
 		}
 
-		selectedTools, err := s.toolIndex.search(ctx, candidateTools, lastUser.Content, s.maxTools)
+		selectedTools, err := s.searcher.Search(ctx, candidateTools, lastUser.Content, s.maxTools)
 		if err != nil {
 			return nil, err
 		}
@@ -130,9 +130,8 @@ func sortedToolNames(tools map[string]tool.Tool) []string {
 	return names
 }
 
-func (s *ToolSearch) buildCandidateTools(baseTools map[string]tool.Tool) ([]string, map[string]tool.Tool) {
+func (s *ToolSearch) buildCandidateTools(baseTools map[string]tool.Tool) map[string]tool.Tool {
 	// Prepare candidate tools for selection (exclude always-include).
-	candidateNames := make([]string, 0, len(baseTools))
 	candidateTools := make(map[string]tool.Tool, len(baseTools))
 
 	always := make(map[string]bool, len(s.alwaysInclude))
@@ -144,11 +143,12 @@ func (s *ToolSearch) buildCandidateTools(baseTools map[string]tool.Tool) ([]stri
 		if always[name] {
 			continue
 		}
-		candidateNames = append(candidateNames, name)
+		if t == nil || t.Declaration() == nil {
+			continue
+		}
 		candidateTools[name] = t
 	}
-	sort.Strings(candidateNames)
-	return candidateNames, candidateTools
+	return candidateTools
 }
 
 func lastUserMessage(messages []model.Message) (model.Message, error) {

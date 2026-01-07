@@ -12,7 +12,7 @@ package toolsearch
 import "trpc.group/trpc-go/trpc-agent-go/model"
 
 // Config holds all configurable values for ToolSearch.
-// It is mutated by Option functions and then applied when constructing the toolIndex.
+// It is mutated by Option functions and then applied when constructing the searcher.
 type Config struct {
 	Model         model.Model
 	toolKnowledge *ToolKnowledge

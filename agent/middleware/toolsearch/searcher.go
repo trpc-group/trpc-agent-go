@@ -15,6 +15,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-type toolIndex interface {
-	search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) ([]string, error)
+type searcher interface {
+	Search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) ([]string, error)
 }
