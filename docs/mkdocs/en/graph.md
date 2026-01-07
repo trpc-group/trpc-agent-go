@@ -158,13 +158,14 @@ The Graph package provides some built-in state keys, mainly for internal system 
 - `StateKeyUserInput`: User input (one-shot, cleared after consumption, persisted by LLM nodes)
 - `StateKeyOneShotMessages`: One-shot messages (complete override for current round, cleared after consumption)
 - `StateKeyLastResponse`: Last response (used to set final output, Executor reads this value as result)
+- `StateKeyLastToolResponse`: Last tool output (JSON string, set by Tools nodes)
 - `StateKeyLastResponseID`: Last response identifier (ID) (set by LLM nodes; may
   be empty when `StateKeyLastResponse` is produced by a non-model node)
 - `StateKeyMessages`: Message history (durable, supports append + MessageOp patch operations)
-- `StateKeyNodeResponses`: Per-node responses map. Key is node ID, value is the
-  node's final textual response. Use `StateKeyLastResponse` for the final
-  serial output; when multiple parallel nodes converge, read each node's
-  output from `StateKeyNodeResponses`.
+- `StateKeyNodeResponses`: Per-node outputs map. Key is node ID, value is the
+  node's final output. For LLM and Agent nodes this is the final textual
+  response; for Tools nodes this is a JSON array string of tool outputs (each
+  item contains `tool_id`, `tool_name`, and `output`).
 - `StateKeyMetadata`: Metadata (general metadata storage available to users)
 
 **System Internal Keys** (users should not use directly):
@@ -1826,9 +1827,17 @@ sg.AddToolsNode(nodeTools, tools)
 // For parallelism, use multiple nodes + parallel edges
 // Pairing rule: walk the messages from the tail to the most recent assistant(tool_calls)
 // message; stop at a new user to ensure pairing with the current tool call round.
+// Output: appends tool messages to graph.StateKeyMessages, sets
+// graph.StateKeyLastToolResponse, and sets
+// graph.StateKeyNodeResponses[nodeTools] to a JSON array string.
 ```
 
 #### Reading Tool Results into State
+
+Tools nodes already expose their outputs via:
+
+- `graph.StateKeyLastToolResponse`: JSON string of the last tool output in this node run
+- `graph.StateKeyNodeResponses[<tools_node_id>]`: JSON array string of all tool outputs from this node run
 
 After a tools node, add a function node to collect tool outputs from `graph.StateKeyMessages` and write a structured result into state:
 
@@ -2652,7 +2661,7 @@ Graph state is a `map[string]any` with runtime validation provided by `StateSche
 
 #### Common State Keys
 
-- User‑visible: `graph.StateKeyUserInput`, `graph.StateKeyOneShotMessages`, `graph.StateKeyMessages`, `graph.StateKeyLastResponse`, `graph.StateKeyNodeResponses`, `graph.StateKeyMetadata`
+- User‑visible: `graph.StateKeyUserInput`, `graph.StateKeyOneShotMessages`, `graph.StateKeyMessages`, `graph.StateKeyLastResponse`, `graph.StateKeyLastToolResponse`, `graph.StateKeyNodeResponses`, `graph.StateKeyMetadata`
 - Internal: `session`, `exec_context`, `tool_callbacks`, `model_callbacks`, `agent_callbacks`, `current_node_id`, `parent_agent`
 - Command/Resume: `__command__`, `__resume_map__`
 
@@ -2810,6 +2819,7 @@ Nodes communicate only via the shared `State`. Each node returns a state delta t
 - Tools nodes
 
   - Read the latest assistant message with `tool_calls` for the current round and append tool responses to `graph.StateKeyMessages`
+  - Output: set `graph.StateKeyLastToolResponse`, set `graph.StateKeyNodeResponses[<tools_node_id>]` (JSON array string)
   - Multiple tools execute in the order returned by the LLM
 
 - Agent nodes
