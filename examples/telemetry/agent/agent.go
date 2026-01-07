@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-	"trpc.group/trpc-go/trpc-agent-go/agent/middleware/llmtoolselector"
+	"trpc.group/trpc-go/trpc-agent-go/agent/middleware/toolsearch"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -40,7 +40,7 @@ type MultiToolChatAgent struct {
 }
 
 // NewMultiToolChatAgent creates a new multi-tool chat agent.
-func NewMultiToolChatAgent(agentName, modelName string) *MultiToolChatAgent {
+func NewMultiToolChatAgent(agentName, modelName string) (*MultiToolChatAgent, error) {
 	a := &MultiToolChatAgent{modelName: modelName}
 	// Create OpenAI model
 	modelInstance := openai.New(a.modelName)
@@ -55,10 +55,11 @@ func NewMultiToolChatAgent(agentName, modelName string) *MultiToolChatAgent {
 	}
 
 	modelCallbacks := model.NewCallbacks()
-	modelCallbacks.RegisterBeforeModel(llmtoolselector.New(
-		llmtoolselector.WithModel(modelInstance),
-		llmtoolselector.WithMaxTools(2),
-	).Callback())
+	if toolSelector, err := toolsearch.New(modelInstance, toolsearch.WithMaxTools(2)); err != nil {
+		return nil, fmt.Errorf("failed to create tool selector: %w", err)
+	} else {
+		modelCallbacks.RegisterBeforeModel(toolSelector.Callback())
+	}
 
 	// Create LLM agent
 	genConfig := model.GenerationConfig{
@@ -95,7 +96,7 @@ func NewMultiToolChatAgent(agentName, modelName string) *MultiToolChatAgent {
 	a.sessionID = fmt.Sprintf("multi-tool-session-%d", time.Now().Unix())
 
 	fmt.Printf("✅ Multi-tool intelligent assistant is ready! Session ID: %s\n\n", a.sessionID)
-	return a
+	return a, nil
 }
 
 // Close closes the agent and releases owned resources.

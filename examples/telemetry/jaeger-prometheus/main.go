@@ -61,7 +61,10 @@ func main() {
 	modelName := flag.String("model", "deepseek-chat", "Model name to use")
 	flag.Parse()
 	printGuideMessage(*modelName)
-	a := agent.NewMultiToolChatAgent("multi-tool-assistant", *modelName)
+	a, err := agent.NewMultiToolChatAgent("multi-tool-assistant", *modelName)
+	if err != nil {
+		log.Fatalf("Failed to create multi-tool chat agent: %v", err)
+	}
 	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
 	defer a.Close()
 	userMessage := []string{
