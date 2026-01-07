@@ -16,7 +16,7 @@ Within the same conversation, it allows for seamless transitions between multipl
 - **Session Summary**: Automatically compress long conversation history using LLM while preserving key context and significantly reducing token consumption
 - **Event Limiting**: Control maximum number of events stored per session to prevent memory overflow
 - **TTL Management**: Support automatic expiration and cleanup of session data
-- **Multiple Storage Backends**: Support Memory, Redis, PostgreSQL, MySQL storage
+- **Multiple Storage Backends**: Support Memory, Redis, PostgreSQL, MySQL, ClickHouse storage
 - **Concurrency Safety**: Built-in read-write locks ensure safe concurrent access
 - **Automatic Management**: Automatically handle session creation, loading, and updates after Runner integration
 - **Soft Delete Support**: PostgreSQL/MySQL support soft delete with data recovery capability
@@ -338,15 +338,15 @@ sessionService := inmemory.NewSessionService(
 
 ## Storage Backend Comparison
 
-tRPC-Agent-Go provides four session storage backends to meet different scenario requirements:
+tRPC-Agent-Go provides five session storage backends to meet different scenario requirements:
 
-| Storage Type | Use Case                         | Advantages                                             | Disadvantages                               |
-| ------------ | -------------------------------- | ------------------------------------------------------ | ------------------------------------------- |
-| Memory       | Development/testing, small-scale | Simple and fast, no external dependencies              | Data not persistent, no distributed support |
-| Redis        | Production, distributed          | High performance, distributed support, auto-expiration | Requires Redis service                      |
-| PostgreSQL   | Production, complex queries      | Relational database, supports complex queries, JSONB   | Relatively heavy, requires database         |
-| MySQL        | Production, complex queries      | Widely used, supports complex queries, JSON            | Relatively heavy, requires database         |
-| ClickHouse   | Production, massive logs         | Extremely high write throughput, suitable for massive event analysis | High update cost, relies on FINAL |
+| Storage Type | Use Case                         |
+| ------------ | -------------------------------- |
+| Memory       | Development/testing, small-scale |
+| Redis        | Production, distributed          |
+| PostgreSQL   | Production, complex queries      |
+| MySQL        | Production, complex queries      |
+| ClickHouse   | Production, massive logs         |
 
 ## Memory Storage
 
@@ -784,7 +784,7 @@ sessionService, err := mysql.NewService(
 // - Connect to localhost:3306, database trpc_sessions
 // - Each session max 1000 events
 // - Data never expires
-// - 2 async persistence workers
+// - Default 10 async persistence workers (tunable via WithAsyncPersisterNum)
 
 // Complete production environment configuration
 sessionService, err := mysql.NewService(
