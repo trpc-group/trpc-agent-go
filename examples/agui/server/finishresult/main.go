@@ -11,18 +11,14 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"net/http"
 
-	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	_ "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 	_ "trpc.group/trpc-go/trpc-agent-go/session/redis"
@@ -59,18 +55,6 @@ func main() {
 		agui.WithAGUIRunnerOptions(
 			aguirunner.WithUserIDResolver(userIDResolver),
 			aguirunner.WithTranslatorFactory(newTranslator),
-			aguirunner.WithTranslateCallbacks(translator.NewCallbacks().RegisterBeforeTranslate(
-				func(ctx context.Context, event *event.Event) (*event.Event, error) {
-					data, _ := json.Marshal(event)
-					log.Infof("before event: %s", string(data))
-					return nil, nil
-				},
-			).RegisterAfterTranslate(func(ctx context.Context, event events.Event) (events.Event, error) {
-				data, _ := json.Marshal(event)
-				log.Infof("after event: %s", string(data))
-				return nil, nil
-			}),
-			),
 		),
 	)
 	if err != nil {
