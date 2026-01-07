@@ -183,3 +183,51 @@ func TestWithSkillRunDeniedCommands_CopiesSlice(t *testing.T) {
 	in[0] = "rm"
 	require.Equal(t, []string{"echo", "ls"}, opts.skillRunDeniedCommands)
 }
+
+func TestWithSummaryFormatter(t *testing.T) {
+	tests := []struct {
+		name      string
+		formatter func(summary string) string
+		wantNil   bool
+	}{
+		{
+			name:      "set custom formatter",
+			formatter: func(summary string) string {
+				return "## Summary\n\n" + summary
+			},
+			wantNil: false,
+		},
+		{
+			name:      "set nil formatter",
+			formatter: nil,
+			wantNil:   true,
+		},
+		{
+			name: "set formatter with prefix",
+			formatter: func(summary string) string {
+				return "## Previous Context\n\n" + summary
+			},
+			wantNil: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &Options{}
+			opt := WithSummaryFormatter(tt.formatter)
+			opt(opts)
+
+			if tt.wantNil {
+				require.Nil(t, opts.summaryFormatter)
+			} else {
+				require.NotNil(t, opts.summaryFormatter)
+				require.NotNil(t, tt.formatter)
+				// Verify the formatter works as expected.
+				input := "test summary"
+				expected := tt.formatter(input)
+				actual := opts.summaryFormatter(input)
+				require.Equal(t, expected, actual)
+			}
+		})
+	}
+}

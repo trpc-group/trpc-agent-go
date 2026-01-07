@@ -651,7 +651,7 @@ func WithReasoningContentMode(mode string) Option {
 	}
 }
 
-// withSummaryFormatter sets a custom formatter for session summary content.
+// WithSummaryFormatter sets a custom formatter for session summary content.
 // This allows users to customize how summaries are presented to the model.
 // Example:
 //
