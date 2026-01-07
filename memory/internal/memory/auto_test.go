@@ -313,6 +313,38 @@ func TestAutoMemoryWorker_EnqueueJob_SyncFallback(t *testing.T) {
 	assert.Equal(t, 1, op.addCalls)
 }
 
+func TestAutoMemoryWorker_EnqueueJob_SyncFallback_CancelledContext(t *testing.T) {
+	ext := &mockExtractor{
+		ops: []*extractor.Operation{
+			{
+				Type:   extractor.OperationAdd,
+				Memory: "Test memory.",
+			},
+		},
+	}
+	op := newMockOperator()
+	config := AutoMemoryConfig{
+		Extractor: ext,
+	}
+
+	worker := NewAutoMemoryWorker(config, op)
+	// Do not start the worker, so it would fall back to sync.
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+
+	err := worker.EnqueueJob(ctx, memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-1",
+	}, []model.Message{
+		model.NewUserMessage("hello"),
+	})
+
+	// Should skip sync fallback when context is cancelled.
+	assert.NoError(t, err)
+	assert.Equal(t, 0, op.addCalls)
+}
+
 func TestAutoMemoryWorker_EnqueueJob_Async(t *testing.T) {
 	ext := &mockExtractor{
 		ops: []*extractor.Operation{

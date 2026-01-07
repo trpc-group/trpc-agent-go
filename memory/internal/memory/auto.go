@@ -193,10 +193,22 @@ func (w *AutoMemoryWorker) EnqueueJob(
 	if w.tryEnqueueJob(ctx, userKey, job) {
 		return nil
 	}
-	// Fall back to synchronous processing.
+	// Skip if context is already cancelled to avoid wasted work.
+	if ctx.Err() != nil {
+		log.DebugfContext(ctx, "auto_memory: skipped sync fallback due to cancelled context "+
+			"for user %s/%s", userKey.AppName, userKey.UserID)
+		return nil
+	}
+	// Fall back to synchronous processing with detached context and timeout.
 	log.DebugfContext(ctx, "auto_memory: queue full, processing synchronously for user %s/%s",
 		userKey.AppName, userKey.UserID)
-	return w.createAutoMemory(ctx, userKey, messagesToExtract)
+	timeout := w.config.MemoryJobTimeout
+	if timeout <= 0 {
+		timeout = DefaultMemoryJobTimeout
+	}
+	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	return w.createAutoMemory(syncCtx, userKey, messagesToExtract)
 }
 
 // tryEnqueueJob attempts to enqueue a memory job.
