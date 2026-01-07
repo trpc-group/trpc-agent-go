@@ -325,7 +325,7 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 			includeContents: BranchFilterModePrefix,
 			expectedMsg: &model.Message{
 				Role:    model.RoleSystem,
-				Content: formatSummaryContent("Test summary content"),
+				Content: NewContentRequestProcessor().formatSummary("Test summary content"),
 			},
 			expectedTime: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
 		},
@@ -346,7 +346,7 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 			includeContents: BranchFilterModeAll,
 			expectedMsg: &model.Message{
 				Role:    model.RoleSystem,
-				Content: formatSummaryContent("Full session summary"),
+				Content: NewContentRequestProcessor().formatSummary("Full session summary"),
 			},
 			expectedTime: time.Date(2023, 1, 1, 13, 0, 0, 0, time.UTC),
 		},
@@ -604,7 +604,7 @@ func TestContentRequestProcessor_ConcurrentSummariesAccess(t *testing.T) {
 	// Test single read
 	msg, updatedAt := p.getSessionSummaryMessage(inv)
 	assert.NotNil(t, msg, "Should get summary message")
-	assert.Equal(t, formatSummaryContent("Initial summary"), msg.Content)
+	assert.Equal(t, NewContentRequestProcessor().formatSummary("Initial summary"), msg.Content)
 	assert.Equal(t, baseTime, updatedAt)
 
 	// Test single write
@@ -618,7 +618,7 @@ func TestContentRequestProcessor_ConcurrentSummariesAccess(t *testing.T) {
 	// Test read after write
 	msg, updatedAt = p.getSessionSummaryMessage(inv)
 	assert.NotNil(t, msg, "Should get updated summary message")
-	assert.Equal(t, formatSummaryContent("Updated summary"), msg.Content)
+	assert.Equal(t, NewContentRequestProcessor().formatSummary("Updated summary"), msg.Content)
 	assert.Equal(t, baseTime.Add(time.Second), updatedAt)
 
 	// Test with minimal concurrency (2 goroutines only)

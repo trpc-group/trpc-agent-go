@@ -275,6 +275,52 @@ After enabling summary, the framework prepends the summary as a system message t
 └─────────────────────────────────────────┘
 ```
 
+#### Summary Format Customization
+
+By default, session summaries are formatted with context tags and a note about preferring current conversation information:
+
+**Default Format:**
+
+```
+Here is a brief summary of your previous interactions:
+
+<summary_of_previous_interactions>
+[summary content]
+</summary_of_previous_interactions>
+
+Note: this information is from previous interactions and may be outdated. You should ALWAYS prefer information from this conversation over the past summary.
+```
+
+You can customize the summary format using `WithSummaryFormatter` (available in `llmagent` and `graphagent`) to better match your specific use cases or model requirements.
+
+**Custom Format Example:**
+
+```go
+// Custom formatter with simplified format
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithSummaryFormatter(func(summary string) string {
+        return fmt.Sprintf("## Previous Context\n\n%s", summary)
+    }),
+)
+```
+
+**Use Cases:**
+
+- **Simplified Format**: Reduce token usage by using concise headings and minimal context notes
+- **Language Localization**: Translate context notes to target language (e.g., Chinese, Japanese)
+- **Role-Specific Formatting**: Different formats for different agent roles (assistant, researcher, coder)
+- **Model Optimization**: Tailor format for specific model preferences (some models respond better to certain prompt structures)
+
+**Important Notes:**
+
+- The formatter function receives the raw summary text from the session and returns the formatted string
+- Custom formatters should ensure the summary is clearly distinguishable from other messages
+- The default format is designed to be compatible with most models and use cases
+- When `WithAddSessionSummary(false)` is used, the formatter is **never invoked**
+
 **Important Note:** When `WithAddSessionSummary(true)` is enabled, the `WithMaxHistoryRuns` parameter is ignored, and all events after the summary are fully retained.
 
 For detailed configuration and advanced usage, see the [Session Summary](#session-summary) section.

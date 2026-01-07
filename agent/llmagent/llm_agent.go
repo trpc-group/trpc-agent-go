@@ -259,6 +259,10 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		contentOpts = append(contentOpts,
 			processor.WithReasoningContentMode(options.ReasoningContentMode))
 	}
+	if options.summaryFormatter != nil {
+		contentOpts = append(contentOpts,
+			processor.WithSummaryFormatter(options.summaryFormatter))
+	}
 	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
