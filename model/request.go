@@ -366,6 +366,10 @@ type ToolCall struct {
 
 	// Index is the index of the tool call in the message for streaming responses.
 	Index *int `json:"index,omitempty"`
+
+	// ExtraFields stores additional provider-specific fields for transparent passthrough.
+	// For example, Gemini 3's thought_signature for multi-turn function calling.
+	ExtraFields map[string]any `json:"extra_fields,omitempty"`
 }
 
 // FunctionDefinitionParam represents the parameters for a function definition in tool calls.
