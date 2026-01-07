@@ -30,6 +30,9 @@ type ToolSearch struct {
 
 // New creates a new ToolSearch.
 func New(m model.Model, opts ...Option) (*ToolSearch, error) {
+	if m == nil {
+		return nil, fmt.Errorf("newing tool search: model is nil")
+	}
 	cfg := &Config{Model: m}
 	for _, opt := range opts {
 		opt(cfg)
@@ -131,7 +134,7 @@ func (s *ToolSearch) validateAlwaysIncludeToolsExist(baseTools map[string]tool.T
 	sort.Strings(missing)
 	available := sortedToolNames(baseTools)
 	return fmt.Errorf(
-		"ToolSearch: tools in always_include not found in request: %v; available tools: %v",
+		"validating always include tools: tools in always_include not found in request: %v; available tools: %v",
 		missing, available,
 	)
 }
@@ -169,7 +172,7 @@ func (s *ToolSearch) buildCandidateTools(baseTools map[string]tool.Tool) ([]stri
 func lastUserMessage(messages []model.Message) (model.Message, error) {
 	lastUser, ok := findLastUserMessage(messages)
 	if !ok {
-		return model.Message{}, fmt.Errorf("ToolSearch: no user message found in request messages")
+		return model.Message{}, fmt.Errorf("finding last user message: no user message found in request messages")
 	}
 	return lastUser, nil
 }

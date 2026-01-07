@@ -24,11 +24,6 @@ type Config struct {
 // Option configures ToolSearch by mutating a Config.
 type Option func(*Config)
 
-// WithModel sets the model used for tool selection.
-func WithModel(m model.Model) Option {
-	return func(c *Config) { c.Model = m }
-}
-
 // WithToolKnowledge sets the tool knowledge used for tool selection.
 func WithToolKnowledge(k *ToolKnowledge) Option {
 	return func(c *Config) { c.toolKnowledge = k }

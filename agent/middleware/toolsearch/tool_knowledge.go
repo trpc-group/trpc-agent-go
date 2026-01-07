@@ -94,9 +94,6 @@ func (k *ToolKnowledge) upsert(ctx context.Context, ts map[string]tool.Tool) err
 }
 
 func (k *ToolKnowledge) ensureReady() error {
-	if k == nil {
-		return fmt.Errorf("ToolKnowledge: nil")
-	}
 	if k.s == nil {
 		k.s = inmemory.New()
 	}
@@ -104,12 +101,15 @@ func (k *ToolKnowledge) ensureReady() error {
 		k.tools = make(map[string]tool.Tool)
 	}
 	if k.e == nil {
-		return fmt.Errorf("ToolKnowledge: embedder is nil")
+		return fmt.Errorf("ensuring ToolKnowledge is ready: embedder is nil")
 	}
 	return nil
 }
 
 func toolToText(t tool.Tool) string {
+	if t == nil {
+		return ""
+	}
 	decl := t.Declaration()
 	if decl == nil {
 		return ""
