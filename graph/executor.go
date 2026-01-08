@@ -218,8 +218,11 @@ func (e *Executor) Execute(
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_graph %s", invocation.AgentName)))
-		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: fmt.Sprintf("execute_graph %s", invocation.AgentName), ID: invocation.AgentName})
-		defer span.End()
+		workflow := &itelemetry.Workflow{
+			Name:    fmt.Sprintf("execute_graph %s", invocation.AgentName),
+			ID:      invocation.AgentName,
+			Request: initialState.safeClone(),
+		}
 		defer func() {
 			if r := recover(); r != nil {
 				stack := debug.Stack()
@@ -229,13 +232,16 @@ func (e *Executor) Execute(
 					r,
 					string(stack),
 				)
+				workflow.Error = fmt.Errorf("executor panic: %v", r)
 				agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
 					WithPregelEventInvocationID(invocation.InvocationID),
 					WithPregelEventStepNumber(-1),
-					WithPregelEventError(fmt.Sprintf("executor panic: %v", r)),
+					WithPregelEventError(workflow.Error.Error()),
 				))
 			}
 			close(eventChan)
+			itelemetry.TraceWorkflow(span, workflow)
+			span.End()
 		}()
 		if err := e.executeGraph(ctx, initialState, invocation, eventChan, startTime); err != nil {
 			// Check if this is an interrupt error.
@@ -244,6 +250,7 @@ func (e *Executor) Execute(
 				// The interrupt will be handled by the caller.
 				return
 			}
+			workflow.Error = err
 			// Emit error event for other errors.
 			agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
 				WithPregelEventInvocationID(invocation.InvocationID),
@@ -483,87 +490,81 @@ func (e *Executor) processResumeCommand(execState, initialState State) State {
 	return execState
 }
 
-func restoreVersionsSeenFromCheckpoint(
+// restoreVersionsSeen restores per-node versionsSeen from the last checkpoint.
+func (e *Executor) restoreVersionsSeen(
 	resumed bool,
 	lastCheckpoint *Checkpoint,
 ) map[string]map[string]int64 {
 	versionsSeen := make(map[string]map[string]int64)
-	if !resumed {
-		return versionsSeen
-	}
-	if lastCheckpoint == nil {
-		return versionsSeen
-	}
-	if lastCheckpoint.VersionsSeen == nil {
+	if !resumed || lastCheckpoint == nil || lastCheckpoint.VersionsSeen == nil {
 		return versionsSeen
 	}
 
 	for nodeID, nodeVersions := range lastCheckpoint.VersionsSeen {
-		copiedVersions := make(map[string]int64, len(nodeVersions))
-		for channelName, version := range nodeVersions {
-			copiedVersions[channelName] = version
+		versionsSeen[nodeID] = make(map[string]int64)
+		for ch, version := range nodeVersions {
+			versionsSeen[nodeID][ch] = version
 		}
-		versionsSeen[nodeID] = copiedVersions
 	}
 	log.Debugf(
 		"Restored versionsSeen for %d nodes from checkpoint",
 		len(versionsSeen),
 	)
-
 	return versionsSeen
 }
 
-// newExecutionChannelManager builds per-execution channels from the graph's
-// static channel definitions.
-func (e *Executor) newExecutionChannelManager() *channel.Manager {
+// buildChannelManager creates per-execution channels from the graph's static
+// channel definitions.
+func (e *Executor) buildChannelManager() *channel.Manager {
 	channelManager := channel.NewChannelManager()
 	for name, ch := range e.graph.getAllChannels() {
+		if ch == nil {
+			continue
+		}
 		channelManager.AddChannel(name, ch.Behavior)
 		if ch.Behavior != channel.BehaviorBarrier {
 			continue
 		}
-		perRunCh, _ := channelManager.GetChannel(name)
-		perRunCh.SetBarrierExpected(ch.BarrierExpected)
+		if perRunCh, ok := channelManager.GetChannel(name); ok &&
+			perRunCh != nil {
+			perRunCh.SetBarrierExpected(ch.BarrierExpected)
+		}
 	}
 	return channelManager
 }
 
-func restoreCheckpointChannelVersions(execCtx *ExecutionContext) {
-	if !execCtx.resumed {
-		return
-	}
-	lastCheckpoint := execCtx.lastCheckpoint
-	if lastCheckpoint == nil {
-		return
-	}
-	if lastCheckpoint.ChannelVersions == nil {
+// restoreChannelVersions seeds channel versions from the last checkpoint for
+// resumed executions.
+func (e *Executor) restoreChannelVersions(
+	execCtx *ExecutionContext,
+	resumed bool,
+	lastCheckpoint *Checkpoint,
+) {
+	if !resumed || lastCheckpoint == nil || lastCheckpoint.ChannelVersions == nil {
 		return
 	}
 
 	for name, version := range lastCheckpoint.ChannelVersions {
-		ch, ok := execCtx.channels.GetChannel(name)
-		if !ok {
-			continue
+		if ch, ok := execCtx.channels.GetChannel(name); ok && ch != nil {
+			ch.Version = version
 		}
-		ch.Version = version
 	}
 }
 
-func restoreCheckpointBarrierSets(execCtx *ExecutionContext) {
-	if !execCtx.resumed {
-		return
-	}
-	lastCheckpoint := execCtx.lastCheckpoint
-	if lastCheckpoint == nil {
-		return
-	}
-	if len(lastCheckpoint.BarrierSets) == 0 {
+// restoreBarrierSets restores barrier sets from the last checkpoint for resumed
+// executions.
+func (e *Executor) restoreBarrierSets(
+	execCtx *ExecutionContext,
+	resumed bool,
+	lastCheckpoint *Checkpoint,
+) {
+	if !resumed || lastCheckpoint == nil || len(lastCheckpoint.BarrierSets) == 0 {
 		return
 	}
 
 	for name, seen := range lastCheckpoint.BarrierSets {
 		ch, ok := execCtx.channels.GetChannel(name)
-		if !ok {
+		if !ok || ch == nil {
 			continue
 		}
 		ch.SetBarrierSeen(seen)
@@ -578,8 +579,8 @@ func (e *Executor) buildExecutionContext(
 	resumed bool,
 	lastCheckpoint *Checkpoint,
 ) *ExecutionContext {
-	versionsSeen := restoreVersionsSeenFromCheckpoint(resumed, lastCheckpoint)
-	channelManager := e.newExecutionChannelManager()
+	versionsSeen := e.restoreVersionsSeen(resumed, lastCheckpoint)
+	channelManager := e.buildChannelManager()
 
 	execCtx := &ExecutionContext{
 		Graph:          e.graph,
@@ -592,9 +593,10 @@ func (e *Executor) buildExecutionContext(
 		channels:       channelManager,
 	}
 
-	restoreCheckpointChannelVersions(execCtx)
-	restoreCheckpointBarrierSets(execCtx)
-
+	// For resumed executions, seed channel versions from the last checkpoint so
+	// version-based triggering semantics can continue to function correctly.
+	e.restoreChannelVersions(execCtx, resumed, lastCheckpoint)
+	e.restoreBarrierSets(execCtx, resumed, lastCheckpoint)
 	return execCtx
 }
 
