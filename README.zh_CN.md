@@ -18,7 +18,7 @@
 - **丰富的 Tool 生态系统**：与外部 API、数据库和服务的无缝集成
 - **持久化 Memory**：长期状态管理和上下文感知
 - **多 Agent 协作**：Chain、Parallel 和基于 Graph 的 agent 工作流
-- **GraphAgent**：类型安全的图工作流，支持多条件路由、并行 fan-out/fan-in 与检查点
+- **GraphAgent**：类型安全的图工作流，支持多条件路由，功能对标 LangGraph 的 Go 实现
 - **Agent Skills**：可复用的 `SKILL.md` 工作流，支持安全执行
 - **Artifacts**：对 agent/tool 产出的文件进行版本化存储
 - **评测与基准**：EvalSet + Metric 用于长期质量度量

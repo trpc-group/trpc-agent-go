@@ -18,7 +18,7 @@ English | [中文](README.zh_CN.md)
 - **Rich Tool Ecosystem**: Seamless integration with external APIs, databases, and services
 - **Persistent Memory**: Long-term state management and contextual awareness
 - **Multi-Agent Collaboration**: Chain, parallel, and graph-based agent workflows
-- **GraphAgent**: Type-safe graph workflows with conditional routing, fan-out/fan-in, and checkpoints
+- **GraphAgent**: Type-safe graph workflows with multi-conditional routing, functionally equivalent to LangGraph for Go
 - **Agent Skills**: Reusable `SKILL.md` workflows with safe execution
 - **Artifacts**: Versioned storage for files produced by agents and tools
 - **Evaluation & Benchmarks**: Eval sets + metrics to measure quality over time

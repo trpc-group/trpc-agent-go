@@ -100,7 +100,7 @@ func (a *LangChainAdapter) FindSubAgent(name string) agent.Agent {
 **可以集成开源组件示例：**
 
 - LangChain 适配器
-- 图工作流适配器
+- LangGraph 适配器
 
 **贡献方式：**
 
@@ -1120,7 +1120,7 @@ WebSocket 适配。
 **生态化方向：**
 
 - Reflection Planner：自反式修正与多轮再规划。
-- 并行 Planner：支持 Pregel 风格的并行与检查点机制。
+- LangGraph 风格 Planner：对齐 Pregel 并行与检查点机制。
 - 工具优先 Planner：面向 Tool-First 流程的选择与约束。
 
 **接入示例（骨架）：**
