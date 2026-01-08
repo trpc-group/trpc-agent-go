@@ -121,9 +121,8 @@ func TestCharFilter_MetadataPreservation(t *testing.T) {
 	assert.Equal(t, 1, len(result))
 	assert.Equal(t, "es", result[0].Content)
 	assert.Equal(t, "value", result[0].Metadata["key"])
-	
+
 	// Modify result metadata to verify it's a copy
 	result[0].Metadata["key"] = "new_value"
 	assert.Equal(t, "value", input[0].Metadata["key"])
 }
-

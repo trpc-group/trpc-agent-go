@@ -23,6 +23,7 @@ import (
 type mockChunkingStrategy struct {
 	name string
 }
+
 // ... existing code ...
 type mockTransformer struct{}
 
@@ -52,7 +53,6 @@ func TestWithTransformers(t *testing.T) {
 		t.Errorf("WithTransformers() expected 2 transformers, got %d", len(config.Transformers))
 	}
 }
-
 
 func (m *mockChunkingStrategy) Chunk(doc *document.Document) ([]*document.Document, error) {
 	return []*document.Document{doc}, nil

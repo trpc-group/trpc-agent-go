@@ -76,7 +76,7 @@ func TestApplyPreprocess(t *testing.T) {
 		assert.Nil(t, res)
 		mockT.AssertExpectations(t)
 	})
-	
+
 	t.Run("Nil Transformer", func(t *testing.T) {
 		res, err := itransform.ApplyPreprocess(docs, nil)
 		assert.NoError(t, err)
@@ -120,11 +120,10 @@ func TestApplyPostprocess(t *testing.T) {
 		assert.Nil(t, res)
 		mockT.AssertExpectations(t)
 	})
-	
+
 	t.Run("Nil Transformer", func(t *testing.T) {
 		res, err := itransform.ApplyPostprocess(docs, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, docs, res)
 	})
 }
-
