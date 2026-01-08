@@ -556,6 +556,7 @@ type eventLoopContext struct {
 	runHandle        *runHandle
 	finalStateDelta  map[string][]byte
 	finalChoices     []model.Choice
+	streamFilter     graph.StreamModeFilter
 	// emittedAssistantResponseIDs tracks response IDs that already produced a
 	// non-partial assistant message event during this run.
 	//
@@ -581,6 +582,10 @@ func (r *runner) processAgentEvents(
 		flushChan:        flushChan,
 		processedEventCh: processedEventCh,
 		runHandle:        handle,
+		streamFilter: graph.NewStreamModeFilter(
+			invocation.RunOptions.StreamModeEnabled,
+			invocation.RunOptions.StreamModes,
+		),
 	}
 	runCtx := agent.CloneContext(ctx)
 	go r.runEventLoop(runCtx, loop)
@@ -661,11 +666,15 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		loop.invocation.NotifyCompletion(ctx, completionID)
 	}
 
+	r.recordRunEvent(loop)
+	if !loop.streamFilter.Allows(agentEvent) {
+		return nil
+	}
+
 	// Emit event to output channel.
 	if err := event.EmitEvent(ctx, loop.processedEventCh, agentEvent); err != nil {
 		return fmt.Errorf("emit event to output channel: %w", err)
 	}
-	r.recordRunEvent(loop)
 
 	return nil
 }

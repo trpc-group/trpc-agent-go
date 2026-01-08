@@ -630,6 +630,11 @@ stateGraph.AddLLMNode("analyze", model,
 Runner 运行时开启 `agent.WithGraphEmitFinalModelResponses(true)`。该选项的详细语义、
 示例和注意事项请参见 `runner.md`。
 
+小贴士：如果你通过 Runner 运行，并且主要只关心流式的大语言模型（Large Language
+Model，LLM）消息（例如用于用户界面（User Interface，UI）的流式展示），可以使用
+`agent.WithStreamMode(...)` 作为统一开关（见下文“事件监控”）。当选择
+`agent.StreamModeMessages` 时，Runner 会为本次运行自动开启 Graph 的最终响应事件输出。
+
 #### 三种输入范式
 
 - OneShot（`StateKeyOneShotMessages`）：
@@ -3210,6 +3215,41 @@ for ev := range eventCh {
     }
 }
 ```
+
+#### StreamMode
+
+Runner 可以在事件到达你的业务代码之前先做一次过滤，这样你只会收到你关心的一小类事件
+（例如只关心模型输出用于流式展示）。
+
+使用 `agent.WithStreamMode(...)`：
+
+```go
+eventCh, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithStreamMode(
+        agent.StreamModeMessages,
+        agent.StreamModeCustom,
+    ),
+)
+```
+
+支持的模式（图式工作流）：
+
+- `messages`：模型输出事件（例如 `chat.completion.chunk`）
+- `updates`：`graph.state.update` / `graph.channel.update` / `graph.execution`
+- `checkpoints`：`graph.checkpoint.*`
+- `tasks`：任务生命周期事件（`graph.node.*`、`graph.pregel.*`）
+- `debug`：等价于 `checkpoints` + `tasks`
+- `custom`：节点主动发出的自定义事件（`graph.node.custom`）
+
+注意事项：
+
+- 当选择 `agent.StreamModeMessages` 时，Runner 会为本次运行自动开启 Graph 的最终响应事件
+  输出。若你需要关闭该行为，请在 `agent.WithStreamMode(...)` 之后调用
+  `agent.WithGraphEmitFinalModelResponses(false)` 覆盖。
+- StreamMode 只影响 Runner 向你的 `eventCh` 转发哪些事件；Runner 内部仍会处理并持久化
+  所有事件。
+- 对于图式工作流，部分事件类型（例如 `graph.checkpoint.*`）只会在选择对应模式时才会产生。
+- Runner 总会额外发出一条 `runner.completion` 完成事件。
 
 #### 事件元数据（StateDelta）
 
