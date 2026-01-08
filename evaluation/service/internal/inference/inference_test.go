@@ -68,6 +68,8 @@ func TestInferenceSuccess(t *testing.T) {
 	}
 	finalEvent := &event.Event{
 		InvocationID: "generated-inv",
+		Branch:       "root-agent",
+		Author:       "root-agent",
 		Response: &model.Response{
 			Done: true,
 			Choices: []model.Choice{
@@ -100,6 +102,84 @@ func TestInferenceSuccess(t *testing.T) {
 	assert.Len(t, results[0].Tools, 1)
 	assert.Equal(t, "lookup", results[0].Tools[0].Name)
 	assert.Equal(t, map[string]any{"foo": "bar"}, results[0].Tools[0].Arguments)
+}
+
+func TestInferenceAgentsAggregation(t *testing.T) {
+	mkEvent := func(invocationID, parentInvocationID, branch, author string, rsp *model.Response) *event.Event {
+		e := event.NewResponseEvent(invocationID, author, rsp)
+		e.ParentInvocationID = parentInvocationID
+		e.Branch = branch
+		return e
+	}
+
+	rootID := "inv-root"
+	rootBranch := "rootAgent"
+	events := []*event.Event{
+		mkEvent("inv-child-b", rootID, rootBranch+"/childB", "childB", &model.Response{Done: false}),
+		mkEvent(rootID, "", rootBranch, rootBranch, &model.Response{Done: false}),
+		mkEvent("inv-child-a", rootID, rootBranch+"/childA", "childA", &model.Response{Done: false}),
+		mkEvent("inv-grand", "inv-child-a", rootBranch+"/childA/grand", "grand", &model.Response{Done: false}),
+		mkEvent("inv-orphan", "inv-missing-parent", "orphanAgent", "orphanAgent", &model.Response{Done: false}),
+		mkEvent("inv-child-a", rootID, rootBranch+"/childA", "childA", &model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{Message: model.Message{Content: "answer", Role: model.RoleAssistant}},
+			},
+		}),
+		mkEvent(rootID, "", rootBranch, "app", &model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		}),
+	}
+
+	r := &fakeRunner{events: events}
+	session := &evalset.SessionInput{UserID: "user-1"}
+	result, err := inferenceInvocation(context.Background(), r, "session-1", session, &evalset.Invocation{
+		InvocationID: "input",
+		UserContent: &model.Message{
+			Role:    model.RoleUser,
+			Content: "question",
+		},
+	})
+	assert.NoError(t, err)
+
+	assert.Equal(t, rootID, result.InvocationID)
+	assert.NotNil(t, result.FinalResponse)
+	assert.Equal(t, "answer", result.FinalResponse.Content)
+
+	expected := []*evalset.Agent{
+		&evalset.Agent{
+			InvocationID:       rootID,
+			ParentInvocationID: "",
+			Name:               "rootAgent",
+			Branch:             rootBranch,
+		},
+		&evalset.Agent{
+			InvocationID:       "inv-child-b",
+			ParentInvocationID: rootID,
+			Name:               "childB",
+			Branch:             rootBranch + "/childB",
+		},
+		&evalset.Agent{
+			InvocationID:       "inv-child-a",
+			ParentInvocationID: rootID,
+			Name:               "childA",
+			Branch:             rootBranch + "/childA",
+		},
+		&evalset.Agent{
+			InvocationID:       "inv-grand",
+			ParentInvocationID: "inv-child-a",
+			Name:               "grand",
+			Branch:             rootBranch + "/childA/grand",
+		},
+		&evalset.Agent{
+			InvocationID:       "inv-orphan",
+			ParentInvocationID: "inv-missing-parent",
+			Name:               "orphanAgent",
+			Branch:             "orphanAgent",
+		},
+	}
+	assert.Equal(t, expected, result.Agents)
 }
 
 func TestInferenceValidation(t *testing.T) {
