@@ -101,15 +101,17 @@ func TraceWorkflow(span trace.Span, workflow *Workflow) {
 		request, err := json.Marshal(workflow.Request)
 		if err != nil {
 			span.SetAttributes(attribute.String(KeyGenAIWorkflowRequest, "<not json serializable>"))
+		} else {
+			span.SetAttributes(attribute.String(KeyGenAIWorkflowRequest, string(request)))
 		}
-		span.SetAttributes(attribute.String(KeyGenAIWorkflowRequest, string(request)))
 	}
 	if workflow.Response != nil {
 		response, err := json.Marshal(workflow.Response)
 		if err != nil {
 			span.SetAttributes(attribute.String(KeyGenAIWorkflowResponse, "<not json serializable>"))
+		} else {
+			span.SetAttributes(attribute.String(KeyGenAIWorkflowResponse, string(response)))
 		}
-		span.SetAttributes(attribute.String(KeyGenAIWorkflowResponse, string(response)))
 	}
 	if workflow.Error != nil {
 		span.SetAttributes(attribute.String(KeyErrorType, ValueDefaultErrorType))
