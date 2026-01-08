@@ -824,6 +824,202 @@ func TestRunner_GraphCompletion_DedupFinalChoices(t *testing.T) {
 	require.Empty(t, completion.Response.Choices)
 }
 
+func TestRunner_StreamMode_FiltersEvents(t *testing.T) {
+	const (
+		appName   = "stream-mode-app"
+		userID    = "user"
+		sessionID = "session"
+		agentName = "stream-mode-agent"
+	)
+
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &streamModeMockAgent{name: agentName}
+	r := NewRunner(appName, ag, WithSessionService(sessionService))
+
+	tests := []struct {
+		name     string
+		opts     []agent.RunOption
+		allowed  map[string]bool
+		required map[string]bool
+	}{
+		{
+			name: "messages",
+			opts: []agent.RunOption{
+				agent.WithStreamMode(agent.StreamModeMessages),
+			},
+			allowed: map[string]bool{
+				model.ObjectTypeChatCompletionChunk: true,
+				model.ObjectTypeChatCompletion:      true,
+				model.ObjectTypeRunnerCompletion:    true,
+			},
+			required: map[string]bool{
+				model.ObjectTypeChatCompletionChunk: true,
+				model.ObjectTypeRunnerCompletion:    true,
+			},
+		},
+		{
+			name: "updates",
+			opts: []agent.RunOption{
+				agent.WithStreamMode(agent.StreamModeUpdates),
+			},
+			allowed: map[string]bool{
+				graph.ObjectTypeGraphStateUpdate:   true,
+				graph.ObjectTypeGraphChannelUpdate: true,
+				graph.ObjectTypeGraphExecution:     true,
+				model.ObjectTypeStateUpdate:        true,
+				model.ObjectTypeRunnerCompletion:   true,
+			},
+			required: map[string]bool{
+				graph.ObjectTypeGraphStateUpdate: true,
+				model.ObjectTypeRunnerCompletion: true,
+			},
+		},
+		{
+			name: "checkpoints",
+			opts: []agent.RunOption{
+				agent.WithStreamMode(agent.StreamModeCheckpoints),
+			},
+			allowed: map[string]bool{
+				graph.ObjectTypeGraphCheckpointCommitted: true,
+				model.ObjectTypeRunnerCompletion:         true,
+			},
+			required: map[string]bool{
+				graph.ObjectTypeGraphCheckpointCommitted: true,
+				model.ObjectTypeRunnerCompletion:         true,
+			},
+		},
+		{
+			name: "tasks",
+			opts: []agent.RunOption{
+				agent.WithStreamMode(agent.StreamModeTasks),
+			},
+			allowed: map[string]bool{
+				graph.ObjectTypeGraphNodeStart:    true,
+				graph.ObjectTypeGraphNodeComplete: true,
+				graph.ObjectTypeGraphPregelStep:   true,
+				model.ObjectTypeRunnerCompletion:  true,
+			},
+			required: map[string]bool{
+				graph.ObjectTypeGraphNodeStart:   true,
+				model.ObjectTypeRunnerCompletion: true,
+			},
+		},
+		{
+			name: "custom",
+			opts: []agent.RunOption{
+				agent.WithStreamMode(agent.StreamModeCustom),
+			},
+			allowed: map[string]bool{
+				graph.ObjectTypeGraphNodeCustom:  true,
+				model.ObjectTypeRunnerCompletion: true,
+			},
+			required: map[string]bool{
+				graph.ObjectTypeGraphNodeCustom:  true,
+				model.ObjectTypeRunnerCompletion: true,
+			},
+		},
+		{
+			name: "debug",
+			opts: []agent.RunOption{
+				agent.WithStreamMode(agent.StreamModeDebug),
+			},
+			allowed: map[string]bool{
+				graph.ObjectTypeGraphNodeStart:           true,
+				graph.ObjectTypeGraphNodeComplete:        true,
+				graph.ObjectTypeGraphCheckpointCommitted: true,
+				graph.ObjectTypeGraphPregelStep:          true,
+				model.ObjectTypeRunnerCompletion:         true,
+			},
+			required: map[string]bool{
+				graph.ObjectTypeGraphNodeStart:           true,
+				graph.ObjectTypeGraphCheckpointCommitted: true,
+				model.ObjectTypeRunnerCompletion:         true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch, err := r.Run(
+				context.Background(),
+				userID,
+				sessionID,
+				model.NewUserMessage("hi"),
+				tt.opts...,
+			)
+			require.NoError(t, err)
+
+			seen := make(map[string]bool)
+			for e := range ch {
+				require.NotNil(t, e)
+				seen[e.Object] = true
+				if !tt.allowed[e.Object] {
+					t.Fatalf("unexpected event object: %q", e.Object)
+				}
+			}
+
+			for obj := range tt.required {
+				require.True(t, seen[obj], "missing %q", obj)
+			}
+		})
+	}
+}
+
+type streamModeMockAgent struct {
+	name string
+}
+
+func (m *streamModeMockAgent) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *streamModeMockAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *streamModeMockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *streamModeMockAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *streamModeMockAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 8)
+	go func() {
+		defer close(ch)
+		ch <- event.New(invocation.InvocationID, m.name,
+			event.WithObject(graph.ObjectTypeGraphNodeStart))
+		ch <- event.New(invocation.InvocationID, m.name,
+			event.WithObject(graph.ObjectTypeGraphStateUpdate))
+		ch <- event.New(invocation.InvocationID, m.name,
+			event.WithObject(graph.ObjectTypeGraphCheckpointCommitted))
+		ch <- event.New(invocation.InvocationID, m.name,
+			event.WithObject(graph.ObjectTypeGraphNodeCustom))
+		ch <- event.NewResponseEvent(invocation.InvocationID, m.name,
+			&model.Response{
+				Object: model.ObjectTypeChatCompletionChunk,
+				Done:   false,
+				Choices: []model.Choice{{
+					Index: 0,
+					Delta: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "hi",
+					},
+				}},
+			})
+		ch <- event.New(invocation.InvocationID, m.name,
+			event.WithObject(graph.ObjectTypeGraphPregelStep))
+		ch <- event.New(invocation.InvocationID, m.name,
+			event.WithObject(graph.ObjectTypeGraphNodeComplete))
+	}()
+	return ch, nil
+}
+
 // graphCompletionMockAgent emits a graph completion event with state delta
 // and choices.
 type graphCompletionMockAgent struct {

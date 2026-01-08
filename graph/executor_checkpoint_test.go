@@ -28,6 +28,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+func collectObjectCounts(ch <-chan *event.Event) map[string]int {
+	counts := make(map[string]int)
+	for evt := range ch {
+		if evt == nil {
+			continue
+		}
+		counts[evt.Object]++
+	}
+	return counts
+}
+
 // Test that executor with a saver triggers initial checkpoint creation (covering getNext* helpers)
 func TestExecutor_WithSaver_CreatesInitialCheckpoint(t *testing.T) {
 	// simple graph with single node
@@ -46,6 +57,62 @@ func TestExecutor_WithSaver_CreatesInitialCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	for range ch { /* drain */
 	}
+}
+
+func TestExecutor_CheckpointLifecycleEvents_DefaultDisabled(
+	t *testing.T,
+) {
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a",
+			func(ctx context.Context, state State) (any, error) {
+				return nil, nil
+			},
+		).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{InvocationID: "inv-default"}
+	ch, err := exec.Execute(context.Background(), State{}, inv)
+	require.NoError(t, err)
+
+	counts := collectObjectCounts(ch)
+	require.Zero(t, counts[ObjectTypeGraphCheckpointCreated])
+	require.Zero(t, counts[ObjectTypeGraphCheckpointCommitted])
+	require.Zero(t, counts[ObjectTypeGraphCheckpointInterrupt])
+}
+
+func TestExecutor_CheckpointLifecycleEvents_EmittedWhenEnabled(
+	t *testing.T,
+) {
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a",
+			func(ctx context.Context, state State) (any, error) {
+				return nil, nil
+			},
+		).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{InvocationID: "inv-enabled"}
+	agent.WithStreamMode(agent.StreamModeCheckpoints)(&inv.RunOptions)
+	ch, err := exec.Execute(context.Background(), State{}, inv)
+	require.NoError(t, err)
+
+	counts := collectObjectCounts(ch)
+	require.Greater(t, counts[ObjectTypeGraphCheckpointCreated], 0)
+	require.Greater(t, counts[ObjectTypeGraphCheckpointCommitted], 0)
 }
 
 type failingPutFullSaver struct {
@@ -241,7 +308,12 @@ func TestExecutor_Resume_AppliesPendingWrites(t *testing.T) {
 func TestExecutor_HandleInterrupt(t *testing.T) {
 	g, err := NewStateGraph(NewStateSchema()).
 		AddNode("i", func(ctx context.Context, state State) (any, error) {
-			return nil, &InterruptError{Value: "stop", NodeID: "i", TaskID: "t1", Path: []string{"i"}}
+			return nil, &InterruptError{
+				Value:  "stop",
+				NodeID: "i",
+				TaskID: "t1",
+				Path:   []string{"i"},
+			}
 		}).
 		SetEntryPoint("i").
 		SetFinishPoint("i").
@@ -250,10 +322,44 @@ func TestExecutor_HandleInterrupt(t *testing.T) {
 	saver := newMockSaver()
 	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
 	require.NoError(t, err)
-	ch, err := exec.Execute(context.Background(), State{}, &agent.Invocation{InvocationID: "inv-int"})
+
+	inv := &agent.Invocation{InvocationID: "inv-int"}
+	ch, err := exec.Execute(context.Background(), State{}, inv)
 	require.NoError(t, err)
-	for range ch { /* drain */
-	}
+	counts := collectObjectCounts(ch)
+	require.Zero(t, counts[ObjectTypeGraphCheckpointInterrupt])
+}
+
+func TestExecutor_HandleInterrupt_EmitsCheckpointInterruptWhenEnabled(
+	t *testing.T,
+) {
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("i",
+			func(ctx context.Context, state State) (any, error) {
+				return nil, &InterruptError{
+					Value:  "stop",
+					NodeID: "i",
+					TaskID: "t1",
+					Path:   []string{"i"},
+				}
+			},
+		).
+		SetEntryPoint("i").
+		SetFinishPoint("i").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{InvocationID: "inv-int-enabled"}
+	agent.WithStreamMode(agent.StreamModeCheckpoints)(&inv.RunOptions)
+	ch, err := exec.Execute(context.Background(), State{}, inv)
+	require.NoError(t, err)
+
+	counts := collectObjectCounts(ch)
+	require.Greater(t, counts[ObjectTypeGraphCheckpointInterrupt], 0)
 }
 
 func TestExecutor_VersionBasedPlanning(t *testing.T) {
