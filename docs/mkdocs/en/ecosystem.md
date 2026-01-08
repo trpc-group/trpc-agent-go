@@ -100,7 +100,7 @@ func (a *LangChainAdapter) FindSubAgent(name string) agent.Agent {
 **Open Source Components That Can Be Integrated:**
 
 - LangChain adapter
-- LangGraph adapter
+- Graph workflow adapter
 
 **Contribution Method:**
 
@@ -1101,7 +1101,7 @@ Link references:
 **Ecosystem Directions:**
 
 - Reflection Planner: Self-reflective correction and multi-round re-planning.
-- LangGraph style Planner: Align with Pregel parallel and checkpoint mechanisms.
+- Parallel Planner: Pregel-style parallelism and checkpoints.
 - Tool-first Planner: Selection and constraints for Tool-First processes.
 
 **Integration Example (skeleton):**

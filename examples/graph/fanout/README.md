@@ -1,6 +1,6 @@
 # Parallel Fan-out Graph Example
 
-This example demonstrates **parallel fan-out execution** using the `trpc-agent-go` library. It shows how a single node can return multiple `[]*graph.Command` results that execute the same target node in parallel with different parameters, similar to LangGraph's "Send" functionality.
+This example demonstrates **parallel fan-out execution** using the `trpc-agent-go` library. It shows how a single node can return multiple `[]*graph.Command` results that execute the same target node in parallel with different parameters, similar to a "send" fan-out pattern.
 
 ## Overview
 

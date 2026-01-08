@@ -10,9 +10,8 @@
 package agent
 
 // StreamMode controls which categories of events are forwarded to callers.
-//
-// This is inspired by LangGraph's stream_mode. Graph-related modes are only
-// meaningful when the underlying agent emits graph events.
+// Graph-related modes are only meaningful when the underlying agent emits
+// graph events.
 type StreamMode string
 
 // StreamMode constants for supported stream categories.

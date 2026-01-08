@@ -388,10 +388,10 @@ eventChan, err := r.Run(
 唯一来源（例如 `graph.StateKeyLastResponse`）。当开启该选项时，请把“完成事件”里的
 `Response.Choices` 当作可选字段，不要作为唯一依赖。
 
-#### 🎛️ 开关：StreamMode（对齐 LangGraph）
+#### 🎛️ 开关：StreamMode
 
-Runner 支持在事件到达业务代码之前先做一次过滤：你可以用一个 RunOption（对齐 LangGraph
-的 `stream_mode` 概念）来选择“本次运行”向 `eventChan` 转发哪些类别的事件。
+Runner 支持在事件到达业务代码之前先做一次过滤：你可以用一个 RunOption 来选择
+“本次运行”向 `eventChan` 转发哪些类别的事件。
 
 使用 `agent.WithStreamMode(...)`：
 
@@ -421,6 +421,7 @@ eventChan, err := r.Run(
   `agent.WithGraphEmitFinalModelResponses(false)` 覆盖。
 - StreamMode 只影响 Runner 向你的 `eventChan` 转发哪些事件；Runner 内部仍会处理并持久化
   所有事件。
+- 对于图式工作流，部分事件类型（例如 `graph.checkpoint.*`）只会在选择对应模式时才会产生。
 - Runner 总会额外发出一条 `runner.completion` 完成事件。
 
 ## 💾 会话管理

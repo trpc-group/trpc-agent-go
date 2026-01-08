@@ -3126,7 +3126,9 @@ You can also filter by the event's `Author` field:
 - Executor‑level (state updates/checkpoints): `Author = graph.AuthorGraphExecutor`
 - User input (Runner writes): `Author = user`
 
-This convention lets you subscribe to a specific node's stream without passing streaming context through nodes (streaming travels via the event channel; state stays structured in a LangGraph‑like style).
+This convention lets you subscribe to a specific node's stream without passing
+streaming context through nodes (streaming travels via the event channel;
+state stays structured and type-safe).
 
 Example: consume only node `ask`'s streaming output and print the final message when done.
 
@@ -3162,7 +3164,7 @@ for ev := range eventCh {
 }
 ```
 
-#### StreamMode (LangGraph-style)
+#### StreamMode
 
 Runner can filter the event stream before it reaches your application code.
 This is useful when you only want a subset of events (for example, only model
@@ -3194,8 +3196,10 @@ Notes:
   (LLM) nodes enable final model response events automatically for that run.
   To override it, call `agent.WithGraphEmitFinalModelResponses(false)` after
   `agent.WithStreamMode(...)`.
-- StreamMode only affects what Runner forwards to your `eventCh`. Runner still
+- StreamMode affects what Runner forwards to your `eventCh`. Runner still
   processes and persists events internally.
+- For graph workflows, some event types (for example, `graph.checkpoint.*`)
+  are emitted only when their corresponding mode is selected.
 - Runner always emits a final `runner.completion` event.
 
 #### Event Metadata (StateDelta)

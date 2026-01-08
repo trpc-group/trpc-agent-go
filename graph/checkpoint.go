@@ -276,7 +276,7 @@ func NewCheckpointConfig(lineageID string) *CheckpointConfig {
 		panic("lineage_id cannot be empty")
 	}
 
-	// Use default empty namespace to align with LangGraph's design.
+	// Use the default empty namespace.
 	namespace := DefaultCheckpointNamespace
 
 	return &CheckpointConfig{
@@ -526,7 +526,7 @@ func CreateCheckpointConfig(lineageID string, checkpointID string, namespace str
 	if lineageID == "" {
 		panic("lineage_id cannot be empty")
 	}
-	// Use default empty namespace to align with LangGraph's design.
+	// Use the default empty namespace.
 	if namespace == "" {
 		namespace = DefaultCheckpointNamespace
 	}

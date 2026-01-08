@@ -156,4 +156,3 @@ User Query: Please reimburse $200 for conference travel
 ## References
 
 - [Google ADK Long Running Function Tool](https://google.github.io/adk-docs/tools/function-tools/#2-long-running-function-tool)
-- [LangGraph Human-in-the-Loop Concepts](https://langchain-ai.github.io/langgraph/concepts/human_in_the_loop/)

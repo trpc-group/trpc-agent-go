@@ -238,8 +238,8 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	}
 
 	// Add invocation message to state.
-	// When resuming from checkpoint, only add user input if it's meaningful content
-	// (not just a resume signal), following LangGraph's pattern.
+	// When resuming from a checkpoint, only add user input when it carries
+	// meaningful content (not just a resume signal).
 	isResuming := invocation.RunOptions.RuntimeState != nil &&
 		invocation.RunOptions.RuntimeState[graph.CfgKeyCheckpointID] != nil
 

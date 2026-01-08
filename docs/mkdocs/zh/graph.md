@@ -3134,7 +3134,8 @@ for ev := range eventCh {
 - 执行器级别事件（状态更新/检查点等）：`Author = graph.AuthorGraphExecutor`
 - 用户输入事件（Runner 写入）：`Author = user`
 
-利用这一约定，你可以精准订阅某个节点的流式输出，而无需在节点之间传递流式上下文（流式由事件通道统一承载，状态仍按 LangGraph 风格以结构化 State 传递）。
+利用这一约定，你可以精准订阅某个节点的流式输出，而无需在节点之间传递流式上下文
+（流式由事件通道统一承载，状态仍以结构化 State 传递）。
 
 示例：仅消费节点 `ask` 的流式输出，并在完成时打印最终消息。
 
@@ -3170,7 +3171,7 @@ for ev := range eventCh {
 }
 ```
 
-#### StreamMode（对齐 LangGraph）
+#### StreamMode
 
 Runner 可以在事件到达你的业务代码之前先做一次过滤，这样你只会收到你关心的一小类事件
 （例如只关心模型输出用于流式展示）。
@@ -3202,6 +3203,7 @@ eventCh, err := r.Run(ctx, userID, sessionID, message,
   `agent.WithGraphEmitFinalModelResponses(false)` 覆盖。
 - StreamMode 只影响 Runner 向你的 `eventCh` 转发哪些事件；Runner 内部仍会处理并持久化
   所有事件。
+- 对于图式工作流，部分事件类型（例如 `graph.checkpoint.*`）只会在选择对应模式时才会产生。
 - Runner 总会额外发出一条 `runner.completion` 完成事件。
 
 #### 事件元数据（StateDelta）

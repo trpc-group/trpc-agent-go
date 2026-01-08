@@ -27,7 +27,7 @@ const (
 
 // StreamModeFilter decides whether an event should be forwarded to callers.
 //
-// This is a best-effort mapping to LangGraph's StreamMode categories.
+// It categorizes events into coarse groups.
 // It only affects event forwarding; events are still processed internally.
 type StreamModeFilter struct {
 	enabled bool

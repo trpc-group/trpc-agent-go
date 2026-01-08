@@ -1,4 +1,4 @@
-# StreamMode (LangGraph-style) Example
+# StreamMode Example
 
 This example demonstrates `agent.WithStreamMode(...)`, a single per-run switch
 that lets Runner filter which categories of events are forwarded to your event
@@ -14,7 +14,9 @@ It uses:
 ## What Is StreamMode?
 
 Runner internally processes (and may persist) many kinds of events during a
-graph run. StreamMode only controls **what Runner forwards to your `eventCh`**.
+graph run. StreamMode controls **what Runner forwards to your `eventCh`**.
+For graph workflows, some event types (for example, `graph.checkpoint.*`) are
+emitted only when their corresponding mode is selected.
 
 Supported modes for graph workflows:
 

@@ -700,7 +700,7 @@ func (w *checkpointWorkflow) resumeWorkflow(
 		message = model.NewUserMessage(additionalInput)
 		fmt.Printf("🔄 Resuming workflow with additional input: %s\n", additionalInput)
 	} else {
-		// Pure resume with no input (standard mode, following LangGraph pattern)
+		// Pure resume with no input (standard mode)
 		message = model.NewUserMessage("resume")
 		fmt.Printf("🔄 Resuming workflow from checkpoint\n")
 	}
