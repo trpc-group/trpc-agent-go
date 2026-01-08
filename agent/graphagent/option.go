@@ -89,6 +89,9 @@ type Options struct {
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
+	// summaryFormatter allows custom formatting of session summary content.
+	// When nil (default), uses default formatSummaryContent function.
+	summaryFormatter func(summary string) string
 
 	// MessageTimelineFilterMode is the message timeline filter mode.
 	messageTimelineFilterMode string
@@ -98,9 +101,6 @@ type Options struct {
 	// conversations. This is useful for models like DeepSeek that output reasoning_content
 	// in thinking mode.
 	ReasoningContentMode string
-	// summaryFormatter allows custom formatting of session summary content.
-	// When nil (default), uses default formatSummaryContent function.
-	summaryFormatter func(summary string) string
 }
 
 var (
