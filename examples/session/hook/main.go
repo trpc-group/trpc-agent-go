@@ -15,57 +15,86 @@
 // - Content moderation
 // - Compliance filtering
 // - Preventing sensitive information from being included in LLM context
+//
+// Usage:
+//
+//	go run . -session=inmemory
+//	go run . -session=redis
+//	go run . -session=postgres
+//	go run . -session=mysql
+//	go run . -session=clickhouse
+//
+// Environment variables:
+//
+//	MODEL_NAME: model name (default: deepseek-chat)
+//	redis:      REDIS_ADDR (default: localhost:6379)
+//	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
+//	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
+//	clickhouse: CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, CLICKHOUSE_PASSWORD, CLICKHOUSE_DATABASE
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
 
+	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+
+	util "trpc.group/trpc-go/trpc-agent-go/examples/session"
+)
+
+var (
+	modelName   = flag.String("model", os.Getenv("MODEL_NAME"), "Name of the model to use (default: MODEL_NAME env var or deepseek-chat)")
+	sessionType = flag.String("session", "inmemory", "Session backend: inmemory / redis / postgres / mysql / clickhouse")
 )
 
 func getModelName() string {
-	if name := os.Getenv("MODEL_NAME"); name != "" {
-		return name
+	if *modelName != "" {
+		return *modelName
 	}
 	return "deepseek-chat"
 }
 
 func main() {
-	modelName := getModelName()
-	fmt.Printf("Using model: %s\n", modelName)
+	flag.Parse()
+
+	model := getModelName()
+	fmt.Printf("Using model: %s\n", model)
+	fmt.Printf("Session backend: %s\n", *sessionType)
 	fmt.Printf("Prohibited words: %v\n\n", ProhibitedWords)
 
 	// Create session service with content filtering hooks
-	sessionService := sessioninmemory.NewSessionService(
-		sessioninmemory.WithAppendEventHook(MarkViolationHook()),
-		sessioninmemory.WithGetSessionHook(FilterViolationHook()),
-	)
+	sessionService, err := util.NewSessionServiceByType(util.SessionType(*sessionType), util.SessionServiceConfig{
+		AppendEventHooks: []session.AppendEventHook{MarkViolationHook()},
+		GetSessionHooks:  []session.GetSessionHook{FilterViolationHook()},
+	})
+	if err != nil {
+		log.Fatalf("Failed to create session service: %v", err)
+	}
 
 	llmAgent := llmagent.New(
 		"test-assistant",
-		llmagent.WithModel(openai.New(modelName)),
+		llmagent.WithModel(openai.New(model)),
 		llmagent.WithInstruction("You are a helpful assistant. Answer questions concisely."),
 	)
 
 	r := runner.NewRunner(
-		"content-filter-demo",
+		appName,
 		llmAgent,
 		runner.WithSessionService(sessionService),
 	)
 	defer r.Close()
 
 	userID := "user1"
-	sessionID := "sess1"
+	sessionID := uuid.New().String()
 
 	// Step 1: Normal request
 	fmt.Println("=== Step 1: Normal request ===")
@@ -96,6 +125,15 @@ func main() {
 	printSessionEvents(sessionService, userID, sessionID)
 }
 
+const appName = "content-filter-demo"
+
+func printSessionEvents(svc session.Service, userID, sessionID string) {
+	ctx := context.Background()
+	if err := util.PrintSessionEvents(ctx, svc, appName, userID, sessionID); err != nil {
+		fmt.Printf("PrintSessionEvents error: %v\n", err)
+	}
+}
+
 func chat(r runner.Runner, userID, sessionID, message, requestID string) error {
 	ctx := context.Background()
 	eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage(message), agent.WithRequestID(requestID))
@@ -111,48 +149,10 @@ func chat(r runner.Runner, userID, sessionID, message, requestID string) error {
 			return fmt.Errorf("event error: %s", evt.Error.Message)
 		}
 		if len(evt.Response.Choices) > 0 {
-			fmt.Print(evt.Response.Choices[0].Delta.Content)
+			content := evt.Response.Choices[0].Message.Content
+			fmt.Print(content)
 		}
 	}
 	fmt.Println()
 	return nil
-}
-
-func printSessionEvents(svc session.Service, userID, sessionID string) {
-	ctx := context.Background()
-	sess, err := svc.GetSession(ctx, session.Key{
-		AppName:   "content-filter-demo",
-		UserID:    userID,
-		SessionID: sessionID,
-	})
-	if err != nil {
-		fmt.Printf("GetSession error: %v\n", err)
-		return
-	}
-	if sess == nil {
-		fmt.Println("Session not found")
-		return
-	}
-
-	fmt.Printf("\n--- Session Events (count=%d) ---\n", len(sess.Events))
-	for i, evt := range sess.Events {
-		fmt.Printf("  [%d] %s\n", i, getEventPreview(&evt))
-	}
-	fmt.Println("---")
-}
-
-func getEventPreview(evt *event.Event) string {
-	role := "unknown"
-	content := ""
-	if len(evt.Response.Choices) > 0 {
-		role = string(evt.Response.Choices[0].Message.Role)
-		content = evt.Response.Choices[0].Message.Content
-		if len(content) > 50 {
-			content = content[:50] + "..."
-		}
-	}
-	if word, ok := parseViolationTag(evt.Tag); ok {
-		return fmt.Sprintf("%s: %s [VIOLATION: %s]", role, content, word)
-	}
-	return fmt.Sprintf("%s: %s", role, content)
 }
