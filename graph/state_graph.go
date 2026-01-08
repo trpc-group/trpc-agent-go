@@ -1453,12 +1453,14 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 
 	return func(ctx context.Context, state State) (any, error) {
 		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
-		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: "execute_tools_node", ID: "execute_tools_node"})
+		workflow := &itelemetry.Workflow{Name: "execute_tools_node", ID: "execute_tools_node", Request: state.safeClone()}
+		itelemetry.TraceWorkflow(span, workflow)
 		defer span.End()
 
 		// Extract and validate messages from state.
 		toolCalls, err := extractToolCallsFromState(state, span)
 		if err != nil {
+			workflow.Error = err
 			return nil, err
 		}
 
@@ -1485,6 +1487,7 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			EnableParallel: parallel,
 		})
 		if err != nil {
+			workflow.Error = err
 			return nil, err
 		}
 		upd := State{StateKeyMessages: newMessages}
@@ -1517,6 +1520,7 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			}
 		}
 
+		workflow.Response = upd
 		return upd, nil
 	}
 }
