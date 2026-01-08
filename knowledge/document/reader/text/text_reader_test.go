@@ -22,7 +22,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
-
 type errorTransformer struct {
 	preprocessErr  error
 	postprocessErr error
@@ -65,7 +64,7 @@ func TestTextReader_TransformerErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rdr := New(reader.WithTransformers(tt.transformer))
-			
+
 			// Test ReadFromReader
 			_, err := rdr.ReadFromReader("test", strings.NewReader("content"))
 			if err == nil {

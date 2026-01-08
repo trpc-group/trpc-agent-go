@@ -65,7 +65,7 @@ func TestJSONReader_TransformerErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rdr := New(reader.WithTransformers(tt.transformer))
 			jsonData := `{"key":"val"}`
-			
+
 			// Test ReadFromReader
 			_, err := rdr.ReadFromReader("test", strings.NewReader(jsonData))
 			if err == nil {
@@ -90,9 +90,9 @@ func TestJSONReader_TransformerErrors(t *testing.T) {
 
 func TestJSONReader_WithTransformers(t *testing.T) {
 	data := `{"key":"val"}`
-	
+
 	t1 := transform.NewCharFilter("\n") // Dummy transform
-	
+
 	rdr := New(reader.WithTransformers(t1))
 	docs, err := rdr.ReadFromReader("test", strings.NewReader(data))
 	if err != nil {
