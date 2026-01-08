@@ -15,7 +15,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.76.0
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
-	trpc.group/trpc-go/trpc-agent-go/storage/qdrant v0.0.0-20251225192850-ab56b6777963
+	trpc.group/trpc-go/trpc-agent-go/storage/qdrant v1.1.2-0.20260108033914-7a20241f1ad5
 )
 
 require (
