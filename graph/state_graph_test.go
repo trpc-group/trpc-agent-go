@@ -23,6 +23,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -564,6 +565,139 @@ func TestBuilderEdges(t *testing.T) {
 	if edges[0].To != "node2" {
 		t.Errorf("Expected edge to node2, got %s", edges[0].To)
 	}
+}
+
+func TestBuilderJoinEdges(t *testing.T) {
+	builder := NewStateGraph(NewStateSchema())
+
+	testFunc := func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	}
+
+	graph, err := builder.
+		AddNode("a", testFunc).
+		AddNode("b", testFunc).
+		AddNode("c", testFunc).
+		SetEntryPoint("a").
+		AddJoinEdge([]string{"a", "b"}, "c").
+		SetFinishPoint("c").
+		Compile()
+	require.NoError(t, err)
+
+	edgesA := graph.Edges("a")
+	require.Len(t, edgesA, 1)
+	require.Equal(t, "c", edgesA[0].To)
+
+	edgesB := graph.Edges("b")
+	require.Len(t, edgesB, 1)
+	require.Equal(t, "c", edgesB[0].To)
+
+	starts := []string{"a", "b"}
+	joinChan := joinChannelName("c", starts)
+
+	ch, ok := graph.getChannel(joinChan)
+	require.True(t, ok)
+	require.Equal(t, ichannel.BehaviorBarrier, ch.Behavior)
+	require.Equal(t, starts, ch.BarrierExpected)
+
+	nodeC, exists := graph.Node("c")
+	require.True(t, exists)
+	require.Contains(t, nodeC.triggers, joinChan)
+
+	nodeA, exists := graph.Node("a")
+	require.True(t, exists)
+	require.True(t, hasJoinWriter(nodeA.writers, joinChan, "a"))
+
+	nodeB, exists := graph.Node("b")
+	require.True(t, exists)
+	require.True(t, hasJoinWriter(nodeB.writers, joinChan, "b"))
+}
+
+func TestBuilderJoinEdges_ChannelNameAvoidsCollisions(t *testing.T) {
+	builder := NewStateGraph(NewStateSchema())
+
+	testFunc := func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	}
+
+	joinNode := "join"
+
+	starts1 := normalizeJoinStarts([]string{"a+b", "c"})
+	starts2 := normalizeJoinStarts([]string{"a", "b+c"})
+	require.NotEqual(t, starts1, starts2)
+
+	graph, err := builder.
+		AddNode(starts1[0], testFunc).
+		AddNode(starts1[1], testFunc).
+		AddNode(starts2[0], testFunc).
+		AddNode(starts2[1], testFunc).
+		AddNode(joinNode, testFunc).
+		SetEntryPoint(starts1[0]).
+		AddJoinEdge(starts1, joinNode).
+		AddJoinEdge(starts2, joinNode).
+		SetFinishPoint(joinNode).
+		Compile()
+	require.NoError(t, err)
+
+	joinChan1 := joinChannelName(joinNode, starts1)
+	joinChan2 := joinChannelName(joinNode, starts2)
+	require.NotEqual(t, joinChan1, joinChan2)
+
+	ch1, ok := graph.getChannel(joinChan1)
+	require.True(t, ok)
+	require.Equal(t, ichannel.BehaviorBarrier, ch1.Behavior)
+	require.Equal(t, starts1, ch1.BarrierExpected)
+
+	ch2, ok := graph.getChannel(joinChan2)
+	require.True(t, ok)
+	require.Equal(t, ichannel.BehaviorBarrier, ch2.Behavior)
+	require.Equal(t, starts2, ch2.BarrierExpected)
+}
+
+func TestNormalizeJoinStarts(t *testing.T) {
+	require.Nil(t, normalizeJoinStarts(nil))
+	require.Nil(t, normalizeJoinStarts([]string{}))
+
+	in := []string{"b", "", Start, "a", "b", End}
+	require.Equal(t, []string{"a", "b"}, normalizeJoinStarts(in))
+}
+
+func TestBuilderJoinEdges_IgnoresInvalidInput(t *testing.T) {
+	builder := NewStateGraph(NewStateSchema())
+
+	testFunc := func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	}
+
+	graph, err := builder.
+		AddNode("a", testFunc).
+		AddNode("b", testFunc).
+		SetEntryPoint("a").
+		AddJoinEdge(nil, "b").
+		AddJoinEdge([]string{""}, "b").
+		AddJoinEdge([]string{"a"}, "").
+		AddJoinEdge([]string{"a"}, Start).
+		SetFinishPoint("b").
+		Compile()
+	require.NoError(t, err)
+
+	for name := range graph.getAllChannels() {
+		require.False(t, strings.HasPrefix(name, ChannelJoinPrefix))
+	}
+}
+
+func hasJoinWriter(
+	writers []channelWriteEntry,
+	channelName string,
+	value string,
+) bool {
+	for _, w := range writers {
+		v, ok := w.Value.(string)
+		if w.Channel == channelName && ok && v == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestStateGraphBasic(t *testing.T) {

@@ -11,10 +11,12 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -421,6 +423,265 @@ func TestExecutor_ProcessResumeCommand_And_ApplyExecutableNextNodes(t *testing.T
 	restored := make(State)
 	exec.applyExecutableNextNodes(restored, tuple)
 	require.NotNil(t, restored[StateKeyNextNodes])
+}
+
+type recordingSaver struct {
+	mu     sync.Mutex
+	tuples map[string]*CheckpointTuple
+}
+
+func newRecordingSaver() *recordingSaver {
+	return &recordingSaver{tuples: make(map[string]*CheckpointTuple)}
+}
+
+func (s *recordingSaver) Get(
+	ctx context.Context,
+	config map[string]any,
+) (*Checkpoint, error) {
+	tuple, err := s.GetTuple(ctx, config)
+	if err != nil || tuple == nil {
+		return nil, err
+	}
+	return tuple.Checkpoint, nil
+}
+
+func (s *recordingSaver) GetTuple(
+	_ context.Context,
+	config map[string]any,
+) (*CheckpointTuple, error) {
+	key := GetLineageID(config) + ":" + GetNamespace(config) + ":" +
+		GetCheckpointID(config)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tuples[key], nil
+}
+
+func (s *recordingSaver) List(
+	_ context.Context,
+	_ map[string]any,
+	_ *CheckpointFilter,
+) ([]*CheckpointTuple, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*CheckpointTuple, 0, len(s.tuples))
+	for _, tuple := range s.tuples {
+		out = append(out, tuple)
+	}
+	return out, nil
+}
+
+func (s *recordingSaver) Put(
+	_ context.Context,
+	req PutRequest,
+) (map[string]any, error) {
+	cfg := CreateCheckpointConfig(
+		GetLineageID(req.Config),
+		req.Checkpoint.ID,
+		GetNamespace(req.Config),
+	)
+	key := GetLineageID(cfg) + ":" + GetNamespace(cfg) + ":" +
+		GetCheckpointID(cfg)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tuples[key] = &CheckpointTuple{
+		Config:     cfg,
+		Checkpoint: req.Checkpoint,
+		Metadata:   req.Metadata,
+	}
+	return cfg, nil
+}
+
+func (s *recordingSaver) PutWrites(
+	_ context.Context,
+	_ PutWritesRequest,
+) error {
+	return nil
+}
+
+func (s *recordingSaver) PutFull(
+	_ context.Context,
+	req PutFullRequest,
+) (map[string]any, error) {
+	cfg, err := s.Put(context.Background(), PutRequest{
+		Config:      req.Config,
+		Checkpoint:  req.Checkpoint,
+		Metadata:    req.Metadata,
+		NewVersions: req.NewVersions,
+	})
+	if err != nil {
+		return nil, err
+	}
+	key := GetLineageID(cfg) + ":" + GetNamespace(cfg) + ":" +
+		GetCheckpointID(cfg)
+
+	pending := make([]PendingWrite, len(req.PendingWrites))
+	copy(pending, req.PendingWrites)
+
+	s.mu.Lock()
+	if tuple := s.tuples[key]; tuple != nil {
+		tuple.PendingWrites = pending
+	}
+	s.mu.Unlock()
+
+	return cfg, nil
+}
+
+func (s *recordingSaver) DeleteLineage(
+	_ context.Context,
+	_ string,
+) error {
+	return nil
+}
+
+func (s *recordingSaver) Close() error { return nil }
+
+func (s *recordingSaver) findLoopCheckpointWithBarrierSet(
+	channelName string,
+	mustContain string,
+	mustNotContain string,
+) *CheckpointTuple {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, tuple := range s.tuples {
+		if tuple == nil || tuple.Metadata == nil {
+			continue
+		}
+		if tuple.Metadata.Source != CheckpointSourceLoop {
+			continue
+		}
+		if tuple.Checkpoint == nil {
+			continue
+		}
+		seen := tuple.Checkpoint.BarrierSets[channelName]
+		if !containsString(seen, mustContain) {
+			continue
+		}
+		if mustNotContain != "" &&
+			containsString(seen, mustNotContain) {
+			continue
+		}
+		return tuple
+	}
+	return nil
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func TestExecutor_JoinEdge_ResumeRestoresBarrierSet(t *testing.T) {
+	const (
+		orderKey  = "order"
+		ticksKey  = "ticks"
+		lineageID = "ln-join-resume"
+	)
+
+	schema := NewStateSchema().
+		AddField(orderKey, StateField{
+			Type:    reflect.TypeOf([]string{}),
+			Reducer: StringSliceReducer,
+			Default: func() any { return []string{} },
+		}).
+		AddField(ticksKey, StateField{
+			Type:    reflect.TypeOf(0),
+			Reducer: DefaultReducer,
+			Default: func() any { return 0 },
+		})
+
+	sg := NewStateGraph(schema)
+	sg.AddNode("start", func(ctx context.Context, state State) (any, error) {
+		return State{orderKey: []string{"start"}}, nil
+	})
+	sg.AddNode("b", func(ctx context.Context, state State) (any, error) {
+		return State{orderKey: []string{"b"}}, nil
+	})
+	sg.AddNode("ticker", func(ctx context.Context, state State) (any, error) {
+		ticks := state[ticksKey].(int) + 1
+		return State{
+			orderKey: []string{"ticker"},
+			ticksKey: ticks,
+		}, nil
+	})
+	sg.AddNode("c", func(ctx context.Context, state State) (any, error) {
+		return State{orderKey: []string{"c"}}, nil
+	})
+	sg.AddNode("join", func(ctx context.Context, state State) (any, error) {
+		return State{orderKey: []string{"join"}}, nil
+	})
+
+	sg.SetEntryPoint("start")
+	sg.AddEdge("start", "b")
+	sg.AddEdge("start", "ticker")
+	sg.AddConditionalEdges(
+		"ticker",
+		func(ctx context.Context, state State) (string, error) {
+			ticks := state[ticksKey].(int)
+			if ticks < 3 {
+				return "ticker", nil
+			}
+			return "c", nil
+		},
+		map[string]string{
+			"ticker": "ticker",
+			"c":      "c",
+		},
+	)
+	sg.AddJoinEdge([]string{"b", "c"}, "join")
+	sg.SetFinishPoint("join")
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	saver := newRecordingSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{InvocationID: lineageID}
+	ch, err := exec.Execute(context.Background(), State{}, inv)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	starts := []string{"b", "c"}
+	joinChan := joinChannelName("join", starts)
+
+	tuple := saver.findLoopCheckpointWithBarrierSet(joinChan, "b", "c")
+	require.NotNil(t, tuple)
+	require.NotNil(t, tuple.Checkpoint)
+
+	seen, ok := tuple.Checkpoint.BarrierSets[joinChan]
+	require.True(t, ok)
+	require.Contains(t, seen, "b")
+	require.NotContains(t, seen, "c")
+
+	resumeState := State{
+		CfgKeyLineageID:    lineageID,
+		CfgKeyCheckpointNS: DefaultCheckpointNamespace,
+		CfgKeyCheckpointID: tuple.Checkpoint.ID,
+	}
+	resumeInv := &agent.Invocation{InvocationID: "inv-join-resume"}
+	resumeCh, err := exec.Execute(context.Background(), resumeState, resumeInv)
+	require.NoError(t, err)
+
+	var doneEvent *event.Event
+	for evt := range resumeCh {
+		if evt.Done {
+			doneEvent = evt
+			break
+		}
+	}
+	require.NotNil(t, doneEvent)
+	raw, ok := doneEvent.StateDelta[orderKey]
+	require.True(t, ok)
+
+	var order []string
+	require.NoError(t, json.Unmarshal(raw, &order))
+	require.Contains(t, order, "join")
 }
 
 func TestExecutor_SyncResumeState_RemovesKeysWhenMissing(t *testing.T) {

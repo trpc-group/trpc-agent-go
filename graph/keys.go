@@ -43,6 +43,7 @@ const (
 	ChannelInputPrefix   = "input:"
 	ChannelTriggerPrefix = "trigger:"
 	ChannelBranchPrefix  = "branch:to:"
+	ChannelJoinPrefix    = "join:to:"
 )
 
 // Event metadata keys (used in checkpoint events).

@@ -231,6 +231,122 @@ func TestChannel_Update_BehaviorBarrier(t *testing.T) {
 	}
 }
 
+func TestChannel_SetBarrierExpected_SortsAndCopies(t *testing.T) {
+	ch := NewChannel("test", BehaviorBarrier)
+	input := []string{"b", "a", "b"}
+	ch.SetBarrierExpected(input)
+
+	want := []string{"a", "b"}
+	if !reflect.DeepEqual(ch.BarrierExpected, want) {
+		t.Errorf("BarrierExpected = %v, want %v", ch.BarrierExpected, want)
+	}
+
+	input[0] = "mutated"
+	if !reflect.DeepEqual(ch.BarrierExpected, want) {
+		t.Errorf("BarrierExpected = %v, want %v", ch.BarrierExpected, want)
+	}
+}
+
+func TestChannel_SetBarrierSeen_ResetsAndRecomputesAvailability(t *testing.T) {
+	ch := NewChannel("test", BehaviorBarrier)
+	ch.SetBarrierExpected([]string{"a", "b"})
+
+	ch.BarrierSet = nil
+	ch.SetBarrierSeen([]string{"a"})
+	if ch.Available {
+		t.Error("Barrier should not be available after partial seen set")
+	}
+	if !reflect.DeepEqual(ch.BarrierSet, map[string]bool{"a": true}) {
+		t.Errorf("BarrierSet = %v, want %v", ch.BarrierSet,
+			map[string]bool{"a": true})
+	}
+
+	ch.SetBarrierSeen([]string{"a", "b", ""})
+	if !ch.Available {
+		t.Error("Barrier should be available after full seen set")
+	}
+	expected := map[string]bool{"a": true, "b": true}
+	if !reflect.DeepEqual(ch.BarrierSet, expected) {
+		t.Errorf("BarrierSet = %v, want %v", ch.BarrierSet, expected)
+	}
+
+	ch.SetBarrierSeen([]string{"b"})
+	if ch.Available {
+		t.Error("Barrier should not be available after resetting seen set")
+	}
+	if !reflect.DeepEqual(ch.BarrierSet, map[string]bool{"b": true}) {
+		t.Errorf("BarrierSet = %v, want %v", ch.BarrierSet,
+			map[string]bool{"b": true})
+	}
+}
+
+func TestChannel_Update_BehaviorBarrier_WaitsForExpected(t *testing.T) {
+	ch := NewChannel("test", BehaviorBarrier)
+	ch.SetBarrierExpected([]string{"a", "b"})
+
+	if ok := ch.Update([]any{"a"}, 1); !ok {
+		t.Error("Update() should return true for barrier update")
+	}
+	if ch.Available {
+		t.Error("Barrier should not be available before all senders arrive")
+	}
+
+	if ok := ch.Update([]any{"b"}, 2); !ok {
+		t.Error("Update() should return true for barrier update")
+	}
+	if !ch.Available {
+		t.Error("Barrier should be available after all senders arrive")
+	}
+}
+
+func TestChannel_Acknowledge_BehaviorBarrier_ClearsSet(t *testing.T) {
+	ch := NewChannel("test", BehaviorBarrier)
+	ch.SetBarrierExpected([]string{"a"})
+	ch.Update([]any{"a"}, 1)
+
+	ch.Acknowledge()
+	if ch.Available {
+		t.Error("Channel should not be available after acknowledge")
+	}
+	if len(ch.BarrierSet) != 0 {
+		t.Errorf("BarrierSet should be cleared, got %v", ch.BarrierSet)
+	}
+}
+
+func TestChannel_BarrierSeenSnapshot_Sorted(t *testing.T) {
+	ch := NewChannel("test", BehaviorBarrier)
+	ch.Update([]any{"b", "a"}, 1)
+
+	got := ch.BarrierSeenSnapshot()
+	want := []string{"a", "b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("BarrierSeenSnapshot() = %v, want %v", got, want)
+	}
+
+	ch.Acknowledge()
+	if got := ch.BarrierSeenSnapshot(); got != nil {
+		t.Errorf("BarrierSeenSnapshot() = %v, want nil", got)
+	}
+}
+
+func TestDedupeSortedStrings(t *testing.T) {
+	if out := dedupeSortedStrings(nil); out != nil {
+		t.Errorf("dedupeSortedStrings(nil) = %v, want nil", out)
+	}
+
+	single := []string{"a"}
+	if out := dedupeSortedStrings(single); !reflect.DeepEqual(out, []string{"a"}) {
+		t.Errorf("dedupeSortedStrings(single) = %v, want %v", out, []string{"a"})
+	}
+
+	in := []string{"a", "a", "b", "b", "c"}
+	out := dedupeSortedStrings(in)
+	want := []string{"a", "b", "c"}
+	if !reflect.DeepEqual(out, want) {
+		t.Errorf("dedupeSortedStrings(in) = %v, want %v", out, want)
+	}
+}
+
 func TestChannel_Get(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -383,6 +499,32 @@ func TestManager_AddChannel(t *testing.T) {
 	}
 	if ch2.Behavior != BehaviorTopic {
 		t.Errorf("Channel type = %v, want BehaviorTopic", ch2.Behavior)
+	}
+}
+
+func TestManager_AddChannel_DoesNotOverwriteExisting(t *testing.T) {
+	manager := NewChannelManager()
+	manager.AddChannel("test", BehaviorLastValue)
+
+	original, ok := manager.GetChannel("test")
+	if !ok || original == nil {
+		t.Fatalf("expected channel to exist")
+	}
+	original.Version = 7
+
+	manager.AddChannel("test", BehaviorTopic)
+	current, ok := manager.GetChannel("test")
+	if !ok || current == nil {
+		t.Fatalf("expected channel to exist")
+	}
+	if current != original {
+		t.Error("expected AddChannel to keep the existing channel instance")
+	}
+	if current.Behavior != BehaviorLastValue {
+		t.Errorf("Behavior = %v, want %v", current.Behavior, BehaviorLastValue)
+	}
+	if current.Version != 7 {
+		t.Errorf("Version = %v, want 7", current.Version)
 	}
 }
 
