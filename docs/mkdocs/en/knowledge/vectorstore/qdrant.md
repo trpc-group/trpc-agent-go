@@ -8,6 +8,7 @@
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
     vectorqdrant "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/qdrant"
 )
 

@@ -28,6 +28,13 @@
 
 **Reference Code**:
 ```go
+import (
+    "log"
+    "os"
+
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+)
+
 embedder := openaiembedder.New(
     openaiembedder.WithModel("text-embedding-3-small"),
     openaiembedder.WithAPIKey(os.Getenv("OPENAI_API_KEY")),

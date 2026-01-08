@@ -14,6 +14,7 @@ Use local embedder to compute vectors, then store to TcVector:
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
     vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
 )
 
@@ -22,6 +23,7 @@ tcVS, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-tcvector-endpoint"),
     vectortcvector.WithUsername("your-username"),
     vectortcvector.WithPassword("your-password"),
+    vectortcvector.WithFilterAll(true), // Recommended: automatically index all metadata fields
 )
 if err != nil {
     // Handle error
@@ -39,6 +41,7 @@ Use TcVector cloud embedding computation, no local embedder needed, saves resour
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
     vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
 )
 
@@ -47,6 +50,7 @@ tcVS, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-tcvector-endpoint"),
     vectortcvector.WithUsername("your-username"),
     vectortcvector.WithPassword("your-password"),
+    vectortcvector.WithFilterAll(true), // Recommended: automatically index all metadata fields
     // Enable remote embedding computation
     vectortcvector.WithRemoteEmbeddingModel("bge-base-zh"),
     // Enable TSVector for hybrid retrieval if needed
@@ -124,29 +128,23 @@ TcVector filter support:
 - ⚡ Optional: Use `WithFilterIndexFields` to build additional indexes for frequently queried fields
 
 ```go
-// v0.4.0+ new collections (TCVector service supports JSON index)
+// Recommended configuration (suitable for most scenarios)
 vectorStore, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-endpoint"),
+    vectortcvector.WithFilterAll(true), // Recommended: automatically index all metadata fields, no need to manually manage indexes
     // ... other configuration
 )
-// All metadata fields can be queried via JSON index, no predefinition needed
 
-// Optional: Build additional indexes for frequently queried fields to optimize performance
+// Optional: Build additional indexes for frequently queried fields to optimize performance (use with WithFilterAll(true))
 metadataKeys := source.GetAllMetadataKeys(sources)
 vectorStore, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-endpoint"),
-    vectortcvector.WithFilterIndexFields(metadataKeys), // Optional: build additional indexes
-    // ... other configuration
-)
-
-// Collections before v0.4.0 or TCVector service doesn't support JSON index
-vectorStore, err := vectortcvector.New(
-    vectortcvector.WithURL("https://your-endpoint"),
-    vectortcvector.WithFilterIndexFields(metadataKeys), // Required: predefine filter fields
+    vectortcvector.WithFilterAll(true),
+    vectortcvector.WithFilterIndexFields(metadataKeys), // Optional: build additional inverted indexes for faster queries
     // ... other configuration
 )
 ```
 
 **Notes:**
-- **v0.4.0+ new collections**: Automatically create metadata JSON index, all fields queryable
-- **Older version collections**: Only support fields predefined in `WithFilterIndexFields`
+- **WithFilterAll(true)** (Recommended): Automatically create JSON index for `metadata` fields, making all metadata fields filterable without pre-defining schema.
+- **WithFilterIndexFields** (Optional): Create additional inverted indexes for specific high-frequency query fields to further improve filtering performance on large datasets.

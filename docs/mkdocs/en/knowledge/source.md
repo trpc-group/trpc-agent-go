@@ -71,6 +71,10 @@ urlSrc := urlsource.New(
 Separate content fetching and document identification:
 
 ```go
+import (
+    urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
+)
+
 urlSrcAlias := urlsource.New(
     []string{"https://trpc-go.com/docs/api.md"},     // Identifier URL (for document ID and metadata)
     urlsource.WithContentFetchingURL([]string{"https://github.com/trpc-group/trpc-go/raw/main/docs/api.md"}), // Actual content fetching URL
@@ -136,29 +140,11 @@ if err := kb.Load(ctx); err != nil {
 }
 ```
 
-## Batch Document Processing and Concurrency
-
-Knowledge supports batch document processing and concurrent loading, significantly improving processing performance for large numbers of documents:
-
-```go
-err := kb.Load(ctx,
-    knowledge.WithShowProgress(true),      // Print progress logs
-    knowledge.WithProgressStepSize(10),    // Progress step size
-    knowledge.WithShowStats(true),         // Print statistics
-    knowledge.WithSourceConcurrency(4),    // Source-level concurrency
-    knowledge.WithDocConcurrency(64),      // Document-level concurrency
-)
-```
-
-> **About Performance and Rate Limiting**:
->
-> - Increasing concurrency will increase call frequency to Embedder services (OpenAI/Gemini), potentially triggering rate limits
-> - Adjust `WithSourceConcurrency()` and `WithDocConcurrency()` based on throughput, cost, and rate limiting
-> - Default values are balanced for most scenarios; increase for faster speed, decrease if rate limited
-
 ## Configuring Metadata
 
-To enable filter functionality, it's recommended to add rich metadata when creating document sources:
+To enable filter functionality, it's recommended to add rich metadata when creating document sources.
+
+> For detailed filter usage guide, please refer to [Filter Documentation](filter.md).
 
 ```go
 sources := []source.Source{

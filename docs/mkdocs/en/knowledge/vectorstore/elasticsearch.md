@@ -8,6 +8,7 @@ Elasticsearch vector store supports v7, v8, v9 versions.
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
     vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 )
 

@@ -8,6 +8,7 @@
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
     vectormilvus "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus"
 )
 

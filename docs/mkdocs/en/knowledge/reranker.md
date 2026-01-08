@@ -25,7 +25,11 @@ rerank := topk.New(
 Use Cohere's rerank service.
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/cohere"
+import (
+    "log"
+
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/cohere"
+)
 
 rerank, err := cohere.New(
     cohere.WithAPIKey("your-api-key"),       // required: Cohere API Key
@@ -59,7 +63,11 @@ The Infinity Reranker implementation in trpc-agent-go can connect to any service
 **Usage**
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/infinity"
+import (
+    "log"
+
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/infinity"
+)
 
 rerank, err := infinity.New(
     infinity.WithEndpoint("http://localhost:7997/rerank"), // required: service endpoint
@@ -86,6 +94,8 @@ For detailed deployment methods and examples, see the [examples/knowledge/rerank
 ## Inject into Knowledge
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/knowledge"
+
 kb := knowledge.New(
     knowledge.WithReranker(rerank),
     // ... other configurations (VectorStore, Embedder, Sources, etc.)

@@ -8,6 +8,7 @@ PGVector is a vector store implementation based on PostgreSQL + pgvector extensi
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
     vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
 )
 

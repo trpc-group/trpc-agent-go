@@ -12,7 +12,7 @@ The Knowledge system follows this usage pattern:
 2. **Load Documents**: Load and index documents from various sources
 3. **Create Search Tool**: Use `NewKnowledgeSearchTool` to create a knowledge search tool
 4. **Integrate with Agent**: Add the search tool to the Agent's tool list
-5. **Knowledge Base Management**: Enable intelligent sync mechanism via `enableSourceSync` to keep vector store data consistent with configured sources
+5. **Knowledge Base Management**: Enable intelligent sync mechanism via `WithEnableSourceSync(true)` to keep vector store data consistent with configured sources (see [Knowledge Base Management](management.md))
 
 This pattern provides:
 
@@ -137,7 +137,6 @@ func main() {
 }
 ```
 
-
 ## Core Concepts
 
 The [knowledge module](https://github.com/trpc-group/trpc-agent-go/tree/main/knowledge) is the knowledge management core of the tRPC-Agent-Go framework, providing complete RAG capabilities. The module uses a modular design, supporting various document sources, vector storage backends, and embedding models.
@@ -207,7 +206,9 @@ searchTool := knowledgetool.NewKnowledgeSearchTool(
 
 #### AgenticFilterSearchTool
 
-Intelligent filter search tool where the Agent can automatically build filter conditions based on user queries:
+Intelligent filter search tool, Agent can automatically build filter conditions based on user queries.
+
+Supports multiple configuration methods such as automatic extraction, manually specifying enum values, and manually specifying fields:
 
 ```go
 import (
@@ -215,16 +216,31 @@ import (
     knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 )
 
-// Get source metadata information (for intelligent filtering)
+// Way 1 (Recommended): Automatically extract metadata info from all sources (for intelligent filtering)
 sourcesMetadata := source.GetAllMetadata(sources)
+
+// Way 2: Manually configure allowed filter fields and values (suitable for limited enum values)
+// sourcesMetadata := map[string][]string{
+//     "category": {"doc", "blog"},
+//     "status":   {"published", "draft"},
+// }
+
+// Way 3: Manually configure fields, values inferred by LLM (suitable for excessive enum values)
+// sourcesMetadata := map[string][]string{
+//     "author_id": nil,
+//     "year":      nil,
+// }
 
 filterSearchTool := knowledgetool.NewAgenticFilterSearchTool(
     kb,                    // Knowledge instance
     sourcesMetadata,       // Metadata information
     knowledgetool.WithToolName("knowledge_search_with_filter"),
     knowledgetool.WithToolDescription("Search the knowledge base with intelligent metadata filtering."),
+    knowledgetool.WithMaxResults(10), // Return max 10 results
 )
 ```
+
+> Detailed configuration instructions please refer to [Filter Documentation](filter.md#enabling-intelligent-filters).
 
 #### Search Tool Configuration Options
 
@@ -239,6 +255,8 @@ Both `NewKnowledgeSearchTool` and `NewAgenticFilterSearchTool` support the follo
 | `WithFilter(map)` | Set static metadata filter (simple AND logic) | `nil` |
 | `WithConditionedFilter(cond)` | Set complex filter conditions (supports AND/OR/nested logic) | `nil` |
 
+> **Tip**: Each returned document contains text content, metadata, and relevance score, sorted by score in descending order.
+
 ### Integration Methods
 
 #### Method 1: Manual Tool Addition (Recommended)
@@ -247,6 +265,7 @@ Use `llmagent.WithTools` to manually add search tools with flexible configuratio
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -264,6 +283,10 @@ Use `llmagent.WithKnowledge(kb)` to integrate Knowledge into the Agent, and the 
 > **Note**: The automatic integration method is simple and quick, but less flexible. It doesn't allow customizing tool names, descriptions, filter conditions, or other parameters, and doesn't support integrating multiple knowledge bases simultaneously. For more fine-grained control, it's recommended to use the manual tool addition approach.
 
 ```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+)
+
 llmAgent := llmagent.New(
     "knowledge-assistant",
     llmagent.WithModel(modelInstance),
@@ -271,11 +294,35 @@ llmAgent := llmagent.New(
 )
 ```
 
+## Performance Options at Loading
+
+Knowledge supports batch document processing and concurrent loading, which can significantly improve performance when handling large amounts of documents:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/knowledge"
+
+err := kb.Load(ctx,
+    knowledge.WithShowProgress(true),      // Print progress log
+    knowledge.WithProgressStepSize(10),    // Progress step size
+    knowledge.WithShowStats(true),         // Print statistics
+    knowledge.WithSourceConcurrency(4),    // Source-level concurrency
+    knowledge.WithDocConcurrency(64),      // Document-level concurrency
+)
+```
+
+> **About Performance and Rate Limiting**:
+>
+> - Increasing concurrency will increase the call frequency to Embedder services (OpenAI/Gemini), which may trigger rate limiting.
+> - Adjust `WithSourceConcurrency()` and `WithDocConcurrency()` according to throughput, cost, and rate limits.
+> - Default values are balanced for most scenarios; increase for speed if needed, decrease if rate limiting occurs.
+
 ## More Content
 
 - [Vector Store](vectorstore/index.md) - Configure various vector database backends
 - [Embedder](embedder.md) - Text vectorization model configuration
+- [Reranker](reranker.md) - Retrieval result reranking
 - [Document Sources](source.md) - File, directory, URL, and other knowledge source configuration
 - [OCR Text Recognition](ocr.md) - Configure Tesseract OCR for text extraction
 - [Filters](filter.md) - Basic filters and intelligent filters
 - [Knowledge Base Management](management.md) - Dynamic source management and status monitoring
+- [Common Issues](troubleshooting.md) - Common issues and solutions

@@ -6,18 +6,24 @@ The Knowledge system provides powerful knowledge base management functionality, 
 
 ## Source Sync Mode Comparison
 
-Knowledge provides two loading modes: **Default Mode (sync disabled)** and **Sync Mode (enableSourceSync enabled)**.
+Knowledge provides two loading modes: **Default Mode (sync disabled)** and **Sync Mode (WithEnableSourceSync enabled)**.
 
 ### Default Mode (Sync Disabled)
 
-By default, `enableSourceSync` is `false`, and Knowledge uses **append-only loading**:
+By default, `WithEnableSourceSync` is `false`, and Knowledge uses **append-only loading**:
 
 ```go
+import (
+    "log"
+
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
+)
+
 kb := knowledge.New(
     knowledge.WithEmbedder(embedder),
     knowledge.WithVectorStore(vectorStore),
     knowledge.WithSources(sources),
-    // enableSourceSync defaults to false
+    // WithEnableSourceSync defaults to false
 )
 
 if err := kb.Load(ctx); err != nil {
@@ -30,13 +36,19 @@ if err := kb.Load(ctx); err != nil {
 - **Append Only**: Each `Load()` only adds new documents to vector store
 - **No Change Detection**: Existing documents won't be updated even if source file content has changed
 - **No Orphan Cleanup**: Vector data for deleted source files won't be automatically cleaned up
-- **Use Cases**: One-time imports, scenarios where data only grows
+- **Use Cases**: One-time imports, scenarios where data only grows, business manages data sources independently
 
-### Sync Mode (enableSourceSync Enabled)
+### Sync Mode (WithEnableSourceSync Enabled)
 
-When `enableSourceSync` is enabled, Knowledge **keeps vector store fully consistent with configured Sources**:
+* When `WithEnableSourceSync(true)` is enabled, Knowledge **keeps vector store fully consistent with configured Sources**:
 
 ```go
+import (
+    "log"
+
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
+)
+
 kb := knowledge.New(
     knowledge.WithEmbedder(embedder),
     knowledge.WithVectorStore(vectorStore),
@@ -80,6 +92,11 @@ With sync mode enabled, the following operations trigger sync validation:
 > ⚠️ **Important Warning**: When sync mode is enabled, **ensure all Sources that need to be retained are correctly configured**. The sync mechanism compares configured Sources with data in vector store, **any documents not belonging to configured Sources will be treated as orphans and deleted**.
 >
 > ```go
+> import (
+>     "trpc.group/trpc-go/trpc-agent-go/knowledge"
+>     "trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+> )
+>
 > // ❌ Dangerous: Empty Source configuration will delete all existing documents!
 > kb := knowledge.New(
 >     knowledge.WithEmbedder(embedder),
@@ -99,13 +116,17 @@ With sync mode enabled, the following operations trigger sync validation:
 > kb.Load(ctx) // Safe: Only clean up documents not belonging to these Sources
 > ```
 
-
-
 ## Dynamic Source Management
 
 Knowledge supports runtime dynamic management of knowledge sources, ensuring vector store data always stays consistent with user-configured sources:
 
 ```go
+import (
+    "log"
+
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+)
+
 // Add new knowledge source - data will sync with configured sources
 newSource := filesource.New([]string{"./new-docs/api.md"})
 if err := kb.AddSource(ctx, newSource); err != nil {
@@ -123,12 +144,18 @@ if err := kb.RemoveSource(ctx, "API Documentation"); err != nil {
 }
 ```
 
-
 ## Knowledge Base Status Monitoring
 
 Knowledge provides rich status monitoring functionality to help users understand the current sync status of configured sources:
 
 ```go
+import (
+    "fmt"
+    "log"
+
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
+)
+
 // Show all document information
 docInfos, err := kb.ShowDocumentInfo(ctx)
 if err != nil {
@@ -174,36 +201,3 @@ Source: Technical Documentation
 URI: /docs/api/authentication.md
 Chunk Index: 1
 ```
-
-
-
-## Performance Optimization
-
-The Knowledge system provides various performance optimization strategies, including concurrent processing, vector store optimization, and caching mechanisms:
-
-```go
-// Adjust concurrency based on system resources
-kb := knowledge.New(
-    knowledge.WithSources(sources),
-    knowledge.WithSourceConcurrency(runtime.NumCPU()),
-    knowledge.WithDocConcurrency(runtime.NumCPU()*2),
-)
-```
-
-### Loading Performance Options
-
-```go
-err := kb.Load(ctx,
-    knowledge.WithShowProgress(true),      // Print progress logs
-    knowledge.WithProgressStepSize(10),    // Progress step size
-    knowledge.WithShowStats(true),         // Print statistics
-    knowledge.WithSourceConcurrency(4),    // Source-level concurrency
-    knowledge.WithDocConcurrency(64),      // Document-level concurrency
-)
-```
-
-> **About Performance and Rate Limiting**:
->
-> - Increasing concurrency will increase call frequency to Embedder services (OpenAI/Gemini), potentially triggering rate limits
-> - Adjust `WithSourceConcurrency()` and `WithDocConcurrency()` based on throughput, cost, and rate limiting
-> - Default values are balanced for most scenarios; increase for faster speed, decrease if rate limited
