@@ -290,7 +290,12 @@ func (e *Executor) executeGraph(
 
 	if e.checkpointSaver != nil && !resumed {
 		if err := e.createCheckpointAndSave(
-			ctx, &checkpointConfig, CheckpointSourceInput, -1, execCtx,
+			ctx,
+			invocation,
+			&checkpointConfig,
+			CheckpointSourceInput,
+			-1,
+			execCtx,
 		); err != nil {
 			log.DebugfContext(
 				ctx,
@@ -607,7 +612,12 @@ func (e *Executor) runBspLoop(
 				step,
 			)
 			if err := e.createCheckpointAndSave(
-				ctx, checkpointConfig, CheckpointSourceLoop, step, execCtx,
+				ctx,
+				invocation,
+				checkpointConfig,
+				CheckpointSourceLoop,
+				step,
+				execCtx,
 			); err != nil {
 				log.DebugfContext(
 					ctx,
@@ -647,6 +657,7 @@ func (e *Executor) buildCompletionEvent(
 // returned value from saver.PutFull (which may include the new checkpoint_id).
 func (e *Executor) createCheckpointAndSave(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	config *map[string]any,
 	source string,
 	step int,
@@ -683,6 +694,17 @@ func (e *Executor) createCheckpointAndSave(
 	pendingWrites := make([]PendingWrite, len(execCtx.pendingWrites))
 	copy(pendingWrites, execCtx.pendingWrites)
 	execCtx.pendingWrites = nil // Clear after copying.
+
+	if execCtx != nil && execCtx.EventChan != nil {
+		evt := NewCheckpointCreatedEvent(
+			WithCheckpointEventInvocationID(execCtx.InvocationID),
+			WithCheckpointEventCheckpointID(checkpoint.ID),
+			WithCheckpointEventSource(source),
+			WithCheckpointEventStep(step),
+			WithCheckpointEventWritesCount(len(pendingWrites)),
+		)
+		agent.EmitEvent(ctx, invocation, execCtx.EventChan, evt)
+	}
 
 	// Track new versions for channels that were updated on this execution.
 	newVersions := make(map[string]int64)
@@ -727,6 +749,7 @@ func (e *Executor) createCheckpointAndSave(
 		checkpoint.NextNodes,
 		len(pendingWrites),
 	)
+	saveStart := time.Now()
 	updatedConfig, err := e.checkpointSaver.PutFull(ctx, PutFullRequest{
 		Config:        *config,
 		Checkpoint:    checkpoint,
@@ -742,6 +765,17 @@ func (e *Executor) createCheckpointAndSave(
 			err,
 		)
 		return fmt.Errorf("failed to save checkpoint atomically: %w", err)
+	}
+	if execCtx != nil && execCtx.EventChan != nil {
+		evt := NewCheckpointCommittedEvent(
+			WithCheckpointEventInvocationID(execCtx.InvocationID),
+			WithCheckpointEventCheckpointID(checkpoint.ID),
+			WithCheckpointEventSource(source),
+			WithCheckpointEventStep(step),
+			WithCheckpointEventDuration(time.Since(saveStart)),
+			WithCheckpointEventWritesCount(len(pendingWrites)),
+		)
+		agent.EmitEvent(ctx, invocation, execCtx.EventChan, evt)
 	}
 	// Successfully saved checkpoint.
 	// Clear step marks after checkpoint creation.
@@ -2552,6 +2586,11 @@ func (e *Executor) handleInterrupt(
 	step int,
 	checkpointConfig map[string]any,
 ) error {
+	var (
+		interruptCheckpointID  string
+		interruptCheckpointDur time.Duration
+		interruptCheckpointOK  bool
+	)
 	// Create an interrupt checkpoint with the current state.
 	if e.checkpointSaver != nil && checkpointConfig != nil {
 		// Set interrupt state in the checkpoint.
@@ -2612,6 +2651,7 @@ func (e *Executor) handleInterrupt(
 			NewVersions:   checkpoint.ChannelVersions,
 			PendingWrites: []PendingWrite{},
 		}
+		saveStart := time.Now()
 		updatedConfig, err := e.checkpointSaver.PutFull(saveCtx, req)
 		if err != nil {
 			log.DebugfContext(
@@ -2620,6 +2660,9 @@ func (e *Executor) handleInterrupt(
 				err,
 			)
 		} else {
+			interruptCheckpointID = checkpoint.ID
+			interruptCheckpointDur = time.Since(saveStart)
+			interruptCheckpointOK = true
 			// Update the config with new checkpoint ID for proper parent tracking
 			if configurable, ok := checkpointConfig[CfgKeyConfigurable].(map[string]any); ok {
 				if updatedConfigurable, ok := updatedConfig[CfgKeyConfigurable].(map[string]any); ok {
@@ -2627,6 +2670,23 @@ func (e *Executor) handleInterrupt(
 				}
 			}
 		}
+	}
+
+	// Replace ctx with a fresh eventCtx derived from background to avoid cancel warning.
+	const defaultEmitTimeout = time.Second
+	eventCtx, cancel := context.WithTimeout(context.Background(),
+		defaultEmitTimeout)
+	defer cancel()
+
+	if interruptCheckpointOK && execCtx != nil && execCtx.EventChan != nil {
+		evt := NewCheckpointInterruptEvent(
+			WithCheckpointEventInvocationID(execCtx.InvocationID),
+			WithCheckpointEventCheckpointID(interruptCheckpointID),
+			WithCheckpointEventSource(CheckpointSourceInterrupt),
+			WithCheckpointEventStep(step),
+			WithCheckpointEventDuration(interruptCheckpointDur),
+		)
+		agent.EmitEvent(eventCtx, invocation, execCtx.EventChan, evt)
 	}
 
 	// Emit interrupt event.
@@ -2637,10 +2697,6 @@ func (e *Executor) handleInterrupt(
 		WithPregelEventInterruptValue(interrupt.Value),
 	)
 
-	// Replace ctx with a fresh eventCtx derived from background to avoid cancel warning.
-	const defaultEmitTimeout = time.Second
-	eventCtx, cancel := context.WithTimeout(context.Background(), defaultEmitTimeout)
-	defer cancel()
 	agent.EmitEvent(eventCtx, invocation, execCtx.EventChan, interruptEvent)
 
 	// Return the interrupt error to propagate it to the caller.
