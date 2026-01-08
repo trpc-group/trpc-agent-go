@@ -428,7 +428,7 @@ Notes:
   (LLM) nodes enable final model response events automatically for that run.
   To override it, call `agent.WithGraphEmitFinalModelResponses(false)` after
   `agent.WithStreamMode(...)`.
-- StreamMode affects what Runner forwards to your `eventChan`. Runner still
+- StreamMode only affects what Runner forwards to your `eventChan`. Runner still
   processes and persists events internally.
 - For graph workflows, some event types (for example, `graph.checkpoint.*`)
   are emitted only when their corresponding mode is selected.
