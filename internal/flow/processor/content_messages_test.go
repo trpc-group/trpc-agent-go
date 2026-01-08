@@ -322,7 +322,7 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 	require.Equal(t, model.RoleSystem, req1.Messages[0].Role)
 	require.Equal(t, "existing system prompt", req1.Messages[0].Content)
 	require.Equal(t, model.RoleSystem, req1.Messages[1].Role)
-	require.Equal(t, formatSummaryContent("Session summary content"), req1.Messages[1].Content)
+	require.Equal(t, NewContentRequestProcessor().formatSummary("Session summary content"), req1.Messages[1].Content)
 	require.Equal(t, model.RoleUser, req1.Messages[2].Role)
 	require.Equal(t, "user question", req1.Messages[2].Content)
 	require.Equal(t, model.RoleUser, req1.Messages[3].Role)
@@ -348,7 +348,7 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 	// Should have 3 messages: summary system, user, current request
 	require.Equal(t, 3, len(req2.Messages))
 	require.Equal(t, model.RoleSystem, req2.Messages[0].Role)
-	require.Equal(t, formatSummaryContent("Session summary content"), req2.Messages[0].Content)
+	require.Equal(t, NewContentRequestProcessor().formatSummary("Session summary content"), req2.Messages[0].Content)
 	require.Equal(t, model.RoleUser, req2.Messages[1].Role)
 	require.Equal(t, "user question", req2.Messages[1].Content)
 	require.Equal(t, model.RoleUser, req2.Messages[2].Role)
@@ -378,7 +378,7 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 	require.Equal(t, model.RoleSystem, req3.Messages[0].Role)
 	require.Equal(t, "system 1", req3.Messages[0].Content)
 	require.Equal(t, model.RoleSystem, req3.Messages[1].Role)
-	require.Equal(t, formatSummaryContent("Session summary content"), req3.Messages[1].Content)
+	require.Equal(t, NewContentRequestProcessor().formatSummary("Session summary content"), req3.Messages[1].Content)
 	require.Equal(t, model.RoleSystem, req3.Messages[2].Role)
 	require.Equal(t, "system 2", req3.Messages[2].Content)
 	require.Equal(t, model.RoleUser, req3.Messages[3].Role)
@@ -417,7 +417,7 @@ func TestProcessRequest_SessionSummary_EdgeCases(t *testing.T) {
 	// Should have 2 messages: summary system, current request
 	require.Equal(t, 2, len(req1.Messages))
 	require.Equal(t, model.RoleSystem, req1.Messages[0].Role)
-	require.Equal(t, formatSummaryContent("Session summary content"), req1.Messages[0].Content)
+	require.Equal(t, NewContentRequestProcessor().formatSummary("Session summary content"), req1.Messages[0].Content)
 	require.Equal(t, model.RoleUser, req1.Messages[1].Role)
 	require.Equal(t, "current request", req1.Messages[1].Content)
 
@@ -443,7 +443,7 @@ func TestProcessRequest_SessionSummary_EdgeCases(t *testing.T) {
 	require.Equal(t, model.RoleSystem, req2.Messages[0].Role)
 	require.Equal(t, "system prompt", req2.Messages[0].Content)
 	require.Equal(t, model.RoleSystem, req2.Messages[1].Role)
-	require.Equal(t, formatSummaryContent("Session summary content"), req2.Messages[1].Content)
+	require.Equal(t, NewContentRequestProcessor().formatSummary("Session summary content"), req2.Messages[1].Content)
 	require.Equal(t, model.RoleUser, req2.Messages[2].Role)
 	require.Equal(t, "current request", req2.Messages[2].Content)
 }
