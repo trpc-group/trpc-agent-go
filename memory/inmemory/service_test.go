@@ -20,10 +20,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -610,15 +612,10 @@ func TestWithMemoryJobTimeout(t *testing.T) {
 func TestEnqueueAutoMemoryJob_NoExtractor(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()
-	userKey := memory.UserKey{
-		AppName: "test-app",
-		UserID:  "test-user",
-	}
+	sess := session.NewSession("test-app", "test-user", "test-session")
 
 	// Should return nil when no extractor is configured.
-	err := service.EnqueueAutoMemoryJob(ctx, userKey, []model.Message{
-		model.NewUserMessage("hello"),
-	})
+	err := service.EnqueueAutoMemoryJob(ctx, sess)
 	assert.NoError(t, err)
 }
 
@@ -632,14 +629,17 @@ func TestEnqueueAutoMemoryJob_WithExtractor(t *testing.T) {
 	defer service.Close()
 
 	ctx := context.Background()
-	userKey := memory.UserKey{
-		AppName: "test-app",
-		UserID:  "test-user",
+	sess := session.NewSession("test-app", "test-user", "test-session")
+	sess.Events = []event.Event{
+		{
+			Timestamp: time.Now(),
+			Response: &model.Response{
+				Choices: []model.Choice{{Message: model.NewUserMessage("hello")}},
+			},
+		},
 	}
 
-	err := service.EnqueueAutoMemoryJob(ctx, userKey, []model.Message{
-		model.NewUserMessage("hello"),
-	})
+	err := service.EnqueueAutoMemoryJob(ctx, sess)
 	assert.NoError(t, err)
 
 	// Wait for async processing.

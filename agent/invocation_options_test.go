@@ -408,7 +408,7 @@ func (m *mockMemoryService) Tools() []tool.Tool {
 	return nil
 }
 
-func (m *mockMemoryService) EnqueueAutoMemoryJob(ctx context.Context, userKey memory.UserKey, messages []model.Message) error {
+func (m *mockMemoryService) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error {
 	return nil
 }
 

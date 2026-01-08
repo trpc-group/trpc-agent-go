@@ -19,7 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
-	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -321,17 +321,13 @@ func (s *MemoryService) Tools() []tool.Tool {
 }
 
 // EnqueueAutoMemoryJob enqueues an auto memory extraction job for async
-// processing. The messages parameter contains conversation messages to analyze.
-// Returns nil if extractor is not configured or job is enqueued.
-func (s *MemoryService) EnqueueAutoMemoryJob(
-	ctx context.Context,
-	userKey memory.UserKey,
-	messages []model.Message,
-) error {
+// processing. The session contains the full transcript and state for
+// incremental extraction.
+func (s *MemoryService) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error {
 	if s.autoMemoryWorker == nil {
 		return nil
 	}
-	return s.autoMemoryWorker.EnqueueJob(ctx, userKey, messages)
+	return s.autoMemoryWorker.EnqueueJob(ctx, sess)
 }
 
 // Close stops the async memory workers and cleans up resources.

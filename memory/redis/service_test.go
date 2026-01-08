@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -981,15 +982,9 @@ func TestEnqueueAutoMemoryJob_NoWorker(t *testing.T) {
 	defer memoryService.Close()
 
 	ctx := context.Background()
-	userKey := memory.UserKey{
-		AppName: "test-app",
-		UserID:  "test-user",
-	}
-
+	sess := session.NewSession("test-app", "test-user", "test-session")
 	// Should return nil when no worker is configured.
-	err = memoryService.EnqueueAutoMemoryJob(ctx, userKey, []model.Message{
-		model.NewUserMessage("hello"),
-	})
+	err = memoryService.EnqueueAutoMemoryJob(ctx, sess)
 	assert.NoError(t, err)
 }
 

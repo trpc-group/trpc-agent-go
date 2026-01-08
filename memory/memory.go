@@ -15,7 +15,7 @@ import (
 	"errors"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -27,6 +27,13 @@ const (
 	ClearToolName  = "memory_clear"
 	SearchToolName = "memory_search"
 	LoadToolName   = "memory_load"
+)
+
+// Session state keys for memory features.
+const (
+	// SessionStateKeyAutoMemoryLastExtractAt stores the last included event
+	// timestamp for auto memory extraction.
+	SessionStateKeyAutoMemoryLastExtractAt = "memory:last_extract_at"
 )
 
 var (
@@ -62,9 +69,9 @@ type Service interface {
 	Tools() []tool.Tool
 
 	// EnqueueAutoMemoryJob enqueues an auto memory extraction job for async
-	// processing. The messages parameter contains conversation messages to
-	// analyze. Returns nil if extractor is not configured or job is enqueued.
-	EnqueueAutoMemoryJob(ctx context.Context, userKey UserKey, messages []model.Message) error
+	// processing. The session contains the full transcript and state for
+	// incremental extraction.
+	EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error
 
 	// Close closes the service and releases resources.
 	// This includes stopping async memory workers if configured.

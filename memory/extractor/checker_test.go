@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestCheckMessageThreshold(t *testing.T) {
@@ -53,8 +52,7 @@ func TestCheckMessageThreshold(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			checker := CheckMessageThreshold(tt.threshold)
-			messages := make([]model.Message, tt.messageCount)
-			ctx := &ExtractionContext{Messages: messages}
+			ctx := &ExtractionContext{TurnCount: tt.messageCount}
 			assert.Equal(t, tt.want, checker(ctx))
 		})
 	}
@@ -181,15 +179,13 @@ func TestExtractionContext(t *testing.T) {
 			AppName: "test-app",
 			UserID:  "user-123",
 		},
-		Messages: []model.Message{
-			model.NewUserMessage("hello"),
-		},
+		TurnCount:     5,
 		LastExtractAt: &now,
 	}
 
 	assert.Equal(t, "test-app", ctx.UserKey.AppName)
 	assert.Equal(t, "user-123", ctx.UserKey.UserID)
-	assert.Len(t, ctx.Messages, 1)
+	assert.Equal(t, 5, ctx.TurnCount)
 	assert.NotNil(t, ctx.LastExtractAt)
 }
 
@@ -203,19 +199,19 @@ func TestMemoryExtractorShouldExtract(t *testing.T) {
 		{
 			name: "no checkers always returns true",
 			opts: nil,
-			ctx:  &ExtractionContext{Messages: make([]model.Message, 1)},
+			ctx:  &ExtractionContext{TurnCount: 1},
 			want: true,
 		},
 		{
 			name: "single checker passes",
 			opts: []Option{WithChecker(CheckMessageThreshold(10))},
-			ctx:  &ExtractionContext{Messages: make([]model.Message, 11)},
+			ctx:  &ExtractionContext{TurnCount: 11},
 			want: true,
 		},
 		{
 			name: "single checker fails",
 			opts: []Option{WithChecker(CheckMessageThreshold(10))},
-			ctx:  &ExtractionContext{Messages: make([]model.Message, 5)},
+			ctx:  &ExtractionContext{TurnCount: 5},
 			want: false,
 		},
 		{
@@ -225,7 +221,7 @@ func TestMemoryExtractorShouldExtract(t *testing.T) {
 				WithChecker(CheckTimeInterval(time.Minute)),
 			},
 			ctx: &ExtractionContext{
-				Messages:      make([]model.Message, 11),
+				TurnCount:     11,
 				LastExtractAt: nil, // First extraction.
 			},
 			want: true,
@@ -237,7 +233,7 @@ func TestMemoryExtractorShouldExtract(t *testing.T) {
 				WithChecker(CheckTimeInterval(time.Minute)),
 			},
 			ctx: &ExtractionContext{
-				Messages:      make([]model.Message, 5),
+				TurnCount:     5,
 				LastExtractAt: nil,
 			},
 			want: false,
@@ -251,7 +247,7 @@ func TestMemoryExtractorShouldExtract(t *testing.T) {
 				),
 			},
 			ctx: &ExtractionContext{
-				Messages:      make([]model.Message, 5),
+				TurnCount:     5,
 				LastExtractAt: nil, // First extraction triggers time interval.
 			},
 			want: true,
@@ -265,7 +261,7 @@ func TestMemoryExtractorShouldExtract(t *testing.T) {
 				),
 			},
 			ctx: &ExtractionContext{
-				Messages:      make([]model.Message, 5),
+				TurnCount:     5,
 				LastExtractAt: timePtr(time.Now()), // Just extracted.
 			},
 			want: false,
@@ -282,7 +278,7 @@ func TestMemoryExtractorShouldExtract(t *testing.T) {
 func TestWithCheckerNil(t *testing.T) {
 	// WithChecker should ignore nil checkers.
 	ext := NewExtractor(nil, WithChecker(nil))
-	ctx := &ExtractionContext{Messages: make([]model.Message, 1)}
+	ctx := &ExtractionContext{TurnCount: 1}
 	assert.True(t, ext.ShouldExtract(ctx))
 }
 

@@ -1102,84 +1102,29 @@ func RunWithMessages(
 	return r.Run(ctx, userID, sessionID, latestUser, runOpts...)
 }
 
-// enqueueAutoMemoryJob triggers async memory extraction if memory service is
-// configured. It extracts recent user and assistant messages from the session
-// and enqueues them for memory extraction.
-func (r *runner) enqueueAutoMemoryJob(
-	ctx context.Context,
-	sess *session.Session,
-) {
-	if r.memoryService == nil {
+// enqueueAutoMemoryJob triggers auto memory extraction if memory service is
+// configured.
+func (r *runner) enqueueAutoMemoryJob(ctx context.Context, sess *session.Session) {
+	if r.memoryService == nil || sess == nil {
 		return
 	}
-	// Extract current turn messages from session for memory extraction.
-	messages := extractMessagesFromSession(sess)
-	if len(messages) == 0 {
+	if err := r.memoryService.EnqueueAutoMemoryJob(ctx, sess); err != nil {
+		log.DebugfContext(ctx, "Auto memory extraction skipped or failed: %v", err)
 		return
 	}
-	userKey := memory.UserKey{
-		AppName: sess.AppName,
-		UserID:  sess.UserID,
-	}
-	if err := r.memoryService.EnqueueAutoMemoryJob(ctx, userKey, messages); err != nil {
-		log.DebugfContext(ctx, "Auto memory extraction skipped or failed: %v.", err)
-	}
-}
 
-// extractMessagesFromSession extracts messages from the current conversation
-// turn for memory extraction. It starts from the last user message and includes
-// all subsequent assistant responses.
-// Only extracts messages without tool calls to avoid incomplete tool sequences.
-func extractMessagesFromSession(sess *session.Session) []model.Message {
-	if sess == nil {
-		return nil
+	if r.sessionService == nil {
+		return
 	}
-	events := sess.GetEvents()
-	if len(events) == 0 {
-		return nil
+	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
+	if !ok || len(raw) == 0 {
+		return
 	}
 
-	// Find the last user message index to determine current turn start.
-	lastUserIdx := -1
-findLastUser:
-	for i := len(events) - 1; i >= 0; i-- {
-		evt := &events[i]
-		if evt.Response == nil {
-			continue
-		}
-		for _, choice := range evt.Response.Choices {
-			if choice.Message.Role == model.RoleUser && choice.Message.Content != "" {
-				lastUserIdx = i
-				break findLastUser
-			}
-		}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := r.sessionService.UpdateSessionState(ctx, key, session.StateMap{
+		memory.SessionStateKeyAutoMemoryLastExtractAt: raw,
+	}); err != nil {
+		log.DebugfContext(ctx, "Auto memory state persistence skipped or failed: %v", err)
 	}
-	// No user message found, nothing to extract.
-	if lastUserIdx < 0 {
-		return nil
-	}
-
-	// Extract messages from the last user message onwards (current turn only).
-	var messages []model.Message
-	for i := lastUserIdx; i < len(events); i++ {
-		evt := &events[i]
-		if evt.Response == nil {
-			continue
-		}
-		for _, choice := range evt.Response.Choices {
-			msg := choice.Message
-			// Skip messages with tool calls to avoid incomplete tool sequences.
-			// The extractor model expects tool_calls to be followed by tool
-			// responses, but we only extract user/assistant messages.
-			if len(msg.ToolCalls) > 0 {
-				continue
-			}
-			// Only include user and assistant messages with content.
-			if (msg.Role == model.RoleUser || msg.Role == model.RoleAssistant) &&
-				msg.Content != "" {
-				messages = append(messages, msg)
-			}
-		}
-	}
-	return messages
 }

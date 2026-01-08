@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // ExtractionContext contains all context information for extraction decision.
@@ -22,10 +21,8 @@ type ExtractionContext struct {
 	// UserKey identifies the user for memory extraction.
 	UserKey memory.UserKey
 
-	// Messages contains accumulated messages since the last successful extraction.
-	// When a checker returns false, messages are accumulated and will be included
-	// in the next extraction. This ensures no conversation context is lost.
-	Messages []model.Message
+	// TurnCount is the number of new session events since the last extraction.
+	TurnCount int
 
 	// LastExtractAt is the last extraction timestamp, nil if never extracted.
 	LastExtractAt *time.Time
@@ -38,10 +35,10 @@ type ExtractionContext struct {
 type Checker func(ctx *ExtractionContext) bool
 
 // CheckMessageThreshold creates a checker that triggers when the number of
-// accumulated messages exceeds the specified threshold.
+// new turns exceeds the specified threshold.
 func CheckMessageThreshold(n int) Checker {
 	return func(ctx *ExtractionContext) bool {
-		return len(ctx.Messages) > n
+		return ctx.TurnCount > n
 	}
 }
 

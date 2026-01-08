@@ -20,10 +20,23 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
+
+func newTestSession(appName, userID string) *session.Session {
+	return session.NewSession(appName, userID, "test-session")
+}
+
+func appendSessionMessage(sess *session.Session, ts time.Time, msg model.Message) {
+	sess.Events = append(sess.Events, event.Event{
+		Timestamp: ts,
+		Response:  &model.Response{Choices: []model.Choice{{Message: msg}}},
+	})
+}
 
 // mockExtractor is a mock implementation of extractor.MemoryExtractor.
 type mockExtractor struct {
@@ -230,12 +243,10 @@ func TestAutoMemoryWorker_EnqueueJob_NoExtractor(t *testing.T) {
 
 	worker := NewAutoMemoryWorker(config, op)
 
-	err := worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "test-app",
-		UserID:  "user-1",
-	}, []model.Message{
-		model.NewUserMessage("hello"),
-	})
+	sess := newTestSession("test-app", "user-1")
+	appendSessionMessage(sess, time.Now(), model.NewUserMessage("hello"))
+
+	err := worker.EnqueueJob(context.Background(), sess)
 
 	assert.NoError(t, err)
 }
@@ -250,21 +261,15 @@ func TestAutoMemoryWorker_EnqueueJob_EmptyUserKey(t *testing.T) {
 	worker := NewAutoMemoryWorker(config, op)
 
 	// Empty AppName.
-	err := worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "",
-		UserID:  "user-1",
-	}, []model.Message{
-		model.NewUserMessage("hello"),
-	})
+	sess1 := newTestSession("", "user-1")
+	appendSessionMessage(sess1, time.Now(), model.NewUserMessage("hello"))
+	err := worker.EnqueueJob(context.Background(), sess1)
 	assert.NoError(t, err)
 
 	// Empty UserID.
-	err = worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "test-app",
-		UserID:  "",
-	}, []model.Message{
-		model.NewUserMessage("hello"),
-	})
+	sess2 := newTestSession("test-app", "")
+	appendSessionMessage(sess2, time.Now(), model.NewUserMessage("hello"))
+	err = worker.EnqueueJob(context.Background(), sess2)
 	assert.NoError(t, err)
 }
 
@@ -277,12 +282,45 @@ func TestAutoMemoryWorker_EnqueueJob_EmptyMessages(t *testing.T) {
 
 	worker := NewAutoMemoryWorker(config, op)
 
-	err := worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "test-app",
-		UserID:  "user-1",
-	}, nil)
+	sess := newTestSession("test-app", "user-1")
+	err := worker.EnqueueJob(context.Background(), sess)
 
 	assert.NoError(t, err)
+}
+
+func TestScanDeltaSince_SkipsToolMessages(t *testing.T) {
+	const (
+		userOffset       = time.Second
+		toolCallOffset   = 2 * time.Second
+		toolResultOffset = 3 * time.Second
+		assistOffset     = 4 * time.Second
+	)
+
+	sess := newTestSession("test-app", "user-1")
+	base := time.Now()
+
+	appendSessionMessage(sess, base.Add(userOffset), model.NewUserMessage("who am I"))
+	appendSessionMessage(sess, base.Add(toolCallOffset), model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+			ID:   "call_1",
+			Function: model.FunctionDefinitionParam{
+				Name:      memory.SearchToolName,
+				Arguments: []byte("{}"),
+			},
+		}},
+	})
+	appendSessionMessage(sess, base.Add(toolResultOffset),
+		model.NewToolMessage("call_1", memory.SearchToolName, "{\"count\":0}"))
+	appendSessionMessage(sess, base.Add(assistOffset), model.NewAssistantMessage("answer"))
+
+	turnCount, latestTs, msgs := scanDeltaSince(sess, time.Time{})
+	require.Equal(t, 4, turnCount)
+	require.Equal(t, base.Add(assistOffset), latestTs)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, model.RoleUser, msgs[0].Role)
+	assert.Equal(t, model.RoleAssistant, msgs[1].Role)
 }
 
 func TestAutoMemoryWorker_EnqueueJob_SyncFallback(t *testing.T) {
@@ -302,12 +340,10 @@ func TestAutoMemoryWorker_EnqueueJob_SyncFallback(t *testing.T) {
 	worker := NewAutoMemoryWorker(config, op)
 	// Do not start the worker, so it falls back to sync.
 
-	err := worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "test-app",
-		UserID:  "user-1",
-	}, []model.Message{
-		model.NewUserMessage("hello"),
-	})
+	sess := newTestSession("test-app", "user-1")
+	appendSessionMessage(sess, time.Now(), model.NewUserMessage("hello"))
+
+	err := worker.EnqueueJob(context.Background(), sess)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 1, op.addCalls)
@@ -333,12 +369,10 @@ func TestAutoMemoryWorker_EnqueueJob_SyncFallback_CancelledContext(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.
 
-	err := worker.EnqueueJob(ctx, memory.UserKey{
-		AppName: "test-app",
-		UserID:  "user-1",
-	}, []model.Message{
-		model.NewUserMessage("hello"),
-	})
+	sess := newTestSession("test-app", "user-1")
+	appendSessionMessage(sess, time.Now(), model.NewUserMessage("hello"))
+
+	err := worker.EnqueueJob(ctx, sess)
 
 	// Should skip sync fallback when context is cancelled.
 	assert.NoError(t, err)
@@ -366,12 +400,10 @@ func TestAutoMemoryWorker_EnqueueJob_Async(t *testing.T) {
 	worker.Start()
 	defer worker.Stop()
 
-	err := worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "test-app",
-		UserID:  "user-1",
-	}, []model.Message{
-		model.NewUserMessage("hello"),
-	})
+	sess := newTestSession("test-app", "user-1")
+	appendSessionMessage(sess, time.Now(), model.NewUserMessage("hello"))
+
+	err := worker.EnqueueJob(context.Background(), sess)
 
 	assert.NoError(t, err)
 
@@ -402,35 +434,26 @@ func TestAutoMemoryWorker_EnqueueJob_QueueFull(t *testing.T) {
 	worker.Start()
 
 	// First job blocks the worker.
-	_ = worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "test-app",
-		UserID:  "user-1",
-	}, []model.Message{
-		model.NewUserMessage("hello"),
-	})
+	sess1 := newTestSession("test-app", "user-1")
+	appendSessionMessage(sess1, time.Now(), model.NewUserMessage("hello"))
+	_ = worker.EnqueueJob(context.Background(), sess1)
 
 	// Wait a bit for the worker to pick up the job.
 	time.Sleep(10 * time.Millisecond)
 
 	// Second job fills the queue.
-	_ = worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "test-app",
-		UserID:  "user-1",
-	}, []model.Message{
-		model.NewUserMessage("hello"),
-	})
+	sess2 := newTestSession("test-app", "user-1")
+	appendSessionMessage(sess2, time.Now(), model.NewUserMessage("hello"))
+	_ = worker.EnqueueJob(context.Background(), sess2)
 
 	// Third job should fall back to sync (queue is full).
 	// Since blockingExt is still blocking, the sync fallback will also block,
 	// so we run it in a goroutine and verify the queue was full.
 	syncDone := make(chan struct{})
 	go func() {
-		_ = worker.EnqueueJob(context.Background(), memory.UserKey{
-			AppName: "test-app",
-			UserID:  "user-2",
-		}, []model.Message{
-			model.NewUserMessage("hello"),
-		})
+		sess3 := newTestSession("test-app", "user-2")
+		appendSessionMessage(sess3, time.Now(), model.NewUserMessage("hello"))
+		_ = worker.EnqueueJob(context.Background(), sess3)
 		close(syncDone)
 	}()
 
@@ -878,12 +901,9 @@ func TestAutoMemoryWorker_IntegrationWithRealExtractor(t *testing.T) {
 	worker.Start()
 	defer worker.Stop()
 
-	err := worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "test-app",
-		UserID:  "user-1",
-	}, []model.Message{
-		model.NewUserMessage("I love coffee."),
-	})
+	sess := newTestSession("test-app", "user-1")
+	appendSessionMessage(sess, time.Now(), model.NewUserMessage("I love coffee."))
+	err := worker.EnqueueJob(context.Background(), sess)
 
 	assert.NoError(t, err)
 
@@ -929,12 +949,9 @@ func TestAutoMemoryWorker_EnqueueJob_RaceWithStop(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			// This should not panic even if Stop() is called concurrently.
-			_ = worker.EnqueueJob(context.Background(), memory.UserKey{
-				AppName: "test-app",
-				UserID:  fmt.Sprintf("user-%d", id),
-			}, []model.Message{
-				model.NewUserMessage("hello"),
-			})
+			sess := newTestSession("test-app", fmt.Sprintf("user-%d", id))
+			appendSessionMessage(sess, time.Now(), model.NewUserMessage("hello"))
+			_ = worker.EnqueueJob(context.Background(), sess)
 		}(i)
 	}
 
@@ -1000,12 +1017,10 @@ func TestAutoMemoryWorker_ShouldExtract_Skipped(t *testing.T) {
 	defer worker.Stop()
 
 	// Enqueue job - should be skipped by checker.
-	err := worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "test-app",
-		UserID:  "user-1",
-	}, []model.Message{
-		model.NewUserMessage("hello"),
-	})
+	sess := newTestSession("test-app", "user-1")
+	appendSessionMessage(sess, time.Now(), model.NewUserMessage("hello"))
+
+	err := worker.EnqueueJob(context.Background(), sess)
 
 	require.NoError(t, err)
 
@@ -1028,12 +1043,10 @@ func TestAutoMemoryWorker_ShouldExtract_Proceeds(t *testing.T) {
 	defer worker.Stop()
 
 	// Enqueue job - should proceed.
-	err := worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "test-app",
-		UserID:  "user-1",
-	}, []model.Message{
-		model.NewUserMessage("hello"),
-	})
+	sess := newTestSession("test-app", "user-1")
+	appendSessionMessage(sess, time.Now(), model.NewUserMessage("hello"))
+
+	err := worker.EnqueueJob(context.Background(), sess)
 
 	require.NoError(t, err)
 
@@ -1073,139 +1086,62 @@ func (e *mockExtractorWithCapture) Metadata() map[string]any {
 	return map[string]any{}
 }
 
-func TestAutoMemoryWorker_PendingMessages_Accumulation(t *testing.T) {
-	var capturedMessages []model.Message
-	ext := &mockExtractorWithCapture{
-		shouldExtract: false, // Don't extract, accumulate messages.
-		captureCtx: func(ctx *extractor.ExtractionContext) {
-			capturedMessages = ctx.Messages
-		},
-	}
-	op := newMockOperator()
-	config := AutoMemoryConfig{
-		Extractor: ext,
-	}
-
-	worker := NewAutoMemoryWorker(config, op)
-
-	userKey := memory.UserKey{
-		AppName: "test-app",
-		UserID:  "user-1",
-	}
-
-	// First turn - not extracted.
-	msg1 := model.NewUserMessage("hello")
-	_ = worker.EnqueueJob(context.Background(), userKey, []model.Message{msg1})
-	assert.Len(t, capturedMessages, 1)
-	assert.Equal(t, "hello", capturedMessages[0].Content)
-
-	// Second turn - not extracted, messages should accumulate.
-	msg2 := model.NewUserMessage("world")
-	_ = worker.EnqueueJob(context.Background(), userKey, []model.Message{msg2})
-	assert.Len(t, capturedMessages, 2)
-	assert.Equal(t, "hello", capturedMessages[0].Content)
-	assert.Equal(t, "world", capturedMessages[1].Content)
-
-	// Third turn - not extracted, messages should continue accumulating.
-	msg3 := model.NewUserMessage("foo")
-	_ = worker.EnqueueJob(context.Background(), userKey, []model.Message{msg3})
-	assert.Len(t, capturedMessages, 3)
-}
-
-func TestAutoMemoryWorker_PendingMessages_ClearedAfterExtraction(t *testing.T) {
-	extractCount := 0
-	var capturedMessages []model.Message
+func TestAutoMemoryWorker_DeltaTurnCount_UsesTimestamp(t *testing.T) {
+	var capturedTurnCount int
+	var capturedLastExtractAt *time.Time
 	ext := &mockExtractorWithCapture{
 		shouldExtract: false,
 		captureCtx: func(ctx *extractor.ExtractionContext) {
-			capturedMessages = ctx.Messages
+			capturedTurnCount = ctx.TurnCount
+			capturedLastExtractAt = ctx.LastExtractAt
 		},
 	}
 	op := newMockOperator()
-	config := AutoMemoryConfig{
-		Extractor: ext,
-	}
+	config := AutoMemoryConfig{Extractor: ext}
 
 	worker := NewAutoMemoryWorker(config, op)
 
-	userKey := memory.UserKey{
-		AppName: "test-app",
-		UserID:  "user-1",
-	}
+	sess := newTestSession("test-app", "user-1")
+	t1 := time.Now().Add(-2 * time.Minute)
+	t2 := t1.Add(time.Minute)
+	appendSessionMessage(sess, t1, model.NewUserMessage("hello"))
+	appendSessionMessage(sess, t2, model.NewAssistantMessage("world"))
 
-	// First two turns - not extracted.
-	_ = worker.EnqueueJob(context.Background(), userKey, []model.Message{
-		model.NewUserMessage("msg1"),
-	})
-	_ = worker.EnqueueJob(context.Background(), userKey, []model.Message{
-		model.NewUserMessage("msg2"),
-	})
-	assert.Len(t, capturedMessages, 2)
+	err := worker.EnqueueJob(context.Background(), sess)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, capturedTurnCount)
+	assert.Nil(t, capturedLastExtractAt)
 
-	// Now enable extraction.
-	ext.shouldExtract = true
-	ext.captureCtx = func(ctx *extractor.ExtractionContext) {
-		capturedMessages = ctx.Messages
-		extractCount++
-	}
-
-	// Third turn - should extract all accumulated messages.
-	_ = worker.EnqueueJob(context.Background(), userKey, []model.Message{
-		model.NewUserMessage("msg3"),
-	})
-	assert.Len(t, capturedMessages, 3)
-	assert.Equal(t, "msg1", capturedMessages[0].Content)
-	assert.Equal(t, "msg2", capturedMessages[1].Content)
-	assert.Equal(t, "msg3", capturedMessages[2].Content)
-
-	// Fourth turn - pending should be cleared, only new message.
-	_ = worker.EnqueueJob(context.Background(), userKey, []model.Message{
-		model.NewUserMessage("msg4"),
-	})
-	assert.Len(t, capturedMessages, 1)
-	assert.Equal(t, "msg4", capturedMessages[0].Content)
+	sess.SetState(memory.SessionStateKeyAutoMemoryLastExtractAt,
+		[]byte(t1.UTC().Format(time.RFC3339Nano)))
+	err = worker.EnqueueJob(context.Background(), sess)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, capturedTurnCount)
+	require.NotNil(t, capturedLastExtractAt)
+	assert.True(t, capturedLastExtractAt.Equal(t1.UTC()))
 }
 
-func TestAutoMemoryWorker_PendingMessages_PerUser(t *testing.T) {
-	var capturedMessages []model.Message
-	ext := &mockExtractorWithCapture{
-		shouldExtract: false,
-		captureCtx: func(ctx *extractor.ExtractionContext) {
-			capturedMessages = ctx.Messages
-		},
-	}
+func TestAutoMemoryWorker_WritesLastExtractAt_OnSuccess(t *testing.T) {
+	ext := &mockExtractor{}
 	op := newMockOperator()
-	config := AutoMemoryConfig{
-		Extractor: ext,
-	}
+	config := AutoMemoryConfig{Extractor: ext}
 
 	worker := NewAutoMemoryWorker(config, op)
 
-	// User 1 accumulates messages.
-	_ = worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "app",
-		UserID:  "user-1",
-	}, []model.Message{model.NewUserMessage("user1-msg1")})
-	assert.Len(t, capturedMessages, 1)
+	sess := newTestSession("test-app", "user-1")
+	t1 := time.Now().Add(-2 * time.Minute)
+	t2 := t1.Add(time.Minute)
+	appendSessionMessage(sess, t1, model.NewUserMessage("m1"))
+	appendSessionMessage(sess, t2, model.NewAssistantMessage("m2"))
 
-	_ = worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "app",
-		UserID:  "user-1",
-	}, []model.Message{model.NewUserMessage("user1-msg2")})
-	assert.Len(t, capturedMessages, 2)
+	err := worker.EnqueueJob(context.Background(), sess)
+	assert.NoError(t, err)
 
-	// User 2 has its own pending messages.
-	_ = worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "app",
-		UserID:  "user-2",
-	}, []model.Message{model.NewUserMessage("user2-msg1")})
-	assert.Len(t, capturedMessages, 1) // Only user2's message.
-	assert.Equal(t, "user2-msg1", capturedMessages[0].Content)
+	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
+	require.True(t, ok)
+	require.NotEmpty(t, raw)
 
-	// User 1 still has accumulated messages.
-	_ = worker.EnqueueJob(context.Background(), memory.UserKey{
-		AppName: "app",
-		UserID:  "user-1",
-	}, []model.Message{model.NewUserMessage("user1-msg3")})
-	assert.Len(t, capturedMessages, 3) // user1's 3 messages.
+	ts, parseErr := time.Parse(time.RFC3339Nano, string(raw))
+	require.NoError(t, parseErr)
+	assert.True(t, ts.Equal(t2.UTC()))
 }

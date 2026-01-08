@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // Default values for auto memory configuration.
@@ -62,26 +63,13 @@ type AutoMemoryWorker struct {
 	wg       sync.WaitGroup
 	mu       sync.RWMutex
 	started  bool
-
-	// stateMu protects extractionStates map.
-	stateMu sync.RWMutex
-	// extractionStates tracks extraction state per user.
-	extractionStates map[string]*extractionState
-}
-
-// extractionState tracks extraction state for a user.
-type extractionState struct {
-	lastExtractAt *time.Time
-	// pendingMessages accumulates messages from turns that were not extracted.
-	pendingMessages []model.Message
 }
 
 // NewAutoMemoryWorker creates a new auto memory worker.
 func NewAutoMemoryWorker(config AutoMemoryConfig, operator MemoryOperator) *AutoMemoryWorker {
 	return &AutoMemoryWorker{
-		config:           config,
-		operator:         operator,
-		extractionStates: make(map[string]*extractionState),
+		config:   config,
+		operator: operator,
 	}
 }
 
@@ -136,70 +124,63 @@ func (w *AutoMemoryWorker) Stop() {
 
 // EnqueueJob enqueues an auto memory job for async processing.
 // Returns nil if successfully enqueued or processed synchronously.
-func (w *AutoMemoryWorker) EnqueueJob(
-	ctx context.Context,
-	userKey memory.UserKey,
-	messages []model.Message,
-) error {
+func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session) error {
 	if w.config.Extractor == nil {
 		return nil
 	}
-	// Validate userKey.
+	if sess == nil {
+		log.DebugfContext(ctx, "auto_memory: skipped due to nil session")
+		return nil
+	}
+	userKey := memory.UserKey{AppName: sess.AppName, UserID: sess.UserID}
 	if userKey.AppName == "" || userKey.UserID == "" {
 		log.DebugfContext(ctx, "auto_memory: skipped due to empty userKey")
 		return nil
 	}
-	// Validate messages.
-	if len(messages) == 0 {
-		log.DebugfContext(ctx, "auto_memory: skipped due to empty messages")
+
+	since := readLastExtractAt(sess)
+	turnCount, latestTs, messages := scanDeltaSince(sess, since)
+	if turnCount == 0 {
+		log.DebugfContext(ctx, "auto_memory: skipped due to no new events for user %s/%s",
+			userKey.AppName, userKey.UserID)
 		return nil
 	}
 
-	// Get or create extraction state for this user.
-	state := w.getOrCreateState(userKey)
-
-	// Accumulate current turn messages.
-	state.pendingMessages = append(state.pendingMessages, messages...)
-
-	// Build extraction context.
+	var lastExtractAtPtr *time.Time
+	if !since.IsZero() {
+		sinceUTC := since.UTC()
+		lastExtractAtPtr = &sinceUTC
+	}
 	extractCtx := &extractor.ExtractionContext{
 		UserKey:       userKey,
-		Messages:      state.pendingMessages,
-		LastExtractAt: state.lastExtractAt,
+		TurnCount:     turnCount,
+		LastExtractAt: lastExtractAtPtr,
 	}
 
-	// Check if extraction should proceed.
 	if !w.config.Extractor.ShouldExtract(extractCtx) {
 		log.DebugfContext(ctx, "auto_memory: skipped by checker for user %s/%s",
 			userKey.AppName, userKey.UserID)
 		return nil
 	}
 
-	// Capture messages to extract and clear pending.
-	messagesToExtract := state.pendingMessages
-	state.pendingMessages = nil
+	if latestTs.IsZero() {
+		latestTs = time.Now()
+	}
 
-	// Update lastExtractAt.
-	now := time.Now()
-	state.lastExtractAt = &now
-
-	// Create job with detached context.
 	job := &MemoryJob{
 		Ctx:      context.WithoutCancel(ctx),
 		UserKey:  userKey,
-		Messages: messagesToExtract,
+		Messages: messages,
 	}
-	// Try to enqueue the job asynchronously.
 	if w.tryEnqueueJob(ctx, userKey, job) {
+		writeLastExtractAt(sess, latestTs)
 		return nil
 	}
-	// Skip if context is already cancelled to avoid wasted work.
 	if ctx.Err() != nil {
 		log.DebugfContext(ctx, "auto_memory: skipped sync fallback due to cancelled context "+
 			"for user %s/%s", userKey.AppName, userKey.UserID)
 		return nil
 	}
-	// Fall back to synchronous processing with detached context and timeout.
 	log.DebugfContext(ctx, "auto_memory: queue full, processing synchronously for user %s/%s",
 		userKey.AppName, userKey.UserID)
 	timeout := w.config.MemoryJobTimeout
@@ -208,7 +189,11 @@ func (w *AutoMemoryWorker) EnqueueJob(
 	}
 	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
-	return w.createAutoMemory(syncCtx, userKey, messagesToExtract)
+	if err := w.createAutoMemory(syncCtx, userKey, messages); err != nil {
+		return err
+	}
+	writeLastExtractAt(sess, latestTs)
+	return nil
 }
 
 // tryEnqueueJob attempts to enqueue a memory job.
@@ -352,22 +337,54 @@ func hashUserKey(userKey memory.UserKey) int {
 	return int(h.Sum32())
 }
 
-// getOrCreateState returns the extraction state for a user, creating if needed.
-func (w *AutoMemoryWorker) getOrCreateState(userKey memory.UserKey) *extractionState {
-	key := userKey.AppName + "/" + userKey.UserID
-	w.stateMu.RLock()
-	state, ok := w.extractionStates[key]
-	w.stateMu.RUnlock()
-	if ok {
-		return state
+func readLastExtractAt(sess *session.Session) time.Time {
+	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
+	if !ok || len(raw) == 0 {
+		return time.Time{}
 	}
-	w.stateMu.Lock()
-	defer w.stateMu.Unlock()
-	// Double-check after acquiring write lock.
-	if state, ok = w.extractionStates[key]; ok {
-		return state
+	ts, err := time.Parse(time.RFC3339Nano, string(raw))
+	if err != nil {
+		return time.Time{}
 	}
-	state = &extractionState{}
-	w.extractionStates[key] = state
-	return state
+	return ts
+}
+
+func writeLastExtractAt(sess *session.Session, ts time.Time) {
+	sess.SetState(memory.SessionStateKeyAutoMemoryLastExtractAt,
+		[]byte(ts.UTC().Format(time.RFC3339Nano)))
+}
+
+func scanDeltaSince(
+	sess *session.Session,
+	since time.Time,
+) (turnCount int, latestTs time.Time, messages []model.Message) {
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	for _, e := range sess.Events {
+		if !since.IsZero() && !e.Timestamp.After(since) {
+			continue
+		}
+		turnCount++
+		if e.Timestamp.After(latestTs) {
+			latestTs = e.Timestamp
+		}
+		if e.Response == nil {
+			continue
+		}
+		for _, choice := range e.Response.Choices {
+			msg := choice.Message
+			if msg.Role == model.RoleTool || msg.ToolID != "" {
+				continue
+			}
+			if msg.Content == "" {
+				continue
+			}
+			if len(msg.ToolCalls) > 0 {
+				continue
+			}
+			messages = append(messages, msg)
+		}
+	}
+	return turnCount, latestTs, messages
 }

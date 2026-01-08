@@ -24,7 +24,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -124,11 +123,7 @@ func (m *mockMemoryService) Tools() []tool.Tool {
 	return []tool.Tool{}
 }
 
-func (m *mockMemoryService) EnqueueAutoMemoryJob(
-	_ context.Context,
-	_ memory.UserKey,
-	_ []model.Message,
-) error {
+func (m *mockMemoryService) EnqueueAutoMemoryJob(_ context.Context, _ *session.Session) error {
 	return nil
 }
 
@@ -1059,8 +1054,7 @@ func (m *mockMemoryServiceWithError) Tools() []tool.Tool {
 
 func (m *mockMemoryServiceWithError) EnqueueAutoMemoryJob(
 	_ context.Context,
-	_ memory.UserKey,
-	_ []model.Message,
+	_ *session.Session,
 ) error {
 	return nil
 }
