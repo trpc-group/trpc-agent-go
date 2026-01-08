@@ -704,6 +704,11 @@ eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
 - **No Side Effects**: Does not affect other concurrent requests or subsequent requests
 - **Flexible Combination**: Can be used in combination with agent-level switching
 
+**Model-specific Prompts (LLMAgent)**:
+
+- Use `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions` to override prompts by `model.Info().Name` when the Agent switches models; it falls back to the Agent defaults when no mapping exists.
+- For a runnable example, see [examples/model/promptmap](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/promptmap).
+
 ##### Usage Example
 
 For a complete interactive example, see [examples/model/switch](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/switch), which demonstrates both agent-level and per-request switching approaches.
@@ -1808,6 +1813,11 @@ eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
 - **Higher Priority**: Per-request model settings take precedence over the Agent's default model
 - **No Side Effects**: Does not affect other concurrent requests or subsequent requests
 - **Flexible Combination**: Can be used in combination with agent-level switching
+
+**Model-specific Prompts (LLMAgent)**:
+
+- Use `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions` to override prompts by `model.Info().Name` when the Agent switches models; it falls back to the Agent defaults when no mapping exists.
+- For a runnable example, see [examples/model/promptmap](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/promptmap).
 
 ##### Usage Example
 
