@@ -180,6 +180,33 @@ func TestWithGraphEmitFinalModelResponses(t *testing.T) {
 	require.False(t, ro.GraphEmitFinalModelResponses)
 }
 
+func TestWithStreamMode(t *testing.T) {
+	t.Run("enables stream mode", func(t *testing.T) {
+		var ro RunOptions
+		WithStreamMode(StreamModeUpdates, StreamModeCustom)(&ro)
+		require.True(t, ro.StreamModeEnabled)
+		require.Equal(t, []StreamMode{
+			StreamModeUpdates,
+			StreamModeCustom,
+		}, ro.StreamModes)
+	})
+
+	t.Run("messages enables final model responses", func(t *testing.T) {
+		var ro RunOptions
+		require.False(t, ro.GraphEmitFinalModelResponses)
+		WithStreamMode(StreamModeMessages)(&ro)
+		require.True(t, ro.StreamModeEnabled)
+		require.True(t, ro.GraphEmitFinalModelResponses)
+	})
+
+	t.Run("explicit empty modes is allowed", func(t *testing.T) {
+		var ro RunOptions
+		WithStreamMode()(&ro)
+		require.True(t, ro.StreamModeEnabled)
+		require.Nil(t, ro.StreamModes)
+	})
+}
+
 type stubTool struct {
 	decl *tool.Declaration
 }
