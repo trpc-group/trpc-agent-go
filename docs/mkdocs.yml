@@ -31,6 +31,7 @@ nav:
           - Source: knowledge/source.md
           - Filter: knowledge/filter.md
           - Management: knowledge/management.md
+          - OCR: knowledge/ocr.md
           - VectorStore:
               - Overview: knowledge/vectorstore/index.md
               - Memory: knowledge/vectorstore/inmemory.md
@@ -88,6 +89,7 @@ plugins:
                     - 数据源: knowledge/source.md
                     - 过滤器: knowledge/filter.md
                     - 知识库管理: knowledge/management.md
+                    - OCR: knowledge/ocr.md
                     - 向量存储:
                         - 概述: knowledge/vectorstore/index.md
                         - Memory: knowledge/vectorstore/inmemory.md
