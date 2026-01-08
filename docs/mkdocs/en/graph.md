@@ -2023,6 +2023,36 @@ sg.AddEdge(nodeSplit, nodeBranch1)
 sg.AddEdge(nodeSplit, nodeBranch2)  // branch1 and branch2 execute in parallel
 ```
 
+#### Join edges (wait-all fan-in)
+
+When multiple upstream branches run in parallel, a normal `AddEdge(from, to)`
+triggers `to` whenever **any** upstream node updates its edge channel. That can
+make `to` execute multiple times.
+
+If you need classic “wait for all branches, then run once” fan-in semantics,
+use `AddJoinEdge`:
+
+```go
+const (
+    nodeSplit = "split"
+    nodeA     = "branch_a"
+    nodeB     = "branch_b"
+    nodeJoin  = "join"
+)
+
+sg.AddEdge(nodeSplit, nodeA)
+sg.AddEdge(nodeSplit, nodeB)
+
+// Wait for both A and B to complete before running join.
+sg.AddJoinEdge([]string{nodeA, nodeB}, nodeJoin)
+```
+
+`AddJoinEdge` creates an internal barrier channel and triggers `nodeJoin` only
+after every `from` node has reported completion. The barrier resets after it
+triggers, so the same join can be reached again in loops.
+
+Reference example: `examples/graph/join_edge`.
+
 Tip: setting entry and finish points implicitly connects to virtual Start/End nodes:
 
 - `SetEntryPoint("first")` is equivalent to Start → first.

@@ -11,6 +11,7 @@
 package channel
 
 import (
+	"sort"
 	"sync"
 )
 
@@ -37,6 +38,7 @@ type Channel struct {
 	Values          []any
 	Subscribers     []string
 	BarrierSet      map[string]bool
+	BarrierExpected []string
 	Version         int64
 	Available       bool
 	LastUpdatedStep int
@@ -53,6 +55,56 @@ func NewChannel(name string, channelBehavior Behavior) *Channel {
 	}
 }
 
+// SetBarrierExpected sets the sender set required to satisfy this barrier.
+// The expected names are copied and sorted to avoid external mutation.
+func (c *Channel) SetBarrierExpected(expected []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	names := append([]string(nil), expected...)
+	sort.Strings(names)
+	names = dedupeSortedStrings(names)
+
+	c.BarrierExpected = names
+}
+
+// SetBarrierSeen restores the set of senders that have been observed so far.
+// The barrier availability is recomputed after applying the set.
+func (c *Channel) SetBarrierSeen(seen []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.BarrierSet == nil {
+		c.BarrierSet = make(map[string]bool)
+	}
+	for k := range c.BarrierSet {
+		delete(c.BarrierSet, k)
+	}
+	for _, name := range seen {
+		if name == "" {
+			continue
+		}
+		c.BarrierSet[name] = true
+	}
+	c.Available = c.isBarrierSatisfiedLocked()
+}
+
+// BarrierSeenSnapshot returns a stable, sorted snapshot of the seen set.
+func (c *Channel) BarrierSeenSnapshot() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if len(c.BarrierSet) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(c.BarrierSet))
+	for name := range c.BarrierSet {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Update updates the channel with new values.
 func (c *Channel) Update(values []any, step int) bool {
 	c.mu.Lock()
@@ -67,6 +119,7 @@ func (c *Channel) Update(values []any, step int) bool {
 			c.LastUpdatedStep = step
 			return true
 		}
+		return false
 	case BehaviorTopic:
 		c.Values = append(c.Values, values...)
 		c.Version++
@@ -81,14 +134,18 @@ func (c *Channel) Update(values []any, step int) bool {
 			c.LastUpdatedStep = step
 			return true
 		}
+		return false
 	case BehaviorBarrier:
+		if c.BarrierSet == nil {
+			c.BarrierSet = make(map[string]bool)
+		}
 		for _, value := range values {
 			if sender, ok := value.(string); ok {
 				c.BarrierSet[sender] = true
 			}
 		}
 		c.Version++
-		c.Available = true
+		c.Available = c.isBarrierSatisfiedLocked()
 		c.LastUpdatedStep = step
 		return true
 	}
@@ -157,7 +214,39 @@ func (c *Channel) Finish() bool {
 func (c *Channel) Acknowledge() {
 	c.mu.Lock()
 	c.Available = false
+	if c.Behavior == BehaviorBarrier {
+		for k := range c.BarrierSet {
+			delete(c.BarrierSet, k)
+		}
+	}
 	c.mu.Unlock()
+}
+
+func (c *Channel) isBarrierSatisfiedLocked() bool {
+	if len(c.BarrierExpected) == 0 {
+		return true
+	}
+	for _, name := range c.BarrierExpected {
+		if !c.BarrierSet[name] {
+			return false
+		}
+	}
+	return true
+}
+
+func dedupeSortedStrings(in []string) []string {
+	if len(in) < 2 {
+		return in
+	}
+	out := in[:0]
+	var prev string
+	for i, s := range in {
+		if i == 0 || s != prev {
+			out = append(out, s)
+			prev = s
+		}
+	}
+	return out
 }
 
 // Manager manages all channels in the graph.
@@ -177,6 +266,9 @@ func NewChannelManager() *Manager {
 func (m *Manager) AddChannel(name string, channelBehavior Behavior) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, exists := m.channels[name]; exists {
+		return
+	}
 	m.channels[name] = NewChannel(name, channelBehavior)
 }
 

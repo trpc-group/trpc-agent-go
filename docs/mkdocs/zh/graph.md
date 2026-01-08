@@ -2015,6 +2015,35 @@ sg.AddEdge(nodeSplit, nodeBranch1)
 sg.AddEdge(nodeSplit, nodeBranch2)  // branch1 和 branch2 会并行执行
 ```
 
+#### Join（等待所有分支的汇聚）
+
+当一个节点有多个并行上游分支时，普通 `AddEdge(from, to)` 的语义是：只要任意
+一个上游节点更新了对应的边通道（Channel），`to` 就会被触发。这很适合增量/
+流式场景，但也意味着 `to` 可能会执行多次。
+
+如果你需要经典的 “等待所有分支都完成后再执行下游节点” 的 fan-in（汇聚）
+语义，可以使用 `AddJoinEdge`：
+
+```go
+const (
+    nodeSplit = "split"
+    nodeA     = "branch_a"
+    nodeB     = "branch_b"
+    nodeJoin  = "join"
+)
+
+sg.AddEdge(nodeSplit, nodeA)
+sg.AddEdge(nodeSplit, nodeB)
+
+// 等待 A 和 B 都完成后再执行 join。
+sg.AddJoinEdge([]string{nodeA, nodeB}, nodeJoin)
+```
+
+`AddJoinEdge` 会创建一个内部 barrier（屏障）通道，只有当上游节点列表里的每个
+节点都“报到”后才触发 `to`。触发后屏障会重置，因此在循环图里可以再次汇聚。
+
+参考示例：`examples/graph/join_edge`。
+
 提示：设置入口与结束点时，会隐式连接到虚拟的 Start/End 节点：
 
 - `SetEntryPoint("first")` 等效于创建 `Start -> first` 的连边；
