@@ -701,6 +701,11 @@ eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
 - **无副作用**：不影响其他并发请求或后续请求
 - **灵活组合**：可以与 Agent 级别切换配合使用
 
+**按模型覆盖提示词（LLMAgent）**：
+
+- 使用 `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions` 按 `model.Info().Name` 覆盖提示词；未命中映射时回退到 Agent 默认提示词。
+- 可运行示例见 [examples/model/promptmap](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/promptmap)。
+
 ##### 使用示例
 
 完整的交互式示例请参考 [examples/model/switch](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/switch)，该示例演示了 Agent 级别和请求级别两种切换方式。
@@ -1802,6 +1807,11 @@ eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
 - **优先级高**：请求级别的模型设置优先于 Agent 默认模型
 - **无副作用**：不影响其他并发请求或后续请求
 - **灵活组合**：可以与 Agent 级别切换配合使用
+
+**按模型覆盖提示词（LLMAgent）**：
+
+- 使用 `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions` 按 `model.Info().Name` 覆盖提示词；未命中映射时回退到 Agent 默认提示词。
+- 可运行示例见 [examples/model/promptmap](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/promptmap)。
 
 ##### 使用示例
 

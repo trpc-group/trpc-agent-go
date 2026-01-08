@@ -19,9 +19,9 @@ require (
 	go.opentelemetry.io/otel/trace v1.38.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
-	trpc.group/trpc-go/trpc-agent-go/evaluation v0.8.0
-	trpc.group/trpc-go/trpc-agent-go/tool/openapi v0.0.1
-	trpc.group/trpc-go/trpc-agent-go/tool/wikipedia v0.0.1
+	trpc.group/trpc-go/trpc-agent-go/evaluation v1.1.2-0.20260108033914-7a20241f1ad5
+	trpc.group/trpc-go/trpc-agent-go/tool/openapi v1.1.2-0.20260108033914-7a20241f1ad5
+	trpc.group/trpc-go/trpc-agent-go/tool/wikipedia v1.1.2-0.20260108033914-7a20241f1ad5
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
 
@@ -95,8 +95,8 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251124214823-79d6a2a48846 // indirect
 	google.golang.org/grpc v1.77.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
-	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.8.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.8.1-0.20251222024650-ea147adf3d21 // indirect
-	trpc.group/trpc-go/trpc-agent-go/model/ollama v0.8.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/model/provider v0.8.0 // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/anthropic v1.1.2-0.20260108033914-7a20241f1ad5 // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/gemini v1.1.2-0.20260108033914-7a20241f1ad5 // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/ollama v1.1.2-0.20260108033914-7a20241f1ad5 // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/provider v1.1.2-0.20260108033914-7a20241f1ad5 // indirect
 )
