@@ -34,7 +34,7 @@ Auto Mode is available in versions >= 1.2.0 and is recommended as the default ch
 | **How it works**    | Agent decides when to call memory tools        | System extracts memories automatically from conversations |
 | **User experience** | Visible - user sees tool calls                 | Transparent - memories created silently in background     |
 | **Control**         | Agent has full control over what to remember   | Extractor decides based on conversation analysis          |
-| **Available tools** | All 6 tools                                    | Search tool (search), optional load tool (load)                    |
+| **Available tools** | All 6 tools                                    | Search tool (search), optional load tool (load)           |
 | **Processing**      | Synchronous - during response generation       | Asynchronous - background workers after response          |
 | **Best for**        | Precise control, user-driven memory management | Natural conversations, hands-off memory building          |
 
@@ -284,7 +284,7 @@ Agent: Nice to meet you, Alice! It's great to connect with someone from TechCorp
 | **Step 1**          | `NewMemoryService()`                | `NewMemoryService(WithExtractor(ext))` |
 | **Step 2**          | `WithTools(memoryService.Tools())`  | `WithTools(memoryService.Tools())`     |
 | **Step 3**          | `WithMemoryService(memoryService)`  | `WithMemoryService(memoryService)`     |
-| **Available tools** | add/update/delete/clear/search/load | search (default) / load (optional)                                 |
+| **Available tools** | add/update/delete/clear/search/load | search (default) / load (optional)     |
 | **Memory creation** | Agent actively calls tools          | Background auto extraction             |
 
 ## Core Concepts
@@ -408,14 +408,14 @@ The memory service provides 6 tools. Common tools are enabled by default, while 
 
 #### Tool List
 
-| Tool            | Function       | Agentic Mode    | Auto Extraction Mode | Description                                           |
-| --------------- | -------------- | --------------- | -------------------- | ----------------------------------------------------- |
-| `memory_add`    | Add new memory | ✅ Default      | ❌ Unavailable       | Create new memory entry                               |
-| `memory_update` | Update memory  | ✅ Default      | ❌ Unavailable       | Modify existing memory                                |
-| `memory_search` | Search memory  | ✅ Default      | ✅ Default           | Find by keywords                                      |
-| `memory_load`   | Load memories  | ✅ Default      | ⚙️ Configurable      | Load recent memories                                  |
-| `memory_delete` | Delete memory  | ⚙️ Configurable | ❌ Unavailable       | Delete single memory                                  |
-| `memory_clear`  | Clear memories | ⚙️ Configurable | ❌ Unavailable        | Delete all memories (not exposed in Auto mode)        |
+| Tool            | Function       | Agentic Mode    | Auto Extraction Mode | Description                                    |
+| --------------- | -------------- | --------------- | -------------------- | ---------------------------------------------- |
+| `memory_add`    | Add new memory | ✅ Default      | ❌ Unavailable       | Create new memory entry                        |
+| `memory_update` | Update memory  | ✅ Default      | ❌ Unavailable       | Modify existing memory                         |
+| `memory_search` | Search memory  | ✅ Default      | ✅ Default           | Find by keywords                               |
+| `memory_load`   | Load memories  | ✅ Default      | ⚙️ Configurable      | Load recent memories                           |
+| `memory_delete` | Delete memory  | ⚙️ Configurable | ❌ Unavailable       | Delete single memory                           |
+| `memory_clear`  | Clear memories | ⚙️ Configurable | ❌ Unavailable       | Delete all memories (not exposed in Auto mode) |
 
 **Notes**:
 
@@ -1162,12 +1162,12 @@ Checkers control when memory extraction should be triggered. By default, extract
 
 #### Available Checkers
 
-| Checker                | Description                                              | Example                                     |
-| ---------------------- | -------------------------------------------------------- | ------------------------------------------- |
-| `CheckMessageThreshold`| Triggers when accumulated messages exceed threshold      | `CheckMessageThreshold(5)` - when messages > 5 |
-| `CheckTimeInterval`    | Triggers when time since last extraction exceeds interval | `CheckTimeInterval(3*time.Minute)` - every 3 min |
-| `ChecksAll`            | Combines checkers with AND logic                         | All checkers must pass                      |
-| `ChecksAny`            | Combines checkers with OR logic                          | Any checker passing triggers extraction     |
+| Checker                 | Description                                               | Example                                          |
+| ----------------------- | --------------------------------------------------------- | ------------------------------------------------ |
+| `CheckMessageThreshold` | Triggers when accumulated messages exceed threshold       | `CheckMessageThreshold(5)` - when messages > 5   |
+| `CheckTimeInterval`     | Triggers when time since last extraction exceeds interval | `CheckTimeInterval(3*time.Minute)` - every 3 min |
+| `ChecksAll`             | Combines checkers with AND logic                          | All checkers must pass                           |
+| `ChecksAny`             | Combines checkers with OR logic                           | Any checker passing triggers extraction          |
 
 #### Checker Configuration Examples
 
@@ -1209,19 +1209,19 @@ In auto extraction mode, `WithToolEnabled` controls all 6 tools, but they serve 
 
 **Front-end Tools** (exposed via `Tools()` for agent to call):
 
-| Tool            | Default | Description                              |
-| --------------- | ------- | ---------------------------------------- |
-| `memory_search` | ✅ On   | Search memories by query                 |
-| `memory_load`   | ❌ Off  | Load all or recent N memories            |
+| Tool            | Default | Description                   |
+| --------------- | ------- | ----------------------------- |
+| `memory_search` | ✅ On   | Search memories by query      |
+| `memory_load`   | ❌ Off  | Load all or recent N memories |
 
 **Back-end Tools** (used by extractor in background, not exposed to agent):
 
-| Tool            | Default | Description                              |
-| --------------- | ------- | ---------------------------------------- |
-| `memory_add`    | ✅ On   | Add new memories (extractor uses this)   |
-| `memory_update` | ✅ On   | Update existing memories                 |
-| `memory_delete` | ✅ On   | Delete memories                          |
-| `memory_clear`  | ❌ Off  | Clear all user memories (dangerous)      |
+| Tool            | Default | Description                            |
+| --------------- | ------- | -------------------------------------- |
+| `memory_add`    | ✅ On   | Add new memories (extractor uses this) |
+| `memory_update` | ✅ On   | Update existing memories               |
+| `memory_delete` | ✅ On   | Delete memories                        |
+| `memory_clear`  | ❌ Off  | Clear all user memories (dangerous)    |
 
 **Configuration Examples**:
 
@@ -1241,13 +1241,13 @@ memoryService := memoryinmemory.NewMemoryService(
 
 ### Comparison: Agentic Mode vs Auto Mode
 
-| Tool            | Agentic Mode (no extractor)         | Auto Mode (with extractor)              |
-| --------------- | ----------------------------------- | --------------------------------------- |
-| `memory_add`    | ✅ Agent calls via `Tools()`        | ✅ Extractor uses in background         |
-| `memory_update` | ✅ Agent calls via `Tools()`        | ✅ Extractor uses in background         |
-| `memory_search` | ✅ Agent calls via `Tools()`        | ✅ Agent calls via `Tools()`            |
-| `memory_load`   | ✅ Agent calls via `Tools()`        | ⚙️ Agent calls via `Tools()` if enabled |
-| `memory_delete` | ⚙️ Agent calls via `Tools()` if enabled | ✅ Extractor uses in background      |
+| Tool            | Agentic Mode (no extractor)             | Auto Mode (with extractor)                 |
+| --------------- | --------------------------------------- | ------------------------------------------ |
+| `memory_add`    | ✅ Agent calls via `Tools()`            | ✅ Extractor uses in background            |
+| `memory_update` | ✅ Agent calls via `Tools()`            | ✅ Extractor uses in background            |
+| `memory_search` | ✅ Agent calls via `Tools()`            | ✅ Agent calls via `Tools()`               |
+| `memory_load`   | ✅ Agent calls via `Tools()`            | ⚙️ Agent calls via `Tools()` if enabled    |
+| `memory_delete` | ⚙️ Agent calls via `Tools()` if enabled | ✅ Extractor uses in background            |
 | `memory_clear`  | ⚙️ Agent calls via `Tools()` if enabled | ⚙️ Extractor uses in background if enabled |
 
 ### Memory Preloading

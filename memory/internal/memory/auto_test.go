@@ -315,8 +315,7 @@ func TestScanDeltaSince_SkipsToolMessages(t *testing.T) {
 		model.NewToolMessage("call_1", memory.SearchToolName, "{\"count\":0}"))
 	appendSessionMessage(sess, base.Add(assistOffset), model.NewAssistantMessage("answer"))
 
-	turnCount, latestTs, msgs := scanDeltaSince(sess, time.Time{})
-	require.Equal(t, 4, turnCount)
+	latestTs, msgs := scanDeltaSince(sess, time.Time{})
 	require.Equal(t, base.Add(assistOffset), latestTs)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, model.RoleUser, msgs[0].Role)
@@ -1086,13 +1085,13 @@ func (e *mockExtractorWithCapture) Metadata() map[string]any {
 	return map[string]any{}
 }
 
-func TestAutoMemoryWorker_DeltaTurnCount_UsesTimestamp(t *testing.T) {
-	var capturedTurnCount int
+func TestAutoMemoryWorker_DeltaMessages_UsesTimestamp(t *testing.T) {
+	var capturedMessageCount int
 	var capturedLastExtractAt *time.Time
 	ext := &mockExtractorWithCapture{
 		shouldExtract: false,
 		captureCtx: func(ctx *extractor.ExtractionContext) {
-			capturedTurnCount = ctx.TurnCount
+			capturedMessageCount = len(ctx.Messages)
 			capturedLastExtractAt = ctx.LastExtractAt
 		},
 	}
@@ -1109,14 +1108,14 @@ func TestAutoMemoryWorker_DeltaTurnCount_UsesTimestamp(t *testing.T) {
 
 	err := worker.EnqueueJob(context.Background(), sess)
 	assert.NoError(t, err)
-	assert.Equal(t, 2, capturedTurnCount)
+	assert.Equal(t, 2, capturedMessageCount)
 	assert.Nil(t, capturedLastExtractAt)
 
 	sess.SetState(memory.SessionStateKeyAutoMemoryLastExtractAt,
 		[]byte(t1.UTC().Format(time.RFC3339Nano)))
 	err = worker.EnqueueJob(context.Background(), sess)
 	assert.NoError(t, err)
-	assert.Equal(t, 1, capturedTurnCount)
+	assert.Equal(t, 1, capturedMessageCount)
 	require.NotNil(t, capturedLastExtractAt)
 	assert.True(t, capturedLastExtractAt.Equal(t1.UTC()))
 }

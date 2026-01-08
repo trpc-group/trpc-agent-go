@@ -141,9 +141,9 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 	}
 
 	since := readLastExtractAt(sess)
-	turnCount, latestTs, messages := scanDeltaSince(sess, since)
-	if turnCount == 0 {
-		log.DebugfContext(ctx, "auto_memory: skipped due to no new events for user %s/%s",
+	latestTs, messages := scanDeltaSince(sess, since)
+	if len(messages) == 0 {
+		log.DebugfContext(ctx, "auto_memory: skipped due to no new messages for user %s/%s",
 			userKey.AppName, userKey.UserID)
 		return nil
 	}
@@ -155,7 +155,7 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 	}
 	extractCtx := &extractor.ExtractionContext{
 		UserKey:       userKey,
-		TurnCount:     turnCount,
+		Messages:      messages,
 		LastExtractAt: lastExtractAtPtr,
 	}
 
@@ -360,13 +360,12 @@ func writeLastExtractAt(sess *session.Session, ts time.Time) {
 }
 
 // scanDeltaSince scans session events since the given timestamp and extracts messages.
-// Returns the number of turns (events), latest event timestamp, and extracted messages.
+// Returns the latest event timestamp and extracted messages.
 // Only includes user/assistant messages with content, excluding tool calls.
 func scanDeltaSince(
 	sess *session.Session,
 	since time.Time,
-) (int, time.Time, []model.Message) {
-	var turnCount int
+) (time.Time, []model.Message) {
 	var latestTs time.Time
 	var messages []model.Message
 	sess.EventMu.RLock()
@@ -377,7 +376,6 @@ func scanDeltaSince(
 		if !since.IsZero() && !e.Timestamp.After(since) {
 			continue
 		}
-		turnCount++
 
 		// Track the latest timestamp among all processed events.
 		if e.Timestamp.After(latestTs) {
@@ -405,5 +403,5 @@ func scanDeltaSince(
 			messages = append(messages, msg)
 		}
 	}
-	return turnCount, latestTs, messages
+	return latestTs, messages
 }
