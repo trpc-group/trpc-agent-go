@@ -108,6 +108,13 @@ type Options struct {
 	// GlobalInstruction is the global instruction for the agent.
 	// It will be used for all agents in the agent tree.
 	GlobalInstruction string
+	// ModelInstructions maps model.Info().Name to a model-specific instruction.
+	// When present, it overrides Instruction for matching models.
+	ModelInstructions map[string]string
+	// ModelGlobalInstructions maps model.Info().Name to a model-specific system
+	// prompt.
+	// When present, it overrides GlobalInstruction for matching models.
+	ModelGlobalInstructions map[string]string
 	// GenerationConfig contains the generation configuration.
 	GenerationConfig model.GenerationConfig
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
@@ -270,6 +277,22 @@ func WithInstruction(instruction string) Option {
 func WithGlobalInstruction(instruction string) Option {
 	return func(opts *Options) {
 		opts.GlobalInstruction = instruction
+	}
+}
+
+// WithModelInstructions sets model-specific instruction overrides.
+// Key: model.Info().Name, Value: instruction text.
+func WithModelInstructions(instructions map[string]string) Option {
+	return func(opts *Options) {
+		opts.ModelInstructions = cloneStringMap(instructions)
+	}
+}
+
+// WithModelGlobalInstructions sets model-specific system prompt overrides.
+// Key: model.Info().Name, Value: system prompt text.
+func WithModelGlobalInstructions(prompts map[string]string) Option {
+	return func(opts *Options) {
+		opts.ModelGlobalInstructions = cloneStringMap(prompts)
 	}
 }
 
@@ -674,4 +697,15 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 			panic("invalid option value")
 		}
 	}
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
