@@ -166,7 +166,3 @@ func InvertScores(scores []float64) []float64 {
 	}
 	return result
 }
-
-
-
-
