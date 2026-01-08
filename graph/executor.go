@@ -219,10 +219,9 @@ func (e *Executor) Execute(
 	go func(ctx context.Context) {
 		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_graph %s", invocation.AgentName)))
 		workflow := &itelemetry.Workflow{
-			Name:     fmt.Sprintf("execute_graph %s", invocation.AgentName),
-			ID:       invocation.AgentName,
-			Request:  initialState.safeClone(),
-			Response: responseOmitted,
+			Name:    fmt.Sprintf("execute_graph %s", invocation.AgentName),
+			ID:      invocation.AgentName,
+			Request: initialState.safeClone(),
 		}
 		defer func() {
 			if r := recover(); r != nil {
@@ -262,17 +261,6 @@ func (e *Executor) Execute(
 	}(runCtx)
 	return eventChan, nil
 }
-
-const responseOmitted = `response omitted due to streaming nature.
-
-  Challenges capturing complete response:
-  - Stream-based async execution via eventChan
-  - Dynamic response generation at runtime
-  - Large data volume across many responses
-  - Complex response structures with sensitive data
-  - Non-linear execution paths with parallel branches
-
-  Refer to individual response spans or the response stream for details.`
 
 // executeGraph executes the graph using Pregel-style BSP execution.
 func (e *Executor) executeGraph(

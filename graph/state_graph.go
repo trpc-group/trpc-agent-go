@@ -281,18 +281,6 @@ func WithNodeCallbacks(callbacks *NodeCallbacks) Option {
 	}
 }
 
-var telemetryNodeCallbacks = NewNodeCallbacks().RegisterBeforeNode(func(ctx context.Context, callbackCtx *NodeCallbackContext, state State) (any, error) {
-	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", callbackCtx.NodeID)))
-	workflow := &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", callbackCtx.NodeID), ID: callbackCtx.InvocationID}
-	defer func() {
-		itelemetry.TraceWorkflow(span, workflow)
-		span.End()
-	}()
-	return nil, nil
-}).RegisterAfterNode(func(ctx context.Context, callbackCtx *NodeCallbackContext, state State, result any, nodeErr error) (any, error) {
-	return nil, nil
-})
-
 // WithToolCallbacks sets multiple callbacks for this specific node.
 // This allows setting tool callbacks directly on the node.
 // It's effect just for tool node.
