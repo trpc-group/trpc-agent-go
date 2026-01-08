@@ -12,6 +12,7 @@ package clickhouse
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -173,6 +174,44 @@ func TestService_GetSession_Error(t *testing.T) {
 	sess, err = s.GetSession(ctx, key)
 	assert.NoError(t, err)
 	assert.Nil(t, sess)
+}
+
+func TestService_GetSession_NoTTLRefresh(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		opts:                  ServiceOpts{sessionTTL: 0}, // No TTL refresh
+		tableSessionStates:    "session_states",
+		tableSessionEvents:    "session_events",
+		tableSessionSummaries: "session_summaries",
+		tableAppStates:        "app_states",
+		tableUserStates:       "user_states",
+	}
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test-app", UserID: "test-user", SessionID: "test-session"}
+
+	// Mock queries for getSession
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		if strings.Contains(query, "FROM session_states") {
+			return newMockRows([][]any{{"{}", time.Now(), time.Now()}}), nil
+		}
+		if strings.Contains(query, "FROM app_states") {
+			return newMockRows([][]any{}), nil
+		}
+		if strings.Contains(query, "FROM user_states") {
+			return newMockRows([][]any{}), nil
+		}
+		return newMockRows([][]any{}), nil
+	}
+
+	// Get existing session - should not refresh TTL since sessionTTL is 0
+	sess, err := s.GetSession(ctx, key)
+	assert.NoError(t, err)
+	assert.NotNil(t, sess)
+	assert.Equal(t, key.AppName, sess.AppName)
+	assert.Equal(t, key.UserID, sess.UserID)
+	assert.Equal(t, key.SessionID, sess.ID)
 }
 
 func TestService_ListSessions(t *testing.T) {

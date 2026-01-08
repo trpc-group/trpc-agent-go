@@ -47,7 +47,9 @@ func (s *Service) getSession(
 		if err := rows.Scan(&stateStr, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
-		sessState = &SessionState{}
+		sessState = &SessionState{
+			ID: key.SessionID,
+		}
 		if err := json.Unmarshal([]byte(stateStr), sessState); err != nil {
 			return nil, fmt.Errorf("unmarshal session state failed: %w", err)
 		}

@@ -482,3 +482,47 @@ func TestService_DeleteUserState_Error(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "get user state for delete failed")
 }
+
+func TestService_RefreshSessionSummaryTTLs(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		opts:                  ServiceOpts{sessionTTL: time.Hour},
+		tableSessionSummaries: "session_summaries",
+	}
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+	// Mock Exec - success
+	execCalled := false
+	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
+		execCalled = true
+		assert.Contains(t, query, "ALTER TABLE session_summaries UPDATE expires_at")
+		assert.Len(t, args, 4)
+		return nil
+	}
+
+	err := s.refreshSessionSummaryTTLs(ctx, key)
+	assert.NoError(t, err)
+	assert.True(t, execCalled)
+}
+
+func TestService_RefreshSessionSummaryTTLs_Error(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		opts:                  ServiceOpts{sessionTTL: time.Hour},
+		tableSessionSummaries: "session_summaries",
+	}
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+	// Mock Exec - error
+	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
+		return assert.AnError
+	}
+
+	err := s.refreshSessionSummaryTTLs(ctx, key)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "refresh session summary TTLs failed")
+}
