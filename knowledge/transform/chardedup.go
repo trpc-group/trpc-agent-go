@@ -83,7 +83,7 @@ func (cd *CharDedup) dedupContent(content string) string {
 	result := content
 
 	for i, pattern := range cd.patterns {
-		result = pattern.ReplaceAllString(result, cd.replacements[i])
+		result = pattern.ReplaceAllLiteralString(result, cd.replacements[i])
 	}
 
 	return result

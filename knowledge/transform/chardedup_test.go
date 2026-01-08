@@ -80,6 +80,16 @@ func TestCharDedup_Preprocess(t *testing.T) {
 			input:        []*document.Document{nil},
 			expected:     []*document.Document{},
 		},
+		{
+			name:         "Dedup regex special char $2",
+			charsToDedup: []string{"$2"},
+			input: []*document.Document{
+				{Content: "$2$2$2"},
+			},
+			expected: []*document.Document{
+				{Content: "$2"},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -126,9 +136,8 @@ func TestCharDedup_MetadataPreservation(t *testing.T) {
 	assert.Equal(t, 1, len(result))
 	assert.Equal(t, "test test", result[0].Content)
 	assert.Equal(t, "value", result[0].Metadata["key"])
-	
+
 	// Modify result metadata to verify it's a copy
 	result[0].Metadata["key"] = "new_value"
 	assert.Equal(t, "value", input[0].Metadata["key"])
 }
-
