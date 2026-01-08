@@ -765,6 +765,50 @@ Session summary notes:
 - GraphAgent reads summaries only; it does not generate them. If you bypass Runner, call `sessionService.CreateSessionSummary` or `EnqueueSummaryJob` after appending events.
 - Summary injection works only when `TimelineFilterMode` is `TimelineFilterAll`.
 
+#### Summary Format Customization
+
+By default, session summaries are formatted with context tags and a note about preferring current conversation information. You can customize the summary format using `WithSummaryFormatter` to better match your specific use cases or model requirements.
+
+**Default Format:**
+
+```
+Here is a brief summary of your previous interactions:
+
+<summary_of_previous_interactions>
+[summary content]
+</summary_of_previous_interactions>
+
+Note: this information is from previous interactions and may be outdated. You should ALWAYS prefer information from this conversation over the past summary.
+```
+
+**Custom Format Example:**
+
+```go
+// Custom formatter with simplified format
+ga := graphagent.New(
+    "my-graph",
+    graphagent.WithInitialState(initialState),
+    graphagent.WithAddSessionSummary(true),
+    graphagent.WithSummaryFormatter(func(summary string) string {
+        return fmt.Sprintf("## Previous Context\n\n%s", summary)
+    }),
+)
+```
+
+**Use Cases:**
+
+- **Simplified Format**: Reduce token usage by using concise headings and minimal context notes
+- **Language Localization**: Translate context notes to target language (e.g., Chinese, Japanese)
+- **Role-Specific Formatting**: Different formats for different agent roles
+- **Model Optimization**: Tailor format for specific model preferences
+
+**Important Notes:**
+
+- The formatter function receives raw summary text from the session and returns the formatted string
+- Custom formatters should ensure that the summary is clearly distinguishable from other messages
+- The default format is designed to be compatible with most models and use cases
+- When `WithAddSessionSummary(false)` is used, the formatter is never invoked
+
 #### Concurrency considerations
 
 When using Graph + GraphAgent in a concurrent environment (for example, serving many requests from a single long‑lived process), keep the following in mind:
@@ -1961,6 +2005,36 @@ const (
 sg.AddEdge(nodeSplit, nodeBranch1)
 sg.AddEdge(nodeSplit, nodeBranch2)  // branch1 and branch2 execute in parallel
 ```
+
+#### Join edges (wait-all fan-in)
+
+When multiple upstream branches run in parallel, a normal `AddEdge(from, to)`
+triggers `to` whenever **any** upstream node updates its edge channel. That can
+make `to` execute multiple times.
+
+If you need classic “wait for all branches, then run once” fan-in semantics,
+use `AddJoinEdge`:
+
+```go
+const (
+    nodeSplit = "split"
+    nodeA     = "branch_a"
+    nodeB     = "branch_b"
+    nodeJoin  = "join"
+)
+
+sg.AddEdge(nodeSplit, nodeA)
+sg.AddEdge(nodeSplit, nodeB)
+
+// Wait for both A and B to complete before running join.
+sg.AddJoinEdge([]string{nodeA, nodeB}, nodeJoin)
+```
+
+`AddJoinEdge` creates an internal barrier channel and triggers `nodeJoin` only
+after every `from` node has reported completion. The barrier resets after it
+triggers, so the same join can be reached again in loops.
+
+Reference example: `examples/graph/join_edge`.
 
 Tip: setting entry and finish points implicitly connects to virtual Start/End nodes:
 

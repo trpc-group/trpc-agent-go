@@ -835,6 +835,52 @@ graphAgent, err := graphagent.New(
 - GraphAgent 只读取摘要，不生成摘要。如果绕过 Runner，需在写入事件后自行调用 `sessionService.CreateSessionSummary` 或 `EnqueueSummaryJob`。
 - 摘要仅在 `TimelineFilterAll` 下生效。
 
+#### 摘要格式自定义
+
+默认情况下，会话摘要会以包含上下文标签和关于优先考虑当前对话信息的提示进行格式化：
+
+**默认格式：**
+
+```
+Here is a brief summary of your previous interactions:
+
+<summary_of_previous_interactions>
+[摘要内容]
+</summary_of_previous_interactions>
+
+Note: this information is from previous interactions and may be outdated. You should ALWAYS prefer information from this conversation over the past summary.
+```
+
+您可以使用 `WithSummaryFormatter` 来自定义摘要格式，以更好地匹配您的特定使用场景或模型需求。
+
+**自定义格式示例：**
+
+```go
+// 使用简化格式的自定义格式化器
+ga := graphagent.New(
+    "my-graph",
+    graphagent.WithInitialState(initialState),
+    graphagent.WithAddSessionSummary(true),
+    graphagent.WithSummaryFormatter(func(summary string) string {
+        return fmt.Sprintf("## Previous Context\n\n%s", summary)
+    }),
+)
+```
+
+**使用场景：**
+
+- **简化格式**：使用简洁的标题和最少的上下文提示来减少 token 消耗
+- **语言本地化**：将上下文提示翻译为目标语言（例如：中文、日语）
+- **角色特定格式**：为不同的 Agent 角色提供不同的格式
+- **模型优化**：根据特定模型的偏好调整格式
+
+**重要注意事项：**
+
+- 格式化函数接收来自会话的原始摘要文本并返回格式化后的字符串
+- 自定义格式化器应确保摘要可与其他消息清楚地区分开
+- 默认格式设计为与大多数模型和使用场景兼容
+- 当使用 `WithAddSessionSummary(false)` 时，格式化器永远不会被调用
+
 #### 并发使用注意事项
 
 在服务端将 Graph + GraphAgent 部署为长期运行、可并发复用的组件时（例如单个进程内同时处理多路请求），需要注意以下几点：
@@ -1957,6 +2003,35 @@ const (
 sg.AddEdge(nodeSplit, nodeBranch1)
 sg.AddEdge(nodeSplit, nodeBranch2)  // branch1 和 branch2 会并行执行
 ```
+
+#### Join（等待所有分支的汇聚）
+
+当一个节点有多个并行上游分支时，普通 `AddEdge(from, to)` 的语义是：只要任意
+一个上游节点更新了对应的边通道（Channel），`to` 就会被触发。这很适合增量/
+流式场景，但也意味着 `to` 可能会执行多次。
+
+如果你需要经典的 “等待所有分支都完成后再执行下游节点” 的 fan-in（汇聚）
+语义，可以使用 `AddJoinEdge`：
+
+```go
+const (
+    nodeSplit = "split"
+    nodeA     = "branch_a"
+    nodeB     = "branch_b"
+    nodeJoin  = "join"
+)
+
+sg.AddEdge(nodeSplit, nodeA)
+sg.AddEdge(nodeSplit, nodeB)
+
+// 等待 A 和 B 都完成后再执行 join。
+sg.AddJoinEdge([]string{nodeA, nodeB}, nodeJoin)
+```
+
+`AddJoinEdge` 会创建一个内部 barrier（屏障）通道，只有当上游节点列表里的每个
+节点都“报到”后才触发 `to`。触发后屏障会重置，因此在循环图里可以再次汇聚。
+
+参考示例：`examples/graph/join_edge`。
 
 提示：设置入口与结束点时，会隐式连接到虚拟的 Start/End 节点：
 

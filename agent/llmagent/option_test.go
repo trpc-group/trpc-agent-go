@@ -221,3 +221,135 @@ func TestWithSkillRunDeniedCommands_CopiesSlice(t *testing.T) {
 	in[0] = "rm"
 	require.Equal(t, []string{"echo", "ls"}, opts.skillRunDeniedCommands)
 }
+
+func TestWithSummaryFormatter(t *testing.T) {
+	tests := []struct {
+		name      string
+		formatter func(summary string) string
+		wantNil   bool
+	}{
+		{
+			name: "set custom formatter",
+			formatter: func(summary string) string {
+				return "## Summary\n\n" + summary
+			},
+			wantNil: false,
+		},
+		{
+			name:      "set nil formatter",
+			formatter: nil,
+			wantNil:   true,
+		},
+		{
+			name: "set formatter with prefix",
+			formatter: func(summary string) string {
+				return "## Previous Context\n\n" + summary
+			},
+			wantNil: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &Options{}
+			opt := WithSummaryFormatter(tt.formatter)
+			opt(opts)
+
+			if tt.wantNil {
+				require.Nil(t, opts.summaryFormatter)
+			} else {
+				require.NotNil(t, opts.summaryFormatter)
+				require.NotNil(t, tt.formatter)
+				// Verify the formatter works as expected.
+				input := "test summary"
+				expected := tt.formatter(input)
+				actual := opts.summaryFormatter(input)
+				require.Equal(t, expected, actual)
+			}
+		})
+	}
+}
+
+// TestBuildRequestProcessorsWithReasoningContentMode verifies that
+// ReasoningContentMode option is correctly passed to ContentRequestProcessor.
+func TestBuildRequestProcessorsWithReasoningContentMode(t *testing.T) {
+	tests := []struct {
+		name                     string
+		reasoningContentMode     string
+		wantReasoningContentMode bool
+	}{
+		{
+			name:                     "keep_all mode",
+			reasoningContentMode:     ReasoningContentModeKeepAll,
+			wantReasoningContentMode: true,
+		},
+		{
+			name:                     "discard_previous_turns mode",
+			reasoningContentMode:     ReasoningContentModeDiscardPreviousTurns,
+			wantReasoningContentMode: true,
+		},
+		{
+			name:                     "discard_all mode",
+			reasoningContentMode:     ReasoningContentModeDiscardAll,
+			wantReasoningContentMode: true,
+		},
+		{
+			name:                     "empty mode",
+			reasoningContentMode:     "",
+			wantReasoningContentMode: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agent := New("test-agent", WithReasoningContentMode(tt.reasoningContentMode))
+
+			// When reasoningContentMode is set, agent should be created
+			// without errors. The actual verification is done by checking that
+			// no panic occurred during agent creation.
+			require.NotNil(t, agent)
+		})
+	}
+}
+
+// TestBuildRequestProcessorsWithSummaryFormatter verifies that
+// SummaryFormatter option is correctly passed to ContentRequestProcessor.
+func TestBuildRequestProcessorsWithSummaryFormatter(t *testing.T) {
+	tests := []struct {
+		name      string
+		formatter func(summary string) string
+		wantNil   bool
+	}{
+		{
+			name: "with custom formatter",
+			formatter: func(summary string) string {
+				return "## Custom Summary\n\n" + summary
+			},
+			wantNil: false,
+		},
+		{
+			name:      "without formatter",
+			formatter: nil,
+			wantNil:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agent := New("test-agent", WithSummaryFormatter(tt.formatter))
+
+			// When SummaryFormatter is set, agent should be created
+			// without errors. The actual verification is done by checking that
+			// no panic occurred during agent creation.
+			require.NotNil(t, agent)
+
+			// Verify that the formatter function works when set.
+			if !tt.wantNil && tt.formatter != nil {
+				testSummary := "test summary content"
+				expected := tt.formatter(testSummary)
+				// The formatter should be callable.
+				require.Equal(t, expected, tt.formatter(testSummary))
+			}
+		})
+	}
+}

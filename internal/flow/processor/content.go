@@ -100,6 +100,9 @@ type ContentRequestProcessor struct {
 	// When 0, no memories are preloaded (use tools instead).
 	// When < 0 (default), all memories are loaded.
 	PreloadMemory int
+	// SummaryFormatter allows custom formatting of session summary content.
+	// When nil (default), uses the default formatSummaryContent function.
+	SummaryFormatter func(summary string) string
 }
 
 // ContentOption is a functional option for configuring the ContentRequestProcessor.
@@ -183,6 +186,13 @@ func WithReasoningContentMode(mode string) ContentOption {
 func WithPreloadMemory(limit int) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.PreloadMemory = limit
+	}
+}
+
+// WithSummaryFormatter sets a custom formatter for session summary content.
+func WithSummaryFormatter(formatter func(summary string) string) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.SummaryFormatter = formatter
 	}
 }
 
@@ -343,7 +353,7 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 	// Try exact match first.
 	sum := inv.Session.Summaries[filter]
 	if sum != nil && sum.Summary != "" {
-		content := formatSummaryContent(sum.Summary)
+		content := p.formatSummary(sum.Summary)
 		return &model.Message{Role: model.RoleSystem, Content: content}, sum.UpdatedAt
 	}
 
@@ -353,7 +363,7 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 	if p.BranchFilterMode == BranchFilterModePrefix && filter != "" {
 		summaryText, updatedAt := p.aggregatePrefixSummaries(inv.Session.Summaries, filter)
 		if summaryText != "" {
-			content := formatSummaryContent(summaryText)
+			content := p.formatSummary(summaryText)
 			return &model.Message{Role: model.RoleSystem, Content: content}, updatedAt
 		}
 	}
@@ -388,8 +398,12 @@ func (p *ContentRequestProcessor) aggregatePrefixSummaries(
 	return strings.Join(parts, "\n\n"), latestTime
 }
 
-// formatSummaryContent formats summary content with tags and notes.
-func formatSummaryContent(summary string) string {
+// formatSummary applies custom formatter if available, otherwise uses default.
+func (p *ContentRequestProcessor) formatSummary(summary string) string {
+	if p.SummaryFormatter != nil {
+		return p.SummaryFormatter(summary)
+	}
+	// Default format.
 	return fmt.Sprintf("Here is a brief summary of your previous interactions:\n\n"+
 		"<summary_of_previous_interactions>\n%s\n</summary_of_previous_interactions>\n\n"+
 		"Note: this information is from previous interactions and may be outdated. "+
