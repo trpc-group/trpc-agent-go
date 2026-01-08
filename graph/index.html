@@ -1539,6 +1539,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#streammode" class="md-nav__link">
+    <span class="md-ellipsis">
+      StreamMode
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#event-metadata-statedelta" class="md-nav__link">
     <span class="md-ellipsis">
       Event Metadata (StateDelta)
@@ -3461,6 +3470,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#streammode" class="md-nav__link">
+    <span class="md-ellipsis">
+      StreamMode
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#event-metadata-statedelta" class="md-nav__link">
     <span class="md-ellipsis">
       Event Metadata (StateDelta)
@@ -4436,6 +4454,10 @@ persisted into the Session by Runner).</p>
 <p>If you want graph LLM nodes to also emit the final <code>Done=true</code> assistant
 message events, enable <code>agent.WithGraphEmitFinalModelResponses(true)</code> when
 running via Runner. See <code>runner.md</code> for details and examples.</p>
+<p>Tip: if you are using Runner and you mainly care about streaming Large Language
+Model (LLM) messages, you can enable <code>agent.WithStreamMode(...)</code> (see
+"Event Monitoring"). When <code>agent.StreamModeMessages</code> is selected, graph LLM
+nodes enable final model responses automatically for that run.</p>
 <h4 id="three-input-paradigms">Three input paradigms</h4>
 <ul>
 <li>
@@ -8103,55 +8125,46 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </span><span id="__span-76-28"><a id="__codelineno-76-28" name="__codelineno-76-28"></a><span class="w">    </span><span class="p">}</span>
 </span><span id="__span-76-29"><a id="__codelineno-76-29" name="__codelineno-76-29"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<h4 id="streammode">StreamMode</h4>
+<p>Runner can filter the event stream before it reaches your application code.
+This is useful when you only want a subset of events (for example, only model
+tokens for user interface streaming).</p>
+<p>Use <code>agent.WithStreamMode(...)</code>:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-77-1">1</a></span>
+<span class="normal"><a href="#__codelineno-77-2">2</a></span>
+<span class="normal"><a href="#__codelineno-77-3">3</a></span>
+<span class="normal"><a href="#__codelineno-77-4">4</a></span>
+<span class="normal"><a href="#__codelineno-77-5">5</a></span>
+<span class="normal"><a href="#__codelineno-77-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-77-1"><a id="__codelineno-77-1" name="__codelineno-77-1"></a><span class="nx">eventCh</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">,</span>
+</span><span id="__span-77-2"><a id="__codelineno-77-2" name="__codelineno-77-2"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithStreamMode</span><span class="p">(</span>
+</span><span id="__span-77-3"><a id="__codelineno-77-3" name="__codelineno-77-3"></a><span class="w">        </span><span class="nx">agent</span><span class="p">.</span><span class="nx">StreamModeMessages</span><span class="p">,</span>
+</span><span id="__span-77-4"><a id="__codelineno-77-4" name="__codelineno-77-4"></a><span class="w">        </span><span class="nx">agent</span><span class="p">.</span><span class="nx">StreamModeCustom</span><span class="p">,</span>
+</span><span id="__span-77-5"><a id="__codelineno-77-5" name="__codelineno-77-5"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-77-6"><a id="__codelineno-77-6" name="__codelineno-77-6"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Supported modes (graph workflows):</p>
+<ul>
+<li><code>messages</code>: model output events (for example, <code>chat.completion.chunk</code>)</li>
+<li><code>updates</code>: <code>graph.state.update</code> / <code>graph.channel.update</code> / <code>graph.execution</code></li>
+<li><code>checkpoints</code>: <code>graph.checkpoint.*</code></li>
+<li><code>tasks</code>: task lifecycle events (<code>graph.node.*</code>, <code>graph.pregel.*</code>)</li>
+<li><code>debug</code>: same as <code>checkpoints</code> + <code>tasks</code></li>
+<li><code>custom</code>: node-emitted events (<code>graph.node.custom</code>)</li>
+</ul>
+<p>Notes:</p>
+<ul>
+<li>When <code>agent.StreamModeMessages</code> is selected, graph-based Large Language Model
+  (LLM) nodes enable final model response events automatically for that run.
+  To override it, call <code>agent.WithGraphEmitFinalModelResponses(false)</code> after
+  <code>agent.WithStreamMode(...)</code>.</li>
+<li>StreamMode only affects what Runner forwards to your <code>eventCh</code>. Runner still
+  processes and persists events internally.</li>
+<li>For graph workflows, some event types (for example, <code>graph.checkpoint.*</code>)
+  are emitted only when their corresponding mode is selected.</li>
+<li>Runner always emits a final <code>runner.completion</code> event.</li>
+</ul>
 <h4 id="event-metadata-statedelta">Event Metadata (StateDelta)</h4>
 <p>Each event also carries <code>StateDelta</code>, which includes execution metadata for models/tools:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-77-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-77-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-77-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-77-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-77-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-77-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-77-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-77-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-77-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-77-10">10</a></span>
-<span class="normal"><a href="#__codelineno-77-11">11</a></span>
-<span class="normal"><a href="#__codelineno-77-12">12</a></span>
-<span class="normal"><a href="#__codelineno-77-13">13</a></span>
-<span class="normal"><a href="#__codelineno-77-14">14</a></span>
-<span class="normal"><a href="#__codelineno-77-15">15</a></span>
-<span class="normal"><a href="#__codelineno-77-16">16</a></span>
-<span class="normal"><a href="#__codelineno-77-17">17</a></span>
-<span class="normal"><a href="#__codelineno-77-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-77-1"><a id="__codelineno-77-1" name="__codelineno-77-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-77-2"><a id="__codelineno-77-2" name="__codelineno-77-2"></a><span class="w">    </span><span class="s">&quot;encoding/json&quot;</span>
-</span><span id="__span-77-3"><a id="__codelineno-77-3" name="__codelineno-77-3"></a>
-</span><span id="__span-77-4"><a id="__codelineno-77-4" name="__codelineno-77-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/graph&quot;</span>
-</span><span id="__span-77-5"><a id="__codelineno-77-5" name="__codelineno-77-5"></a><span class="p">)</span>
-</span><span id="__span-77-6"><a id="__codelineno-77-6" name="__codelineno-77-6"></a>
-</span><span id="__span-77-7"><a id="__codelineno-77-7" name="__codelineno-77-7"></a><span class="k">for</span><span class="w"> </span><span class="nx">ev</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">events</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-77-8"><a id="__codelineno-77-8" name="__codelineno-77-8"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">StateDelta</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">continue</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-77-9"><a id="__codelineno-77-9" name="__codelineno-77-9"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">b</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">StateDelta</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">MetadataKeyModel</span><span class="p">];</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-77-10"><a id="__codelineno-77-10" name="__codelineno-77-10"></a><span class="w">        </span><span class="kd">var</span><span class="w"> </span><span class="nx">md</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">ModelExecutionMetadata</span>
-</span><span id="__span-77-11"><a id="__codelineno-77-11" name="__codelineno-77-11"></a><span class="w">        </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">Unmarshal</span><span class="p">(</span><span class="nx">b</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">md</span><span class="p">)</span>
-</span><span id="__span-77-12"><a id="__codelineno-77-12" name="__codelineno-77-12"></a><span class="w">        </span><span class="c1">// md.Input / md.Output / md.Duration</span>
-</span><span id="__span-77-13"><a id="__codelineno-77-13" name="__codelineno-77-13"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-77-14"><a id="__codelineno-77-14" name="__codelineno-77-14"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">b</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">StateDelta</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">MetadataKeyTool</span><span class="p">];</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-77-15"><a id="__codelineno-77-15" name="__codelineno-77-15"></a><span class="w">        </span><span class="kd">var</span><span class="w"> </span><span class="nx">td</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">ToolExecutionMetadata</span>
-</span><span id="__span-77-16"><a id="__codelineno-77-16" name="__codelineno-77-16"></a><span class="w">        </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">Unmarshal</span><span class="p">(</span><span class="nx">b</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">td</span><span class="p">)</span>
-</span><span id="__span-77-17"><a id="__codelineno-77-17" name="__codelineno-77-17"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-77-18"><a id="__codelineno-77-18" name="__codelineno-77-18"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<h4 id="emit-selected-values-from-node-callbacks">Emit selected values from node callbacks</h4>
-<p>By default, mid‑run events like <code>graph.state.update</code> report which keys were updated (metadata‑only). Concrete values are not included to keep the stream lightweight and avoid exposing intermediate, potentially conflicting updates. The final <code>graph.execution</code> event's <code>StateDelta</code> carries the serialized final snapshot of allowed keys (see implementations in <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go#L2001">graph/executor.go:2001</a>, <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go#L1276">graph/events.go:1276</a>, <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go#L1330">graph/events.go:1330</a>).</p>
-<p>If you only need to surface a few values from the result of a specific node right after it completes, register an After‑node callback and emit a small custom event containing just those values:</p>
-<p>Steps:</p>
-<ul>
-<li>Register <code>WithPostNodeCallback</code> on the target node.</li>
-<li>In the callback, read <code>result any</code>; when the node returns <code>graph.State</code>, this is the node's state delta.</li>
-<li>Pick the needed keys, serialize to JSON, attach to a new event's <code>StateDelta</code>.</li>
-<li>Send via <code>agent.EmitEvent</code>.</li>
-</ul>
-<p>Example:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-78-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-78-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-78-3"> 3</a></span>
@@ -8169,100 +8182,36 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <span class="normal"><a href="#__codelineno-78-15">15</a></span>
 <span class="normal"><a href="#__codelineno-78-16">16</a></span>
 <span class="normal"><a href="#__codelineno-78-17">17</a></span>
-<span class="normal"><a href="#__codelineno-78-18">18</a></span>
-<span class="normal"><a href="#__codelineno-78-19">19</a></span>
-<span class="normal"><a href="#__codelineno-78-20">20</a></span>
-<span class="normal"><a href="#__codelineno-78-21">21</a></span>
-<span class="normal"><a href="#__codelineno-78-22">22</a></span>
-<span class="normal"><a href="#__codelineno-78-23">23</a></span>
-<span class="normal"><a href="#__codelineno-78-24">24</a></span>
-<span class="normal"><a href="#__codelineno-78-25">25</a></span>
-<span class="normal"><a href="#__codelineno-78-26">26</a></span>
-<span class="normal"><a href="#__codelineno-78-27">27</a></span>
-<span class="normal"><a href="#__codelineno-78-28">28</a></span>
-<span class="normal"><a href="#__codelineno-78-29">29</a></span>
-<span class="normal"><a href="#__codelineno-78-30">30</a></span>
-<span class="normal"><a href="#__codelineno-78-31">31</a></span>
-<span class="normal"><a href="#__codelineno-78-32">32</a></span>
-<span class="normal"><a href="#__codelineno-78-33">33</a></span>
-<span class="normal"><a href="#__codelineno-78-34">34</a></span>
-<span class="normal"><a href="#__codelineno-78-35">35</a></span>
-<span class="normal"><a href="#__codelineno-78-36">36</a></span>
-<span class="normal"><a href="#__codelineno-78-37">37</a></span>
-<span class="normal"><a href="#__codelineno-78-38">38</a></span>
-<span class="normal"><a href="#__codelineno-78-39">39</a></span>
-<span class="normal"><a href="#__codelineno-78-40">40</a></span>
-<span class="normal"><a href="#__codelineno-78-41">41</a></span>
-<span class="normal"><a href="#__codelineno-78-42">42</a></span>
-<span class="normal"><a href="#__codelineno-78-43">43</a></span>
-<span class="normal"><a href="#__codelineno-78-44">44</a></span>
-<span class="normal"><a href="#__codelineno-78-45">45</a></span>
-<span class="normal"><a href="#__codelineno-78-46">46</a></span>
-<span class="normal"><a href="#__codelineno-78-47">47</a></span>
-<span class="normal"><a href="#__codelineno-78-48">48</a></span>
-<span class="normal"><a href="#__codelineno-78-49">49</a></span>
-<span class="normal"><a href="#__codelineno-78-50">50</a></span>
-<span class="normal"><a href="#__codelineno-78-51">51</a></span>
-<span class="normal"><a href="#__codelineno-78-52">52</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-78-1"><a id="__codelineno-78-1" name="__codelineno-78-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-78-2"><a id="__codelineno-78-2" name="__codelineno-78-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-78-3"><a id="__codelineno-78-3" name="__codelineno-78-3"></a><span class="w">    </span><span class="s">&quot;encoding/json&quot;</span>
-</span><span id="__span-78-4"><a id="__codelineno-78-4" name="__codelineno-78-4"></a>
-</span><span id="__span-78-5"><a id="__codelineno-78-5" name="__codelineno-78-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
-</span><span id="__span-78-6"><a id="__codelineno-78-6" name="__codelineno-78-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/graph&quot;</span>
-</span><span id="__span-78-7"><a id="__codelineno-78-7" name="__codelineno-78-7"></a><span class="p">)</span>
-</span><span id="__span-78-8"><a id="__codelineno-78-8" name="__codelineno-78-8"></a>
-</span><span id="__span-78-9"><a id="__codelineno-78-9" name="__codelineno-78-9"></a><span class="kd">const</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-78-10"><a id="__codelineno-78-10" name="__codelineno-78-10"></a><span class="w">    </span><span class="nx">nodeParse</span><span class="w">   </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;parse&quot;</span>
-</span><span id="__span-78-11"><a id="__codelineno-78-11" name="__codelineno-78-11"></a><span class="w">    </span><span class="nx">stateKeyOut</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;parsed_value&quot;</span><span class="w"> </span><span class="c1">// emit only what upstream needs</span>
-</span><span id="__span-78-12"><a id="__codelineno-78-12" name="__codelineno-78-12"></a><span class="p">)</span>
-</span><span id="__span-78-13"><a id="__codelineno-78-13" name="__codelineno-78-13"></a>
-</span><span id="__span-78-14"><a id="__codelineno-78-14" name="__codelineno-78-14"></a><span class="kd">func</span><span class="w"> </span><span class="nx">parseNode</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-15"><a id="__codelineno-78-15" name="__codelineno-78-15"></a><span class="w">    </span><span class="nx">val</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span><span class="s">&quot;ok&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;score&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.97</span><span class="p">}</span>
-</span><span id="__span-78-16"><a id="__codelineno-78-16" name="__codelineno-78-16"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="nx">stateKeyOut</span><span class="p">:</span><span class="w"> </span><span class="nx">val</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-78-17"><a id="__codelineno-78-17" name="__codelineno-78-17"></a><span class="p">}</span>
-</span><span id="__span-78-18"><a id="__codelineno-78-18" name="__codelineno-78-18"></a>
-</span><span id="__span-78-19"><a id="__codelineno-78-19" name="__codelineno-78-19"></a><span class="kd">func</span><span class="w"> </span><span class="nx">buildGraph</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">Graph</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-20"><a id="__codelineno-78-20" name="__codelineno-78-20"></a><span class="w">    </span><span class="nx">sg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewStateGraph</span><span class="p">(</span><span class="nx">graph</span><span class="p">.</span><span class="nx">MessagesStateSchema</span><span class="p">())</span>
-</span><span id="__span-78-21"><a id="__codelineno-78-21" name="__codelineno-78-21"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeParse</span><span class="p">,</span><span class="w"> </span><span class="nx">parseNode</span><span class="p">,</span>
-</span><span id="__span-78-22"><a id="__codelineno-78-22" name="__codelineno-78-22"></a><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithPostNodeCallback</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span>
-</span><span id="__span-78-23"><a id="__codelineno-78-23" name="__codelineno-78-23"></a><span class="w">            </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
-</span><span id="__span-78-24"><a id="__codelineno-78-24" name="__codelineno-78-24"></a><span class="w">            </span><span class="nx">cb</span><span class="w"> </span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">NodeCallbackContext</span><span class="p">,</span>
-</span><span id="__span-78-25"><a id="__codelineno-78-25" name="__codelineno-78-25"></a><span class="w">            </span><span class="nx">st</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">,</span>
-</span><span id="__span-78-26"><a id="__codelineno-78-26" name="__codelineno-78-26"></a><span class="w">            </span><span class="nx">result</span><span class="w"> </span><span class="kt">any</span><span class="p">,</span>
-</span><span id="__span-78-27"><a id="__codelineno-78-27" name="__codelineno-78-27"></a><span class="w">            </span><span class="nx">nodeErr</span><span class="w"> </span><span class="kt">error</span><span class="p">,</span>
-</span><span id="__span-78-28"><a id="__codelineno-78-28" name="__codelineno-78-28"></a><span class="w">        </span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-29"><a id="__codelineno-78-29" name="__codelineno-78-29"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">nodeErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-78-30"><a id="__codelineno-78-30" name="__codelineno-78-30"></a><span class="w">            </span><span class="nx">inv</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">InvocationFromContext</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
-</span><span id="__span-78-31"><a id="__codelineno-78-31" name="__codelineno-78-31"></a><span class="w">            </span><span class="nx">execCtx</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">st</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyExecContext</span><span class="p">].(</span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">ExecutionContext</span><span class="p">)</span>
-</span><span id="__span-78-32"><a id="__codelineno-78-32" name="__codelineno-78-32"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">delta</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">result</span><span class="p">.(</span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-33"><a id="__codelineno-78-33" name="__codelineno-78-33"></a><span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="nx">v</span><span class="p">,</span><span class="w"> </span><span class="nx">exists</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">delta</span><span class="p">[</span><span class="nx">stateKeyOut</span><span class="p">];</span><span class="w"> </span><span class="nx">exists</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">execCtx</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-34"><a id="__codelineno-78-34" name="__codelineno-78-34"></a><span class="w">                    </span><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewGraphEvent</span><span class="p">(</span>
-</span><span id="__span-78-35"><a id="__codelineno-78-35" name="__codelineno-78-35"></a><span class="w">                        </span><span class="nx">inv</span><span class="p">.</span><span class="nx">InvocationID</span><span class="p">,</span>
-</span><span id="__span-78-36"><a id="__codelineno-78-36" name="__codelineno-78-36"></a><span class="w">                        </span><span class="nx">cb</span><span class="p">.</span><span class="nx">NodeID</span><span class="p">,</span><span class="w"> </span><span class="c1">// author = node id for easy filtering</span>
-</span><span id="__span-78-37"><a id="__codelineno-78-37" name="__codelineno-78-37"></a><span class="w">                        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">ObjectTypeGraphNodeExecution</span><span class="p">,</span>
-</span><span id="__span-78-38"><a id="__codelineno-78-38" name="__codelineno-78-38"></a><span class="w">                    </span><span class="p">)</span>
-</span><span id="__span-78-39"><a id="__codelineno-78-39" name="__codelineno-78-39"></a><span class="w">                    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">StateDelta</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">StateDelta</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">make</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">][]</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-78-40"><a id="__codelineno-78-40" name="__codelineno-78-40"></a><span class="w">                    </span><span class="k">if</span><span class="w"> </span><span class="nx">b</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">Marshal</span><span class="p">(</span><span class="nx">v</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-41"><a id="__codelineno-78-41" name="__codelineno-78-41"></a><span class="w">                        </span><span class="nx">evt</span><span class="p">.</span><span class="nx">StateDelta</span><span class="p">[</span><span class="nx">stateKeyOut</span><span class="p">]</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">b</span>
-</span><span id="__span-78-42"><a id="__codelineno-78-42" name="__codelineno-78-42"></a><span class="w">                        </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">EmitEvent</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="p">,</span><span class="w"> </span><span class="nx">execCtx</span><span class="p">.</span><span class="nx">EventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">evt</span><span class="p">)</span>
-</span><span id="__span-78-43"><a id="__codelineno-78-43" name="__codelineno-78-43"></a><span class="w">                    </span><span class="p">}</span>
-</span><span id="__span-78-44"><a id="__codelineno-78-44" name="__codelineno-78-44"></a><span class="w">                </span><span class="p">}</span>
-</span><span id="__span-78-45"><a id="__codelineno-78-45" name="__codelineno-78-45"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-78-46"><a id="__codelineno-78-46" name="__codelineno-78-46"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-78-47"><a id="__codelineno-78-47" name="__codelineno-78-47"></a><span class="w">        </span><span class="p">}),</span>
-</span><span id="__span-78-48"><a id="__codelineno-78-48" name="__codelineno-78-48"></a><span class="w">    </span><span class="p">).</span>
-</span><span id="__span-78-49"><a id="__codelineno-78-49" name="__codelineno-78-49"></a><span class="w">        </span><span class="nx">SetEntryPoint</span><span class="p">(</span><span class="nx">nodeParse</span><span class="p">).</span>
-</span><span id="__span-78-50"><a id="__codelineno-78-50" name="__codelineno-78-50"></a><span class="w">        </span><span class="nx">SetFinishPoint</span><span class="p">(</span><span class="nx">nodeParse</span><span class="p">)</span>
-</span><span id="__span-78-51"><a id="__codelineno-78-51" name="__codelineno-78-51"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">sg</span><span class="p">.</span><span class="nx">Compile</span><span class="p">()</span>
-</span><span id="__span-78-52"><a id="__codelineno-78-52" name="__codelineno-78-52"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-78-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-78-1"><a id="__codelineno-78-1" name="__codelineno-78-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-78-2"><a id="__codelineno-78-2" name="__codelineno-78-2"></a><span class="w">    </span><span class="s">&quot;encoding/json&quot;</span>
+</span><span id="__span-78-3"><a id="__codelineno-78-3" name="__codelineno-78-3"></a>
+</span><span id="__span-78-4"><a id="__codelineno-78-4" name="__codelineno-78-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/graph&quot;</span>
+</span><span id="__span-78-5"><a id="__codelineno-78-5" name="__codelineno-78-5"></a><span class="p">)</span>
+</span><span id="__span-78-6"><a id="__codelineno-78-6" name="__codelineno-78-6"></a>
+</span><span id="__span-78-7"><a id="__codelineno-78-7" name="__codelineno-78-7"></a><span class="k">for</span><span class="w"> </span><span class="nx">ev</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">events</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-78-8"><a id="__codelineno-78-8" name="__codelineno-78-8"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">StateDelta</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">continue</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-78-9"><a id="__codelineno-78-9" name="__codelineno-78-9"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">b</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">StateDelta</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">MetadataKeyModel</span><span class="p">];</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-78-10"><a id="__codelineno-78-10" name="__codelineno-78-10"></a><span class="w">        </span><span class="kd">var</span><span class="w"> </span><span class="nx">md</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">ModelExecutionMetadata</span>
+</span><span id="__span-78-11"><a id="__codelineno-78-11" name="__codelineno-78-11"></a><span class="w">        </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">Unmarshal</span><span class="p">(</span><span class="nx">b</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">md</span><span class="p">)</span>
+</span><span id="__span-78-12"><a id="__codelineno-78-12" name="__codelineno-78-12"></a><span class="w">        </span><span class="c1">// md.Input / md.Output / md.Duration</span>
+</span><span id="__span-78-13"><a id="__codelineno-78-13" name="__codelineno-78-13"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-78-14"><a id="__codelineno-78-14" name="__codelineno-78-14"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">b</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">StateDelta</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">MetadataKeyTool</span><span class="p">];</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-78-15"><a id="__codelineno-78-15" name="__codelineno-78-15"></a><span class="w">        </span><span class="kd">var</span><span class="w"> </span><span class="nx">td</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">ToolExecutionMetadata</span>
+</span><span id="__span-78-16"><a id="__codelineno-78-16" name="__codelineno-78-16"></a><span class="w">        </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">Unmarshal</span><span class="p">(</span><span class="nx">b</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">td</span><span class="p">)</span>
+</span><span id="__span-78-17"><a id="__codelineno-78-17" name="__codelineno-78-17"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-78-18"><a id="__codelineno-78-18" name="__codelineno-78-18"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Recommendations:</p>
+<h4 id="emit-selected-values-from-node-callbacks">Emit selected values from node callbacks</h4>
+<p>By default, mid‑run events like <code>graph.state.update</code> report which keys were updated (metadata‑only). Concrete values are not included to keep the stream lightweight and avoid exposing intermediate, potentially conflicting updates. The final <code>graph.execution</code> event's <code>StateDelta</code> carries the serialized final snapshot of allowed keys (see implementations in <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go#L2001">graph/executor.go:2001</a>, <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go#L1276">graph/events.go:1276</a>, <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go#L1330">graph/events.go:1330</a>).</p>
+<p>If you only need to surface a few values from the result of a specific node right after it completes, register an After‑node callback and emit a small custom event containing just those values:</p>
+<p>Steps:</p>
 <ul>
-<li>Emit only necessary keys to control bandwidth and avoid leaking sensitive data.</li>
-<li>Internal/volatile keys are filtered from final snapshots and should not be emitted (see <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/internal_keys.go#L16">graph/internal_keys.go:16</a>).</li>
-<li>For textual intermediate outputs, prefer existing model streaming events (<code>choice.Delta.Content</code>).</li>
+<li>Register <code>WithPostNodeCallback</code> on the target node.</li>
+<li>In the callback, read <code>result any</code>; when the node returns <code>graph.State</code>, this is the node's state delta.</li>
+<li>Pick the needed keys, serialize to JSON, attach to a new event's <code>StateDelta</code>.</li>
+<li>Send via <code>agent.EmitEvent</code>.</li>
 </ul>
-<p>You can also configure agent‑level callbacks:</p>
+<p>Example:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-79-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-79-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-79-3"> 3</a></span>
@@ -8282,26 +8231,137 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <span class="normal"><a href="#__codelineno-79-17">17</a></span>
 <span class="normal"><a href="#__codelineno-79-18">18</a></span>
 <span class="normal"><a href="#__codelineno-79-19">19</a></span>
-<span class="normal"><a href="#__codelineno-79-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-79-1"><a id="__codelineno-79-1" name="__codelineno-79-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-79-2"><a id="__codelineno-79-2" name="__codelineno-79-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
-</span><span id="__span-79-3"><a id="__codelineno-79-3" name="__codelineno-79-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-79-4"><a id="__codelineno-79-4" name="__codelineno-79-4"></a><span class="p">)</span>
-</span><span id="__span-79-5"><a id="__codelineno-79-5" name="__codelineno-79-5"></a>
-</span><span id="__span-79-6"><a id="__codelineno-79-6" name="__codelineno-79-6"></a><span class="c1">// Construct and register callbacks (recommended)</span>
-</span><span id="__span-79-7"><a id="__codelineno-79-7" name="__codelineno-79-7"></a><span class="c1">// Note: Structured callback API requires trpc-agent-go &gt;= 0.6.0</span>
-</span><span id="__span-79-8"><a id="__codelineno-79-8" name="__codelineno-79-8"></a><span class="nx">cb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">().</span>
-</span><span id="__span-79-9"><a id="__codelineno-79-9" name="__codelineno-79-9"></a><span class="w">    </span><span class="nx">RegisterBeforeAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-79-10"><a id="__codelineno-79-10" name="__codelineno-79-10"></a><span class="w">        </span><span class="c1">// Return a non-nil CustomResponse to short-circuit this turn</span>
-</span><span id="__span-79-11"><a id="__codelineno-79-11" name="__codelineno-79-11"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-79-12"><a id="__codelineno-79-12" name="__codelineno-79-12"></a><span class="w">    </span><span class="p">}).</span>
-</span><span id="__span-79-13"><a id="__codelineno-79-13" name="__codelineno-79-13"></a><span class="w">    </span><span class="nx">RegisterAfterAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">AfterAgentArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">AfterAgentResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-79-14"><a id="__codelineno-79-14" name="__codelineno-79-14"></a><span class="w">        </span><span class="c1">// Modify/replace the final response</span>
-</span><span id="__span-79-15"><a id="__codelineno-79-15" name="__codelineno-79-15"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-79-16"><a id="__codelineno-79-16" name="__codelineno-79-16"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-79-17"><a id="__codelineno-79-17" name="__codelineno-79-17"></a>
-</span><span id="__span-79-18"><a id="__codelineno-79-18" name="__codelineno-79-18"></a><span class="nx">graphAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;workflow&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">g</span><span class="p">,</span>
-</span><span id="__span-79-19"><a id="__codelineno-79-19" name="__codelineno-79-19"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">cb</span><span class="p">),</span>
-</span><span id="__span-79-20"><a id="__codelineno-79-20" name="__codelineno-79-20"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-79-20">20</a></span>
+<span class="normal"><a href="#__codelineno-79-21">21</a></span>
+<span class="normal"><a href="#__codelineno-79-22">22</a></span>
+<span class="normal"><a href="#__codelineno-79-23">23</a></span>
+<span class="normal"><a href="#__codelineno-79-24">24</a></span>
+<span class="normal"><a href="#__codelineno-79-25">25</a></span>
+<span class="normal"><a href="#__codelineno-79-26">26</a></span>
+<span class="normal"><a href="#__codelineno-79-27">27</a></span>
+<span class="normal"><a href="#__codelineno-79-28">28</a></span>
+<span class="normal"><a href="#__codelineno-79-29">29</a></span>
+<span class="normal"><a href="#__codelineno-79-30">30</a></span>
+<span class="normal"><a href="#__codelineno-79-31">31</a></span>
+<span class="normal"><a href="#__codelineno-79-32">32</a></span>
+<span class="normal"><a href="#__codelineno-79-33">33</a></span>
+<span class="normal"><a href="#__codelineno-79-34">34</a></span>
+<span class="normal"><a href="#__codelineno-79-35">35</a></span>
+<span class="normal"><a href="#__codelineno-79-36">36</a></span>
+<span class="normal"><a href="#__codelineno-79-37">37</a></span>
+<span class="normal"><a href="#__codelineno-79-38">38</a></span>
+<span class="normal"><a href="#__codelineno-79-39">39</a></span>
+<span class="normal"><a href="#__codelineno-79-40">40</a></span>
+<span class="normal"><a href="#__codelineno-79-41">41</a></span>
+<span class="normal"><a href="#__codelineno-79-42">42</a></span>
+<span class="normal"><a href="#__codelineno-79-43">43</a></span>
+<span class="normal"><a href="#__codelineno-79-44">44</a></span>
+<span class="normal"><a href="#__codelineno-79-45">45</a></span>
+<span class="normal"><a href="#__codelineno-79-46">46</a></span>
+<span class="normal"><a href="#__codelineno-79-47">47</a></span>
+<span class="normal"><a href="#__codelineno-79-48">48</a></span>
+<span class="normal"><a href="#__codelineno-79-49">49</a></span>
+<span class="normal"><a href="#__codelineno-79-50">50</a></span>
+<span class="normal"><a href="#__codelineno-79-51">51</a></span>
+<span class="normal"><a href="#__codelineno-79-52">52</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-79-1"><a id="__codelineno-79-1" name="__codelineno-79-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-79-2"><a id="__codelineno-79-2" name="__codelineno-79-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-79-3"><a id="__codelineno-79-3" name="__codelineno-79-3"></a><span class="w">    </span><span class="s">&quot;encoding/json&quot;</span>
+</span><span id="__span-79-4"><a id="__codelineno-79-4" name="__codelineno-79-4"></a>
+</span><span id="__span-79-5"><a id="__codelineno-79-5" name="__codelineno-79-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
+</span><span id="__span-79-6"><a id="__codelineno-79-6" name="__codelineno-79-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/graph&quot;</span>
+</span><span id="__span-79-7"><a id="__codelineno-79-7" name="__codelineno-79-7"></a><span class="p">)</span>
+</span><span id="__span-79-8"><a id="__codelineno-79-8" name="__codelineno-79-8"></a>
+</span><span id="__span-79-9"><a id="__codelineno-79-9" name="__codelineno-79-9"></a><span class="kd">const</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-79-10"><a id="__codelineno-79-10" name="__codelineno-79-10"></a><span class="w">    </span><span class="nx">nodeParse</span><span class="w">   </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;parse&quot;</span>
+</span><span id="__span-79-11"><a id="__codelineno-79-11" name="__codelineno-79-11"></a><span class="w">    </span><span class="nx">stateKeyOut</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;parsed_value&quot;</span><span class="w"> </span><span class="c1">// emit only what upstream needs</span>
+</span><span id="__span-79-12"><a id="__codelineno-79-12" name="__codelineno-79-12"></a><span class="p">)</span>
+</span><span id="__span-79-13"><a id="__codelineno-79-13" name="__codelineno-79-13"></a>
+</span><span id="__span-79-14"><a id="__codelineno-79-14" name="__codelineno-79-14"></a><span class="kd">func</span><span class="w"> </span><span class="nx">parseNode</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-15"><a id="__codelineno-79-15" name="__codelineno-79-15"></a><span class="w">    </span><span class="nx">val</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span><span class="s">&quot;ok&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;score&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.97</span><span class="p">}</span>
+</span><span id="__span-79-16"><a id="__codelineno-79-16" name="__codelineno-79-16"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="nx">stateKeyOut</span><span class="p">:</span><span class="w"> </span><span class="nx">val</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-79-17"><a id="__codelineno-79-17" name="__codelineno-79-17"></a><span class="p">}</span>
+</span><span id="__span-79-18"><a id="__codelineno-79-18" name="__codelineno-79-18"></a>
+</span><span id="__span-79-19"><a id="__codelineno-79-19" name="__codelineno-79-19"></a><span class="kd">func</span><span class="w"> </span><span class="nx">buildGraph</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">Graph</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-20"><a id="__codelineno-79-20" name="__codelineno-79-20"></a><span class="w">    </span><span class="nx">sg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewStateGraph</span><span class="p">(</span><span class="nx">graph</span><span class="p">.</span><span class="nx">MessagesStateSchema</span><span class="p">())</span>
+</span><span id="__span-79-21"><a id="__codelineno-79-21" name="__codelineno-79-21"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeParse</span><span class="p">,</span><span class="w"> </span><span class="nx">parseNode</span><span class="p">,</span>
+</span><span id="__span-79-22"><a id="__codelineno-79-22" name="__codelineno-79-22"></a><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithPostNodeCallback</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span>
+</span><span id="__span-79-23"><a id="__codelineno-79-23" name="__codelineno-79-23"></a><span class="w">            </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
+</span><span id="__span-79-24"><a id="__codelineno-79-24" name="__codelineno-79-24"></a><span class="w">            </span><span class="nx">cb</span><span class="w"> </span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">NodeCallbackContext</span><span class="p">,</span>
+</span><span id="__span-79-25"><a id="__codelineno-79-25" name="__codelineno-79-25"></a><span class="w">            </span><span class="nx">st</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">,</span>
+</span><span id="__span-79-26"><a id="__codelineno-79-26" name="__codelineno-79-26"></a><span class="w">            </span><span class="nx">result</span><span class="w"> </span><span class="kt">any</span><span class="p">,</span>
+</span><span id="__span-79-27"><a id="__codelineno-79-27" name="__codelineno-79-27"></a><span class="w">            </span><span class="nx">nodeErr</span><span class="w"> </span><span class="kt">error</span><span class="p">,</span>
+</span><span id="__span-79-28"><a id="__codelineno-79-28" name="__codelineno-79-28"></a><span class="w">        </span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-29"><a id="__codelineno-79-29" name="__codelineno-79-29"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">nodeErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-79-30"><a id="__codelineno-79-30" name="__codelineno-79-30"></a><span class="w">            </span><span class="nx">inv</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">InvocationFromContext</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
+</span><span id="__span-79-31"><a id="__codelineno-79-31" name="__codelineno-79-31"></a><span class="w">            </span><span class="nx">execCtx</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">st</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyExecContext</span><span class="p">].(</span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">ExecutionContext</span><span class="p">)</span>
+</span><span id="__span-79-32"><a id="__codelineno-79-32" name="__codelineno-79-32"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">delta</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">result</span><span class="p">.(</span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-33"><a id="__codelineno-79-33" name="__codelineno-79-33"></a><span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="nx">v</span><span class="p">,</span><span class="w"> </span><span class="nx">exists</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">delta</span><span class="p">[</span><span class="nx">stateKeyOut</span><span class="p">];</span><span class="w"> </span><span class="nx">exists</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">execCtx</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-34"><a id="__codelineno-79-34" name="__codelineno-79-34"></a><span class="w">                    </span><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewGraphEvent</span><span class="p">(</span>
+</span><span id="__span-79-35"><a id="__codelineno-79-35" name="__codelineno-79-35"></a><span class="w">                        </span><span class="nx">inv</span><span class="p">.</span><span class="nx">InvocationID</span><span class="p">,</span>
+</span><span id="__span-79-36"><a id="__codelineno-79-36" name="__codelineno-79-36"></a><span class="w">                        </span><span class="nx">cb</span><span class="p">.</span><span class="nx">NodeID</span><span class="p">,</span><span class="w"> </span><span class="c1">// author = node id for easy filtering</span>
+</span><span id="__span-79-37"><a id="__codelineno-79-37" name="__codelineno-79-37"></a><span class="w">                        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">ObjectTypeGraphNodeExecution</span><span class="p">,</span>
+</span><span id="__span-79-38"><a id="__codelineno-79-38" name="__codelineno-79-38"></a><span class="w">                    </span><span class="p">)</span>
+</span><span id="__span-79-39"><a id="__codelineno-79-39" name="__codelineno-79-39"></a><span class="w">                    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">StateDelta</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">StateDelta</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">make</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">][]</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-79-40"><a id="__codelineno-79-40" name="__codelineno-79-40"></a><span class="w">                    </span><span class="k">if</span><span class="w"> </span><span class="nx">b</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">Marshal</span><span class="p">(</span><span class="nx">v</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-41"><a id="__codelineno-79-41" name="__codelineno-79-41"></a><span class="w">                        </span><span class="nx">evt</span><span class="p">.</span><span class="nx">StateDelta</span><span class="p">[</span><span class="nx">stateKeyOut</span><span class="p">]</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">b</span>
+</span><span id="__span-79-42"><a id="__codelineno-79-42" name="__codelineno-79-42"></a><span class="w">                        </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">EmitEvent</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="p">,</span><span class="w"> </span><span class="nx">execCtx</span><span class="p">.</span><span class="nx">EventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">evt</span><span class="p">)</span>
+</span><span id="__span-79-43"><a id="__codelineno-79-43" name="__codelineno-79-43"></a><span class="w">                    </span><span class="p">}</span>
+</span><span id="__span-79-44"><a id="__codelineno-79-44" name="__codelineno-79-44"></a><span class="w">                </span><span class="p">}</span>
+</span><span id="__span-79-45"><a id="__codelineno-79-45" name="__codelineno-79-45"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-79-46"><a id="__codelineno-79-46" name="__codelineno-79-46"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-79-47"><a id="__codelineno-79-47" name="__codelineno-79-47"></a><span class="w">        </span><span class="p">}),</span>
+</span><span id="__span-79-48"><a id="__codelineno-79-48" name="__codelineno-79-48"></a><span class="w">    </span><span class="p">).</span>
+</span><span id="__span-79-49"><a id="__codelineno-79-49" name="__codelineno-79-49"></a><span class="w">        </span><span class="nx">SetEntryPoint</span><span class="p">(</span><span class="nx">nodeParse</span><span class="p">).</span>
+</span><span id="__span-79-50"><a id="__codelineno-79-50" name="__codelineno-79-50"></a><span class="w">        </span><span class="nx">SetFinishPoint</span><span class="p">(</span><span class="nx">nodeParse</span><span class="p">)</span>
+</span><span id="__span-79-51"><a id="__codelineno-79-51" name="__codelineno-79-51"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">sg</span><span class="p">.</span><span class="nx">Compile</span><span class="p">()</span>
+</span><span id="__span-79-52"><a id="__codelineno-79-52" name="__codelineno-79-52"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Recommendations:</p>
+<ul>
+<li>Emit only necessary keys to control bandwidth and avoid leaking sensitive data.</li>
+<li>Internal/volatile keys are filtered from final snapshots and should not be emitted (see <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/internal_keys.go#L16">graph/internal_keys.go:16</a>).</li>
+<li>For textual intermediate outputs, prefer existing model streaming events (<code>choice.Delta.Content</code>).</li>
+</ul>
+<p>You can also configure agent‑level callbacks:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-80-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-80-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-80-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-80-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-80-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-80-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-80-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-80-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-80-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-80-10">10</a></span>
+<span class="normal"><a href="#__codelineno-80-11">11</a></span>
+<span class="normal"><a href="#__codelineno-80-12">12</a></span>
+<span class="normal"><a href="#__codelineno-80-13">13</a></span>
+<span class="normal"><a href="#__codelineno-80-14">14</a></span>
+<span class="normal"><a href="#__codelineno-80-15">15</a></span>
+<span class="normal"><a href="#__codelineno-80-16">16</a></span>
+<span class="normal"><a href="#__codelineno-80-17">17</a></span>
+<span class="normal"><a href="#__codelineno-80-18">18</a></span>
+<span class="normal"><a href="#__codelineno-80-19">19</a></span>
+<span class="normal"><a href="#__codelineno-80-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-80-1"><a id="__codelineno-80-1" name="__codelineno-80-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-80-2"><a id="__codelineno-80-2" name="__codelineno-80-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
+</span><span id="__span-80-3"><a id="__codelineno-80-3" name="__codelineno-80-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-80-4"><a id="__codelineno-80-4" name="__codelineno-80-4"></a><span class="p">)</span>
+</span><span id="__span-80-5"><a id="__codelineno-80-5" name="__codelineno-80-5"></a>
+</span><span id="__span-80-6"><a id="__codelineno-80-6" name="__codelineno-80-6"></a><span class="c1">// Construct and register callbacks (recommended)</span>
+</span><span id="__span-80-7"><a id="__codelineno-80-7" name="__codelineno-80-7"></a><span class="c1">// Note: Structured callback API requires trpc-agent-go &gt;= 0.6.0</span>
+</span><span id="__span-80-8"><a id="__codelineno-80-8" name="__codelineno-80-8"></a><span class="nx">cb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">().</span>
+</span><span id="__span-80-9"><a id="__codelineno-80-9" name="__codelineno-80-9"></a><span class="w">    </span><span class="nx">RegisterBeforeAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-80-10"><a id="__codelineno-80-10" name="__codelineno-80-10"></a><span class="w">        </span><span class="c1">// Return a non-nil CustomResponse to short-circuit this turn</span>
+</span><span id="__span-80-11"><a id="__codelineno-80-11" name="__codelineno-80-11"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-80-12"><a id="__codelineno-80-12" name="__codelineno-80-12"></a><span class="w">    </span><span class="p">}).</span>
+</span><span id="__span-80-13"><a id="__codelineno-80-13" name="__codelineno-80-13"></a><span class="w">    </span><span class="nx">RegisterAfterAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">AfterAgentArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">AfterAgentResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-80-14"><a id="__codelineno-80-14" name="__codelineno-80-14"></a><span class="w">        </span><span class="c1">// Modify/replace the final response</span>
+</span><span id="__span-80-15"><a id="__codelineno-80-15" name="__codelineno-80-15"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-80-16"><a id="__codelineno-80-16" name="__codelineno-80-16"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-80-17"><a id="__codelineno-80-17" name="__codelineno-80-17"></a>
+</span><span id="__span-80-18"><a id="__codelineno-80-18" name="__codelineno-80-18"></a><span class="nx">graphAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;workflow&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">g</span><span class="p">,</span>
+</span><span id="__span-80-19"><a id="__codelineno-80-19" name="__codelineno-80-19"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">cb</span><span class="p">),</span>
+</span><span id="__span-80-20"><a id="__codelineno-80-20" name="__codelineno-80-20"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="troubleshooting">Troubleshooting</h2>
 <p><strong>Q1: Graph has no entry point</strong></p>
@@ -8324,17 +8384,17 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <li><code>AddToolsConditionalEdges</code> internally checks <code>state[StateKeyMessages].([]model.Message)</code> to determine if there are tool calls.</li>
 <li>If the Schema lacks the <code>StateKeyMessages</code> field, <code>MessageReducer</code> won't be applied. The LLM node returns <code>[]graph.MessageOp</code> instead of <code>[]model.Message</code>, causing type assertion to fail and always routing to <code>fallbackNode</code>.</li>
 <li><strong>Solution</strong>: Replace <code>graph.NewStateSchema()</code> with <code>graph.MessagesStateSchema()</code>, then add custom fields on top:
-  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-80-1">1</a></span>
-<span class="normal"><a href="#__codelineno-80-2">2</a></span>
-<span class="normal"><a href="#__codelineno-80-3">3</a></span>
-<span class="normal"><a href="#__codelineno-80-4">4</a></span>
-<span class="normal"><a href="#__codelineno-80-5">5</a></span>
-<span class="normal"><a href="#__codelineno-80-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-80-1"><a id="__codelineno-80-1" name="__codelineno-80-1"></a><span class="c1">// Wrong</span>
-</span><span id="__span-80-2"><a id="__codelineno-80-2" name="__codelineno-80-2"></a><span class="nx">schema</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewStateSchema</span><span class="p">()</span>
-</span><span id="__span-80-3"><a id="__codelineno-80-3" name="__codelineno-80-3"></a>
-</span><span id="__span-80-4"><a id="__codelineno-80-4" name="__codelineno-80-4"></a><span class="c1">// Correct</span>
-</span><span id="__span-80-5"><a id="__codelineno-80-5" name="__codelineno-80-5"></a><span class="nx">schema</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">MessagesStateSchema</span><span class="p">()</span>
-</span><span id="__span-80-6"><a id="__codelineno-80-6" name="__codelineno-80-6"></a><span class="nx">schema</span><span class="p">.</span><span class="nx">AddField</span><span class="p">(</span><span class="s">&quot;my_field&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateField</span><span class="p">{</span><span class="o">...</span><span class="p">})</span>
+  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-81-1">1</a></span>
+<span class="normal"><a href="#__codelineno-81-2">2</a></span>
+<span class="normal"><a href="#__codelineno-81-3">3</a></span>
+<span class="normal"><a href="#__codelineno-81-4">4</a></span>
+<span class="normal"><a href="#__codelineno-81-5">5</a></span>
+<span class="normal"><a href="#__codelineno-81-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-81-1"><a id="__codelineno-81-1" name="__codelineno-81-1"></a><span class="c1">// Wrong</span>
+</span><span id="__span-81-2"><a id="__codelineno-81-2" name="__codelineno-81-2"></a><span class="nx">schema</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewStateSchema</span><span class="p">()</span>
+</span><span id="__span-81-3"><a id="__codelineno-81-3" name="__codelineno-81-3"></a>
+</span><span id="__span-81-4"><a id="__codelineno-81-4" name="__codelineno-81-4"></a><span class="c1">// Correct</span>
+</span><span id="__span-81-5"><a id="__codelineno-81-5" name="__codelineno-81-5"></a><span class="nx">schema</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">MessagesStateSchema</span><span class="p">()</span>
+</span><span id="__span-81-6"><a id="__codelineno-81-6" name="__codelineno-81-6"></a><span class="nx">schema</span><span class="p">.</span><span class="nx">AddField</span><span class="p">(</span><span class="s">&quot;my_field&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateField</span><span class="p">{</span><span class="o">...</span><span class="p">})</span>
 </span></code></pre></div></td></tr></table></div></li>
 </ul>
 <p><strong>Q5: No streaming events observed</strong></p>
@@ -8357,21 +8417,21 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <li><strong>LLM decides whether to call tools</strong>: Based on the tools declaration and user input, the LLM decides whether to return <code>tool_calls</code> in its response.</li>
 <li><strong>tools are NOT automatically executed</strong>: <code>AddLLMNode</code> only declares tools and sends requests to the LLM; it does not execute tools.</li>
 <li><strong>Tool execution requires AddToolsNode + AddToolsConditionalEdges</strong>:
-  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-81-1">1</a></span>
-<span class="normal"><a href="#__codelineno-81-2">2</a></span>
-<span class="normal"><a href="#__codelineno-81-3">3</a></span>
-<span class="normal"><a href="#__codelineno-81-4">4</a></span>
-<span class="normal"><a href="#__codelineno-81-5">5</a></span>
-<span class="normal"><a href="#__codelineno-81-6">6</a></span>
-<span class="normal"><a href="#__codelineno-81-7">7</a></span>
-<span class="normal"><a href="#__codelineno-81-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-81-1"><a id="__codelineno-81-1" name="__codelineno-81-1"></a><span class="c1">// 1. LLM node declares tools (tells LLM what tools are available)</span>
-</span><span id="__span-81-2"><a id="__codelineno-81-2" name="__codelineno-81-2"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddLLMNode</span><span class="p">(</span><span class="s">&quot;ask&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">,</span><span class="w"> </span><span class="nx">systemPrompt</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">)</span>
-</span><span id="__span-81-3"><a id="__codelineno-81-3" name="__codelineno-81-3"></a>
-</span><span id="__span-81-4"><a id="__codelineno-81-4" name="__codelineno-81-4"></a><span class="c1">// 2. Tools node executes tools (based on tool_calls returned by LLM)</span>
-</span><span id="__span-81-5"><a id="__codelineno-81-5" name="__codelineno-81-5"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddToolsNode</span><span class="p">(</span><span class="s">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">)</span>
-</span><span id="__span-81-6"><a id="__codelineno-81-6" name="__codelineno-81-6"></a>
-</span><span id="__span-81-7"><a id="__codelineno-81-7" name="__codelineno-81-7"></a><span class="c1">// 3. Conditional edges route based on LLM response (routes to tools node if tool_calls present)</span>
-</span><span id="__span-81-8"><a id="__codelineno-81-8" name="__codelineno-81-8"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddToolsConditionalEdges</span><span class="p">(</span><span class="s">&quot;ask&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;fallback&quot;</span><span class="p">)</span>
+  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-82-1">1</a></span>
+<span class="normal"><a href="#__codelineno-82-2">2</a></span>
+<span class="normal"><a href="#__codelineno-82-3">3</a></span>
+<span class="normal"><a href="#__codelineno-82-4">4</a></span>
+<span class="normal"><a href="#__codelineno-82-5">5</a></span>
+<span class="normal"><a href="#__codelineno-82-6">6</a></span>
+<span class="normal"><a href="#__codelineno-82-7">7</a></span>
+<span class="normal"><a href="#__codelineno-82-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-82-1"><a id="__codelineno-82-1" name="__codelineno-82-1"></a><span class="c1">// 1. LLM node declares tools (tells LLM what tools are available)</span>
+</span><span id="__span-82-2"><a id="__codelineno-82-2" name="__codelineno-82-2"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddLLMNode</span><span class="p">(</span><span class="s">&quot;ask&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">,</span><span class="w"> </span><span class="nx">systemPrompt</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">)</span>
+</span><span id="__span-82-3"><a id="__codelineno-82-3" name="__codelineno-82-3"></a>
+</span><span id="__span-82-4"><a id="__codelineno-82-4" name="__codelineno-82-4"></a><span class="c1">// 2. Tools node executes tools (based on tool_calls returned by LLM)</span>
+</span><span id="__span-82-5"><a id="__codelineno-82-5" name="__codelineno-82-5"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddToolsNode</span><span class="p">(</span><span class="s">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">)</span>
+</span><span id="__span-82-6"><a id="__codelineno-82-6" name="__codelineno-82-6"></a>
+</span><span id="__span-82-7"><a id="__codelineno-82-7" name="__codelineno-82-7"></a><span class="c1">// 3. Conditional edges route based on LLM response (routes to tools node if tool_calls present)</span>
+</span><span id="__span-82-8"><a id="__codelineno-82-8" name="__codelineno-82-8"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddToolsConditionalEdges</span><span class="p">(</span><span class="s">&quot;ask&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;fallback&quot;</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div></li>
 <li><strong>Execution timing</strong>: When <code>AddToolsConditionalEdges</code> detects <code>tool_calls</code> in the LLM response, it routes to <code>AddToolsNode</code>, which executes the actual tool calls.</li>
 </ul>
@@ -8380,189 +8440,189 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <li><strong>Symptom</strong>: The same user input appears multiple times in <code>req.Messages</code>.</li>
 <li><strong>Root cause</strong>: When using <code>MessagesStateSchema()</code>, <code>MessageReducer</code> accumulates messages. Each LLM node execution appends a new user message if <code>StateKeyUserInput</code> is not empty. When there are loops (e.g., tool call loops) or multiple LLM nodes chained together, messages keep accumulating.</li>
 <li><strong>Solution</strong>: Use <code>RemoveAllMessages</code> to clear previous messages before setting a new <code>StateKeyUserInput</code>:
-  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-82-1">1</a></span>
-<span class="normal"><a href="#__codelineno-82-2">2</a></span>
-<span class="normal"><a href="#__codelineno-82-3">3</a></span>
-<span class="normal"><a href="#__codelineno-82-4">4</a></span>
-<span class="normal"><a href="#__codelineno-82-5">5</a></span>
-<span class="normal"><a href="#__codelineno-82-6">6</a></span>
-<span class="normal"><a href="#__codelineno-82-7">7</a></span>
-<span class="normal"><a href="#__codelineno-82-8">8</a></span>
-<span class="normal"><a href="#__codelineno-82-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-82-1"><a id="__codelineno-82-1" name="__codelineno-82-1"></a><span class="c1">// In the prepare prompt node</span>
-</span><span id="__span-82-2"><a id="__codelineno-82-2" name="__codelineno-82-2"></a><span class="kd">func</span><span class="w"> </span><span class="nx">preparePromptNode</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">state</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-82-3"><a id="__codelineno-82-3" name="__codelineno-82-3"></a><span class="w">    </span><span class="nx">userMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">buildUserMessage</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
-</span><span id="__span-82-4"><a id="__codelineno-82-4" name="__codelineno-82-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span>
-</span><span id="__span-82-5"><a id="__codelineno-82-5" name="__codelineno-82-5"></a><span class="w">        </span><span class="c1">// Key: Clear previous messages to avoid accumulation</span>
-</span><span id="__span-82-6"><a id="__codelineno-82-6" name="__codelineno-82-6"></a><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyMessages</span><span class="p">:</span><span class="w">  </span><span class="nx">graph</span><span class="p">.</span><span class="nx">RemoveAllMessages</span><span class="p">{},</span>
-</span><span id="__span-82-7"><a id="__codelineno-82-7" name="__codelineno-82-7"></a><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyUserInput</span><span class="p">:</span><span class="w"> </span><span class="nx">userMessage</span><span class="p">,</span>
-</span><span id="__span-82-8"><a id="__codelineno-82-8" name="__codelineno-82-8"></a><span class="w">    </span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-82-9"><a id="__codelineno-82-9" name="__codelineno-82-9"></a><span class="p">}</span>
+  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-83-1">1</a></span>
+<span class="normal"><a href="#__codelineno-83-2">2</a></span>
+<span class="normal"><a href="#__codelineno-83-3">3</a></span>
+<span class="normal"><a href="#__codelineno-83-4">4</a></span>
+<span class="normal"><a href="#__codelineno-83-5">5</a></span>
+<span class="normal"><a href="#__codelineno-83-6">6</a></span>
+<span class="normal"><a href="#__codelineno-83-7">7</a></span>
+<span class="normal"><a href="#__codelineno-83-8">8</a></span>
+<span class="normal"><a href="#__codelineno-83-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-83-1"><a id="__codelineno-83-1" name="__codelineno-83-1"></a><span class="c1">// In the prepare prompt node</span>
+</span><span id="__span-83-2"><a id="__codelineno-83-2" name="__codelineno-83-2"></a><span class="kd">func</span><span class="w"> </span><span class="nx">preparePromptNode</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">state</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-83-3"><a id="__codelineno-83-3" name="__codelineno-83-3"></a><span class="w">    </span><span class="nx">userMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">buildUserMessage</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-83-4"><a id="__codelineno-83-4" name="__codelineno-83-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span>
+</span><span id="__span-83-5"><a id="__codelineno-83-5" name="__codelineno-83-5"></a><span class="w">        </span><span class="c1">// Key: Clear previous messages to avoid accumulation</span>
+</span><span id="__span-83-6"><a id="__codelineno-83-6" name="__codelineno-83-6"></a><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyMessages</span><span class="p">:</span><span class="w">  </span><span class="nx">graph</span><span class="p">.</span><span class="nx">RemoveAllMessages</span><span class="p">{},</span>
+</span><span id="__span-83-7"><a id="__codelineno-83-7" name="__codelineno-83-7"></a><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyUserInput</span><span class="p">:</span><span class="w"> </span><span class="nx">userMessage</span><span class="p">,</span>
+</span><span id="__span-83-8"><a id="__codelineno-83-8" name="__codelineno-83-8"></a><span class="w">    </span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-83-9"><a id="__codelineno-83-9" name="__codelineno-83-9"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div></li>
 <li><strong>Note</strong>: <code>WithSubgraphIsolatedMessages(true)</code> only works for <code>AddSubgraphNode</code>, not for <code>AddLLMNode</code>.</li>
 </ul>
 <h2 id="realworld-example">Real‑World Example</h2>
 <h3 id="approval-workflow">Approval Workflow</h3>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-83-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-83-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-83-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-83-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-83-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-83-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-83-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-83-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-83-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-83-10">10</a></span>
-<span class="normal"><a href="#__codelineno-83-11">11</a></span>
-<span class="normal"><a href="#__codelineno-83-12">12</a></span>
-<span class="normal"><a href="#__codelineno-83-13">13</a></span>
-<span class="normal"><a href="#__codelineno-83-14">14</a></span>
-<span class="normal"><a href="#__codelineno-83-15">15</a></span>
-<span class="normal"><a href="#__codelineno-83-16">16</a></span>
-<span class="normal"><a href="#__codelineno-83-17">17</a></span>
-<span class="normal"><a href="#__codelineno-83-18">18</a></span>
-<span class="normal"><a href="#__codelineno-83-19">19</a></span>
-<span class="normal"><a href="#__codelineno-83-20">20</a></span>
-<span class="normal"><a href="#__codelineno-83-21">21</a></span>
-<span class="normal"><a href="#__codelineno-83-22">22</a></span>
-<span class="normal"><a href="#__codelineno-83-23">23</a></span>
-<span class="normal"><a href="#__codelineno-83-24">24</a></span>
-<span class="normal"><a href="#__codelineno-83-25">25</a></span>
-<span class="normal"><a href="#__codelineno-83-26">26</a></span>
-<span class="normal"><a href="#__codelineno-83-27">27</a></span>
-<span class="normal"><a href="#__codelineno-83-28">28</a></span>
-<span class="normal"><a href="#__codelineno-83-29">29</a></span>
-<span class="normal"><a href="#__codelineno-83-30">30</a></span>
-<span class="normal"><a href="#__codelineno-83-31">31</a></span>
-<span class="normal"><a href="#__codelineno-83-32">32</a></span>
-<span class="normal"><a href="#__codelineno-83-33">33</a></span>
-<span class="normal"><a href="#__codelineno-83-34">34</a></span>
-<span class="normal"><a href="#__codelineno-83-35">35</a></span>
-<span class="normal"><a href="#__codelineno-83-36">36</a></span>
-<span class="normal"><a href="#__codelineno-83-37">37</a></span>
-<span class="normal"><a href="#__codelineno-83-38">38</a></span>
-<span class="normal"><a href="#__codelineno-83-39">39</a></span>
-<span class="normal"><a href="#__codelineno-83-40">40</a></span>
-<span class="normal"><a href="#__codelineno-83-41">41</a></span>
-<span class="normal"><a href="#__codelineno-83-42">42</a></span>
-<span class="normal"><a href="#__codelineno-83-43">43</a></span>
-<span class="normal"><a href="#__codelineno-83-44">44</a></span>
-<span class="normal"><a href="#__codelineno-83-45">45</a></span>
-<span class="normal"><a href="#__codelineno-83-46">46</a></span>
-<span class="normal"><a href="#__codelineno-83-47">47</a></span>
-<span class="normal"><a href="#__codelineno-83-48">48</a></span>
-<span class="normal"><a href="#__codelineno-83-49">49</a></span>
-<span class="normal"><a href="#__codelineno-83-50">50</a></span>
-<span class="normal"><a href="#__codelineno-83-51">51</a></span>
-<span class="normal"><a href="#__codelineno-83-52">52</a></span>
-<span class="normal"><a href="#__codelineno-83-53">53</a></span>
-<span class="normal"><a href="#__codelineno-83-54">54</a></span>
-<span class="normal"><a href="#__codelineno-83-55">55</a></span>
-<span class="normal"><a href="#__codelineno-83-56">56</a></span>
-<span class="normal"><a href="#__codelineno-83-57">57</a></span>
-<span class="normal"><a href="#__codelineno-83-58">58</a></span>
-<span class="normal"><a href="#__codelineno-83-59">59</a></span>
-<span class="normal"><a href="#__codelineno-83-60">60</a></span>
-<span class="normal"><a href="#__codelineno-83-61">61</a></span>
-<span class="normal"><a href="#__codelineno-83-62">62</a></span>
-<span class="normal"><a href="#__codelineno-83-63">63</a></span>
-<span class="normal"><a href="#__codelineno-83-64">64</a></span>
-<span class="normal"><a href="#__codelineno-83-65">65</a></span>
-<span class="normal"><a href="#__codelineno-83-66">66</a></span>
-<span class="normal"><a href="#__codelineno-83-67">67</a></span>
-<span class="normal"><a href="#__codelineno-83-68">68</a></span>
-<span class="normal"><a href="#__codelineno-83-69">69</a></span>
-<span class="normal"><a href="#__codelineno-83-70">70</a></span>
-<span class="normal"><a href="#__codelineno-83-71">71</a></span>
-<span class="normal"><a href="#__codelineno-83-72">72</a></span>
-<span class="normal"><a href="#__codelineno-83-73">73</a></span>
-<span class="normal"><a href="#__codelineno-83-74">74</a></span>
-<span class="normal"><a href="#__codelineno-83-75">75</a></span>
-<span class="normal"><a href="#__codelineno-83-76">76</a></span>
-<span class="normal"><a href="#__codelineno-83-77">77</a></span>
-<span class="normal"><a href="#__codelineno-83-78">78</a></span>
-<span class="normal"><a href="#__codelineno-83-79">79</a></span>
-<span class="normal"><a href="#__codelineno-83-80">80</a></span>
-<span class="normal"><a href="#__codelineno-83-81">81</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-83-1"><a id="__codelineno-83-1" name="__codelineno-83-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-83-2"><a id="__codelineno-83-2" name="__codelineno-83-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-83-3"><a id="__codelineno-83-3" name="__codelineno-83-3"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
-</span><span id="__span-83-4"><a id="__codelineno-83-4" name="__codelineno-83-4"></a><span class="w">    </span><span class="s">&quot;strings&quot;</span>
-</span><span id="__span-83-5"><a id="__codelineno-83-5" name="__codelineno-83-5"></a>
-</span><span id="__span-83-6"><a id="__codelineno-83-6" name="__codelineno-83-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/graph&quot;</span>
-</span><span id="__span-83-7"><a id="__codelineno-83-7" name="__codelineno-83-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
-</span><span id="__span-83-8"><a id="__codelineno-83-8" name="__codelineno-83-8"></a><span class="p">)</span>
-</span><span id="__span-83-9"><a id="__codelineno-83-9" name="__codelineno-83-9"></a>
-</span><span id="__span-83-10"><a id="__codelineno-83-10" name="__codelineno-83-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">buildApprovalWorkflow</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">Graph</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-83-11"><a id="__codelineno-83-11" name="__codelineno-83-11"></a><span class="w">    </span><span class="nx">sg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewStateGraph</span><span class="p">(</span><span class="nx">graph</span><span class="p">.</span><span class="nx">MessagesStateSchema</span><span class="p">())</span>
-</span><span id="__span-83-12"><a id="__codelineno-83-12" name="__codelineno-83-12"></a>
-</span><span id="__span-83-13"><a id="__codelineno-83-13" name="__codelineno-83-13"></a><span class="w">    </span><span class="c1">// AI pre‑review (define LLM model)</span>
-</span><span id="__span-83-14"><a id="__codelineno-83-14" name="__codelineno-83-14"></a><span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-83-15"><a id="__codelineno-83-15" name="__codelineno-83-15"></a><span class="w">        </span><span class="nx">modelNameApprove</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;gpt-4o-mini&quot;</span>
-</span><span id="__span-83-16"><a id="__codelineno-83-16" name="__codelineno-83-16"></a><span class="w">        </span><span class="nx">promptApproveDecision</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;Decide whether the application meets requirements; reply approve or reject&quot;</span>
-</span><span id="__span-83-17"><a id="__codelineno-83-17" name="__codelineno-83-17"></a>
-</span><span id="__span-83-18"><a id="__codelineno-83-18" name="__codelineno-83-18"></a><span class="w">        </span><span class="nx">nodeAIReview</span><span class="w">    </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;ai_review&quot;</span>
-</span><span id="__span-83-19"><a id="__codelineno-83-19" name="__codelineno-83-19"></a><span class="w">        </span><span class="nx">nodeHumanReview</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;human_review&quot;</span>
-</span><span id="__span-83-20"><a id="__codelineno-83-20" name="__codelineno-83-20"></a><span class="w">        </span><span class="nx">nodeApprove</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;approve&quot;</span>
-</span><span id="__span-83-21"><a id="__codelineno-83-21" name="__codelineno-83-21"></a><span class="w">        </span><span class="nx">nodeReject</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;reject&quot;</span>
-</span><span id="__span-83-22"><a id="__codelineno-83-22" name="__codelineno-83-22"></a>
-</span><span id="__span-83-23"><a id="__codelineno-83-23" name="__codelineno-83-23"></a><span class="w">        </span><span class="nx">routeHumanReview</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_human_review&quot;</span>
-</span><span id="__span-83-24"><a id="__codelineno-83-24" name="__codelineno-83-24"></a><span class="w">        </span><span class="nx">routeReject</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_reject&quot;</span>
-</span><span id="__span-83-25"><a id="__codelineno-83-25" name="__codelineno-83-25"></a><span class="w">        </span><span class="nx">routeApprove</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_approve&quot;</span>
-</span><span id="__span-83-26"><a id="__codelineno-83-26" name="__codelineno-83-26"></a>
-</span><span id="__span-83-27"><a id="__codelineno-83-27" name="__codelineno-83-27"></a><span class="w">        </span><span class="nx">stateKeyApplication</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;application&quot;</span>
-</span><span id="__span-83-28"><a id="__codelineno-83-28" name="__codelineno-83-28"></a><span class="w">        </span><span class="nx">stateKeyDecision</span><span class="w">    </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;decision&quot;</span>
-</span><span id="__span-83-29"><a id="__codelineno-83-29" name="__codelineno-83-29"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-83-30"><a id="__codelineno-83-30" name="__codelineno-83-30"></a>
-</span><span id="__span-83-31"><a id="__codelineno-83-31" name="__codelineno-83-31"></a><span class="w">    </span><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">modelNameApprove</span><span class="p">)</span>
-</span><span id="__span-83-32"><a id="__codelineno-83-32" name="__codelineno-83-32"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddLLMNode</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">,</span><span class="w"> </span><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">promptApproveDecision</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">)</span>
-</span><span id="__span-83-33"><a id="__codelineno-83-33" name="__codelineno-83-33"></a>
-</span><span id="__span-83-34"><a id="__codelineno-83-34" name="__codelineno-83-34"></a><span class="w">    </span><span class="c1">// Route to human review or reject</span>
-</span><span id="__span-83-35"><a id="__codelineno-83-35" name="__codelineno-83-35"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">,</span>
-</span><span id="__span-83-36"><a id="__codelineno-83-36" name="__codelineno-83-36"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-83-37"><a id="__codelineno-83-37" name="__codelineno-83-37"></a><span class="w">            </span><span class="nx">resp</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyLastResponse</span><span class="p">].(</span><span class="kt">string</span><span class="p">)</span>
-</span><span id="__span-83-38"><a id="__codelineno-83-38" name="__codelineno-83-38"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Contains</span><span class="p">(</span><span class="nx">resp</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;approve&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-83-39"><a id="__codelineno-83-39" name="__codelineno-83-39"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">routeHumanReview</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-83-40"><a id="__codelineno-83-40" name="__codelineno-83-40"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-83-41"><a id="__codelineno-83-41" name="__codelineno-83-41"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">routeReject</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-83-42"><a id="__codelineno-83-42" name="__codelineno-83-42"></a><span class="w">        </span><span class="p">},</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
-</span><span id="__span-83-43"><a id="__codelineno-83-43" name="__codelineno-83-43"></a><span class="w">            </span><span class="nx">routeHumanReview</span><span class="p">:</span><span class="w"> </span><span class="nx">nodeHumanReview</span><span class="p">,</span>
-</span><span id="__span-83-44"><a id="__codelineno-83-44" name="__codelineno-83-44"></a><span class="w">            </span><span class="nx">routeReject</span><span class="p">:</span><span class="w">      </span><span class="nx">nodeReject</span><span class="p">,</span>
-</span><span id="__span-83-45"><a id="__codelineno-83-45" name="__codelineno-83-45"></a><span class="w">        </span><span class="p">})</span>
-</span><span id="__span-83-46"><a id="__codelineno-83-46" name="__codelineno-83-46"></a>
-</span><span id="__span-83-47"><a id="__codelineno-83-47" name="__codelineno-83-47"></a><span class="w">    </span><span class="c1">// Human review node</span>
-</span><span id="__span-83-48"><a id="__codelineno-83-48" name="__codelineno-83-48"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeHumanReview</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-83-49"><a id="__codelineno-83-49" name="__codelineno-83-49"></a><span class="w">        </span><span class="nx">app</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">stateKeyApplication</span><span class="p">].(</span><span class="kt">string</span><span class="p">)</span>
-</span><span id="__span-83-50"><a id="__codelineno-83-50" name="__codelineno-83-50"></a><span class="w">        </span><span class="nx">decision</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">Interrupt</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;approval&quot;</span><span class="p">,</span>
-</span><span id="__span-83-51"><a id="__codelineno-83-51" name="__codelineno-83-51"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;Please approve: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">app</span><span class="p">))</span>
-</span><span id="__span-83-52"><a id="__codelineno-83-52" name="__codelineno-83-52"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-83-53"><a id="__codelineno-83-53" name="__codelineno-83-53"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-83-54"><a id="__codelineno-83-54" name="__codelineno-83-54"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-83-55"><a id="__codelineno-83-55" name="__codelineno-83-55"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="nx">stateKeyDecision</span><span class="p">:</span><span class="w"> </span><span class="nx">decision</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-83-56"><a id="__codelineno-83-56" name="__codelineno-83-56"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-83-57"><a id="__codelineno-83-57" name="__codelineno-83-57"></a>
-</span><span id="__span-83-58"><a id="__codelineno-83-58" name="__codelineno-83-58"></a><span class="w">    </span><span class="c1">// Outcome handling</span>
-</span><span id="__span-83-59"><a id="__codelineno-83-59" name="__codelineno-83-59"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeApprove</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-83-60"><a id="__codelineno-83-60" name="__codelineno-83-60"></a><span class="w">        </span><span class="c1">// perform approval logic</span>
-</span><span id="__span-83-61"><a id="__codelineno-83-61" name="__codelineno-83-61"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="s">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;approved&quot;</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-83-62"><a id="__codelineno-83-62" name="__codelineno-83-62"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-83-63"><a id="__codelineno-83-63" name="__codelineno-83-63"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeReject</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-83-64"><a id="__codelineno-83-64" name="__codelineno-83-64"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="s">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;rejected&quot;</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-83-65"><a id="__codelineno-83-65" name="__codelineno-83-65"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-83-66"><a id="__codelineno-83-66" name="__codelineno-83-66"></a>
-</span><span id="__span-83-67"><a id="__codelineno-83-67" name="__codelineno-83-67"></a><span class="w">    </span><span class="c1">// Wire the flow</span>
-</span><span id="__span-83-68"><a id="__codelineno-83-68" name="__codelineno-83-68"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">SetEntryPoint</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">)</span>
-</span><span id="__span-83-69"><a id="__codelineno-83-69" name="__codelineno-83-69"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeHumanReview</span><span class="p">,</span>
-</span><span id="__span-83-70"><a id="__codelineno-83-70" name="__codelineno-83-70"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-83-71"><a id="__codelineno-83-71" name="__codelineno-83-71"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">stateKeyDecision</span><span class="p">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;approve&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-83-72"><a id="__codelineno-83-72" name="__codelineno-83-72"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">routeApprove</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-83-73"><a id="__codelineno-83-73" name="__codelineno-83-73"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-83-74"><a id="__codelineno-83-74" name="__codelineno-83-74"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">routeReject</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-83-75"><a id="__codelineno-83-75" name="__codelineno-83-75"></a><span class="w">        </span><span class="p">},</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
-</span><span id="__span-83-76"><a id="__codelineno-83-76" name="__codelineno-83-76"></a><span class="w">            </span><span class="nx">routeApprove</span><span class="p">:</span><span class="w"> </span><span class="nx">nodeApprove</span><span class="p">,</span>
-</span><span id="__span-83-77"><a id="__codelineno-83-77" name="__codelineno-83-77"></a><span class="w">            </span><span class="nx">routeReject</span><span class="p">:</span><span class="w">  </span><span class="nx">nodeReject</span><span class="p">,</span>
-</span><span id="__span-83-78"><a id="__codelineno-83-78" name="__codelineno-83-78"></a><span class="w">        </span><span class="p">})</span>
-</span><span id="__span-83-79"><a id="__codelineno-83-79" name="__codelineno-83-79"></a>
-</span><span id="__span-83-80"><a id="__codelineno-83-80" name="__codelineno-83-80"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">sg</span><span class="p">.</span><span class="nx">Compile</span><span class="p">()</span>
-</span><span id="__span-83-81"><a id="__codelineno-83-81" name="__codelineno-83-81"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-84-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-84-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-84-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-84-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-84-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-84-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-84-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-84-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-84-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-84-10">10</a></span>
+<span class="normal"><a href="#__codelineno-84-11">11</a></span>
+<span class="normal"><a href="#__codelineno-84-12">12</a></span>
+<span class="normal"><a href="#__codelineno-84-13">13</a></span>
+<span class="normal"><a href="#__codelineno-84-14">14</a></span>
+<span class="normal"><a href="#__codelineno-84-15">15</a></span>
+<span class="normal"><a href="#__codelineno-84-16">16</a></span>
+<span class="normal"><a href="#__codelineno-84-17">17</a></span>
+<span class="normal"><a href="#__codelineno-84-18">18</a></span>
+<span class="normal"><a href="#__codelineno-84-19">19</a></span>
+<span class="normal"><a href="#__codelineno-84-20">20</a></span>
+<span class="normal"><a href="#__codelineno-84-21">21</a></span>
+<span class="normal"><a href="#__codelineno-84-22">22</a></span>
+<span class="normal"><a href="#__codelineno-84-23">23</a></span>
+<span class="normal"><a href="#__codelineno-84-24">24</a></span>
+<span class="normal"><a href="#__codelineno-84-25">25</a></span>
+<span class="normal"><a href="#__codelineno-84-26">26</a></span>
+<span class="normal"><a href="#__codelineno-84-27">27</a></span>
+<span class="normal"><a href="#__codelineno-84-28">28</a></span>
+<span class="normal"><a href="#__codelineno-84-29">29</a></span>
+<span class="normal"><a href="#__codelineno-84-30">30</a></span>
+<span class="normal"><a href="#__codelineno-84-31">31</a></span>
+<span class="normal"><a href="#__codelineno-84-32">32</a></span>
+<span class="normal"><a href="#__codelineno-84-33">33</a></span>
+<span class="normal"><a href="#__codelineno-84-34">34</a></span>
+<span class="normal"><a href="#__codelineno-84-35">35</a></span>
+<span class="normal"><a href="#__codelineno-84-36">36</a></span>
+<span class="normal"><a href="#__codelineno-84-37">37</a></span>
+<span class="normal"><a href="#__codelineno-84-38">38</a></span>
+<span class="normal"><a href="#__codelineno-84-39">39</a></span>
+<span class="normal"><a href="#__codelineno-84-40">40</a></span>
+<span class="normal"><a href="#__codelineno-84-41">41</a></span>
+<span class="normal"><a href="#__codelineno-84-42">42</a></span>
+<span class="normal"><a href="#__codelineno-84-43">43</a></span>
+<span class="normal"><a href="#__codelineno-84-44">44</a></span>
+<span class="normal"><a href="#__codelineno-84-45">45</a></span>
+<span class="normal"><a href="#__codelineno-84-46">46</a></span>
+<span class="normal"><a href="#__codelineno-84-47">47</a></span>
+<span class="normal"><a href="#__codelineno-84-48">48</a></span>
+<span class="normal"><a href="#__codelineno-84-49">49</a></span>
+<span class="normal"><a href="#__codelineno-84-50">50</a></span>
+<span class="normal"><a href="#__codelineno-84-51">51</a></span>
+<span class="normal"><a href="#__codelineno-84-52">52</a></span>
+<span class="normal"><a href="#__codelineno-84-53">53</a></span>
+<span class="normal"><a href="#__codelineno-84-54">54</a></span>
+<span class="normal"><a href="#__codelineno-84-55">55</a></span>
+<span class="normal"><a href="#__codelineno-84-56">56</a></span>
+<span class="normal"><a href="#__codelineno-84-57">57</a></span>
+<span class="normal"><a href="#__codelineno-84-58">58</a></span>
+<span class="normal"><a href="#__codelineno-84-59">59</a></span>
+<span class="normal"><a href="#__codelineno-84-60">60</a></span>
+<span class="normal"><a href="#__codelineno-84-61">61</a></span>
+<span class="normal"><a href="#__codelineno-84-62">62</a></span>
+<span class="normal"><a href="#__codelineno-84-63">63</a></span>
+<span class="normal"><a href="#__codelineno-84-64">64</a></span>
+<span class="normal"><a href="#__codelineno-84-65">65</a></span>
+<span class="normal"><a href="#__codelineno-84-66">66</a></span>
+<span class="normal"><a href="#__codelineno-84-67">67</a></span>
+<span class="normal"><a href="#__codelineno-84-68">68</a></span>
+<span class="normal"><a href="#__codelineno-84-69">69</a></span>
+<span class="normal"><a href="#__codelineno-84-70">70</a></span>
+<span class="normal"><a href="#__codelineno-84-71">71</a></span>
+<span class="normal"><a href="#__codelineno-84-72">72</a></span>
+<span class="normal"><a href="#__codelineno-84-73">73</a></span>
+<span class="normal"><a href="#__codelineno-84-74">74</a></span>
+<span class="normal"><a href="#__codelineno-84-75">75</a></span>
+<span class="normal"><a href="#__codelineno-84-76">76</a></span>
+<span class="normal"><a href="#__codelineno-84-77">77</a></span>
+<span class="normal"><a href="#__codelineno-84-78">78</a></span>
+<span class="normal"><a href="#__codelineno-84-79">79</a></span>
+<span class="normal"><a href="#__codelineno-84-80">80</a></span>
+<span class="normal"><a href="#__codelineno-84-81">81</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-84-1"><a id="__codelineno-84-1" name="__codelineno-84-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-84-2"><a id="__codelineno-84-2" name="__codelineno-84-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-84-3"><a id="__codelineno-84-3" name="__codelineno-84-3"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
+</span><span id="__span-84-4"><a id="__codelineno-84-4" name="__codelineno-84-4"></a><span class="w">    </span><span class="s">&quot;strings&quot;</span>
+</span><span id="__span-84-5"><a id="__codelineno-84-5" name="__codelineno-84-5"></a>
+</span><span id="__span-84-6"><a id="__codelineno-84-6" name="__codelineno-84-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/graph&quot;</span>
+</span><span id="__span-84-7"><a id="__codelineno-84-7" name="__codelineno-84-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-84-8"><a id="__codelineno-84-8" name="__codelineno-84-8"></a><span class="p">)</span>
+</span><span id="__span-84-9"><a id="__codelineno-84-9" name="__codelineno-84-9"></a>
+</span><span id="__span-84-10"><a id="__codelineno-84-10" name="__codelineno-84-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">buildApprovalWorkflow</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">Graph</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-84-11"><a id="__codelineno-84-11" name="__codelineno-84-11"></a><span class="w">    </span><span class="nx">sg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewStateGraph</span><span class="p">(</span><span class="nx">graph</span><span class="p">.</span><span class="nx">MessagesStateSchema</span><span class="p">())</span>
+</span><span id="__span-84-12"><a id="__codelineno-84-12" name="__codelineno-84-12"></a>
+</span><span id="__span-84-13"><a id="__codelineno-84-13" name="__codelineno-84-13"></a><span class="w">    </span><span class="c1">// AI pre‑review (define LLM model)</span>
+</span><span id="__span-84-14"><a id="__codelineno-84-14" name="__codelineno-84-14"></a><span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-84-15"><a id="__codelineno-84-15" name="__codelineno-84-15"></a><span class="w">        </span><span class="nx">modelNameApprove</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;gpt-4o-mini&quot;</span>
+</span><span id="__span-84-16"><a id="__codelineno-84-16" name="__codelineno-84-16"></a><span class="w">        </span><span class="nx">promptApproveDecision</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;Decide whether the application meets requirements; reply approve or reject&quot;</span>
+</span><span id="__span-84-17"><a id="__codelineno-84-17" name="__codelineno-84-17"></a>
+</span><span id="__span-84-18"><a id="__codelineno-84-18" name="__codelineno-84-18"></a><span class="w">        </span><span class="nx">nodeAIReview</span><span class="w">    </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;ai_review&quot;</span>
+</span><span id="__span-84-19"><a id="__codelineno-84-19" name="__codelineno-84-19"></a><span class="w">        </span><span class="nx">nodeHumanReview</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;human_review&quot;</span>
+</span><span id="__span-84-20"><a id="__codelineno-84-20" name="__codelineno-84-20"></a><span class="w">        </span><span class="nx">nodeApprove</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;approve&quot;</span>
+</span><span id="__span-84-21"><a id="__codelineno-84-21" name="__codelineno-84-21"></a><span class="w">        </span><span class="nx">nodeReject</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;reject&quot;</span>
+</span><span id="__span-84-22"><a id="__codelineno-84-22" name="__codelineno-84-22"></a>
+</span><span id="__span-84-23"><a id="__codelineno-84-23" name="__codelineno-84-23"></a><span class="w">        </span><span class="nx">routeHumanReview</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_human_review&quot;</span>
+</span><span id="__span-84-24"><a id="__codelineno-84-24" name="__codelineno-84-24"></a><span class="w">        </span><span class="nx">routeReject</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_reject&quot;</span>
+</span><span id="__span-84-25"><a id="__codelineno-84-25" name="__codelineno-84-25"></a><span class="w">        </span><span class="nx">routeApprove</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_approve&quot;</span>
+</span><span id="__span-84-26"><a id="__codelineno-84-26" name="__codelineno-84-26"></a>
+</span><span id="__span-84-27"><a id="__codelineno-84-27" name="__codelineno-84-27"></a><span class="w">        </span><span class="nx">stateKeyApplication</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;application&quot;</span>
+</span><span id="__span-84-28"><a id="__codelineno-84-28" name="__codelineno-84-28"></a><span class="w">        </span><span class="nx">stateKeyDecision</span><span class="w">    </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;decision&quot;</span>
+</span><span id="__span-84-29"><a id="__codelineno-84-29" name="__codelineno-84-29"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-84-30"><a id="__codelineno-84-30" name="__codelineno-84-30"></a>
+</span><span id="__span-84-31"><a id="__codelineno-84-31" name="__codelineno-84-31"></a><span class="w">    </span><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">modelNameApprove</span><span class="p">)</span>
+</span><span id="__span-84-32"><a id="__codelineno-84-32" name="__codelineno-84-32"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddLLMNode</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">,</span><span class="w"> </span><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">promptApproveDecision</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">)</span>
+</span><span id="__span-84-33"><a id="__codelineno-84-33" name="__codelineno-84-33"></a>
+</span><span id="__span-84-34"><a id="__codelineno-84-34" name="__codelineno-84-34"></a><span class="w">    </span><span class="c1">// Route to human review or reject</span>
+</span><span id="__span-84-35"><a id="__codelineno-84-35" name="__codelineno-84-35"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">,</span>
+</span><span id="__span-84-36"><a id="__codelineno-84-36" name="__codelineno-84-36"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-84-37"><a id="__codelineno-84-37" name="__codelineno-84-37"></a><span class="w">            </span><span class="nx">resp</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyLastResponse</span><span class="p">].(</span><span class="kt">string</span><span class="p">)</span>
+</span><span id="__span-84-38"><a id="__codelineno-84-38" name="__codelineno-84-38"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Contains</span><span class="p">(</span><span class="nx">resp</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;approve&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-84-39"><a id="__codelineno-84-39" name="__codelineno-84-39"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">routeHumanReview</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-84-40"><a id="__codelineno-84-40" name="__codelineno-84-40"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-84-41"><a id="__codelineno-84-41" name="__codelineno-84-41"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">routeReject</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-84-42"><a id="__codelineno-84-42" name="__codelineno-84-42"></a><span class="w">        </span><span class="p">},</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
+</span><span id="__span-84-43"><a id="__codelineno-84-43" name="__codelineno-84-43"></a><span class="w">            </span><span class="nx">routeHumanReview</span><span class="p">:</span><span class="w"> </span><span class="nx">nodeHumanReview</span><span class="p">,</span>
+</span><span id="__span-84-44"><a id="__codelineno-84-44" name="__codelineno-84-44"></a><span class="w">            </span><span class="nx">routeReject</span><span class="p">:</span><span class="w">      </span><span class="nx">nodeReject</span><span class="p">,</span>
+</span><span id="__span-84-45"><a id="__codelineno-84-45" name="__codelineno-84-45"></a><span class="w">        </span><span class="p">})</span>
+</span><span id="__span-84-46"><a id="__codelineno-84-46" name="__codelineno-84-46"></a>
+</span><span id="__span-84-47"><a id="__codelineno-84-47" name="__codelineno-84-47"></a><span class="w">    </span><span class="c1">// Human review node</span>
+</span><span id="__span-84-48"><a id="__codelineno-84-48" name="__codelineno-84-48"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeHumanReview</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-84-49"><a id="__codelineno-84-49" name="__codelineno-84-49"></a><span class="w">        </span><span class="nx">app</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">stateKeyApplication</span><span class="p">].(</span><span class="kt">string</span><span class="p">)</span>
+</span><span id="__span-84-50"><a id="__codelineno-84-50" name="__codelineno-84-50"></a><span class="w">        </span><span class="nx">decision</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">Interrupt</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;approval&quot;</span><span class="p">,</span>
+</span><span id="__span-84-51"><a id="__codelineno-84-51" name="__codelineno-84-51"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;Please approve: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">app</span><span class="p">))</span>
+</span><span id="__span-84-52"><a id="__codelineno-84-52" name="__codelineno-84-52"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-84-53"><a id="__codelineno-84-53" name="__codelineno-84-53"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-84-54"><a id="__codelineno-84-54" name="__codelineno-84-54"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-84-55"><a id="__codelineno-84-55" name="__codelineno-84-55"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="nx">stateKeyDecision</span><span class="p">:</span><span class="w"> </span><span class="nx">decision</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-84-56"><a id="__codelineno-84-56" name="__codelineno-84-56"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-84-57"><a id="__codelineno-84-57" name="__codelineno-84-57"></a>
+</span><span id="__span-84-58"><a id="__codelineno-84-58" name="__codelineno-84-58"></a><span class="w">    </span><span class="c1">// Outcome handling</span>
+</span><span id="__span-84-59"><a id="__codelineno-84-59" name="__codelineno-84-59"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeApprove</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-84-60"><a id="__codelineno-84-60" name="__codelineno-84-60"></a><span class="w">        </span><span class="c1">// perform approval logic</span>
+</span><span id="__span-84-61"><a id="__codelineno-84-61" name="__codelineno-84-61"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="s">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;approved&quot;</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-84-62"><a id="__codelineno-84-62" name="__codelineno-84-62"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-84-63"><a id="__codelineno-84-63" name="__codelineno-84-63"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeReject</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-84-64"><a id="__codelineno-84-64" name="__codelineno-84-64"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="s">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;rejected&quot;</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-84-65"><a id="__codelineno-84-65" name="__codelineno-84-65"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-84-66"><a id="__codelineno-84-66" name="__codelineno-84-66"></a>
+</span><span id="__span-84-67"><a id="__codelineno-84-67" name="__codelineno-84-67"></a><span class="w">    </span><span class="c1">// Wire the flow</span>
+</span><span id="__span-84-68"><a id="__codelineno-84-68" name="__codelineno-84-68"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">SetEntryPoint</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">)</span>
+</span><span id="__span-84-69"><a id="__codelineno-84-69" name="__codelineno-84-69"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeHumanReview</span><span class="p">,</span>
+</span><span id="__span-84-70"><a id="__codelineno-84-70" name="__codelineno-84-70"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-84-71"><a id="__codelineno-84-71" name="__codelineno-84-71"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">stateKeyDecision</span><span class="p">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;approve&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-84-72"><a id="__codelineno-84-72" name="__codelineno-84-72"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">routeApprove</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-84-73"><a id="__codelineno-84-73" name="__codelineno-84-73"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-84-74"><a id="__codelineno-84-74" name="__codelineno-84-74"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">routeReject</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-84-75"><a id="__codelineno-84-75" name="__codelineno-84-75"></a><span class="w">        </span><span class="p">},</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
+</span><span id="__span-84-76"><a id="__codelineno-84-76" name="__codelineno-84-76"></a><span class="w">            </span><span class="nx">routeApprove</span><span class="p">:</span><span class="w"> </span><span class="nx">nodeApprove</span><span class="p">,</span>
+</span><span id="__span-84-77"><a id="__codelineno-84-77" name="__codelineno-84-77"></a><span class="w">            </span><span class="nx">routeReject</span><span class="p">:</span><span class="w">  </span><span class="nx">nodeReject</span><span class="p">,</span>
+</span><span id="__span-84-78"><a id="__codelineno-84-78" name="__codelineno-84-78"></a><span class="w">        </span><span class="p">})</span>
+</span><span id="__span-84-79"><a id="__codelineno-84-79" name="__codelineno-84-79"></a>
+</span><span id="__span-84-80"><a id="__codelineno-84-80" name="__codelineno-84-80"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">sg</span><span class="p">.</span><span class="nx">Compile</span><span class="p">()</span>
+</span><span id="__span-84-81"><a id="__codelineno-84-81" name="__codelineno-84-81"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="summary">Summary</h2>
 <p>This guide introduced the core usage of the <code>graph</code> package and GraphAgent: declaring nodes and routes, safely merging state via Schema + Reducers, and leveraging events, checkpoints, and interrupts for observability and recovery. For structured flows (approvals, content moderation, stepwise processing), Graph provides stable, auditable execution. For intelligent decisions, extend with LLM nodes and sub‑agents.</p>
@@ -8600,7 +8660,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 07:45:32 UTC">2026-01-08 07:45:32</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 15:24:10 UTC">2026-01-08 15:24:10</span>
   </span>
 
     
