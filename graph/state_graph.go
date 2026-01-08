@@ -86,13 +86,6 @@ func WithDescription(description string) Option {
 	}
 }
 
-// WithNodeFuncInterceptor sets the interceptor for the node function.
-func WithNodeFuncInterceptor(interceptor NodeFuncInterceptor) Option {
-	return func(node *Node) {
-		node.functionInterceptor = interceptor
-	}
-}
-
 // WithNodeType sets the type of the node.
 func WithNodeType(nodeType NodeType) Option {
 	return func(node *Node) {
