@@ -115,7 +115,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	return svc, nil
 }
 
-// AddMemory adds a new memory for a user.
+// AddMemory adds or updates a memory for a user (idempotent).
 func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err

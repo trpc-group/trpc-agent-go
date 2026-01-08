@@ -475,6 +475,49 @@ func TestAddMemory_NoLimit(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestAddMemory_Idempotent tests that AddMemory is idempotent - calling it multiple times
+// with the same memory content should not fail.
+func TestAddMemory_Idempotent(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	memoryStr := "test memory"
+	topics := []string{"topic1"}
+
+	// Mock count query for first call.
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs("app", "user").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	// Mock insert for first call.
+	mock.ExpectExec("INSERT INTO.*ON DUPLICATE KEY UPDATE").
+		WithArgs("app", "user", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Mock count query for second call.
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs("app", "user").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	// Mock upsert for second call (should update existing).
+	mock.ExpectExec("INSERT INTO.*ON DUPLICATE KEY UPDATE").
+		WithArgs("app", "user", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// First call should succeed.
+	err := s.AddMemory(ctx, userKey, memoryStr, topics)
+	require.NoError(t, err)
+
+	// Second call with same content should also succeed (idempotent).
+	err = s.AddMemory(ctx, userKey, memoryStr, topics)
+	require.NoError(t, err)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestAddMemory_SoftDeleteFalse tests AddMemory when softDelete is false.
 func TestAddMemory_SoftDeleteFalse(t *testing.T) {
 	db, mock := setupMockDB(t)

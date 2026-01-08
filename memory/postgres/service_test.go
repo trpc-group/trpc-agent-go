@@ -1022,6 +1022,40 @@ func TestService_AddMemory_Success(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestService_AddMemory_Idempotent(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(10))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+	memoryStr := "test memory"
+	topics := []string{"topic1"}
+
+	// Mock count query for first call.
+	mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	// Mock insert for first call.
+	mock.ExpectExec("INSERT INTO.*ON CONFLICT").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock count query for second call.
+	mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	// Mock upsert for second call (should update existing).
+	mock.ExpectExec("INSERT INTO.*ON CONFLICT").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// First call should succeed.
+	err := svc.AddMemory(ctx, userKey, memoryStr, topics)
+	require.NoError(t, err)
+
+	// Second call with same content should also succeed (idempotent).
+	err = svc.AddMemory(ctx, userKey, memoryStr, topics)
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestService_AddMemory_WithLimit(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()

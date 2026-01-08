@@ -47,7 +47,7 @@ var (
 
 // Service defines the interface for memory service operations.
 type Service interface {
-	// AddMemory adds a new memory for a user.
+	// AddMemory adds or updates a memory for a user (idempotent).
 	AddMemory(ctx context.Context, userKey UserKey, memory string, topics []string) error
 
 	// UpdateMemory updates an existing memory for a user.

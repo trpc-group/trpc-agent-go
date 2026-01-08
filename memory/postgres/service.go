@@ -162,7 +162,7 @@ func buildConnString(opts ServiceOpts) string {
 	return connString
 }
 
-// AddMemory adds a new memory for a user.
+// AddMemory adds or updates a memory for a user (idempotent).
 func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
@@ -210,8 +210,11 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		return fmt.Errorf("marshal memory entry failed: %w", err)
 	}
 
+	// Note: memory_data contains the full JSON with topics, so updating memory_data
+	// will also update the topics field.
 	insertQuery := fmt.Sprintf(
-		"INSERT INTO %s (memory_id, app_name, user_id, memory_data, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)",
+		"INSERT INTO %s (memory_id, app_name, user_id, memory_data, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6) "+
+			"ON CONFLICT (memory_id) DO UPDATE SET memory_data = EXCLUDED.memory_data, updated_at = EXCLUDED.updated_at",
 		s.tableName,
 	)
 	_, err = s.db.ExecContext(ctx, insertQuery, entry.ID, userKey.AppName, userKey.UserID, memoryData, now, now)
