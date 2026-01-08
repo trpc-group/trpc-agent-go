@@ -4159,6 +4159,11 @@
 <li><strong>无副作用</strong>：不影响其他并发请求或后续请求</li>
 <li><strong>灵活组合</strong>：可以与 Agent 级别切换配合使用</li>
 </ul>
+<p><strong>按模型覆盖提示词（LLMAgent）</strong>：</p>
+<ul>
+<li>使用 <code>llmagent.WithModelInstructions</code> / <code>llmagent.WithModelGlobalInstructions</code> 按 <code>model.Info().Name</code> 覆盖提示词；未命中映射时回退到 Agent 默认提示词。</li>
+<li>可运行示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/promptmap">examples/model/promptmap</a>。</li>
+</ul>
 <h5 id="_21">使用示例</h5>
 <p>完整的交互式示例请参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/switch">examples/model/switch</a>，该示例演示了 Agent 级别和请求级别两种切换方式。</p>
 <h4 id="3-batch-api">3. 批量处理（Batch API）</h4>
@@ -5663,6 +5668,11 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 <li><strong>无副作用</strong>：不影响其他并发请求或后续请求</li>
 <li><strong>灵活组合</strong>：可以与 Agent 级别切换配合使用</li>
 </ul>
+<p><strong>按模型覆盖提示词（LLMAgent）</strong>：</p>
+<ul>
+<li>使用 <code>llmagent.WithModelInstructions</code> / <code>llmagent.WithModelGlobalInstructions</code> 按 <code>model.Info().Name</code> 覆盖提示词；未命中映射时回退到 Agent 默认提示词。</li>
+<li>可运行示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/promptmap">examples/model/promptmap</a>。</li>
+</ul>
 <h5 id="_48">使用示例</h5>
 <p>完整的交互式示例请参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/switch">examples/model/switch</a>，该示例演示了 Agent 级别和请求级别两种切换方式。</p>
 <h4 id="3-http-header">3. 自定义 HTTP Header</h4>
@@ -6028,7 +6038,7 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月16日 09:04:36 UTC">2025-12-16 09:04:36</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月8日 03:39:14 UTC">2026-01-08 03:39:14</span>
   </span>
 
     
