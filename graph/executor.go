@@ -695,7 +695,8 @@ func (e *Executor) createCheckpointAndSave(
 	copy(pendingWrites, execCtx.pendingWrites)
 	execCtx.pendingWrites = nil // Clear after copying.
 
-	if execCtx != nil && execCtx.EventChan != nil {
+	if shouldEmitCheckpointLifecycleEvents(invocation) &&
+		execCtx != nil && execCtx.EventChan != nil {
 		evt := NewCheckpointCreatedEvent(
 			WithCheckpointEventInvocationID(execCtx.InvocationID),
 			WithCheckpointEventCheckpointID(checkpoint.ID),
@@ -766,7 +767,8 @@ func (e *Executor) createCheckpointAndSave(
 		)
 		return fmt.Errorf("failed to save checkpoint atomically: %w", err)
 	}
-	if execCtx != nil && execCtx.EventChan != nil {
+	if shouldEmitCheckpointLifecycleEvents(invocation) &&
+		execCtx != nil && execCtx.EventChan != nil {
 		evt := NewCheckpointCommittedEvent(
 			WithCheckpointEventInvocationID(execCtx.InvocationID),
 			WithCheckpointEventCheckpointID(checkpoint.ID),
@@ -785,6 +787,27 @@ func (e *Executor) createCheckpointAndSave(
 	*config = updatedConfig
 	// Updated config with new checkpoint ID.
 	return nil
+}
+
+func shouldEmitCheckpointLifecycleEvents(
+	invocation *agent.Invocation,
+) bool {
+	if invocation == nil {
+		return false
+	}
+	ro := invocation.RunOptions
+	if !ro.StreamModeEnabled {
+		return false
+	}
+	for _, mode := range ro.StreamModes {
+		if mode == agent.StreamModeCheckpoints {
+			return true
+		}
+		if mode == agent.StreamModeDebug {
+			return true
+		}
+	}
+	return false
 }
 
 // applyPendingWrites replays pending writes into channels to rebuild frontier.
@@ -2678,7 +2701,9 @@ func (e *Executor) handleInterrupt(
 		defaultEmitTimeout)
 	defer cancel()
 
-	if interruptCheckpointOK && execCtx != nil && execCtx.EventChan != nil {
+	if interruptCheckpointOK &&
+		shouldEmitCheckpointLifecycleEvents(invocation) &&
+		execCtx != nil && execCtx.EventChan != nil {
 		evt := NewCheckpointInterruptEvent(
 			WithCheckpointEventInvocationID(execCtx.InvocationID),
 			WithCheckpointEventCheckpointID(interruptCheckpointID),
