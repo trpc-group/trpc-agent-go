@@ -29,6 +29,8 @@ const (
 	testDynamicSystemPrompt  = "dynamic system prompt"
 	testResolvedInstruction  = "resolved instruction"
 	testResolvedSystemPrompt = "resolved system prompt"
+	testRunInstruction       = "run instruction override"
+	testRunSystemPrompt      = "run system prompt override"
 	jsonSchemaTitle          = "test schema"
 )
 
@@ -305,11 +307,52 @@ func TestInstructionProcessor_DynamicResolvers(t *testing.T) {
 	require.Contains(t, req.Messages[0].Content, testResolvedInstruction)
 	require.Contains(t, req.Messages[0].Content, testResolvedSystemPrompt)
 	require.NotContains(t, req.Messages[0].Content, testDynamicInstruction)
-	require.NotContains(
-		t,
-		req.Messages[0].Content,
-		testDynamicSystemPrompt,
+	require.NotContains(t, req.Messages[0].Content, testDynamicSystemPrompt)
+}
+
+func TestInstructionProcessor_RunOptionsOverride(t *testing.T) {
+	ctx := context.Background()
+	req := &model.Request{
+		Messages: []model.Message{},
+	}
+	inv := &agent.Invocation{
+		AgentName:    testAgentName,
+		InvocationID: testInvocationID,
+		RunOptions: agent.RunOptions{
+			Instruction:       testRunInstruction,
+			GlobalInstruction: testRunSystemPrompt,
+		},
+	}
+	eventCh := make(chan *event.Event, 1)
+
+	processor := NewInstructionRequestProcessor(
+		testInstructionContent,
+		testSystemPromptContent,
+		WithInstructionGetter(func() string {
+			return testDynamicInstruction
+		}),
+		WithSystemPromptGetter(func() string {
+			return testDynamicSystemPrompt
+		}),
+		WithInstructionResolver(func(*agent.Invocation) string {
+			return testResolvedInstruction
+		}),
+		WithSystemPromptResolver(func(*agent.Invocation) string {
+			return testResolvedSystemPrompt
+		}),
 	)
+
+	processor.ProcessRequest(ctx, inv, req, eventCh)
+
+	require.NotEmpty(t, req.Messages)
+	sysMsg := req.Messages[0]
+	require.Equal(t, model.RoleSystem, sysMsg.Role)
+	require.Contains(t, sysMsg.Content, testRunInstruction)
+	require.Contains(t, sysMsg.Content, testRunSystemPrompt)
+	require.NotContains(t, sysMsg.Content, testResolvedInstruction)
+	require.NotContains(t, sysMsg.Content, testResolvedSystemPrompt)
+	require.NotContains(t, sysMsg.Content, testDynamicInstruction)
+	require.NotContains(t, sysMsg.Content, testDynamicSystemPrompt)
 }
 
 func TestInstructionProcessor_ProcessRequest_NilRequest(t *testing.T) {

@@ -491,7 +491,10 @@ func (e *Executor) processResumeCommand(execState, initialState State) State {
 }
 
 // restoreVersionsSeen restores per-node versionsSeen from the last checkpoint.
-func (e *Executor) restoreVersionsSeen(resumed bool, lastCheckpoint *Checkpoint) map[string]map[string]int64 {
+func (e *Executor) restoreVersionsSeen(
+	resumed bool,
+	lastCheckpoint *Checkpoint,
+) map[string]map[string]int64 {
 	versionsSeen := make(map[string]map[string]int64)
 	if !resumed || lastCheckpoint == nil || lastCheckpoint.VersionsSeen == nil {
 		return versionsSeen
@@ -510,7 +513,8 @@ func (e *Executor) restoreVersionsSeen(resumed bool, lastCheckpoint *Checkpoint)
 	return versionsSeen
 }
 
-// buildChannelManager creates per-execution channels from the graph's static channel definitions.
+// buildChannelManager creates per-execution channels from the graph's static
+// channel definitions.
 func (e *Executor) buildChannelManager() *channel.Manager {
 	channelManager := channel.NewChannelManager()
 	for name, ch := range e.graph.getAllChannels() {
@@ -521,15 +525,21 @@ func (e *Executor) buildChannelManager() *channel.Manager {
 		if ch.Behavior != channel.BehaviorBarrier {
 			continue
 		}
-		if perRunCh, ok := channelManager.GetChannel(name); ok && perRunCh != nil {
+		if perRunCh, ok := channelManager.GetChannel(name); ok &&
+			perRunCh != nil {
 			perRunCh.SetBarrierExpected(ch.BarrierExpected)
 		}
 	}
 	return channelManager
 }
 
-// restoreChannelVersions seeds channel versions from the last checkpoint for resumed executions.
-func (e *Executor) restoreChannelVersions(execCtx *ExecutionContext, resumed bool, lastCheckpoint *Checkpoint) {
+// restoreChannelVersions seeds channel versions from the last checkpoint for
+// resumed executions.
+func (e *Executor) restoreChannelVersions(
+	execCtx *ExecutionContext,
+	resumed bool,
+	lastCheckpoint *Checkpoint,
+) {
 	if !resumed || lastCheckpoint == nil || lastCheckpoint.ChannelVersions == nil {
 		return
 	}
@@ -541,8 +551,13 @@ func (e *Executor) restoreChannelVersions(execCtx *ExecutionContext, resumed boo
 	}
 }
 
-// restoreBarrierSets restores barrier sets from the last checkpoint for resumed executions.
-func (e *Executor) restoreBarrierSets(execCtx *ExecutionContext, resumed bool, lastCheckpoint *Checkpoint) {
+// restoreBarrierSets restores barrier sets from the last checkpoint for resumed
+// executions.
+func (e *Executor) restoreBarrierSets(
+	execCtx *ExecutionContext,
+	resumed bool,
+	lastCheckpoint *Checkpoint,
+) {
 	if !resumed || lastCheckpoint == nil || len(lastCheckpoint.BarrierSets) == 0 {
 		return
 	}

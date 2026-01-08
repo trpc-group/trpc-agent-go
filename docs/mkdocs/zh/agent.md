@@ -884,6 +884,7 @@ _ = ch; _ = err
 
 - 线程安全：上述设置方法是并发安全的，可在服务处理请求时调用。
 - 同一轮次内的效果：若一次调用过程中会触发多次模型请求（例如工具调用后再次提问），更新可能会对同一轮后续的请求生效。若需要“每次调用内保持稳定”，可在调用开始时确定或冻结提示词。
+- 单次请求覆盖：在 `Runner.Run(...)` 里传 `agent.WithInstruction(...)` / `agent.WithGlobalInstruction(...)`，仅对当前请求生效，不会修改 Agent 实例。
 - 按模型覆盖：如果 Agent 可能切换模型，可用 `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions`（或对应的 setter）按 `model.Info().Name` 覆盖提示词；未命中映射时回退到 Agent 默认提示词。
 - 个性化上下文：若需按用户/会话动态注入内容，优先使用指令中的占位符加会话状态注入（见上文“占位符变量”一节）。
 
