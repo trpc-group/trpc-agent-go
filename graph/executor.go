@@ -518,20 +518,11 @@ func restoreVersionsSeenFromCheckpoint(
 func (e *Executor) newExecutionChannelManager() *channel.Manager {
 	channelManager := channel.NewChannelManager()
 	for name, ch := range e.graph.getAllChannels() {
-		if ch == nil {
-			continue
-		}
 		channelManager.AddChannel(name, ch.Behavior)
 		if ch.Behavior != channel.BehaviorBarrier {
 			continue
 		}
-		perRunCh, ok := channelManager.GetChannel(name)
-		if !ok {
-			continue
-		}
-		if perRunCh == nil {
-			continue
-		}
+		perRunCh, _ := channelManager.GetChannel(name)
 		perRunCh.SetBarrierExpected(ch.BarrierExpected)
 	}
 	return channelManager
@@ -554,9 +545,6 @@ func restoreCheckpointChannelVersions(execCtx *ExecutionContext) {
 		if !ok {
 			continue
 		}
-		if ch == nil {
-			continue
-		}
 		ch.Version = version
 	}
 }
@@ -576,9 +564,6 @@ func restoreCheckpointBarrierSets(execCtx *ExecutionContext) {
 	for name, seen := range lastCheckpoint.BarrierSets {
 		ch, ok := execCtx.channels.GetChannel(name)
 		if !ok {
-			continue
-		}
-		if ch == nil {
 			continue
 		}
 		ch.SetBarrierSeen(seen)
