@@ -372,17 +372,9 @@ func (s *Service) GetSession(
 					err,
 				)
 				// Do not fail GetSession; just log a warning.
-			} else {
-				// Also refresh summary TTLs when session TTL is refreshed
-				if err := s.refreshSessionSummaryTTLs(c.Context, c.Key); err != nil {
-					log.WarnfContext(
-						c.Context,
-						"failed to refresh session summary TTLs: %v",
-						err,
-					)
-					// Do not fail GetSession; just log a warning.
-				}
 			}
+			// Note: Summary TTLs are refreshed lazily when accessed via GetSessionSummaryText
+			// to avoid performance impact on GetSession calls
 		}
 		return sess, nil
 	}

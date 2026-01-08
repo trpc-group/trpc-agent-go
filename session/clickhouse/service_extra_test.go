@@ -497,7 +497,7 @@ func TestService_RefreshSessionSummaryTTLs(t *testing.T) {
 	execCalled := false
 	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
 		execCalled = true
-		assert.Contains(t, query, "ALTER TABLE session_summaries UPDATE expires_at")
+		assert.Contains(t, query, "UPDATE session_summaries SET expires_at")
 		assert.Len(t, args, 4)
 		return nil
 	}

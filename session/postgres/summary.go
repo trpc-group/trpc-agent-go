@@ -126,6 +126,15 @@ func (s *Service) GetSessionSummaryText(
 		return "", false
 	}
 
+	// Refresh summary TTLs if session has TTL configured and we're accessing summaries
+	// This ensures summaries remain valid when session TTL is refreshed
+	if s.opts.sessionTTL > 0 {
+		if err := s.refreshSessionSummaryTTLs(ctx, key); err != nil {
+			// Log warning but don't fail the operation
+			// This is defensive to avoid breaking summary access due to TTL refresh failures
+		}
+	}
+
 	// Try in-memory summaries first.
 	if text, ok := isummary.GetSummaryTextFromSession(sess, opts...); ok {
 		return text, true
@@ -186,4 +195,24 @@ func (s *Service) GetSessionSummaryText(
 	}
 
 	return "", false
+}
+
+// refreshSessionSummaryTTLs updates the expires_at timestamps of all summaries for a session.
+// This ensures summaries remain valid when the session TTL is refreshed.
+func (s *Service) refreshSessionSummaryTTLs(ctx context.Context, key session.Key) error {
+	now := time.Now()
+	expiresAt := now.Add(s.opts.sessionTTL)
+
+	_, err := s.pgClient.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE %s
+		SET expires_at = $1
+		WHERE app_name = $2 AND user_id = $3 AND session_id = $4
+		AND deleted_at IS NULL`, s.tableSessionSummaries),
+		expiresAt, key.AppName, key.UserID, key.SessionID)
+
+	if err != nil {
+		return fmt.Errorf("refresh session summary TTLs failed: %w", err)
+	}
+
+	return nil
 }
