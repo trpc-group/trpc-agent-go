@@ -98,7 +98,7 @@ func TraceWorkflow(span trace.Span, workflow *Workflow) {
 	if workflow.Request != nil {
 		request, err := json.Marshal(workflow.Request)
 		if err != nil {
-			span.SetAttributes(attribute.String(KeyGenAIWorkflowRequest, "<not json serializable>"))
+			span.SetAttributes(attribute.String(KeyGenAIWorkflowRequest, fmt.Sprintf("<not json serializable: %v>", err)))
 		} else {
 			span.SetAttributes(attribute.String(KeyGenAIWorkflowRequest, string(request)))
 		}
@@ -106,7 +106,7 @@ func TraceWorkflow(span trace.Span, workflow *Workflow) {
 	if workflow.Response != nil {
 		response, err := json.Marshal(workflow.Response)
 		if err != nil {
-			span.SetAttributes(attribute.String(KeyGenAIWorkflowResponse, "<not json serializable>"))
+			span.SetAttributes(attribute.String(KeyGenAIWorkflowResponse, fmt.Sprintf("<not json serializable>: %v", err)))
 		} else {
 			span.SetAttributes(attribute.String(KeyGenAIWorkflowResponse, string(response)))
 		}
