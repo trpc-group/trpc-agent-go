@@ -26,12 +26,20 @@ import (
 type InstructionRequestProcessor struct {
 	// Instruction is the instruction to add to requests.
 	Instruction string
+	// InstructionResolver, if provided, supplies the instruction for each
+	// request based on the current invocation. When set, this takes
+	// precedence over InstructionGetter and Instruction.
+	InstructionResolver func(*agent.Invocation) string
 	// InstructionGetter, if provided, dynamically supplies the instruction
 	// each time a request is processed. When set, this takes precedence over
 	// the static Instruction field.
 	InstructionGetter func() string
 	// SystemPrompt is the system prompt to add to requests.
 	SystemPrompt string
+	// SystemPromptResolver, if provided, supplies the system prompt for each
+	// request based on the current invocation. When set, this takes
+	// precedence over SystemPromptGetter and SystemPrompt.
+	SystemPromptResolver func(*agent.Invocation) string
 	// SystemPromptGetter, if provided, dynamically supplies the system prompt
 	// each time a request is processed. When set, this takes precedence over
 	// the static SystemPrompt field.
@@ -62,12 +70,32 @@ func WithStructuredOutputSchema(schema map[string]any) InstructionRequestProcess
 	}
 }
 
+// WithInstructionResolver configures a dynamic resolver for instruction
+// content based on the current invocation.
+func WithInstructionResolver(
+	resolver func(*agent.Invocation) string,
+) InstructionRequestProcessorOption {
+	return func(p *InstructionRequestProcessor) {
+		p.InstructionResolver = resolver
+	}
+}
+
 // WithInstructionGetter configures a dynamic getter for instruction content.
 // When provided, this getter is called for every request, allowing callers to
 // update the instruction at runtime without reconstructing the processor/agent.
 func WithInstructionGetter(getter func() string) InstructionRequestProcessorOption {
 	return func(p *InstructionRequestProcessor) {
 		p.InstructionGetter = getter
+	}
+}
+
+// WithSystemPromptResolver configures a dynamic resolver for system prompt
+// content based on the current invocation.
+func WithSystemPromptResolver(
+	resolver func(*agent.Invocation) string,
+) InstructionRequestProcessorOption {
+	return func(p *InstructionRequestProcessor) {
+		p.SystemPromptResolver = resolver
 	}
 }
 
@@ -141,16 +169,21 @@ func (p *InstructionRequestProcessor) processInstructionsWithState(
 	ctx context.Context,
 	invocation *agent.Invocation,
 ) (string, string) {
-	// Prefer dynamic getters when present; fall back to static fields.
+	// Prefer invocation-based resolvers, then dynamic getters, then static
+	// fields.
 	var processedInstruction string
-	if p.InstructionGetter != nil {
+	if p.InstructionResolver != nil {
+		processedInstruction = p.InstructionResolver(invocation)
+	} else if p.InstructionGetter != nil {
 		processedInstruction = p.InstructionGetter()
 	} else {
 		processedInstruction = p.Instruction
 	}
 
 	var processedSystemPrompt string
-	if p.SystemPromptGetter != nil {
+	if p.SystemPromptResolver != nil {
+		processedSystemPrompt = p.SystemPromptResolver(invocation)
+	} else if p.SystemPromptGetter != nil {
 		processedSystemPrompt = p.SystemPromptGetter()
 	} else {
 		processedSystemPrompt = p.SystemPrompt

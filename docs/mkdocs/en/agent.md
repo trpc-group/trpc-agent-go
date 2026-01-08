@@ -901,7 +901,52 @@ Notes
 - Thread‑safe: the setters are concurrency‑safe and can be called while the service is handling requests.
 - Mid‑turn behavior: if an Agent’s current turn triggers more than one model request (e.g., due to tool calls), updates may apply to subsequent requests in the same turn. If you need per‑run stability, set or freeze the text at the start of the run.
 - Per‑run override: pass `agent.WithInstruction(...)` and/or `agent.WithGlobalInstruction(...)` to `Runner.Run(...)` to override prompts for a single request without mutating the Agent instance.
+- Model‑specific prompts: if an Agent can switch models, use `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions` (or the corresponding setters) to override prompts by `model.Info().Name`, falling back to the Agent defaults when no mapping exists.
 - Per‑session personalization: for per‑user or per‑session data, prefer placeholders in the instruction and session state injection (see the “Placeholder Variables” section above).
+
+### Model-specific Prompts
+
+If a single Agent can switch between different models, you can define a
+different Instruction/system prompt for each model.
+
+The key used for matching is the model name returned by `model.Info().Name`.
+
+Example
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+models := map[string]model.Model{
+    "gpt-4o-mini": openai.New("gpt-4o-mini"),
+    "gpt-4o":      openai.New("gpt-4o"),
+}
+
+llm := llmagent.New(
+    "support-bot",
+    llmagent.WithModels(models),
+    llmagent.WithModel(models["gpt-4o-mini"]), // Default model.
+
+    // Fallback prompts when no mapping exists.
+    llmagent.WithGlobalInstruction("System: You are a helpful assistant."),
+    llmagent.WithInstruction("Start every answer with DEFAULT:"),
+
+    // Per-model prompt mapping.
+    llmagent.WithModelGlobalInstructions(map[string]string{
+        "gpt-4o-mini": "System: You are in FAST mode.",
+        "gpt-4o":      "System: You are in SMART mode.",
+    }),
+    llmagent.WithModelInstructions(map[string]string{
+        "gpt-4o-mini": "Start every answer with FAST:",
+        "gpt-4o":      "Start every answer with SMART:",
+    }),
+)
+```
+
+See also: `examples/model/promptmap`.
 
 ### Alternative: Placeholder‑Driven Dynamic System Prompts
 

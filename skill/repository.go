@@ -21,6 +21,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -171,31 +172,41 @@ func (r *FSRepository) Get(name string) (*Skill, error) {
 	if sum.Name == "" {
 		sum.Name = name
 	}
-	docs := make([]Doc, 0)
-	entries, err := os.ReadDir(dir)
-	if err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			n := e.Name()
-			if strings.EqualFold(n, skillFile) {
-				continue
-			}
-			if !isDocFile(n) {
-				continue
-			}
-			b, err2 := os.ReadFile(filepath.Join(dir, n))
-			if err2 != nil {
-				continue
-			}
-			docs = append(docs, Doc{
-				Path:    n,
-				Content: string(b),
-			})
-		}
-	}
+	docs := r.readDocs(dir)
 	return &Skill{Summary: sum, Body: body, Docs: docs}, nil
+}
+
+func (r *FSRepository) readDocs(dir string) []Doc {
+	var docs []Doc
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry,
+		err error) error {
+		if err != nil || d == nil || d.IsDir() {
+			return nil
+		}
+		if strings.EqualFold(d.Name(), skillFile) {
+			return nil
+		}
+		if !isDocFile(d.Name()) {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		docs = append(docs, Doc{
+			Path:    filepath.ToSlash(rel),
+			Content: string(b),
+		})
+		return nil
+	})
+	sort.Slice(docs, func(i, j int) bool {
+		return docs[i].Path < docs[j].Path
+	})
+	return docs
 }
 
 // parseSummary returns front matter name/description only.

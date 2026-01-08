@@ -303,8 +303,8 @@ func WithAccumulateChunkTokenUsage(a AccumulateChunkUsage) Option {
 	}
 }
 
-// inverseOPENAISKDAddChunkUsage calculates the inverse of OPENAISKDAddChunkUsage, related to the current openai sdk version
-func inverseOPENAISKDAddChunkUsage(u model.Usage, delta model.Usage) model.Usage {
+// inverseOpenAISDKAddChunkUsage calculates the inverse of OPENAISKDAddChunkUsage, related to the current openai sdk version
+func inverseOpenAISDKAddChunkUsage(u model.Usage, delta model.Usage) model.Usage {
 	return model.Usage{
 		PromptTokens:     u.PromptTokens - delta.PromptTokens,
 		CompletionTokens: u.CompletionTokens - delta.CompletionTokens,

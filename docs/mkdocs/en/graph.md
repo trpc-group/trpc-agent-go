@@ -158,13 +158,14 @@ The Graph package provides some built-in state keys, mainly for internal system 
 - `StateKeyUserInput`: User input (one-shot, cleared after consumption, persisted by LLM nodes)
 - `StateKeyOneShotMessages`: One-shot messages (complete override for current round, cleared after consumption)
 - `StateKeyLastResponse`: Last response (used to set final output, Executor reads this value as result)
+- `StateKeyLastToolResponse`: Last tool output (JSON string, set by Tools nodes)
 - `StateKeyLastResponseID`: Last response identifier (ID) (set by LLM nodes; may
   be empty when `StateKeyLastResponse` is produced by a non-model node)
 - `StateKeyMessages`: Message history (durable, supports append + MessageOp patch operations)
-- `StateKeyNodeResponses`: Per-node responses map. Key is node ID, value is the
-  node's final textual response. Use `StateKeyLastResponse` for the final
-  serial output; when multiple parallel nodes converge, read each node's
-  output from `StateKeyNodeResponses`.
+- `StateKeyNodeResponses`: Per-node outputs map. Key is node ID, value is the
+  node's final output. For LLM and Agent nodes this is the final textual
+  response; for Tools nodes this is a JSON array string of tool outputs (each
+  item contains `tool_id`, `tool_name`, and `output`).
 - `StateKeyMetadata`: Metadata (general metadata storage available to users)
 
 **System Internal Keys** (users should not use directly):
@@ -763,6 +764,50 @@ Session summary notes:
 - `WithAddSessionSummary(true)` takes effect only when `Session.Summaries` contains a summary for the invocation’s filter key. Summaries are typically produced by SessionService + SessionSummarizer, and Runner will auto‑enqueue summarization after persisting events.
 - GraphAgent reads summaries only; it does not generate them. If you bypass Runner, call `sessionService.CreateSessionSummary` or `EnqueueSummaryJob` after appending events.
 - Summary injection works only when `TimelineFilterMode` is `TimelineFilterAll`.
+
+#### Summary Format Customization
+
+By default, session summaries are formatted with context tags and a note about preferring current conversation information. You can customize the summary format using `WithSummaryFormatter` to better match your specific use cases or model requirements.
+
+**Default Format:**
+
+```
+Here is a brief summary of your previous interactions:
+
+<summary_of_previous_interactions>
+[summary content]
+</summary_of_previous_interactions>
+
+Note: this information is from previous interactions and may be outdated. You should ALWAYS prefer information from this conversation over the past summary.
+```
+
+**Custom Format Example:**
+
+```go
+// Custom formatter with simplified format
+ga := graphagent.New(
+    "my-graph",
+    graphagent.WithInitialState(initialState),
+    graphagent.WithAddSessionSummary(true),
+    graphagent.WithSummaryFormatter(func(summary string) string {
+        return fmt.Sprintf("## Previous Context\n\n%s", summary)
+    }),
+)
+```
+
+**Use Cases:**
+
+- **Simplified Format**: Reduce token usage by using concise headings and minimal context notes
+- **Language Localization**: Translate context notes to target language (e.g., Chinese, Japanese)
+- **Role-Specific Formatting**: Different formats for different agent roles
+- **Model Optimization**: Tailor format for specific model preferences
+
+**Important Notes:**
+
+- The formatter function receives raw summary text from the session and returns the formatted string
+- Custom formatters should ensure that the summary is clearly distinguishable from other messages
+- The default format is designed to be compatible with most models and use cases
+- When `WithAddSessionSummary(false)` is used, the formatter is never invoked
 
 #### Concurrency considerations
 
@@ -1826,9 +1871,17 @@ sg.AddToolsNode(nodeTools, tools)
 // For parallelism, use multiple nodes + parallel edges
 // Pairing rule: walk the messages from the tail to the most recent assistant(tool_calls)
 // message; stop at a new user to ensure pairing with the current tool call round.
+// Output: appends tool messages to graph.StateKeyMessages, sets
+// graph.StateKeyLastToolResponse, and sets
+// graph.StateKeyNodeResponses[nodeTools] to a JSON array string.
 ```
 
 #### Reading Tool Results into State
+
+Tools nodes already expose their outputs via:
+
+- `graph.StateKeyLastToolResponse`: JSON string of the last tool output in this node run
+- `graph.StateKeyNodeResponses[<tools_node_id>]`: JSON array string of all tool outputs from this node run
 
 After a tools node, add a function node to collect tool outputs from `graph.StateKeyMessages` and write a structured result into state:
 
@@ -1952,6 +2005,36 @@ const (
 sg.AddEdge(nodeSplit, nodeBranch1)
 sg.AddEdge(nodeSplit, nodeBranch2)  // branch1 and branch2 execute in parallel
 ```
+
+#### Join edges (wait-all fan-in)
+
+When multiple upstream branches run in parallel, a normal `AddEdge(from, to)`
+triggers `to` whenever **any** upstream node updates its edge channel. That can
+make `to` execute multiple times.
+
+If you need classic “wait for all branches, then run once” fan-in semantics,
+use `AddJoinEdge`:
+
+```go
+const (
+    nodeSplit = "split"
+    nodeA     = "branch_a"
+    nodeB     = "branch_b"
+    nodeJoin  = "join"
+)
+
+sg.AddEdge(nodeSplit, nodeA)
+sg.AddEdge(nodeSplit, nodeB)
+
+// Wait for both A and B to complete before running join.
+sg.AddJoinEdge([]string{nodeA, nodeB}, nodeJoin)
+```
+
+`AddJoinEdge` creates an internal barrier channel and triggers `nodeJoin` only
+after every `from` node has reported completion. The barrier resets after it
+triggers, so the same join can be reached again in loops.
+
+Reference example: `examples/graph/join_edge`.
 
 Tip: setting entry and finish points implicitly connects to virtual Start/End nodes:
 
@@ -2652,7 +2735,7 @@ Graph state is a `map[string]any` with runtime validation provided by `StateSche
 
 #### Common State Keys
 
-- User‑visible: `graph.StateKeyUserInput`, `graph.StateKeyOneShotMessages`, `graph.StateKeyMessages`, `graph.StateKeyLastResponse`, `graph.StateKeyNodeResponses`, `graph.StateKeyMetadata`
+- User‑visible: `graph.StateKeyUserInput`, `graph.StateKeyOneShotMessages`, `graph.StateKeyMessages`, `graph.StateKeyLastResponse`, `graph.StateKeyLastToolResponse`, `graph.StateKeyNodeResponses`, `graph.StateKeyMetadata`
 - Internal: `session`, `exec_context`, `tool_callbacks`, `model_callbacks`, `agent_callbacks`, `current_node_id`, `parent_agent`
 - Command/Resume: `__command__`, `__resume_map__`
 
@@ -2810,6 +2893,7 @@ Nodes communicate only via the shared `State`. Each node returns a state delta t
 - Tools nodes
 
   - Read the latest assistant message with `tool_calls` for the current round and append tool responses to `graph.StateKeyMessages`
+  - Output: set `graph.StateKeyLastToolResponse`, set `graph.StateKeyNodeResponses[<tools_node_id>]` (JSON array string)
   - Multiple tools execute in the order returned by the LLM
 
 - Agent nodes

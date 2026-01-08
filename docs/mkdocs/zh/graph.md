@@ -158,13 +158,14 @@ Graph 包提供了一些内置状态键，主要用于系统内部通信：
 - `StateKeyUserInput`：用户输入（一次性，消费后清空，由 LLM 节点自动持久化）
 - `StateKeyOneShotMessages`：一次性消息（完整覆盖本轮输入，消费后清空）
 - `StateKeyLastResponse`：最后响应（用于设置最终输出，Executor 会读取此值作为结果）
+- `StateKeyLastToolResponse`：最近一次工具输出（JSON 字符串，由 Tools 节点写入）
 - `StateKeyLastResponseID`：最近一次响应标识符（identifier，ID）（由 LLM 节点写入；当
   `StateKeyLastResponse` 由非模型节点写入时可能为空）
 - `StateKeyMessages`：消息历史（持久化，支持 append + MessageOp 补丁操作）
-- `StateKeyNodeResponses`：按节点存储的响应映射。键为节点 ID，值为该
-  节点的最终文本响应。`StateKeyLastResponse` 用于串行路径上的最终输
-  出；当多个并行节点在某处汇合时，应从 `StateKeyNodeResponses` 中按节
-  点读取各自的输出。
+- `StateKeyNodeResponses`：按节点存储的输出映射。键为节点 ID，值为该
+  节点的最终输出。对 LLM / Agent 节点而言是最终文本响应；对 Tools 节
+  点而言是工具输出的 JSON 数组字符串（每项包含 `tool_id`、`tool_name`
+  和 `output`）。
 - `StateKeyMetadata`：元数据（用户可用的通用元数据存储）
 
 **系统内部键**（用户不应直接使用）：
@@ -833,6 +834,52 @@ graphAgent, err := graphagent.New(
 - `WithAddSessionSummary(true)` 仅在 `Session.Summaries` 中已有对应 `FilterKey` 的摘要时生效。摘要通常由 SessionService + SessionSummarizer 生成，Runner 在落库事件后会自动触发 `EnqueueSummaryJob`。
 - GraphAgent 只读取摘要，不生成摘要。如果绕过 Runner，需在写入事件后自行调用 `sessionService.CreateSessionSummary` 或 `EnqueueSummaryJob`。
 - 摘要仅在 `TimelineFilterAll` 下生效。
+
+#### 摘要格式自定义
+
+默认情况下，会话摘要会以包含上下文标签和关于优先考虑当前对话信息的提示进行格式化：
+
+**默认格式：**
+
+```
+Here is a brief summary of your previous interactions:
+
+<summary_of_previous_interactions>
+[摘要内容]
+</summary_of_previous_interactions>
+
+Note: this information is from previous interactions and may be outdated. You should ALWAYS prefer information from this conversation over the past summary.
+```
+
+您可以使用 `WithSummaryFormatter` 来自定义摘要格式，以更好地匹配您的特定使用场景或模型需求。
+
+**自定义格式示例：**
+
+```go
+// 使用简化格式的自定义格式化器
+ga := graphagent.New(
+    "my-graph",
+    graphagent.WithInitialState(initialState),
+    graphagent.WithAddSessionSummary(true),
+    graphagent.WithSummaryFormatter(func(summary string) string {
+        return fmt.Sprintf("## Previous Context\n\n%s", summary)
+    }),
+)
+```
+
+**使用场景：**
+
+- **简化格式**：使用简洁的标题和最少的上下文提示来减少 token 消耗
+- **语言本地化**：将上下文提示翻译为目标语言（例如：中文、日语）
+- **角色特定格式**：为不同的 Agent 角色提供不同的格式
+- **模型优化**：根据特定模型的偏好调整格式
+
+**重要注意事项：**
+
+- 格式化函数接收来自会话的原始摘要文本并返回格式化后的字符串
+- 自定义格式化器应确保摘要可与其他消息清楚地区分开
+- 默认格式设计为与大多数模型和使用场景兼容
+- 当使用 `WithAddSessionSummary(false)` 时，格式化器永远不会被调用
 
 #### 并发使用注意事项
 
@@ -1823,9 +1870,17 @@ sg.AddToolsNode(nodeTools, tools)
 // 如需并行，应该使用多个节点 + 并行边
 // 配对规则：从 messages 尾部回溯定位最近的 assistant(tool_calls)
 // 消息，遇到新的 user 即停止，确保与本轮工具调用配对。
+// 输出：追加工具消息到 graph.StateKeyMessages，设置
+// graph.StateKeyLastToolResponse，并将
+// graph.StateKeyNodeResponses[nodeTools] 写为 JSON 数组字符串。
 ```
 
 #### 将工具结果写入 State
+
+Tools 节点已直接暴露输出：
+
+- `graph.StateKeyLastToolResponse`：本次节点执行中最后一个工具输出的 JSON 字符串
+- `graph.StateKeyNodeResponses[<tools_node_id>]`：本次节点执行的所有工具输出（JSON 数组字符串）
 
 在 Tools 节点之后，添加一个函数节点，从 `graph.StateKeyMessages` 汇总工具结果并写入结构化 State：
 
@@ -1948,6 +2003,35 @@ const (
 sg.AddEdge(nodeSplit, nodeBranch1)
 sg.AddEdge(nodeSplit, nodeBranch2)  // branch1 和 branch2 会并行执行
 ```
+
+#### Join（等待所有分支的汇聚）
+
+当一个节点有多个并行上游分支时，普通 `AddEdge(from, to)` 的语义是：只要任意
+一个上游节点更新了对应的边通道（Channel），`to` 就会被触发。这很适合增量/
+流式场景，但也意味着 `to` 可能会执行多次。
+
+如果你需要经典的 “等待所有分支都完成后再执行下游节点” 的 fan-in（汇聚）
+语义，可以使用 `AddJoinEdge`：
+
+```go
+const (
+    nodeSplit = "split"
+    nodeA     = "branch_a"
+    nodeB     = "branch_b"
+    nodeJoin  = "join"
+)
+
+sg.AddEdge(nodeSplit, nodeA)
+sg.AddEdge(nodeSplit, nodeB)
+
+// 等待 A 和 B 都完成后再执行 join。
+sg.AddJoinEdge([]string{nodeA, nodeB}, nodeJoin)
+```
+
+`AddJoinEdge` 会创建一个内部 barrier（屏障）通道，只有当上游节点列表里的每个
+节点都“报到”后才触发 `to`。触发后屏障会重置，因此在循环图里可以再次汇聚。
+
+参考示例：`examples/graph/join_edge`。
 
 提示：设置入口与结束点时，会隐式连接到虚拟的 Start/End 节点：
 
@@ -2774,6 +2858,7 @@ stateGraph.
 - 工具节点（Tools）
 
   - 自 `graph.StateKeyMessages` 尾部配对当前轮的 `assistant(tool_calls)`，按顺序追加工具返回到 `graph.StateKeyMessages`
+  - 输出：设置 `graph.StateKeyLastToolResponse`，并写入 `graph.StateKeyNodeResponses[<tools_node_id>]`（JSON 数组字符串）
   - 多个工具按 LLM 返回顺序顺序执行
 
 - Agent 节点
@@ -2799,7 +2884,7 @@ stateGraph.
 
 - 常用 State 键（用户可见）
 
-  - `graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、`graph.StateKeyMessages`、`graph.StateKeyLastResponse`、`graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
+  - `graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、`graph.StateKeyMessages`、`graph.StateKeyLastResponse`、`graph.StateKeyLastToolResponse`、`graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
 
 - 节点级可选项
 

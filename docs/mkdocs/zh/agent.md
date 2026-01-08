@@ -885,7 +885,53 @@ _ = ch; _ = err
 - 线程安全：上述设置方法是并发安全的，可在服务处理请求时调用。
 - 同一轮次内的效果：若一次调用过程中会触发多次模型请求（例如工具调用后再次提问），更新可能会对同一轮后续的请求生效。若需要“每次调用内保持稳定”，可在调用开始时确定或冻结提示词。
 - 单次请求覆盖：在 `Runner.Run(...)` 里传 `agent.WithInstruction(...)` / `agent.WithGlobalInstruction(...)`，仅对当前请求生效，不会修改 Agent 实例。
+- 按模型覆盖：如果 Agent 可能切换模型，可用 `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions`（或对应的 setter）按 `model.Info().Name` 覆盖提示词；未命中映射时回退到 Agent 默认提示词。
 - 个性化上下文：若需按用户/会话动态注入内容，优先使用指令中的占位符加会话状态注入（见上文“占位符变量”一节）。
+
+### 按模型覆盖提示词
+
+如果一个 Agent 会在运行时切换不同模型，你可以按模型为 Instruction
+与 Global Instruction（系统提示词）配置不同的文本。
+
+匹配逻辑是：先用当前模型的 `model.Info().Name` 查映射；命中则使用映射值；
+否则回退到 Agent 的默认提示词。
+
+示例
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+models := map[string]model.Model{
+    "gpt-4o-mini": openai.New("gpt-4o-mini"),
+    "gpt-4o":      openai.New("gpt-4o"),
+}
+
+llm := llmagent.New(
+    "support-bot",
+    llmagent.WithModels(models),
+    llmagent.WithModel(models["gpt-4o-mini"]), // Default model.
+
+    // Fallback prompts when no mapping exists.
+    llmagent.WithGlobalInstruction("System: You are a helpful assistant."),
+    llmagent.WithInstruction("Start every answer with DEFAULT:"),
+
+    // Per-model prompt mapping.
+    llmagent.WithModelGlobalInstructions(map[string]string{
+        "gpt-4o-mini": "System: You are in FAST mode.",
+        "gpt-4o":      "System: You are in SMART mode.",
+    }),
+    llmagent.WithModelInstructions(map[string]string{
+        "gpt-4o-mini": "Start every answer with FAST:",
+        "gpt-4o":      "Start every answer with SMART:",
+    }),
+)
+```
+
+另见：`examples/model/promptmap`。
 
 ### 另一种方式：用占位符驱动动态 System Prompt
 

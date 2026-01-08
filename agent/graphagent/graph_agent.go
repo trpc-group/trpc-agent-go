@@ -222,14 +222,22 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		req := &model.Request{}
 
 		// Default processor: include (possibly overridden) + preserve same branch.
-		p := processor.NewContentRequestProcessor(
-			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
+		contentOpts := []processor.ContentOption{
 			processor.WithAddSessionSummary(ga.options.AddSessionSummary),
 			processor.WithMaxHistoryRuns(ga.options.MaxHistoryRuns),
 			processor.WithPreserveSameBranch(true),
 			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
-			processor.WithReasoningContentMode(ga.options.ReasoningContentMode),
-		)
+			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
+		}
+		if ga.options.ReasoningContentMode != "" {
+			contentOpts = append(contentOpts,
+				processor.WithReasoningContentMode(ga.options.ReasoningContentMode))
+		}
+		if ga.options.summaryFormatter != nil {
+			contentOpts = append(contentOpts,
+				processor.WithSummaryFormatter(ga.options.summaryFormatter))
+		}
+		p := processor.NewContentRequestProcessor(contentOpts...)
 		// We only need messages side effect; no output channel needed.
 		p.ProcessRequest(ctx, invocation, req, nil)
 		if len(req.Messages) > 0 {
