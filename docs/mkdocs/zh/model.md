@@ -661,7 +661,9 @@ eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
 
 - `agent.RunOptions.Model`：直接指定模型实例
 - `agent.RunOptions.ModelName`：指定预注册的模型名称
-- `agent.RunOptions.Stream`：覆盖是否使用流式输出
+- `agent.RunOptions.Stream`：覆盖是否使用流式输出（使用 `agent.WithStream(...)`）
+- `agent.RunOptions.Instruction`：仅本次请求覆盖 Instruction（使用 `agent.WithInstruction(...)`）
+- `agent.RunOptions.GlobalInstruction`：仅本次请求覆盖 Global Instruction（系统提示词，使用 `agent.WithGlobalInstruction(...)`）
 - 优先级：`Model` > `ModelName` > Agent 默认模型
 - 如果 `ModelName` 指定的模型不存在，将回退到 Agent 默认模型
 
@@ -1772,6 +1774,8 @@ eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
 
 - `agent.RunOptions.Model`：直接指定模型实例
 - `agent.RunOptions.ModelName`：指定预注册的模型名称
+- `agent.RunOptions.Instruction`：仅本次请求覆盖 Instruction（使用 `agent.WithInstruction(...)`）
+- `agent.RunOptions.GlobalInstruction`：仅本次请求覆盖 Global Instruction（系统提示词，使用 `agent.WithGlobalInstruction(...)`）
 - 优先级：`Model` > `ModelName` > Agent 默认模型
 - 如果 `ModelName` 指定的模型不存在，将回退到 Agent 默认模型
 

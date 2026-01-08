@@ -353,6 +353,25 @@ func WithStream(stream bool) RunOption {
 	}
 }
 
+// WithInstruction sets the instruction for this specific run.
+// If set, it temporarily overrides the agent's instruction for this request
+// only. This does not modify the agent instance.
+func WithInstruction(instruction string) RunOption {
+	return func(opts *RunOptions) {
+		opts.Instruction = instruction
+	}
+}
+
+// WithGlobalInstruction sets the global instruction (system prompt) for this
+// specific run.
+// If set, it temporarily overrides the agent's global instruction for this
+// request only. This does not modify the agent instance.
+func WithGlobalInstruction(instruction string) RunOption {
+	return func(opts *RunOptions) {
+		opts.GlobalInstruction = instruction
+	}
+}
+
 // WithToolFilter sets a custom tool filter function for this specific run.
 // The filter function receives a context and a tool, and returns true if the tool should be included.
 //
@@ -565,6 +584,17 @@ type RunOptions struct {
 	// This is useful when you want to switch between streaming and
 	// non-streaming responses per request without rebuilding the agent.
 	Stream *bool
+
+	// Instruction overrides the agent's instruction for this run.
+	// If set, it temporarily overrides the agent's instruction for this request
+	// only.
+	Instruction string
+
+	// GlobalInstruction overrides the agent's global instruction (system prompt)
+	// for this run.
+	// If set, it temporarily overrides the agent's global instruction for
+	// this request only.
+	GlobalInstruction string
 
 	// ToolFilter is a custom function to filter tools for this run.
 	// If set, only tools for which the filter returns true will be available to the model.

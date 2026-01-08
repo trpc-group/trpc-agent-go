@@ -887,6 +887,84 @@ func TestExecutor_BuildExecutionContext_SeedsChannelVersions(t *testing.T) {
 	require.Equal(t, int64(7), ch.Version)
 }
 
+func TestExecutor_BuildExecutionContext_ResumedNilCheckpoint(t *testing.T) {
+	const (
+		barrierChannel = "barrier:ch"
+		invocationID   = "inv"
+	)
+	expectedSenders := []string{"a", "b"}
+
+	g := New(NewStateSchema())
+	g.addChannel(barrierChannel, ichannel.BehaviorBarrier)
+	template, ok := g.getChannel(barrierChannel)
+	require.True(t, ok)
+	template.SetBarrierExpected(expectedSenders)
+
+	exec := &Executor{graph: g}
+	ec := exec.buildExecutionContext(nil, invocationID, State{}, true, nil)
+
+	require.Empty(t, ec.versionsSeen)
+	runCh, ok := ec.channels.GetChannel(barrierChannel)
+	require.True(t, ok)
+	require.NotNil(t, runCh)
+	require.Equal(t, expectedSenders, runCh.BarrierExpected)
+}
+
+func TestExecutor_BuildExecutionContext_SkipsMissingCheckpointChannels(
+	t *testing.T,
+) {
+	const (
+		knownChannel   = "branch:to:X"
+		missingChannel = "missing:ch"
+		barrierChannel = "barrier:ch"
+		barrierSender  = "sender"
+		invocationID   = "inv"
+		nodeID         = "node"
+	)
+
+	g := New(NewStateSchema())
+	g.addChannel(knownChannel, ichannel.BehaviorLastValue)
+	g.addChannel(barrierChannel, ichannel.BehaviorBarrier)
+	template, ok := g.getChannel(barrierChannel)
+	require.True(t, ok)
+	template.SetBarrierExpected([]string{barrierSender})
+
+	exec := &Executor{graph: g}
+	last := &Checkpoint{
+		VersionsSeen: map[string]map[string]int64{
+			nodeID: {
+				knownChannel: 1,
+			},
+		},
+		ChannelVersions: map[string]int64{
+			knownChannel:   7,
+			missingChannel: 3,
+		},
+		BarrierSets: map[string][]string{
+			barrierChannel: {barrierSender},
+			missingChannel: {barrierSender},
+		},
+	}
+
+	ec := exec.buildExecutionContext(nil, invocationID, State{}, true, last)
+
+	require.Equal(t, int64(1), ec.versionsSeen[nodeID][knownChannel])
+
+	ch, ok := ec.channels.GetChannel(knownChannel)
+	require.True(t, ok)
+	require.NotNil(t, ch)
+	require.Equal(t, int64(7), ch.Version)
+
+	barrierCh, ok := ec.channels.GetChannel(barrierChannel)
+	require.True(t, ok)
+	require.NotNil(t, barrierCh)
+	require.Equal(
+		t,
+		[]string{barrierSender},
+		barrierCh.BarrierSeenSnapshot(),
+	)
+}
+
 // Ensure applyPendingWrites replays writes into per-execution channels (not Graph channels)
 // and respects the PendingWrite.Sequence ordering.
 func TestExecutor_ApplyPendingWrites_UsesExecCtxChannels(t *testing.T) {

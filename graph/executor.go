@@ -528,7 +528,6 @@ func (e *Executor) buildChannelManager() *channel.Manager {
 		if ch.Behavior != channel.BehaviorBarrier {
 			continue
 		}
-
 		perRunCh, ok := channelManager.GetChannel(name)
 		if !ok || perRunCh == nil {
 			continue

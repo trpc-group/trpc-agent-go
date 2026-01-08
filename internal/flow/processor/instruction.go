@@ -189,6 +189,16 @@ func (p *InstructionRequestProcessor) processInstructionsWithState(
 		processedSystemPrompt = p.SystemPrompt
 	}
 
+	if invocation != nil {
+		if invocation.RunOptions.Instruction != "" {
+			processedInstruction = invocation.RunOptions.Instruction
+		}
+		if invocation.RunOptions.GlobalInstruction != "" {
+			processedSystemPrompt =
+				invocation.RunOptions.GlobalInstruction
+		}
+	}
+
 	// Automatically inject JSON output instructions.
 	// Precedence: StructuredOutputSchema > OutputSchema.
 	if p.StructuredOutputSchema != nil {
