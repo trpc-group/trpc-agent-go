@@ -796,3 +796,23 @@ func (s *Service) getSummariesList(
 
 	return result, nil
 }
+
+// refreshSessionSummaryTTLs updates the expires_at timestamps of all summaries for a session.
+// This ensures summaries remain valid when the session TTL is refreshed.
+func (s *Service) refreshSessionSummaryTTLs(ctx context.Context, key session.Key) error {
+	now := time.Now()
+	expiresAt := now.Add(s.opts.sessionTTL)
+
+	_, err := s.mysqlClient.Exec(ctx,
+		fmt.Sprintf(`UPDATE %s
+		SET expires_at = ?
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND deleted_at IS NULL`, s.tableSessionSummaries),
+		expiresAt, key.AppName, key.UserID, key.SessionID)
+
+	if err != nil {
+		return fmt.Errorf("refresh session summary TTLs failed: %w", err)
+	}
+
+	return nil
+}
