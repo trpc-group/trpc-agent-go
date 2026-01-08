@@ -298,11 +298,9 @@ func (s *Service) GetSession(
 		// Refresh session TTL if configured and session exists
 		if sess != nil && s.opts.sessionTTL > 0 {
 			if err := s.refreshSessionTTL(c.Context, c.Key); err != nil {
-				log.Warnf("failed to refresh session TTL: %v", err)
+				log.WarnfContext(c.Context, "failed to refresh session TTL: %v", err)
 				// Don't fail the GetSession call, just log the warning
 			}
-			// Note: Summary TTLs are refreshed lazily when accessed via GetSessionSummaryText
-			// to avoid performance impact on GetSession calls
 		}
 		return sess, nil
 	}

@@ -373,8 +373,6 @@ func (s *Service) GetSession(
 				)
 				// Do not fail GetSession; just log a warning.
 			}
-			// Note: Summary TTLs are refreshed lazily when accessed via GetSessionSummaryText
-			// to avoid performance impact on GetSession calls
 		}
 		return sess, nil
 	}

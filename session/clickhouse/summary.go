@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
@@ -121,7 +122,7 @@ func (s *Service) GetSessionSummaryText(
 	if s.opts.sessionTTL > 0 {
 		if err := s.refreshSessionSummaryTTLs(ctx, key); err != nil {
 			// Log warning but don't fail the operation
-			// This is defensive to avoid breaking summary access due to TTL refresh failures
+			log.DebugfContext(ctx, "refresh session summary TTLs failed: %v", err)
 		}
 	}
 
