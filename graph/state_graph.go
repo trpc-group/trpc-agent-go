@@ -11,10 +11,14 @@ package graph
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"sync"
 	"time"
 
@@ -476,6 +480,11 @@ func (sg *StateGraph) AddSubgraphNode(id string, opts ...Option) *StateGraph {
 // channelUpdateMarker value for marking channel updates.
 const channelUpdateMarker = "update"
 
+const (
+	joinChannelFromSeparator = ":from:"
+	joinKeyLenBytes          = 8
+)
+
 // AddEdge adds a normal edge between two nodes.
 // This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
@@ -497,6 +506,78 @@ func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 	}
 	sg.graph.addNodeWriter(from, writer)
 	return sg
+}
+
+// AddJoinEdge adds a join edge that waits for all start nodes to complete
+// before triggering the end node.
+func (sg *StateGraph) AddJoinEdge(fromNodes []string, to string) *StateGraph {
+	starts := normalizeJoinStarts(fromNodes)
+	if to == "" || to == Start || len(starts) == 0 {
+		return sg
+	}
+
+	for _, from := range starts {
+		edge := &Edge{
+			From: from,
+			To:   to,
+		}
+		sg.graph.addEdge(edge)
+	}
+
+	channelName := joinChannelName(to, starts)
+
+	sg.graph.addChannel(channelName, channel.BehaviorBarrier)
+	if ch, ok := sg.graph.getChannel(channelName); ok && ch != nil {
+		ch.SetBarrierExpected(starts)
+	}
+
+	sg.graph.addNodeTriggerChannel(to, channelName)
+	sg.graph.addNodeTrigger(channelName, to)
+
+	for _, from := range starts {
+		writer := channelWriteEntry{
+			Channel: channelName,
+			Value:   from,
+		}
+		sg.graph.addNodeWriter(from, writer)
+	}
+	return sg
+}
+
+func joinChannelName(to string, starts []string) string {
+	joinKey := joinKeyForStarts(starts)
+	return ChannelJoinPrefix + to + joinChannelFromSeparator + joinKey
+}
+
+func joinKeyForStarts(starts []string) string {
+	h := sha256.New()
+	for _, start := range starts {
+		var lenBuf [joinKeyLenBytes]byte
+		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(start)))
+		_, _ = h.Write(lenBuf[:])
+		_, _ = h.Write([]byte(start))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func normalizeJoinStarts(fromNodes []string) []string {
+	if len(fromNodes) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(fromNodes))
+	out := make([]string, 0, len(fromNodes))
+	for _, from := range fromNodes {
+		if from == "" || from == Start || from == End {
+			continue
+		}
+		if seen[from] {
+			continue
+		}
+		seen[from] = true
+		out = append(out, from)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // AddConditionalEdges adds conditional routing from a node.
