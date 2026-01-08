@@ -218,8 +218,11 @@ func (e *Executor) Execute(
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_graph %s", invocation.AgentName)))
-		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: fmt.Sprintf("execute_graph %s", invocation.AgentName), ID: invocation.AgentName})
-		defer span.End()
+		workflow := &itelemetry.Workflow{
+			Name:    fmt.Sprintf("execute_graph %s", invocation.AgentName),
+			ID:      invocation.AgentName,
+			Request: initialState.safeClone(),
+		}
 		defer func() {
 			if r := recover(); r != nil {
 				stack := debug.Stack()
@@ -229,13 +232,16 @@ func (e *Executor) Execute(
 					r,
 					string(stack),
 				)
+				workflow.Error = fmt.Errorf("executor panic: %v", r)
 				agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
 					WithPregelEventInvocationID(invocation.InvocationID),
 					WithPregelEventStepNumber(-1),
-					WithPregelEventError(fmt.Sprintf("executor panic: %v", r)),
+					WithPregelEventError(workflow.Error.Error()),
 				))
 			}
 			close(eventChan)
+			itelemetry.TraceWorkflow(span, workflow)
+			span.End()
 		}()
 		if err := e.executeGraph(ctx, initialState, invocation, eventChan, startTime); err != nil {
 			// Check if this is an interrupt error.
@@ -244,6 +250,7 @@ func (e *Executor) Execute(
 				// The interrupt will be handled by the caller.
 				return
 			}
+			workflow.Error = err
 			// Emit error event for other errors.
 			agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
 				WithPregelEventInvocationID(invocation.InvocationID),
@@ -483,6 +490,7 @@ func (e *Executor) processResumeCommand(execState, initialState State) State {
 	return execState
 }
 
+// restoreVersionsSeen restores per-node versionsSeen from the last checkpoint.
 func (e *Executor) restoreVersionsSeen(
 	resumed bool,
 	lastCheckpoint *Checkpoint,
@@ -500,16 +508,16 @@ func (e *Executor) restoreVersionsSeen(
 		}
 		versionsSeen[nodeID] = out
 	}
-
 	log.Debugf(
 		"Restored versionsSeen for %d nodes from checkpoint",
 		len(versionsSeen),
 	)
-
 	return versionsSeen
 }
 
-func (e *Executor) newExecutionChannels() *channel.Manager {
+// buildChannelManager creates per-execution channels from the graph's static
+// channel definitions.
+func (e *Executor) buildChannelManager() *channel.Manager {
 	channelManager := channel.NewChannelManager()
 	for name, ch := range e.graph.getAllChannels() {
 		if ch == nil {
@@ -530,8 +538,10 @@ func (e *Executor) newExecutionChannels() *channel.Manager {
 	return channelManager
 }
 
+// restoreChannelVersions seeds channel versions from the last checkpoint for
+// resumed executions.
 func (e *Executor) restoreChannelVersions(
-	channels *channel.Manager,
+	execCtx *ExecutionContext,
 	resumed bool,
 	lastCheckpoint *Checkpoint,
 ) {
@@ -541,7 +551,7 @@ func (e *Executor) restoreChannelVersions(
 	}
 
 	for name, version := range lastCheckpoint.ChannelVersions {
-		ch, ok := channels.GetChannel(name)
+		ch, ok := execCtx.channels.GetChannel(name)
 		if !ok || ch == nil {
 			continue
 		}
@@ -549,8 +559,10 @@ func (e *Executor) restoreChannelVersions(
 	}
 }
 
+// restoreBarrierSets restores barrier sets from the last checkpoint for resumed
+// executions.
 func (e *Executor) restoreBarrierSets(
-	channels *channel.Manager,
+	execCtx *ExecutionContext,
 	resumed bool,
 	lastCheckpoint *Checkpoint,
 ) {
@@ -560,7 +572,7 @@ func (e *Executor) restoreBarrierSets(
 	}
 
 	for name, seen := range lastCheckpoint.BarrierSets {
-		ch, ok := channels.GetChannel(name)
+		ch, ok := execCtx.channels.GetChannel(name)
 		if !ok || ch == nil {
 			continue
 		}
@@ -577,9 +589,7 @@ func (e *Executor) buildExecutionContext(
 	lastCheckpoint *Checkpoint,
 ) *ExecutionContext {
 	versionsSeen := e.restoreVersionsSeen(resumed, lastCheckpoint)
-	channelManager := e.newExecutionChannels()
-	e.restoreChannelVersions(channelManager, resumed, lastCheckpoint)
-	e.restoreBarrierSets(channelManager, resumed, lastCheckpoint)
+	channelManager := e.buildChannelManager()
 
 	execCtx := &ExecutionContext{
 		Graph:          e.graph,
@@ -592,6 +602,10 @@ func (e *Executor) buildExecutionContext(
 		channels:       channelManager,
 	}
 
+	// For resumed executions, seed channel versions from the last checkpoint so
+	// version-based triggering semantics can continue to function correctly.
+	e.restoreChannelVersions(execCtx, resumed, lastCheckpoint)
+	e.restoreBarrierSets(execCtx, resumed, lastCheckpoint)
 	return execCtx
 }
 
