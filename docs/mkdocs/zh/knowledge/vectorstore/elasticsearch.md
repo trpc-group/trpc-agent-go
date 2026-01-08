@@ -8,6 +8,7 @@ Elasticsearch 向量存储支持 v7、v8、v9 多个版本。
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
     vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 )
 

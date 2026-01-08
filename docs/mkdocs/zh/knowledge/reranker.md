@@ -25,7 +25,11 @@ rerank := topk.New(
 使用 Cohere 提供的 Rerank 服务
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/cohere"
+import (
+    "log"
+
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/cohere"
+)
 
 rerank, err := cohere.New(
     cohere.WithAPIKey("your-api-key"),       // 必填：Cohere API Key
@@ -59,7 +63,11 @@ trpc-agent-go 的 Infinity Reranker 实现可以连接任何兼容标准 Rerank 
 使用方式
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/infinity"
+import (
+    "log"
+
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/infinity"
+)
 
 rerank, err := infinity.New(
     infinity.WithEndpoint("http://localhost:7997/rerank"), // 必填：服务端点
@@ -88,6 +96,8 @@ if err != nil {
 ## 注入 Knowledge
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/knowledge"
+
 kb := knowledge.New(
     knowledge.WithReranker(rerank),
     // ... 其他配置（VectorStore、Embedder、Sources 等）

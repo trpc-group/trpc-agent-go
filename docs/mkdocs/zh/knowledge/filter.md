@@ -2,8 +2,7 @@
 
 > **示例代码**: [examples/knowledge/features/metadata-filter](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/metadata-filter) 以及 [examples/knowledge/features/agentic-filter](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/agentic-filter)
 
-
-Knowledge 系统提供了强大的过滤器功能，允许基于文档元数据进行精准搜索。这包括静态过滤器和智能过滤器两种模式。
+Knowledge 系统提供了强大的过滤器功能，允许基于文档元数据进行精准搜索。这包括静态过滤器和智能过滤器（由 LLM 根据文档元数据信息自动生成过滤条件）两种模式。
 
 ## 配置元数据源
 
@@ -49,25 +48,54 @@ sources := []source.Source{
 
 > **提示**：更多文档源配置详见 [文档源配置](source.md)。
 
+## 过滤器字段设置要求
+
+在使用过滤器时，**元数据字段需要使用 `metadata.` 前缀**：
+
+*   `metadata.` 前缀用于区分元数据字段和系统字段（如 `id`、`name`、`content` 等）
+*   无论是基础过滤器的条件设置，还是智能过滤器生成的条件，元数据字段名都必须包含此前缀
+*   **基础过滤器**：例如 `searchfilter.Equal("metadata.category", "docs")`
+*   **智能过滤器**：LLM 生成的 JSON 字段名也需包含前缀，例如 `{"metadata.topic": "api"}`（系统会自动处理）
+*   **例外**：通过 `WithDocBuilder` 自定义的表字段（如 `status`、`priority` 等额外列，需向量数据库支持）直接使用字段名，无需前缀
+
+## 过滤器层级
+
+Knowledge 系统支持多层过滤器，所有过滤器统一使用 FilterCondition 实现，通过 **AND 逻辑**组合。系统不区分优先级，所有层级的过滤器平等合并。
+
+**过滤器层级**：
+
+1. **Tool 级过滤器 / Agent 级过滤器**：
+   - **手动创建工具**（通过 `llmagent.WithTools(自定义searchTool)` 注入）：通过 `knowledgetool.WithConditionedFilter()` 设置。
+   - **自动创建工具**（通过 `llmagent.WithKnowledge` 注入）：通过 `llmagent.WithKnowledgeConditionedFilter()` 设置。
+   - 注：两者本质相同，都是作用于 Tool 实例的静态过滤器。
+
+2. **Runner 级过滤器**：
+
+   - 通过 `agent.WithKnowledgeConditionedFilter()` 在 `runner.Run()` 时传递条件过滤器
+
+3. **LLM 智能过滤器**：
+
+   - LLM 根据用户查询动态生成的过滤条件
+
+> **重要说明**：
+>
+> - 所有过滤器通过 **AND 逻辑**组合，即必须同时满足所有层级的过滤条件
 
 ## 基础过滤器
 
-> **重要：过滤器字段命名规范**
->
-> 在使用过滤器时，**元数据字段需要使用 `metadata.` 前缀**：
-> - `metadata.` 前缀用于区分元数据字段和系统字段（如 `id`、`name`、`content` 等）
-> - 无论是 `llmagent.WithKnowledgeConditionedFilter()`、`knowledgetool.WithConditionedFilter()` 还是 `searchfilter.Equal()` 等，元数据字段都需要加 `metadata.` 前缀
-> - 如果通过 `WithMetadataField()` 自定义了元数据字段名，仍然使用 `metadata.` 前缀，框架会自动转换为实际的字段名
-> - 通过 `WithDocBuilder` 自定义的表字段（如 `status`、`priority` 等额外列）直接使用字段名，无需前缀
+基础过滤器支持两种设置方式：Tool/Agent 级别的固定过滤器和 Runner 级别的运行时过滤器。
 
-基础过滤器支持两种设置方式：Agent 级别的固定过滤器和 Runner 级别的运行时过滤器。
+### Tool/Agent 级过滤器
 
-### Agent 级过滤器
+**方式一：自动创建 Tool 时的 Agent 级过滤器**
 
-在创建 Agent 时预设固定的搜索过滤条件：
+在创建 Agent 并通过 `WithKnowledge` 自动注入 Knowledge Tool 时，可以使用 `WithKnowledgeConditionedFilter` 预设固定的搜索过滤条件：
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+)
 
 // 创建带有固定过滤器的 Agent
 llmAgent := llmagent.New(
@@ -83,6 +111,33 @@ llmAgent := llmagent.New(
 )
 ```
 
+**方式二：手动创建 Tool 时的 Tool 级过滤器**
+
+手动创建 Knowledge Search Tool 时，可以使用 `WithConditionedFilter` 注入过滤器：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+    knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+)
+
+// 手动创建 Tool 并设置过滤器
+searchTool := knowledgetool.NewKnowledgeSearchTool(
+    kb,
+    knowledgetool.WithConditionedFilter(
+        searchfilter.Equal("metadata.language", "en"),
+    ),
+)
+
+// 将 Tool 注入到 Agent
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(searchTool),
+)
+```
+
 ### Runner 级过滤器
 
 在调用 `runner.Run()` 时动态传递过滤器，适用于需要根据不同请求上下文进行过滤的场景：
@@ -91,10 +146,14 @@ llmAgent := llmagent.New(
 import (
     "trpc.group/trpc-go/trpc-agent-go/agent"
     "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
+// 创建 Runner
+appRunner := runner.NewRunner("knowledge-chat", llmAgent)
+
 // 在运行时传递过滤器
-eventCh, err := runner.Run(
+eventCh, err := appRunner.Run(
     ctx,
     userID,
     sessionID,
@@ -111,12 +170,17 @@ eventCh, err := runner.Run(
 
 ### 过滤器合并规则
 
-Agent 级过滤器和 Runner 级过滤器通过 **AND 逻辑**组合：
+Tool/Agent 级过滤器和 Runner 级过滤器通过 **AND 逻辑**组合：
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
 
-// Agent 级过滤器
+// Tool/Agent 级过滤器 (metadata.category = "documentation")
 llmAgent := llmagent.New(
     "assistant",
     llmagent.WithKnowledge(kb),
@@ -128,8 +192,11 @@ llmAgent := llmagent.New(
     ),
 )
 
-// Runner 级过滤器
-eventCh, err := runner.Run(
+// 创建 Runner
+appRunner := runner.NewRunner("knowledge-chat", llmAgent)
+
+// Runner 级过滤器 (metadata.topic = "api")
+eventCh, err := appRunner.Run(
     ctx, userID, sessionID, message,
     agent.WithKnowledgeConditionedFilter(
         searchfilter.Equal("metadata.topic", "api"),
@@ -144,81 +211,94 @@ eventCh, err := runner.Run(
 
 ## 智能过滤器 (Agentic Filter)
 
-
-> **重要：过滤器字段命名规范**
->
-> 在使用过滤器时，**元数据字段需要使用 `metadata.` 前缀**：
-> - `metadata.` 前缀用于区分元数据字段和系统字段（如 `id`、`name`、`content` 等）
-> - 无论是 `llmagent.WithKnowledgeConditionedFilter()`、`knowledgetool.WithConditionedFilter()` 还是 `searchfilter.Equal()` 等，元数据字段都需要加 `metadata.` 前缀
-> - 如果通过 `WithMetadataField()` 自定义了元数据字段名，仍然使用 `metadata.` 前缀，框架会自动转换为实际的字段名
-> - 通过 `WithDocBuilder` 自定义的表字段（如 `status`、`priority` 等额外列）直接使用字段名，无需前缀
-
-
 智能过滤器是 Knowledge 系统的高级功能，允许 LLM Agent 根据用户查询动态选择合适的过滤条件。
 
 ### 启用智能过滤器
 
+启用智能过滤器时，需要通过 `WithKnowledgeAgenticFilterInfo` 提供可用于过滤的元数据字段信息。这些信息将作为提示词的一部分，引导 LLM 生成正确的过滤条件。
+
+支持以下三种配置方式：
+
+**方式一：自动提取（推荐）**
+
+从配置的文档源中自动提取元数据信息：
+
+1.  **提取字段和值**：使用 `source.GetAllMetadata(sources)`，LLM 将在提取的枚举值范围内进行选择（适合有限枚举值）。
+2.  **仅提取字段**：使用 `source.GetAllMetadataWithoutValues(sources)`，LLM 将根据用户查询自由推断值（适合开放域值）。
+
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
-// 获取所有源的元数据信息
+// 1. 提取所有元数据信息（包括字段名和所有出现过的值）
+// 例如：{"metadata.category": ["doc", "tutorial"], "metadata.topic": ["api", "rpc"]}
 sourcesMetadata := source.GetAllMetadata(sources)
 
-// 创建支持智能过滤的 Agent
+// 2. 或者仅提取字段名（不限制取值范围，由 LLM 推断）
+// 例如：{"metadata.category": [], "metadata.topic": []}
+// sourcesMetadata := source.GetAllMetadataWithoutValues(sources)
+
 llmAgent := llmagent.New(
-    "knowledge-assistant",
-    llmagent.WithModel(modelInstance),
-    llmagent.WithKnowledge(kb),
-    llmagent.WithEnableKnowledgeAgenticFilter(true),           // 启用智能过滤器
-    llmagent.WithKnowledgeAgenticFilterInfo(sourcesMetadata), // 提供可用的过滤器信息
+    // ...
+    llmagent.WithEnableKnowledgeAgenticFilter(true),
+    llmagent.WithKnowledgeAgenticFilterInfo(sourcesMetadata),
 )
 ```
 
-## 过滤器层级
+**方式二：手动配置（指定字段和值）**
 
-Knowledge 系统支持多层过滤器，所有过滤器统一使用 FilterCondition 实现，通过 **AND 逻辑**组合。系统不区分优先级，所有层级的过滤器平等合并。
+手动指定允许过滤的字段及其允许值枚举，适合枚举值有限的场景（如状态、分类）：
 
-**过滤器层级**：
+```go
+// 手动指定字段和可选值
+customMetadata := map[string][]string{
+    "category": {"documentation", "tutorial", "blog"},
+    "language": {"en", "zh"},
+}
 
-1. **Agent 级过滤器**：
-   - 通过 `llmagent.WithKnowledgeConditionedFilter()` 设置条件过滤器
+llmAgent := llmagent.New(
+    // ...
+    llmagent.WithEnableKnowledgeAgenticFilter(true),
+    llmagent.WithKnowledgeAgenticFilterInfo(customMetadata),
+)
+```
 
-2. **Tool 级过滤器**：
-   - 通过 `knowledgetool.WithConditionedFilter()` 设置条件过滤器
-   - 注：Agent 级过滤器实际上是通过 Tool 级过滤器实现的
+**方式三：手动配置（指定字段，由 LLM 推断值）**
 
-3. **Runner 级过滤器**：
-   - 通过 `agent.WithKnowledgeConditionedFilter()` 在 `runner.Run()` 时传递条件过滤器
+仅指定允许过滤的字段，值列表留空（`nil` 或空切片），让 LLM 根据用户查询自由推断值（适合 ID、名称等枚举值过多的开放域字段）：
 
-4. **LLM 智能过滤器**：
-   - LLM 根据用户查询动态生成的过滤条件
+```go
+// 仅指定字段，不限制取值范围
+customMetadata := map[string][]string{
+    "author_id": nil,       // LLM 自动提取 author_id
+    "publish_year": nil,    // LLM 自动提取年份
+    "category": {"news"},   // 混合使用：category 限制为 "news"
+}
 
-> **重要说明**：
-> - 所有过滤器通过 **AND 逻辑**组合，即必须同时满足所有层级的过滤条件
+llmAgent := llmagent.New(
+    // ...
+    llmagent.WithEnableKnowledgeAgenticFilter(true),
+    llmagent.WithKnowledgeAgenticFilterInfo(customMetadata),
+)
+```
 
 ### 过滤器组合示例
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
-
-// 1. Agent 级过滤器
-llmAgent := llmagent.New(
-    "knowledge-assistant",
-    llmagent.WithModel(modelInstance),
-    llmagent.WithKnowledge(kb),
-    llmagent.WithKnowledgeConditionedFilter(
-        searchfilter.And(
-            searchfilter.Equal("metadata.source_type", "web"),
-            searchfilter.Equal("metadata.category", "documentation"),
-            searchfilter.Equal("metadata.protocol", "trpc-go"),
-        ),
-    ),
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
+
+// 创建 Runner
+appRunner := runner.NewRunner("knowledge-chat", llmAgent)
+
 // 2. Runner 级过滤器
-eventCh, err := runner.Run(
+eventCh, err := appRunner.Run(
     ctx, userID, sessionID, message,
     agent.WithKnowledgeConditionedFilter(
         searchfilter.And(
@@ -246,6 +326,7 @@ eventCh, err := runner.Run(
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
     knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 )
@@ -309,26 +390,3 @@ searchfilter.And(
     ),
 )
 ```
-
-## 多文档返回
-
-Knowledge Search Tool 支持返回多个相关文档，可通过 `WithMaxResults(n)` 选项限制返回的最大文档数量：
-
-```go
-import knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
-
-// 创建搜索工具，限制最多返回 5 个文档
-searchTool := knowledgetool.NewKnowledgeSearchTool(
-    kb,
-    knowledgetool.WithMaxResults(5),
-)
-
-// 或使用智能过滤搜索工具
-agenticSearchTool := knowledgetool.NewAgenticFilterSearchTool(
-    kb,
-    sourcesMetadata,
-    knowledgetool.WithMaxResults(10),
-)
-```
-
-每个返回的文档包含文本内容、元数据和相关性分数，按分数降序排列。

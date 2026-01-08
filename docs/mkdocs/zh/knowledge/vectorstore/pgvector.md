@@ -8,6 +8,7 @@ PGVector 是基于 PostgreSQL + pgvector 扩展的向量存储实现，支持混
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
     vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
 )
 

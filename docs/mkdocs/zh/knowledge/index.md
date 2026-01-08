@@ -12,7 +12,7 @@ Knowledge 系统的使用遵循以下模式：
 2. **加载文档**：从各种来源加载和索引文档
 3. **创建搜索工具**：使用 `NewKnowledgeSearchTool` 创建知识搜索工具
 4. **集成到 Agent**：将搜索工具添加到 Agent 的工具列表中
-5. **知识库管理**：通过 `enableSourceSync` 启用智能同步机制，确保向量存储中的数据始终与用户配置的 source 保持一致
+5. **知识库管理**：通过 `knowledge.WithEnableSourceSync(true)` 启用智能同步机制，确保向量存储中的数据始终与用户配置的 source 保持一致（详见 [知识库管理](management.md)）
 
 这种模式提供了：
 
@@ -99,7 +99,6 @@ func main() {
         knowledge.WithEmbedder(embedder),
         knowledge.WithVectorStore(vectorStore),
         knowledge.WithSources(sources),
-        knowledge.WithEnableSourceSync(true),
     )
 
     // 5. 加载文档
@@ -115,7 +114,7 @@ func main() {
     )
 
     // 7. 创建 Agent 并添加工具
-    modelInstance := openai.New("claude-4-sonnet-20250514")
+    modelInstance := openai.New("gpt-4o")
     llmAgent := llmagent.New(
         "knowledge-assistant",
         llmagent.WithModel(modelInstance),
@@ -133,7 +132,6 @@ func main() {
     }
 }
 ```
-
 
 ## 核心概念
 
@@ -182,6 +180,30 @@ knowledge/
 
 Knowledge 系统提供了搜索工具，可以将知识库能力集成到 Agent 中。
 
+### 构建 Knowledge 实例
+
+在创建搜索工具之前，首先需要构建并加载 Knowledge 实例：
+
+```go
+simport (
+    "context"
+    "log"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
+)
+
+// 创建 Knowledge 实例
+kb := knowledge.New(
+    knowledge.WithEmbedder(embedder),       // 必选，配置 Embedder
+    knowledge.WithVectorStore(vectorStore), // 必选，配置向量存储
+    knowledge.WithSources(sources),         // 必选，配置数据源
+)
+
+// 加载数据（重要：创建 Tool 前需确保数据已加载）
+if err := kb.Load(context.Background()); err != nil {
+    log.Fatalf("Knowledge load failed: %v", err)
+}
+```
+
 ### 搜索工具
 
 #### KnowledgeSearchTool
@@ -204,7 +226,9 @@ searchTool := knowledgetool.NewKnowledgeSearchTool(
 
 #### AgenticFilterSearchTool
 
-智能过滤搜索工具，Agent 可以根据用户查询自动构建过滤条件：
+智能过滤搜索工具，Agent 可以根据用户查询自动构建过滤条件。
+
+支持自动提取、手动指定枚举值、手动指定字段等多种配置方式：
 
 ```go
 import (
@@ -212,29 +236,47 @@ import (
     knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 )
 
-// 获取源的元数据信息（用于智能过滤）
+// 方式一（推荐）：自动获取所有源的元数据信息（用于智能过滤）
 sourcesMetadata := source.GetAllMetadata(sources)
+
+// 方式二：手动配置允许过滤的字段和值（适合枚举值有限）
+// sourcesMetadata := map[string][]string{
+//     "category": {"doc", "blog"},
+//     "status":   {"published", "draft"},
+// }
+
+// 方式三：手动配置字段，值由 LLM 推断（适合枚举值过多）
+// sourcesMetadata := map[string][]string{
+//     "author_id": nil,
+//     "year":      nil,
+// }
 
 filterSearchTool := knowledgetool.NewAgenticFilterSearchTool(
     kb,                    // Knowledge 实例
     sourcesMetadata,       // 元数据信息
     knowledgetool.WithToolName("knowledge_search_with_filter"),
     knowledgetool.WithToolDescription("Search the knowledge base with intelligent metadata filtering."),
+    knowledgetool.WithMaxResults(10), // 返回最多 10 个结果
 )
 ```
+
+> 详细配置说明请参考 [过滤器文档](filter.md#启用智能过滤器)。
 
 #### 搜索工具配置选项
 
 `NewKnowledgeSearchTool` 和 `NewAgenticFilterSearchTool` 都支持以下配置选项：
 
-| 选项 | 说明 | 默认值 |
-|------|------|--------|
-| `WithToolName(name)` | 设置工具名称 | `"knowledge_search"` / `"knowledge_search_with_agentic_filter"` |
-| `WithToolDescription(desc)` | 设置工具描述 | 默认描述 |
-| `WithMaxResults(n)` | 设置返回的最大文档数量 | `10` |
-| `WithMinScore(score)` | 设置最小相关性分数阈值（0.0-1.0），低于此分数的文档将被过滤 | `0.0` |
-| `WithFilter(map)` | 设置静态元数据过滤（简单 AND 逻辑） | `nil` |
-| `WithConditionedFilter(cond)` | 设置复杂过滤条件（支持 AND/OR/嵌套逻辑） | `nil` |
+
+| 选项                          | 说明                                                        | 默认值                                                          |
+| ------------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `WithToolName(name)`          | 设置工具名称                                                | `"knowledge_search"` / `"knowledge_search_with_agentic_filter"` |
+| `WithToolDescription(desc)`   | 设置工具描述                                                | 默认描述                                                        |
+| `WithMaxResults(n)`           | 设置返回的最大文档数量                                      | `10`                                                            |
+| `WithMinScore(score)`         | 设置最小相关性分数阈值（0.0-1.0），低于此分数的文档将被过滤 | `0.0`                                                           |
+| `WithFilter(map)`             | 设置静态元数据过滤（简单 AND 逻辑）                         | `nil`                                                           |
+| `WithConditionedFilter(cond)` | 设置复杂过滤条件（支持 AND/OR/嵌套逻辑）                    | `nil`                                                           |
+
+> **提示**: 每个返回的文档包含文本内容、元数据和相关性分数，按分数降序排列。
 
 ### 集成方式
 
@@ -244,6 +286,7 @@ filterSearchTool := knowledgetool.NewAgenticFilterSearchTool(
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -261,12 +304,38 @@ llmAgent := llmagent.New(
 > **注意**：自动集成方式简单快捷，但灵活性较低，无法自定义工具名称、描述、过滤条件等参数，也不支持同时集成多个知识库。如需更精细的控制，建议使用手动添加工具的方式。
 
 ```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+)
+
 llmAgent := llmagent.New(
     "knowledge-assistant",
     llmagent.WithModel(modelInstance),
     llmagent.WithKnowledge(kb), // 自动添加 knowledge_search 工具
 )
 ```
+
+## 加载时性能选项
+
+Knowledge 支持批量文档处理和并发加载，可以显著提升大量文档的处理性能：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/knowledge"
+
+err := kb.Load(ctx,
+    knowledge.WithShowProgress(true),      // 打印进度日志
+    knowledge.WithProgressStepSize(10),    // 进度步长
+    knowledge.WithShowStats(true),         // 打印统计信息
+    knowledge.WithSourceConcurrency(4),    // 源级并发
+    knowledge.WithDocConcurrency(64),      // 文档级并发
+)
+```
+
+> **关于性能与限流**：
+>
+> - 提高并发会增加对 Embedder 服务（OpenAI/Gemini）的调用频率，可能触发限流
+> - 请根据吞吐、成本与限流情况调节 `WithSourceConcurrency()`、`WithDocConcurrency()`
+> - 默认值在多数场景下较为均衡；需要更快速度可适当上调，遇到限流则下调
 
 ## 更多内容
 
@@ -277,3 +346,4 @@ llmAgent := llmagent.New(
 - [OCR 图片文字识别](ocr.md) - 配置 Tesseract OCR 提取文本
 - [过滤器](filter.md) - 基础过滤器和智能过滤器
 - [知识库管理](management.md) - 动态源管理和状态监控
+- [常见问题](troubleshooting.md) - 常见问题说明

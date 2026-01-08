@@ -14,6 +14,7 @@ TcVector 支持两种 embedding 模式：
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
     vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
 )
 
@@ -22,6 +23,7 @@ tcVS, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-tcvector-endpoint"),
     vectortcvector.WithUsername("your-username"),
     vectortcvector.WithPassword("your-password"),
+    vectortcvector.WithFilterAll(true), // 推荐开启：自动索引所有元数据字段
 )
 if err != nil {
     // 处理 error
@@ -39,6 +41,7 @@ kb := knowledge.New(
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
     vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
 )
 
@@ -47,6 +50,7 @@ tcVS, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-tcvector-endpoint"),
     vectortcvector.WithUsername("your-username"),
     vectortcvector.WithPassword("your-password"),
+    vectortcvector.WithFilterAll(true), // 推荐开启：自动索引所有元数据字段
     // 启用远程 embedding 计算
     vectortcvector.WithRemoteEmbeddingModel("bge-base-zh"),
     // 如需混合检索，需启用 TSVector
@@ -124,29 +128,23 @@ TcVector 对过滤器的支持：
 - ⚡ 可选：使用 `WithFilterIndexFields` 为高频字段构建额外索引
 
 ```go
-// v0.4.0+ 新建集合（TCVector 服务支持 JSON 索引）
+// 推荐配置（适用于大多数场景）
 vectorStore, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-endpoint"),
+    vectortcvector.WithFilterAll(true), // 推荐开启：自动索引所有元数据字段，无需手动管理索引
     // ... 其他配置
 )
-// 所有元数据字段可通过 JSON 索引查询，无需预定义
 
-// 可选：为高频字段构建额外索引以优化性能
+// 可选：为高频字段构建额外索引以优化性能（配合 WithFilterAll(true) 使用）
 metadataKeys := source.GetAllMetadataKeys(sources)
 vectorStore, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-endpoint"),
-    vectortcvector.WithFilterIndexFields(metadataKeys), // 可选：构建额外索引
-    // ... 其他配置
-)
-
-// v0.4.0 之前的集合或 TCVector 服务不支持 JSON 索引
-vectorStore, err := vectortcvector.New(
-    vectortcvector.WithURL("https://your-endpoint"),
-    vectortcvector.WithFilterIndexFields(metadataKeys), // 必需：预定义过滤字段
+    vectortcvector.WithFilterAll(true),
+    vectortcvector.WithFilterIndexFields(metadataKeys), // 可选：构建额外倒排索引加速查询
     // ... 其他配置
 )
 ```
 
 **说明：**
-- **v0.4.0+ 新建集合**：自动创建 metadata JSON 索引，所有字段可查询
-- **旧版本集合**：仅支持 `WithFilterIndexFields` 中预定义的字段
+- **WithFilterAll(true)**（推荐）：自动为 `metadata` 字段创建 JSON 索引，使所有元数据字段均可被过滤查询，无需预先定义 schema。
+- **WithFilterIndexFields**（可选）：为特定的高频查询字段创建额外的倒排索引，在大数据量下进一步提升过滤性能。

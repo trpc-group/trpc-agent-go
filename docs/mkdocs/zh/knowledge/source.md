@@ -71,6 +71,10 @@ urlSrc := urlsource.New(
 分离内容获取和文档标识：
 
 ```go
+import (
+    urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
+)
+
 urlSrcAlias := urlsource.New(
     []string{"https://trpc-go.com/docs/api.md"},     // 标识符 URL（用于文档 ID 和元数据）
     urlsource.WithContentFetchingURL([]string{"https://github.com/trpc-group/trpc-go/raw/main/docs/api.md"}), // 实际内容获取 URL
@@ -136,29 +140,12 @@ if err := kb.Load(ctx); err != nil {
 }
 ```
 
-## 批量文档处理与并发
-
-Knowledge 支持批量文档处理和并发加载，可以显著提升大量文档的处理性能：
-
-```go
-err := kb.Load(ctx,
-    knowledge.WithShowProgress(true),      // 打印进度日志
-    knowledge.WithProgressStepSize(10),    // 进度步长
-    knowledge.WithShowStats(true),         // 打印统计信息
-    knowledge.WithSourceConcurrency(4),    // 源级并发
-    knowledge.WithDocConcurrency(64),      // 文档级并发
-)
-```
-
-> **关于性能与限流**：
->
-> - 提高并发会增加对 Embedder 服务（OpenAI/Gemini）的调用频率，可能触发限流
-> - 请根据吞吐、成本与限流情况调节 `WithSourceConcurrency()`、`WithDocConcurrency()`
-> - 默认值在多数场景下较为均衡；需要更快速度可适当上调，遇到限流则下调
 
 ## 配置元数据
 
-为了使过滤器功能正常工作，建议在创建文档源时添加丰富的元数据：
+为了使过滤器功能正常工作，建议在创建文档源时添加丰富的元数据。
+
+> 详细的过滤器使用指南，请参考 [过滤器文档](filter.md)。
 
 ```go
 sources := []source.Source{
