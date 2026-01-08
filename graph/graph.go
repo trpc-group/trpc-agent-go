@@ -50,14 +50,6 @@ const (
 // Node function signature: (state) -> updated_state or Command.
 type NodeFunc func(ctx context.Context, state State) (any, error)
 
-// NodeFuncInterceptor is an interface that can be implemented by a node function to intercept the execution of the node function.
-type NodeFuncInterceptor interface {
-	// Before is called before the node function is executed.
-	Before(context.Context, State) (State, error)
-	// After is called after the node function is executed.
-	After(context.Context, NodeResult) (NodeResult, error)
-}
-
 // NodeResult represents the result of executing a node function.
 // It can be either a State update or a Command for combined state update + routing.
 type NodeResult any
@@ -114,12 +106,11 @@ type channelWriteEntry struct {
 // Node represents a node in the graph.
 // Nodes are primarily functions with metadata.
 type Node struct {
-	ID                  string
-	Name                string
-	Description         string
-	Function            NodeFunc
-	functionInterceptor NodeFuncInterceptor
-	Type                NodeType // Type of the node (function, llm, tool, etc.)
+	ID          string
+	Name        string
+	Description string
+	Function    NodeFunc
+	Type        NodeType // Type of the node (function, llm, tool, etc.)
 
 	toolSets             []tool.ToolSet
 	refreshToolSetsOnRun bool

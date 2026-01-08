@@ -418,34 +418,16 @@ func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *Sta
 
 	node.Function = func(ctx context.Context, state State) (any, error) {
 		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
-		workflow := &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", id), ID: id}
+		workflow := &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", id), ID: id, Request: state.safeClone()}
 		defer func() {
 			itelemetry.TraceWorkflow(span, workflow)
 			span.End()
 		}()
-		if node.functionInterceptor != nil {
-			request, err := node.functionInterceptor.Before(ctx, state)
-			if err != nil {
-				workflow.Error = err
-				return nil, err
-			}
-			workflow.Request = request.safeClone()
-		} else {
-			workflow.Request = state.safeClone()
-		}
 
 		response, err := function(ctx, state)
 		if err != nil {
 			workflow.Error = err
 			return nil, err
-		}
-		if node.functionInterceptor != nil {
-			response, err = node.functionInterceptor.After(ctx, response)
-			if err != nil {
-				workflow.Error = err
-				return nil, err
-			}
-			workflow.Response = response
 		}
 		workflow.Response = response
 		return response, nil
