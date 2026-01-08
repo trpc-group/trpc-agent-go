@@ -2531,3 +2531,78 @@ func TestDisableDeepCopy(t *testing.T) {
 
 	require.NoError(t, err)
 }
+
+func TestExecutor_JoinEdge_WaitsForAll(t *testing.T) {
+	const orderKey = "order"
+
+	schema := NewStateSchema().AddField(orderKey, StateField{
+		Type:    reflect.TypeOf([]string{}),
+		Reducer: StringSliceReducer,
+		Default: func() any { return []string{} },
+	})
+
+	sg := NewStateGraph(schema)
+	sg.AddNode("start", func(ctx context.Context, state State) (any, error) {
+		return State{orderKey: []string{"start"}}, nil
+	})
+	sg.AddNode("b", func(ctx context.Context, state State) (any, error) {
+		return State{orderKey: []string{"b"}}, nil
+	})
+	sg.AddNode("c", func(ctx context.Context, state State) (any, error) {
+		return State{orderKey: []string{"c"}}, nil
+	})
+	sg.AddNode("join", func(ctx context.Context, state State) (any, error) {
+		return State{orderKey: []string{"join"}}, nil
+	})
+
+	g, err := sg.
+		SetEntryPoint("start").
+		AddEdge("start", "b").
+		AddEdge("start", "c").
+		AddJoinEdge([]string{"b", "c"}, "join").
+		SetFinishPoint("join").
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{InvocationID: "inv-join-edge"}
+	ch, err := exec.Execute(context.Background(), State{}, inv)
+	require.NoError(t, err)
+
+	var doneEvent *event.Event
+	for evt := range ch {
+		if evt.Done {
+			doneEvent = evt
+			break
+		}
+	}
+	require.NotNil(t, doneEvent)
+	require.NotNil(t, doneEvent.StateDelta)
+
+	raw, ok := doneEvent.StateDelta[orderKey]
+	require.True(t, ok)
+
+	var order []string
+	require.NoError(t, json.Unmarshal(raw, &order))
+	require.GreaterOrEqual(t, len(order), 4)
+
+	indexOf := func(target string) int {
+		for i, name := range order {
+			if name == target {
+				return i
+			}
+		}
+		return -1
+	}
+
+	iStart := indexOf("start")
+	iB := indexOf("b")
+	iC := indexOf("c")
+	iJoin := indexOf("join")
+
+	require.Equal(t, 0, iStart)
+	require.Greater(t, iJoin, iB)
+	require.Greater(t, iJoin, iC)
+}
