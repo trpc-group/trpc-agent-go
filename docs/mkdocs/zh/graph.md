@@ -254,6 +254,42 @@ schema.AddField("counter", graph.StateField{
   不要同时写 `one_shot_messages`，优先使用 `one_shot_messages_by_node`。
 - 需要消费上游文本结果时：紧邻下游读取 `last_response`，或在任意后续节点读取 `node_responses[节点ID]`。
 
+按节点 ID 定向的一次性消息覆盖示例：
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const (
+    llm1NodeID = "llm1"
+    llm2NodeID = "llm2"
+)
+
+func prepForLLM1(ctx context.Context, state graph.State) (any, error) {
+    msgs := []model.Message{
+        model.NewUserMessage("question for llm1"),
+    }
+    return graph.SetOneShotMessagesForNode(llm1NodeID, msgs), nil
+}
+
+func prepForLLM2(ctx context.Context, state graph.State) (any, error) {
+    msgs := []model.Message{
+        model.NewUserMessage("question for llm2"),
+    }
+    return graph.SetOneShotMessagesForNode(llm2NodeID, msgs), nil
+}
+```
+
+注意：
+
+- `llm1NodeID` / `llm2NodeID` 必须与 `AddLLMNode` 里传入的节点 ID 一致。
+- 每个 LLM 节点只会消费一次 `one_shot_messages_by_node[自己的ID]`，
+  并且只清理自己的 entry。
+
 示例：
 
 - `examples/graph/io_conventions`：函数 + LLM + Agent 的 I/O 演示

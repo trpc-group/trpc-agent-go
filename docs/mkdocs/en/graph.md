@@ -256,6 +256,42 @@ Recommended patterns
   one‑shot input.
 - To consume an upstream node's text, read `last_response` immediately downstream or fetch from `node_responses[that_node_id]` later.
 
+One-shot messages scoped by node ID:
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const (
+    llm1NodeID = "llm1"
+    llm2NodeID = "llm2"
+)
+
+func prepForLLM1(ctx context.Context, state graph.State) (any, error) {
+    msgs := []model.Message{
+        model.NewUserMessage("question for llm1"),
+    }
+    return graph.SetOneShotMessagesForNode(llm1NodeID, msgs), nil
+}
+
+func prepForLLM2(ctx context.Context, state graph.State) (any, error) {
+    msgs := []model.Message{
+        model.NewUserMessage("question for llm2"),
+    }
+    return graph.SetOneShotMessagesForNode(llm2NodeID, msgs), nil
+}
+```
+
+Notes:
+
+- `llm1NodeID` / `llm2NodeID` must match the IDs you pass to `AddLLMNode`.
+- Each LLM node consumes `one_shot_messages_by_node[its_id]` once, and clears
+  only its own entry.
+
 See examples:
 
 - `examples/graph/io_conventions` — Function + LLM + Agent I/O
