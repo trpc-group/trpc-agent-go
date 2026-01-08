@@ -69,10 +69,22 @@ const (
 	KeyGenAIWorkflowID = "gen_ai.workflow.id"
 )
 
+var (
+	// KeyGenAIWorkflowResponse is the response of the workflow.
+	KeyGenAIWorkflowRequest = semconvtrace.KeyGenAIWorkflowRequest
+	// KeyGenAIWorkflowResponse is the response of the workflow.
+	KeyGenAIWorkflowResponse = semconvtrace.KeyGenAIWorkflowResponse
+	// KeyGenAIWorkflowError is the error of the workflow.
+	KeyGenAIWorkflowError = semconvtrace.KeyGenAIWorkflowError
+)
+
 // Workflow is the workflow information.
 type Workflow struct {
-	Name string
-	ID   string
+	Name     string
+	ID       string
+	Request  any
+	Response any
+	Error    error
 }
 
 // NewWorkflowSpanName creates a new workflow span name.
@@ -85,6 +97,25 @@ func TraceWorkflow(span trace.Span, workflow *Workflow) {
 	span.SetAttributes(attribute.String(KeyGenAIOperationName, OperationWorkflow))
 	span.SetAttributes(attribute.String(KeyGenAIWorkflowName, workflow.Name))
 	span.SetAttributes(attribute.String(KeyGenAIWorkflowID, workflow.ID))
+	if workflow.Request != nil {
+		request, err := json.Marshal(workflow.Request)
+		if err != nil {
+			span.SetAttributes(attribute.String(KeyGenAIWorkflowRequest, "<not json serializable>"))
+		}
+		span.SetAttributes(attribute.String(KeyGenAIWorkflowRequest, string(request)))
+	}
+	if workflow.Response != nil {
+		response, err := json.Marshal(workflow.Response)
+		if err != nil {
+			span.SetAttributes(attribute.String(KeyGenAIWorkflowResponse, "<not json serializable>"))
+		}
+		span.SetAttributes(attribute.String(KeyGenAIWorkflowResponse, string(response)))
+	}
+	if workflow.Error != nil {
+		span.SetAttributes(attribute.String(KeyGenAIWorkflowError, workflow.Error.Error()))
+		span.SetStatus(codes.Error, workflow.Error.Error())
+		span.RecordError(workflow.Error)
+	}
 }
 
 // newInferenceSpanName creates a new inference span name.

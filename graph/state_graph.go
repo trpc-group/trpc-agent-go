@@ -82,6 +82,13 @@ func WithDescription(description string) Option {
 	}
 }
 
+// WithNodeFuncInterceptor sets the interceptor for the node function.
+func WithNodeFuncInterceptor(interceptor NodeFuncInterceptor) Option {
+	return func(node *Node) {
+		node.functionInterceptor = interceptor
+	}
+}
+
 // WithNodeType sets the type of the node.
 func WithNodeType(nodeType NodeType) Option {
 	return func(node *Node) {
@@ -384,20 +391,48 @@ func WithModelCallbacks(callbacks *model.Callbacks) Option {
 // The name and description of the node can be set with the options.
 // This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *StateGraph {
-	f := func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
-		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", id), ID: id})
-		defer span.End()
-		return function(ctx, state)
-	}
 	node := &Node{
-		ID:       id,
-		Name:     id,
-		Function: f,
-		Type:     NodeTypeFunction, // Default to function type
+		ID:   id,
+		Name: id,
+		Type: NodeTypeFunction, // Default to function type
 	}
 	for _, opt := range opts {
 		opt(node)
+	}
+
+	node.Function = func(ctx context.Context, state State) (any, error) {
+		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
+		workflow := &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", id), ID: id}
+		defer func() {
+			itelemetry.TraceWorkflow(span, workflow)
+			span.End()
+		}()
+		if node.functionInterceptor != nil {
+			request, err := node.functionInterceptor.Before(ctx, state)
+			if err != nil {
+				workflow.Error = err
+				return nil, err
+			}
+			workflow.Request = request
+		} else {
+			workflow.Request = state
+		}
+
+		response, err := function(ctx, state)
+		if err != nil {
+			workflow.Error = err
+			return nil, err
+		}
+		if node.functionInterceptor != nil {
+			response, err = node.functionInterceptor.After(ctx, response)
+			if err != nil {
+				workflow.Error = err
+				return nil, err
+			}
+			workflow.Response = response
+		}
+		workflow.Response = response
+		return response, nil
 	}
 
 	sg.graph.addNode(node)
