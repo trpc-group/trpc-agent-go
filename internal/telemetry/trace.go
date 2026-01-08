@@ -70,7 +70,7 @@ const (
 )
 
 var (
-	// KeyGenAIWorkflowResponse is the response of the workflow.
+	// KeyGenAIWorkflowRequest is the request of the workflow.
 	KeyGenAIWorkflowRequest = semconvtrace.KeyGenAIWorkflowRequest
 	// KeyGenAIWorkflowResponse is the response of the workflow.
 	KeyGenAIWorkflowResponse = semconvtrace.KeyGenAIWorkflowResponse
