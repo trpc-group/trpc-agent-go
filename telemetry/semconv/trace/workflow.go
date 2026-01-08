@@ -14,6 +14,4 @@ const (
 	KeyGenAIWorkflowRequest = "gen_ai.workflow.request"
 	// KeyGenAIWorkflowResponse is the response of the workflow.
 	KeyGenAIWorkflowResponse = "gen_ai.workflow.response"
-	// KeyGenAIWorkflowError is the error of the workflow.
-	KeyGenAIWorkflowError = "gen_ai.workflow.error"
 )

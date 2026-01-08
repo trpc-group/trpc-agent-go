@@ -112,7 +112,7 @@ func TraceWorkflow(span trace.Span, workflow *Workflow) {
 		span.SetAttributes(attribute.String(KeyGenAIWorkflowResponse, string(response)))
 	}
 	if workflow.Error != nil {
-		span.SetAttributes(attribute.String(KeyGenAIWorkflowError, workflow.Error.Error()))
+		span.SetAttributes(attribute.String(KeyErrorType, ValueDefaultErrorType))
 		span.SetStatus(codes.Error, workflow.Error.Error())
 		span.RecordError(workflow.Error)
 	}
