@@ -19,7 +19,34 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
+
+func TestMarkdownReader_WithTransformers(t *testing.T) {
+	data := "# Title\n\nContent"
+
+	// Create a simple char filter
+	filter := transform.NewCharFilter("\n")
+
+	rdr := New(
+		reader.WithChunk(false),
+		reader.WithTransformers(filter),
+	)
+
+	docs, err := rdr.ReadFromReader("test", strings.NewReader(data))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(docs) != 1 {
+		t.Fatalf("expected 1 document")
+	}
+
+	// Expect "# TitleContent" because newline is removed
+	if docs[0].Content != "# TitleContent" {
+		t.Errorf("expected '# TitleContent', got '%s'", docs[0].Content)
+	}
+}
 
 func TestMarkdownReader_Read_NoChunk(t *testing.T) {
 	data := "# Title\n\nThis is **markdown**."

@@ -7,8 +7,8 @@
 //
 //
 
-// Package transform provides internal transform utilities.
-package transform
+// Package knowledge provides internal knowledge utilities.
+package knowledge
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"

@@ -6,12 +6,12 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package vectorstore provides internal utilities for vector store operations.
-package vectorstore
+// Package knowledge provides internal utilities for knowledge
+package knowledge
 
 import "math"
 
-// MetricType represents the type of distance/similarity metric used in vector search.
+// MetricType represents the typeof distance/similarity metric used in vector search.
 type MetricType string
 
 // Metric type constants.

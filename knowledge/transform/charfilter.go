@@ -19,7 +19,7 @@ import (
 // CharFilter removes specific characters or strings from document content.
 // This is useful for preprocessing documents before chunking.
 type CharFilter struct {
-	charsToRemove []string
+	replacer *strings.Replacer
 }
 
 // NewCharFilter creates a CharFilter that removes the specified characters or strings.
@@ -28,8 +28,12 @@ type CharFilter struct {
 //
 //	filter := transform.NewCharFilter("\n", "\t", "\r")
 func NewCharFilter(charsToRemove ...string) *CharFilter {
+	args := make([]string, 0, len(charsToRemove)*2)
+	for _, char := range charsToRemove {
+		args = append(args, char, "")
+	}
 	return &CharFilter{
-		charsToRemove: charsToRemove,
+		replacer: strings.NewReplacer(args...),
 	}
 }
 
@@ -62,11 +66,7 @@ func (cf *CharFilter) transform(docs []*document.Document) ([]*document.Document
 
 // cleanContent applies all character filters to the content.
 func (cf *CharFilter) cleanContent(content string) string {
-	result := content
-	for _, char := range cf.charsToRemove {
-		result = strings.ReplaceAll(result, char, "")
-	}
-	return result
+	return cf.replacer.Replace(content)
 }
 
 // createProcessedDoc creates a new document with processed content.

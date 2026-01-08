@@ -17,12 +17,12 @@ import (
 	"os"
 	"path/filepath"
 
-	isource "trpc.group/trpc-go/trpc-agent-go/internal/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+	isource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/internal/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 

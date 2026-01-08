@@ -23,7 +23,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/index"
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
 
-	internalvectorstore "trpc.group/trpc-go/trpc-agent-go/internal/knowledge/vectorstore"
+	internalknowledge "trpc.group/trpc-go/trpc-agent-go/internal/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
@@ -1047,36 +1047,36 @@ func (vs *VectorStore) normalizeScores(scores []float64, searchMode int) []float
 	result := make([]float64, len(scores))
 
 	// Determine metric type based on search mode
-	var metricType internalvectorstore.MetricType
+	var metricType internalknowledge.MetricType
 	switch searchMode {
 	case vectorstore.SearchModeKeyword:
 		// BM25 sparse vector search
-		metricType = internalvectorstore.MetricTypeBM25
+		metricType = internalknowledge.MetricTypeBM25
 	case vectorstore.SearchModeHybrid:
 		// Hybrid search scores are already fused by reranker
 		// Use min-max normalization for hybrid results
-		return internalvectorstore.MinMaxNormalize(scores)
+		return internalknowledge.MinMaxNormalize(scores)
 	default:
 		// Vector search - use configured metric type
 		metricType = vs.metricTypeToInternal()
 	}
 
 	for i, score := range scores {
-		result[i] = internalvectorstore.NormalizeScore(score, metricType)
+		result[i] = internalknowledge.NormalizeScore(score, metricType)
 	}
 	return result
 }
 
 // metricTypeToInternal converts Milvus entity.MetricType to internal MetricType.
-func (vs *VectorStore) metricTypeToInternal() internalvectorstore.MetricType {
+func (vs *VectorStore) metricTypeToInternal() internalknowledge.MetricType {
 	switch vs.option.metricType {
 	case entity.L2:
-		return internalvectorstore.MetricTypeL2
+		return internalknowledge.MetricTypeL2
 	case entity.IP:
-		return internalvectorstore.MetricTypeIP
+		return internalknowledge.MetricTypeIP
 	case entity.COSINE:
-		return internalvectorstore.MetricTypeCosine
+		return internalknowledge.MetricTypeCosine
 	default:
-		return internalvectorstore.MetricTypeIP
+		return internalknowledge.MetricTypeIP
 	}
 }

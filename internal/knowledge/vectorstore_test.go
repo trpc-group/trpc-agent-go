@@ -6,7 +6,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package vectorstore
+package knowledge
 
 import (
 	"math"
@@ -310,9 +310,3 @@ func TestNormalizeBM25(t *testing.T) {
 	assert.Less(t, normalizeBM25(1), 1.0)
 	assert.Greater(t, normalizeBM25(10), 0.99)
 }
-
-
-
-
-
-

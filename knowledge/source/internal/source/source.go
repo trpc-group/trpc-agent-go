@@ -181,7 +181,3 @@ func GetFileTypeFromContentType(contentType, fileName string) string {
 func GetReadersWithChunkConfig(chunkSize, overlap int) map[string]reader.Reader {
 	return GetReaders(WithChunkSize(chunkSize), WithChunkOverlap(overlap))
 }
-
-
-
-

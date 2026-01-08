@@ -29,10 +29,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/knowledge/document/internal/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	itransform "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/transform"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
-
-	itransform "trpc.group/trpc-go/trpc-agent-go/internal/knowledge/transform"
 )
 
 var (

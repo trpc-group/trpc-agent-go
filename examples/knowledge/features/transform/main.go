@@ -31,9 +31,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 
-	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
 )
 
 func main() {
@@ -43,23 +44,27 @@ func main() {
 	fmt.Println("==============")
 
 	// Example 1: No transformer (baseline)
+	// Shows original content with tabs, multiple spaces, and "xxxxx" patterns
 	fmt.Println("\n1. No Transformer (baseline)")
 	runDemo(ctx, "No Transform")
 
-	// Example 2: CharFilter - Remove specific characters
-	fmt.Println("\n2. CharFilter: Remove tabs and carriage returns")
-	charFilter := transform.NewCharFilter("\t", "\r", "\n")
+	// Example 2: CharFilter - Remove tab characters
+	// Removes all \t characters from the content
+	fmt.Println("\n2. CharFilter: Remove tabs")
+	charFilter := transform.NewCharFilter("\t")
 	runDemo(ctx, "CharFilter", charFilter)
 
-	// Example 3: CharDedup - Collapse consecutive repeated characters
-	fmt.Println("\n3. CharDedup: Collapse consecutive spaces and newlines")
-	charDedup := transform.NewCharDedup(" ", "\n")
+	// Example 3: CharDedup - Collapse consecutive spaces and 'x' characters
+	// "     " -> " " and "xxxxx" -> "x"
+	fmt.Println("\n3. CharDedup: Collapse consecutive spaces and 'x' characters")
+	charDedup := transform.NewCharDedup(" ", "x")
 	runDemo(ctx, "CharDedup", charDedup)
 
 	// Example 4: Combined transformers
-	fmt.Println("\n4. Combined: CharFilter + CharDedup")
-	filter := transform.NewCharFilter("\t", "\r")
-	dedup := transform.NewCharDedup(" ", "\n")
+	// First remove tabs, then collapse spaces and 'x' characters
+	fmt.Println("\n4. Combined: CharFilter(tabs) + CharDedup(spaces, x)")
+	filter := transform.NewCharFilter("\t")
+	dedup := transform.NewCharDedup(" ", "x")
 	runDemo(ctx, "Combined", filter, dedup)
 }
 
@@ -71,7 +76,7 @@ func runDemo(ctx context.Context, demoName string, transformers ...transform.Tra
 	}
 
 	src := file.New(
-		[]string{util.ExampleDataPath("file/test.pdf")},
+		[]string{util.ExampleDataPath("file/content_transform.md")},
 		opts...,
 	)
 
@@ -101,6 +106,7 @@ func runDemo(ctx context.Context, demoName string, transformers ...transform.Tra
 	result, err := kb.Search(ctx, &knowledge.SearchRequest{
 		Query:      "",
 		MaxResults: len(docInfos),
+		SearchMode: vectorstore.SearchModeFilter,
 	})
 	if err != nil {
 		log.Printf("Failed to search %s: %v", demoName, err)
@@ -110,9 +116,6 @@ func runDemo(ctx context.Context, demoName string, transformers ...transform.Tra
 	// Show all chunks
 	for i, res := range result.Documents {
 		content := res.Document.Content
-		if len(content) > 100 {
-			content = content[:100] + "..."
-		}
 		fmt.Printf("   Chunk %d: %q\n", i+1, content)
 	}
 }
