@@ -74,8 +74,6 @@ var (
 	KeyGenAIWorkflowRequest = semconvtrace.KeyGenAIWorkflowRequest
 	// KeyGenAIWorkflowResponse is the response of the workflow.
 	KeyGenAIWorkflowResponse = semconvtrace.KeyGenAIWorkflowResponse
-	// KeyGenAIWorkflowError is the error of the workflow.
-	KeyGenAIWorkflowError = semconvtrace.KeyGenAIWorkflowError
 )
 
 // Workflow is the workflow information.
