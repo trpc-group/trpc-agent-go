@@ -218,8 +218,11 @@ func (e *Executor) Execute(
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_graph %s", invocation.AgentName)))
-		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: fmt.Sprintf("execute_graph %s", invocation.AgentName), ID: invocation.AgentName})
-		defer span.End()
+		workflow := &itelemetry.Workflow{
+			Name:    fmt.Sprintf("execute_graph %s", invocation.AgentName),
+			ID:      invocation.AgentName,
+			Request: initialState.safeClone(),
+		}
 		defer func() {
 			if r := recover(); r != nil {
 				stack := debug.Stack()
@@ -229,13 +232,16 @@ func (e *Executor) Execute(
 					r,
 					string(stack),
 				)
+				workflow.Error = fmt.Errorf("executor panic: %v", r)
 				agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
 					WithPregelEventInvocationID(invocation.InvocationID),
 					WithPregelEventStepNumber(-1),
-					WithPregelEventError(fmt.Sprintf("executor panic: %v", r)),
+					WithPregelEventError(workflow.Error.Error()),
 				))
 			}
 			close(eventChan)
+			itelemetry.TraceWorkflow(span, workflow)
+			span.End()
 		}()
 		if err := e.executeGraph(ctx, initialState, invocation, eventChan, startTime); err != nil {
 			// Check if this is an interrupt error.
@@ -244,6 +250,7 @@ func (e *Executor) Execute(
 				// The interrupt will be handled by the caller.
 				return
 			}
+			workflow.Error = err
 			// Emit error event for other errors.
 			agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
 				WithPregelEventInvocationID(invocation.InvocationID),
