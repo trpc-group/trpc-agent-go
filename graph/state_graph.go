@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"sync"
 	"time"
@@ -765,8 +766,25 @@ type llmRunner struct {
 
 // execute implements the three-stage rule for LLM execution.
 func (r *llmRunner) execute(ctx context.Context, state State, span oteltrace.Span) (any, error) {
+	if msgs, ok := GetOneShotMessagesForNode(state, r.nodeID); ok {
+		return r.executeOneShotStage(
+			ctx,
+			state,
+			msgs,
+			span,
+			ClearOneShotMessagesForNode(r.nodeID),
+		)
+	}
 	if v, ok := state[StateKeyOneShotMessages].([]model.Message); ok && len(v) > 0 {
-		return r.executeOneShotStage(ctx, state, v, span)
+		return r.executeOneShotStage(
+			ctx,
+			state,
+			v,
+			span,
+			State{
+				StateKeyOneShotMessages: []model.Message(nil),
+			},
+		)
 	}
 	if userInput, exists := state[StateKeyUserInput]; exists {
 		if input, ok := userInput.(string); ok && input != "" {
@@ -781,6 +799,7 @@ func (r *llmRunner) executeOneShotStage(
 	state State,
 	oneShotMsgs []model.Message,
 	span oteltrace.Span,
+	clearUpdate State,
 ) (any, error) {
 	instr := r.processInstruction(state)
 	used := ensureSystemHead(oneShotMsgs, instr)
@@ -796,15 +815,16 @@ func (r *llmRunner) executeOneShotStage(
 	if asst != nil {
 		ops = append(ops, AppendMessages{Items: []model.Message{*asst}})
 	}
-	return State{
-		StateKeyMessages:        ops,
-		StateKeyOneShotMessages: []model.Message(nil), // Clear one-shot messages after execution.
-		StateKeyLastResponse:    asst.Content,
-		StateKeyLastResponseID:  extractResponseID(result),
+	out := State{
+		StateKeyMessages:       ops,
+		StateKeyLastResponse:   asst.Content,
+		StateKeyLastResponseID: extractResponseID(result),
 		StateKeyNodeResponses: map[string]any{
 			r.nodeID: asst.Content,
 		},
-	}, nil
+	}
+	maps.Copy(out, clearUpdate)
+	return out, nil
 }
 
 func (r *llmRunner) executeUserInputStage(

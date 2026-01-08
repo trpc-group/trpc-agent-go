@@ -10,6 +10,7 @@
 package graph
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -200,4 +201,88 @@ func TestGetStateValue(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, "value", nodeResponses["key"])
 	})
+}
+
+func TestOneShotMessagesByNodeHelpers(t *testing.T) {
+	nodeID := "llm1"
+	msgs := []model.Message{
+		model.NewUserMessage("hi"),
+	}
+
+	update := SetOneShotMessagesForNode(nodeID, msgs)
+	raw, ok := update[StateKeyOneShotMessagesByNode].(map[string][]model.Message)
+	require.True(t, ok)
+	require.Len(t, raw, 1)
+	require.Equal(t, "hi", raw[nodeID][0].Content)
+
+	msgs[0].Content = "changed"
+	require.Equal(t, "hi", raw[nodeID][0].Content)
+
+	clear := ClearOneShotMessagesForNode(nodeID)
+	clearRaw, ok := clear[StateKeyOneShotMessagesByNode].(map[string][]model.Message)
+	require.True(t, ok)
+	_, exists := clearRaw[nodeID]
+	require.True(t, exists)
+	require.Len(t, clearRaw[nodeID], 0)
+
+	state := State{
+		StateKeyOneShotMessagesByNode: raw,
+	}
+	got, ok := GetOneShotMessagesForNode(state, nodeID)
+	require.True(t, ok)
+	require.Equal(t, "hi", got[0].Content)
+	got[0].Content = "mutated"
+	require.Equal(t, "hi", raw[nodeID][0].Content)
+}
+
+func TestStateSchemaApplyUpdate_OneShotMessagesByNode(t *testing.T) {
+	schema := NewStateSchema()
+
+	a := State{
+		StateKeyOneShotMessagesByNode: map[string][]model.Message{
+			"llm1": {model.NewUserMessage("a")},
+		},
+	}
+	b := State{
+		StateKeyOneShotMessagesByNode: map[string][]model.Message{
+			"llm2": {model.NewUserMessage("b")},
+		},
+	}
+
+	state := schema.ApplyUpdate(State{}, a)
+	state = schema.ApplyUpdate(state, b)
+
+	merged, ok := state[StateKeyOneShotMessagesByNode].(map[string][]model.Message)
+	require.True(t, ok)
+	require.Len(t, merged, 2)
+	require.Equal(t, "a", merged["llm1"][0].Content)
+	require.Equal(t, "b", merged["llm2"][0].Content)
+
+	del := State{
+		StateKeyOneShotMessagesByNode: map[string][]model.Message{
+			"llm1": nil,
+		},
+	}
+	state = schema.ApplyUpdate(state, del)
+	merged, ok = state[StateKeyOneShotMessagesByNode].(map[string][]model.Message)
+	require.True(t, ok)
+	_, exists := merged["llm1"]
+	require.False(t, exists)
+	require.Equal(t, "b", merged["llm2"][0].Content)
+
+	state = schema.ApplyUpdate(state, State{StateKeyOneShotMessagesByNode: nil})
+	cleared, ok := state[StateKeyOneShotMessagesByNode].(map[string][]model.Message)
+	require.True(t, ok)
+	require.Nil(t, cleared)
+
+	raw, err := json.Marshal(b[StateKeyOneShotMessagesByNode])
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	state = schema.ApplyUpdate(State{}, State{
+		StateKeyOneShotMessagesByNode: decoded,
+	})
+	merged, ok = state[StateKeyOneShotMessagesByNode].(map[string][]model.Message)
+	require.True(t, ok)
+	require.Equal(t, "b", merged["llm2"][0].Content)
 }

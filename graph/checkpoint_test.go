@@ -1095,7 +1095,13 @@ func TestLLMRunner_ExecuteOneShotStage(t *testing.T) {
 	r := &llmRunner{llmModel: &dummyModel{}, instruction: "inst", tools: nil, nodeID: "node1"}
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
 	_, span := tracer.Start(context.Background(), "s")
-	st, err := r.executeOneShotStage(context.Background(), State{}, []model.Message{model.NewUserMessage("hi")}, span)
+	st, err := r.executeOneShotStage(
+		context.Background(),
+		State{},
+		[]model.Message{model.NewUserMessage("hi")},
+		span,
+		nil,
+	)
 	require.NoError(t, err)
 	s, _ := st.(State)
 	// last_response should be set
