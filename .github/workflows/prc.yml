@@ -31,7 +31,8 @@ jobs:
           mapfile -t modules < <(find . -name go.mod \
             -not -path "./.resource/*" \
             -not -path "./docs/*" \
-            -not -path "./examples/*" | sort)
+            -not -path "./examples/*" \
+            -not -path "./test/*" | sort)
           if [ "${#modules[@]}" -eq 0 ]; then
             echo "matrix={\"module\":[]}" >> "$GITHUB_OUTPUT"
             exit 0
@@ -84,6 +85,20 @@ jobs:
           name: coverage-${{ steps.module-info.outputs.safe_name }}
           path: coverage-${{ steps.module-info.outputs.safe_name }}.out
           if-no-files-found: error
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Run e2e tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd test
+          go test ./...
   coverage:
     name: coverage
     runs-on: ubuntu-latest
