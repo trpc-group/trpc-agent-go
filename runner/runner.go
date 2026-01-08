@@ -1116,19 +1116,4 @@ func (r *runner) enqueueAutoMemoryJob(ctx context.Context, sess *session.Session
 		log.DebugfContext(ctx, "Auto memory extraction skipped or failed: %v", err)
 		return
 	}
-
-	if r.sessionService == nil {
-		return
-	}
-	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
-	if !ok || len(raw) == 0 {
-		return
-	}
-
-	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
-	if err := r.sessionService.UpdateSessionState(ctx, key, session.StateMap{
-		memory.SessionStateKeyAutoMemoryLastExtractAt: raw,
-	}); err != nil {
-		log.DebugfContext(ctx, "Auto memory state persistence skipped or failed: %v", err)
-	}
 }

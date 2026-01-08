@@ -34,6 +34,8 @@ const (
 type MemoryJob struct {
 	Ctx      context.Context
 	UserKey  memory.UserKey
+	Session  *session.Session
+	LatestTs time.Time
 	Messages []model.Message
 }
 
@@ -163,17 +165,14 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 		return nil
 	}
 
-	if latestTs.IsZero() {
-		latestTs = time.Now()
-	}
-
 	job := &MemoryJob{
 		Ctx:      context.WithoutCancel(ctx),
 		UserKey:  userKey,
+		Session:  sess,
+		LatestTs: latestTs,
 		Messages: messages,
 	}
 	if w.tryEnqueueJob(ctx, userKey, job) {
-		writeLastExtractAt(sess, latestTs)
 		return nil
 	}
 	if ctx.Err() != nil {
@@ -247,7 +246,9 @@ func (w *AutoMemoryWorker) processJob(job *MemoryJob) {
 	if err := w.createAutoMemory(ctx, job.UserKey, job.Messages); err != nil {
 		log.WarnfContext(ctx, "auto_memory: job failed for user %s/%s: %v",
 			job.UserKey.AppName, job.UserKey.UserID, err)
+		return
 	}
+	writeLastExtractAt(job.Session, job.LatestTs)
 }
 
 // createAutoMemory performs memory extraction and persists operations.
@@ -337,6 +338,8 @@ func hashUserKey(userKey memory.UserKey) int {
 	return int(h.Sum32())
 }
 
+// readLastExtractAt reads the last auto memory extraction timestamp from session state.
+// Returns zero time if not found or parsing fails.
 func readLastExtractAt(sess *session.Session) time.Time {
 	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
 	if !ok || len(raw) == 0 {
@@ -349,31 +352,47 @@ func readLastExtractAt(sess *session.Session) time.Time {
 	return ts
 }
 
+// writeLastExtractAt writes the last auto memory extraction timestamp to session state.
+// The timestamp represents the last included event's timestamp for incremental extraction.
 func writeLastExtractAt(sess *session.Session, ts time.Time) {
 	sess.SetState(memory.SessionStateKeyAutoMemoryLastExtractAt,
 		[]byte(ts.UTC().Format(time.RFC3339Nano)))
 }
 
+// scanDeltaSince scans session events since the given timestamp and extracts messages.
+// Returns the number of turns (events), latest event timestamp, and extracted messages.
+// Only includes user/assistant messages with content, excluding tool calls.
 func scanDeltaSince(
 	sess *session.Session,
 	since time.Time,
-) (turnCount int, latestTs time.Time, messages []model.Message) {
+) (int, time.Time, []model.Message) {
+	var turnCount int
+	var latestTs time.Time
+	var messages []model.Message
 	sess.EventMu.RLock()
 	defer sess.EventMu.RUnlock()
 
 	for _, e := range sess.Events {
+		// Skip events that are not newer than the since timestamp.
 		if !since.IsZero() && !e.Timestamp.After(since) {
 			continue
 		}
 		turnCount++
+
+		// Track the latest timestamp among all processed events.
 		if e.Timestamp.After(latestTs) {
 			latestTs = e.Timestamp
 		}
+
+		// Skip events without responses.
 		if e.Response == nil {
 			continue
 		}
+
+		// Extract messages from response choices, excluding tool-related messages.
 		for _, choice := range e.Response.Choices {
 			msg := choice.Message
+			// Skip tool messages and messages with tool calls.
 			if msg.Role == model.RoleTool || msg.ToolID != "" {
 				continue
 			}
