@@ -1108,7 +1108,11 @@ func (r *runner) enqueueAutoMemoryJob(ctx context.Context, sess *session.Session
 	if r.memoryService == nil || sess == nil {
 		return
 	}
-	if err := r.memoryService.EnqueueAutoMemoryJob(ctx, sess); err != nil {
+	enqueuer, ok := r.memoryService.(memory.Enqueuer)
+	if !ok {
+		return
+	}
+	if err := enqueuer.EnqueueAutoMemoryJob(ctx, sess); err != nil {
 		log.DebugfContext(ctx, "Auto memory extraction skipped or failed: %v", err)
 		return
 	}

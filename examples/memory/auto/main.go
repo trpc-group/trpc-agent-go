@@ -90,7 +90,11 @@ func (c *autoMemoryChat) run() error {
 		return fmt.Errorf("setup failed: %w", err)
 	}
 	defer c.runner.Close()
-	defer c.memoryService.Close()
+	defer func() {
+		if enq, ok := c.memoryService.(memory.Enqueuer); ok {
+			_ = enq.Close()
+		}
+	}()
 
 	return c.startChat(ctx)
 }

@@ -67,10 +67,11 @@ type Service interface {
 
 	// Tools returns the list of available memory tools.
 	Tools() []tool.Tool
+}
 
-	// EnqueueAutoMemoryJob enqueues an auto memory extraction job for async
-	// processing. The session contains the full transcript and state for
-	// incremental extraction.
+// Enqueuer is an optional interface for enqueuing auto memory extraction
+// and managing related resources.
+type Enqueuer interface {
 	EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error
 
 	// Close closes the service and releases resources.

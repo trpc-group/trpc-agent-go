@@ -219,14 +219,6 @@ func (m *mockMemoryService) Tools() []tool.Tool {
 	return nil
 }
 
-func (m *mockMemoryService) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error {
-	return nil
-}
-
-func (m *mockMemoryService) Close() error {
-	return nil
-}
-
 func TestGetPreloadMemoryMessage(t *testing.T) {
 	t.Run("nil memory service", func(t *testing.T) {
 		p := NewContentRequestProcessor(WithPreloadMemory(-1))

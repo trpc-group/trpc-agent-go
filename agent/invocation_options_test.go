@@ -408,14 +408,6 @@ func (m *mockMemoryService) Tools() []tool.Tool {
 	return nil
 }
 
-func (m *mockMemoryService) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error {
-	return nil
-}
-
-func (m *mockMemoryService) Close() error {
-	return nil
-}
-
 type mockArtifactService struct{}
 
 func (m *mockArtifactService) SaveArtifact(ctx context.Context, info artifact.SessionInfo, filename string, artifact *artifact.Artifact) (int, error) {
