@@ -10,6 +10,40 @@
 // Package main demonstrates multi-turn chat using Runner with multiple
 // session backends. It highlights how to switch between sessions while the
 // agent keeps per-session context.
+//
+// Usage:
+//
+//	go run main.go -session=inmemory
+//	go run main.go -session=redis
+//	go run main.go -session=postgres
+//	go run main.go -session=mysql
+//	go run main.go -session=clickhouse
+//
+// Environment variables by session type (example usage):
+//
+//	redis:
+//		export REDIS_ADDR="localhost:6379"
+//
+//	postgres:
+//		export PG_HOST="localhost"
+//		export PG_PORT="5432"
+//		export PG_USER="postgres"
+//		export PG_PASSWORD="password"
+//		export PG_DATABASE="trpc_agent"
+//
+//	mysql:
+//		export MYSQL_HOST="localhost"
+//		export MYSQL_PORT="3306"
+//		export MYSQL_USER="root"
+//		export MYSQL_PASSWORD="password"
+//		export MYSQL_DATABASE="trpc_agent"
+//
+//	clickhouse:
+//		export CLICKHOUSE_HOST="localhost"
+//		export CLICKHOUSE_PORT="9000"
+//		export CLICKHOUSE_USER="default"
+//		export CLICKHOUSE_PASSWORD=""
+//		export CLICKHOUSE_DATABASE="trpc_agent"
 package main
 
 import (
@@ -30,59 +64,29 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/session/mysql"
-	"trpc.group/trpc-go/trpc-agent-go/session/postgres"
-	"trpc.group/trpc-go/trpc-agent-go/session/redis"
+
+	util "trpc.group/trpc-go/trpc-agent-go/examples/session"
 )
 
 var (
-	modelName       = flag.String("model", "deepseek-chat", "Name of the model to use")
-	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis / pgsql / mysql")
+	modelName       = flag.String("model", os.Getenv("MODEL_NAME"), "Name of the model to use (default: MODEL_NAME env var)")
+	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis / postgres / mysql / clickhouse")
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
-	eventLimit      = flag.Int("event-limit", 100, "Maximum number of events to store per session")
-	sessionTTL      = flag.Duration("session-ttl", 24*time.Hour, "Session time-to-live duration")
-)
-
-// Environment variables for session services.
-var (
-	// Redis.
-	redisAddr = getEnvOrDefault("REDIS_ADDR", "localhost:6379")
-
-	// PostgreSQL.
-	pgHost     = getEnvOrDefault("PG_HOST", "localhost")
-	pgPort     = getEnvOrDefault("PG_PORT", "5432")
-	pgUser     = getEnvOrDefault("PG_USER", "root")
-	pgPassword = getEnvOrDefault("PG_PASSWORD", "")
-	pgDatabase = getEnvOrDefault("PG_DATABASE", "trpc-agent-go")
-
-	// MySQL.
-	mysqlHost     = getEnvOrDefault("MYSQL_HOST", "localhost")
-	mysqlPort     = getEnvOrDefault("MYSQL_PORT", "3306")
-	mysqlUser     = getEnvOrDefault("MYSQL_USER", "root")
-	mysqlPassword = getEnvOrDefault("MYSQL_PASSWORD", "")
-	mysqlDatabase = getEnvOrDefault("MYSQL_DATABASE", "trpc_agent_go")
+	eventLimit      = flag.Int("event-limit", 1000, "Maximum number of events to store per session")
+	sessionTTL      = flag.Duration("session-ttl", 10*time.Second, "Session time-to-live duration")
+	debugMode       = flag.Bool("debug", true, "Enable debug mode to print session events after each turn")
 )
 
 func main() {
 	flag.Parse()
 
-	fmt.Printf("🚀 Session Management Demo\n")
+	fmt.Printf("Session Management Demo\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Printf("Event Limit: %d\n", *eventLimit)
 	fmt.Printf("Session TTL: %v\n", *sessionTTL)
-	fmt.Printf("Session Backend: ")
-	switch *sessServiceName {
-	case "redis":
-		fmt.Printf("Redis (%s)\n", redisAddr)
-	case "pgsql":
-		fmt.Printf("PostgreSQL (%s:%s/%s)\n", pgHost, pgPort, pgDatabase)
-	case "mysql":
-		fmt.Printf("MySQL (%s:%s/%s)\n", mysqlHost, mysqlPort, mysqlDatabase)
-	default:
-		fmt.Printf("In-memory\n")
-	}
+	fmt.Printf("Session Backend: %s\n", *sessServiceName)
+	fmt.Printf("Debug Mode: %t\n", *debugMode)
 	fmt.Println(strings.Repeat("=", 50))
 
 	chat := &multiTurnChat{
@@ -96,12 +100,13 @@ func main() {
 }
 
 type multiTurnChat struct {
-	modelName  string
-	streaming  bool
-	runner     runner.Runner
-	userID     string
-	sessionID  string
-	sessionIDs []string
+	modelName      string
+	streaming      bool
+	runner         runner.Runner
+	sessionService session.Service
+	userID         string
+	sessionID      string
+	sessionIDs     []string
 }
 
 // run starts the interactive chat session.
@@ -121,64 +126,21 @@ func (c *multiTurnChat) run() error {
 }
 
 func (c *multiTurnChat) setup(_ context.Context) error {
+	// Create session service using util.
+	sessionType := util.SessionType(*sessServiceName)
+	sessionService, err := util.NewSessionServiceByType(sessionType, util.SessionServiceConfig{
+		EventLimit: *eventLimit,
+		TTL:        *sessionTTL,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create session service: %w", err)
+	}
+	c.sessionService = sessionService
+
 	modelInstance := openai.New(c.modelName)
 
-	var (
-		err            error
-		sessionService session.Service
-	)
-	switch *sessServiceName {
-	case "inmemory":
-		sessionService = sessioninmemory.NewSessionService(
-			sessioninmemory.WithSessionEventLimit(*eventLimit),
-			sessioninmemory.WithSessionTTL(*sessionTTL),
-		)
-
-	case "redis":
-		redisURL := fmt.Sprintf("redis://%s", redisAddr)
-		sessionService, err = redis.NewService(
-			redis.WithRedisClientURL(redisURL),
-			redis.WithSessionEventLimit(*eventLimit),
-			redis.WithSessionTTL(*sessionTTL),
-		)
-		if err != nil {
-			return fmt.Errorf("failed to create redis session service: %w", err)
-		}
-
-	case "pgsql":
-		pgDSN := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-			pgUser, pgPassword, pgHost, pgPort, pgDatabase)
-		sessionService, err = postgres.NewService(
-			postgres.WithPostgresClientDSN(pgDSN),
-			postgres.WithTablePrefix("trpc_"),
-			postgres.WithSessionEventLimit(*eventLimit),
-			postgres.WithSessionTTL(*sessionTTL),
-		)
-		if err != nil {
-			return fmt.Errorf("failed to create postgres session service: %w", err)
-		}
-
-	case "mysql":
-		mysqlDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4",
-			mysqlUser, mysqlPassword, mysqlHost, mysqlPort, mysqlDatabase)
-		sessionService, err = mysql.NewService(
-			mysql.WithMySQLClientDSN(mysqlDSN),
-			mysql.WithTablePrefix("trpc_"),
-			mysql.WithSessionEventLimit(*eventLimit),
-			mysql.WithSessionTTL(*sessionTTL),
-		)
-		if err != nil {
-			return fmt.Errorf("failed to create mysql session service: %w", err)
-		}
-
-	default:
-		return fmt.Errorf("invalid session service name: %s", *sessServiceName)
-	}
-
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      c.streaming,
+		Stream: c.streaming,
 	}
 
 	llmAgent := llmagent.New(
@@ -207,7 +169,7 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 	c.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
 	c.rememberSession(c.sessionID)
 
-	fmt.Printf("✅ Chat ready! Session: %s\n\n", c.sessionID)
+	fmt.Printf("Chat ready! Session: %s\n\n", c.sessionID)
 	return nil
 }
 
@@ -215,7 +177,7 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 func (c *multiTurnChat) startChat(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
 
-	fmt.Println("💡 Session commands:")
+	fmt.Println("Session commands:")
 	fmt.Println("   /history   - Ask the assistant to recap our conversation")
 	fmt.Println("   /new       - Start a brand-new session ID")
 	fmt.Println("   /sessions  - List known session IDs")
@@ -224,7 +186,7 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 	fmt.Println()
 
 	for {
-		fmt.Print("👤 You: ")
+		fmt.Print("You: ")
 		if !scanner.Scan() {
 			break
 		}
@@ -238,7 +200,7 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 
 		switch {
 		case lowerInput == "/exit":
-			fmt.Println("👋 Goodbye!")
+			fmt.Println("Goodbye!")
 			return nil
 		case lowerInput == "/history":
 			userInput = "show our conversation history"
@@ -251,7 +213,7 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 		case strings.HasPrefix(lowerInput, "/use"):
 			target := strings.TrimSpace(userInput[4:])
 			if target == "" {
-				fmt.Println("⚠️  Usage: /use <session-id>")
+				fmt.Println("Usage: /use <session-id>")
 				continue
 			}
 			c.switchSession(target)
@@ -259,7 +221,14 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 		}
 
 		if err := c.processMessage(ctx, userInput); err != nil {
-			fmt.Printf("❌ Error: %v\n", err)
+			fmt.Printf("Error: %v\n", err)
+		}
+
+		// Print session events in debug mode.
+		if *debugMode {
+			if err := util.PrintSessionEvents(ctx, c.sessionService, "session-demo", c.userID, c.sessionID); err != nil {
+				fmt.Printf("Debug error: %v\n", err)
+			}
 		}
 
 		fmt.Println()
@@ -289,7 +258,7 @@ func (c *multiTurnChat) processMessage(ctx context.Context, userMessage string) 
 
 // processResponse handles both streaming and non-streaming responses with tool call visualization.
 func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
-	fmt.Print("🤖 Assistant: ")
+	fmt.Print("Assistant: ")
 
 	var (
 		fullContent       string
@@ -322,7 +291,7 @@ func (c *multiTurnChat) handleEvent(
 ) error {
 	// Handle errors.
 	if event.Error != nil {
-		fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
+		fmt.Printf("\nError: %s\n", event.Error.Message)
 		return nil
 	}
 
@@ -353,14 +322,14 @@ func (c *multiTurnChat) handleToolCalls(
 		if *assistantStarted {
 			fmt.Printf("\n")
 		}
-		fmt.Printf("🔧 CallableTool calls initiated:\n")
+		fmt.Printf("Tool calls initiated:\n")
 		for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
-			fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
+			fmt.Printf("   - %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 			if len(toolCall.Function.Arguments) > 0 {
 				fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
 			}
 		}
-		fmt.Printf("\n🔄 Executing tools...\n")
+		fmt.Printf("\nExecuting tools...\n")
 		return true
 	}
 	return false
@@ -372,7 +341,7 @@ func (c *multiTurnChat) handleToolResponses(event *event.Event) bool {
 		hasToolResponse := false
 		for _, choice := range event.Response.Choices {
 			if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
-				fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
+				fmt.Printf("Tool response (ID: %s): %s\n",
 					choice.Message.ToolID,
 					strings.TrimSpace(choice.Message.Content))
 				hasToolResponse = true
@@ -421,7 +390,7 @@ func (c *multiTurnChat) displayContent(
 ) {
 	if !*assistantStarted {
 		if *toolCallsDetected {
-			fmt.Printf("\n🤖 Assistant: ")
+			fmt.Printf("\nAssistant: ")
 		}
 		*assistantStarted = true
 	}
@@ -433,7 +402,7 @@ func (c *multiTurnChat) startNewSession() {
 	oldSessionID := c.sessionID
 	c.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
 	c.rememberSession(c.sessionID)
-	fmt.Printf("🆕 Started new session!\n")
+	fmt.Printf("Started new session!\n")
 	fmt.Printf("   Previous: %s\n", oldSessionID)
 	fmt.Printf("   Current:  %s\n", c.sessionID)
 	fmt.Printf("   (Conversation history has been reset)\n")
@@ -459,7 +428,7 @@ func (c *multiTurnChat) listSessions() {
 		fmt.Println()
 		return
 	}
-	fmt.Println("🗂 Session roster:")
+	fmt.Println("Session roster:")
 	for _, id := range c.sessionIDs {
 		marker := " "
 		if id == c.sessionID {
@@ -473,30 +442,14 @@ func (c *multiTurnChat) listSessions() {
 func (c *multiTurnChat) switchSession(target string) {
 	target = strings.TrimSpace(target)
 	if target == "" {
-		fmt.Println("⚠️  Usage: /use <session-id>")
+		fmt.Println("Usage: /use <session-id>")
 		return
 	}
 	if target == c.sessionID {
-		fmt.Printf("ℹ️  Already using session %s\n", target)
+		fmt.Printf("Already using session %s\n", target)
 		return
 	}
 	c.sessionID = target
 	c.rememberSession(target)
-	fmt.Printf("🔁 Switched to session %s\n", target)
-}
-
-// getEnvOrDefault returns the environment variable value or a default value if not set.
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-func intPtr(i int) *int {
-	return &i
-}
-
-func floatPtr(f float64) *float64 {
-	return &f
+	fmt.Printf("Switched to session %s\n", target)
 }
