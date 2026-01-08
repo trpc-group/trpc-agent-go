@@ -49,7 +49,7 @@ func (m *mockTransformer) Name() string {
 func TestWithTransformers(t *testing.T) {
 	t1 := &mockTransformer{}
 	src := New([]string{"test"}, WithTransformers(t1))
-	
+
 	if len(src.transformers) != 1 {
 		t.Fatalf("expected 1 transformer, got %d", len(src.transformers))
 	}
@@ -58,14 +58,14 @@ func TestWithTransformers(t *testing.T) {
 func TestTransformerPropagation(t *testing.T) {
 	ctx := context.Background()
 	t1 := &mockTransformer{}
-	
+
 	// 1. Test propagation to URL source
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Write([]byte("content"))
 	}))
 	defer ts.Close()
-	
+
 	srcURL := New([]string{ts.URL}, WithTransformers(t1))
 	if _, err := srcURL.ReadDocuments(ctx); err != nil {
 		t.Fatalf("URL ReadDocuments failed: %v", err)
@@ -75,7 +75,7 @@ func TestTransformerPropagation(t *testing.T) {
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(tmpFile, []byte("content"), 0600)
-	
+
 	srcFile := New([]string{tmpFile}, WithTransformers(t1))
 	if _, err := srcFile.ReadDocuments(ctx); err != nil {
 		t.Fatalf("File ReadDocuments failed: %v", err)
