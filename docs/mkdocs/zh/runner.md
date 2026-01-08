@@ -388,6 +388,41 @@ eventChan, err := r.Run(
 唯一来源（例如 `graph.StateKeyLastResponse`）。当开启该选项时，请把“完成事件”里的
 `Response.Choices` 当作可选字段，不要作为唯一依赖。
 
+#### 🎛️ 开关：StreamMode（对齐 LangGraph）
+
+Runner 支持在事件到达业务代码之前先做一次过滤：你可以用一个 RunOption（对齐 LangGraph
+的 `stream_mode` 概念）来选择“本次运行”向 `eventChan` 转发哪些类别的事件。
+
+使用 `agent.WithStreamMode(...)`：
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithStreamMode(agent.StreamModeMessages),
+)
+```
+
+支持的模式（图式工作流）：
+
+- `messages`：模型输出事件（例如 `chat.completion.chunk`）
+- `updates`：`graph.state.update` / `graph.channel.update` / `graph.execution`
+- `checkpoints`：`graph.checkpoint.*`
+- `tasks`：任务生命周期事件（`graph.node.*`、`graph.pregel.*`）
+- `debug`：等价于 `checkpoints` + `tasks`
+- `custom`：节点主动发出的自定义事件（`graph.node.custom`）
+
+注意事项：
+
+- 当选择 `agent.StreamModeMessages` 时，Runner 会为本次运行自动开启 Graph 的最终响应事件
+  输出。若你需要关闭该行为，请在 `agent.WithStreamMode(...)` 之后调用
+  `agent.WithGraphEmitFinalModelResponses(false)` 覆盖。
+- StreamMode 只影响 Runner 向你的 `eventChan` 转发哪些事件；Runner 内部仍会处理并持久化
+  所有事件。
+- Runner 总会额外发出一条 `runner.completion` 完成事件。
+
 ## 💾 会话管理
 
 ### 内存会话（默认）

@@ -395,6 +395,44 @@ Runner completion event’s `StateDelta` (for example,
 `graph.StateKeyLastResponse`). Treat `Response.Choices` on the completion event
 as optional when this option is enabled.
 
+#### 🎛️ Option: StreamMode (LangGraph-style)
+
+Runner can filter the event stream before it reaches your application code.
+This provides a single, run-level switch (inspired by LangGraph’s
+`stream_mode`) to select which categories of events are forwarded to your
+`eventChan`.
+
+Use `agent.WithStreamMode(...)`:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithStreamMode(agent.StreamModeMessages),
+)
+```
+
+Supported modes (graph workflows):
+
+- `messages`: model output events (for example, `chat.completion.chunk`)
+- `updates`: `graph.state.update` / `graph.channel.update` / `graph.execution`
+- `checkpoints`: `graph.checkpoint.*`
+- `tasks`: task lifecycle events (`graph.node.*`, `graph.pregel.*`)
+- `debug`: same as `checkpoints` + `tasks`
+- `custom`: node-emitted events (`graph.node.custom`)
+
+Notes:
+
+- When `agent.StreamModeMessages` is selected, graph-based Large Language Model
+  (LLM) nodes enable final model response events automatically for that run.
+  To override it, call `agent.WithGraphEmitFinalModelResponses(false)` after
+  `agent.WithStreamMode(...)`.
+- StreamMode only affects what Runner forwards to your `eventChan`. Runner
+  still processes and persists events internally.
+- Runner always emits a final `runner.completion` event.
+
 ## 💾 Session Management
 
 ### In-memory Session (Default)
