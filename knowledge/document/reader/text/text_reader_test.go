@@ -22,6 +22,72 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
+
+type errorTransformer struct {
+	preprocessErr  error
+	postprocessErr error
+}
+
+func (e *errorTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	if e.preprocessErr != nil {
+		return nil, e.preprocessErr
+	}
+	return docs, nil
+}
+
+func (e *errorTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	if e.postprocessErr != nil {
+		return nil, e.postprocessErr
+	}
+	return docs, nil
+}
+
+func (e *errorTransformer) Name() string { return "ErrorTransformer" }
+
+func TestTextReader_TransformerErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		transformer *errorTransformer
+		wantErr     string
+	}{
+		{
+			name:        "preprocess error",
+			transformer: &errorTransformer{preprocessErr: errors.New("preprocess failed")},
+			wantErr:     "failed to apply preprocess",
+		},
+		{
+			name:        "postprocess error",
+			transformer: &errorTransformer{postprocessErr: errors.New("postprocess failed")},
+			wantErr:     "failed to apply postprocess",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rdr := New(reader.WithTransformers(tt.transformer))
+			
+			// Test ReadFromReader
+			_, err := rdr.ReadFromReader("test", strings.NewReader("content"))
+			if err == nil {
+				t.Error("ReadFromReader expected error, got nil")
+			} else if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("ReadFromReader expected error containing %q, got %q", tt.wantErr, err.Error())
+			}
+
+			// Test ReadFromFile
+			tmp, _ := os.CreateTemp(t.TempDir(), "*.txt")
+			tmp.WriteString("content")
+			tmp.Close()
+			_, err = rdr.ReadFromFile(tmp.Name())
+			if err == nil {
+				t.Error("ReadFromFile expected error, got nil")
+			} else if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("ReadFromFile expected error containing %q, got %q", tt.wantErr, err.Error())
+			}
+		})
+	}
+}
+
 func TestTextReader_WithTransformers(t *testing.T) {
 	data := "hello\nworld"
 
@@ -45,6 +111,71 @@ func TestTextReader_WithTransformers(t *testing.T) {
 	// Expect "helloworld" because newline is removed
 	if docs[0].Content != "helloworld" {
 		t.Errorf("expected 'helloworld', got '%s'", docs[0].Content)
+	}
+}
+
+type mockErrorTransformer struct{}
+
+func (m *mockErrorTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	return nil, errors.New("preprocess error")
+}
+
+func (m *mockErrorTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	return nil, errors.New("postprocess error")
+}
+
+func (m *mockErrorTransformer) Name() string {
+	return "MockErrorTransformer"
+}
+
+func TestTextReader_WithTransformers_Error(t *testing.T) {
+	t.Run("Preprocess Error", func(t *testing.T) {
+		rdr := New(reader.WithTransformers(&mockErrorTransformer{}))
+		_, err := rdr.ReadFromReader("test", strings.NewReader("test"))
+		if err == nil {
+			t.Error("expected error from preprocess")
+		}
+		if !strings.Contains(err.Error(), "preprocess error") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	// For Postprocess error, we need a transformer that passes Preprocess but fails Postprocess.
+	// We can reuse mockErrorTransformer but we need to control when it fails.
+	// Or just create a struct with fields.
+}
+
+type mockSpecificErrorTransformer struct {
+	failPre  bool
+	failPost bool
+}
+
+func (m *mockSpecificErrorTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	if m.failPre {
+		return nil, errors.New("preprocess error")
+	}
+	return docs, nil
+}
+
+func (m *mockSpecificErrorTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	if m.failPost {
+		return nil, errors.New("postprocess error")
+	}
+	return docs, nil
+}
+
+func (m *mockSpecificErrorTransformer) Name() string {
+	return "MockSpecificErrorTransformer"
+}
+
+func TestTextReader_WithTransformers_PostprocessError(t *testing.T) {
+	rdr := New(reader.WithTransformers(&mockSpecificErrorTransformer{failPost: true}))
+	_, err := rdr.ReadFromReader("test", strings.NewReader("test"))
+	if err == nil {
+		t.Error("expected error from postprocess")
+	}
+	if !strings.Contains(err.Error(), "postprocess error") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -196,6 +327,7 @@ func TestTextReader_ExtractFileNameFromURL(t *testing.T) {
 	}{
 		{"simple_filename", "https://example.com/document.txt", "document"},
 		{"with_query_params", "https://example.com/file.txt?v=1", "file"},
+		{"with_fragment", "https://example.com/file.txt#section", "file"},
 		{"root_path", "https://example.com/", ""},
 	}
 
