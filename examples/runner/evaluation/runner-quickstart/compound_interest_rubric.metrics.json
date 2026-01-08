@@ -1,0 +1,32 @@
+[
+  {
+    "metricName": "llm_rubric_response",
+    "threshold": 1,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "${JUDGE_MODEL_PROVIDER_NAME}",
+          "modelName": "${JUDGE_MODEL_NAME}",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
+          "numSamples": 1,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 0,
+            "stream": false
+          }
+        },
+        "rubrics": [
+          {
+            "id": "1",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "description": "The final answer includes the final profit.",
+            "content": {
+              "text": "Return yes only if the final answer explicitly states the profit after 30 years as a numeric value. The expected profit is approximately 1644.94 (allow minor rounding differences). If the final answer omits the numeric profit, only gives the final balance, or gives an ambiguous answer without the profit figure, return no."
+            }
+          }
+        ]
+      }
+    }
+  }
+]

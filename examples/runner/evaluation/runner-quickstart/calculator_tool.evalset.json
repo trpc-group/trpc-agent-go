@@ -9,7 +9,7 @@
           "invocationId": "calculator_add-1",
           "userContent": {
             "role": "user",
-            "content": "Use the calculator to add 6 and 7."
+            "content": "Calculate the result of 6+7."
           },
           "tools": [
             {
@@ -42,7 +42,7 @@
           "invocationId": "calculator_subtract-1",
           "userContent": {
             "role": "user",
-            "content": "Use the calculator to subtract 6 and 7."
+            "content": "Calculate the result of 6-7."
           },
           "tools": [
             {
@@ -75,7 +75,7 @@
           "invocationId": "calculator_multiply-1",
           "userContent": {
             "role": "user",
-            "content": "Use the calculator to multiply 6 and 7."
+            "content": "Calculate the result of 6*7."
           },
           "tools": [
             {
@@ -108,7 +108,7 @@
           "invocationId": "calculator_divide-1",
           "userContent": {
             "role": "user",
-            "content": "Use the calculator to divide 6 and 7."
+            "content": "Calculate the result of 6/7."
           },
           "tools": [
             {
@@ -141,7 +141,7 @@
           "invocationId": "calculator_power-1",
           "userContent": {
             "role": "user",
-            "content": "Use the calculator to calculate 2 to the power of 3."
+            "content": "Calculate the result of 2^3."
           },
           "tools": [
             {

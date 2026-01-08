@@ -1,0 +1,22 @@
+{
+  "evalSetId": "compound_interest_rubric",
+  "name": "compound_interest_rubric",
+  "evalCases": [
+    {
+      "evalId": "compound_interest_rubric",
+      "conversation": [
+        {
+          "invocationId": "compound_interest_rubric-1",
+          "userContent": {
+            "role": "user",
+            "content": "With a principal of 100 and an annual compound interest rate of 10%, what will the profit be after 30 years?"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "runner-quickstart",
+        "userId": "tool-user"
+      }
+    }
+  ]
+}
