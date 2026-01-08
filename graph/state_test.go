@@ -197,7 +197,10 @@ func TestGetStateValue(t *testing.T) {
 		assert.Equal(t, model.RoleUser, messages[0].Role)
 
 		// Test StateKeyNodeResponses.
-		nodeResponses, ok := GetStateValue[map[string]any](state, StateKeyNodeResponses)
+		nodeResponses, ok := GetStateValue[map[string]any](
+			state,
+			StateKeyNodeResponses,
+		)
 		assert.True(t, ok)
 		assert.Equal(t, "value", nodeResponses["key"])
 	})
@@ -219,7 +222,8 @@ func TestOneShotMessagesByNodeHelpers(t *testing.T) {
 	require.Equal(t, "hi", raw[nodeID][0].Content)
 
 	clear := ClearOneShotMessagesForNode(nodeID)
-	clearRaw, ok := clear[StateKeyOneShotMessagesByNode].(map[string][]model.Message)
+	clearAny := clear[StateKeyOneShotMessagesByNode]
+	clearRaw, ok := clearAny.(map[string][]model.Message)
 	require.True(t, ok)
 	_, exists := clearRaw[nodeID]
 	require.True(t, exists)
@@ -252,7 +256,8 @@ func TestStateSchemaApplyUpdate_OneShotMessagesByNode(t *testing.T) {
 	state := schema.ApplyUpdate(State{}, a)
 	state = schema.ApplyUpdate(state, b)
 
-	merged, ok := state[StateKeyOneShotMessagesByNode].(map[string][]model.Message)
+	mergedAny := state[StateKeyOneShotMessagesByNode]
+	merged, ok := mergedAny.(map[string][]model.Message)
 	require.True(t, ok)
 	require.Len(t, merged, 2)
 	require.Equal(t, "a", merged["llm1"][0].Content)
@@ -264,14 +269,16 @@ func TestStateSchemaApplyUpdate_OneShotMessagesByNode(t *testing.T) {
 		},
 	}
 	state = schema.ApplyUpdate(state, del)
-	merged, ok = state[StateKeyOneShotMessagesByNode].(map[string][]model.Message)
+	mergedAny = state[StateKeyOneShotMessagesByNode]
+	merged, ok = mergedAny.(map[string][]model.Message)
 	require.True(t, ok)
 	_, exists := merged["llm1"]
 	require.False(t, exists)
 	require.Equal(t, "b", merged["llm2"][0].Content)
 
 	state = schema.ApplyUpdate(state, State{StateKeyOneShotMessagesByNode: nil})
-	cleared, ok := state[StateKeyOneShotMessagesByNode].(map[string][]model.Message)
+	clearedAny := state[StateKeyOneShotMessagesByNode]
+	cleared, ok := clearedAny.(map[string][]model.Message)
 	require.True(t, ok)
 	require.Nil(t, cleared)
 
@@ -282,7 +289,137 @@ func TestStateSchemaApplyUpdate_OneShotMessagesByNode(t *testing.T) {
 	state = schema.ApplyUpdate(State{}, State{
 		StateKeyOneShotMessagesByNode: decoded,
 	})
-	merged, ok = state[StateKeyOneShotMessagesByNode].(map[string][]model.Message)
+	mergedAny = state[StateKeyOneShotMessagesByNode]
+	merged, ok = mergedAny.(map[string][]model.Message)
 	require.True(t, ok)
 	require.Equal(t, "b", merged["llm2"][0].Content)
+}
+
+func TestOneShotMessagesByNodeCoveragePaths(t *testing.T) {
+	t.Run("SetOneShotMessagesForNode handles empty", func(t *testing.T) {
+		update := SetOneShotMessagesForNode("llm1", nil)
+		rawAny := update[StateKeyOneShotMessagesByNode]
+		raw, ok := rawAny.(map[string][]model.Message)
+		require.True(t, ok)
+		require.Contains(t, raw, "llm1")
+
+		empty := SetOneShotMessagesForNode("", []model.Message{
+			model.NewUserMessage("hi"),
+		})
+		require.Nil(t, empty)
+	})
+
+	t.Run("ClearOneShotMessagesForNode handles empty ID", func(t *testing.T) {
+		require.Nil(t, ClearOneShotMessagesForNode(""))
+	})
+
+	t.Run("GetOneShotMessagesForNode reads map[string]any", func(t *testing.T) {
+		msgs := map[string][]model.Message{
+			"llm1": {model.NewUserMessage("hi")},
+		}
+		raw, err := json.Marshal(msgs)
+		require.NoError(t, err)
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(raw, &decoded))
+
+		state := State{StateKeyOneShotMessagesByNode: decoded}
+		got, ok := GetOneShotMessagesForNode(state, "llm1")
+		require.True(t, ok)
+		require.Equal(t, "hi", got[0].Content)
+	})
+
+	t.Run("GetOneShotMessagesForNode uses default decode", func(t *testing.T) {
+		type byNode struct {
+			LLM1 []model.Message `json:"llm1"`
+		}
+		state := State{
+			StateKeyOneShotMessagesByNode: byNode{
+				LLM1: []model.Message{model.NewUserMessage("hi")},
+			},
+		}
+		got, ok := GetOneShotMessagesForNode(state, "llm1")
+		require.True(t, ok)
+		require.Equal(t, "hi", got[0].Content)
+	})
+
+	t.Run("GetOneShotMessagesForNode decode failure", func(t *testing.T) {
+		state := State{
+			StateKeyOneShotMessagesByNode: make(chan int),
+		}
+		_, ok := GetOneShotMessagesForNode(state, "llm1")
+		require.False(t, ok)
+	})
+
+	t.Run("Reducer handles default update types", func(t *testing.T) {
+		type byNode struct {
+			LLM1 []model.Message `json:"llm1"`
+		}
+		out := OneShotMessagesByNodeReducer(nil, byNode{
+			LLM1: []model.Message{model.NewUserMessage("hi")},
+		})
+		merged, ok := out.(map[string][]model.Message)
+		require.True(t, ok)
+		require.Equal(t, "hi", merged["llm1"][0].Content)
+
+		ch := make(chan int)
+		out = OneShotMessagesByNodeReducer(nil, ch)
+		typed, ok := out.(chan int)
+		require.True(t, ok)
+		require.Nil(t, typed)
+	})
+
+	t.Run("Reducer deletes on decode error", func(t *testing.T) {
+		state := map[string][]model.Message{
+			"llm1": {model.NewUserMessage("keep")},
+		}
+		update := map[string]any{
+			"llm1": make(chan int),
+		}
+		out := OneShotMessagesByNodeReducer(state, update)
+		merged, ok := out.(map[string][]model.Message)
+		require.True(t, ok)
+		_, exists := merged["llm1"]
+		require.False(t, exists)
+	})
+
+	t.Run("Existing decode supports any/default", func(t *testing.T) {
+		msgs := map[string][]model.Message{
+			"llm1": {model.NewUserMessage("hi")},
+		}
+		raw, err := json.Marshal(msgs)
+		require.NoError(t, err)
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(raw, &decoded))
+
+		out := OneShotMessagesByNodeReducer(decoded, map[string][]model.Message{
+			"llm2": {model.NewUserMessage("yo")},
+		})
+		merged, ok := out.(map[string][]model.Message)
+		require.True(t, ok)
+		require.Equal(t, "hi", merged["llm1"][0].Content)
+		require.Equal(t, "yo", merged["llm2"][0].Content)
+
+		type byNode struct {
+			LLM1 []model.Message `json:"llm1"`
+		}
+		out = OneShotMessagesByNodeReducer(byNode{
+			LLM1: []model.Message{model.NewUserMessage("hi")},
+		}, map[string][]model.Message{
+			"llm2": {model.NewUserMessage("yo")},
+		})
+		merged, ok = out.(map[string][]model.Message)
+		require.True(t, ok)
+		require.Equal(t, "hi", merged["llm1"][0].Content)
+		require.Equal(t, "yo", merged["llm2"][0].Content)
+
+		out = OneShotMessagesByNodeReducer(
+			make(chan int),
+			map[string][]model.Message{
+				"llm1": {model.NewUserMessage("hi")},
+			},
+		)
+		merged, ok = out.(map[string][]model.Message)
+		require.True(t, ok)
+		require.Equal(t, "hi", merged["llm1"][0].Content)
+	})
 }
