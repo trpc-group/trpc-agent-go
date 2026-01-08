@@ -280,6 +280,29 @@ func WithRequestID(requestID string) RunOption {
 	}
 }
 
+// WithDetachedCancel enables running a job that ignores parent context
+// cancellation.
+//
+// When enabled, Runner will remove the cancellation signal from the
+// execution context while still preserving context values and enforcing
+// timeouts and deadlines.
+func WithDetachedCancel(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DetachedCancel = enabled
+	}
+}
+
+// WithMaxRunDuration sets the maximum duration for a single run.
+//
+// Runner will enforce the smaller of:
+//   - the parent context deadline (if any)
+//   - MaxRunDuration (if > 0)
+func WithMaxRunDuration(d time.Duration) RunOption {
+	return func(opts *RunOptions) {
+		opts.MaxRunDuration = d
+	}
+}
+
 // WithSpanAttributes sets custom span attributes for the RunOptions.
 func WithSpanAttributes(attrs ...attribute.KeyValue) RunOption {
 	return func(opts *RunOptions) {
@@ -494,6 +517,16 @@ type RunOptions struct {
 
 	// RequestID is the request id of the request.
 	RequestID string
+
+	// DetachedCancel controls whether Runner ignores parent context
+	// cancellation for this run.
+	DetachedCancel bool
+
+	// MaxRunDuration bounds the total execution time for this run.
+	// When set, Runner enforces the smaller of:
+	//   - the parent context deadline (if any)
+	//   - MaxRunDuration
+	MaxRunDuration time.Duration
 
 	// SpanAttributes carries custom span attributes for this run.
 	SpanAttributes []attribute.KeyValue

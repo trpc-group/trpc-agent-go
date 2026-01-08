@@ -18,6 +18,7 @@ import (
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
@@ -56,6 +57,128 @@ func TestRunValidatesInput(t *testing.T) {
 	ch, err = r.Run(context.Background(), nil)
 	assert.Nil(t, ch)
 	assert.Error(t, err)
+}
+
+func TestRunIgnoresRequestCancelButRespectsBackendTimeout(t *testing.T) {
+	ctxCh := make(chan context.Context, 1)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ctxCh <- ctx
+			ch := make(chan *agentevent.Event)
+			go func() {
+				<-ctx.Done()
+				close(ch)
+			}()
+			return ch, nil
+		},
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+		timeout:           200 * time.Millisecond,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	reqCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eventsCh, err := r.Run(reqCtx, input)
+	require.NoError(t, err)
+
+	select {
+	case evt := <-eventsCh:
+		assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for run started event")
+	}
+
+	var runCtx context.Context
+	select {
+	case runCtx = <-ctxCh:
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for underlying runner context")
+	}
+
+	cancel()
+
+	assert.Eventually(t, func() bool {
+		return errors.Is(runCtx.Err(), context.DeadlineExceeded)
+	}, time.Second, 5*time.Millisecond)
+
+	_ = collectEvents(t, eventsCh)
+}
+
+func TestRunTimeoutUsesMinRequestDeadlineAndBackendTimeout(t *testing.T) {
+	ctxCh := make(chan context.Context, 1)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ctxCh <- ctx
+			ch := make(chan *agentevent.Event)
+			go func() {
+				<-ctx.Done()
+				close(ch)
+			}()
+			return ch, nil
+		},
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+		timeout:           500 * time.Millisecond,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	reqCtx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	reqDeadline, ok := reqCtx.Deadline()
+	require.True(t, ok)
+
+	eventsCh, err := r.Run(reqCtx, input)
+	require.NoError(t, err)
+
+	select {
+	case evt := <-eventsCh:
+		assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for run started event")
+	}
+
+	var runCtx context.Context
+	select {
+	case runCtx = <-ctxCh:
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for underlying runner context")
+	}
+
+	deadline, ok := runCtx.Deadline()
+	require.True(t, ok)
+	assert.WithinDuration(t, reqDeadline, deadline, 50*time.Millisecond)
+
+	cancel()
+
+	wait := time.Until(deadline) + 200*time.Millisecond
+	if wait < 0 {
+		wait = 200 * time.Millisecond
+	}
+	assert.Eventually(t, func() bool {
+		return errors.Is(runCtx.Err(), context.DeadlineExceeded)
+	}, wait, 5*time.Millisecond)
+
+	_ = collectEvents(t, eventsCh)
 }
 
 func TestRunNoMessages(t *testing.T) {
@@ -284,6 +407,17 @@ func TestNewWithSessionServiceEnablesTracker(t *testing.T) {
 	assert.NotNil(t, run.tracker)
 }
 
+type nonTrackSessionService struct {
+	session.Service
+}
+
+func TestNewWithSessionServiceWithoutTrackDisablesTracker(t *testing.T) {
+	r := New(nil, WithSessionService(nonTrackSessionService{Service: inmemory.NewSessionService()}))
+	run, ok := r.(*runner)
+	assert.True(t, ok)
+	assert.Nil(t, run.tracker)
+}
+
 func TestRunRejectsConcurrentSession(t *testing.T) {
 	ch := make(chan *agentevent.Event)
 	underlying := &fakeRunner{
@@ -302,10 +436,15 @@ func TestRunRejectsConcurrentSession(t *testing.T) {
 	events1, err := r.Run(context.Background(), input)
 	assert.NoError(t, err)
 
-	events2, err := r.Run(context.Background(), input)
+	input2 := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run-2",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi again"}},
+	}
+	events2, err := r.Run(context.Background(), input2)
 	assert.Nil(t, events2)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "session is already running")
+	assert.ErrorIs(t, err, ErrRunAlreadyExists)
 
 	close(ch)
 	collectEvents(t, events1)
@@ -434,9 +573,7 @@ func TestRunNormal(t *testing.T) {
 	}
 
 	aguiCh, err := r.Run(context.Background(), input)
-	if !assert.NoError(t, err) {
-		return
-	}
+	require.NoError(t, err)
 	evts := collectEvents(t, aguiCh)
 	assert.Len(t, evts, 4)
 	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
@@ -508,19 +645,19 @@ func TestRunAgentInputHook(t *testing.T) {
 			}()
 			return ch, nil
 		}
-		input := &adapter.RunAgentInput{
+		originalInput := &adapter.RunAgentInput{
 			ThreadID: "thread",
 			RunID:    "run",
 			Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 		}
 		r := &runner{
 			runner: underlying,
-			translatorFactory: func(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
-				assert.Same(t, input, input)
+			translatorFactory: func(ctx context.Context, in *adapter.RunAgentInput) translator.Translator {
+				assert.Same(t, originalInput, in)
 				return &fakeTranslator{}
 			},
 			userIDResolver: func(ctx context.Context, in *adapter.RunAgentInput) (string, error) {
-				assert.Same(t, input, in)
+				assert.Same(t, originalInput, in)
 				return "user", nil
 			},
 			runAgentInputHook: func(ctx context.Context, in *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
@@ -530,7 +667,7 @@ func TestRunAgentInputHook(t *testing.T) {
 			startSpan:         defaultStartSpan,
 		}
 
-		ch, err := r.Run(context.Background(), input)
+		ch, err := r.Run(context.Background(), originalInput)
 		assert.NoError(t, err)
 		collectEvents(t, ch)
 		assert.Equal(t, 1, underlying.calls)
@@ -976,7 +1113,8 @@ func collectEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Event 
 			}
 			out = append(out, evt)
 		case <-time.After(time.Second):
-			t.Fatalf("timeout collecting events")
+			assert.FailNow(t, "timeout collecting events")
+			return out
 		}
 	}
 }
@@ -1048,4 +1186,53 @@ func TestTranslateCallbackError(t *testing.T) {
 		_, ok := evts[0].(*aguievents.RunErrorEvent)
 		assert.True(t, ok)
 	})
+}
+
+func TestEmitEventStopsWhenContextDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	r := &runner{}
+	events := make(chan aguievents.Event)
+	input := &runInput{threadID: "thread", runID: "run"}
+
+	ok := r.emitEvent(ctx, events, aguievents.NewRunStartedEvent("thread", "run"), input)
+
+	assert.False(t, ok)
+}
+
+func TestEmitEventStopsWhenAfterTranslateFailsAndContextDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	r := &runner{
+		translateCallbacks: translator.NewCallbacks().RegisterAfterTranslate(
+			func(context.Context, aguievents.Event) (aguievents.Event, error) {
+				return nil, errors.New("after translate fail")
+			},
+		),
+	}
+	events := make(chan aguievents.Event)
+	input := &runInput{threadID: "thread", runID: "run"}
+
+	ok := r.emitEvent(ctx, events, aguievents.NewRunStartedEvent("thread", "run"), input)
+
+	assert.False(t, ok)
+}
+
+func TestHandleAgentEventStopsWhenEmitCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	r := &runner{}
+	events := make(chan aguievents.Event)
+	input := &runInput{
+		threadID:   "thread",
+		runID:      "run",
+		translator: &fakeTranslator{events: [][]aguievents.Event{{aguievents.NewRunFinishedEvent("thread", "run")}}},
+	}
+
+	ok := r.handleAgentEvent(ctx, events, input, agentevent.New("inv", "assistant"))
+
+	assert.False(t, ok)
 }

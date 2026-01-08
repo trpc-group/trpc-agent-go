@@ -79,7 +79,7 @@ LLMAgent 会自动在 `Instruction` 和可选的 `SystemPrompt` 中注入会话�
 - `{key}`：替换为会话状态中键 `key` 对应的字符串值（可通过 `invocation.Session.SetState("key", ...)` 或 SessionService 写入）
 - `{key?}`：可选；如果不存在，替换为空字符串
 - `{user:subkey}` / `{app:subkey}` / `{temp:subkey}`：访问用户/应用/临时命名空间（SessionService 会把 app/user 作用域的状态合并进 session，并带上前缀）
-- `{invocation:subkey}` ：替换为fmt.Sprintf("%+v",`invocation.state["subkey"]`)的值，（可以通过invocation.SetState(k,v)来设置）。
+- `{invocation:subkey}` ：替换为 fmt.Sprintf("%+v",`invocation.state["subkey"]`) 的值，（可以通过 invocation.SetState(k,v) 来设置）。
 
 注意：
 
@@ -139,20 +139,20 @@ if err != nil {
 ```
 
 ### 消息可见性选项
-当前Agent可在需要时根据不同场景控制其对其他Agent生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
-在与model交互时仅将可见的内容输入给模型。 
+当前 Agent 可在需要时根据不同场景控制其对其他 Agent 生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
+在与 model 交互时仅将可见的内容输入给模型。 
 
 TIPS:
- - 不同sessionID的消息在任何场景下都是互不可见的，以下管控策略均针对同一个sessionID的消息
- - invocation.Message在任何场景下均可见
- - 未配置选项时，默认值为FullContext
+ - 不同 sessionID 的消息在任何场景下都是互不可见的，以下管控策略均针对同一个 sessionID 的消息
+ - invocation.Message 在任何场景下均可见
+ - 未配置选项时，默认值为 FullContext
 
-配置:
+配置：
 - `llmagent.WithMessageFilterMode(MessageFilterMode)`:
-  - `FullContext`: 所有能通过filterKey做前缀匹配的消息
-  - `RequestContext`: 仅包含当前请求周期内通过filterKey前缀匹配的消息
-  - `IsolatedRequest`: 仅包含当前请求周期内通过filterKey完全匹配的消息
-  - `IsolatedInvocation`: 仅包含当前invocation周期内通过filterKey完全匹配的消息
+  - `FullContext`: 所有能通过 filterKey 做前缀匹配的消息
+  - `RequestContext`: 仅包含当前请求周期内通过 filterKey 前缀匹配的消息
+  - `IsolatedRequest`: 仅包含当前请求周期内通过 filterKey 完全匹配的消息
+  - `IsolatedInvocation`: 仅包含当前 invocation 周期内通过 filterKey 完全匹配的消息
 
 推荐用法示例（该用法仅基于高级用法基础之上做了简化配置）:
 
@@ -160,32 +160,32 @@ TIPS:
 taskagentA := llmagent.New(
   "coordinator",
   llmagent.WithModel(modelInstance),
-  // 对taskagentA、taskagentB生成的所有消息可见（包含同一sessionID的历史会话消息）
+  // 对 taskagentA、taskagentB 生成的所有消息可见（包含同一 sessionID 的历史会话消息）
   llmagent.WithMessageFilterMode(llmagent.FullContext)
-  // 对taskagentA、taskagentB当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
+  // 对 taskagentA、taskagentB 当前 runner.Run 期间生成的所有消息可见（不包含历史会话消息）
   llmagent.WithMessageFilterMode(llmagent.RequestContext)
-  // 仅对taskagentA当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）
+  // 仅对 taskagentA 当前 runner.Run 期间生成的消息可见（不包含自己的历史会话消息）
   llmagent.WithMessageFilterMode(llmagent.IsolatedRequest)
-  // agent执性顺序：taskagentA-invocation1 -> taskagentB-invocation2 -> taskagentA-invocation3(当前执行阶段)
-  // 仅对taskagentA当前taskagentA-invocation3期间生成的消息可见（不包含自己的历史会话消息以及taskagentA-invocation1期间生成的消息）
+  // agent 执性顺序：taskagentA-invocation1 -> taskagentB-invocation2 -> taskagentA-invocation3(当前执行阶段)
+  // 仅对 taskagentA 当前 taskagentA-invocation3 期间生成的消息可见（不包含自己的历史会话消息以及 taskagentA-invocation1 期间生成的消息）
   llmagent.WithMessageFilterMode(llmagent.IsolatedInvocation)
 )
 
 taskagentB := llmagent.New(
   "coordinator",
   llmagent.WithModel(modelInstance),
-  // 对taskagentA、taskagentB生成的所有消息可见（包含同一sessionID的历史会话消息）
+  // 对 taskagentA、taskagentB 生成的所有消息可见（包含同一 sessionID 的历史会话消息）
   llmagent.WithMessageFilterMode(llmagent.FullContext),
-  // 对taskagentA、taskagentB当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
+  // 对 taskagentA、taskagentB 当前 runner.Run 期间生成的所有消息可见（不包含历史会话消息）
   llmagent.WithMessageFilterMode(llmagent.RequestContext),
-  // 仅对taskagentB当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）
+  // 仅对 taskagentB 当前 runner.Run 期间生成的消息可见（不包含自己的历史会话消息）
   llmagent.WithMessageFilterMode(llmagent.IsolatedRequest),
-  // agent执性顺序：taskagentA-invocation1 -> taskagentB-invocation2 -> taskagentA-invocation3 -> taskagentB-invocation4(当前执行阶段)
-  // 仅对taskagentB当前taskagentB-invocation4期间生成的消息可见（不包含自己的历史会话消息以及taskagentB-invocation2期间生成的消息）
+  // agent 执性顺序：taskagentA-invocation1 -> taskagentB-invocation2 -> taskagentA-invocation3 -> taskagentB-invocation4(当前执行阶段)
+  // 仅对 taskagentB 当前 taskagentB-invocation4 期间生成的消息可见（不包含自己的历史会话消息以及 taskagentB-invocation2 期间生成的消息）
   llmagent.WithMessageFilterMode(llmagent.IsolatedInvocation),
 )
 
-// 循环执行taskagentA、taskagentB
+// 循环执行 taskagentA、taskagentB
 cycleAgent := cycleagent.New(
   "coordinator",
   llmagent.WithModel(modelInstance),
@@ -205,17 +205,17 @@ if err != nil {
 ```
 
 高阶用法示例：
-可以单独通过 `WithMessageTimelineFilterMode`、`WithMessageBranchFilterMode`控制当前agent对历史消息与其他agent生成的消息可见性。
-当前agent在与模型交互时，最终将同时满足两个条件的消息输入给模型。
+可以单独通过 `WithMessageTimelineFilterMode`、`WithMessageBranchFilterMode`控制当前 agent 对历史消息与其他 agent 生成的消息可见性。
+当前 agent 在与模型交互时，最终将同时满足两个条件的消息输入给模型。
 
 `配置:`
 - `WithMessageTimelineFilterMode`: 时间维度可见性控制
   - `TimelineFilterAll`: 包含历史消息以及当前请求中所生成的消息
-  - `TimelineFilterCurrentRequest`: 仅包含当前请求(一次runner.Run为一次请求)中所生成的消息
-  - `TimelineFilterCurrentInvocation`: 仅包含当前invocation上下文中生成的消息
-- `WithMessageBranchFilterMode`: 分支维度可见性控制（用于控制对其他agent生成消息的可见性）
-  - `BranchFilterModePrefix`: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配
-  - `BranchFilterModeAll`: 所有agent的均消息
+  - `TimelineFilterCurrentRequest`: 仅包含当前请求 (一次 runner.Run 为一次请求) 中所生成的消息
+  - `TimelineFilterCurrentInvocation`: 仅包含当前 invocation 上下文中生成的消息
+- `WithMessageBranchFilterMode`: 分支维度可见性控制（用于控制对其他 agent 生成消息的可见性）
+  - `BranchFilterModePrefix`: 通过 Event.FilterKey 与 Invocation.eventFilterKey 做前缀匹配
+  - `BranchFilterModeAll`: 所有 agent 的均消息
   - `BranchFilterModeExact`: 仅自己生成的消息可见
   
 ```go
@@ -226,20 +226,20 @@ llmAgent := llmagent.New(
     llmagent.WithInstruction("Be helpful, concise, and informative in your responses"), // 设置指令
     llmagent.WithGenerationConfig(genConfig),                                           // 设置生成参数
 
-    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足 WithMessageTimelineFilterMode 与 WithMessageBranchFilterMode 条件
     // 时间维度过滤条件
-    // 默认值: llmagent.TimelineFilterAll
-    // 可选值:
+    // 默认值：llmagent.TimelineFilterAll
+    // 可选值：
     //  - llmagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
     //  - llmagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
-    //  - llmagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
+    //  - llmagent.TimelineFilterCurrentInvocation: 仅包含当前 invocation 上下文中生成的消息
     llmagent.WithMessageTimelineFilterMode(llmagent.TimelineFilterAll),
     // 分支维度过滤条件
-    // 默认值: llmagent.BranchFilterModePrefix
-    // 可选值:
-    //  - llmagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
-    //  - llmagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
-    //  - llmagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
+    // 默认值：llmagent.BranchFilterModePrefix
+    // 可选值：
+    //  - llmagent.BranchFilterModeAll: 包含所有 agent 的消息，当前 agent 与模型交互时，如需将所有 agent 生成的有效内容消息同步给模型时可设置该值
+    //  - llmagent.BranchFilterModePrefix: 通过 Event.FilterKey 与 Invocation.eventFilterKey 做前缀匹配过滤消息，期望将与当前 agent 以及相关上下游 agent 生成的消息传递给模型时，可设置该值
+    //  - llmagent.BranchFilterModeExact: 通过 Event.FilterKey==Invocation.eventFilterKey 过滤消息，当前 agent 与模型交互时，仅需使用当前 agent 生成的消息时可设置该值
     llmagent.WithMessageBranchFilterMode(llmagent.BranchFilterModePrefix),
 )
 ```
@@ -628,6 +628,202 @@ llmagent := llmagent.New("llmagent", llmagent.WithAgentCallbacks(callbacks))
 
 回调机制让你能够精确控制 Agent 的执行过程，实现更复杂的业务逻辑。
 
+## 结构化输出
+
+结构化输出确保 Agent 的响应符合预定义的格式，使其更易于解析和程序化处理。框架提供了多种结构化输出方法，每种方法适用于不同的使用场景。
+
+### 结构化输出方法对比
+
+| 特性 | WithStructuredOutputJSONSchema | WithStructuredOutputJSON | WithOutputSchema | WithOutputKey |
+|------|-------------------------------|-------------------------|------------------|---------------|
+| **工具使用** | ✅ 允许 | ✅ 允许 | ❌ 禁用 | ✅ 允许 |
+| **Schema 类型** | 用户提供的 JSON Schema | 从 Go 结构体自动生成 | 用户提供的 JSON Schema | 不适用 |
+| **输出类型** | 非类型化 (map/interface{}) | 类型化 (Go 结构体) | 非类型化 (map/interface{}) | 字符串/字节 |
+| **Schema 验证** | ✅ 由 LLM 验证 | ✅ 由 LLM 验证 | ✅ 由 LLM 验证 | ❌ 无 |
+| **数据位置** | Event.StructuredOutput | Event.StructuredOutput | 模型响应内容 | Session State |
+| **主要用途** | 灵活 schema + 工具 | 类型安全的结构化输出 | 简单的结构化响应 | 状态存储和流程控制 |
+
+### WithStructuredOutputJSONSchema
+
+提供用户自定义的 JSON schema 用于结构化输出，同时**允许使用工具**。这是需要结构化输出和工具能力的 Agent 的最灵活选项。
+
+**示例：**
+
+```go
+schema := map[string]any{
+    "type": "object",
+    "properties": map[string]any{
+        "name": map[string]any{
+            "type": "string",
+            "description": "Product name",
+        },
+        "price": map[string]any{
+            "type": "number",
+            "minimum": 0,
+        },
+        "category": map[string]any{
+            "type": "string",
+            "enum": []string{"electronics", "clothing", "food"},
+        },
+    },
+    "required": []string{"name", "price"},
+}
+
+agent := llmagent.New(
+    "shopping-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithStructuredOutputJSONSchema(
+        "shopping_output",      // Name
+        schema,                 // JSON schema
+        true,                   // Strict mode
+        "Product information",  // Description
+    ),
+    llmagent.WithTools([]tool.Tool{searchTool, calculatorTool}), // Tools are allowed!
+)
+
+// Access untyped output from events
+for event := range eventCh {
+    if event.StructuredOutput != nil {
+        data := event.StructuredOutput.(map[string]any)
+        name := data["name"].(string)
+        price := data["price"].(float64)
+        fmt.Printf("Product: %s, Price: $%.2f\n", name, price)
+    }
+}
+```
+
+**最适合：**
+- 需要结构化输出和工具使用的复杂 Agent
+- 使用外部 JSON schema（来自 API、数据库、配置文件）
+- 使用动态 schema 进行原型开发
+- 渐进式类型场景
+
+### WithStructuredOutputJSON
+
+从 Go 结构体自动生成 JSON schema 并返回类型化输出。提供编译时类型安全。
+
+**示例：**
+
+```go
+type ProductInfo struct {
+    Name     string  `json:"name"`
+    Price    float64 `json:"price"`
+    Category string  `json:"category"`
+}
+
+agent := llmagent.New(
+    "shopping-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithStructuredOutputJSON(
+        new(ProductInfo),           // Auto-generates schema
+        true,                       // Strict mode
+        "Product information",      // Description
+    ),
+    llmagent.WithTools([]tool.Tool{searchTool}), // Tools are allowed
+)
+
+// Access typed output from events
+for event := range eventCh {
+    if event.StructuredOutput != nil {
+        product := event.StructuredOutput.(*ProductInfo)
+        fmt.Printf("Product: %s, Price: $%.2f\n", product.Name, product.Price)
+    }
+}
+```
+
+**最适合：**
+- 具有明确定义的 Go 结构体的类型安全应用
+- 清晰的代码集成
+- 编译时类型检查
+
+### WithOutputSchema (遗留)
+
+类似于 `WithStructuredOutputJSONSchema`，但**禁用所有工具**。这是为了向后兼容而保留的遗留方法。
+
+**示例：**
+
+```go
+agent := llmagent.New(
+    "weather-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithOutputSchema(weatherSchema),
+    // llmagent.WithTools(...) // ❌ Tools are disabled!
+)
+```
+
+**限制：**
+- ❌ 无法使用工具、函数调用或 RAG
+- ❌ 响应在模型内容中（需要解析）
+
+**迁移提示：** 如果需要工具能力，迁移到 `WithStructuredOutputJSONSchema`：
+
+```go
+// Old: Tools disabled
+agent := llmagent.New(
+    "agent",
+    llmagent.WithOutputSchema(schema),
+)
+
+// New: Tools enabled
+agent := llmagent.New(
+    "agent",
+    llmagent.WithStructuredOutputJSONSchema(
+        "agent_output",  // Name
+        schema,          // JSON schema
+        true,            // Strict mode
+        "Agent output",  // Description
+    ),
+    llmagent.WithTools([]tool.Tool{myTool1, myTool2}), // ✅ Now works!
+)
+```
+
+### WithOutputKey
+
+将 Agent 输出存储在会话状态的特定键下，适用于输出需要被下游 Agent 访问的工作流。
+
+**示例：**
+
+```go
+researchAgent := llmagent.New(
+    "researcher",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithOutputKey("research_findings"),
+)
+
+writerAgent := llmagent.New(
+    "writer",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("Based on research: {research_findings}, write a summary."),
+)
+
+// Chain agents using session state
+chain := chainagent.New("pipeline", chainagent.WithSubAgents([]agent.Agent{
+    researchAgent,
+    writerAgent,
+}))
+```
+
+**最适合：**
+- 带数据传递的多 Agent 工作流
+- 会话状态管理
+- 在下游 Agent 中使用占位符变量访问
+
+### 选择合适的方法
+
+| 场景 | 推荐方法 |
+|------|---------|
+| 需要工具 + 结构化输出 | `WithStructuredOutputJSONSchema` 或 `WithStructuredOutputJSON` |
+| 类型安全至关重要 | `WithStructuredOutputJSON` |
+| 使用外部 schema | `WithStructuredOutputJSONSchema` |
+| 简单的结构化响应（无工具） | `WithOutputSchema` |
+| 多 Agent 工作流 | `WithOutputKey` |
+| 快速原型开发 | `WithStructuredOutputJSONSchema` |
+
+**示例：**
+- `examples/structuredoutput/` - 演示 `WithStructuredOutputJSON`（类型化）
+- `examples/outputschema/` - 演示 `WithOutputSchema`（遗留）
+- `examples/outputkey/` - 演示 `WithOutputKey`（会话状态）
+
 ## 进阶使用
 
 框架提供了 Runner、Session 和 Memory 等高级功能，用于构建更复杂的 Agent 系统。
@@ -688,7 +884,53 @@ _ = ch; _ = err
 
 - 线程安全：上述设置方法是并发安全的，可在服务处理请求时调用。
 - 同一轮次内的效果：若一次调用过程中会触发多次模型请求（例如工具调用后再次提问），更新可能会对同一轮后续的请求生效。若需要“每次调用内保持稳定”，可在调用开始时确定或冻结提示词。
+- 按模型覆盖：如果 Agent 可能切换模型，可用 `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions`（或对应的 setter）按 `model.Info().Name` 覆盖提示词；未命中映射时回退到 Agent 默认提示词。
 - 个性化上下文：若需按用户/会话动态注入内容，优先使用指令中的占位符加会话状态注入（见上文“占位符变量”一节）。
+
+### 按模型覆盖提示词
+
+如果一个 Agent 会在运行时切换不同模型，你可以按模型为 Instruction
+与 Global Instruction（系统提示词）配置不同的文本。
+
+匹配逻辑是：先用当前模型的 `model.Info().Name` 查映射；命中则使用映射值；
+否则回退到 Agent 的默认提示词。
+
+示例
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+models := map[string]model.Model{
+    "gpt-4o-mini": openai.New("gpt-4o-mini"),
+    "gpt-4o":      openai.New("gpt-4o"),
+}
+
+llm := llmagent.New(
+    "support-bot",
+    llmagent.WithModels(models),
+    llmagent.WithModel(models["gpt-4o-mini"]), // Default model.
+
+    // Fallback prompts when no mapping exists.
+    llmagent.WithGlobalInstruction("System: You are a helpful assistant."),
+    llmagent.WithInstruction("Start every answer with DEFAULT:"),
+
+    // Per-model prompt mapping.
+    llmagent.WithModelGlobalInstructions(map[string]string{
+        "gpt-4o-mini": "System: You are in FAST mode.",
+        "gpt-4o":      "System: You are in SMART mode.",
+    }),
+    llmagent.WithModelInstructions(map[string]string{
+        "gpt-4o-mini": "Start every answer with FAST:",
+        "gpt-4o":      "Start every answer with SMART:",
+    }),
+)
+```
+
+另见：`examples/model/promptmap`。
 
 ### 另一种方式：用占位符驱动动态 System Prompt
 

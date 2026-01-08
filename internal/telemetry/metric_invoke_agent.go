@@ -15,9 +15,9 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/noop"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
@@ -26,13 +26,13 @@ var (
 	InvokeAgentMeter metric.Meter = MeterProvider.Meter(metrics.MeterNameInvokeAgent)
 
 	// InvokeAgentMetricGenAIRequestCnt records the number of invoke agent requests made.
-	InvokeAgentMetricGenAIRequestCnt metric.Int64Counter = noop.Int64Counter{}
+	InvokeAgentMetricGenAIRequestCnt metric.Int64Counter
 	// InvokeAgentMetricGenAIClientTokenUsage records the distribution of input and output token usage.
-	InvokeAgentMetricGenAIClientTokenUsage metric.Int64Histogram = noop.Int64Histogram{}
+	InvokeAgentMetricGenAIClientTokenUsage *histogram.DynamicInt64Histogram
 	// InvokeAgentMetricGenAIClientTimeToFirstToken records the distribution of time to first token latency in seconds.
-	InvokeAgentMetricGenAIClientTimeToFirstToken metric.Float64Histogram = noop.Float64Histogram{}
+	InvokeAgentMetricGenAIClientTimeToFirstToken *histogram.DynamicFloat64Histogram
 	// InvokeAgentMetricGenAIClientOperationDuration records the distribution of total agent invocation durations in seconds.
-	InvokeAgentMetricGenAIClientOperationDuration metric.Float64Histogram = noop.Float64Histogram{}
+	InvokeAgentMetricGenAIClientOperationDuration *histogram.DynamicFloat64Histogram
 )
 
 // invokeAgentAttributes is the attributes for invoke agent metrics.
@@ -143,22 +143,32 @@ func (t *InvokeAgentTracker) RecordMetrics() func() {
 		otelAttrs := t.attributes.toAttributes()
 
 		// Increment request counter
-		InvokeAgentMetricGenAIRequestCnt.Add(t.ctx, 1, metric.WithAttributes(otelAttrs...))
+		if InvokeAgentMetricGenAIRequestCnt != nil {
+			InvokeAgentMetricGenAIRequestCnt.Add(t.ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
 
 		// Record request duration
-		InvokeAgentMetricGenAIClientOperationDuration.Record(t.ctx, requestDuration.Seconds(), metric.WithAttributes(otelAttrs...))
+		if InvokeAgentMetricGenAIClientOperationDuration != nil {
+			InvokeAgentMetricGenAIClientOperationDuration.Record(t.ctx, requestDuration.Seconds(), metric.WithAttributes(otelAttrs...))
+		}
 
 		// Record time to first token
-		InvokeAgentMetricGenAIClientTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
-			metric.WithAttributes(otelAttrs...))
+		if InvokeAgentMetricGenAIClientTimeToFirstToken != nil {
+			InvokeAgentMetricGenAIClientTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
+				metric.WithAttributes(otelAttrs...))
+		}
 
 		// Record input token usage
-		InvokeAgentMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptTokens),
-			metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputTokenType))...))
+		if InvokeAgentMetricGenAIClientTokenUsage != nil {
+			InvokeAgentMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptTokens),
+				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputTokenType))...))
+		}
 
 		// Record output token usage
-		InvokeAgentMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalCompletionTokens),
-			metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoOutputTokenType))...))
+		if InvokeAgentMetricGenAIClientTokenUsage != nil {
+			InvokeAgentMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalCompletionTokens),
+				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoOutputTokenType))...))
+		}
 
 	}
 }

@@ -272,6 +272,7 @@ func (e *Executor) executeGraph(
 	execCtx := e.buildExecutionContext(
 		eventChan, invocation.InvocationID, execState, resumed, lastCkpt,
 	)
+	execCtx.Invocation = invocation
 	// Initialize per-execution input channels from the prepared state.
 	e.initializeChannels(execCtx, execState, true)
 	if len(restoredPending) > 0 {
@@ -512,6 +513,13 @@ func (e *Executor) buildExecutionContext(
 			continue
 		}
 		channelManager.AddChannel(name, ch.Behavior)
+		if ch.Behavior != channel.BehaviorBarrier {
+			continue
+		}
+		if perRunCh, ok := channelManager.GetChannel(name); ok &&
+			perRunCh != nil {
+			perRunCh.SetBarrierExpected(ch.BarrierExpected)
+		}
 	}
 
 	execCtx := &ExecutionContext{
@@ -532,6 +540,16 @@ func (e *Executor) buildExecutionContext(
 			if ch, ok := execCtx.channels.GetChannel(name); ok && ch != nil {
 				ch.Version = version
 			}
+		}
+	}
+
+	if resumed && lastCheckpoint != nil && len(lastCheckpoint.BarrierSets) > 0 {
+		for name, seen := range lastCheckpoint.BarrierSets {
+			ch, ok := execCtx.channels.GetChannel(name)
+			if !ok || ch == nil {
+				continue
+			}
+			ch.SetBarrierSeen(seen)
 		}
 	}
 
@@ -920,12 +938,13 @@ func (e *Executor) planBasedOnVersionTriggers(execCtx *ExecutionContext, step in
 	scheduledNodes := make(map[string]bool)
 
 	// Check each available channel and determine which nodes should be triggered.
-	for channelName, channel := range channels {
-		if !channel.IsAvailable() {
+	for channelName, ch := range channels {
+		if ch == nil || !ch.IsAvailable() {
 			continue
 		}
 
-		currentVersion := int64(channel.Version)
+		currentVersion := ch.Version
+		isBarrier := ch.Behavior == channel.BehaviorBarrier
 
 		// Get nodes that are triggered by this channel.
 		nodeIDs, exists := triggerToNodes[channelName]
@@ -937,6 +956,15 @@ func (e *Executor) planBasedOnVersionTriggers(execCtx *ExecutionContext, step in
 		for _, nodeID := range nodeIDs {
 			// Skip if already scheduled.
 			if scheduledNodes[nodeID] {
+				continue
+			}
+
+			if isBarrier {
+				task := e.createTask(nodeID, execCtx.State, step)
+				if task != nil {
+					tasks = append(tasks, task)
+					scheduledNodes[nodeID] = true
+				}
 				continue
 			}
 
@@ -2495,6 +2523,14 @@ func (e *Executor) processConditionalResult(
 			ch.Update([]any{channelUpdateMarker}, -1)
 			e.emitChannelUpdateEvent(ctx, invocation, execCtx, channelName,
 				channel.BehaviorLastValue, []string{target})
+			execCtx.pendingMu.Lock()
+			execCtx.pendingWrites = append(execCtx.pendingWrites, PendingWrite{
+				Channel:  channelName,
+				Value:    channelUpdateMarker,
+				TaskID:   fmt.Sprintf("%s-%d", condEdge.From, step),
+				Sequence: execCtx.seq.Add(1),
+			})
+			execCtx.pendingMu.Unlock()
 		} else {
 			log.WarnfContext(
 				ctx,
@@ -2618,6 +2654,20 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 	// No deep copy is required here
 	channelValues := state.safeClone()
 
+	barrierSets := make(map[string][]string)
+	if execCtx != nil && execCtx.channels != nil {
+		for name, ch := range execCtx.channels.GetAllChannels() {
+			if ch == nil || ch.Behavior != channel.BehaviorBarrier {
+				continue
+			}
+			seen := ch.BarrierSeenSnapshot()
+			if len(seen) == 0 {
+				continue
+			}
+			barrierSets[name] = seen
+		}
+	}
+
 	// Create channel versions from current channel states (per execution).
 	channelVersions := make(map[string]int64)
 	if execCtx != nil && execCtx.channels != nil {
@@ -2643,6 +2693,9 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 
 	// Create checkpoint.
 	checkpoint := NewCheckpoint(channelValues, channelVersions, versionsSeen)
+	if len(barrierSets) > 0 {
+		checkpoint.BarrierSets = barrierSets
+	}
 
 	// Use step-specific channels if step is provided, otherwise fallback to all available
 	if step >= 0 {

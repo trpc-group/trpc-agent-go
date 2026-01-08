@@ -166,7 +166,7 @@ func (vs *VectorStore) DeleteByFilter(ctx context.Context, opts ...vectorstore.D
 		err := retryVoid(ctx, vs.retryCfg, func() error {
 			_, err := vs.client.Delete(ctx, &qdrant.DeletePoints{
 				CollectionName: vs.opts.collectionName,
-				Points:         qdrant.NewPointsSelector(stringsToPointIDs(config.DocumentIDs)...),
+				Points:         qdrant.NewPointsSelectorIDs(stringsToPointIDs(config.DocumentIDs)),
 			})
 			return err
 		})
@@ -230,14 +230,14 @@ func (vs *VectorStore) extractDenseVector(vectors *qdrant.VectorsOutput) []float
 	}
 
 	// Try named vectors first (BM25 mode)
-	if named, ok := vectors.VectorsOptions.(*qdrant.VectorsOutput_Vectors); ok && named.Vectors != nil {
+	if named, ok := vectors.VectorsOptions.(*qdrant.VectorsOutput_Vectors); ok {
 		if denseVec, exists := named.Vectors.Vectors[vectorNameDense]; exists {
 			return extractVectorData(denseVec)
 		}
 	}
 
 	// Fall back to single vector mode
-	if v, ok := vectors.VectorsOptions.(*qdrant.VectorsOutput_Vector); ok && v.Vector != nil {
+	if v, ok := vectors.VectorsOptions.(*qdrant.VectorsOutput_Vector); ok {
 		return extractVectorData(v.Vector)
 	}
 

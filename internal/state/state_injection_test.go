@@ -365,3 +365,63 @@ func TestInjectSessionState_JSONObjectAndArray(t *testing.T) {
 		t.Fatalf("InjectSessionState json: got %q, want %q", got, want)
 	}
 }
+
+func TestInjectSessionStateWithSession_SessionOverride(t *testing.T) {
+	const (
+		template = "Hello {name}, Case={invocation:case}"
+		want     = "Hello Alice, Case=case-1"
+	)
+
+	sessState := make(session.StateMap)
+	sessState["name"] = []byte(`"Alice"`)
+	sess := &session.Session{State: sessState}
+
+	invSessState := make(session.StateMap)
+	invSessState["name"] = []byte(`"Bob"`)
+	inv := &agent.Invocation{Session: &session.Session{State: invSessState}}
+	inv.SetState("case", "case-1")
+
+	got, err := InjectSessionStateWithSession(template, inv, sess)
+	if err != nil {
+		t.Fatalf(
+			"InjectSessionStateWithSession override: unexpected error: %v",
+			err,
+		)
+	}
+	if got != want {
+		t.Fatalf(
+			"InjectSessionStateWithSession override: got %q, want %q",
+			got,
+			want,
+		)
+	}
+}
+
+func TestInjectSessionStateWithSession_NoRecursiveExpansion(t *testing.T) {
+	const (
+		template = "X={invocation:x}"
+		want     = "X={user:name}"
+	)
+
+	sessState := make(session.StateMap)
+	sessState["user:name"] = []byte(`"Alice"`)
+	sess := &session.Session{State: sessState}
+
+	inv := &agent.Invocation{}
+	inv.SetState("x", "{user:name}")
+
+	got, err := InjectSessionStateWithSession(template, inv, sess)
+	if err != nil {
+		t.Fatalf(
+			"InjectSessionStateWithSession recursion: unexpected error: %v",
+			err,
+		)
+	}
+	if got != want {
+		t.Fatalf(
+			"InjectSessionStateWithSession recursion: got %q, want %q",
+			got,
+			want,
+		)
+	}
+}

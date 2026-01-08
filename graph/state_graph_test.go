@@ -23,6 +23,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -346,7 +347,7 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 	}
 	close(agentEvents)
 
-	last, final, raw, _, _, err := processAgentEventStream(
+	last, final, raw, _, _, _, err := processAgentEventStream(
 		ctx,
 		agentEvents,
 		nil,
@@ -394,7 +395,7 @@ func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
 	agentEvents <- finalEvent
 	close(agentEvents)
 
-	last, _, _, fullRespEvent, tokenUsage, err := processAgentEventStream(
+	last, _, _, _, fullRespEvent, tokenUsage, err := processAgentEventStream(
 		ctx,
 		agentEvents,
 		nil,
@@ -411,6 +412,50 @@ func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
 	require.Equal(t, finalUsage.TotalTokens, tokenUsage.TotalTokens)
 	require.Equal(t, finalEvent, fullRespEvent)
 	require.Len(t, parentEventChan, 2)
+}
+
+func TestProcessAgentEventStream_CapturesStructuredOutput(t *testing.T) {
+	ctx := context.Background()
+	agentEvents := make(chan *event.Event, 2)
+	parentEventChan := make(chan *event.Event, 2)
+
+	// First event without structured output
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			IsPartial: false,
+			Choices:   []model.Choice{{Message: model.NewAssistantMessage("text response")}},
+		},
+	}
+
+	// Second event with structured output
+	structuredData := map[string]any{
+		"status": "success",
+		"data":   []string{"item1", "item2"},
+		"count":  2,
+	}
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			IsPartial: false,
+			Choices:   []model.Choice{{Message: model.NewAssistantMessage("final")}},
+		},
+		StructuredOutput: structuredData,
+	}
+	close(agentEvents)
+
+	last, _, _, capturedOutput, _, _, err := processAgentEventStream(
+		ctx,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		&itelemetry.InvokeAgentTracker{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "final", last)
+	require.NotNil(t, capturedOutput, "should capture structured output from event")
+	require.Equal(t, structuredData, capturedOutput, "captured output should match event payload")
 }
 
 func TestProcessToolCalls_ParallelCancelOnFirstError(t *testing.T) {
@@ -520,6 +565,139 @@ func TestBuilderEdges(t *testing.T) {
 	if edges[0].To != "node2" {
 		t.Errorf("Expected edge to node2, got %s", edges[0].To)
 	}
+}
+
+func TestBuilderJoinEdges(t *testing.T) {
+	builder := NewStateGraph(NewStateSchema())
+
+	testFunc := func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	}
+
+	graph, err := builder.
+		AddNode("a", testFunc).
+		AddNode("b", testFunc).
+		AddNode("c", testFunc).
+		SetEntryPoint("a").
+		AddJoinEdge([]string{"a", "b"}, "c").
+		SetFinishPoint("c").
+		Compile()
+	require.NoError(t, err)
+
+	edgesA := graph.Edges("a")
+	require.Len(t, edgesA, 1)
+	require.Equal(t, "c", edgesA[0].To)
+
+	edgesB := graph.Edges("b")
+	require.Len(t, edgesB, 1)
+	require.Equal(t, "c", edgesB[0].To)
+
+	starts := []string{"a", "b"}
+	joinChan := joinChannelName("c", starts)
+
+	ch, ok := graph.getChannel(joinChan)
+	require.True(t, ok)
+	require.Equal(t, ichannel.BehaviorBarrier, ch.Behavior)
+	require.Equal(t, starts, ch.BarrierExpected)
+
+	nodeC, exists := graph.Node("c")
+	require.True(t, exists)
+	require.Contains(t, nodeC.triggers, joinChan)
+
+	nodeA, exists := graph.Node("a")
+	require.True(t, exists)
+	require.True(t, hasJoinWriter(nodeA.writers, joinChan, "a"))
+
+	nodeB, exists := graph.Node("b")
+	require.True(t, exists)
+	require.True(t, hasJoinWriter(nodeB.writers, joinChan, "b"))
+}
+
+func TestBuilderJoinEdges_ChannelNameAvoidsCollisions(t *testing.T) {
+	builder := NewStateGraph(NewStateSchema())
+
+	testFunc := func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	}
+
+	joinNode := "join"
+
+	starts1 := normalizeJoinStarts([]string{"a+b", "c"})
+	starts2 := normalizeJoinStarts([]string{"a", "b+c"})
+	require.NotEqual(t, starts1, starts2)
+
+	graph, err := builder.
+		AddNode(starts1[0], testFunc).
+		AddNode(starts1[1], testFunc).
+		AddNode(starts2[0], testFunc).
+		AddNode(starts2[1], testFunc).
+		AddNode(joinNode, testFunc).
+		SetEntryPoint(starts1[0]).
+		AddJoinEdge(starts1, joinNode).
+		AddJoinEdge(starts2, joinNode).
+		SetFinishPoint(joinNode).
+		Compile()
+	require.NoError(t, err)
+
+	joinChan1 := joinChannelName(joinNode, starts1)
+	joinChan2 := joinChannelName(joinNode, starts2)
+	require.NotEqual(t, joinChan1, joinChan2)
+
+	ch1, ok := graph.getChannel(joinChan1)
+	require.True(t, ok)
+	require.Equal(t, ichannel.BehaviorBarrier, ch1.Behavior)
+	require.Equal(t, starts1, ch1.BarrierExpected)
+
+	ch2, ok := graph.getChannel(joinChan2)
+	require.True(t, ok)
+	require.Equal(t, ichannel.BehaviorBarrier, ch2.Behavior)
+	require.Equal(t, starts2, ch2.BarrierExpected)
+}
+
+func TestNormalizeJoinStarts(t *testing.T) {
+	require.Nil(t, normalizeJoinStarts(nil))
+	require.Nil(t, normalizeJoinStarts([]string{}))
+
+	in := []string{"b", "", Start, "a", "b", End}
+	require.Equal(t, []string{"a", "b"}, normalizeJoinStarts(in))
+}
+
+func TestBuilderJoinEdges_IgnoresInvalidInput(t *testing.T) {
+	builder := NewStateGraph(NewStateSchema())
+
+	testFunc := func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	}
+
+	graph, err := builder.
+		AddNode("a", testFunc).
+		AddNode("b", testFunc).
+		SetEntryPoint("a").
+		AddJoinEdge(nil, "b").
+		AddJoinEdge([]string{""}, "b").
+		AddJoinEdge([]string{"a"}, "").
+		AddJoinEdge([]string{"a"}, Start).
+		SetFinishPoint("b").
+		Compile()
+	require.NoError(t, err)
+
+	for name := range graph.getAllChannels() {
+		require.False(t, strings.HasPrefix(name, ChannelJoinPrefix))
+	}
+}
+
+func hasJoinWriter(
+	writers []channelWriteEntry,
+	channelName string,
+	value string,
+) bool {
+	for _, w := range writers {
+		v, ok := w.Value.(string)
+		if w.Channel == channelName && ok && v == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestStateGraphBasic(t *testing.T) {
@@ -1737,7 +1915,8 @@ func (s *countingToolSet) Close() error { return nil }
 func (s *countingToolSet) Name() string { return s.name }
 
 type recordingModel struct {
-	lastTools map[string]tool.Tool
+	lastTools    map[string]tool.Tool
+	lastMessages []model.Message
 }
 
 func (m *recordingModel) GenerateContent(
@@ -1745,6 +1924,11 @@ func (m *recordingModel) GenerateContent(
 	req *model.Request,
 ) (<-chan *model.Response, error) {
 	m.lastTools = req.Tools
+	if len(req.Messages) == 0 {
+		m.lastMessages = nil
+	} else {
+		m.lastMessages = append([]model.Message(nil), req.Messages...)
+	}
 	ch := make(chan *model.Response, 1)
 	ch <- &model.Response{
 		Done: true,
@@ -1821,6 +2005,50 @@ func TestAddLLMNode_RefreshToolSetsOnRun(t *testing.T) {
 	require.NotEmpty(t, secondTools)
 
 	require.Equal(t, 2, ts.calls)
+}
+
+func TestAddLLMNode_PlaceholderInvocationState(t *testing.T) {
+	const (
+		nodeID        = "llm"
+		userInput     = "hi"
+		invocationID  = "inv"
+		agentName     = "agent"
+		invStateKey   = "case"
+		invStateValue = "case-1"
+		instruction   = "Case: {invocation:case}"
+		wantSystem    = "Case: " + invStateValue
+	)
+
+	schema := MessagesStateSchema()
+	rm := &recordingModel{}
+	sg := NewStateGraph(schema)
+	sg.AddLLMNode(nodeID, rm, instruction, nil)
+
+	g, err := sg.
+		SetEntryPoint(nodeID).
+		SetFinishPoint(nodeID).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(agent.WithInvocationID(invocationID))
+	inv.AgentName = agentName
+	inv.SetState(invStateKey, invStateValue)
+
+	eventCh, err := exec.Execute(
+		context.Background(),
+		State{StateKeyUserInput: userInput},
+		inv,
+	)
+	require.NoError(t, err)
+	for range eventCh {
+	}
+
+	require.NotEmpty(t, rm.lastMessages)
+	require.Equal(t, model.RoleSystem, rm.lastMessages[0].Role)
+	require.Equal(t, wantSystem, rm.lastMessages[0].Content)
 }
 
 func TestNewToolsNodeFunc_StaticToolSets(t *testing.T) {

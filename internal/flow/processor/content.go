@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // Content inclusion options.
@@ -93,6 +94,9 @@ type ContentRequestProcessor struct {
 	// conversations. Default is ReasoningContentModeDiscardPreviousTurns, which is
 	// recommended for DeepSeek thinking mode.
 	ReasoningContentMode string
+	// SummaryFormatter allows custom formatting of session summary content.
+	// When nil (default), uses the default formatSummaryContent function.
+	SummaryFormatter func(summary string) string
 }
 
 // ContentOption is a functional option for configuring the ContentRequestProcessor.
@@ -163,6 +167,13 @@ func WithPreserveSameBranch(preserve bool) ContentOption {
 func WithReasoningContentMode(mode string) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.ReasoningContentMode = mode
+	}
+}
+
+// WithSummaryFormatter sets a custom formatter for session summary content.
+func WithSummaryFormatter(formatter func(summary string) string) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.SummaryFormatter = formatter
 	}
 }
 
@@ -297,20 +308,65 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 		return nil, time.Time{}
 	}
 	filter := inv.GetEventFilterKey()
-	// For IncludeContentsAll, prefer the full-session summary under empty filter key.
+	// For BranchFilterModeAll, prefer the full-session summary under empty filter key.
 	if p.BranchFilterMode == BranchFilterModeAll {
 		filter = ""
 	}
+
+	// Try exact match first.
 	sum := inv.Session.Summaries[filter]
-	if sum == nil || sum.Summary == "" {
-		return nil, time.Time{}
+	if sum != nil && sum.Summary != "" {
+		content := p.formatSummary(sum.Summary)
+		return &model.Message{Role: model.RoleSystem, Content: content}, sum.UpdatedAt
 	}
-	content := formatSummaryContent(sum.Summary)
-	return &model.Message{Role: model.RoleSystem, Content: content}, sum.UpdatedAt
+
+	// For BranchFilterModePrefix, aggregate summaries with matching prefix.
+	// This handles the case where events have custom filterKeys (e.g., "app/user-messages")
+	// but the invocation's eventFilterKey is the app prefix (e.g., "app").
+	if p.BranchFilterMode == BranchFilterModePrefix && filter != "" {
+		summaryText, updatedAt := p.aggregatePrefixSummaries(inv.Session.Summaries, filter)
+		if summaryText != "" {
+			content := p.formatSummary(summaryText)
+			return &model.Message{Role: model.RoleSystem, Content: content}, updatedAt
+		}
+	}
+	return nil, time.Time{}
 }
 
-// formatSummaryContent formats summary content with tags and notes.
-func formatSummaryContent(summary string) string {
+// aggregatePrefixSummaries aggregates all summaries whose keys have the given prefix.
+func (p *ContentRequestProcessor) aggregatePrefixSummaries(
+	summaries map[string]*session.Summary,
+	prefix string,
+) (string, time.Time) {
+	var parts []string
+	var latestTime time.Time
+	filterPrefix := prefix + agent.EventFilterKeyDelimiter
+
+	for key, sum := range summaries {
+		if sum == nil || sum.Summary == "" {
+			continue
+		}
+		// Check if key matches prefix (key starts with "prefix/" or key equals prefix).
+		keyWithDelim := key + agent.EventFilterKeyDelimiter
+		if key == prefix || strings.HasPrefix(keyWithDelim, filterPrefix) {
+			parts = append(parts, sum.Summary)
+			if sum.UpdatedAt.After(latestTime) {
+				latestTime = sum.UpdatedAt
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return "", time.Time{}
+	}
+	return strings.Join(parts, "\n\n"), latestTime
+}
+
+// formatSummary applies custom formatter if available, otherwise uses default.
+func (p *ContentRequestProcessor) formatSummary(summary string) string {
+	if p.SummaryFormatter != nil {
+		return p.SummaryFormatter(summary)
+	}
+	// Default format.
 	return fmt.Sprintf("Here is a brief summary of your previous interactions:\n\n"+
 		"<summary_of_previous_interactions>\n%s\n</summary_of_previous_interactions>\n\n"+
 		"Note: this information is from previous interactions and may be outdated. "+
