@@ -483,30 +483,39 @@ func (e *Executor) processResumeCommand(execState, initialState State) State {
 	return execState
 }
 
-// buildExecutionContext constructs the execution context including versionsSeen.
-func (e *Executor) buildExecutionContext(
-	eventChan chan<- *event.Event,
-	invocationID string,
-	state State,
+func restoreVersionsSeenFromCheckpoint(
 	resumed bool,
 	lastCheckpoint *Checkpoint,
-) *ExecutionContext {
-	// Restore per-node versionsSeen from the last checkpoint if present.
+) map[string]map[string]int64 {
 	versionsSeen := make(map[string]map[string]int64)
-	if resumed && lastCheckpoint != nil && lastCheckpoint.VersionsSeen != nil {
-		for nodeID, nodeVersions := range lastCheckpoint.VersionsSeen {
-			versionsSeen[nodeID] = make(map[string]int64)
-			for ch, version := range nodeVersions {
-				versionsSeen[nodeID][ch] = version
-			}
-		}
-		log.Debugf(
-			"Restored versionsSeen for %d nodes from checkpoint",
-			len(versionsSeen),
-		)
+	if !resumed {
+		return versionsSeen
+	}
+	if lastCheckpoint == nil {
+		return versionsSeen
+	}
+	if lastCheckpoint.VersionsSeen == nil {
+		return versionsSeen
 	}
 
-	// Build per-execution channels from the graph's static channel definitions.
+	for nodeID, nodeVersions := range lastCheckpoint.VersionsSeen {
+		copiedVersions := make(map[string]int64, len(nodeVersions))
+		for channelName, version := range nodeVersions {
+			copiedVersions[channelName] = version
+		}
+		versionsSeen[nodeID] = copiedVersions
+	}
+	log.Debugf(
+		"Restored versionsSeen for %d nodes from checkpoint",
+		len(versionsSeen),
+	)
+
+	return versionsSeen
+}
+
+// newExecutionChannelManager builds per-execution channels from the graph's
+// static channel definitions.
+func (e *Executor) newExecutionChannelManager() *channel.Manager {
 	channelManager := channel.NewChannelManager()
 	for name, ch := range e.graph.getAllChannels() {
 		if ch == nil {
@@ -516,11 +525,76 @@ func (e *Executor) buildExecutionContext(
 		if ch.Behavior != channel.BehaviorBarrier {
 			continue
 		}
-		if perRunCh, ok := channelManager.GetChannel(name); ok &&
-			perRunCh != nil {
-			perRunCh.SetBarrierExpected(ch.BarrierExpected)
+		perRunCh, ok := channelManager.GetChannel(name)
+		if !ok {
+			continue
 		}
+		if perRunCh == nil {
+			continue
+		}
+		perRunCh.SetBarrierExpected(ch.BarrierExpected)
 	}
+	return channelManager
+}
+
+func restoreCheckpointChannelVersions(execCtx *ExecutionContext) {
+	if !execCtx.resumed {
+		return
+	}
+	lastCheckpoint := execCtx.lastCheckpoint
+	if lastCheckpoint == nil {
+		return
+	}
+	if lastCheckpoint.ChannelVersions == nil {
+		return
+	}
+
+	for name, version := range lastCheckpoint.ChannelVersions {
+		ch, ok := execCtx.channels.GetChannel(name)
+		if !ok {
+			continue
+		}
+		if ch == nil {
+			continue
+		}
+		ch.Version = version
+	}
+}
+
+func restoreCheckpointBarrierSets(execCtx *ExecutionContext) {
+	if !execCtx.resumed {
+		return
+	}
+	lastCheckpoint := execCtx.lastCheckpoint
+	if lastCheckpoint == nil {
+		return
+	}
+	if len(lastCheckpoint.BarrierSets) == 0 {
+		return
+	}
+
+	for name, seen := range lastCheckpoint.BarrierSets {
+		ch, ok := execCtx.channels.GetChannel(name)
+		if !ok {
+			continue
+		}
+		if ch == nil {
+			continue
+		}
+		ch.SetBarrierSeen(seen)
+	}
+}
+
+// buildExecutionContext constructs the execution context including versionsSeen.
+func (e *Executor) buildExecutionContext(
+	eventChan chan<- *event.Event,
+	invocationID string,
+	state State,
+	resumed bool,
+	lastCheckpoint *Checkpoint,
+) *ExecutionContext {
+	versionsSeen := restoreVersionsSeenFromCheckpoint(resumed, lastCheckpoint)
+	channelManager := e.newExecutionChannelManager()
 
 	execCtx := &ExecutionContext{
 		Graph:          e.graph,
@@ -533,25 +607,8 @@ func (e *Executor) buildExecutionContext(
 		channels:       channelManager,
 	}
 
-	// For resumed executions, seed channel versions from the last checkpoint so
-	// version-based triggering semantics can continue to function correctly.
-	if resumed && lastCheckpoint != nil && lastCheckpoint.ChannelVersions != nil {
-		for name, version := range lastCheckpoint.ChannelVersions {
-			if ch, ok := execCtx.channels.GetChannel(name); ok && ch != nil {
-				ch.Version = version
-			}
-		}
-	}
-
-	if resumed && lastCheckpoint != nil && len(lastCheckpoint.BarrierSets) > 0 {
-		for name, seen := range lastCheckpoint.BarrierSets {
-			ch, ok := execCtx.channels.GetChannel(name)
-			if !ok || ch == nil {
-				continue
-			}
-			ch.SetBarrierSeen(seen)
-		}
-	}
+	restoreCheckpointChannelVersions(execCtx)
+	restoreCheckpointBarrierSets(execCtx)
 
 	return execCtx
 }
