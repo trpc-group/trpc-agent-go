@@ -394,7 +394,8 @@ func scanDeltaSince(
 			if msg.Role == model.RoleTool || msg.ToolID != "" {
 				continue
 			}
-			if msg.Content == "" {
+			// Skip messages with no content (neither text nor content parts).
+			if msg.Content == "" && len(msg.ContentParts) == 0 {
 				continue
 			}
 			if len(msg.ToolCalls) > 0 {
