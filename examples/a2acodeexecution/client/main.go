@@ -205,7 +205,8 @@ func handleCodeExecutionResult(evt *event.Event) bool {
 
 			fmt.Println("[Code Execution Result]")
 			fmt.Println(content)
-			fmt.Println("---------------------------------------------\n")
+			fmt.Println("---------------------------------------------")
+			fmt.Println()
 		}
 		return true
 	}

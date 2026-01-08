@@ -12,6 +12,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
+	"os"
 	"testing"
 	"time"
 
@@ -25,6 +27,14 @@ import (
 	localmetric "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
+
+func TestMain(m *testing.M) {
+	if !flag.Parsed() {
+		flag.Parse()
+	}
+	*modelName = os.Getenv("MODEL_NAME")
+	os.Exit(m.Run())
+}
 
 func TestTool(t *testing.T) {
 	tests := []struct {
@@ -51,7 +61,7 @@ func TestTool(t *testing.T) {
 				streaming: *streaming,
 				variant:   *variant,
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 			err := chat.setup(ctx)
 			assert.NoError(t, err)
@@ -76,4 +86,35 @@ func TestTool(t *testing.T) {
 			assert.Equal(t, status.EvalStatusPassed, result.OverallStatus, string(resultData))
 		})
 	}
+}
+
+func TestRubric_CompoundInterest_FinalAnswerPresent(t *testing.T) {
+	chat := &multiTurnChat{
+		modelName: *modelName,
+		streaming: *streaming,
+		variant:   *variant,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	err := chat.setup(ctx)
+	assert.NoError(t, err)
+	defer chat.runner.Close()
+	evaluationDir := "evaluation"
+	localEvalSetManager := localevalset.New(evalset.WithBaseDir(evaluationDir))
+	localMetricManager := localmetric.New(metric.WithBaseDir(evaluationDir))
+	localEvalResultManager := localevalresult.New(evalresult.WithBaseDir(evaluationDir))
+	evaluator, err := evaluation.New(
+		appName,
+		chat.runner,
+		evaluation.WithEvalSetManager(localEvalSetManager),
+		evaluation.WithMetricManager(localMetricManager),
+		evaluation.WithEvalResultManager(localEvalResultManager),
+	)
+	assert.NoError(t, err)
+	result, err := evaluator.Evaluate(ctx, "compound_interest_rubric")
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	resultData, err := json.MarshalIndent(result, "", "  ")
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus, string(resultData))
 }
