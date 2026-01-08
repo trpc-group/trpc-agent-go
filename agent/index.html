@@ -3523,6 +3523,7 @@ The structured callback API (recommended) requires <strong>trpc-agent-go &gt;= 0
 <ul>
 <li>Thread‑safe: the setters are concurrency‑safe and can be called while the service is handling requests.</li>
 <li>Mid‑turn behavior: if an Agent’s current turn triggers more than one model request (e.g., due to tool calls), updates may apply to subsequent requests in the same turn. If you need per‑run stability, set or freeze the text at the start of the run.</li>
+<li>Per‑run override: pass <code>agent.WithInstruction(...)</code> and/or <code>agent.WithGlobalInstruction(...)</code> to <code>Runner.Run(...)</code> to override prompts for a single request without mutating the Agent instance.</li>
 <li>Model‑specific prompts: if an Agent can switch models, use <code>llmagent.WithModelInstructions</code> / <code>llmagent.WithModelGlobalInstructions</code> (or the corresponding setters) to override prompts by <code>model.Info().Name</code>, falling back to the Agent defaults when no mapping exists.</li>
 <li>Per‑session personalization: for per‑user or per‑session data, prefer placeholders in the instruction and session state injection (see the “Placeholder Variables” section above).</li>
 </ul>
@@ -3715,7 +3716,7 @@ The structured callback API (recommended) requires <strong>trpc-agent-go &gt;= 0
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 03:39:14 UTC">2026-01-08 03:39:14</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 12:42:43 UTC">2026-01-08 12:42:43</span>
   </span>
 
     
