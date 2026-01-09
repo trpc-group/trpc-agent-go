@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/telemetry/agent"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
@@ -33,6 +34,7 @@ func main() {
 		log.Fatalf("Failed to start trace telemetry: %v", err)
 	}
 	defer func() {
+		time.Sleep(60 * time.Second)
 		if err := clean(context.Background()); err != nil {
 			log.Printf("Failed to clean up trace telemetry: %v", err)
 		}
@@ -50,9 +52,9 @@ func main() {
 	userMessage := []string{
 		"Calculate 123 + 456 * 789",
 		"What day of the week is today?",
-		"'Hello World' to uppercase",
-		"Create a test file in the current directory",
-		"Find information about Tesla company",
+		// "'Hello World' to uppercase",
+		// "Create a test file in the current directory",
+		// "Find information about Tesla company",
 	}
 
 	for _, msg := range userMessage {

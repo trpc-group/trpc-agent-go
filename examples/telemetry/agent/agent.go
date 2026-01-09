@@ -23,6 +23,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/middleware/toolsearch"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -55,7 +57,19 @@ func NewMultiToolChatAgent(agentName, modelName string) (*MultiToolChatAgent, er
 	}
 
 	modelCallbacks := model.NewCallbacks()
-	if toolSelector, err := toolsearch.New(modelInstance, toolsearch.WithMaxTools(2)); err != nil {
+	// if toolSelector, err := toolsearch.New(modelInstance, toolsearch.WithMaxTools(2)); err != nil {
+	// 	return nil, fmt.Errorf("failed to create tool selector: %w", err)
+	// } else {
+	// 	modelCallbacks.RegisterBeforeModel(toolSelector.Callback())
+	// }
+
+	toolKnowledge, err := toolsearch.NewToolKnowledge(openaiembedder.New(openaiembedder.WithModel(openaiembedder.ModelTextEmbedding3Small)),
+		toolsearch.WithVectorStore(vectorinmemory.New()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create tool knowledge: %w", err)
+	}
+
+	if toolSelector, err := toolsearch.New(modelInstance, toolsearch.WithMaxTools(2), toolsearch.WithToolKnowledge(toolKnowledge)); err != nil {
 		return nil, fmt.Errorf("failed to create tool selector: %w", err)
 	} else {
 		modelCallbacks.RegisterBeforeModel(toolSelector.Callback())
@@ -63,9 +77,9 @@ func NewMultiToolChatAgent(agentName, modelName string) (*MultiToolChatAgent, er
 
 	// Create LLM agent
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming response
+		// MaxTokens:   intPtr(2000),
+		// Temperature: floatPtr(0.7),
+		Stream: true, // Enable streaming response
 	}
 	llmAgent := llmagent.New(
 		agentName,
