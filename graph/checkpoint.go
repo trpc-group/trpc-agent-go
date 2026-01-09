@@ -64,6 +64,8 @@ type Checkpoint struct {
 	ChannelValues map[string]any `json:"channel_values"`
 	// ChannelVersions contains the versions of channels at checkpoint time.
 	ChannelVersions map[string]int64 `json:"channel_versions"`
+	// BarrierSets stores per-channel barrier seen sets.
+	BarrierSets map[string][]string `json:"barrier_sets,omitempty"`
 	// VersionsSeen tracks which versions each node has seen.
 	VersionsSeen map[string]map[string]int64 `json:"versions_seen"`
 	// ParentCheckpointID is the ID of the parent checkpoint (for branching).
@@ -380,6 +382,15 @@ func (c *Checkpoint) Copy() *Checkpoint {
 		channelVersions[k] = v
 	}
 
+	// Deep copy barrier sets.
+	var barrierSets map[string][]string
+	if len(c.BarrierSets) > 0 {
+		barrierSets = make(map[string][]string, len(c.BarrierSets))
+		for k, v := range c.BarrierSets {
+			barrierSets[k] = deepCopyStringSlice(v)
+		}
+	}
+
 	// Deep copy versions seen.
 	versionsSeen := make(map[string]map[string]int64, len(c.VersionsSeen))
 	for k, v := range c.VersionsSeen {
@@ -430,6 +441,7 @@ func (c *Checkpoint) Copy() *Checkpoint {
 		Timestamp:          c.Timestamp,
 		ChannelValues:      channelValues,
 		ChannelVersions:    channelVersions,
+		BarrierSets:        barrierSets,
 		VersionsSeen:       versionsSeen,
 		ParentCheckpointID: c.ParentCheckpointID,
 		UpdatedChannels:    updatedChannels,

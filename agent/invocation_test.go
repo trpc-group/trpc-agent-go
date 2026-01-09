@@ -21,6 +21,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const (
+	testRunInstruction       = "run instruction"
+	testRunGlobalInstruction = "run global instruction"
+)
+
 func TestNewInvocation(t *testing.T) {
 	inv := NewInvocation(
 		WithInvocationID("test-invocation"),
@@ -631,6 +636,20 @@ func TestWithModelName(t *testing.T) {
 	require.Equal(t, "gpt-4", opts.ModelName)
 }
 
+func TestWithInstruction(t *testing.T) {
+	opts := &RunOptions{}
+	WithInstruction(testRunInstruction)(opts)
+
+	require.Equal(t, testRunInstruction, opts.Instruction)
+}
+
+func TestWithGlobalInstruction(t *testing.T) {
+	opts := &RunOptions{}
+	WithGlobalInstruction(testRunGlobalInstruction)(opts)
+
+	require.Equal(t, testRunGlobalInstruction, opts.GlobalInstruction)
+}
+
 func TestWithModel_Integration(t *testing.T) {
 	mockModel := &mockModel{name: "custom-model"}
 
@@ -654,6 +673,30 @@ func TestWithModelName_Integration(t *testing.T) {
 	)
 
 	require.Equal(t, "gpt-4-turbo", inv.RunOptions.ModelName)
+}
+
+func TestWithInstruction_Integration(t *testing.T) {
+	inv := NewInvocation(
+		WithInvocationRunOptions(RunOptions{
+			Instruction: testRunInstruction,
+		}),
+	)
+
+	require.Equal(t, testRunInstruction, inv.RunOptions.Instruction)
+}
+
+func TestWithGlobalInstruction_Integration(t *testing.T) {
+	inv := NewInvocation(
+		WithInvocationRunOptions(RunOptions{
+			GlobalInstruction: testRunGlobalInstruction,
+		}),
+	)
+
+	require.Equal(
+		t,
+		testRunGlobalInstruction,
+		inv.RunOptions.GlobalInstruction,
+	)
 }
 
 func TestInvocation_IncLLMCallCount_NoLimitOrNil(t *testing.T) {

@@ -11,10 +11,14 @@ package graph
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"sync"
 	"time"
 
@@ -384,20 +388,30 @@ func WithModelCallbacks(callbacks *model.Callbacks) Option {
 // The name and description of the node can be set with the options.
 // This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *StateGraph {
-	f := func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
-		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", id), ID: id})
-		defer span.End()
-		return function(ctx, state)
-	}
 	node := &Node{
-		ID:       id,
-		Name:     id,
-		Function: f,
-		Type:     NodeTypeFunction, // Default to function type
+		ID:   id,
+		Name: id,
+		Type: NodeTypeFunction, // Default to function type
 	}
 	for _, opt := range opts {
 		opt(node)
+	}
+
+	node.Function = func(ctx context.Context, state State) (any, error) {
+		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
+		workflow := &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", id), ID: id, Request: state.safeClone()}
+		defer func() {
+			itelemetry.TraceWorkflow(span, workflow)
+			span.End()
+		}()
+
+		response, err := function(ctx, state)
+		if err != nil {
+			workflow.Error = err
+			return nil, err
+		}
+		workflow.Response = response
+		return response, nil
 	}
 
 	sg.graph.addNode(node)
@@ -476,6 +490,11 @@ func (sg *StateGraph) AddSubgraphNode(id string, opts ...Option) *StateGraph {
 // channelUpdateMarker value for marking channel updates.
 const channelUpdateMarker = "update"
 
+const (
+	joinChannelFromSeparator = ":from:"
+	joinKeyLenBytes          = 8
+)
+
 // AddEdge adds a normal edge between two nodes.
 // This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
@@ -497,6 +516,78 @@ func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 	}
 	sg.graph.addNodeWriter(from, writer)
 	return sg
+}
+
+// AddJoinEdge adds a join edge that waits for all start nodes to complete
+// before triggering the end node.
+func (sg *StateGraph) AddJoinEdge(fromNodes []string, to string) *StateGraph {
+	starts := normalizeJoinStarts(fromNodes)
+	if to == "" || to == Start || len(starts) == 0 {
+		return sg
+	}
+
+	for _, from := range starts {
+		edge := &Edge{
+			From: from,
+			To:   to,
+		}
+		sg.graph.addEdge(edge)
+	}
+
+	channelName := joinChannelName(to, starts)
+
+	sg.graph.addChannel(channelName, channel.BehaviorBarrier)
+	if ch, ok := sg.graph.getChannel(channelName); ok && ch != nil {
+		ch.SetBarrierExpected(starts)
+	}
+
+	sg.graph.addNodeTriggerChannel(to, channelName)
+	sg.graph.addNodeTrigger(channelName, to)
+
+	for _, from := range starts {
+		writer := channelWriteEntry{
+			Channel: channelName,
+			Value:   from,
+		}
+		sg.graph.addNodeWriter(from, writer)
+	}
+	return sg
+}
+
+func joinChannelName(to string, starts []string) string {
+	joinKey := joinKeyForStarts(starts)
+	return ChannelJoinPrefix + to + joinChannelFromSeparator + joinKey
+}
+
+func joinKeyForStarts(starts []string) string {
+	h := sha256.New()
+	for _, start := range starts {
+		var lenBuf [joinKeyLenBytes]byte
+		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(start)))
+		_, _ = h.Write(lenBuf[:])
+		_, _ = h.Write([]byte(start))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func normalizeJoinStarts(fromNodes []string) []string {
+	if len(fromNodes) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(fromNodes))
+	out := make([]string, 0, len(fromNodes))
+	for _, from := range fromNodes {
+		if from == "" || from == Start || from == End {
+			continue
+		}
+		if seen[from] {
+			continue
+		}
+		seen[from] = true
+		out = append(out, from)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // AddConditionalEdges adds conditional routing from a node.
@@ -1343,12 +1434,16 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 
 	return func(ctx context.Context, state State) (any, error) {
 		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
-		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: "execute_tools_node", ID: "execute_tools_node"})
-		defer span.End()
+		workflow := &itelemetry.Workflow{Name: "execute_tools_node", ID: "execute_tools_node", Request: state.safeClone()}
+		defer func() {
+			itelemetry.TraceWorkflow(span, workflow)
+			span.End()
+		}()
 
 		// Extract and validate messages from state.
 		toolCalls, err := extractToolCallsFromState(state, span)
 		if err != nil {
+			workflow.Error = err
 			return nil, err
 		}
 
@@ -1375,6 +1470,7 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			EnableParallel: parallel,
 		})
 		if err != nil {
+			workflow.Error = err
 			return nil, err
 		}
 		upd := State{StateKeyMessages: newMessages}
@@ -1407,6 +1503,7 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			}
 		}
 
+		workflow.Response = upd
 		return upd, nil
 	}
 }

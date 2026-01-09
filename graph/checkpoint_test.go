@@ -56,6 +56,7 @@ func TestConfigHelpers_Getters(t *testing.T) {
 func TestCheckpoint_CopyAndFork(t *testing.T) {
 	c := NewCheckpoint(map[string]any{"a": 1, "b": map[string]any{"x": 2}}, map[string]int64{"a": 1}, map[string]map[string]int64{"n": {}})
 	c.UpdatedChannels = []string{"a", "b"}
+	c.BarrierSets = map[string][]string{"join": {"a", "b"}}
 	c.PendingSends = []PendingSend{{Channel: "ch", Value: 123, TaskID: "t1"}}
 	c.NextNodes = []string{"n1", "n2"}
 	c.NextChannels = []string{"c1"}
@@ -78,6 +79,12 @@ func TestCheckpoint_CopyAndFork(t *testing.T) {
 	// ChannelVersions map
 	copied.ChannelVersions["a"] = 99
 	assert.Equal(t, int64(1), c.ChannelVersions["a"])
+	// BarrierSets map[string][]string
+	copied.BarrierSets["join"][0] = "changed"
+	assert.Equal(t, []string{"a", "b"}, c.BarrierSets["join"])
+	copied.BarrierSets["new"] = []string{"x"}
+	_, existsNew := c.BarrierSets["new"]
+	assert.False(t, existsNew)
 	// VersionsSeen map of map
 	if _, ok := copied.VersionsSeen["n"]; ok {
 		copied.VersionsSeen["n"]["z"] = 7
@@ -346,6 +353,17 @@ func TestEvents_Stringers_And_CheckpointEventBuilders(t *testing.T) {
 	)
 	require.NotNil(t, e2)
 	require.Contains(t, e2.StateDelta, MetadataKeyCheckpoint)
+
+	e3 := NewCheckpointInterruptEvent(
+		WithCheckpointEventInvocationID("inv-3"),
+		WithCheckpointEventCheckpointID("ck-3"),
+		WithCheckpointEventSource("interrupt"),
+		WithCheckpointEventStep(3),
+		WithCheckpointEventDuration(3*time.Second),
+	)
+	require.NotNil(t, e3)
+	require.Equal(t, ObjectTypeGraphCheckpointInterrupt, e3.Object)
+	require.Contains(t, e3.StateDelta, MetadataKeyCheckpoint)
 }
 
 func TestStateSchema_Validate_And_Reducers(t *testing.T) {

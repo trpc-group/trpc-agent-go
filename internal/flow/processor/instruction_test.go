@@ -21,13 +21,17 @@ import (
 )
 
 const (
-	testInstructionContent  = "Be helpful and concise"
-	testSystemPromptContent = "You are a helpful assistant"
-	testAgentName           = "test-agent"
-	testInvocationID        = "test-123"
-	testDynamicInstruction  = "dynamic instruction"
-	testDynamicSystemPrompt = "dynamic system prompt"
-	jsonSchemaTitle         = "test schema"
+	testInstructionContent   = "Be helpful and concise"
+	testSystemPromptContent  = "You are a helpful assistant"
+	testAgentName            = "test-agent"
+	testInvocationID         = "test-123"
+	testDynamicInstruction   = "dynamic instruction"
+	testDynamicSystemPrompt  = "dynamic system prompt"
+	testResolvedInstruction  = "resolved instruction"
+	testResolvedSystemPrompt = "resolved system prompt"
+	testRunInstruction       = "run instruction override"
+	testRunSystemPrompt      = "run system prompt override"
+	jsonSchemaTitle          = "test schema"
 )
 
 func TestInstructionProc_Request(t *testing.T) {
@@ -254,6 +258,101 @@ func TestInstructionProcessor_DynamicGetters(t *testing.T) {
 	if !strings.Contains(sysMsg.Content, testDynamicSystemPrompt) {
 		t.Fatalf("expected dynamic system prompt in content")
 	}
+}
+
+func TestInstructionProcessor_DynamicResolvers(t *testing.T) {
+	ctx := context.Background()
+	req := &model.Request{
+		Messages: []model.Message{},
+	}
+	inv := &agent.Invocation{
+		AgentName:    testAgentName,
+		InvocationID: testInvocationID,
+	}
+	eventCh := make(chan *event.Event, 1)
+
+	var instructionCalls, systemPromptCalls int
+	var getterInstructionCalls, getterSystemPromptCalls int
+	processor := NewInstructionRequestProcessor(
+		testInstructionContent,
+		testSystemPromptContent,
+		WithInstructionGetter(func() string {
+			getterInstructionCalls++
+			return testDynamicInstruction
+		}),
+		WithSystemPromptGetter(func() string {
+			getterSystemPromptCalls++
+			return testDynamicSystemPrompt
+		}),
+		WithInstructionResolver(func(inv *agent.Invocation) string {
+			require.Equal(t, testInvocationID, inv.InvocationID)
+			instructionCalls++
+			return testResolvedInstruction
+		}),
+		WithSystemPromptResolver(func(inv *agent.Invocation) string {
+			require.Equal(t, testInvocationID, inv.InvocationID)
+			systemPromptCalls++
+			return testResolvedSystemPrompt
+		}),
+	)
+
+	processor.ProcessRequest(ctx, inv, req, eventCh)
+
+	require.Equal(t, 1, instructionCalls)
+	require.Equal(t, 1, systemPromptCalls)
+	require.Equal(t, 0, getterInstructionCalls)
+	require.Equal(t, 0, getterSystemPromptCalls)
+	require.NotEmpty(t, req.Messages)
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	require.Contains(t, req.Messages[0].Content, testResolvedInstruction)
+	require.Contains(t, req.Messages[0].Content, testResolvedSystemPrompt)
+	require.NotContains(t, req.Messages[0].Content, testDynamicInstruction)
+	require.NotContains(t, req.Messages[0].Content, testDynamicSystemPrompt)
+}
+
+func TestInstructionProcessor_RunOptionsOverride(t *testing.T) {
+	ctx := context.Background()
+	req := &model.Request{
+		Messages: []model.Message{},
+	}
+	inv := &agent.Invocation{
+		AgentName:    testAgentName,
+		InvocationID: testInvocationID,
+		RunOptions: agent.RunOptions{
+			Instruction:       testRunInstruction,
+			GlobalInstruction: testRunSystemPrompt,
+		},
+	}
+	eventCh := make(chan *event.Event, 1)
+
+	processor := NewInstructionRequestProcessor(
+		testInstructionContent,
+		testSystemPromptContent,
+		WithInstructionGetter(func() string {
+			return testDynamicInstruction
+		}),
+		WithSystemPromptGetter(func() string {
+			return testDynamicSystemPrompt
+		}),
+		WithInstructionResolver(func(*agent.Invocation) string {
+			return testResolvedInstruction
+		}),
+		WithSystemPromptResolver(func(*agent.Invocation) string {
+			return testResolvedSystemPrompt
+		}),
+	)
+
+	processor.ProcessRequest(ctx, inv, req, eventCh)
+
+	require.NotEmpty(t, req.Messages)
+	sysMsg := req.Messages[0]
+	require.Equal(t, model.RoleSystem, sysMsg.Role)
+	require.Contains(t, sysMsg.Content, testRunInstruction)
+	require.Contains(t, sysMsg.Content, testRunSystemPrompt)
+	require.NotContains(t, sysMsg.Content, testResolvedInstruction)
+	require.NotContains(t, sysMsg.Content, testResolvedSystemPrompt)
+	require.NotContains(t, sysMsg.Content, testDynamicInstruction)
+	require.NotContains(t, sysMsg.Content, testDynamicSystemPrompt)
 }
 
 func TestInstructionProcessor_ProcessRequest_NilRequest(t *testing.T) {

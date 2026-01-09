@@ -664,6 +664,8 @@ eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
 
 - `agent.RunOptions.Model`: Directly specify a model instance
 - `agent.RunOptions.ModelName`: Specify a pre-registered model name
+- `agent.RunOptions.Instruction`: Override instruction for this request only (use `agent.WithInstruction(...)`)
+- `agent.RunOptions.GlobalInstruction`: Override global instruction (system prompt) for this request only (use `agent.WithGlobalInstruction(...)`)
 - Priority: `Model` > `ModelName` > Agent default model
 - If the model specified by `ModelName` is not found, it falls back to the Agent's default model
 
@@ -703,6 +705,11 @@ eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
 - **Higher Priority**: Per-request model settings take precedence over the Agent's default model
 - **No Side Effects**: Does not affect other concurrent requests or subsequent requests
 - **Flexible Combination**: Can be used in combination with agent-level switching
+
+**Model-specific Prompts (LLMAgent)**:
+
+- Use `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions` to override prompts by `model.Info().Name` when the Agent switches models; it falls back to the Agent defaults when no mapping exists.
+- For a runnable example, see [examples/model/promptmap](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/promptmap).
 
 ##### Usage Example
 
@@ -1808,6 +1815,11 @@ eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
 - **Higher Priority**: Per-request model settings take precedence over the Agent's default model
 - **No Side Effects**: Does not affect other concurrent requests or subsequent requests
 - **Flexible Combination**: Can be used in combination with agent-level switching
+
+**Model-specific Prompts (LLMAgent)**:
+
+- Use `llmagent.WithModelInstructions` / `llmagent.WithModelGlobalInstructions` to override prompts by `model.Info().Name` when the Agent switches models; it falls back to the Agent defaults when no mapping exists.
+- For a runnable example, see [examples/model/promptmap](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/promptmap).
 
 ##### Usage Example
 

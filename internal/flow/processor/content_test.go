@@ -325,7 +325,7 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 			includeContents: BranchFilterModePrefix,
 			expectedMsg: &model.Message{
 				Role:    model.RoleSystem,
-				Content: formatSummaryContent("Test summary content"),
+				Content: NewContentRequestProcessor().formatSummary("Test summary content"),
 			},
 			expectedTime: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
 		},
@@ -346,7 +346,7 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 			includeContents: BranchFilterModeAll,
 			expectedMsg: &model.Message{
 				Role:    model.RoleSystem,
-				Content: formatSummaryContent("Full session summary"),
+				Content: NewContentRequestProcessor().formatSummary("Full session summary"),
 			},
 			expectedTime: time.Date(2023, 1, 1, 13, 0, 0, 0, time.UTC),
 		},
@@ -604,7 +604,7 @@ func TestContentRequestProcessor_ConcurrentSummariesAccess(t *testing.T) {
 	// Test single read
 	msg, updatedAt := p.getSessionSummaryMessage(inv)
 	assert.NotNil(t, msg, "Should get summary message")
-	assert.Equal(t, formatSummaryContent("Initial summary"), msg.Content)
+	assert.Equal(t, NewContentRequestProcessor().formatSummary("Initial summary"), msg.Content)
 	assert.Equal(t, baseTime, updatedAt)
 
 	// Test single write
@@ -618,7 +618,7 @@ func TestContentRequestProcessor_ConcurrentSummariesAccess(t *testing.T) {
 	// Test read after write
 	msg, updatedAt = p.getSessionSummaryMessage(inv)
 	assert.NotNil(t, msg, "Should get updated summary message")
-	assert.Equal(t, formatSummaryContent("Updated summary"), msg.Content)
+	assert.Equal(t, NewContentRequestProcessor().formatSummary("Updated summary"), msg.Content)
 	assert.Equal(t, baseTime.Add(time.Second), updatedAt)
 
 	// Test with minimal concurrency (2 goroutines only)
@@ -3418,4 +3418,50 @@ func TestContentRequestProcessor_GetIncrementMessagesWithReasoningContent(t *tes
 			}
 		})
 	}
+}
+
+func TestWithSummaryFormatter(t *testing.T) {
+	// Test that WithSummaryFormatter option sets the SummaryFormatter field.
+	formatter := func(summary string) string {
+		return "Custom: " + summary
+	}
+	p := NewContentRequestProcessor(WithSummaryFormatter(formatter))
+	assert.NotNil(t, p.SummaryFormatter, "SummaryFormatter should be set")
+
+	// Verify the custom formatter is used.
+	result := p.formatSummary("test summary")
+	assert.Equal(t, "Custom: test summary", result,
+		"formatSummary should use custom formatter")
+}
+
+func TestContentRequestProcessor_FormatSummary_CustomFormatter(t *testing.T) {
+	// Test custom formatter is invoked when calling formatSummary.
+	formatter := func(summary string) string {
+		return "[CUSTOM] " + summary + " [END]"
+	}
+	p := NewContentRequestProcessor(WithSummaryFormatter(formatter))
+
+	result := p.formatSummary("test content")
+	expected := "[CUSTOM] test content [END]"
+	assert.Equal(t, expected, result,
+		"custom formatter should wrap summary with custom markers")
+}
+
+func TestContentRequestProcessor_FormatSummary_DefaultFormatter(t *testing.T) {
+	// Test that default formatter is used when SummaryFormatter is nil.
+	p := NewContentRequestProcessor()
+	assert.Nil(t, p.SummaryFormatter,
+		"SummaryFormatter should be nil by default")
+
+	summary := "test summary"
+	result := p.formatSummary(summary)
+
+	// Default formatter wraps with specific format.
+	assert.Contains(t, result, "test summary",
+		"default formatter should contain original summary")
+	assert.Contains(t, result,
+		"Here is a brief summary of your previous interactions",
+		"default formatter should contain header")
+	assert.Contains(t, result, "<summary_of_previous_interactions>",
+		"default formatter should use XML tags")
 }
