@@ -3150,6 +3150,45 @@ automatically.
 
 Runnable example: `examples/graph/nested_interrupt`.
 
+It supports multi-level nesting via the `-depth` flag.
+
+Key idea: `graph.Interrupt(ctx, state, key, prompt)` uses `key` as the routing
+key for `ResumeMap`. When you resume, the map key must match that `key`.
+
+You will see two different identifiers:
+
+- Node Identifier (Node ID): where the current graph paused (in nested graphs,
+  this is often the parent agent node).
+- Task Identifier (Task ID): the interrupt key used for `ResumeMap` routing.
+  For `graph.Interrupt`, Task ID equals the `key` argument.
+
+To resume without hard-coding the key, read the Task ID from the interrupted
+checkpoint and use it as the `ResumeMap` key:
+
+```go
+// cm is a graph.CheckpointManager. If you're using GraphAgent, you can get it
+// from ga.Executor().CheckpointManager().
+latest, err := cm.Latest(ctx, lineageID, namespace)
+if err != nil || latest == nil || latest.Checkpoint == nil {
+    // handle error
+}
+taskID := latest.Checkpoint.InterruptState.TaskID
+
+cmd := graph.NewResumeCommand().
+    AddResumeValue(taskID, "approved")
+
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyCheckpointID: latest.Checkpoint.ID,
+        graph.StateKeyCommand:    cmd,
+    }),
+)
+```
+
+This works the same for multi-level nesting: resume from the parent checkpoint
+and the framework will resume each child checkpoint automatically.
+
 Helpers:
 
 ```go

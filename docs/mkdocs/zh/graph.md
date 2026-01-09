@@ -3133,6 +3133,44 @@ eventCh, err := r.Run(ctx, userID, sessionID,
 
 可运行示例：`examples/graph/nested_interrupt`。
 
+该示例支持通过 `-depth` 参数模拟多级嵌套。
+
+关键点：`graph.Interrupt(ctx, state, key, prompt)` 里的 `key` 会作为 `ResumeMap`
+的路由 key。也就是说，恢复时 `ResumeMap` 的 map key 必须与这里的 `key` 一致。
+
+你会看到两个不同的标识：
+
+- 节点标识（Node Identifier (Node ID)）：当前这张图暂停的位置（在嵌套图里，
+  通常是父图的 Agent 节点）。
+- 任务标识（Task Identifier (Task ID)）：用于 `ResumeMap` 路由的中断 key。
+  对 `graph.Interrupt` 而言，Task ID 等于传入的 `key` 参数。
+
+如果你不想在代码里写死中断 key，可以从“中断检查点”里取出 Task ID，并用它作为
+`ResumeMap` 的 key：
+
+```go
+// cm 是 graph.CheckpointManager。如果你使用 GraphAgent，可以通过
+// ga.Executor().CheckpointManager() 获取。
+latest, err := cm.Latest(ctx, lineageID, namespace)
+if err != nil || latest == nil || latest.Checkpoint == nil {
+    // handle error
+}
+taskID := latest.Checkpoint.InterruptState.TaskID
+
+cmd := graph.NewResumeCommand().
+    AddResumeValue(taskID, "approved")
+
+events, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyCheckpointID: latest.Checkpoint.ID,
+        graph.StateKeyCommand:    cmd,
+    }),
+)
+```
+
+多级嵌套的语义是一样的：只需要恢复父图检查点，框架会自动逐层恢复每一层子图。
+
 恢复辅助函数：
 
 ```go
