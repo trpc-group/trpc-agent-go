@@ -379,16 +379,31 @@ eventChan, err := r.Run(
 
 Behavior summary:
 
-- Default (`false`): graph LLM nodes emit only partial chunks. The workflow’s
-  final text is available on the Runner completion event via
-  `StateDelta[graph.StateKeyLastResponse]`.
-- Enabled (`true`): graph LLM nodes also emit the final `Done=true` assistant
-  message events.
-  - Intermediate nodes may now emit assistant messages (and Runner may persist
-    them into the Session).
-  - Runner may omit echoing the final assistant message in its completion event
-    if it can prove (by response identifier (ID)) that the same final message
-    was already emitted earlier, avoiding duplicate display.
+First, one key idea: this option controls whether each graph Large Language
+Model (LLM) node emits an extra final `Done=true` assistant message event. It
+does not mean the Runner completion event will always have (or not have)
+`Response.Choices`.
+
+Assume your graph is `llm1 -> llm2 -> llm3`, and `llm3` produces the final
+answer:
+
+- Case 1: `agent.WithGraphEmitFinalModelResponses(false)` (default)
+  - `llm1/llm2/llm3`: emit only partial chunks (`Done=false`), no final
+    `Done=true` assistant message events.
+  - Runner completion event: to keep the “read only the last event” pattern
+    working, Runner echoes `llm3`’s final output into completion
+    `Response.Choices` (when the graph provides final choices). The final text
+    is also always available via `StateDelta[graph.StateKeyLastResponse]`.
+- Case 2: `agent.WithGraphEmitFinalModelResponses(true)`
+  - `llm1/llm2/llm3`: in addition to partial chunks, each node emits a final
+    `Done=true` assistant message event (so intermediate nodes may now produce
+    complete assistant messages, and Runner may persist those non-partial events
+    into the Session).
+  - Runner completion event: to avoid duplicating the final message, Runner
+    deduplicates by response identifier (ID). When it can confirm the final
+    message already appeared earlier, it omits the echo, so completion
+    `Response.Choices` may be empty. The final text should still be read from
+    `StateDelta[graph.StateKeyLastResponse]`.
 
 Recommendation: for GraphAgent workflows, always read the final output from the
 Runner completion event’s `StateDelta` (for example,
