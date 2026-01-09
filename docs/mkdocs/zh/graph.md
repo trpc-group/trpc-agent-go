@@ -630,6 +630,11 @@ stateGraph.AddLLMNode("analyze", model,
 Runner 运行时开启 `agent.WithGraphEmitFinalModelResponses(true)`。该选项的详细语义、
 示例和注意事项请参见 `runner.md`。
 
+小贴士：如果你通过 Runner 运行，并且主要只关心流式的大语言模型（Large Language
+Model，LLM）消息（例如用于用户界面（User Interface，UI）的流式展示），可以使用
+`agent.WithStreamMode(...)` 作为统一开关（见下文“事件监控”）。当选择
+`agent.StreamModeMessages` 时，Runner 会为本次运行自动开启 Graph 的最终响应事件输出。
+
 #### 三种输入范式
 
 - OneShot（`StateKeyOneShotMessages`）：
@@ -834,6 +839,52 @@ graphAgent, err := graphagent.New(
 - `WithAddSessionSummary(true)` 仅在 `Session.Summaries` 中已有对应 `FilterKey` 的摘要时生效。摘要通常由 SessionService + SessionSummarizer 生成，Runner 在落库事件后会自动触发 `EnqueueSummaryJob`。
 - GraphAgent 只读取摘要，不生成摘要。如果绕过 Runner，需在写入事件后自行调用 `sessionService.CreateSessionSummary` 或 `EnqueueSummaryJob`。
 - 摘要仅在 `TimelineFilterAll` 下生效。
+
+#### 摘要格式自定义
+
+默认情况下，会话摘要会以包含上下文标签和关于优先考虑当前对话信息的提示进行格式化：
+
+**默认格式：**
+
+```
+Here is a brief summary of your previous interactions:
+
+<summary_of_previous_interactions>
+[摘要内容]
+</summary_of_previous_interactions>
+
+Note: this information is from previous interactions and may be outdated. You should ALWAYS prefer information from this conversation over the past summary.
+```
+
+您可以使用 `WithSummaryFormatter` 来自定义摘要格式，以更好地匹配您的特定使用场景或模型需求。
+
+**自定义格式示例：**
+
+```go
+// 使用简化格式的自定义格式化器
+ga := graphagent.New(
+    "my-graph",
+    graphagent.WithInitialState(initialState),
+    graphagent.WithAddSessionSummary(true),
+    graphagent.WithSummaryFormatter(func(summary string) string {
+        return fmt.Sprintf("## Previous Context\n\n%s", summary)
+    }),
+)
+```
+
+**使用场景：**
+
+- **简化格式**：使用简洁的标题和最少的上下文提示来减少 token 消耗
+- **语言本地化**：将上下文提示翻译为目标语言（例如：中文、日语）
+- **角色特定格式**：为不同的 Agent 角色提供不同的格式
+- **模型优化**：根据特定模型的偏好调整格式
+
+**重要注意事项：**
+
+- 格式化函数接收来自会话的原始摘要文本并返回格式化后的字符串
+- 自定义格式化器应确保摘要可与其他消息清楚地区分开
+- 默认格式设计为与大多数模型和使用场景兼容
+- 当使用 `WithAddSessionSummary(false)` 时，格式化器永远不会被调用
 
 #### 并发使用注意事项
 
@@ -3164,6 +3215,41 @@ for ev := range eventCh {
     }
 }
 ```
+
+#### StreamMode
+
+Runner 可以在事件到达你的业务代码之前先做一次过滤，这样你只会收到你关心的一小类事件
+（例如只关心模型输出用于流式展示）。
+
+使用 `agent.WithStreamMode(...)`：
+
+```go
+eventCh, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithStreamMode(
+        agent.StreamModeMessages,
+        agent.StreamModeCustom,
+    ),
+)
+```
+
+支持的模式（图式工作流）：
+
+- `messages`：模型输出事件（例如 `chat.completion.chunk`）
+- `updates`：`graph.state.update` / `graph.channel.update` / `graph.execution`
+- `checkpoints`：`graph.checkpoint.*`
+- `tasks`：任务生命周期事件（`graph.node.*`、`graph.pregel.*`）
+- `debug`：等价于 `checkpoints` + `tasks`
+- `custom`：节点主动发出的自定义事件（`graph.node.custom`）
+
+注意事项：
+
+- 当选择 `agent.StreamModeMessages` 时，Runner 会为本次运行自动开启 Graph 的最终响应事件
+  输出。若你需要关闭该行为，请在 `agent.WithStreamMode(...)` 之后调用
+  `agent.WithGraphEmitFinalModelResponses(false)` 覆盖。
+- StreamMode 只影响 Runner 向你的 `eventCh` 转发哪些事件；Runner 内部仍会处理并持久化
+  所有事件。
+- 对于图式工作流，部分事件类型（例如 `graph.checkpoint.*`）只会在选择对应模式时才会产生。
+- Runner 总会额外发出一条 `runner.completion` 完成事件。
 
 #### 事件元数据（StateDelta）
 

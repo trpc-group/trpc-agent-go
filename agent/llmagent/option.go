@@ -173,6 +173,12 @@ type Options struct {
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message when available (default: false).
 	AddSessionSummary bool
+	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
+	// When 0 (default), no limit is applied.
+	MaxHistoryRuns int
+	// summaryFormatter allows custom formatting of session summary content.
+	// When nil (default), uses the default formatSummaryContent function.
+	summaryFormatter func(summary string) string
 
 	// MaxLLMCalls is an optional upper bound on the number of LLM calls
 	// allowed per invocation for this agent. When the value is:
@@ -187,10 +193,6 @@ type Options struct {
 	//   - > 0: the limit is enforced per invocation.
 	//   - <= 0: no limit is applied (default, preserves existing behavior).
 	MaxToolIterations int
-
-	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
-	// When 0 (default), no limit is applied.
-	MaxHistoryRuns int
 
 	// PreserveSameBranch controls whether the content request processor
 	// should preserve original roles (assistant/tool) for events that
@@ -667,6 +669,19 @@ func WithMessageBranchFilterMode(mode string) Option {
 func WithReasoningContentMode(mode string) Option {
 	return func(opts *Options) {
 		opts.ReasoningContentMode = mode
+	}
+}
+
+// WithSummaryFormatter sets a custom formatter for session summary content.
+// This allows users to customize how summaries are presented to the model.
+// Example:
+//
+//	llmagent.WithSummaryFormatter(func(summary string) string {
+//	    return fmt.Sprintf("## Previous Context\n\n%s", summary)
+//	})
+func WithSummaryFormatter(formatter func(summary string) string) Option {
+	return func(opts *Options) {
+		opts.summaryFormatter = formatter
 	}
 }
 

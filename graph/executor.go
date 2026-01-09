@@ -218,8 +218,11 @@ func (e *Executor) Execute(
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_graph %s", invocation.AgentName)))
-		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: fmt.Sprintf("execute_graph %s", invocation.AgentName), ID: invocation.AgentName})
-		defer span.End()
+		workflow := &itelemetry.Workflow{
+			Name:    fmt.Sprintf("execute_graph %s", invocation.AgentName),
+			ID:      invocation.AgentName,
+			Request: initialState.safeClone(),
+		}
 		defer func() {
 			if r := recover(); r != nil {
 				stack := debug.Stack()
@@ -229,13 +232,16 @@ func (e *Executor) Execute(
 					r,
 					string(stack),
 				)
+				workflow.Error = fmt.Errorf("executor panic: %v", r)
 				agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
 					WithPregelEventInvocationID(invocation.InvocationID),
 					WithPregelEventStepNumber(-1),
-					WithPregelEventError(fmt.Sprintf("executor panic: %v", r)),
+					WithPregelEventError(workflow.Error.Error()),
 				))
 			}
 			close(eventChan)
+			itelemetry.TraceWorkflow(span, workflow)
+			span.End()
 		}()
 		if err := e.executeGraph(ctx, initialState, invocation, eventChan, startTime); err != nil {
 			// Check if this is an interrupt error.
@@ -244,6 +250,7 @@ func (e *Executor) Execute(
 				// The interrupt will be handled by the caller.
 				return
 			}
+			workflow.Error = err
 			// Emit error event for other errors.
 			agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
 				WithPregelEventInvocationID(invocation.InvocationID),
@@ -290,7 +297,12 @@ func (e *Executor) executeGraph(
 
 	if e.checkpointSaver != nil && !resumed {
 		if err := e.createCheckpointAndSave(
-			ctx, &checkpointConfig, CheckpointSourceInput, -1, execCtx,
+			ctx,
+			invocation,
+			&checkpointConfig,
+			CheckpointSourceInput,
+			-1,
+			execCtx,
 		); err != nil {
 			log.DebugfContext(
 				ctx,
@@ -483,30 +495,32 @@ func (e *Executor) processResumeCommand(execState, initialState State) State {
 	return execState
 }
 
-// buildExecutionContext constructs the execution context including versionsSeen.
-func (e *Executor) buildExecutionContext(
-	eventChan chan<- *event.Event,
-	invocationID string,
-	state State,
+// restoreVersionsSeen restores per-node versionsSeen from the last checkpoint.
+func (e *Executor) restoreVersionsSeen(
 	resumed bool,
 	lastCheckpoint *Checkpoint,
-) *ExecutionContext {
-	// Restore per-node versionsSeen from the last checkpoint if present.
+) map[string]map[string]int64 {
 	versionsSeen := make(map[string]map[string]int64)
-	if resumed && lastCheckpoint != nil && lastCheckpoint.VersionsSeen != nil {
-		for nodeID, nodeVersions := range lastCheckpoint.VersionsSeen {
-			versionsSeen[nodeID] = make(map[string]int64)
-			for ch, version := range nodeVersions {
-				versionsSeen[nodeID][ch] = version
-			}
-		}
-		log.Debugf(
-			"Restored versionsSeen for %d nodes from checkpoint",
-			len(versionsSeen),
-		)
+	if !resumed || lastCheckpoint == nil || lastCheckpoint.VersionsSeen == nil {
+		return versionsSeen
 	}
 
-	// Build per-execution channels from the graph's static channel definitions.
+	for nodeID, nodeVersions := range lastCheckpoint.VersionsSeen {
+		versionsSeen[nodeID] = make(map[string]int64)
+		for ch, version := range nodeVersions {
+			versionsSeen[nodeID][ch] = version
+		}
+	}
+	log.Debugf(
+		"Restored versionsSeen for %d nodes from checkpoint",
+		len(versionsSeen),
+	)
+	return versionsSeen
+}
+
+// buildChannelManager creates per-execution channels from the graph's static
+// channel definitions.
+func (e *Executor) buildChannelManager() *channel.Manager {
 	channelManager := channel.NewChannelManager()
 	for name, ch := range e.graph.getAllChannels() {
 		if ch == nil {
@@ -521,6 +535,57 @@ func (e *Executor) buildExecutionContext(
 			perRunCh.SetBarrierExpected(ch.BarrierExpected)
 		}
 	}
+	return channelManager
+}
+
+// restoreChannelVersions seeds channel versions from the last checkpoint for
+// resumed executions.
+func (e *Executor) restoreChannelVersions(
+	execCtx *ExecutionContext,
+	resumed bool,
+	lastCheckpoint *Checkpoint,
+) {
+	if !resumed || lastCheckpoint == nil || lastCheckpoint.ChannelVersions == nil {
+		return
+	}
+
+	for name, version := range lastCheckpoint.ChannelVersions {
+		if ch, ok := execCtx.channels.GetChannel(name); ok && ch != nil {
+			ch.Version = version
+		}
+	}
+}
+
+// restoreBarrierSets restores barrier sets from the last checkpoint for resumed
+// executions.
+func (e *Executor) restoreBarrierSets(
+	execCtx *ExecutionContext,
+	resumed bool,
+	lastCheckpoint *Checkpoint,
+) {
+	if !resumed || lastCheckpoint == nil || len(lastCheckpoint.BarrierSets) == 0 {
+		return
+	}
+
+	for name, seen := range lastCheckpoint.BarrierSets {
+		ch, ok := execCtx.channels.GetChannel(name)
+		if !ok || ch == nil {
+			continue
+		}
+		ch.SetBarrierSeen(seen)
+	}
+}
+
+// buildExecutionContext constructs the execution context including versionsSeen.
+func (e *Executor) buildExecutionContext(
+	eventChan chan<- *event.Event,
+	invocationID string,
+	state State,
+	resumed bool,
+	lastCheckpoint *Checkpoint,
+) *ExecutionContext {
+	versionsSeen := e.restoreVersionsSeen(resumed, lastCheckpoint)
+	channelManager := e.buildChannelManager()
 
 	execCtx := &ExecutionContext{
 		Graph:          e.graph,
@@ -535,24 +600,8 @@ func (e *Executor) buildExecutionContext(
 
 	// For resumed executions, seed channel versions from the last checkpoint so
 	// version-based triggering semantics can continue to function correctly.
-	if resumed && lastCheckpoint != nil && lastCheckpoint.ChannelVersions != nil {
-		for name, version := range lastCheckpoint.ChannelVersions {
-			if ch, ok := execCtx.channels.GetChannel(name); ok && ch != nil {
-				ch.Version = version
-			}
-		}
-	}
-
-	if resumed && lastCheckpoint != nil && len(lastCheckpoint.BarrierSets) > 0 {
-		for name, seen := range lastCheckpoint.BarrierSets {
-			ch, ok := execCtx.channels.GetChannel(name)
-			if !ok || ch == nil {
-				continue
-			}
-			ch.SetBarrierSeen(seen)
-		}
-	}
-
+	e.restoreChannelVersions(execCtx, resumed, lastCheckpoint)
+	e.restoreBarrierSets(execCtx, resumed, lastCheckpoint)
 	return execCtx
 }
 
@@ -607,7 +656,12 @@ func (e *Executor) runBspLoop(
 				step,
 			)
 			if err := e.createCheckpointAndSave(
-				ctx, checkpointConfig, CheckpointSourceLoop, step, execCtx,
+				ctx,
+				invocation,
+				checkpointConfig,
+				CheckpointSourceLoop,
+				step,
+				execCtx,
 			); err != nil {
 				log.DebugfContext(
 					ctx,
@@ -647,6 +701,7 @@ func (e *Executor) buildCompletionEvent(
 // returned value from saver.PutFull (which may include the new checkpoint_id).
 func (e *Executor) createCheckpointAndSave(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	config *map[string]any,
 	source string,
 	step int,
@@ -683,6 +738,18 @@ func (e *Executor) createCheckpointAndSave(
 	pendingWrites := make([]PendingWrite, len(execCtx.pendingWrites))
 	copy(pendingWrites, execCtx.pendingWrites)
 	execCtx.pendingWrites = nil // Clear after copying.
+
+	if shouldEmitCheckpointLifecycleEvents(invocation) &&
+		execCtx != nil && execCtx.EventChan != nil {
+		evt := NewCheckpointCreatedEvent(
+			WithCheckpointEventInvocationID(execCtx.InvocationID),
+			WithCheckpointEventCheckpointID(checkpoint.ID),
+			WithCheckpointEventSource(source),
+			WithCheckpointEventStep(step),
+			WithCheckpointEventWritesCount(len(pendingWrites)),
+		)
+		agent.EmitEvent(ctx, invocation, execCtx.EventChan, evt)
+	}
 
 	// Track new versions for channels that were updated on this execution.
 	newVersions := make(map[string]int64)
@@ -727,6 +794,7 @@ func (e *Executor) createCheckpointAndSave(
 		checkpoint.NextNodes,
 		len(pendingWrites),
 	)
+	saveStart := time.Now()
 	updatedConfig, err := e.checkpointSaver.PutFull(ctx, PutFullRequest{
 		Config:        *config,
 		Checkpoint:    checkpoint,
@@ -743,6 +811,18 @@ func (e *Executor) createCheckpointAndSave(
 		)
 		return fmt.Errorf("failed to save checkpoint atomically: %w", err)
 	}
+	if shouldEmitCheckpointLifecycleEvents(invocation) &&
+		execCtx != nil && execCtx.EventChan != nil {
+		evt := NewCheckpointCommittedEvent(
+			WithCheckpointEventInvocationID(execCtx.InvocationID),
+			WithCheckpointEventCheckpointID(checkpoint.ID),
+			WithCheckpointEventSource(source),
+			WithCheckpointEventStep(step),
+			WithCheckpointEventDuration(time.Since(saveStart)),
+			WithCheckpointEventWritesCount(len(pendingWrites)),
+		)
+		agent.EmitEvent(ctx, invocation, execCtx.EventChan, evt)
+	}
 	// Successfully saved checkpoint.
 	// Clear step marks after checkpoint creation.
 	e.clearChannelStepMarks(execCtx)
@@ -751,6 +831,27 @@ func (e *Executor) createCheckpointAndSave(
 	*config = updatedConfig
 	// Updated config with new checkpoint ID.
 	return nil
+}
+
+func shouldEmitCheckpointLifecycleEvents(
+	invocation *agent.Invocation,
+) bool {
+	if invocation == nil {
+		return false
+	}
+	ro := invocation.RunOptions
+	if !ro.StreamModeEnabled {
+		return false
+	}
+	for _, mode := range ro.StreamModes {
+		if mode == agent.StreamModeCheckpoints {
+			return true
+		}
+		if mode == agent.StreamModeDebug {
+			return true
+		}
+	}
+	return false
 }
 
 // applyPendingWrites replays pending writes into channels to rebuild frontier.
@@ -2552,6 +2653,11 @@ func (e *Executor) handleInterrupt(
 	step int,
 	checkpointConfig map[string]any,
 ) error {
+	var (
+		interruptCheckpointID  string
+		interruptCheckpointDur time.Duration
+		interruptCheckpointOK  bool
+	)
 	// Create an interrupt checkpoint with the current state.
 	if e.checkpointSaver != nil && checkpointConfig != nil {
 		// Set interrupt state in the checkpoint.
@@ -2612,6 +2718,7 @@ func (e *Executor) handleInterrupt(
 			NewVersions:   checkpoint.ChannelVersions,
 			PendingWrites: []PendingWrite{},
 		}
+		saveStart := time.Now()
 		updatedConfig, err := e.checkpointSaver.PutFull(saveCtx, req)
 		if err != nil {
 			log.DebugfContext(
@@ -2620,6 +2727,9 @@ func (e *Executor) handleInterrupt(
 				err,
 			)
 		} else {
+			interruptCheckpointID = checkpoint.ID
+			interruptCheckpointDur = time.Since(saveStart)
+			interruptCheckpointOK = true
 			// Update the config with new checkpoint ID for proper parent tracking
 			if configurable, ok := checkpointConfig[CfgKeyConfigurable].(map[string]any); ok {
 				if updatedConfigurable, ok := updatedConfig[CfgKeyConfigurable].(map[string]any); ok {
@@ -2627,6 +2737,25 @@ func (e *Executor) handleInterrupt(
 				}
 			}
 		}
+	}
+
+	// Replace ctx with a fresh eventCtx derived from background to avoid cancel warning.
+	const defaultEmitTimeout = time.Second
+	eventCtx, cancel := context.WithTimeout(context.Background(),
+		defaultEmitTimeout)
+	defer cancel()
+
+	if interruptCheckpointOK &&
+		shouldEmitCheckpointLifecycleEvents(invocation) &&
+		execCtx != nil && execCtx.EventChan != nil {
+		evt := NewCheckpointInterruptEvent(
+			WithCheckpointEventInvocationID(execCtx.InvocationID),
+			WithCheckpointEventCheckpointID(interruptCheckpointID),
+			WithCheckpointEventSource(CheckpointSourceInterrupt),
+			WithCheckpointEventStep(step),
+			WithCheckpointEventDuration(interruptCheckpointDur),
+		)
+		agent.EmitEvent(eventCtx, invocation, execCtx.EventChan, evt)
 	}
 
 	// Emit interrupt event.
@@ -2637,10 +2766,6 @@ func (e *Executor) handleInterrupt(
 		WithPregelEventInterruptValue(interrupt.Value),
 	)
 
-	// Replace ctx with a fresh eventCtx derived from background to avoid cancel warning.
-	const defaultEmitTimeout = time.Second
-	eventCtx, cancel := context.WithTimeout(context.Background(), defaultEmitTimeout)
-	defer cancel()
 	agent.EmitEvent(eventCtx, invocation, execCtx.EventChan, interruptEvent)
 
 	// Return the interrupt error to propagate it to the caller.

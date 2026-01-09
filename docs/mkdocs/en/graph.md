@@ -631,6 +631,11 @@ If you want graph LLM nodes to also emit the final `Done=true` assistant
 message events, enable `agent.WithGraphEmitFinalModelResponses(true)` when
 running via Runner. See `runner.md` for details and examples.
 
+Tip: if you are using Runner and you mainly care about streaming Large Language
+Model (LLM) messages, you can enable `agent.WithStreamMode(...)` (see
+"Event Monitoring"). When `agent.StreamModeMessages` is selected, graph LLM
+nodes enable final model responses automatically for that run.
+
 #### Three input paradigms
 
 - OneShot (`StateKeyOneShotMessages`):
@@ -764,6 +769,50 @@ Session summary notes:
 - `WithAddSessionSummary(true)` takes effect only when `Session.Summaries` contains a summary for the invocation’s filter key. Summaries are typically produced by SessionService + SessionSummarizer, and Runner will auto‑enqueue summarization after persisting events.
 - GraphAgent reads summaries only; it does not generate them. If you bypass Runner, call `sessionService.CreateSessionSummary` or `EnqueueSummaryJob` after appending events.
 - Summary injection works only when `TimelineFilterMode` is `TimelineFilterAll`.
+
+#### Summary Format Customization
+
+By default, session summaries are formatted with context tags and a note about preferring current conversation information. You can customize the summary format using `WithSummaryFormatter` to better match your specific use cases or model requirements.
+
+**Default Format:**
+
+```
+Here is a brief summary of your previous interactions:
+
+<summary_of_previous_interactions>
+[summary content]
+</summary_of_previous_interactions>
+
+Note: this information is from previous interactions and may be outdated. You should ALWAYS prefer information from this conversation over the past summary.
+```
+
+**Custom Format Example:**
+
+```go
+// Custom formatter with simplified format
+ga := graphagent.New(
+    "my-graph",
+    graphagent.WithInitialState(initialState),
+    graphagent.WithAddSessionSummary(true),
+    graphagent.WithSummaryFormatter(func(summary string) string {
+        return fmt.Sprintf("## Previous Context\n\n%s", summary)
+    }),
+)
+```
+
+**Use Cases:**
+
+- **Simplified Format**: Reduce token usage by using concise headings and minimal context notes
+- **Language Localization**: Translate context notes to target language (e.g., Chinese, Japanese)
+- **Role-Specific Formatting**: Different formats for different agent roles
+- **Model Optimization**: Tailor format for specific model preferences
+
+**Important Notes:**
+
+- The formatter function receives raw summary text from the session and returns the formatted string
+- Custom formatters should ensure that the summary is clearly distinguishable from other messages
+- The default format is designed to be compatible with most models and use cases
+- When `WithAddSessionSummary(false)` is used, the formatter is never invoked
 
 #### Concurrency considerations
 
@@ -3156,6 +3205,44 @@ for ev := range eventCh {
     }
 }
 ```
+
+#### StreamMode
+
+Runner can filter the event stream before it reaches your application code.
+This is useful when you only want a subset of events (for example, only model
+tokens for user interface streaming).
+
+Use `agent.WithStreamMode(...)`:
+
+```go
+eventCh, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithStreamMode(
+        agent.StreamModeMessages,
+        agent.StreamModeCustom,
+    ),
+)
+```
+
+Supported modes (graph workflows):
+
+- `messages`: model output events (for example, `chat.completion.chunk`)
+- `updates`: `graph.state.update` / `graph.channel.update` / `graph.execution`
+- `checkpoints`: `graph.checkpoint.*`
+- `tasks`: task lifecycle events (`graph.node.*`, `graph.pregel.*`)
+- `debug`: same as `checkpoints` + `tasks`
+- `custom`: node-emitted events (`graph.node.custom`)
+
+Notes:
+
+- When `agent.StreamModeMessages` is selected, graph-based Large Language Model
+  (LLM) nodes enable final model response events automatically for that run.
+  To override it, call `agent.WithGraphEmitFinalModelResponses(false)` after
+  `agent.WithStreamMode(...)`.
+- StreamMode only affects what Runner forwards to your `eventCh`. Runner still
+  processes and persists events internally.
+- For graph workflows, some event types (for example, `graph.checkpoint.*`)
+  are emitted only when their corresponding mode is selected.
+- Runner always emits a final `runner.completion` event.
 
 #### Event Metadata (StateDelta)
 
