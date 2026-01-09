@@ -2969,17 +2969,32 @@ events from graph LLM nodes), enable this RunOption:</p>
 </span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Behavior summary:</p>
+<p>First, one key idea: this option controls whether each graph Large Language
+Model (LLM) node emits an extra final <code>Done=true</code> assistant message event. It
+does not mean the Runner completion event will always have (or not have)
+<code>Response.Choices</code>.</p>
+<p>Assume your graph is <code>llm1 -&gt; llm2 -&gt; llm3</code>, and <code>llm3</code> produces the final
+answer:</p>
 <ul>
-<li>Default (<code>false</code>): graph LLM nodes emit only partial chunks. The workflow’s
-  final text is available on the Runner completion event via
+<li>Case 1: <code>agent.WithGraphEmitFinalModelResponses(false)</code> (default)<ul>
+<li><code>llm1/llm2/llm3</code>: emit only partial chunks (<code>Done=false</code>), no final
+  <code>Done=true</code> assistant message events.</li>
+<li>Runner completion event: to keep the “read only the last event” pattern
+  working, Runner echoes <code>llm3</code>’s final output into completion
+  <code>Response.Choices</code> (when the graph provides final choices). The final text
+  is also always available via <code>StateDelta[graph.StateKeyLastResponse]</code>.</li>
+</ul>
+</li>
+<li>Case 2: <code>agent.WithGraphEmitFinalModelResponses(true)</code><ul>
+<li><code>llm1/llm2/llm3</code>: in addition to partial chunks, each node emits a final
+  <code>Done=true</code> assistant message event (so intermediate nodes may now produce
+  complete assistant messages, and Runner may persist those non-partial events
+  into the Session).</li>
+<li>Runner completion event: to avoid duplicating the final message, Runner
+  deduplicates by response identifier (ID). When it can confirm the final
+  message already appeared earlier, it omits the echo, so completion
+  <code>Response.Choices</code> may be empty. The final text should still be read from
   <code>StateDelta[graph.StateKeyLastResponse]</code>.</li>
-<li>Enabled (<code>true</code>): graph LLM nodes also emit the final <code>Done=true</code> assistant
-  message events.<ul>
-<li>Intermediate nodes may now emit assistant messages (and Runner may persist
-  them into the Session).</li>
-<li>Runner may omit echoing the final assistant message in its completion event
-  if it can prove (by response identifier (ID)) that the same final message
-  was already emitted earlier, avoiding duplicate display.</li>
 </ul>
 </li>
 </ul>
@@ -3729,7 +3744,7 @@ are forwarded to your <code>eventChan</code>.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 15:24:10 UTC">2026-01-08 15:24:10</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 9, 2026 08:49:15 UTC">2026-01-09 08:49:15</span>
   </span>
 
     

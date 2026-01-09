@@ -2941,17 +2941,17 @@ Session。内容处理器不会读取这个选项，它只会从 Session 事件�
 </span></code></pre></div></td></tr></table></div>
 <p>这样应用层可以始终“看最后一条事件”来判断流程结束并读取最终结果，避免因为提前退出而错过 <code>output</code> 等后续节点。</p>
 <h4 id="graph-llm">🔁 开关：让 Graph 的 LLM 节点输出最终响应事件</h4>
-<p>在 GraphAgent（图式智能体）里，一次 <code>Run</code> 可能会在多个节点里多次调用大语言模型
-（Large Language Model，LLM）。当开启流式输出时，一次模型调用通常会产生一串事件：</p>
+<p>在 GraphAgent 里，一次 <code>Run</code> 可能会在多个节点里多次调用 LLM。当开启流式输出时，
+一次模型调用通常会产生一串事件：</p>
 <ul>
-<li>分片（partial）事件：<code>IsPartial=true</code>、<code>Done=false</code>，增量文本在
+<li>分片（<code>partial</code>）事件：<code>IsPartial=true</code>、<code>Done=false</code>，增量文本在
   <code>choice.Delta.Content</code></li>
-<li>最终（final）事件：<code>IsPartial=false</code>、<code>Done=true</code>，完整文本在
+<li>最终（<code>final</code>）事件：<code>IsPartial=false</code>、<code>Done=true</code>，完整文本在
   <code>choice.Message.Content</code></li>
 </ul>
 <p>默认情况下，Graph 的 LLM 节点只输出分片事件，不输出最终 <code>Done=true</code> 的 assistant 消息
-事件。这样可以避免“中间节点的输出”被当作普通助手回复（例如被 Runner 写进会话
-（Session），或被上层用户界面（User Interface，UI）直接展示）。</p>
+事件。这样可以避免“中间节点的输出”被当作普通助手回复（例如被 Runner 写进会话，或被
+上层用户界面直接展示）。</p>
 <p>如果你希望 Graph 的 LLM 节点也输出最终 <code>Done=true</code> 的 assistant 消息事件，可以开启这个
 RunOption：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1">1</a></span>
@@ -2969,15 +2969,28 @@ RunOption：</p>
 </span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>行为总结：</p>
+<p>先讲清楚一句话：这个开关控制的是“图里每个 LLM 节点是否要额外输出最终 <code>Done=true</code>
+的消息事件”，它不等价于“Runner 的完成事件一定会带（或一定不会带）
+<code>Response.Choices</code>”。</p>
+<p>假设你的图是：<code>llm1 -&gt; llm2 -&gt; llm3</code>，最后由 <code>llm3</code> 产出最终答案：</p>
 <ul>
-<li>默认（<code>false</code>）：Graph 的 LLM 节点只输出分片事件。流程最终输出仍然可以在 Runner
-  “完成事件”的 <code>StateDelta[graph.StateKeyLastResponse]</code> 中读取。</li>
-<li>开启（<code>true</code>）：Graph 的 LLM 节点也会输出最终 <code>Done=true</code> 的 assistant 消息事件。<ul>
-<li>中间节点现在也可能产生 assistant 消息（并且 Runner 可能会把这些非分片事件写入
-  Session）。</li>
-<li>Runner 可能会在“完成事件”里不再重复回显最终 assistant 消息：当它能通过响应标识符
-  （identifier，ID）确认“同一个最终消息已经在前面的事件里出现过”时，会省略回显以避免
-  重复展示。</li>
+<li>情况 1：<code>agent.WithGraphEmitFinalModelResponses(false)</code>（默认）<ul>
+<li><code>llm1/llm2/llm3</code>：只输出分片事件（<code>Done=false</code>），不输出最终 <code>Done=true</code> 的
+  assistant 消息事件。</li>
+<li>Runner 完成事件：为了让“只看最后一条事件也能拿到最终答案”，Runner 会把 <code>llm3</code>
+  的最终结果回显到完成事件的 <code>Response.Choices</code>（前提是图的完成事件里带了
+  <code>Response.Choices</code>）。同时，最终文本也始终能从
+  <code>StateDelta[graph.StateKeyLastResponse]</code> 读取。</li>
+</ul>
+</li>
+<li>情况 2：<code>agent.WithGraphEmitFinalModelResponses(true)</code><ul>
+<li><code>llm1/llm2/llm3</code>：除了分片事件外，还会各自输出最终 <code>Done=true</code> 的 assistant
+  消息事件（因此中间节点也可能出现完整 assistant 消息，Runner 也可能把这些非分片事件
+  写入会话）。</li>
+<li>Runner 完成事件：为了避免和 <code>llm3</code> 的最终消息重复展示，Runner 会用响应 ID 做去重；
+  当它确认“最终消息已在前面的事件里出现过”时，就会省略回显，因此完成事件的
+  <code>Response.Choices</code> 可能为空，这是预期行为。最终文本仍然以
+  <code>StateDelta[graph.StateKeyLastResponse]</code> 为准。</li>
 </ul>
 </li>
 </ul>
@@ -3722,7 +3735,7 @@ RunOption：</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月8日 15:24:10 UTC">2026-01-08 15:24:10</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月9日 08:49:15 UTC">2026-01-09 08:49:15</span>
   </span>
 
     
