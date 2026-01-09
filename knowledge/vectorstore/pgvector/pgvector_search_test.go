@@ -53,9 +53,9 @@ func TestVectorStore_Search(t *testing.T) {
 			validate: func(t *testing.T, result *vectorstore.SearchResult) {
 				require.Len(t, result.Results, 3)
 				assert.Equal(t, "doc_1", result.Results[0].Document.ID)
-				assert.Equal(t, 0.95, result.Results[0].Score)
+				assert.Equal(t, 0.975, result.Results[0].Score)
 				assert.Equal(t, "doc_2", result.Results[1].Document.ID)
-				assert.Equal(t, 0.85, result.Results[1].Score)
+				assert.Equal(t, 0.925, result.Results[1].Score)
 			},
 		},
 		{

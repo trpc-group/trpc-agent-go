@@ -535,6 +535,33 @@ func (vs *VectorStore) executeSearch(ctx context.Context, query string, args []a
 		return nil, fmt.Errorf("pgvector search documents: %w", err)
 	}
 
+	// For Hybrid and Keyword search, we have already normalized and weighted the scores in SQL.
+	// So we don't need to do any further normalization.
+	if searchMode == vectorstore.SearchModeHybrid || searchMode == vectorstore.SearchModeKeyword {
+		return result, nil
+	}
+
+	// Normalize scores
+	scores := make([]float64, len(result.Results))
+	for i, res := range result.Results {
+		scores[i] = res.Score
+	}
+
+	// Pgvector uses Cosine distance (<=>) in SQL builder which is converted to similarity 1 - (<=>)
+	// But we now handle normalization in SQL for vector search too (mapping to [0,1]).
+	// However, NormalizeSearchScores expects raw scores for vector search (which might be distance or similarity depending on metric).
+	// If we changed SQL to return normalized scores for Vector search too, we should skip normalization here as well.
+	// Let's check SQL builder again:
+	// Vector search SQL returns: (1.0 - (%s <=> $1) / 2.0) as score ==> This IS normalized [0, 1].
+	// So we can actually skip normalization for ALL modes now if we trust SQL.
+
+	// However, to be safe and consistent with other implementations, let's look at what NormalizeSearchScores does.
+	// It uses metricType. Since we transformed distance to similarity in SQL, we should probably just return it.
+	// But let's check if the user wants to use a specific metric type (L2, IP).
+	// Currently PgVector implementation hardcodes Cosine distance using <=> operator.
+	// So effectively we are always using Cosine.
+
+	// So, we can just return the result as is, because SQL already produces normalized [0, 1] cosine similarity.
 	return result, nil
 }
 

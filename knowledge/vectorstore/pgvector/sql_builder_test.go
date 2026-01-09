@@ -158,7 +158,7 @@ func TestQueryBuilders(t *testing.T) {
 			setupFunc: func(qb *queryBuilder) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 			},
-			expectedContains: []string{"SELECT", "1 - (embedding <=> $1) as score"},
+			expectedContains: []string{"SELECT", "(1.0 - (embedding <=> $1) / 2.0) as score"},
 			expectedOrder:    "ORDER BY embedding <=> $1",
 			minArgs:          1,
 		},
@@ -180,7 +180,7 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 				qb.addScoreFilter(0.5)
 			},
-			expectedContains: []string{"WHERE", ">= 0.500000"},
+			expectedContains: []string{"WHERE", "(1.0 - (embedding <=> $1) / 2.0) >= 0.500000"},
 			expectedOrder:    "ORDER BY embedding <=> $1",
 			minArgs:          1,
 		},
@@ -239,7 +239,7 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 				qb.addHybridFtsCondition("machine learning")
 			},
-			expectedContains: []string{"0.700", "0.300", "ts_rank_cd"},
+			expectedContains: []string{"0.700", "0.300", "ts_rank_cd", "/ (COALESCE(ts_rank_cd"},
 			expectedOrder:    "ORDER BY score DESC",
 			minArgs:          2,
 		},
@@ -265,7 +265,7 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addHybridFtsCondition("test")
 				qb.addScoreFilter(0.5)
 			},
-			expectedContains: []string{"WHERE", ">= 0.500"},
+			expectedContains: []string{"WHERE", "(1.0 - (embedding <=> $1) / 2.0) >= 0.500"},
 			expectedOrder:    "ORDER BY score DESC",
 			minArgs:          2,
 		},
@@ -354,7 +354,7 @@ func TestBuildSelectClause(t *testing.T) {
 		{
 			name:             "vector_mode",
 			mode:             vectorstore.SearchModeVector,
-			expectedContains: []string{"1 - (embedding <=> $1) as score"},
+			expectedContains: []string{"(1.0 - (embedding <=> $1) / 2.0) as score"},
 		},
 		{
 			name:             "keyword_mode_with_text",
@@ -374,7 +374,7 @@ func TestBuildSelectClause(t *testing.T) {
 			vectorWeight:     0.6,
 			textWeight:       0.4,
 			textQueryPos:     2,
-			expectedContains: []string{"0.600", "0.400", "as score", "ts_rank_cd"},
+			expectedContains: []string{"0.600", "0.400", "as score", "ts_rank_cd", "/ (COALESCE(ts_rank_cd"},
 		},
 		{
 			name:                "hybrid_mode_without_text",
