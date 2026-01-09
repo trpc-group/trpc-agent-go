@@ -35,3 +35,7 @@ Optional flags:
 - It also prints the remaining size of `one_shot_messages_by_node` (should be
   empty after consumption).
 
+## Related example
+
+- `examples/graph/oneshot_by_node_preprocess`: prepares one-shot inputs for
+  multiple Large Language Model (LLM) nodes from a single upstream node.
