@@ -1657,6 +1657,44 @@ func newRunner(respID string) *llmRunner {
 	}
 }
 
+type streamRecordingModel struct {
+	lastStream bool
+}
+
+type testSubAgentProvider struct {
+	sub agent.Agent
+}
+
+func (p *testSubAgentProvider) FindSubAgent(name string) agent.Agent {
+	if p.sub == nil {
+		return nil
+	}
+	if name == p.sub.Info().Name {
+		return p.sub
+	}
+	return nil
+}
+
+func (m *streamRecordingModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.lastStream = req.GenerationConfig.Stream
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("ok"),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *streamRecordingModel) Info() model.Info {
+	return model.Info{Name: "stream-recording"}
+}
+
 func TestLLMRunnerSetsLastResponseID(t *testing.T) {
 	ctx, span := trace.Tracer.Start(context.Background(), "test")
 	defer span.End()
@@ -1709,6 +1747,66 @@ func TestLLMRunnerSetsLastResponseID(t *testing.T) {
 			require.Equal(t, tt.expect, state[StateKeyLastResponseID])
 		})
 	}
+}
+
+func TestLLMRunner_OverridesStreamFromRunOptions(t *testing.T) {
+	ctx, span := trace.Tracer.Start(context.Background(), "test")
+	defer span.End()
+
+	rm := &streamRecordingModel{}
+	runner := &llmRunner{
+		llmModel:         rm,
+		generationConfig: model.GenerationConfig{Stream: true},
+	}
+
+	stream := false
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{Stream: &stream}),
+	)
+	ctx = agent.NewInvocationContext(ctx, inv)
+
+	_, err := runner.executeModel(
+		ctx,
+		State{},
+		[]model.Message{model.NewUserMessage("hi")},
+		span,
+		"",
+	)
+	require.NoError(t, err)
+	require.False(t, rm.lastStream)
+}
+
+func TestAgentNodeFunc_OverridesStreamFromRunOptions(t *testing.T) {
+	const (
+		testInvocationID = "inv-1"
+		testNodeID       = "node-1"
+		testAgentName    = "agent-1"
+	)
+	target := &dummyAgent{name: testAgentName}
+	provider := &testSubAgentProvider{sub: target}
+
+	stream := false
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationID(testInvocationID),
+		agent.WithInvocationRunOptions(agent.RunOptions{Stream: &stream}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parentInv)
+
+	eventCh := make(chan *event.Event, 8)
+	exec := &ExecutionContext{
+		InvocationID: testInvocationID,
+		EventChan:    eventCh,
+	}
+	state := State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: testNodeID,
+		StateKeyParentAgent:   provider,
+		StateKeyUserInput:     "hi",
+	}
+
+	nodeFn := NewAgentNodeFunc(testAgentName)
+	_, err := nodeFn(ctx, state)
+	require.NoError(t, err)
 }
 
 func TestLLMRunner_OneShotMessagesByNode_TakesPrecedence(t *testing.T) {

@@ -441,7 +441,19 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
 
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
+	ctx, span := trace.Tracer.Start(
+		ctx,
+		fmt.Sprintf(
+			"%s %s",
+			itelemetry.OperationInvokeAgent,
+			a.name,
+		),
+	)
+	effectiveGenConfig := a.genConfig
+	if invocation.RunOptions.Stream != nil {
+		effectiveGenConfig.Stream = *invocation.RunOptions.Stream
+	}
+
 	promptText := a.systemPromptForInvocation(invocation) +
 		a.instructionForInvocation(invocation)
 	itelemetry.TraceBeforeInvokeAgent(
@@ -449,9 +461,14 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 		invocation,
 		a.description,
 		promptText,
-		&a.genConfig,
+		&effectiveGenConfig,
 	)
-	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, a.genConfig.Stream, &err)
+	tracker := itelemetry.NewInvokeAgentTracker(
+		ctx,
+		invocation,
+		effectiveGenConfig.Stream,
+		&err,
+	)
 
 	ctx, flowEventChan, err := a.executeAgentFlow(ctx, invocation)
 	if err != nil {

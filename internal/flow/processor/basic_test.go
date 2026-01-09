@@ -45,6 +45,38 @@ func TestBasicReqProc_ProcessReq(t *testing.T) {
 			wantStream: false,
 		},
 		{
+			name:      "run options override stream false",
+			processor: NewBasicRequestProcessor(),
+			request: &model.Request{
+				Messages: []model.Message{},
+			},
+			invocation: &agent.Invocation{
+				AgentName:    "test-agent",
+				InvocationID: "test-123",
+				RunOptions: agent.RunOptions{
+					Stream: boolPtr(false),
+				},
+			},
+			wantStream: false,
+		},
+		{
+			name: "run options override stream true",
+			processor: NewBasicRequestProcessor(
+				WithGenerationConfig(model.GenerationConfig{Stream: false}),
+			),
+			request: &model.Request{
+				Messages: []model.Message{},
+			},
+			invocation: &agent.Invocation{
+				AgentName:    "test-agent",
+				InvocationID: "test-123",
+				RunOptions: agent.RunOptions{
+					Stream: boolPtr(true),
+				},
+			},
+			wantStream: true,
+		},
+		{
 			name:      "default stream setting",
 			processor: NewBasicRequestProcessor(),
 			request: &model.Request{
@@ -89,6 +121,10 @@ func intPtr(i int) *int {
 
 func floatPtr(f float64) *float64 {
 	return &f
+}
+
+func boolPtr(b bool) *bool {
+	return &b
 }
 
 // Cover early-return branches for robustness and full coverage.

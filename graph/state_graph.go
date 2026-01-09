@@ -1005,6 +1005,10 @@ func (r *llmRunner) executeModel(
 		Tools:            tools,
 		GenerationConfig: r.generationConfig,
 	}
+	if inv, ok := agent.InvocationFromContext(ctx); ok &&
+		inv != nil && inv.RunOptions.Stream != nil {
+		request.GenerationConfig.Stream = *inv.RunOptions.Stream
+	}
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
 	var nodeID string
@@ -1564,11 +1568,21 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	scope := dummyNode.agentEventScope
 	inputFromLast := dummyNode.agentInputFromLastResponse
 	return func(ctx context.Context, state State) (a any, err error) {
-		ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, agentName))
+		ctx, span := trace.Tracer.Start(
+			ctx,
+			fmt.Sprintf(
+				"%s %s",
+				itelemetry.OperationInvokeAgent,
+				agentName,
+			),
+		)
 		defer func() {
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+				span.SetAttributes(attribute.String(
+					itelemetry.KeyErrorType,
+					itelemetry.ValueDefaultErrorType,
+				))
 			}
 			span.End()
 		}()
@@ -1577,12 +1591,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		invocationID, _, _, _, eventChan := extractExecutionContext(state)
 
 		// Extract current node ID from state.
-		var nodeID string
-		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
-			if id, ok := nodeIDData.(string); ok {
-				nodeID = id
-			}
-		}
+		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
 
 		// Extract parent agent from state to find the sub-agent.
 		parentAgent, parentExists := state[StateKeyParentAgent]
@@ -1598,46 +1607,56 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 
 		// Build child runtime state via optional mapper; default to a filtered shallow copy
 		// of the parent state to avoid leaking internal/ephemeral keys (exec context, callbacks, etc.).
-		var childState State
+		childState := State{}
 		if inputMapper != nil {
 			if s := inputMapper(state); s != nil {
 				childState = s
-			} else {
-				childState = State{}
 			}
 		} else {
 			childState = copyRuntimeStateFiltered(state)
 		}
 		if isolated {
 			// Instruct child GraphAgent to not include session contents in its request.
-			if childState == nil {
-				childState = State{}
-			}
 			childState[CfgKeyIncludeContents] = "none"
 		}
 
 		// Optionally map parent's last_response to user_input for this agent node.
 		parentForInput := state
 		if inputFromLast {
-			if lr, ok := state[StateKeyLastResponse]; ok {
-				if v, ok2 := lr.(string); ok2 && v != "" {
-					// Clone a shallow copy to avoid mutating the original state view.
-					cloned := state.Clone()
-					cloned[StateKeyUserInput] = v
-					parentForInput = cloned
-				}
+			lastResponse, ok := GetStateValue[string](
+				state,
+				StateKeyLastResponse,
+			)
+			if ok && lastResponse != "" {
+				// Clone a shallow copy to avoid mutating the original state view.
+				cloned := state.Clone()
+				cloned[StateKeyUserInput] = lastResponse
+				parentForInput = cloned
 			}
 		}
 
 		// Build invocation for the target agent with custom runtime state and scope.
 		invocation := buildAgentInvocationWithStateAndScope(ctx, parentForInput, childState, targetAgent, scope)
 
-		itelemetry.TraceBeforeInvokeAgent(span, invocation, targetAgent.Info().Description, "", dummyNode.llmGenerationConfig)
+		itelemetry.TraceBeforeInvokeAgent(
+			span,
+			invocation,
+			targetAgent.Info().Description,
+			"",
+			dummyNode.llmGenerationConfig,
+		)
 		var stream bool
-		if dummyNode.llmGenerationConfig != nil {
+		if invocation.RunOptions.Stream != nil {
+			stream = *invocation.RunOptions.Stream
+		} else if dummyNode.llmGenerationConfig != nil {
 			stream = dummyNode.llmGenerationConfig.Stream
 		}
-		tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &err)
+		tracker := itelemetry.NewInvokeAgentTracker(
+			ctx,
+			invocation,
+			stream,
+			&err,
+		)
 		defer tracker.RecordMetrics()()
 
 		// Emit agent execution start event.
