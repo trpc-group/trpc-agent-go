@@ -209,6 +209,8 @@ Nodes communicate exclusively through the shared state. Each node returns a stat
 
   - `user_input`: One‑shot input for the next LLM/Agent node. Cleared after consumption.
   - `one_shot_messages`: Full message override for the next LLM call. Cleared after consumption.
+  - `one_shot_messages_by_node`: Targeted one‑shot override for a specific
+    node ID (map[nodeID][]Message). Cleared per entry after consumption.
   - `messages`: Durable conversation history (LLM/Tools append here). Supports MessageOp patches.
   - `last_response`: The last textual assistant response.
   - `last_response_id`: The identifier (ID) of the last model response that
@@ -223,7 +225,8 @@ Nodes communicate exclusively through the shared state. Each node returns a stat
 
 - LLM node
 
-  - Input priority: `one_shot_messages` → `user_input` → `messages`
+  - Input priority: `one_shot_messages_by_node[<node_id>]` →
+    `one_shot_messages` → `user_input` → `messages`
   - Output:
     - Appends assistant message to `messages`
     - Sets `last_response`
@@ -246,13 +249,93 @@ Nodes communicate exclusively through the shared state. Each node returns a stat
 Recommended patterns
 
 - Add your own keys in the schema (e.g., `parsed_time`, `final_payload`) and write/read them in function nodes.
-- To feed structured hints into an LLM node, write `one_shot_messages` in the previous node (e.g., prepend a system message with parsed context).
+- To feed structured hints into an LLM node, write `one_shot_messages` in the
+  previous node (e.g., prepend a system message with parsed context).
+- Parallel branches: avoid writing `one_shot_messages` from multiple branches.
+  Prefer `one_shot_messages_by_node` so each LLM node consumes only its own
+  one‑shot input.
 - To consume an upstream node's text, read `last_response` immediately downstream or fetch from `node_responses[that_node_id]` later.
+
+One-shot messages scoped by node ID:
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const (
+    llm1NodeID = "llm1"
+    llm2NodeID = "llm2"
+)
+
+func prepForLLM1(ctx context.Context, state graph.State) (any, error) {
+    msgs := []model.Message{
+        model.NewUserMessage("question for llm1"),
+    }
+    return graph.SetOneShotMessagesForNode(llm1NodeID, msgs), nil
+}
+
+func prepForLLM2(ctx context.Context, state graph.State) (any, error) {
+    msgs := []model.Message{
+        model.NewUserMessage("question for llm2"),
+    }
+    return graph.SetOneShotMessagesForNode(llm2NodeID, msgs), nil
+}
+```
+
+Preparing one-shot inputs for multiple nodes in a single upstream node:
+
+In Go, a `map` assignment overwrites by key. Since
+`SetOneShotMessagesForNode(...)` writes the same top-level key
+(`one_shot_messages_by_node`) every time, you should avoid calling it multiple
+times and then “merging” the returned `graph.State` values with plain
+`result[k] = v` assignments (the last write wins).
+
+Instead, build one `map[nodeID][]model.Message` and write it once:
+
+```go
+func preprocess(ctx context.Context, state graph.State) (any, error) {
+    byNode := map[string][]model.Message{
+        llm1NodeID: {
+            model.NewSystemMessage("You are llm1."),
+            model.NewUserMessage("question for llm1"),
+        },
+        llm2NodeID: {
+            model.NewSystemMessage("You are llm2."),
+            model.NewUserMessage("question for llm2"),
+        },
+    }
+    return graph.SetOneShotMessagesByNode(byNode), nil
+}
+```
+
+Alternative (no helpers): write a raw state delta map (handy if you also need
+to update other keys in the same node):
+
+```go
+func preprocess(ctx context.Context, state graph.State) (any, error) {
+    // byNode := ...
+    return graph.State{
+        graph.StateKeyOneShotMessagesByNode: byNode,
+    }, nil
+}
+```
+
+Notes:
+
+- `llm1NodeID` / `llm2NodeID` must match the IDs you pass to `AddLLMNode`.
+- Each LLM node consumes `one_shot_messages_by_node[its_id]` once, and clears
+  only its own entry.
 
 See examples:
 
 - `examples/graph/io_conventions` — Function + LLM + Agent I/O
 - `examples/graph/io_conventions_tools` — Adds a Tools node path and shows how to capture tool JSON
+- `examples/graph/oneshot_by_node` — One-shot inputs scoped by LLM node ID
+- `examples/graph/oneshot_by_node_preprocess` — One upstream node prepares one-shot inputs for multiple LLM nodes
 - `examples/graph/retry` — Node-level retry/backoff demonstration
 
 #### Constant references (import and keys)
@@ -264,10 +347,19 @@ See examples:
 
   - `user_input` → `graph.StateKeyUserInput`
   - `one_shot_messages` → `graph.StateKeyOneShotMessages`
+  - `one_shot_messages_by_node` → `graph.StateKeyOneShotMessagesByNode`
   - `messages` → `graph.StateKeyMessages`
   - `last_response` → `graph.StateKeyLastResponse`
   - `last_response_id` → `graph.StateKeyLastResponseID`
   - `node_responses` → `graph.StateKeyNodeResponses`
+
+- One-shot helpers
+
+  - `SetOneShotMessagesForNode(nodeID, msgs)` → per-node one-shot update
+  - `SetOneShotMessagesByNode(byNode)` → multi-node one-shot update
+  - `ClearOneShotMessagesForNode(nodeID)` → clear one node entry
+  - `ClearOneShotMessagesByNode()` → clear the entire map
+  - `GetOneShotMessagesForNode(state, nodeID)` → read one node entry
 
 - Other useful keys
   - `session` → `graph.StateKeySession`
@@ -581,7 +673,11 @@ func processNodeFunc(ctx context.Context, state graph.State) (any, error) {
 
 LLM nodes implement a fixed three-stage input rule without extra configuration:
 
-1. OneShot first: If `one_shot_messages` exists, use it as the input for this round.
+1. OneShot first:
+   - If `one_shot_messages_by_node[<node_id>]` exists, use it as the input for
+     this round.
+   - Otherwise, if `one_shot_messages` exists, use it as the input for this
+     round.
 2. UserInput next: Otherwise, if `user_input` exists, persist once to history.
 3. History default: Otherwise, use durable `messages` as input.
 
@@ -602,7 +698,13 @@ Please provide structured analysis results.`,
 Important notes:
 
 - System prompt is only used for this round and is not persisted to state.
-- One-shot keys (`user_input` / `one_shot_messages`) are automatically cleared after successful execution.
+- One-shot keys (`user_input` / `one_shot_messages` / `one_shot_messages_by_node`)
+  are automatically cleared after successful execution.
+- Parallel branches: if multiple branches need different one-shot inputs for
+  different LLM nodes in the same step, write `one_shot_messages_by_node`
+  instead of `one_shot_messages`. If one upstream node prepares inputs for
+  multiple LLM nodes, prefer `graph.SetOneShotMessagesByNode(...)` to write all
+  entries at once.
 - All state updates are atomic.
 - GraphAgent/Runner only sets `user_input` and no longer pre-populates `messages` with a user message. This allows any pre-LLM node to modify `user_input` and have it take effect in the same round.
 - When Graph runs sub-agents, it preserves the parent run's `RequestID`
@@ -642,6 +744,11 @@ nodes enable final model responses automatically for that run.
 
   - When present, only the provided `[]model.Message` is used for this round, typically including a full system prompt and user prompt. Automatically cleared afterwards.
   - Use case: a dedicated pre-node constructs the full prompt and must fully override input.
+  - Parallel branches: when multiple branches prepare one-shot inputs for
+    different LLM nodes, prefer `StateKeyOneShotMessagesByNode` to avoid
+    clobbering a shared global key.
+  - If a single node prepares one-shot inputs for multiple LLM nodes, use
+    `graph.SetOneShotMessagesByNode(...)` to write them in one return value.
 
 - UserInput (`StateKeyUserInput`):
 
@@ -1480,6 +1587,7 @@ schema := graph.MessagesStateSchema()
 
 // Additional one-shot/system keys (use as needed):
 // - graph.StateKeyOneShotMessages ("one_shot_messages")  One-shot override of this turn's input ([]model.Message)
+// - graph.StateKeyOneShotMessagesByNode ("one_shot_messages_by_node")  One-shot override scoped by node ID (map[string][]model.Message)
 // - graph.StateKeySession         ("session")            Session object (internal)
 // - graph.StateKeyExecContext     ("exec_context")       Execution context (events etc., internal)
 ```
@@ -1563,7 +1671,11 @@ const (
 model := openai.New(llmModelName)
 sg.AddLLMNode(llmNodeAssistant, model, llmSystemPrompt, tools)
 
-// Inputs (priority): graph.StateKeyOneShotMessages > graph.StateKeyUserInput > graph.StateKeyMessages
+// Inputs (priority):
+// graph.StateKeyOneShotMessagesByNode[<node_id>] >
+// graph.StateKeyOneShotMessages >
+// graph.StateKeyUserInput >
+// graph.StateKeyMessages
 // Outputs: graph.StateKeyLastResponse, graph.StateKeyMessages (atomic), graph.StateKeyNodeResponses (includes this node's output for aggregation)
 ```
 
@@ -2740,7 +2852,10 @@ Graph state is a `map[string]any` with runtime validation provided by `StateSche
 
 #### Common State Keys
 
-- User‑visible: `graph.StateKeyUserInput`, `graph.StateKeyOneShotMessages`, `graph.StateKeyMessages`, `graph.StateKeyLastResponse`, `graph.StateKeyLastToolResponse`, `graph.StateKeyNodeResponses`, `graph.StateKeyMetadata`
+- User‑visible: `graph.StateKeyUserInput`, `graph.StateKeyOneShotMessages`,
+  `graph.StateKeyOneShotMessagesByNode`, `graph.StateKeyMessages`,
+  `graph.StateKeyLastResponse`, `graph.StateKeyLastToolResponse`,
+  `graph.StateKeyNodeResponses`, `graph.StateKeyMetadata`
 - Internal: `session`, `exec_context`, `tool_callbacks`, `model_callbacks`, `agent_callbacks`, `current_node_id`, `parent_agent`
 - Command/Resume: `__command__`, `__resume_map__`
 
@@ -2892,7 +3007,11 @@ Nodes communicate only via the shared `State`. Each node returns a state delta t
 
 - LLM nodes
 
-  - Input priority: `graph.StateKeyOneShotMessages` → `graph.StateKeyUserInput` → `graph.StateKeyMessages`
+  - Input priority:
+    `graph.StateKeyOneShotMessagesByNode[<node_id>]` →
+    `graph.StateKeyOneShotMessages` →
+    `graph.StateKeyUserInput` →
+    `graph.StateKeyMessages`
   - Output: append to `graph.StateKeyMessages` atomically, set `graph.StateKeyLastResponse`, set `graph.StateKeyNodeResponses[<llm_node_id>]`
 
 - Tools nodes
