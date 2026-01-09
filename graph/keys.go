@@ -29,6 +29,18 @@ const (
 	StateKeyResumeMap      = "__resume_map__"
 	StateKeyNextNodes      = "__next_nodes__"
 	StateKeyUsedInterrupts = "__used_interrupts__"
+	// StateKeySubgraphInterrupt stores metadata needed to resume a child
+	// GraphAgent (subgraph) after it interrupts within an agent node.
+	StateKeySubgraphInterrupt = "__subgraph_interrupt__"
+)
+
+const (
+	subgraphInterruptKeyParentNodeID      = "parent_node_id"
+	subgraphInterruptKeyChildAgentName    = "child_agent_name"
+	subgraphInterruptKeyChildCheckpointID = "child_checkpoint_id"
+	subgraphInterruptKeyChildCheckpointNS = "child_checkpoint_ns"
+	subgraphInterruptKeyChildLineageID    = "child_lineage_id"
+	subgraphInterruptKeyChildTaskID       = "child_task_id"
 )
 
 // Checkpoint Metadata.Source enumeration values

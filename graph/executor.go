@@ -1650,7 +1650,9 @@ func (e *Executor) evaluateRetryDecision(
 	if IsInterruptError(retryCtx.err) {
 		if interrupt, ok := GetInterruptError(retryCtx.err); ok {
 			interrupt.NodeID = t.NodeID
-			interrupt.TaskID = t.NodeID
+			if interrupt.TaskID == "" {
+				interrupt.TaskID = t.NodeID
+			}
 			interrupt.Step = step
 		}
 		return false, retryCtx.err
@@ -2284,6 +2286,7 @@ func (e *Executor) syncResumeState(execCtx *ExecutionContext, source State) {
 	syncResumeKey(execCtx.State, source, ResumeChannel)
 	syncResumeKey(execCtx.State, source, StateKeyResumeMap)
 	syncResumeKey(execCtx.State, source, StateKeyUsedInterrupts)
+	syncResumeKey(execCtx.State, source, StateKeySubgraphInterrupt)
 }
 
 // syncResumeKey applies a specific resume key mutation from the node state.

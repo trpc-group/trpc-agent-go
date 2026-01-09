@@ -347,7 +347,7 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 	}
 	close(agentEvents)
 
-	last, final, raw, _, _, _, err := processAgentEventStream(
+	res, err := processAgentEventStream(
 		ctx,
 		agentEvents,
 		nil,
@@ -358,9 +358,9 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
-	require.Equal(t, "", last)
-	require.NotNil(t, final)
-	require.Len(t, raw, 1)
+	require.Equal(t, "", res.lastResponse)
+	require.NotNil(t, res.finalState)
+	require.Len(t, res.rawDelta, 1)
 }
 
 func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
@@ -395,7 +395,7 @@ func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
 	agentEvents <- finalEvent
 	close(agentEvents)
 
-	last, _, _, _, fullRespEvent, tokenUsage, err := processAgentEventStream(
+	res, err := processAgentEventStream(
 		ctx,
 		agentEvents,
 		nil,
@@ -406,11 +406,15 @@ func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
 		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
-	require.Equal(t, "final", last)
-	require.Equal(t, finalUsage.PromptTokens, tokenUsage.PromptTokens)
-	require.Equal(t, finalUsage.CompletionTokens, tokenUsage.CompletionTokens)
-	require.Equal(t, finalUsage.TotalTokens, tokenUsage.TotalTokens)
-	require.Equal(t, finalEvent, fullRespEvent)
+	require.Equal(t, "final", res.lastResponse)
+	require.Equal(t, finalUsage.PromptTokens, res.tokenUsage.PromptTokens)
+	require.Equal(
+		t,
+		finalUsage.CompletionTokens,
+		res.tokenUsage.CompletionTokens,
+	)
+	require.Equal(t, finalUsage.TotalTokens, res.tokenUsage.TotalTokens)
+	require.Equal(t, finalEvent, res.fullRespEvent)
 	require.Len(t, parentEventChan, 2)
 }
 
@@ -442,7 +446,7 @@ func TestProcessAgentEventStream_CapturesStructuredOutput(t *testing.T) {
 	}
 	close(agentEvents)
 
-	last, _, _, capturedOutput, _, _, err := processAgentEventStream(
+	res, err := processAgentEventStream(
 		ctx,
 		agentEvents,
 		nil,
@@ -453,9 +457,18 @@ func TestProcessAgentEventStream_CapturesStructuredOutput(t *testing.T) {
 		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
-	require.Equal(t, "final", last)
-	require.NotNil(t, capturedOutput, "should capture structured output from event")
-	require.Equal(t, structuredData, capturedOutput, "captured output should match event payload")
+	require.Equal(t, "final", res.lastResponse)
+	require.NotNil(
+		t,
+		res.structuredOutput,
+		"should capture structured output from event",
+	)
+	require.Equal(
+		t,
+		structuredData,
+		res.structuredOutput,
+		"captured output should match event payload",
+	)
 }
 
 func TestProcessToolCalls_ParallelCancelOnFirstError(t *testing.T) {

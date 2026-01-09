@@ -1530,6 +1530,137 @@ func copyRuntimeStateFiltered(parent State) State {
 	return out
 }
 
+type executorProvider interface {
+	Executor() *Executor
+}
+
+type subgraphInterruptInfo struct {
+	parentNodeID      string
+	childAgentName    string
+	childCheckpointID string
+	childCheckpointNS string
+	childLineageID    string
+	childTaskID       string
+}
+
+func subgraphInterruptInfoFromState(
+	state State,
+) (subgraphInterruptInfo, bool) {
+	if state == nil {
+		return subgraphInterruptInfo{}, false
+	}
+	raw, ok := state[StateKeySubgraphInterrupt]
+	if !ok || raw == nil {
+		return subgraphInterruptInfo{}, false
+	}
+	typed, ok := raw.(map[string]any)
+	if !ok {
+		return subgraphInterruptInfo{}, false
+	}
+	info := subgraphInterruptInfo{}
+	if v, ok := typed[subgraphInterruptKeyParentNodeID].(string); ok {
+		info.parentNodeID = v
+	}
+	if v, ok := typed[subgraphInterruptKeyChildAgentName].(string); ok {
+		info.childAgentName = v
+	}
+	if v, ok := typed[subgraphInterruptKeyChildCheckpointID].(string); ok {
+		info.childCheckpointID = v
+	}
+	if v, ok := typed[subgraphInterruptKeyChildCheckpointNS].(string); ok {
+		info.childCheckpointNS = v
+	}
+	if v, ok := typed[subgraphInterruptKeyChildLineageID].(string); ok {
+		info.childLineageID = v
+	}
+	if v, ok := typed[subgraphInterruptKeyChildTaskID].(string); ok {
+		info.childTaskID = v
+	}
+	return info, true
+}
+
+func extractPregelInterrupt(e *event.Event) (*InterruptError, bool) {
+	if e == nil {
+		return nil, false
+	}
+	if e.Object != ObjectTypeGraphPregelStep {
+		return nil, false
+	}
+	if e.StateDelta == nil {
+		return nil, false
+	}
+	raw, ok := e.StateDelta[MetadataKeyPregel]
+	if !ok || len(raw) == 0 {
+		return nil, false
+	}
+	var meta PregelStepMetadata
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return nil, false
+	}
+	if meta.NodeID == "" || meta.InterruptValue == nil {
+		return nil, false
+	}
+	intr := NewInterruptError(meta.InterruptValue)
+	intr.NodeID = meta.NodeID
+	intr.TaskID = meta.NodeID
+	return intr, true
+}
+
+func latestInterruptedCheckpointID(
+	ctx context.Context,
+	targetAgent agent.Agent,
+	lineageID string,
+	namespace string,
+) (string, error) {
+	provider, ok := targetAgent.(executorProvider)
+	if !ok || provider.Executor() == nil {
+		return "", nil
+	}
+	cm := provider.Executor().CheckpointManager()
+	if cm == nil {
+		return "", nil
+	}
+	tuple, err := cm.Latest(ctx, lineageID, namespace)
+	if err != nil || tuple == nil || tuple.Checkpoint == nil {
+		return "", err
+	}
+	if !tuple.Checkpoint.IsInterrupted() {
+		return "", nil
+	}
+	return tuple.Checkpoint.ID, nil
+}
+
+func resumeCommandForSubgraph(
+	state State,
+	childTaskID string,
+) *Command {
+	if state == nil {
+		return nil
+	}
+	cmd := &Command{}
+	hasResume := false
+	if v, ok := state[ResumeChannel]; ok {
+		cmd.Resume = v
+		hasResume = true
+	}
+	if resumeMap, ok := state[StateKeyResumeMap].(map[string]any); ok {
+		if childTaskID != "" {
+			if v, ok := resumeMap[childTaskID]; ok {
+				cmd.ResumeMap = map[string]any{childTaskID: v}
+				hasResume = true
+			}
+		} else if len(resumeMap) > 0 {
+			cloned := deepCopyAny(resumeMap).(map[string]any)
+			cmd.ResumeMap = cloned
+			hasResume = true
+		}
+	}
+	if !hasResume {
+		return nil
+	}
+	return cmd
+}
+
 // NewAgentNodeFunc creates a NodeFunc that looks up and uses a sub-agent by name.
 // The agent name should correspond to a sub-agent in the parent GraphAgent's sub-agent list.
 func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
@@ -1588,12 +1719,53 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		} else {
 			childState = copyRuntimeStateFiltered(state)
 		}
+		delete(childState, StateKeySubgraphInterrupt)
+		if inputMapper == nil {
+			if _, ok := targetAgent.(executorProvider); ok {
+				if childState == nil {
+					childState = State{}
+				}
+				childState[CfgKeyCheckpointNS] =
+					targetAgent.Info().Name
+				delete(childState, CfgKeyCheckpointID)
+			}
+		}
 		if isolated {
 			// Instruct child GraphAgent to not include session contents in its request.
 			if childState == nil {
 				childState = State{}
 			}
 			childState[CfgKeyIncludeContents] = "none"
+		}
+
+		if info, ok := subgraphInterruptInfoFromState(state); ok {
+			if info.parentNodeID == nodeID {
+				if info.childCheckpointID != "" {
+					childState[CfgKeyCheckpointID] =
+						info.childCheckpointID
+				} else {
+					delete(childState, CfgKeyCheckpointID)
+				}
+				if info.childCheckpointNS != "" {
+					childState[CfgKeyCheckpointNS] =
+						info.childCheckpointNS
+				}
+				if info.childLineageID != "" {
+					childState[CfgKeyLineageID] =
+						info.childLineageID
+				}
+				if cmd := resumeCommandForSubgraph(
+					state,
+					info.childTaskID,
+				); cmd != nil {
+					childState[StateKeyCommand] = cmd
+					delete(state, ResumeChannel)
+					delete(state, StateKeyResumeMap)
+					delete(childState, ResumeChannel)
+					delete(childState, StateKeyResumeMap)
+				}
+				delete(state, StateKeySubgraphInterrupt)
+			}
 		}
 
 		// Optionally map parent's last_response to user_input for this agent node.
@@ -1640,24 +1812,66 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		}
 
 		// Process agent event stream and capture completion state.
-		lastResponse, finalState, rawDelta, structuredOutput, fullRespEvent, tokenUsage, err := processAgentEventStream(
+		streamRes, err := processAgentEventStream(
 			ctx, agentEventChan, nodeCallbacks, nodeID, state, eventChan, agentName, tracker,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process agent event stream: %w", err)
 		}
 
-		itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
+		if streamRes.interrupt != nil {
+			childLineageID := stateStringOr(
+				childState,
+				CfgKeyLineageID,
+				invocation.InvocationID,
+			)
+			childNamespace := stateStringOr(
+				childState,
+				CfgKeyCheckpointNS,
+				targetAgent.Info().Name,
+			)
+			childCheckpointID, ckptErr := latestInterruptedCheckpointID(
+				ctx,
+				targetAgent,
+				childLineageID,
+				childNamespace,
+			)
+			if ckptErr != nil {
+				log.DebugfContext(
+					ctx,
+					"subgraph: latest checkpoint failed: %v",
+					ckptErr,
+				)
+			}
+			state[StateKeySubgraphInterrupt] = map[string]any{
+				subgraphInterruptKeyParentNodeID:      nodeID,
+				subgraphInterruptKeyChildAgentName:    agentName,
+				subgraphInterruptKeyChildCheckpointID: childCheckpointID,
+				subgraphInterruptKeyChildCheckpointNS: childNamespace,
+				subgraphInterruptKeyChildLineageID:    childLineageID,
+				subgraphInterruptKeyChildTaskID:       streamRes.interrupt.TaskID,
+			}
+			intr := NewInterruptError(streamRes.interrupt.Value)
+			intr.TaskID = streamRes.interrupt.TaskID
+			return nil, intr
+		}
+
+		itelemetry.TraceAfterInvokeAgent(
+			span,
+			streamRes.fullRespEvent,
+			streamRes.tokenUsage,
+			tracker.FirstTokenTimeDuration(),
+		)
 		// Emit agent execution complete event.
 		endTime := time.Now()
 		emitAgentCompleteEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime)
 		// Update state with either custom output mapping or default behavior.
 		if outputMapper != nil {
 			mapped := outputMapper(state, SubgraphResult{
-				LastResponse:     lastResponse,
-				FinalState:       finalState,
-				RawStateDelta:    rawDelta,
-				StructuredOutput: structuredOutput,
+				LastResponse:     streamRes.lastResponse,
+				FinalState:       streamRes.finalState,
+				RawStateDelta:    streamRes.rawDelta,
+				StructuredOutput: streamRes.structuredOutput,
 			})
 			if mapped != nil {
 				return mapped, nil
@@ -1665,11 +1879,33 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			return State{}, nil
 		}
 		upd := State{}
-		upd[StateKeyLastResponse] = lastResponse
-		upd[StateKeyNodeResponses] = map[string]any{nodeID: lastResponse}
+		upd[StateKeyLastResponse] = streamRes.lastResponse
+		upd[StateKeyNodeResponses] = map[string]any{
+			nodeID: streamRes.lastResponse,
+		}
 		upd[StateKeyUserInput] = ""
 		return upd, nil
 	}
+}
+
+func stateStringOr(state State, key string, fallback string) string {
+	if state == nil {
+		return fallback
+	}
+	if v, ok := state[key].(string); ok && v != "" {
+		return v
+	}
+	return fallback
+}
+
+type agentEventStreamResult struct {
+	lastResponse     string
+	finalState       State
+	rawDelta         map[string][]byte
+	structuredOutput any
+	fullRespEvent    *event.Event
+	tokenUsage       *itelemetry.TokenUsage
+	interrupt        *InterruptError
 }
 
 // processAgentEventStream processes the event stream from the target agent.
@@ -1683,13 +1919,10 @@ func processAgentEventStream(
 	eventChan chan<- *event.Event,
 	agentName string,
 	tracker *itelemetry.InvokeAgentTracker,
-) (string, State, map[string][]byte, any, *event.Event, *itelemetry.TokenUsage, error) {
-	var lastResponse string
-	var finalState State
-	var rawDelta map[string][]byte
-	var structuredOutput any
-	var fullRespEvent *event.Event
-	tokenUsage := &itelemetry.TokenUsage{}
+) (agentEventStreamResult, error) {
+	res := agentEventStreamResult{
+		tokenUsage: &itelemetry.TokenUsage{},
+	}
 
 	for agentEvent := range agentEventChan {
 		// Run node callbacks for this event.
@@ -1704,29 +1937,38 @@ func processAgentEventStream(
 
 		// Forward the event to the parent event channel.
 		if err := event.EmitEvent(ctx, eventChan, agentEvent); err != nil {
-			return "", nil, nil, nil, fullRespEvent, tokenUsage, err
+			return res, err
 		}
 
 		// Track the last response for state update.
 		if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 &&
 			agentEvent.Response.Choices[0].Message.Content != "" {
-			lastResponse = agentEvent.Response.Choices[0].Message.Content
+			res.lastResponse = agentEvent.Response.Choices[0].Message.Content
 		}
 
 		// Capture structured output from state.update events.
 		if agentEvent.StructuredOutput != nil {
-			structuredOutput = agentEvent.StructuredOutput
+			res.structuredOutput = agentEvent.StructuredOutput
 		}
 
 		if agentEvent.Response != nil {
 			tracker.TrackResponse(agentEvent.Response)
 			if !agentEvent.Response.IsPartial {
 				if agentEvent.Response.Usage != nil {
-					tokenUsage.PromptTokens += agentEvent.Response.Usage.PromptTokens
-					tokenUsage.CompletionTokens += agentEvent.Response.Usage.CompletionTokens
-					tokenUsage.TotalTokens += agentEvent.Response.Usage.TotalTokens
+					res.tokenUsage.PromptTokens +=
+						agentEvent.Response.Usage.PromptTokens
+					res.tokenUsage.CompletionTokens +=
+						agentEvent.Response.Usage.CompletionTokens
+					res.tokenUsage.TotalTokens +=
+						agentEvent.Response.Usage.TotalTokens
 				}
-				fullRespEvent = agentEvent
+				res.fullRespEvent = agentEvent
+			}
+		}
+
+		if res.interrupt == nil {
+			if intr, ok := extractPregelInterrupt(agentEvent); ok {
+				res.interrupt = intr
 			}
 		}
 
@@ -1751,12 +1993,12 @@ func processAgentEventStream(
 					)
 				}
 			}
-			finalState = tmp
-			rawDelta = agentEvent.StateDelta
+			res.finalState = tmp
+			res.rawDelta = agentEvent.StateDelta
 		}
 	}
 
-	return lastResponse, finalState, rawDelta, structuredOutput, fullRespEvent, tokenUsage, nil
+	return res, nil
 }
 
 // buildAgentInvocationWithStateAndScope builds an invocation for the target agent
