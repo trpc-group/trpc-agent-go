@@ -661,10 +661,14 @@ eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
 
 - `agent.RunOptions.Model`：直接指定模型实例
 - `agent.RunOptions.ModelName`：指定预注册的模型名称
+- `agent.RunOptions.Stream`：覆盖是否使用流式输出（使用 `agent.WithStream(...)`）
 - `agent.RunOptions.Instruction`：仅本次请求覆盖 Instruction（使用 `agent.WithInstruction(...)`）
 - `agent.RunOptions.GlobalInstruction`：仅本次请求覆盖 Global Instruction（系统提示词，使用 `agent.WithGlobalInstruction(...)`）
 - 优先级：`Model` > `ModelName` > Agent 默认模型
 - 如果 `ModelName` 指定的模型不存在，将回退到 Agent 默认模型
+
+你可以通过 `agent.WithStream(true)` 或 `agent.WithStream(false)` 在单次
+请求中切换流式/非流式输出。
 
 ##### Agent 级别 vs 请求级别对比
 
