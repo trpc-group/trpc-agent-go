@@ -53,7 +53,9 @@ func Interrupt(ctx context.Context, state State, key string, prompt any) (any, e
 	}
 
 	// Not resuming, so interrupt with the prompt.
-	return nil, NewInterruptError(prompt)
+	intr := NewInterruptError(prompt)
+	intr.TaskID = key
+	return nil, intr
 }
 
 // ResumeValue extracts a resume value from the state with type safety.

@@ -286,6 +286,9 @@ type PregelStepMetadata struct {
 	Error string `json:"error,omitempty"`
 	// NodeID is the ID of the node where interrupt occurred.
 	NodeID string `json:"nodeID,omitempty"`
+	// TaskID is the task key used to route ResumeMap values. For
+	// graph.Interrupt, this equals the interrupt key argument.
+	TaskID string `json:"taskID,omitempty"`
 	// InterruptValue is the value passed to interrupt().
 	InterruptValue any `json:"interruptValue,omitempty"`
 }
@@ -854,6 +857,7 @@ type PregelEventOptions struct {
 	EndTime         time.Time
 	Error           string
 	NodeID          string
+	TaskID          string
 	InterruptValue  any
 }
 
@@ -927,6 +931,13 @@ func WithPregelEventError(errMsg string) PregelEventOption {
 func WithPregelEventNodeID(nodeID string) PregelEventOption {
 	return func(opts *PregelEventOptions) {
 		opts.NodeID = nodeID
+	}
+}
+
+// WithPregelEventTaskID sets the task ID for Pregel events.
+func WithPregelEventTaskID(taskID string) PregelEventOption {
+	return func(opts *PregelEventOptions) {
+		opts.TaskID = taskID
 	}
 }
 
@@ -1310,6 +1321,7 @@ func NewPregelInterruptEvent(opts ...PregelEventOption) *event.Event {
 		EndTime:        options.EndTime,
 		Duration:       options.EndTime.Sub(options.StartTime),
 		NodeID:         options.NodeID,
+		TaskID:         options.TaskID,
 		InterruptValue: options.InterruptValue,
 	}
 	return NewGraphEvent(options.InvocationID, AuthorGraphPregel, ObjectTypeGraphPregelStep,

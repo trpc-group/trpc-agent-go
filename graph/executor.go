@@ -2766,6 +2766,7 @@ func (e *Executor) handleInterrupt(
 		WithPregelEventInvocationID(execCtx.InvocationID),
 		WithPregelEventStepNumber(step),
 		WithPregelEventNodeID(interrupt.NodeID),
+		WithPregelEventTaskID(interrupt.TaskID),
 		WithPregelEventInterruptValue(interrupt.Value),
 	)
 

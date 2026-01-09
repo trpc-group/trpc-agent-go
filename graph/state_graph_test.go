@@ -2140,6 +2140,7 @@ func TestExtractPregelInterrupt(t *testing.T) {
 		invocationID = "inv"
 		author       = "a"
 		nodeID       = "n"
+		taskID       = "k"
 		interruptVal = "prompt"
 	)
 
@@ -2197,6 +2198,28 @@ func TestExtractPregelInterrupt(t *testing.T) {
 	require.NotNil(t, intr)
 	require.Equal(t, nodeID, intr.NodeID)
 	require.Equal(t, nodeID, intr.TaskID)
+	require.Equal(t, interruptVal, intr.Value)
+
+	meta = PregelStepMetadata{
+		NodeID:         nodeID,
+		TaskID:         taskID,
+		InterruptValue: interruptVal,
+	}
+	b, err = json.Marshal(meta)
+	require.NoError(t, err)
+	e = event.New(
+		invocationID,
+		author,
+		event.WithObject(ObjectTypeGraphPregelStep),
+		event.WithStateDelta(map[string][]byte{
+			MetadataKeyPregel: b,
+		}),
+	)
+	intr, ok = extractPregelInterrupt(e)
+	require.True(t, ok)
+	require.NotNil(t, intr)
+	require.Equal(t, nodeID, intr.NodeID)
+	require.Equal(t, taskID, intr.TaskID)
 	require.Equal(t, interruptVal, intr.Value)
 
 	meta = PregelStepMetadata{

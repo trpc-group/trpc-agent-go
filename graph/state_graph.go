@@ -1602,7 +1602,11 @@ func extractPregelInterrupt(e *event.Event) (*InterruptError, bool) {
 	}
 	intr := NewInterruptError(meta.InterruptValue)
 	intr.NodeID = meta.NodeID
-	intr.TaskID = meta.NodeID
+	taskID := meta.TaskID
+	if taskID == "" {
+		taskID = meta.NodeID
+	}
+	intr.TaskID = taskID
 	return intr, true
 }
 

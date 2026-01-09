@@ -531,8 +531,9 @@ func (s *subgraphTestSaver) DeleteLineage(
 func (s *subgraphTestSaver) Close() error { return nil }
 
 type checkpointGraphAgent struct {
-	name string
-	exec *Executor
+	name      string
+	exec      *Executor
+	subAgents []agent.Agent
 }
 
 func (a *checkpointGraphAgent) Info() agent.Info {
@@ -541,9 +542,19 @@ func (a *checkpointGraphAgent) Info() agent.Info {
 
 func (a *checkpointGraphAgent) Tools() []tool.Tool { return nil }
 
-func (a *checkpointGraphAgent) SubAgents() []agent.Agent { return nil }
+func (a *checkpointGraphAgent) SubAgents() []agent.Agent {
+	return a.subAgents
+}
 
-func (a *checkpointGraphAgent) FindSubAgent(_ string) agent.Agent {
+func (a *checkpointGraphAgent) FindSubAgent(name string) agent.Agent {
+	for _, sub := range a.subAgents {
+		if sub == nil {
+			continue
+		}
+		if sub.Info().Name == name {
+			return sub
+		}
+	}
 	return nil
 }
 
@@ -797,6 +808,252 @@ func TestSubgraph_NestedInterruptResume(t *testing.T) {
 	}
 	ch2, err := parentExec.Execute(
 		context.Background(),
+		resume,
+		agent.NewInvocation(agent.WithInvocationID(resumeInvID)),
+	)
+	require.NoError(t, err)
+
+	var done *event.Event
+	for ev := range ch2 {
+		if ev != nil && ev.Done && ev.Object == ObjectTypeGraphExecution {
+			done = ev
+		}
+	}
+	require.NotNil(t, done)
+	raw, ok := done.StateDelta[stateKeyOut]
+	require.True(t, ok)
+	var got string
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.Equal(t, resumeValue, got)
+}
+
+func TestSubgraph_MultiLevelNestedInterruptResume(t *testing.T) {
+	const (
+		lineageID         = "ln-subgraph-interrupt-multi"
+		namespace         = "ns-subgraph-interrupt-multi"
+		childAgentID      = "child_multi"
+		grandchildAgentID = "grandchild_multi"
+		leafNodeID        = "ask"
+		interruptKey      = "approval"
+		stateKeyOut       = "answer"
+		interruptMsg      = "prompt"
+		resumeValue       = "approved"
+		resumeInvID       = "inv-resume-multi"
+	)
+
+	ctx := context.Background()
+
+	schema := NewStateSchema()
+	schema.AddField(
+		stateKeyOut,
+		StateField{Type: reflect.TypeOf(testEmptyString)},
+	)
+
+	saver := newSubgraphTestSaver()
+
+	grandchildGraph, err := NewStateGraph(schema).
+		AddNode(leafNodeID, func(ctx context.Context, s State) (any, error) {
+			value, err := Interrupt(ctx, s, interruptKey, interruptMsg)
+			if err != nil {
+				return nil, err
+			}
+			v, _ := value.(string)
+			return State{stateKeyOut: v}, nil
+		}).
+		SetEntryPoint(leafNodeID).
+		SetFinishPoint(leafNodeID).
+		Compile()
+	require.NoError(t, err)
+
+	grandchildExec, err := NewExecutor(
+		grandchildGraph,
+		WithCheckpointSaver(saver),
+	)
+	require.NoError(t, err)
+	grandchildAgent := &checkpointGraphAgent{
+		name: grandchildAgentID,
+		exec: grandchildExec,
+	}
+
+	childGraph, err := NewStateGraph(schema).
+		AddAgentNode(
+			grandchildAgentID,
+			WithSubgraphOutputMapper(func(_ State, r SubgraphResult) State {
+				value, ok := GetStateValue[string](r.FinalState, stateKeyOut)
+				if !ok {
+					return nil
+				}
+				return State{stateKeyOut: value}
+			}),
+		).
+		SetEntryPoint(grandchildAgentID).
+		SetFinishPoint(grandchildAgentID).
+		Compile()
+	require.NoError(t, err)
+
+	childExec, err := NewExecutor(
+		childGraph,
+		WithCheckpointSaver(saver),
+	)
+	require.NoError(t, err)
+	childAgent := &checkpointGraphAgent{
+		name:      childAgentID,
+		exec:      childExec,
+		subAgents: []agent.Agent{grandchildAgent},
+	}
+
+	parent := &parentWithSubAgent{a: childAgent}
+	parentGraph, err := NewStateGraph(schema).
+		AddAgentNode(
+			childAgentID,
+			WithSubgraphOutputMapper(func(_ State, r SubgraphResult) State {
+				value, ok := GetStateValue[string](r.FinalState, stateKeyOut)
+				if !ok {
+					return nil
+				}
+				return State{stateKeyOut: value}
+			}),
+		).
+		SetEntryPoint(childAgentID).
+		SetFinishPoint(childAgentID).
+		Compile()
+	require.NoError(t, err)
+
+	parentExec, err := NewExecutor(
+		parentGraph,
+		WithCheckpointSaver(saver),
+	)
+	require.NoError(t, err)
+
+	initial := State{
+		StateKeyParentAgent: parent,
+		CfgKeyLineageID:     lineageID,
+		CfgKeyCheckpointNS:  namespace,
+	}
+	ch, err := parentExec.Execute(
+		ctx,
+		initial,
+		agent.NewInvocation(agent.WithInvocationID(testInvocationID)),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	cm := parentExec.CheckpointManager()
+	require.NotNil(t, cm)
+
+	parentTuples, err := cm.ListCheckpoints(
+		ctx,
+		CreateCheckpointConfig(lineageID, "", namespace),
+		nil,
+	)
+	require.NoError(t, err)
+	childTuples, err := cm.ListCheckpoints(
+		ctx,
+		CreateCheckpointConfig(lineageID, "", childAgentID),
+		nil,
+	)
+	require.NoError(t, err)
+	grandchildTuples, err := cm.ListCheckpoints(
+		ctx,
+		CreateCheckpointConfig(lineageID, "", grandchildAgentID),
+		nil,
+	)
+	require.NoError(t, err)
+
+	var parentInterrupt *CheckpointTuple
+	for _, tuple := range parentTuples {
+		if tuple == nil || tuple.Checkpoint == nil {
+			continue
+		}
+		if tuple.Checkpoint.InterruptState == nil {
+			continue
+		}
+		if tuple.Checkpoint.InterruptState.NodeID == childAgentID {
+			parentInterrupt = tuple
+			break
+		}
+	}
+	require.NotNil(t, parentInterrupt)
+	require.Equal(
+		t,
+		interruptKey,
+		parentInterrupt.Checkpoint.InterruptState.TaskID,
+	)
+
+	var childInterrupt *CheckpointTuple
+	for _, tuple := range childTuples {
+		if tuple == nil || tuple.Checkpoint == nil {
+			continue
+		}
+		if tuple.Checkpoint.InterruptState == nil {
+			continue
+		}
+		if tuple.Checkpoint.InterruptState.NodeID == grandchildAgentID {
+			childInterrupt = tuple
+			break
+		}
+	}
+	require.NotNil(t, childInterrupt)
+	require.Equal(
+		t,
+		interruptKey,
+		childInterrupt.Checkpoint.InterruptState.TaskID,
+	)
+
+	var grandchildInterrupt *CheckpointTuple
+	for _, tuple := range grandchildTuples {
+		if tuple == nil || tuple.Checkpoint == nil {
+			continue
+		}
+		if tuple.Checkpoint.InterruptState == nil {
+			continue
+		}
+		if tuple.Checkpoint.InterruptState.NodeID == leafNodeID {
+			grandchildInterrupt = tuple
+			break
+		}
+	}
+	require.NotNil(t, grandchildInterrupt)
+	require.Equal(
+		t,
+		interruptKey,
+		grandchildInterrupt.Checkpoint.InterruptState.TaskID,
+	)
+
+	values := parentInterrupt.Checkpoint.ChannelValues
+	rawAny, ok := values[StateKeySubgraphInterrupt]
+	require.True(t, ok)
+
+	rawInfo, ok := rawAny.(map[string]any)
+	require.True(t, ok)
+
+	gotNS, _ := rawInfo[subgraphInterruptKeyChildCheckpointNS].(string)
+	require.Equal(t, childAgentID, gotNS)
+
+	gotLineage, _ := rawInfo[subgraphInterruptKeyChildLineageID].(string)
+	require.Equal(t, lineageID, gotLineage)
+
+	taskID, _ := rawInfo[subgraphInterruptKeyChildTaskID].(string)
+	require.Equal(t, interruptKey, taskID)
+
+	gotChildCkptID, _ :=
+		rawInfo[subgraphInterruptKeyChildCheckpointID].(string)
+	require.Equal(t, childInterrupt.Checkpoint.ID, gotChildCkptID)
+
+	resume := State{
+		StateKeyParentAgent: parent,
+		CfgKeyLineageID:     lineageID,
+		CfgKeyCheckpointNS:  namespace,
+		CfgKeyCheckpointID:  parentInterrupt.Checkpoint.ID,
+		StateKeyCommand: &Command{
+			ResumeMap: map[string]any{
+				interruptKey: resumeValue,
+			},
+		},
+	}
+	ch2, err := parentExec.Execute(
+		ctx,
 		resume,
 		agent.NewInvocation(agent.WithInvocationID(resumeInvID)),
 	)
