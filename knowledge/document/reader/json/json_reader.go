@@ -204,7 +204,7 @@ func (r *Reader) jsonToText(jsonContent string) (string, error) {
 // chunkDocuments applies chunking to documents.
 func (r *Reader) chunkDocuments(docs []*document.Document) ([]*document.Document, error) {
 	if r.chunkingStrategy == nil {
-		r.chunkingStrategy = chunking.NewFixedSizeChunking()
+		r.chunkingStrategy = chunking.NewJSONChunking()
 	}
 
 	var result []*document.Document

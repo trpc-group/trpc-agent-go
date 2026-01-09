@@ -59,6 +59,16 @@ func TestCharFilter_Preprocess(t *testing.T) {
 			},
 		},
 		{
+			name:          "Empty chars to remove should be ignored",
+			charsToRemove: []string{"\n", "", "\t"},
+			input: []*document.Document{
+				{Content: "Hello\n\tWorld"},
+			},
+			expected: []*document.Document{
+				{Content: "HelloWorld"},
+			},
+		},
+		{
 			name:          "Empty input",
 			charsToRemove: []string{"\n"},
 			input:         []*document.Document{},

@@ -30,6 +30,9 @@ type CharFilter struct {
 func NewCharFilter(charsToRemove ...string) *CharFilter {
 	args := make([]string, 0, len(charsToRemove)*2)
 	for _, char := range charsToRemove {
+		if char == "" {
+			continue
+		}
 		args = append(args, char, "")
 	}
 	return &CharFilter{
