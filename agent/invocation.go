@@ -273,6 +273,31 @@ func WithGraphEmitFinalModelResponses(enabled bool) RunOption {
 	}
 }
 
+// WithStreamMode sets StreamMode selection for this run.
+//
+// When StreamModeMessages is present, graph-based Large Language Model (LLM)
+// nodes will also emit their final (Done=true) model responses by default.
+// If you need to override that behavior, call WithGraphEmitFinalModelResponses
+// after WithStreamMode.
+func WithStreamMode(modes ...StreamMode) RunOption {
+	return func(opts *RunOptions) {
+		opts.StreamModeEnabled = true
+		if len(modes) == 0 {
+			opts.StreamModes = nil
+			return
+		}
+		copied := make([]StreamMode, len(modes))
+		copy(copied, modes)
+		opts.StreamModes = copied
+		for _, mode := range copied {
+			if mode == StreamModeMessages {
+				opts.GraphEmitFinalModelResponses = true
+				break
+			}
+		}
+	}
+}
+
 // WithRequestID sets the request id for the RunOptions.
 func WithRequestID(requestID string) RunOption {
 	return func(opts *RunOptions) {
@@ -341,6 +366,25 @@ func WithModel(m model.Model) RunOption {
 func WithModelName(name string) RunOption {
 	return func(opts *RunOptions) {
 		opts.ModelName = name
+	}
+}
+
+// WithInstruction sets the instruction for this specific run.
+// If set, it temporarily overrides the agent's instruction for this
+// request only. This does not modify the agent instance.
+func WithInstruction(instruction string) RunOption {
+	return func(opts *RunOptions) {
+		opts.Instruction = instruction
+	}
+}
+
+// WithGlobalInstruction sets the global instruction (system prompt) for
+// this specific run.
+// If set, it temporarily overrides the agent's global instruction for
+// this request only. This does not modify the agent instance.
+func WithGlobalInstruction(instruction string) RunOption {
+	return func(opts *RunOptions) {
+		opts.GlobalInstruction = instruction
 	}
 }
 
@@ -506,6 +550,16 @@ type RunOptions struct {
 	// in its runner-completion event to avoid duplicates.
 	GraphEmitFinalModelResponses bool
 
+	// StreamModeEnabled indicates whether the caller explicitly configured
+	// StreamModes for this run.
+	StreamModeEnabled bool
+
+	// StreamModes selects which categories of events are forwarded to callers.
+	//
+	// When StreamModeEnabled is false, runners should not apply any stream
+	// filtering and preserve the existing behavior.
+	StreamModes []StreamMode
+
 	// RequestID is the request id of the request.
 	RequestID string
 
@@ -550,6 +604,17 @@ type RunOptions struct {
 	// The agent will look up the model by name from its registered models.
 	// If both Model and ModelName are set, Model takes precedence.
 	ModelName string
+
+	// Instruction overrides the agent's instruction for this run.
+	// If set, it temporarily overrides the agent's instruction for this
+	// request only.
+	Instruction string
+
+	// GlobalInstruction overrides the agent's global instruction (system
+	// prompt) for this run.
+	// If set, it temporarily overrides the agent's global instruction for
+	// this request only.
+	GlobalInstruction string
 
 	// ToolFilter is a custom function to filter tools for this run.
 	// If set, only tools for which the filter returns true will be available to the model.

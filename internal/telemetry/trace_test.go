@@ -69,15 +69,25 @@ func newStubSpan() *stubSpan {
 // recordingSpan captures attributes and status for assertions.
 type recordingSpan struct {
 	trace.Span
-	attrs  []attribute.KeyValue
-	status codes.Code
+	attrs          []attribute.KeyValue
+	status         codes.Code
+	statusDesc     string
+	recordedErrors []error
 }
 
 func (s *recordingSpan) SetAttributes(kv ...attribute.KeyValue) {
 	s.attrs = append(s.attrs, kv...)
 	s.Span.SetAttributes(kv...)
 }
-func (s *recordingSpan) SetStatus(c codes.Code, msg string) { s.status = c; s.Span.SetStatus(c, msg) }
+func (s *recordingSpan) SetStatus(c codes.Code, msg string) {
+	s.status = c
+	s.statusDesc = msg
+	s.Span.SetStatus(c, msg)
+}
+func (s *recordingSpan) RecordError(err error, opts ...trace.EventOption) {
+	s.recordedErrors = append(s.recordedErrors, err)
+	s.Span.RecordError(err, opts...)
+}
 func newRecordingSpan() *recordingSpan {
 	_, sp := trace.NewNoopTracerProvider().Tracer("test").Start(context.Background(), "op")
 	return &recordingSpan{Span: sp}
@@ -112,20 +122,81 @@ func TestNewWorkflowSpanName(t *testing.T) {
 }
 
 func TestTraceWorkflow(t *testing.T) {
-	span := newRecordingSpan()
-	wf := &Workflow{Name: "myflow", ID: "wf-123"}
+	t.Run("basic attributes", func(t *testing.T) {
+		span := newRecordingSpan()
+		wf := &Workflow{Name: "myflow", ID: "wf-123"}
 
-	TraceWorkflow(span, wf)
+		TraceWorkflow(span, wf)
 
-	if !hasAttr(span.attrs, KeyGenAIOperationName, OperationWorkflow) {
-		t.Fatalf("missing operation name attribute")
-	}
-	if !hasAttr(span.attrs, KeyGenAIWorkflowName, "myflow") {
-		t.Fatalf("missing workflow name attribute")
-	}
-	if !hasAttr(span.attrs, KeyGenAIWorkflowID, "wf-123") {
-		t.Fatalf("missing workflow id attribute")
-	}
+		if !hasAttr(span.attrs, KeyGenAIOperationName, OperationWorkflow) {
+			t.Fatalf("missing operation name attribute")
+		}
+		if !hasAttr(span.attrs, KeyGenAIWorkflowName, "myflow") {
+			t.Fatalf("missing workflow name attribute")
+		}
+		if !hasAttr(span.attrs, KeyGenAIWorkflowID, "wf-123") {
+			t.Fatalf("missing workflow id attribute")
+		}
+	})
+
+	t.Run("request/response json success", func(t *testing.T) {
+		type payload struct {
+			A string `json:"a"`
+		}
+		span := newRecordingSpan()
+		wf := &Workflow{
+			Name:     "myflow",
+			ID:       "wf-123",
+			Request:  payload{A: "req"},
+			Response: payload{A: "rsp"},
+		}
+
+		TraceWorkflow(span, wf)
+
+		require.True(t, hasAttr(span.attrs, KeyGenAIWorkflowRequest, `{"a":"req"}`))
+		require.True(t, hasAttr(span.attrs, KeyGenAIWorkflowResponse, `{"a":"rsp"}`))
+		require.NotEqual(t, codes.Error, span.status, "did not expect error status")
+	})
+
+	t.Run("request/response json marshal error", func(t *testing.T) {
+		span := newRecordingSpan()
+		wf := &Workflow{
+			Name:     "myflow",
+			ID:       "wf-123",
+			Request:  make(chan int), // not json serializable
+			Response: make(chan int), // not json serializable
+		}
+
+		TraceWorkflow(span, wf)
+
+		var gotReq, gotRsp string
+		for _, kv := range span.attrs {
+			if string(kv.Key) == KeyGenAIWorkflowRequest {
+				gotReq = kv.Value.AsString()
+			}
+			if string(kv.Key) == KeyGenAIWorkflowResponse {
+				gotRsp = kv.Value.AsString()
+			}
+		}
+		require.Contains(t, gotReq, "<not json serializable:")
+		require.Contains(t, gotReq, "unsupported type")
+		require.Contains(t, gotRsp, "<not json serializable>:")
+		require.Contains(t, gotRsp, "unsupported type")
+	})
+
+	t.Run("error sets status and records error", func(t *testing.T) {
+		span := newRecordingSpan()
+		wfErr := errors.New("boom")
+		wf := &Workflow{Name: "myflow", ID: "wf-123", Error: wfErr}
+
+		TraceWorkflow(span, wf)
+
+		require.True(t, hasAttr(span.attrs, KeyErrorType, ValueDefaultErrorType))
+		require.Equal(t, codes.Error, span.status)
+		require.Equal(t, "boom", span.statusDesc)
+		require.Len(t, span.recordedErrors, 1)
+		require.Equal(t, wfErr, span.recordedErrors[0])
+	})
 }
 
 func TestTraceFunctions_NoPanics(t *testing.T) {
