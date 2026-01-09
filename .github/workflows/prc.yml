@@ -86,7 +86,7 @@ jobs:
           path: coverage-${{ steps.module-info.outputs.safe_name }}.out
           if-no-files-found: error
   e2e:
-    name: e2e
+    name: e2e test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
