@@ -286,6 +286,44 @@ func prepForLLM2(ctx context.Context, state graph.State) (any, error) {
 }
 ```
 
+Preparing one-shot inputs for multiple nodes in a single upstream node:
+
+In Go, a `map` assignment overwrites by key. Since
+`SetOneShotMessagesForNode(...)` writes the same top-level key
+(`one_shot_messages_by_node`) every time, you should avoid calling it multiple
+times and then “merging” the returned `graph.State` values with plain
+`result[k] = v` assignments (the last write wins).
+
+Instead, build one `map[nodeID][]model.Message` and write it once:
+
+```go
+func preprocess(ctx context.Context, state graph.State) (any, error) {
+    byNode := map[string][]model.Message{
+        llm1NodeID: {
+            model.NewSystemMessage("You are llm1."),
+            model.NewUserMessage("question for llm1"),
+        },
+        llm2NodeID: {
+            model.NewSystemMessage("You are llm2."),
+            model.NewUserMessage("question for llm2"),
+        },
+    }
+    return graph.SetOneShotMessagesByNode(byNode), nil
+}
+```
+
+Alternative (no helpers): write a raw state delta map (handy if you also need
+to update other keys in the same node):
+
+```go
+func preprocess(ctx context.Context, state graph.State) (any, error) {
+    // byNode := ...
+    return graph.State{
+        graph.StateKeyOneShotMessagesByNode: byNode,
+    }, nil
+}
+```
+
 Notes:
 
 - `llm1NodeID` / `llm2NodeID` must match the IDs you pass to `AddLLMNode`.
@@ -297,6 +335,7 @@ See examples:
 - `examples/graph/io_conventions` — Function + LLM + Agent I/O
 - `examples/graph/io_conventions_tools` — Adds a Tools node path and shows how to capture tool JSON
 - `examples/graph/oneshot_by_node` — One-shot inputs scoped by LLM node ID
+- `examples/graph/oneshot_by_node_preprocess` — One upstream node prepares one-shot inputs for multiple LLM nodes
 - `examples/graph/retry` — Node-level retry/backoff demonstration
 
 #### Constant references (import and keys)
@@ -313,6 +352,14 @@ See examples:
   - `last_response` → `graph.StateKeyLastResponse`
   - `last_response_id` → `graph.StateKeyLastResponseID`
   - `node_responses` → `graph.StateKeyNodeResponses`
+
+- One-shot helpers
+
+  - `SetOneShotMessagesForNode(nodeID, msgs)` → per-node one-shot update
+  - `SetOneShotMessagesByNode(byNode)` → multi-node one-shot update
+  - `ClearOneShotMessagesForNode(nodeID)` → clear one node entry
+  - `ClearOneShotMessagesByNode()` → clear the entire map
+  - `GetOneShotMessagesForNode(state, nodeID)` → read one node entry
 
 - Other useful keys
   - `session` → `graph.StateKeySession`
@@ -655,7 +702,9 @@ Important notes:
   are automatically cleared after successful execution.
 - Parallel branches: if multiple branches need different one-shot inputs for
   different LLM nodes in the same step, write `one_shot_messages_by_node`
-  instead of `one_shot_messages`.
+  instead of `one_shot_messages`. If one upstream node prepares inputs for
+  multiple LLM nodes, prefer `graph.SetOneShotMessagesByNode(...)` to write all
+  entries at once.
 - All state updates are atomic.
 - GraphAgent/Runner only sets `user_input` and no longer pre-populates `messages` with a user message. This allows any pre-LLM node to modify `user_input` and have it take effect in the same round.
 - When Graph runs sub-agents, it preserves the parent run's `RequestID`
@@ -693,6 +742,8 @@ running via Runner. See `runner.md` for details and examples.
   - Parallel branches: when multiple branches prepare one-shot inputs for
     different LLM nodes, prefer `StateKeyOneShotMessagesByNode` to avoid
     clobbering a shared global key.
+  - If a single node prepares one-shot inputs for multiple LLM nodes, use
+    `graph.SetOneShotMessagesByNode(...)` to write them in one return value.
 
 - UserInput (`StateKeyUserInput`):
 

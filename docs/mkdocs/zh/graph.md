@@ -284,6 +284,43 @@ func prepForLLM2(ctx context.Context, state graph.State) (any, error) {
 }
 ```
 
+在单个上游节点里同时为多个下游节点准备 one-shot：
+
+在 Go 里，`map` 对同一个 key 的赋值会覆盖旧值。由于
+`SetOneShotMessagesForNode(...)` 每次都会写入同一个顶层 key
+（`one_shot_messages_by_node`），因此不要在一个函数里多次调用它，然后再用
+`result[k] = v` 这种方式去“合并”多个 `graph.State`（最后一次写入会覆盖前面的）。
+
+推荐做法是：先构造一个 `map[nodeID][]model.Message`，一次性写入：
+
+```go
+func preprocess(ctx context.Context, state graph.State) (any, error) {
+    byNode := map[string][]model.Message{
+        llm1NodeID: {
+            model.NewSystemMessage("You are llm1."),
+            model.NewUserMessage("question for llm1"),
+        },
+        llm2NodeID: {
+            model.NewSystemMessage("You are llm2."),
+            model.NewUserMessage("question for llm2"),
+        },
+    }
+    return graph.SetOneShotMessagesByNode(byNode), nil
+}
+```
+
+另一种写法（不使用辅助函数）：直接返回 State delta map（当你在同一个节点里
+还要同时更新其它键时很方便）：
+
+```go
+func preprocess(ctx context.Context, state graph.State) (any, error) {
+    // byNode := ...
+    return graph.State{
+        graph.StateKeyOneShotMessagesByNode: byNode,
+    }, nil
+}
+```
+
 注意：
 
 - `llm1NodeID` / `llm2NodeID` 必须与 `AddLLMNode` 里传入的节点 ID 一致。
@@ -295,6 +332,7 @@ func prepForLLM2(ctx context.Context, state graph.State) (any, error) {
 - `examples/graph/io_conventions`：函数 + LLM + Agent 的 I/O 演示
 - `examples/graph/io_conventions_tools`：加入 Tools 节点，展示如何获取工具 JSON 并落入 State
 - `examples/graph/oneshot_by_node`：按 LLM 节点 ID 定向的一次性输入
+- `examples/graph/oneshot_by_node_preprocess`：在单个上游节点里为多个 LLM 节点准备 OneShot
 - `examples/graph/retry`：节点级重试/退避演示
 
 #### 状态键常量与来源（可直接引用）
@@ -311,6 +349,14 @@ func prepForLLM2(ctx context.Context, state graph.State) (any, error) {
   - `last_response` → 常量 `graph.StateKeyLastResponse`
   - `last_response_id` → 常量 `graph.StateKeyLastResponseID`
   - `node_responses` → 常量 `graph.StateKeyNodeResponses`
+
+- OneShot 辅助函数
+
+  - `SetOneShotMessagesForNode(nodeID, msgs)`：设置单个节点的 OneShot
+  - `SetOneShotMessagesByNode(byNode)`：一次性设置多个节点的 OneShot
+  - `ClearOneShotMessagesForNode(nodeID)`：清理单个节点 entry
+  - `ClearOneShotMessagesByNode()`：清理整个 map
+  - `GetOneShotMessagesForNode(state, nodeID)`：读取单个节点 entry
 
 - 其他常用键
   - `session` → `graph.StateKeySession`
@@ -651,7 +697,8 @@ stateGraph.AddLLMNode("analyze", model,
   在成功执行后自动清空。
 - 并行分支：如果需要为不同的 LLM 节点准备不同的一次性输入，优先写
   `one_shot_messages_by_node`，避免多个分支同时写 `one_shot_messages`
-  互相覆盖/清空。
+  互相覆盖/清空。若由单个上游节点同时为多个 LLM 节点准备输入，推荐使用
+  `graph.SetOneShotMessagesByNode(...)` 一次性写入所有 entry。
 - 所有状态更新都是原子性的，确保一致性。
 - GraphAgent/Runner 仅设置 `user_input`，不再预先把用户消息写入
   `messages`。这样可以允许在 LLM 节点之前的任意节点对 `user_input`
@@ -689,6 +736,8 @@ Runner 运行时开启 `agent.WithGraphEmitFinalModelResponses(true)`。该选�
   - 适用场景：前置节点专门构造 prompt 的工作流，需完全覆盖本轮输入。
   - 并行分支：当多个分支需要为不同的 LLM 节点准备 OneShot 输入时，
     优先使用 `StateKeyOneShotMessagesByNode`，避免共享键互相覆盖。
+  - 若由单个上游节点同时为多个 LLM 节点准备 OneShot 输入，推荐使用
+    `graph.SetOneShotMessagesByNode(...)` 一次性写入。
 
 - UserInput（`StateKeyUserInput`）：
 
