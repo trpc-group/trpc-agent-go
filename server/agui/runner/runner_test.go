@@ -393,6 +393,128 @@ func TestRunValidatesInput(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestRunIgnoresRequestCancelButRespectsBackendTimeout(t *testing.T) {
+	ctxCh := make(chan context.Context, 1)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ctxCh <- ctx
+			ch := make(chan *agentevent.Event)
+			go func() {
+				<-ctx.Done()
+				close(ch)
+			}()
+			return ch, nil
+		},
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+		timeout:           200 * time.Millisecond,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	reqCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eventsCh, err := r.Run(reqCtx, input)
+	require.NoError(t, err)
+
+	select {
+	case evt := <-eventsCh:
+		assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for run started event")
+	}
+
+	var runCtx context.Context
+	select {
+	case runCtx = <-ctxCh:
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for underlying runner context")
+	}
+
+	cancel()
+
+	assert.Eventually(t, func() bool {
+		return errors.Is(runCtx.Err(), context.DeadlineExceeded)
+	}, time.Second, 5*time.Millisecond)
+
+	_ = collectEvents(t, eventsCh)
+}
+
+func TestRunTimeoutUsesMinRequestDeadlineAndBackendTimeout(t *testing.T) {
+	ctxCh := make(chan context.Context, 1)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ctxCh <- ctx
+			ch := make(chan *agentevent.Event)
+			go func() {
+				<-ctx.Done()
+				close(ch)
+			}()
+			return ch, nil
+		},
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+		timeout:           500 * time.Millisecond,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	reqCtx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	reqDeadline, ok := reqCtx.Deadline()
+	require.True(t, ok)
+
+	eventsCh, err := r.Run(reqCtx, input)
+	require.NoError(t, err)
+
+	select {
+	case evt := <-eventsCh:
+		assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for run started event")
+	}
+
+	var runCtx context.Context
+	select {
+	case runCtx = <-ctxCh:
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for underlying runner context")
+	}
+
+	deadline, ok := runCtx.Deadline()
+	require.True(t, ok)
+	assert.WithinDuration(t, reqDeadline, deadline, 50*time.Millisecond)
+
+	cancel()
+
+	wait := time.Until(deadline) + 200*time.Millisecond
+	if wait < 0 {
+		wait = 200 * time.Millisecond
+	}
+	assert.Eventually(t, func() bool {
+		return errors.Is(runCtx.Err(), context.DeadlineExceeded)
+	}, wait, 5*time.Millisecond)
+
+	_ = collectEvents(t, eventsCh)
+}
+
 func TestRunNoMessages(t *testing.T) {
 	underlying := &fakeRunner{}
 	fakeTrans := &fakeTranslator{}

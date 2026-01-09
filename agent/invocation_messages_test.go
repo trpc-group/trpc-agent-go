@@ -12,6 +12,7 @@ package agent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -87,6 +88,25 @@ func TestWithRequestID(t *testing.T) {
 	}
 }
 
+func TestWithDetachedCancel(t *testing.T) {
+	var ro RunOptions
+	WithDetachedCancel(true)(&ro)
+	require.True(t, ro.DetachedCancel)
+
+	WithDetachedCancel(false)(&ro)
+	require.False(t, ro.DetachedCancel)
+}
+
+func TestWithMaxRunDuration(t *testing.T) {
+	const (
+		maxRun = time.Second
+	)
+
+	var ro RunOptions
+	WithMaxRunDuration(maxRun)(&ro)
+	require.Equal(t, maxRun, ro.MaxRunDuration)
+}
+
 func TestWithA2ARequestOptions(t *testing.T) {
 	tests := []struct {
 		name string
@@ -158,6 +178,33 @@ func TestWithGraphEmitFinalModelResponses(t *testing.T) {
 
 	WithGraphEmitFinalModelResponses(false)(&ro)
 	require.False(t, ro.GraphEmitFinalModelResponses)
+}
+
+func TestWithStreamMode(t *testing.T) {
+	t.Run("enables stream mode", func(t *testing.T) {
+		var ro RunOptions
+		WithStreamMode(StreamModeUpdates, StreamModeCustom)(&ro)
+		require.True(t, ro.StreamModeEnabled)
+		require.Equal(t, []StreamMode{
+			StreamModeUpdates,
+			StreamModeCustom,
+		}, ro.StreamModes)
+	})
+
+	t.Run("messages enables final model responses", func(t *testing.T) {
+		var ro RunOptions
+		require.False(t, ro.GraphEmitFinalModelResponses)
+		WithStreamMode(StreamModeMessages)(&ro)
+		require.True(t, ro.StreamModeEnabled)
+		require.True(t, ro.GraphEmitFinalModelResponses)
+	})
+
+	t.Run("explicit empty modes is allowed", func(t *testing.T) {
+		var ro RunOptions
+		WithStreamMode()(&ro)
+		require.True(t, ro.StreamModeEnabled)
+		require.Nil(t, ro.StreamModes)
+	})
 }
 
 type stubTool struct {

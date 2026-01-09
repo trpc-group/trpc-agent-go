@@ -10,6 +10,7 @@
 package graph
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sync"
@@ -25,8 +26,16 @@ const (
 	// StateKeyOneShotMessages is the key for one-shot messages that override
 	// the current round input completely. It is consumed once and then cleared.
 	StateKeyOneShotMessages = "one_shot_messages"
+	// StateKeyOneShotMessagesByNode stores one-shot messages scoped to a target
+	// node ID. The value is a map[nodeID][]model.Message, allowing parallel
+	// branches to prepare one-shot inputs for different LLM nodes without
+	// clobbering a shared global key.
+	StateKeyOneShotMessagesByNode = "one_shot_messages_by_node"
 	// StateKeyLastResponse is the key of the last response.
 	StateKeyLastResponse = "last_response"
+	// StateKeyLastToolResponse stores the last tool output as a JSON string.
+	// It is set by Tools nodes after successful tool execution.
+	StateKeyLastToolResponse = "last_tool_response"
 	// StateKeyNodeResponses is the key of the node responses.
 	StateKeyNodeResponses = "node_responses"
 	// StateKeySession is the key of the session.
@@ -71,6 +80,127 @@ type State map[string]any
 //	}
 func GetStateValue[T any](s State, key string) (T, bool) {
 	return util.GetMapValue[string, T](s, key)
+}
+
+// SetOneShotMessagesForNode sets one-shot messages for a specific target node.
+// It writes an incremental update to StateKeyOneShotMessagesByNode.
+func SetOneShotMessagesForNode(
+	nodeID string,
+	msgs []model.Message,
+) State {
+	if nodeID == "" || len(msgs) == 0 {
+		return ClearOneShotMessagesForNode(nodeID)
+	}
+	update := map[string][]model.Message{
+		nodeID: append([]model.Message(nil), msgs...),
+	}
+	return State{
+		StateKeyOneShotMessagesByNode: update,
+	}
+}
+
+// SetOneShotMessagesByNode sets one-shot messages for multiple target nodes.
+//
+// It writes an incremental update to StateKeyOneShotMessagesByNode:
+//
+//   - Each entry's message slice is defensively copied.
+//   - An empty message slice clears that node's entry.
+//   - Empty node IDs are ignored.
+//
+// This is useful when a single upstream node needs to prepare one-shot inputs
+// for many downstream LLM nodes in one return value.
+func SetOneShotMessagesByNode(
+	byNode map[string][]model.Message,
+) State {
+	if len(byNode) == 0 {
+		return nil
+	}
+	update := make(map[string][]model.Message, len(byNode))
+	for nodeID, msgs := range byNode {
+		if nodeID == "" {
+			continue
+		}
+		if len(msgs) == 0 {
+			update[nodeID] = nil
+			continue
+		}
+		update[nodeID] = append([]model.Message(nil), msgs...)
+	}
+	if len(update) == 0 {
+		return nil
+	}
+	return State{
+		StateKeyOneShotMessagesByNode: update,
+	}
+}
+
+// ClearOneShotMessagesByNode clears the entire one-shot-by-node map.
+func ClearOneShotMessagesByNode() State {
+	return State{
+		StateKeyOneShotMessagesByNode: nil,
+	}
+}
+
+// ClearOneShotMessagesForNode clears one-shot messages for a specific node by
+// deleting its entry in StateKeyOneShotMessagesByNode.
+func ClearOneShotMessagesForNode(nodeID string) State {
+	if nodeID == "" {
+		return nil
+	}
+	update := map[string][]model.Message{
+		nodeID: nil,
+	}
+	return State{
+		StateKeyOneShotMessagesByNode: update,
+	}
+}
+
+// GetOneShotMessagesForNode retrieves one-shot messages for a specific node.
+// It returns a defensive copy of the message slice.
+func GetOneShotMessagesForNode(
+	state State,
+	nodeID string,
+) ([]model.Message, bool) {
+	if state == nil || nodeID == "" {
+		return nil, false
+	}
+	raw, ok := state[StateKeyOneShotMessagesByNode]
+	if !ok || raw == nil {
+		return nil, false
+	}
+
+	switch m := raw.(type) {
+	case map[string][]model.Message:
+		msgs := m[nodeID]
+		if len(msgs) == 0 {
+			return nil, false
+		}
+		return append([]model.Message(nil), msgs...), true
+	case map[string]any:
+		entry, ok := m[nodeID]
+		if !ok || entry == nil {
+			return nil, false
+		}
+		msgs, err := decodeMessages(entry)
+		if err != nil || len(msgs) == 0 {
+			return nil, false
+		}
+		return msgs, true
+	default:
+		anyMap, ok := decodeMapStringAny(raw)
+		if !ok {
+			return nil, false
+		}
+		entry, ok := anyMap[nodeID]
+		if !ok || entry == nil {
+			return nil, false
+		}
+		msgs, err := decodeMessages(entry)
+		if err != nil || len(msgs) == 0 {
+			return nil, false
+		}
+		return msgs, true
+	}
 }
 
 // Clone creates a deep copy of the state.
@@ -169,6 +299,13 @@ func (s *StateSchema) ApplyUpdate(currentState State, update State) State {
 			// Ignore internal/ephemeral keys in updates. They are owned by
 			// the executor and may contain concurrently-mutated maps.
 			if isInternalStateKey(key) {
+				continue
+			}
+			if key == StateKeyOneShotMessagesByNode {
+				result[key] = OneShotMessagesByNodeReducer(
+					result[key],
+					updateValue,
+				)
 				continue
 			}
 			// If no field definition, use default behavior (override) with
@@ -334,6 +471,141 @@ func MergeReducer(existing, update any) any {
 		result[k] = deepCopyAny(v)
 	}
 	return result
+}
+
+// OneShotMessagesByNodeReducer merges targeted one-shot inputs scoped by node
+// ID. It treats the update as a partial map[nodeID][]model.Message and applies
+// per-entry overrides. A nil update clears the entire map. For entries:
+//   - nil / empty message slice: delete the node entry
+//   - non-empty message slice: replace the node entry
+func OneShotMessagesByNodeReducer(existing, update any) any {
+	base := make(map[string][]model.Message)
+	for nodeID, msgs := range decodeOneShotMessagesByNodeExisting(existing) {
+		base[nodeID] = msgs
+	}
+
+	if update == nil {
+		return map[string][]model.Message(nil)
+	}
+
+	switch u := update.(type) {
+	case map[string][]model.Message:
+		applyOneShotMessagesByNodeUpdate(base, u)
+		return normalizeOneShotMessagesByNode(base)
+	case map[string]any:
+		applyOneShotMessagesByNodeAnyUpdate(base, u)
+		return normalizeOneShotMessagesByNode(base)
+	default:
+		raw, ok := decodeMapStringAny(update)
+		if !ok {
+			return deepCopyAny(update)
+		}
+		applyOneShotMessagesByNodeAnyUpdate(base, raw)
+		return normalizeOneShotMessagesByNode(base)
+	}
+}
+
+func applyOneShotMessagesByNodeUpdate(
+	base map[string][]model.Message,
+	update map[string][]model.Message,
+) {
+	for nodeID, msgs := range update {
+		if len(msgs) == 0 {
+			delete(base, nodeID)
+			continue
+		}
+		base[nodeID] = append([]model.Message(nil), msgs...)
+	}
+}
+
+func applyOneShotMessagesByNodeAnyUpdate(
+	base map[string][]model.Message,
+	update map[string]any,
+) {
+	for nodeID, raw := range update {
+		if raw == nil {
+			delete(base, nodeID)
+			continue
+		}
+		msgs, err := decodeMessages(raw)
+		if err != nil || len(msgs) == 0 {
+			delete(base, nodeID)
+			continue
+		}
+		base[nodeID] = msgs
+	}
+}
+
+func normalizeOneShotMessagesByNode(
+	m map[string][]model.Message,
+) map[string][]model.Message {
+	if len(m) == 0 {
+		return map[string][]model.Message(nil)
+	}
+	return m
+}
+
+func decodeOneShotMessagesByNodeExisting(v any) map[string][]model.Message {
+	if v == nil {
+		return nil
+	}
+	switch m := v.(type) {
+	case map[string][]model.Message:
+		out := make(map[string][]model.Message, len(m))
+		for nodeID, msgs := range m {
+			if len(msgs) == 0 {
+				continue
+			}
+			out[nodeID] = append([]model.Message(nil), msgs...)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string][]model.Message, len(m))
+		for nodeID, raw := range m {
+			msgs, err := decodeMessages(raw)
+			if err != nil || len(msgs) == 0 {
+				continue
+			}
+			out[nodeID] = msgs
+		}
+		return out
+	default:
+		raw, ok := decodeMapStringAny(v)
+		if !ok {
+			return nil
+		}
+		return decodeOneShotMessagesByNodeExisting(raw)
+	}
+}
+
+func decodeMapStringAny(v any) (map[string]any, bool) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, false
+	}
+	var out map[string]any
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+func decodeMessages(v any) ([]model.Message, error) {
+	if v == nil {
+		return nil, nil
+	}
+	if msgs, ok := v.([]model.Message); ok {
+		return append([]model.Message(nil), msgs...), nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var msgs []model.Message
+	if err := json.Unmarshal(b, &msgs); err != nil {
+		return nil, err
+	}
+	return msgs, nil
 }
 
 // MessageReducer handles message arrays with ID-based updates and MessageOp support.

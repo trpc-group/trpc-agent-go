@@ -47,27 +47,6 @@ func toFloat32Slice(f64 []float64) []float32 {
 	return f32
 }
 
-// ptr returns a pointer to any value.
-func ptr[T any](v T) *T {
-	return &v
-}
-
-var (
-	ptrBool   = ptr[bool]
-	ptrUint32 = ptr[uint32]
-	ptrUint64 = ptr[uint64]
-	ptrString = ptr[string]
-)
-
-// ptrFloat32If returns a pointer to the float32 value if the condition is true, otherwise nil.
-func ptrFloat32If(cond bool, v float64) *float32 {
-	if !cond {
-		return nil
-	}
-	f := float32(v)
-	return &f
-}
-
 // pointIDToStr converts a Qdrant PointId to its string representation.
 func pointIDToStr(id *qdrant.PointId) string {
 	if id == nil {
@@ -338,53 +317,13 @@ func extractVectorData(v *qdrant.VectorOutput) []float64 {
 	if v == nil {
 		return nil
 	}
-	dense, ok := v.GetVector().(*qdrant.VectorOutput_Dense)
-	if !ok || dense.Dense == nil {
+	dense := v.GetDenseVector()
+	if dense == nil {
 		return nil
 	}
-	f64 := make([]float64, len(dense.Dense.Data))
-	for i, val := range dense.Dense.Data {
+	f64 := make([]float64, len(dense.GetData()))
+	for i, val := range dense.GetData() {
 		f64[i] = float64(val)
 	}
 	return f64
-}
-
-// anyToQdrantValue converts a Go value to a Qdrant Value.
-func anyToQdrantValue(v any) *qdrant.Value {
-	if v == nil {
-		return &qdrant.Value{Kind: &qdrant.Value_NullValue{}}
-	}
-	switch val := v.(type) {
-	case string:
-		return &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: val}}
-	case int:
-		return &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: int64(val)}}
-	case int32:
-		return &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: int64(val)}}
-	case int64:
-		return &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: val}}
-	case float32:
-		return &qdrant.Value{Kind: &qdrant.Value_DoubleValue{DoubleValue: float64(val)}}
-	case float64:
-		return &qdrant.Value{Kind: &qdrant.Value_DoubleValue{DoubleValue: val}}
-	case bool:
-		return &qdrant.Value{Kind: &qdrant.Value_BoolValue{BoolValue: val}}
-	case time.Time:
-		return &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: val.Unix()}}
-	case []any:
-		values := make([]*qdrant.Value, len(val))
-		for i, item := range val {
-			values[i] = anyToQdrantValue(item)
-		}
-		return &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: values}}}
-	case map[string]any:
-		fields := make(map[string]*qdrant.Value, len(val))
-		for k, item := range val {
-			fields[k] = anyToQdrantValue(item)
-		}
-		return &qdrant.Value{Kind: &qdrant.Value_StructValue{StructValue: &qdrant.Struct{Fields: fields}}}
-	default:
-		// Fallback: convert to string
-		return &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: ""}}
-	}
 }

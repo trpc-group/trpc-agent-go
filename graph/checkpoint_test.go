@@ -56,6 +56,7 @@ func TestConfigHelpers_Getters(t *testing.T) {
 func TestCheckpoint_CopyAndFork(t *testing.T) {
 	c := NewCheckpoint(map[string]any{"a": 1, "b": map[string]any{"x": 2}}, map[string]int64{"a": 1}, map[string]map[string]int64{"n": {}})
 	c.UpdatedChannels = []string{"a", "b"}
+	c.BarrierSets = map[string][]string{"join": {"a", "b"}}
 	c.PendingSends = []PendingSend{{Channel: "ch", Value: 123, TaskID: "t1"}}
 	c.NextNodes = []string{"n1", "n2"}
 	c.NextChannels = []string{"c1"}
@@ -78,6 +79,12 @@ func TestCheckpoint_CopyAndFork(t *testing.T) {
 	// ChannelVersions map
 	copied.ChannelVersions["a"] = 99
 	assert.Equal(t, int64(1), c.ChannelVersions["a"])
+	// BarrierSets map[string][]string
+	copied.BarrierSets["join"][0] = "changed"
+	assert.Equal(t, []string{"a", "b"}, c.BarrierSets["join"])
+	copied.BarrierSets["new"] = []string{"x"}
+	_, existsNew := c.BarrierSets["new"]
+	assert.False(t, existsNew)
 	// VersionsSeen map of map
 	if _, ok := copied.VersionsSeen["n"]; ok {
 		copied.VersionsSeen["n"]["z"] = 7
@@ -346,6 +353,17 @@ func TestEvents_Stringers_And_CheckpointEventBuilders(t *testing.T) {
 	)
 	require.NotNil(t, e2)
 	require.Contains(t, e2.StateDelta, MetadataKeyCheckpoint)
+
+	e3 := NewCheckpointInterruptEvent(
+		WithCheckpointEventInvocationID("inv-3"),
+		WithCheckpointEventCheckpointID("ck-3"),
+		WithCheckpointEventSource("interrupt"),
+		WithCheckpointEventStep(3),
+		WithCheckpointEventDuration(3*time.Second),
+	)
+	require.NotNil(t, e3)
+	require.Equal(t, ObjectTypeGraphCheckpointInterrupt, e3.Object)
+	require.Contains(t, e3.StateDelta, MetadataKeyCheckpoint)
 }
 
 func TestStateSchema_Validate_And_Reducers(t *testing.T) {
@@ -1010,6 +1028,22 @@ func TestNewToolsNodeFunc_SuccessAndError(t *testing.T) {
 	require.NoError(t, err)
 	st, _ := out.(State)
 	require.NotNil(t, st[StateKeyMessages])
+	require.Equal(t, `{"x":1}`, st[StateKeyLastToolResponse])
+
+	nr, ok := st[StateKeyNodeResponses].(map[string]any)
+	require.True(t, ok)
+	raw, ok := nr["N"].(string)
+	require.True(t, ok)
+	var got []struct {
+		ToolID   string         `json:"tool_id"`
+		ToolName string         `json:"tool_name"`
+		Output   map[string]any `json:"output"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(raw), &got))
+	require.Len(t, got, 1)
+	require.Equal(t, "tid", got[0].ToolID)
+	require.Equal(t, "echo", got[0].ToolName)
+	require.Equal(t, map[string]any{"x": float64(1)}, got[0].Output)
 
 	// Error: no messages in state
 	_, err = fn(context.Background(), State{})
@@ -1079,7 +1113,13 @@ func TestLLMRunner_ExecuteOneShotStage(t *testing.T) {
 	r := &llmRunner{llmModel: &dummyModel{}, instruction: "inst", tools: nil, nodeID: "node1"}
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
 	_, span := tracer.Start(context.Background(), "s")
-	st, err := r.executeOneShotStage(context.Background(), State{}, []model.Message{model.NewUserMessage("hi")}, span)
+	st, err := r.executeOneShotStage(
+		context.Background(),
+		State{},
+		[]model.Message{model.NewUserMessage("hi")},
+		span,
+		nil,
+	)
 	require.NoError(t, err)
 	s, _ := st.(State)
 	// last_response should be set

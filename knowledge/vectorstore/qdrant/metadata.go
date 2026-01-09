@@ -36,7 +36,7 @@ func (vs *VectorStore) Count(ctx context.Context, opts ...vectorstore.CountOptio
 		return vs.client.Count(ctx, &qdrant.CountPoints{
 			CollectionName: vs.opts.collectionName,
 			Filter:         filter,
-			Exact:          ptrBool(true),
+			Exact:          qdrant.PtrOf(true),
 		})
 	})
 	if err != nil {
@@ -75,7 +75,7 @@ func (vs *VectorStore) GetMetadata(ctx context.Context, opts ...vectorstore.GetM
 			return vs.client.Scroll(ctx, &qdrant.ScrollPoints{
 				CollectionName: vs.opts.collectionName,
 				Filter:         filter,
-				Limit:          ptrUint32(batchSize),
+				Limit:          qdrant.PtrOf(batchSize),
 				Offset:         offset,
 				WithPayload:    qdrant.NewWithPayload(true),
 			})
@@ -147,7 +147,11 @@ func (vs *VectorStore) UpdateMetadata(ctx context.Context, id string, metadata m
 
 	payload := make(map[string]*qdrant.Value)
 	for key, value := range metadata {
-		payload[source.MetadataFieldPrefix+key] = anyToQdrantValue(value)
+		v, err := qdrant.NewValue(sanitizeValue(value))
+		if err != nil {
+			return err
+		}
+		payload[source.MetadataFieldPrefix+key] = v
 	}
 
 	err := retryVoid(ctx, vs.retryCfg, func() error {

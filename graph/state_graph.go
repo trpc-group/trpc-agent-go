@@ -11,10 +11,15 @@ package graph
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
+	"sort"
 	"sync"
 	"time"
 
@@ -306,9 +311,10 @@ func WithAgentNodeEventCallback(callback AgentEventCallback) Option {
 // decoding, which may coerce numbers to float64 and complex structures to
 // map[string]any.
 type SubgraphResult struct {
-	LastResponse  string
-	FinalState    State
-	RawStateDelta map[string][]byte
+	LastResponse     string
+	FinalState       State
+	RawStateDelta    map[string][]byte
+	StructuredOutput any // Structured output from sub-agent (typed struct or untyped map)
 }
 
 // SubgraphInputMapper projects parent state into child runtime state.
@@ -383,20 +389,30 @@ func WithModelCallbacks(callbacks *model.Callbacks) Option {
 // The name and description of the node can be set with the options.
 // This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *StateGraph {
-	f := func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
-		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", id), ID: id})
-		defer span.End()
-		return function(ctx, state)
-	}
 	node := &Node{
-		ID:       id,
-		Name:     id,
-		Function: f,
-		Type:     NodeTypeFunction, // Default to function type
+		ID:   id,
+		Name: id,
+		Type: NodeTypeFunction, // Default to function type
 	}
 	for _, opt := range opts {
 		opt(node)
+	}
+
+	node.Function = func(ctx context.Context, state State) (any, error) {
+		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
+		workflow := &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", id), ID: id, Request: state.safeClone()}
+		defer func() {
+			itelemetry.TraceWorkflow(span, workflow)
+			span.End()
+		}()
+
+		response, err := function(ctx, state)
+		if err != nil {
+			workflow.Error = err
+			return nil, err
+		}
+		workflow.Response = response
+		return response, nil
 	}
 
 	sg.graph.addNode(node)
@@ -475,6 +491,11 @@ func (sg *StateGraph) AddSubgraphNode(id string, opts ...Option) *StateGraph {
 // channelUpdateMarker value for marking channel updates.
 const channelUpdateMarker = "update"
 
+const (
+	joinChannelFromSeparator = ":from:"
+	joinKeyLenBytes          = 8
+)
+
 // AddEdge adds a normal edge between two nodes.
 // This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
@@ -496,6 +517,78 @@ func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 	}
 	sg.graph.addNodeWriter(from, writer)
 	return sg
+}
+
+// AddJoinEdge adds a join edge that waits for all start nodes to complete
+// before triggering the end node.
+func (sg *StateGraph) AddJoinEdge(fromNodes []string, to string) *StateGraph {
+	starts := normalizeJoinStarts(fromNodes)
+	if to == "" || to == Start || len(starts) == 0 {
+		return sg
+	}
+
+	for _, from := range starts {
+		edge := &Edge{
+			From: from,
+			To:   to,
+		}
+		sg.graph.addEdge(edge)
+	}
+
+	channelName := joinChannelName(to, starts)
+
+	sg.graph.addChannel(channelName, channel.BehaviorBarrier)
+	if ch, ok := sg.graph.getChannel(channelName); ok && ch != nil {
+		ch.SetBarrierExpected(starts)
+	}
+
+	sg.graph.addNodeTriggerChannel(to, channelName)
+	sg.graph.addNodeTrigger(channelName, to)
+
+	for _, from := range starts {
+		writer := channelWriteEntry{
+			Channel: channelName,
+			Value:   from,
+		}
+		sg.graph.addNodeWriter(from, writer)
+	}
+	return sg
+}
+
+func joinChannelName(to string, starts []string) string {
+	joinKey := joinKeyForStarts(starts)
+	return ChannelJoinPrefix + to + joinChannelFromSeparator + joinKey
+}
+
+func joinKeyForStarts(starts []string) string {
+	h := sha256.New()
+	for _, start := range starts {
+		var lenBuf [joinKeyLenBytes]byte
+		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(start)))
+		_, _ = h.Write(lenBuf[:])
+		_, _ = h.Write([]byte(start))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func normalizeJoinStarts(fromNodes []string) []string {
+	if len(fromNodes) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(fromNodes))
+	out := make([]string, 0, len(fromNodes))
+	for _, from := range fromNodes {
+		if from == "" || from == Start || from == End {
+			continue
+		}
+		if seen[from] {
+			continue
+		}
+		seen[from] = true
+		out = append(out, from)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // AddConditionalEdges adds conditional routing from a node.
@@ -764,8 +857,25 @@ type llmRunner struct {
 
 // execute implements the three-stage rule for LLM execution.
 func (r *llmRunner) execute(ctx context.Context, state State, span oteltrace.Span) (any, error) {
+	if msgs, ok := GetOneShotMessagesForNode(state, r.nodeID); ok {
+		return r.executeOneShotStage(
+			ctx,
+			state,
+			msgs,
+			span,
+			ClearOneShotMessagesForNode(r.nodeID),
+		)
+	}
 	if v, ok := state[StateKeyOneShotMessages].([]model.Message); ok && len(v) > 0 {
-		return r.executeOneShotStage(ctx, state, v, span)
+		return r.executeOneShotStage(
+			ctx,
+			state,
+			v,
+			span,
+			State{
+				StateKeyOneShotMessages: []model.Message(nil),
+			},
+		)
 	}
 	if userInput, exists := state[StateKeyUserInput]; exists {
 		if input, ok := userInput.(string); ok && input != "" {
@@ -780,6 +890,7 @@ func (r *llmRunner) executeOneShotStage(
 	state State,
 	oneShotMsgs []model.Message,
 	span oteltrace.Span,
+	clearUpdate State,
 ) (any, error) {
 	instr := r.processInstruction(state)
 	used := ensureSystemHead(oneShotMsgs, instr)
@@ -795,15 +906,16 @@ func (r *llmRunner) executeOneShotStage(
 	if asst != nil {
 		ops = append(ops, AppendMessages{Items: []model.Message{*asst}})
 	}
-	return State{
-		StateKeyMessages:        ops,
-		StateKeyOneShotMessages: []model.Message(nil), // Clear one-shot messages after execution.
-		StateKeyLastResponse:    asst.Content,
-		StateKeyLastResponseID:  extractResponseID(result),
+	out := State{
+		StateKeyMessages:       ops,
+		StateKeyLastResponse:   asst.Content,
+		StateKeyLastResponseID: extractResponseID(result),
 		StateKeyNodeResponses: map[string]any{
 			r.nodeID: asst.Content,
 		},
-	}, nil
+	}
+	maps.Copy(out, clearUpdate)
+	return out, nil
 }
 
 func (r *llmRunner) executeUserInputStage(
@@ -893,6 +1005,10 @@ func (r *llmRunner) executeModel(
 		Tools:            tools,
 		GenerationConfig: r.generationConfig,
 	}
+	if inv, ok := agent.InvocationFromContext(ctx); ok &&
+		inv != nil && inv.RunOptions.Stream != nil {
+		request.GenerationConfig.Stream = *inv.RunOptions.Stream
+	}
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
 	var nodeID string
@@ -944,23 +1060,35 @@ func (r *llmRunner) executeModel(
 	return result, err
 }
 
-// processInstruction resolves placeholder variables in the instruction using
-// the session state present in the graph state (if any). It supports keys like
-// {user:...}, {app:...}, and optional suffix {?} consistent with llmagent.
+// processInstruction resolves placeholder variables in the instruction.
+// It supports the same syntax as LLMAgent, including {invocation:*} values
+// stored on the current invocation.
 func (r *llmRunner) processInstruction(state State) string {
 	instr := r.instruction
 	if instr == "" {
 		return instr
 	}
-	// Extract session from graph state.
-	if sessVal, ok := state[StateKeySession]; ok {
-		if sess, ok := sessVal.(*session.Session); ok && sess != nil {
-			// Build a minimal invocation carrying only the session for injection.
-			inv := agent.NewInvocation(agent.WithInvocationSession(sess))
-			if injected, err := stateinject.InjectSessionState(instr, inv); err == nil {
-				return injected
-			}
+
+	var invocation *agent.Invocation
+	if execVal, ok := state[StateKeyExecContext]; ok {
+		if execCtx, ok := execVal.(*ExecutionContext); ok && execCtx != nil {
+			invocation = execCtx.Invocation
 		}
+	}
+
+	var sess *session.Session
+	if sessVal, ok := state[StateKeySession]; ok {
+		if s, ok := sessVal.(*session.Session); ok {
+			sess = s
+		}
+	}
+
+	if injected, err := stateinject.InjectSessionStateWithSession(
+		instr,
+		invocation,
+		sess,
+	); err == nil {
+		return injected
 	}
 	return instr
 }
@@ -1330,12 +1458,16 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 
 	return func(ctx context.Context, state State) (any, error) {
 		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
-		itelemetry.TraceWorkflow(span, &itelemetry.Workflow{Name: "execute_tools_node", ID: "execute_tools_node"})
-		defer span.End()
+		workflow := &itelemetry.Workflow{Name: "execute_tools_node", ID: "execute_tools_node", Request: state.safeClone()}
+		defer func() {
+			itelemetry.TraceWorkflow(span, workflow)
+			span.End()
+		}()
 
 		// Extract and validate messages from state.
 		toolCalls, err := extractToolCallsFromState(state, span)
 		if err != nil {
+			workflow.Error = err
 			return nil, err
 		}
 
@@ -1362,11 +1494,41 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			EnableParallel: parallel,
 		})
 		if err != nil {
+			workflow.Error = err
 			return nil, err
 		}
-		return State{
-			StateKeyMessages: newMessages,
-		}, nil
+		upd := State{StateKeyMessages: newMessages}
+
+		if len(newMessages) > 0 {
+			upd[StateKeyLastToolResponse] =
+				newMessages[len(newMessages)-1].Content
+		}
+
+		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
+		if nodeID != "" {
+			type toolNodeResponse struct {
+				ToolID   string          `json:"tool_id"`
+				ToolName string          `json:"tool_name"`
+				Output   json.RawMessage `json:"output"`
+			}
+
+			responses := make([]toolNodeResponse, 0, len(newMessages))
+			for _, msg := range newMessages {
+				responses = append(responses, toolNodeResponse{
+					ToolID:   msg.ToolID,
+					ToolName: msg.ToolName,
+					Output:   json.RawMessage(msg.Content),
+				})
+			}
+
+			b, _ := json.Marshal(responses)
+			upd[StateKeyNodeResponses] = map[string]any{
+				nodeID: string(b),
+			}
+		}
+
+		workflow.Response = upd
+		return upd, nil
 	}
 }
 
@@ -1406,11 +1568,21 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	scope := dummyNode.agentEventScope
 	inputFromLast := dummyNode.agentInputFromLastResponse
 	return func(ctx context.Context, state State) (a any, err error) {
-		ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, agentName))
+		ctx, span := trace.Tracer.Start(
+			ctx,
+			fmt.Sprintf(
+				"%s %s",
+				itelemetry.OperationInvokeAgent,
+				agentName,
+			),
+		)
 		defer func() {
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+				span.SetAttributes(attribute.String(
+					itelemetry.KeyErrorType,
+					itelemetry.ValueDefaultErrorType,
+				))
 			}
 			span.End()
 		}()
@@ -1419,12 +1591,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		invocationID, _, _, _, eventChan := extractExecutionContext(state)
 
 		// Extract current node ID from state.
-		var nodeID string
-		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
-			if id, ok := nodeIDData.(string); ok {
-				nodeID = id
-			}
-		}
+		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
 
 		// Extract parent agent from state to find the sub-agent.
 		parentAgent, parentExists := state[StateKeyParentAgent]
@@ -1440,46 +1607,56 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 
 		// Build child runtime state via optional mapper; default to a filtered shallow copy
 		// of the parent state to avoid leaking internal/ephemeral keys (exec context, callbacks, etc.).
-		var childState State
+		childState := State{}
 		if inputMapper != nil {
 			if s := inputMapper(state); s != nil {
 				childState = s
-			} else {
-				childState = State{}
 			}
 		} else {
 			childState = copyRuntimeStateFiltered(state)
 		}
 		if isolated {
 			// Instruct child GraphAgent to not include session contents in its request.
-			if childState == nil {
-				childState = State{}
-			}
 			childState[CfgKeyIncludeContents] = "none"
 		}
 
 		// Optionally map parent's last_response to user_input for this agent node.
 		parentForInput := state
 		if inputFromLast {
-			if lr, ok := state[StateKeyLastResponse]; ok {
-				if v, ok2 := lr.(string); ok2 && v != "" {
-					// Clone a shallow copy to avoid mutating the original state view.
-					cloned := state.Clone()
-					cloned[StateKeyUserInput] = v
-					parentForInput = cloned
-				}
+			lastResponse, ok := GetStateValue[string](
+				state,
+				StateKeyLastResponse,
+			)
+			if ok && lastResponse != "" {
+				// Clone a shallow copy to avoid mutating the original state view.
+				cloned := state.Clone()
+				cloned[StateKeyUserInput] = lastResponse
+				parentForInput = cloned
 			}
 		}
 
 		// Build invocation for the target agent with custom runtime state and scope.
 		invocation := buildAgentInvocationWithStateAndScope(ctx, parentForInput, childState, targetAgent, scope)
 
-		itelemetry.TraceBeforeInvokeAgent(span, invocation, targetAgent.Info().Description, "", dummyNode.llmGenerationConfig)
+		itelemetry.TraceBeforeInvokeAgent(
+			span,
+			invocation,
+			targetAgent.Info().Description,
+			"",
+			dummyNode.llmGenerationConfig,
+		)
 		var stream bool
-		if dummyNode.llmGenerationConfig != nil {
+		if invocation.RunOptions.Stream != nil {
+			stream = *invocation.RunOptions.Stream
+		} else if dummyNode.llmGenerationConfig != nil {
 			stream = dummyNode.llmGenerationConfig.Stream
 		}
-		tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &err)
+		tracker := itelemetry.NewInvokeAgentTracker(
+			ctx,
+			invocation,
+			stream,
+			&err,
+		)
 		defer tracker.RecordMetrics()()
 
 		// Emit agent execution start event.
@@ -1502,7 +1679,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		}
 
 		// Process agent event stream and capture completion state.
-		lastResponse, finalState, rawDelta, fullRespEvent, tokenUsage, err := processAgentEventStream(
+		lastResponse, finalState, rawDelta, structuredOutput, fullRespEvent, tokenUsage, err := processAgentEventStream(
 			ctx, agentEventChan, nodeCallbacks, nodeID, state, eventChan, agentName, tracker,
 		)
 		if err != nil {
@@ -1515,7 +1692,12 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		emitAgentCompleteEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime)
 		// Update state with either custom output mapping or default behavior.
 		if outputMapper != nil {
-			mapped := outputMapper(state, SubgraphResult{LastResponse: lastResponse, FinalState: finalState, RawStateDelta: rawDelta})
+			mapped := outputMapper(state, SubgraphResult{
+				LastResponse:     lastResponse,
+				FinalState:       finalState,
+				RawStateDelta:    rawDelta,
+				StructuredOutput: structuredOutput,
+			})
 			if mapped != nil {
 				return mapped, nil
 			}
@@ -1540,10 +1722,11 @@ func processAgentEventStream(
 	eventChan chan<- *event.Event,
 	agentName string,
 	tracker *itelemetry.InvokeAgentTracker,
-) (string, State, map[string][]byte, *event.Event, *itelemetry.TokenUsage, error) {
+) (string, State, map[string][]byte, any, *event.Event, *itelemetry.TokenUsage, error) {
 	var lastResponse string
 	var finalState State
 	var rawDelta map[string][]byte
+	var structuredOutput any
 	var fullRespEvent *event.Event
 	tokenUsage := &itelemetry.TokenUsage{}
 
@@ -1560,13 +1743,18 @@ func processAgentEventStream(
 
 		// Forward the event to the parent event channel.
 		if err := event.EmitEvent(ctx, eventChan, agentEvent); err != nil {
-			return "", nil, nil, fullRespEvent, tokenUsage, err
+			return "", nil, nil, nil, fullRespEvent, tokenUsage, err
 		}
 
 		// Track the last response for state update.
 		if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 &&
 			agentEvent.Response.Choices[0].Message.Content != "" {
 			lastResponse = agentEvent.Response.Choices[0].Message.Content
+		}
+
+		// Capture structured output from state.update events.
+		if agentEvent.StructuredOutput != nil {
+			structuredOutput = agentEvent.StructuredOutput
 		}
 
 		if agentEvent.Response != nil {
@@ -1607,7 +1795,7 @@ func processAgentEventStream(
 		}
 	}
 
-	return lastResponse, finalState, rawDelta, fullRespEvent, tokenUsage, nil
+	return lastResponse, finalState, rawDelta, structuredOutput, fullRespEvent, tokenUsage, nil
 }
 
 // buildAgentInvocationWithStateAndScope builds an invocation for the target agent
@@ -2463,6 +2651,10 @@ func MessagesStateSchema() *StateSchema {
 		Reducer: DefaultReducer,
 	})
 	schema.AddField(StateKeyLastResponse, StateField{
+		Type:    reflect.TypeOf(""),
+		Reducer: DefaultReducer,
+	})
+	schema.AddField(StateKeyLastToolResponse, StateField{
 		Type:    reflect.TypeOf(""),
 		Reducer: DefaultReducer,
 	})

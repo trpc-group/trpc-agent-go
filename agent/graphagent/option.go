@@ -89,6 +89,9 @@ type Options struct {
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
+	// summaryFormatter allows custom formatting of session summary content.
+	// When nil (default), uses default formatSummaryContent function.
+	summaryFormatter func(summary string) string
 
 	// MessageTimelineFilterMode is the message timeline filter mode.
 	messageTimelineFilterMode string
@@ -207,5 +210,18 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 func WithReasoningContentMode(mode string) Option {
 	return func(opts *Options) {
 		opts.ReasoningContentMode = mode
+	}
+}
+
+// WithSummaryFormatter sets a custom formatter for session summary content.
+// This allows users to customize how summaries are presented to the model.
+// Example:
+//
+//	graphagent.WithSummaryFormatter(func(summary string) string {
+//	    return fmt.Sprintf("## Previous Context\n\n%s", summary)
+//	})
+func WithSummaryFormatter(formatter func(summary string) string) Option {
+	return func(opts *Options) {
+		opts.summaryFormatter = formatter
 	}
 }

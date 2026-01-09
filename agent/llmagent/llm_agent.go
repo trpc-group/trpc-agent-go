@@ -47,17 +47,19 @@ func defaultCodeExecutor() codeexecutor.CodeExecutor {
 
 // LLMAgent is an agent that uses an LLM to generate responses.
 type LLMAgent struct {
-	name          string
-	mu            sync.RWMutex
-	model         model.Model
-	models        map[string]model.Model // Registered models for switching
-	description   string
-	instruction   string
-	systemPrompt  string
-	genConfig     model.GenerationConfig
-	flow          flow.Flow
-	tools         []tool.Tool     // All tools (user tools + framework tools)
-	userToolNames map[string]bool // Names of tools explicitly registered
+	name                    string
+	mu                      sync.RWMutex
+	model                   model.Model
+	models                  map[string]model.Model // Registered models for switching
+	description             string
+	instruction             string
+	systemPrompt            string
+	modelInstructions       map[string]string
+	modelGlobalInstructions map[string]string
+	genConfig               model.GenerationConfig
+	flow                    flow.Flow
+	tools                   []tool.Tool     // All tools (user tools + framework tools)
+	userToolNames           map[string]bool // Names of tools explicitly registered
 	// via WithTools and WithToolSets.
 	codeExecutor         codeexecutor.CodeExecutor
 	planner              planner.Planner
@@ -102,12 +104,16 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Construct the agent first so request processors can access dynamic getters.
 	a := &LLMAgent{
-		name:                 name,
-		model:                initialModel,
-		models:               models,
-		description:          options.Description,
-		instruction:          options.Instruction,
-		systemPrompt:         options.GlobalInstruction,
+		name:              name,
+		model:             initialModel,
+		models:            models,
+		description:       options.Description,
+		instruction:       options.Instruction,
+		systemPrompt:      options.GlobalInstruction,
+		modelInstructions: cloneStringMap(options.ModelInstructions),
+		modelGlobalInstructions: cloneStringMap(
+			options.ModelGlobalInstructions,
+		),
 		genConfig:            options.GenerationConfig,
 		codeExecutor:         options.codeExecutor,
 		tools:                tools,
@@ -192,6 +198,8 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 
 	// 3. Instruction processor - adds instruction content and system prompt.
 	if options.Instruction != "" || options.GlobalInstruction != "" ||
+		len(options.ModelInstructions) > 0 ||
+		len(options.ModelGlobalInstructions) > 0 ||
 		(options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil) {
 		instructionOpts := []processor.InstructionRequestProcessorOption{
 			processor.WithOutputSchema(options.OutputSchema),
@@ -202,14 +210,17 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 				processor.WithStructuredOutputSchema(options.StructuredOutput.JSONSchema.Schema),
 			)
 		}
-		// Always wire dynamic getters so instructions can be updated at runtime.
 		instructionOpts = append(instructionOpts,
-			processor.WithInstructionGetter(func() string { return a.getInstruction() }),
-			processor.WithSystemPromptGetter(func() string { return a.getSystemPrompt() }),
+			processor.WithInstructionResolver(
+				a.instructionForInvocation,
+			),
+			processor.WithSystemPromptResolver(
+				a.systemPromptForInvocation,
+			),
 		)
 		instructionProcessor := processor.NewInstructionRequestProcessor(
-			"", // static value unused when getters are present
-			"", // static value unused when getters are present
+			"", // static value unused when resolver is present
+			"", // static value unused when resolver is present
 			instructionOpts...,
 		)
 		requestProcessors = append(requestProcessors, instructionProcessor)
@@ -258,6 +269,10 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	if options.ReasoningContentMode != "" {
 		contentOpts = append(contentOpts,
 			processor.WithReasoningContentMode(options.ReasoningContentMode))
+	}
+	if options.summaryFormatter != nil {
+		contentOpts = append(contentOpts,
+			processor.WithSummaryFormatter(options.summaryFormatter))
 	}
 	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
@@ -426,9 +441,34 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
 
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
-	itelemetry.TraceBeforeInvokeAgent(span, invocation, a.description, a.systemPrompt+a.instruction, &a.genConfig)
-	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, a.genConfig.Stream, &err)
+	ctx, span := trace.Tracer.Start(
+		ctx,
+		fmt.Sprintf(
+			"%s %s",
+			itelemetry.OperationInvokeAgent,
+			a.name,
+		),
+	)
+	effectiveGenConfig := a.genConfig
+	if invocation.RunOptions.Stream != nil {
+		effectiveGenConfig.Stream = *invocation.RunOptions.Stream
+	}
+
+	promptText := a.systemPromptForInvocation(invocation) +
+		a.instructionForInvocation(invocation)
+	itelemetry.TraceBeforeInvokeAgent(
+		span,
+		invocation,
+		a.description,
+		promptText,
+		&effectiveGenConfig,
+	)
+	tracker := itelemetry.NewInvokeAgentTracker(
+		ctx,
+		invocation,
+		effectiveGenConfig.Stream,
+		&err,
+	)
 
 	ctx, flowEventChan, err := a.executeAgentFlow(ctx, invocation)
 	if err != nil {
@@ -946,6 +986,25 @@ func (a *LLMAgent) SetGlobalInstruction(systemPrompt string) {
 	a.mu.Unlock()
 }
 
+// SetModelInstructions updates the model-specific instruction overrides.
+// Key: model.Info().Name, Value: instruction text.
+func (a *LLMAgent) SetModelInstructions(instructions map[string]string) {
+	copied := cloneStringMap(instructions)
+	a.mu.Lock()
+	a.modelInstructions = copied
+	a.mu.Unlock()
+}
+
+// SetModelGlobalInstructions updates the model-specific system prompt
+// overrides.
+// Key: model.Info().Name, Value: system prompt text.
+func (a *LLMAgent) SetModelGlobalInstructions(prompts map[string]string) {
+	copied := cloneStringMap(prompts)
+	a.mu.Lock()
+	a.modelGlobalInstructions = copied
+	a.mu.Unlock()
+}
+
 // getInstruction returns the current instruction with read lock.
 func (a *LLMAgent) getInstruction() string {
 	a.mu.RLock()
@@ -957,5 +1016,39 @@ func (a *LLMAgent) getInstruction() string {
 func (a *LLMAgent) getSystemPrompt() string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
+	return a.systemPrompt
+}
+
+func (a *LLMAgent) instructionForInvocation(inv *agent.Invocation) string {
+	modelName := ""
+	if inv != nil && inv.Model != nil {
+		modelName = inv.Model.Info().Name
+	}
+
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if modelName != "" {
+		if ins, ok := a.modelInstructions[modelName]; ok {
+			return ins
+		}
+	}
+	return a.instruction
+}
+
+func (a *LLMAgent) systemPromptForInvocation(inv *agent.Invocation) string {
+	modelName := ""
+	if inv != nil && inv.Model != nil {
+		modelName = inv.Model.Info().Name
+	}
+
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if modelName != "" {
+		if prompt, ok := a.modelGlobalInstructions[modelName]; ok {
+			return prompt
+		}
+	}
 	return a.systemPrompt
 }
