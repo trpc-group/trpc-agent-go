@@ -143,6 +143,244 @@ func TestRunEmitsGraphNodeInterruptActivityWhenEnabled(t *testing.T) {
 	assert.True(t, found)
 }
 
+func TestRunEmitsGraphNodeInterruptResumeAckWhenResuming(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event)
+			close(agentEvents)
+			return agentEvents, nil
+		},
+	}
+
+	r := New(
+		underlying,
+		WithGraphNodeInterruptActivityEnabled(true),
+		WithRunOptionResolver(func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			runtimeState := map[string]any{
+				graph.CfgKeyLineageID:    "demo-lineage",
+				graph.CfgKeyCheckpointID: "ckpt-uuid-xxx",
+				graph.StateKeyCommand: &graph.Command{
+					ResumeMap: map[string]any{
+						"confirm": true,
+					},
+				},
+			}
+			return []agent.RunOption{agent.WithRuntimeState(runtimeState)}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+
+	delta, ok := evts[1].(*aguievents.ActivityDeltaEvent)
+	require.True(t, ok)
+	assert.Equal(t, "graph.node.interrupt", delta.ActivityType)
+	require.Len(t, delta.Patch, 2)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, "/interrupt", delta.Patch[0].Path)
+	assert.Equal(t, json.RawMessage("null"), delta.Patch[0].Value)
+	assert.Equal(t, "add", delta.Patch[1].Op)
+	assert.Equal(t, "/resume", delta.Patch[1].Path)
+	assert.Equal(t, map[string]any{
+		"checkpointId": "ckpt-uuid-xxx",
+		"lineageId":    "demo-lineage",
+		"resumeMap": map[string]any{
+			"confirm": true,
+		},
+	}, delta.Patch[1].Value)
+}
+
+func TestRunEmitsGraphNodeInterruptResumeAckWhenResumingViaStateKeyResumeMap(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event)
+			close(agentEvents)
+			return agentEvents, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithGraphNodeInterruptActivityEnabled(true),
+		WithRunOptionResolver(func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			runtimeState := map[string]any{
+				graph.CfgKeyLineageID:    "demo-lineage",
+				graph.CfgKeyCheckpointID: "ckpt-uuid-xxx",
+				graph.StateKeyResumeMap: map[string]any{
+					"confirm": true,
+				},
+			}
+			return []agent.RunOption{agent.WithRuntimeState(runtimeState)}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	delta, ok := evts[1].(*aguievents.ActivityDeltaEvent)
+	require.True(t, ok)
+	assert.Equal(t, "graph.node.interrupt", delta.ActivityType)
+	require.Len(t, delta.Patch, 2)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, "/interrupt", delta.Patch[0].Path)
+	assert.Equal(t, json.RawMessage("null"), delta.Patch[0].Value)
+	assert.Equal(t, "add", delta.Patch[1].Op)
+	assert.Equal(t, "/resume", delta.Patch[1].Path)
+	assert.Equal(t, map[string]any{
+		"checkpointId": "ckpt-uuid-xxx",
+		"lineageId":    "demo-lineage",
+		"resumeMap": map[string]any{
+			"confirm": true,
+		},
+	}, delta.Patch[1].Value)
+}
+
+func TestRunEmitsGraphNodeInterruptResumeAckWhenResumingViaResumeChannel(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event)
+			close(agentEvents)
+			return agentEvents, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithGraphNodeInterruptActivityEnabled(true),
+		WithRunOptionResolver(func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			runtimeState := map[string]any{
+				graph.CfgKeyLineageID:    "demo-lineage",
+				graph.CfgKeyCheckpointID: "ckpt-uuid-xxx",
+				graph.ResumeChannel:      "approved",
+			}
+			return []agent.RunOption{agent.WithRuntimeState(runtimeState)}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	delta, ok := evts[1].(*aguievents.ActivityDeltaEvent)
+	require.True(t, ok)
+	assert.Equal(t, "graph.node.interrupt", delta.ActivityType)
+	require.Len(t, delta.Patch, 2)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, "/interrupt", delta.Patch[0].Path)
+	assert.Equal(t, json.RawMessage("null"), delta.Patch[0].Value)
+	assert.Equal(t, "add", delta.Patch[1].Op)
+	assert.Equal(t, "/resume", delta.Patch[1].Path)
+	assert.Equal(t, map[string]any{
+		"checkpointId": "ckpt-uuid-xxx",
+		"lineageId":    "demo-lineage",
+		"resume":       "approved",
+	}, delta.Patch[1].Value)
+}
+
+func TestRunEmitsGraphNodeInterruptResumeAckWhenResumingViaResumeChannelNull(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event)
+			close(agentEvents)
+			return agentEvents, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithGraphNodeInterruptActivityEnabled(true),
+		WithRunOptionResolver(func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			runtimeState := map[string]any{
+				graph.CfgKeyLineageID:    "demo-lineage",
+				graph.CfgKeyCheckpointID: "ckpt-uuid-xxx",
+				graph.ResumeChannel:      nil,
+			}
+			return []agent.RunOption{agent.WithRuntimeState(runtimeState)}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	delta, ok := evts[1].(*aguievents.ActivityDeltaEvent)
+	require.True(t, ok)
+	assert.Equal(t, "graph.node.interrupt", delta.ActivityType)
+	require.Len(t, delta.Patch, 2)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, "/interrupt", delta.Patch[0].Path)
+	assert.Equal(t, json.RawMessage("null"), delta.Patch[0].Value)
+	assert.Equal(t, "add", delta.Patch[1].Op)
+	assert.Equal(t, "/resume", delta.Patch[1].Path)
+	assert.Equal(t, map[string]any{
+		"checkpointId": "ckpt-uuid-xxx",
+		"lineageId":    "demo-lineage",
+		"resume":       nil,
+	}, delta.Patch[1].Value)
+}
+
+func TestRunDoesNotEmitGraphNodeInterruptResumeAckWhenCommandBindsEmptyResumeMap(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event)
+			close(agentEvents)
+			return agentEvents, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithGraphNodeInterruptActivityEnabled(true),
+		WithRunOptionResolver(func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			runtimeState := map[string]any{
+				graph.StateKeyCommand: &graph.Command{
+					ResumeMap: map[string]any{},
+				},
+				graph.StateKeyResumeMap: map[string]any{
+					"confirm": true,
+				},
+			}
+			return []agent.RunOption{agent.WithRuntimeState(runtimeState)}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 1)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+}
+
 func TestRunValidatesInput(t *testing.T) {
 	r := &runner{runOptionResolver: defaultRunOptionResolver}
 	ch, err := r.Run(context.Background(), nil)

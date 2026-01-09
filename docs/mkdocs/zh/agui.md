@@ -654,9 +654,9 @@ if err != nil {
 
 ### GraphAgent 节点活动事件
 
-在 `GraphAgent` 场景下，一个 run 通常会按图执行多个节点。为了让前端能持续展示“当前正在执行哪个节点”，并在 Human-in-the-Loop（HITL）场景中渲染中断提示，框架支持额外发送两类 `ACTIVITY_DELTA` 事件。该能力默认关闭，可在创建 AG-UI Server 时按需开启。
+在 `GraphAgent` 场景下，一个 run 通常会按图执行多个节点。为了让前端能持续展示“当前正在执行哪个节点”，并在 Human-in-the-Loop 场景中渲染中断提示，框架支持额外发送两类 `ACTIVITY_DELTA` 事件。该能力默认关闭，可在创建 AG-UI Server 时按需开启。
 
-`ACTIVITY_DELTA` 事件事件格式可参考 [AG-UI 官方文档](https://docs.ag-ui.com/concepts/events#activitydelta)
+`ACTIVITY_DELTA` 事件格式可参考 [AG-UI 官方文档](https://docs.ag-ui.com/concepts/events#activitydelta)
 
 #### 节点开始（`graph.node.start`）
 
@@ -669,7 +669,7 @@ server, err := agui.New(
 )
 ```
 
-`activityType` 为 `graph.node.start`：在节点真正执行前发出；从中断恢复时也会在恢复前先发出一次。`patch` 会通过 `add /node` 写入当前节点信息：
+`activityType` 为 `graph.node.start`，在节点执行前发出，并通过 `add /node` 写入当前节点信息：
 
 ```json
 {
@@ -687,6 +687,8 @@ server, err := agui.New(
 }
 ```
 
+该事件用于前端展示进度。前端可将 `/node.nodeId` 作为当前正在执行的节点，用于高亮或展示节点执行过程。
+
 #### 中断提示（`graph.node.interrupt`）
 
 该事件默认关闭，可在创建 AG-UI Server 时通过 `agui.WithGraphNodeInterruptActivityEnabled(true)` 开启。
@@ -698,7 +700,7 @@ server, err := agui.New(
 )
 ```
 
-`activityType` 为 `graph.node.interrupt`：在图执行被中断时发出。触发条件为节点调用 `graph.Interrupt(...)`，且当前没有可用的 resume 值。`patch` 会通过 `add /interrupt` 写入 `nodeId` 与 `prompt`，其中 `prompt` 为 `graph.Interrupt(ctx, state, key, prompt)` 的第 4 个参数，可为字符串或结构化 JSON，适合用于前端渲染提示并收集用户输入：
+`activityType` 为 `graph.node.interrupt`，在节点调用 `graph.Interrupt(ctx, state, key, prompt)` 且当前没有可用的 resume 输入时发出。`patch` 会通过 `add /interrupt` 写入中断信息到 `/interrupt`，包含 `nodeId`、`key`、`prompt`、`checkpointId` 与 `lineageId`：
 
 ```json
 {
@@ -710,7 +712,43 @@ server, err := agui.New(
       "path": "/interrupt",
       "value": {
         "nodeId": "confirm",
-        "prompt": "Confirm continuing after the recipe amounts are calculated."
+        "key": "confirm",
+        "prompt": "Confirm continuing after the recipe amounts are calculated.",
+        "checkpointId": "checkpoint-xxx",
+        "lineageId": "lineage-xxx"
+      }
+    }
+  ]
+}
+```
+
+该事件表示执行在该节点暂停。前端可使用 `/interrupt.prompt` 渲染中断提示，并用 `/interrupt.key` 选择需要提供的恢复值。`checkpointId` 与 `lineageId` 可用于定位需要恢复的 checkpoint 并关联多次 run。
+
+#### 恢复回执（`graph.node.interrupt`）
+
+当新的 run 携带 resume 输入发起恢复时，AG-UI Server 会在该 run 的事件流开始处额外发送一条 `ACTIVITY_DELTA`，并且会先于任何 `graph.node.start` 事件发送。该事件同样使用 `activityType: graph.node.interrupt`，先将 `/interrupt` 置为 `null`，再通过 `add /resume` 写入本次恢复输入。`/resume` 包含 `resumeMap` 或 `resume`，并可包含 `checkpointId` 与 `lineageId`：
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "timestamp": 1767950998788,
+  "messageId": "293cec35-9689-4628-82d3-475cc91dab20",
+  "activityType": "graph.node.interrupt",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/interrupt",
+      "value": null
+    },
+    {
+      "op": "add",
+      "path": "/resume",
+      "value": {
+        "checkpointId": "checkpoint-xxx",
+        "lineageId": "lineage-xxx",
+        "resumeMap": {
+          "confirm": true
+        }
       }
     }
   ]

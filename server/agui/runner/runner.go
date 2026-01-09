@@ -12,6 +12,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -23,6 +24,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
@@ -111,6 +113,15 @@ type runInput struct {
 	translator  translator.Translator
 	enableTrack bool
 	span        trace.Span
+	resume      *resumeInfo
+}
+
+type resumeInfo struct {
+	lineageID    string
+	checkpointID string
+	resumeMap    map[string]any
+	resumeSet    bool
+	resumeValue  any
 }
 
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
@@ -176,6 +187,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		translator:  trans,
 		enableTrack: r.tracker != nil,
 		span:        span,
+		resume:      parseResumeInfo(runOption),
 	}
 	events := make(chan aguievents.Event)
 	ctx, cancel := r.newExecutionContext(agent.CloneContext(ctx), r.timeout)
@@ -222,6 +234,11 @@ func (r *runner) run(ctx context.Context, cancel context.CancelFunc, key session
 	if !r.emitEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input) {
 		return
 	}
+	if input.resume != nil && r.graphNodeInterruptActivityEnabled {
+		if !r.emitEvent(ctx, events, newGraphInterruptResumeEvent(input.resume), input) {
+			return
+		}
+	}
 	ch, err := r.runner.Run(ctx, input.userID, threadID, input.userMessage, input.runOption...)
 	if err != nil {
 		log.ErrorfContext(
@@ -249,6 +266,94 @@ func (r *runner) run(ctx context.Context, cancel context.CancelFunc, key session
 			}
 		}
 	}
+}
+
+func parseResumeInfo(opt []agent.RunOption) *resumeInfo {
+	if len(opt) == 0 {
+		return nil
+	}
+	opts := &agent.RunOptions{}
+	for _, o := range opt {
+		o(opts)
+	}
+	state := opts.RuntimeState
+	if len(state) == 0 {
+		return nil
+	}
+	var cmd *graph.Command
+	if rawCmd, ok := state[graph.StateKeyCommand]; ok {
+		cmd, _ = rawCmd.(*graph.Command)
+	}
+	var resumeMap map[string]any
+	if cmd != nil && cmd.ResumeMap != nil && len(cmd.ResumeMap) > 0 {
+		resumeMap = cmd.ResumeMap
+	}
+	if resumeMap == nil && (cmd == nil || cmd.ResumeMap == nil) {
+		switch v := state[graph.StateKeyResumeMap].(type) {
+		case map[string]any:
+			if len(v) > 0 {
+				resumeMap = v
+			}
+		case graph.State:
+			if len(v) > 0 {
+				resumeMap = map[string]any(v)
+			}
+		default:
+		}
+	}
+	var resumeValue any
+	resumeSet := false
+	if cmd != nil && cmd.Resume != nil {
+		resumeSet = true
+		resumeValue = cmd.Resume
+	}
+	if !resumeSet {
+		if rawResume, ok := state[graph.ResumeChannel]; ok {
+			resumeSet = true
+			resumeValue = rawResume
+		}
+	}
+	if resumeMap == nil && !resumeSet {
+		return nil
+	}
+	var lineageID, checkpointID string
+	if rawLineageID, ok := state[graph.CfgKeyLineageID].(string); ok {
+		lineageID = rawLineageID
+	}
+	if rawCheckpointID, ok := state[graph.CfgKeyCheckpointID].(string); ok {
+		checkpointID = rawCheckpointID
+	}
+	return &resumeInfo{
+		lineageID:    lineageID,
+		checkpointID: checkpointID,
+		resumeMap:    resumeMap,
+		resumeSet:    resumeSet,
+		resumeValue:  resumeValue,
+	}
+}
+
+func newGraphInterruptResumeEvent(info *resumeInfo) *aguievents.ActivityDeltaEvent {
+	if info == nil {
+		return nil
+	}
+	resumeValue := make(map[string]any)
+	if info.resumeMap != nil {
+		resumeValue["resumeMap"] = info.resumeMap
+	}
+	if info.lineageID != "" {
+		resumeValue["lineageId"] = info.lineageID
+	}
+	if info.checkpointID != "" {
+		resumeValue["checkpointId"] = info.checkpointID
+	}
+	if info.resumeSet {
+		resumeValue["resume"] = info.resumeValue
+	}
+	patch := []aguievents.JSONPatchOperation{
+		{Op: "add", Path: "/interrupt", Value: json.RawMessage("null")},
+		{Op: "add", Path: "/resume", Value: resumeValue},
+	}
+	return aguievents.NewActivityDeltaEvent(uuid.NewString(), "graph.node.interrupt", patch)
 }
 
 func (r *runner) handleAgentEvent(ctx context.Context, events chan<- aguievents.Event, input *runInput, event *event.Event) bool {

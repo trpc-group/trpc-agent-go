@@ -651,7 +651,7 @@ In this case, the real-time conversation route will be `/agui/chat`, the cancel 
 
 ### GraphAgent Node Activity Events
 
-With `GraphAgent`, a single run typically executes multiple nodes along the graph. To help the frontend highlight the active node and render Human-in-the-Loop (HITL) prompts, the framework can emit two additional `ACTIVITY_DELTA` events. For the event format, see the [AG-UI official docs](https://docs.ag-ui.com/concepts/events#activitydelta). They are disabled by default and can be enabled per event.
+With `GraphAgent`, a single run typically executes multiple nodes along the graph. To help the frontend highlight the active node and render Human-in-the-Loop prompts, the framework can emit two additional `ACTIVITY_DELTA` events. For the event format, see the [AG-UI official docs](https://docs.ag-ui.com/concepts/events#activitydelta). They are disabled by default and can be enabled per event.
 
 #### Node start (`graph.node.start`)
 
@@ -664,7 +664,7 @@ server, err := agui.New(
 )
 ```
 
-`activityType` is `graph.node.start`: emitted before the node actually runs. It is also emitted before resuming from an interrupt. The `patch` writes the current node via `add /node`:
+`activityType` is `graph.node.start`. It is emitted before a node runs and writes the current node to `/node` via `add /node`:
 
 ```json
 {
@@ -682,6 +682,8 @@ server, err := agui.New(
 }
 ```
 
+This event helps the frontend track progress. The frontend can treat `/node.nodeId` as the currently active node and use it to highlight the graph execution.
+
 #### Interrupt (`graph.node.interrupt`)
 
 This event is disabled by default; enable it via `agui.WithGraphNodeInterruptActivityEnabled(true)` when constructing the AG-UI server.
@@ -693,7 +695,7 @@ server, err := agui.New(
 )
 ```
 
-`activityType` is `graph.node.interrupt`: emitted when the graph execution is interrupted. This happens when a node calls `graph.Interrupt(...)` and there is no available resume value. The `patch` writes `nodeId` and `prompt` via `add /interrupt`, where `prompt` is the 4th argument passed to `graph.Interrupt(ctx, state, key, prompt)`, either a string or structured JSON:
+`activityType` is `graph.node.interrupt`. It is emitted when a node calls `graph.Interrupt(ctx, state, key, prompt)` and there is no available resume input. The `patch` writes the interrupt payload to `/interrupt` via `add /interrupt`, including `nodeId`, `key`, `prompt`, `checkpointId`, and `lineageId`:
 
 ```json
 {
@@ -705,7 +707,43 @@ server, err := agui.New(
       "path": "/interrupt",
       "value": {
         "nodeId": "confirm",
-        "prompt": "Confirm continuing after the recipe amounts are calculated."
+        "key": "confirm",
+        "prompt": "Confirm continuing after the recipe amounts are calculated.",
+        "checkpointId": "checkpoint-xxx",
+        "lineageId": "lineage-xxx"
+      }
+    }
+  ]
+}
+```
+
+This event indicates the run is paused at the node. The frontend can render `/interrupt.prompt` as the interrupt UI and use `/interrupt.key` to decide which resume value to provide. `checkpointId` and `lineageId` can be used to resume from the correct checkpoint and correlate runs.
+
+#### Resume ack (`graph.node.interrupt`)
+
+When a run starts with resume input, the AG-UI server emits an extra `ACTIVITY_DELTA` at the beginning of the run, before any `graph.node.start` events. It uses `activityType: graph.node.interrupt`, clears the previous interrupt state by setting `/interrupt` to `null`, and writes the resume input to `/resume`. `/resume` contains `resumeMap` or `resume` plus optional `checkpointId` and `lineageId`:
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "timestamp": 1767950998788,
+  "messageId": "293cec35-9689-4628-82d3-475cc91dab20",
+  "activityType": "graph.node.interrupt",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/interrupt",
+      "value": null
+    },
+    {
+      "op": "add",
+      "path": "/resume",
+      "value": {
+        "checkpointId": "checkpoint-xxx",
+        "lineageId": "lineage-xxx",
+        "resumeMap": {
+          "confirm": true
+        }
       }
     }
   ]

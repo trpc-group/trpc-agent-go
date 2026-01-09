@@ -138,8 +138,11 @@ type graphNodeStartPatchValue struct {
 }
 
 type graphNodeInterruptPatchValue struct {
-	NodeID string `json:"nodeId"`
-	Prompt any    `json:"prompt"`
+	NodeID       string `json:"nodeId"`
+	Key          string `json:"key,omitempty"`
+	Prompt       any    `json:"prompt"`
+	CheckpointID string `json:"checkpointId,omitempty"`
+	LineageID    string `json:"lineageId,omitempty"`
 }
 
 func (t *translator) graphNodeStartActivityEvents(evt *agentevent.Event) []aguievents.Event {
@@ -165,9 +168,14 @@ func (t *translator) graphNodeStartActivityEvents(evt *agentevent.Event) []aguie
 		return nil
 	}
 
-	patch := []aguievents.JSONPatchOperation{
-		{Op: "add", Path: graphNodeStartPatchPath, Value: graphNodeStartPatchValue{NodeID: meta.NodeID}},
-	}
+	patch := make([]aguievents.JSONPatchOperation, 0, 1)
+	patch = append(patch, aguievents.JSONPatchOperation{
+		Op:   "add",
+		Path: graphNodeStartPatchPath,
+		Value: graphNodeStartPatchValue{
+			NodeID: meta.NodeID,
+		},
+	})
 
 	return []aguievents.Event{
 		aguievents.NewActivityDeltaEvent(uuid.NewString(), graphNodeStartActivityType, patch),
@@ -189,7 +197,7 @@ func (t *translator) graphNodeInterruptActivityEvents(evt *agentevent.Event) []a
 			aguievents.WithRunID(t.runID),
 		)}
 	}
-	if meta.NodeID == "" || meta.InterruptValue == nil {
+	if meta.NodeID == "" {
 		return nil
 	}
 
@@ -198,8 +206,11 @@ func (t *translator) graphNodeInterruptActivityEvents(evt *agentevent.Event) []a
 			Op:   "add",
 			Path: graphNodeInterruptPatchPath,
 			Value: graphNodeInterruptPatchValue{
-				NodeID: meta.NodeID,
-				Prompt: meta.InterruptValue,
+				NodeID:       meta.NodeID,
+				Key:          meta.InterruptKey,
+				Prompt:       meta.InterruptValue,
+				CheckpointID: meta.CheckpointID,
+				LineageID:    meta.LineageID,
 			},
 		},
 	}

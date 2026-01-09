@@ -4,24 +4,25 @@ This example exposes an AG-UI SSE endpoint backed by a `GraphAgent` that execute
 
 The graph includes function/LLM/tools/agent nodes to exercise different `GraphAgent` node types in a realistic scenario.
 
-The AG-UI translator emits `ACTIVITY_DELTA` events that the frontend can use to track graph progress and interrupts:
+The AG-UI server emits `ACTIVITY_DELTA` events that the frontend can use to track graph progress and Human-in-the-Loop interrupts:
 
-- `activityType`: `graph.node.start` sets `/node` to the current node information.
-- `activityType`: `graph.node.interrupt` sets `/interrupt` with the interrupt payload, where `prompt` is the value passed to `graph.Interrupt(...)` (string or structured JSON).
+- `activityType`: `graph.node.start` writes the current node to `/node`.
+- `activityType`: `graph.node.interrupt` writes the interrupt payload to `/interrupt`, including `nodeId`, `key`, `prompt`, `checkpointId`, and `lineageId`. `key` and `prompt` are the 3rd and 4th arguments passed to `graph.Interrupt(ctx, state, key, prompt)`.
+- Resume ack: on resume runs, the server emits an extra `graph.node.interrupt` event at the beginning of the run. It clears `/interrupt` to `null` and writes the resume input to `/resume`.
 
-These graph activity events are disabled by default. This example enables them via AG-UI server options (`agui.WithGraphNodeStartActivityEnabled(true)` and `agui.WithGraphNodeInterruptActivityEnabled(true)`).
+These graph activity events are disabled by default. This example enables them via `agui.WithGraphNodeStartActivityEnabled(true)` and `agui.WithGraphNodeInterruptActivityEnabled(true)`.
 
 This helps the frontend track which node is executing and render Human-in-the-Loop prompts, including during resume-from-interrupt flows.
 
 The node IDs are executed in this order:
 
-- `prepare` (function).
-- `recipe_calc_llm` (llm).
-- `execute_tools` (tool).
-- `confirm` (function, interrupt).
-- `draft_message_llm` (llm).
-- `polish_message_agent` (agent).
-- `finish` (function).
+- `prepare`: function.
+- `recipe_calc_llm`: llm.
+- `execute_tools`: tool.
+- `confirm`: function, interrupt.
+- `draft_message_llm`: llm.
+- `polish_message_agent`: agent.
+- `finish`: function.
 
 ## Run
 
@@ -38,7 +39,7 @@ go run ./server/graph \
 
 ## Verify with curl
 
-First request: the graph will interrupt at `confirm` (after the tool is executed).
+First request: the graph will interrupt at `confirm` after the tool is executed.
 
 ```bash
 curl --no-buffer --location 'http://127.0.0.1:8080/agui' \
@@ -55,7 +56,7 @@ curl --no-buffer --location 'http://127.0.0.1:8080/agui' \
   }'
 ```
 
-Second request: resume from the latest checkpoint in the same lineage by providing `forwardedProps.checkpoint_id=""` and a `forwardedProps.resume_map` value.
+Second request: resume from the latest checkpoint in the same lineage. Provide `forwardedProps.resume_map` and `forwardedProps.checkpoint_id`. Use an empty string for the latest checkpoint.
 
 ```bash
 curl --no-buffer --location 'http://127.0.0.1:8080/agui' \
@@ -80,6 +81,8 @@ Look for SSE `data:` lines that contain `"type":"ACTIVITY_DELTA"`, for example:
 
 Node start:
 
+This event is emitted before the node actually runs. It sets `/node.nodeId` so the frontend can highlight the current node.
+
 ```json
 {
   "type": "ACTIVITY_DELTA",
@@ -100,11 +103,13 @@ Node start:
 
 Interrupt:
 
+This event is emitted when a node calls `graph.Interrupt(...)` and there is no available resume input. It writes the interrupt payload to `/interrupt`, including `key`/`prompt` and the `checkpointId`/`lineageId` needed for resuming.
+
 ```json
 {
   "type": "ACTIVITY_DELTA",
-  "timestamp": 1767596081644,
-  "messageId": "1b57bb24-2de0-4824-9175-9dbf58bff34c",
+  "timestamp": 1767949904999,
+  "messageId": "04222c25-f9e1-44c9-ba32-e2ad874123ce",
   "activityType": "graph.node.interrupt",
   "patch": [
     {
@@ -112,7 +117,42 @@ Interrupt:
       "path": "/interrupt",
       "value": {
         "nodeId": "confirm",
-        "prompt": "Confirm continuing after the recipe amounts are calculated."
+        "key": "confirm",
+        "prompt": "Confirm continuing after the recipe amounts are calculated.",
+        "checkpointId": "8780b21e-7f38-4224-a5ea-cbb43e6f71bc",
+        "lineageId": "demo-lineage"
+      }
+    }
+  ]
+}
+```
+
+Resume ack:
+
+This event is emitted before any `graph.node.start` events for the run. It clears `/interrupt` to `null` and writes the resume input to `/resume`. `/resume` contains `resumeMap` or `resume`. It may also include `checkpointId` and `lineageId`.
+
+Example captured from the second request above. `checkpointId` is omitted because `forwardedProps.checkpoint_id` is an empty string.
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "timestamp": 1767950998788,
+  "messageId": "293cec35-9689-4628-82d3-475cc91dab20",
+  "activityType": "graph.node.interrupt",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/interrupt",
+      "value": null
+    },
+    {
+      "op": "add",
+      "path": "/resume",
+      "value": {
+        "lineageId": "demo-lineage",
+        "resumeMap": {
+          "confirm": true
+        }
       }
     }
   ]

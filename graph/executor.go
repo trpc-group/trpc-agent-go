@@ -2598,7 +2598,10 @@ func (e *Executor) handleInterrupt(
 		WithPregelEventInvocationID(execCtx.InvocationID),
 		WithPregelEventStepNumber(step),
 		WithPregelEventNodeID(interrupt.NodeID),
+		WithPregelEventInterruptKey(interrupt.Key),
 		WithPregelEventInterruptValue(interrupt.Value),
+		WithPregelEventLineageID(GetLineageID(checkpointConfig)),
+		WithPregelEventCheckpointID(GetCheckpointID(checkpointConfig)),
 	)
 
 	// Replace ctx with a fresh eventCtx derived from background to avoid cancel warning.

@@ -1291,6 +1291,44 @@ func TestGraphNodeStartEmitsActivityDelta(t *testing.T) {
 	assert.Equal(t, graphNodeStartPatchValue{NodeID: "node-2"}, delta2.Patch[0].Value)
 }
 
+func TestGraphNodeStartDoesNotResetInterruptStateWhenEnabled(t *testing.T) {
+	tr := newTranslatorImplForTest(t,
+		WithGraphNodeStartActivityEnabled(true),
+		WithGraphNodeInterruptActivityEnabled(true),
+	)
+	if tr == nil {
+		return
+	}
+
+	meta := graph.NodeExecutionMetadata{
+		NodeID:   "node-1",
+		NodeType: graph.NodeTypeFunction,
+		Phase:    graph.ExecutionPhaseStart,
+		Attempt:  1,
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "node-start-with-interrupt",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNode: raw,
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+	assert.Equal(t, graphNodeStartActivityType, delta.ActivityType)
+	assert.Len(t, delta.Patch, 1)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, graphNodeStartPatchPath, delta.Patch[0].Path)
+	assert.Equal(t, graphNodeStartPatchValue{NodeID: "node-1"}, delta.Patch[0].Value)
+}
+
 func TestGraphNodeStartActivityDisabledByDefault(t *testing.T) {
 	tr := newTranslatorForTest(t)
 	if tr == nil {
@@ -1428,7 +1466,7 @@ func TestGraphNodeInterruptIgnoresEmptyNodeID(t *testing.T) {
 	assert.Empty(t, events)
 }
 
-func TestGraphNodeInterruptIgnoresNilInterruptValue(t *testing.T) {
+func TestGraphNodeInterruptAllowsNilPrompt(t *testing.T) {
 	tr := newTranslatorImplForTest(t, WithGraphNodeInterruptActivityEnabled(true))
 	if tr == nil {
 		return
@@ -1450,7 +1488,60 @@ func TestGraphNodeInterruptIgnoresNilInterruptValue(t *testing.T) {
 	}
 	events, err := tr.Translate(context.Background(), evt)
 	assert.NoError(t, err)
-	assert.Empty(t, events)
+	assert.Len(t, events, 1)
+
+	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+	assert.NotEmpty(t, delta.MessageID)
+	assert.Equal(t, graphNodeInterruptActivityType, delta.ActivityType)
+	assert.Len(t, delta.Patch, 1)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, graphNodeInterruptPatchPath, delta.Patch[0].Path)
+	assert.Equal(t, graphNodeInterruptPatchValue{NodeID: "nodeX"}, delta.Patch[0].Value)
+}
+
+func TestGraphNodeInterruptIncludesKeyAndCheckpointFields(t *testing.T) {
+	tr := newTranslatorImplForTest(t, WithGraphNodeInterruptActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+
+	meta := graph.PregelStepMetadata{
+		StepNumber:     3,
+		NodeID:         "nodeX",
+		InterruptKey:   "approval_key",
+		InterruptValue: map[string]any{"ok": true},
+		CheckpointID:   "ckpt-uuid-xxx",
+		LineageID:      "thread-123",
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "pregel-interrupt-with-key",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyPregel: raw,
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+	assert.NotEmpty(t, delta.MessageID)
+	assert.Equal(t, graphNodeInterruptActivityType, delta.ActivityType)
+	assert.Len(t, delta.Patch, 1)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, graphNodeInterruptPatchPath, delta.Patch[0].Path)
+	assert.Equal(t, graphNodeInterruptPatchValue{
+		NodeID:       "nodeX",
+		Key:          "approval_key",
+		Prompt:       map[string]any{"ok": true},
+		CheckpointID: "ckpt-uuid-xxx",
+		LineageID:    "thread-123",
+	}, delta.Patch[0].Value)
 }
 
 func TestGraphNodeStartEmitsActivityDeltaForAgentNode(t *testing.T) {
