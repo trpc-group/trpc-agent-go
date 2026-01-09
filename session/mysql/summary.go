@@ -60,12 +60,8 @@ func (s *Service) CreateSessionSummary(
 		return fmt.Errorf("marshal summary failed: %w", err)
 	}
 
-	var expiresAt *time.Time
-	if s.opts.sessionTTL > 0 {
-		t := sum.UpdatedAt.Add(s.opts.sessionTTL)
-		expiresAt = &t
-	}
-
+	// Note: expires_at is set to NULL - summaries are bound to session
+	// lifecycle and will be deleted when session is deleted or expires.
 	_, err = s.mysqlClient.Exec(ctx,
 		fmt.Sprintf(
 			`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
@@ -77,7 +73,7 @@ func (s *Service) CreateSessionSummary(
 				deleted_at = NULL`,
 			s.tableSessionSummaries,
 		),
-		key.AppName, key.UserID, key.SessionID, filterKey, summaryBytes, sum.UpdatedAt, expiresAt)
+		key.AppName, key.UserID, key.SessionID, filterKey, summaryBytes, sum.UpdatedAt, nil)
 	if err != nil {
 		return fmt.Errorf("upsert summary failed: %w", err)
 	}
