@@ -2046,3 +2046,273 @@ func TestNewToolsNodeFunc_RefreshToolSetsOnRun(t *testing.T) {
 
 	require.Equal(t, 2, ts.calls)
 }
+
+type latestCheckpointAgent struct {
+	name string
+	exec *Executor
+}
+
+func (a *latestCheckpointAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *latestCheckpointAgent) Tools() []tool.Tool { return nil }
+
+func (a *latestCheckpointAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *latestCheckpointAgent) FindSubAgent(_ string) agent.Agent {
+	return nil
+}
+
+func (a *latestCheckpointAgent) Executor() *Executor { return a.exec }
+
+func (a *latestCheckpointAgent) Run(
+	_ context.Context,
+	_ *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func TestStateStringOr(t *testing.T) {
+	const (
+		key      = "k"
+		fallback = "fb"
+		value    = "v"
+	)
+
+	require.Equal(t, fallback, stateStringOr(nil, key, fallback))
+	require.Equal(
+		t,
+		fallback,
+		stateStringOr(State{key: testEmptyString}, key, fallback),
+	)
+	require.Equal(t, value, stateStringOr(State{key: value}, key, fallback))
+}
+
+func TestResumeCommandForSubgraph(t *testing.T) {
+	const (
+		taskID      = "task"
+		otherTaskID = "other"
+		resumeValue = "ok"
+	)
+
+	require.Nil(t, resumeCommandForSubgraph(nil, taskID))
+
+	cmd := resumeCommandForSubgraph(
+		State{ResumeChannel: resumeValue},
+		taskID,
+	)
+	require.NotNil(t, cmd)
+	require.Equal(t, resumeValue, cmd.Resume)
+
+	stateMap := map[string]any{
+		taskID:      resumeValue,
+		otherTaskID: resumeValue,
+	}
+	cmd = resumeCommandForSubgraph(
+		State{StateKeyResumeMap: stateMap},
+		taskID,
+	)
+	require.NotNil(t, cmd)
+	require.Equal(t, map[string]any{taskID: resumeValue}, cmd.ResumeMap)
+
+	cmd = resumeCommandForSubgraph(
+		State{StateKeyResumeMap: stateMap},
+		testEmptyString,
+	)
+	require.NotNil(t, cmd)
+	require.Equal(t, stateMap, cmd.ResumeMap)
+	stateMap["new"] = "x"
+	_, ok := cmd.ResumeMap["new"]
+	require.False(t, ok)
+
+	cmd = resumeCommandForSubgraph(
+		State{StateKeyResumeMap: map[string]any{otherTaskID: "x"}},
+		taskID,
+	)
+	require.Nil(t, cmd)
+}
+
+func TestExtractPregelInterrupt(t *testing.T) {
+	const (
+		invocationID = "inv"
+		author       = "a"
+		nodeID       = "n"
+		interruptVal = "prompt"
+	)
+
+	_, ok := extractPregelInterrupt(nil)
+	require.False(t, ok)
+
+	e := event.New(invocationID, author, event.WithObject("other"))
+	_, ok = extractPregelInterrupt(e)
+	require.False(t, ok)
+
+	e = event.New(
+		invocationID,
+		author,
+		event.WithObject(ObjectTypeGraphPregelStep),
+	)
+	_, ok = extractPregelInterrupt(e)
+	require.False(t, ok)
+
+	e = event.New(
+		invocationID,
+		author,
+		event.WithObject(ObjectTypeGraphPregelStep),
+		event.WithStateDelta(map[string][]byte{}),
+	)
+	_, ok = extractPregelInterrupt(e)
+	require.False(t, ok)
+
+	e = event.New(
+		invocationID,
+		author,
+		event.WithObject(ObjectTypeGraphPregelStep),
+		event.WithStateDelta(map[string][]byte{
+			MetadataKeyPregel: []byte("{"),
+		}),
+	)
+	_, ok = extractPregelInterrupt(e)
+	require.False(t, ok)
+
+	meta := PregelStepMetadata{
+		NodeID:         nodeID,
+		InterruptValue: interruptVal,
+	}
+	b, err := json.Marshal(meta)
+	require.NoError(t, err)
+	e = event.New(
+		invocationID,
+		author,
+		event.WithObject(ObjectTypeGraphPregelStep),
+		event.WithStateDelta(map[string][]byte{
+			MetadataKeyPregel: b,
+		}),
+	)
+	intr, ok := extractPregelInterrupt(e)
+	require.True(t, ok)
+	require.NotNil(t, intr)
+	require.Equal(t, nodeID, intr.NodeID)
+	require.Equal(t, nodeID, intr.TaskID)
+	require.Equal(t, interruptVal, intr.Value)
+
+	meta = PregelStepMetadata{
+		NodeID:         testEmptyString,
+		InterruptValue: interruptVal,
+	}
+	b, err = json.Marshal(meta)
+	require.NoError(t, err)
+	e = event.New(
+		invocationID,
+		author,
+		event.WithObject(ObjectTypeGraphPregelStep),
+		event.WithStateDelta(map[string][]byte{
+			MetadataKeyPregel: b,
+		}),
+	)
+	_, ok = extractPregelInterrupt(e)
+	require.False(t, ok)
+
+	meta = PregelStepMetadata{NodeID: nodeID}
+	b, err = json.Marshal(meta)
+	require.NoError(t, err)
+	e = event.New(
+		invocationID,
+		author,
+		event.WithObject(ObjectTypeGraphPregelStep),
+		event.WithStateDelta(map[string][]byte{
+			MetadataKeyPregel: b,
+		}),
+	)
+	_, ok = extractPregelInterrupt(e)
+	require.False(t, ok)
+}
+
+func TestLatestInterruptedCheckpointID(t *testing.T) {
+	ctx := context.Background()
+
+	targetAgent := &inspectAgent{name: "no_exec"}
+	id, err := latestInterruptedCheckpointID(ctx, targetAgent, "ln", "ns")
+	require.NoError(t, err)
+	require.Equal(t, testEmptyString, id)
+
+	targetAgent2 := &latestCheckpointAgent{name: "nil_exec"}
+	id, err = latestInterruptedCheckpointID(ctx, targetAgent2, "ln", "ns")
+	require.NoError(t, err)
+	require.Equal(t, testEmptyString, id)
+
+	execWithNilCM := &Executor{
+		checkpointManager: nil,
+	}
+	targetAgent3 := &latestCheckpointAgent{
+		name: "nil_cm",
+		exec: execWithNilCM,
+	}
+	id, err = latestInterruptedCheckpointID(ctx, targetAgent3, "ln", "ns")
+	require.NoError(t, err)
+	require.Equal(t, testEmptyString, id)
+
+	execWithBrokenCM := &Executor{
+		checkpointManager: &CheckpointManager{},
+	}
+	targetAgent4 := &latestCheckpointAgent{
+		name: "err_latest",
+		exec: execWithBrokenCM,
+	}
+	_, err = latestInterruptedCheckpointID(ctx, targetAgent4, "ln", "ns")
+	require.Error(t, err)
+
+	saver := newSubgraphTestSaver()
+	graphSchema := NewStateSchema()
+	g, err := NewStateGraph(graphSchema).
+		AddNode("n", func(_ context.Context, s State) (any, error) {
+			return s, nil
+		}).
+		SetEntryPoint("n").
+		SetFinishPoint("n").
+		Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+	targetAgent5 := &latestCheckpointAgent{
+		name: "with_saver",
+		exec: exec,
+	}
+
+	id, err = latestInterruptedCheckpointID(ctx, targetAgent5, "ln", "ns")
+	require.NoError(t, err)
+	require.Equal(t, testEmptyString, id)
+
+	cfg := CreateCheckpointConfig("ln", "ck1", "ns")
+	_, err = saver.Put(ctx, PutRequest{
+		Config: cfg,
+		Checkpoint: &Checkpoint{
+			ID:            "ck1",
+			ChannelValues: map[string]any{},
+		},
+		Metadata: NewCheckpointMetadata("test", 0),
+	})
+	require.NoError(t, err)
+	id, err = latestInterruptedCheckpointID(ctx, targetAgent5, "ln", "ns")
+	require.NoError(t, err)
+	require.Equal(t, testEmptyString, id)
+
+	cfg = CreateCheckpointConfig("ln", "ck2", "ns")
+	_, err = saver.Put(ctx, PutRequest{
+		Config: cfg,
+		Checkpoint: &Checkpoint{
+			ID: "ck2",
+			InterruptState: &InterruptState{
+				NodeID: "n",
+			},
+		},
+		Metadata: NewCheckpointMetadata("test", 1),
+	})
+	require.NoError(t, err)
+	id, err = latestInterruptedCheckpointID(ctx, targetAgent5, "ln", "ns")
+	require.NoError(t, err)
+	require.Equal(t, "ck2", id)
+}
