@@ -273,6 +273,31 @@ func WithGraphEmitFinalModelResponses(enabled bool) RunOption {
 	}
 }
 
+// WithStreamMode sets StreamMode selection for this run.
+//
+// When StreamModeMessages is present, graph-based Large Language Model (LLM)
+// nodes will also emit their final (Done=true) model responses by default.
+// If you need to override that behavior, call WithGraphEmitFinalModelResponses
+// after WithStreamMode.
+func WithStreamMode(modes ...StreamMode) RunOption {
+	return func(opts *RunOptions) {
+		opts.StreamModeEnabled = true
+		if len(modes) == 0 {
+			opts.StreamModes = nil
+			return
+		}
+		copied := make([]StreamMode, len(modes))
+		copy(copied, modes)
+		opts.StreamModes = copied
+		for _, mode := range copied {
+			if mode == StreamModeMessages {
+				opts.GraphEmitFinalModelResponses = true
+				break
+			}
+		}
+	}
+}
+
 // WithRequestID sets the request id for the RunOptions.
 func WithRequestID(requestID string) RunOption {
 	return func(opts *RunOptions) {
@@ -533,6 +558,16 @@ type RunOptions struct {
 	// When enabled, Runner may omit echoing the final assistant message
 	// in its runner-completion event to avoid duplicates.
 	GraphEmitFinalModelResponses bool
+
+	// StreamModeEnabled indicates whether the caller explicitly configured
+	// StreamModes for this run.
+	StreamModeEnabled bool
+
+	// StreamModes selects which categories of events are forwarded to callers.
+	//
+	// When StreamModeEnabled is false, runners should not apply any stream
+	// filtering and preserve the existing behavior.
+	StreamModes []StreamMode
 
 	// RequestID is the request id of the request.
 	RequestID string

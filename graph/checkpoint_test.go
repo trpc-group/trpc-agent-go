@@ -353,6 +353,17 @@ func TestEvents_Stringers_And_CheckpointEventBuilders(t *testing.T) {
 	)
 	require.NotNil(t, e2)
 	require.Contains(t, e2.StateDelta, MetadataKeyCheckpoint)
+
+	e3 := NewCheckpointInterruptEvent(
+		WithCheckpointEventInvocationID("inv-3"),
+		WithCheckpointEventCheckpointID("ck-3"),
+		WithCheckpointEventSource("interrupt"),
+		WithCheckpointEventStep(3),
+		WithCheckpointEventDuration(3*time.Second),
+	)
+	require.NotNil(t, e3)
+	require.Equal(t, ObjectTypeGraphCheckpointInterrupt, e3.Object)
+	require.Contains(t, e3.StateDelta, MetadataKeyCheckpoint)
 }
 
 func TestStateSchema_Validate_And_Reducers(t *testing.T) {
@@ -1102,7 +1113,13 @@ func TestLLMRunner_ExecuteOneShotStage(t *testing.T) {
 	r := &llmRunner{llmModel: &dummyModel{}, instruction: "inst", tools: nil, nodeID: "node1"}
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
 	_, span := tracer.Start(context.Background(), "s")
-	st, err := r.executeOneShotStage(context.Background(), State{}, []model.Message{model.NewUserMessage("hi")}, span)
+	st, err := r.executeOneShotStage(
+		context.Background(),
+		State{},
+		[]model.Message{model.NewUserMessage("hi")},
+		span,
+		nil,
+	)
 	require.NoError(t, err)
 	s, _ := st.(State)
 	// last_response should be set

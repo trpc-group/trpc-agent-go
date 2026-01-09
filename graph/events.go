@@ -1591,6 +1591,36 @@ func NewCheckpointCommittedEvent(opts ...CheckpointEventOption) *event.Event {
 	return e
 }
 
+// NewCheckpointInterruptEvent creates a new checkpoint interrupt event.
+func NewCheckpointInterruptEvent(opts ...CheckpointEventOption) *event.Event {
+	options := &CheckpointEventOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	metadata := map[string]any{
+		CfgKeyCheckpointID:  options.CheckpointID,
+		EventKeySource:      options.Source,
+		EventKeyStep:        options.Step,
+		EventKeyDuration:    options.Duration,
+		EventKeyBytes:       options.Bytes,
+		EventKeyWritesCount: options.WritesCount,
+	}
+
+	e := NewGraphEvent(options.InvocationID,
+		AuthorGraphExecutor,
+		ObjectTypeGraphCheckpointInterrupt,
+	)
+	if e.StateDelta == nil {
+		e.StateDelta = make(map[string][]byte)
+	}
+	if jsonData, err := json.Marshal(metadata); err == nil {
+		e.StateDelta[MetadataKeyCheckpoint] = jsonData
+	}
+
+	return e
+}
+
 // NodeCustomEventOptions contains options for creating node custom events.
 type NodeCustomEventOptions struct {
 	InvocationID string
