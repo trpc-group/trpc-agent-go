@@ -237,6 +237,24 @@ func TestOneShotMessagesByNodeHelpers(t *testing.T) {
 	require.Equal(t, "hi", got[0].Content)
 	got[0].Content = "mutated"
 	require.Equal(t, "hi", raw[nodeID][0].Content)
+
+	byNode := map[string][]model.Message{
+		"llm1": {model.NewUserMessage("a")},
+		"llm2": {model.NewUserMessage("b")},
+	}
+	update = SetOneShotMessagesByNode(byNode)
+	raw, ok = update[StateKeyOneShotMessagesByNode].(map[string][]model.Message)
+	require.True(t, ok)
+	require.Len(t, raw, 2)
+	require.Equal(t, "a", raw["llm1"][0].Content)
+	require.Equal(t, "b", raw["llm2"][0].Content)
+
+	byNode["llm1"][0].Content = "changed"
+	require.Equal(t, "a", raw["llm1"][0].Content)
+
+	clear = ClearOneShotMessagesByNode()
+	_, exists = clear[StateKeyOneShotMessagesByNode]
+	require.True(t, exists)
 }
 
 func TestStateSchemaApplyUpdate_OneShotMessagesByNode(t *testing.T) {
@@ -307,6 +325,24 @@ func TestOneShotMessagesByNodeCoveragePaths(t *testing.T) {
 			model.NewUserMessage("hi"),
 		})
 		require.Nil(t, empty)
+	})
+
+	t.Run("SetOneShotMessagesByNode handles empty", func(t *testing.T) {
+		require.Nil(t, SetOneShotMessagesByNode(nil))
+		require.Nil(t, SetOneShotMessagesByNode(map[string][]model.Message{}))
+		onlyEmptyID := SetOneShotMessagesByNode(map[string][]model.Message{
+			"": {model.NewUserMessage("hi")},
+		})
+		require.Nil(t, onlyEmptyID)
+
+		clearOne := SetOneShotMessagesByNode(map[string][]model.Message{
+			"llm1": nil,
+		})
+		rawAny := clearOne[StateKeyOneShotMessagesByNode]
+		raw, ok := rawAny.(map[string][]model.Message)
+		require.True(t, ok)
+		require.Contains(t, raw, "llm1")
+		require.Len(t, raw["llm1"], 0)
 	})
 
 	t.Run("ClearOneShotMessagesForNode handles empty ID", func(t *testing.T) {

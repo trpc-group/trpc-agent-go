@@ -99,6 +99,48 @@ func SetOneShotMessagesForNode(
 	}
 }
 
+// SetOneShotMessagesByNode sets one-shot messages for multiple target nodes.
+//
+// It writes an incremental update to StateKeyOneShotMessagesByNode:
+//
+//   - Each entry's message slice is defensively copied.
+//   - An empty message slice clears that node's entry.
+//   - Empty node IDs are ignored.
+//
+// This is useful when a single upstream node needs to prepare one-shot inputs
+// for many downstream LLM nodes in one return value.
+func SetOneShotMessagesByNode(
+	byNode map[string][]model.Message,
+) State {
+	if len(byNode) == 0 {
+		return nil
+	}
+	update := make(map[string][]model.Message, len(byNode))
+	for nodeID, msgs := range byNode {
+		if nodeID == "" {
+			continue
+		}
+		if len(msgs) == 0 {
+			update[nodeID] = nil
+			continue
+		}
+		update[nodeID] = append([]model.Message(nil), msgs...)
+	}
+	if len(update) == 0 {
+		return nil
+	}
+	return State{
+		StateKeyOneShotMessagesByNode: update,
+	}
+}
+
+// ClearOneShotMessagesByNode clears the entire one-shot-by-node map.
+func ClearOneShotMessagesByNode() State {
+	return State{
+		StateKeyOneShotMessagesByNode: nil,
+	}
+}
+
 // ClearOneShotMessagesForNode clears one-shot messages for a specific node by
 // deleting its entry in StateKeyOneShotMessagesByNode.
 func ClearOneShotMessagesForNode(nodeID string) State {
