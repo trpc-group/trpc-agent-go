@@ -14,7 +14,10 @@ import (
 	"fmt"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -49,7 +52,8 @@ func (s *knowledgeSearcher) Search(ctx context.Context, candidates map[string]to
 	return s.toolKnowledge.search(ctx, candidates, query, topK)
 }
 
-func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (string, error) {
+func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (content string, err error) {
+
 	req := &model.Request{
 		Messages: []model.Message{
 			model.NewSystemMessage(s.systemPrompt),
@@ -57,6 +61,15 @@ func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (str
 		},
 		GenerationConfig: model.GenerationConfig{Stream: false},
 	}
+	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(s.model.Info().Name))
+	defer span.End()
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if ok || invocation == nil {
+		invocation = agent.NewInvocation()
+	}
+	timingInfo := invocation.GetOrCreateTimingInfo()
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, req, timingInfo, &err)
+	defer tracker.RecordMetrics()()
 	respCh, err := s.model.GenerateContent(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("rewriting query: selection model call failed: %w", err)
@@ -78,12 +91,19 @@ func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (str
 		return "", fmt.Errorf("rewriting query: selection model returned empty response")
 	}
 
-	content := strings.TrimSpace(final.Choices[0].Message.Content)
+	content = strings.TrimSpace(final.Choices[0].Message.Content)
 	if content == "" {
 		content = strings.TrimSpace(final.Choices[0].Delta.Content)
 	}
 	if content == "" {
 		return "", fmt.Errorf("rewriting query: selection model returned empty content")
 	}
+	tracker.TrackResponse(final)
+	if final.Usage == nil {
+		final.Usage = &model.Usage{}
+	}
+	final.Usage.TimingInfo = timingInfo
+	itelemetry.TraceChat(span, invocation, req, final, "", tracker.FirstTokenTimeDuration())
+
 	return content, nil
 }

@@ -17,7 +17,10 @@ import (
 	"sort"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -93,7 +96,17 @@ type searchToolResponse struct {
 	Tools []string `json:"tools"`
 }
 
-func searchTools(ctx context.Context, m model.Model, req *model.Request, tools map[string]tool.Tool) ([]string, error) {
+func searchTools(ctx context.Context, m model.Model, req *model.Request, tools map[string]tool.Tool) (results []string, err error) {
+	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(m.Info().Name))
+	defer span.End()
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if ok || invocation == nil {
+		invocation = agent.NewInvocation()
+	}
+	timingInfo := invocation.GetOrCreateTimingInfo()
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, req, timingInfo, &err)
+	defer tracker.RecordMetrics()()
+
 	respCh, err := m.GenerateContent(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("searching tools: model call failed: %w", err)
@@ -114,7 +127,6 @@ func searchTools(ctx context.Context, m model.Model, req *model.Request, tools m
 	if final == nil || len(final.Choices) == 0 {
 		return nil, fmt.Errorf("searching tools: model returned empty response")
 	}
-
 	content := strings.TrimSpace(final.Choices[0].Message.Content)
 	if content == "" {
 		content = strings.TrimSpace(final.Choices[0].Delta.Content)
@@ -122,6 +134,13 @@ func searchTools(ctx context.Context, m model.Model, req *model.Request, tools m
 	if content == "" {
 		return nil, fmt.Errorf("searching tools: model returned empty content")
 	}
+
+	tracker.TrackResponse(final)
+	if final.Usage == nil {
+		final.Usage = &model.Usage{}
+	}
+	final.Usage.TimingInfo = timingInfo
+	itelemetry.TraceChat(span, invocation, req, final, "", tracker.FirstTokenTimeDuration())
 
 	var parsed searchToolResponse
 	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
