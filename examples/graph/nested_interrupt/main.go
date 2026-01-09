@@ -39,11 +39,13 @@ const (
 	defaultDBPath    = "nested-interrupt.db"
 	defaultLineageID = "demo-nested-interrupt"
 
-	parentAgentName = "parent"
-	childAgentName  = "child"
+	minDepth              = 2
+	parentAgentName       = "parent"
+	nestedAgentNamePrefix = "agent_"
 
-	childNodeAsk   = "ask"
-	stateKeyAnswer = "answer"
+	nodeAsk              = "ask"
+	interruptKeyApproval = "approval"
+	stateKeyAnswer       = "answer"
 
 	startMessage  = "start"
 	resumeMessage = "resume"
@@ -63,6 +65,7 @@ func main() {
 		lineageID    string
 		checkpointID string
 		resumeValue  string
+		depth        int
 	)
 
 	flag.StringVar(&mode, "mode", modeRun, "run or resume")
@@ -70,9 +73,10 @@ func main() {
 	flag.StringVar(&dbPath, "db", defaultDBPath, "sqlite path")
 	flag.StringVar(&checkpointID, "checkpoint-id", "", "resume checkpoint")
 	flag.StringVar(&resumeValue, "resume-value", "", "resume value")
+	flag.IntVar(&depth, "depth", minDepth, "agent nesting depth")
 	flag.Parse()
 
-	if err := validateFlags(mode, lineageID, checkpointID); err != nil {
+	if err := validateFlags(mode, lineageID, checkpointID, depth); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
@@ -85,7 +89,7 @@ func main() {
 	}
 	defer closeDB()
 
-	parent, cm, err := buildAgents(saver)
+	parent, cm, err := buildAgents(saver, depth)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -93,9 +97,9 @@ func main() {
 
 	switch mode {
 	case modeRun:
-		err = runMode(ctx, parent, cm, lineageID)
+		err = runMode(ctx, parent, cm, lineageID, depth)
 	case modeResume:
-		err = resumeMode(ctx, parent, lineageID, checkpointID, resumeValue)
+		err = resumeMode(ctx, parent, cm, lineageID, checkpointID, resumeValue)
 	default:
 		err = fmt.Errorf("unknown mode: %s", mode)
 	}
@@ -105,12 +109,20 @@ func main() {
 	}
 }
 
-func validateFlags(mode string, lineageID string, checkpointID string) error {
+func validateFlags(
+	mode string,
+	lineageID string,
+	checkpointID string,
+	depth int,
+) error {
 	if mode != modeRun && mode != modeResume {
 		return fmt.Errorf("invalid -mode: %q", mode)
 	}
 	if lineageID == "" {
 		return errors.New("-lineage-id is required")
+	}
+	if depth < minDepth {
+		return fmt.Errorf("-depth must be >= %d", minDepth)
 	}
 	if mode == modeResume && checkpointID == "" {
 		return errors.New("-checkpoint-id is required for -mode resume")
@@ -135,6 +147,7 @@ func openSQLiteSaver(
 
 func buildAgents(
 	saver graph.CheckpointSaver,
+	depth int,
 ) (*graphagent.GraphAgent, *graph.CheckpointManager, error) {
 	schema := graph.NewStateSchema()
 	schema.AddField(
@@ -142,55 +155,87 @@ func buildAgents(
 		graph.StateField{Type: reflect.TypeOf("")},
 	)
 
-	childGraph, err := graph.NewStateGraph(schema).
-		AddNode(childNodeAsk, childAskNode()).
-		SetEntryPoint(childNodeAsk).
-		SetFinishPoint(childNodeAsk).
-		Compile()
-	if err != nil {
-		return nil, nil, fmt.Errorf("build child graph: %w", err)
+	if depth < minDepth {
+		return nil, nil, fmt.Errorf("invalid depth: %d", depth)
 	}
 
-	child, err := graphagent.New(
-		childAgentName,
-		childGraph,
+	agentNames := make([]string, depth)
+	agentNames[0] = parentAgentName
+	for i := 1; i < depth; i++ {
+		agentNames[i] = fmt.Sprintf("%s%d", nestedAgentNamePrefix, i+1)
+	}
+
+	leafName := agentNames[depth-1]
+	leafGraph, err := graph.NewStateGraph(schema).
+		AddNode(nodeAsk, askNode()).
+		SetEntryPoint(nodeAsk).
+		SetFinishPoint(nodeAsk).
+		Compile()
+	if err != nil {
+		return nil, nil, fmt.Errorf("build leaf graph: %w", err)
+	}
+
+	leaf, err := graphagent.New(
+		leafName,
+		leafGraph,
 		graphagent.WithCheckpointSaver(saver),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("build child agent: %w", err)
+		return nil, nil, fmt.Errorf("build leaf agent: %w", err)
 	}
 
-	parentGraph, err := graph.NewStateGraph(schema).
-		AddAgentNode(
-			childAgentName,
-			graph.WithSubgraphOutputMapper(parentOutputMapper()),
-		).
-		SetEntryPoint(childAgentName).
-		SetFinishPoint(childAgentName).
-		Compile()
-	if err != nil {
-		return nil, nil, fmt.Errorf("build parent graph: %w", err)
+	child := leaf
+	for i := depth - 2; i >= 0; i-- {
+		childName := agentNames[i+1]
+		parentName := agentNames[i]
+		parentGraph, err := graph.NewStateGraph(schema).
+			AddAgentNode(
+				childName,
+				graph.WithSubgraphOutputMapper(answerOutputMapper()),
+			).
+			SetEntryPoint(childName).
+			SetFinishPoint(childName).
+			Compile()
+		if err != nil {
+			return nil, nil, fmt.Errorf(
+				"build parent graph (%s): %w",
+				parentName,
+				err,
+			)
+		}
+
+		parent, err := graphagent.New(
+			parentName,
+			parentGraph,
+			graphagent.WithCheckpointSaver(saver),
+			graphagent.WithSubAgents([]agent.Agent{child}),
+		)
+		if err != nil {
+			return nil, nil, fmt.Errorf(
+				"build parent agent (%s): %w",
+				parentName,
+				err,
+			)
+		}
+		child = parent
 	}
 
-	parent, err := graphagent.New(
-		parentAgentName,
-		parentGraph,
-		graphagent.WithCheckpointSaver(saver),
-		graphagent.WithSubAgents([]agent.Agent{child}),
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("build parent agent: %w", err)
-	}
-	cm := parent.Executor().CheckpointManager()
+	root := child
+	cm := root.Executor().CheckpointManager()
 	if cm == nil {
 		return nil, nil, errors.New("checkpoint manager not configured")
 	}
-	return parent, cm, nil
+	return root, cm, nil
 }
 
-func childAskNode() graph.NodeFunc {
+func askNode() graph.NodeFunc {
 	return func(ctx context.Context, state graph.State) (any, error) {
-		v, err := graph.Interrupt(ctx, state, childNodeAsk, interruptPrompt)
+		v, err := graph.Interrupt(
+			ctx,
+			state,
+			interruptKeyApproval,
+			interruptPrompt,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -199,7 +244,7 @@ func childAskNode() graph.NodeFunc {
 	}
 }
 
-func parentOutputMapper() graph.SubgraphOutputMapper {
+func answerOutputMapper() graph.SubgraphOutputMapper {
 	return func(_ graph.State, res graph.SubgraphResult) graph.State {
 		answer, ok := graph.GetStateValue[string](res.FinalState, stateKeyAnswer)
 		if !ok {
@@ -214,6 +259,7 @@ func runMode(
 	parent *graphagent.GraphAgent,
 	cm *graph.CheckpointManager,
 	lineageID string,
+	depth int,
 ) error {
 	fmt.Println("Running parent graph (expected to interrupt)...")
 
@@ -250,13 +296,24 @@ func runMode(
 		return errors.New("latest checkpoint is not interrupted")
 	}
 
+	intr := tuple.Checkpoint.InterruptState
+	if intr == nil {
+		return errors.New("missing interrupt state")
+	}
+	fmt.Printf(
+		"Interrupt state: node=%q task=%q\n",
+		intr.NodeID,
+		intr.TaskID,
+	)
+
 	fmt.Println()
 	fmt.Println("To resume, run:")
 	fmt.Printf(
-		"  go run . -mode %s -lineage-id %s -checkpoint-id %s "+
-			"-resume-value <value>\n",
+		"  go run . -mode %s -lineage-id %s -depth %d "+
+			"-checkpoint-id %s -resume-value <value>\n",
 		modeResume,
 		lineageID,
+		depth,
 		tuple.Checkpoint.ID,
 	)
 	return nil
@@ -265,11 +322,31 @@ func runMode(
 func resumeMode(
 	ctx context.Context,
 	parent *graphagent.GraphAgent,
+	cm *graph.CheckpointManager,
 	lineageID string,
 	checkpointID string,
 	resumeValue string,
 ) error {
 	fmt.Println("Resuming from parent checkpoint...")
+
+	tuple, err := cm.Goto(ctx, lineageID, parent.Info().Name, checkpointID)
+	if err != nil {
+		return fmt.Errorf("load checkpoint: %w", err)
+	}
+	if tuple == nil || tuple.Checkpoint == nil {
+		return errors.New("checkpoint not found")
+	}
+	if !tuple.Checkpoint.IsInterrupted() {
+		return errors.New("checkpoint is not interrupted")
+	}
+	intr := tuple.Checkpoint.InterruptState
+	if intr == nil {
+		return errors.New("missing interrupt state")
+	}
+	taskID := intr.TaskID
+	if taskID == "" {
+		taskID = intr.NodeID
+	}
 
 	summary, err := runOnce(
 		ctx,
@@ -281,9 +358,12 @@ func resumeMode(
 			agent.WithInvocationRunOptions(agent.RunOptions{
 				RuntimeState: map[string]any{
 					graph.CfgKeyLineageID:    lineageID,
+					graph.CfgKeyCheckpointNS: parent.Info().Name,
 					graph.CfgKeyCheckpointID: checkpointID,
 					graph.StateKeyCommand: &graph.Command{
-						Resume: resumeValue,
+						ResumeMap: map[string]any{
+							taskID: resumeValue,
+						},
 					},
 				},
 			}),

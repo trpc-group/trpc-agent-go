@@ -1,16 +1,17 @@
-# Nested Human-in-the-Loop (HITL) Interrupt (Parent → Child GraphAgent)
+# Nested Human-in-the-Loop (HITL) Interrupt (Multi-level GraphAgent)
 
-This example shows a nested graph setup:
+This example shows a nested graph setup with **multiple levels**:
 
 - A **parent** graph runs a sub-agent node.
-- The sub-agent is a **child GraphAgent** (a graph-based agent).
-- The **child** pauses the run by calling `graph.Interrupt(...)`.
+- The sub-agent is a **GraphAgent** (a graph-based agent).
+- That GraphAgent can call another GraphAgent, forming a chain.
+- The deepest (leaf) graph pauses the run by calling `graph.Interrupt(...)`.
 
 The important behavior is:
 
-When the child graph interrupts, the parent graph also interrupts, so you can
+When a child graph interrupts, the parent graph also interrupts, so you can
 resume from the **parent checkpoint** and the framework will automatically
-resume **inside the child graph**.
+resume **inside the nested child graph(s)**.
 
 ## What You Will See
 
@@ -24,8 +25,14 @@ resume **inside the child graph**.
 - `graph.Interrupt` stops execution by returning a special error.
 - With a **checkpoint** saver, the engine writes a checkpoint (a saved state
   snapshot) at the interrupt point.
-- The parent agent node detects the child interrupt event and triggers a parent
-  interrupt checkpoint that remembers how to resume the child.
+- Each parent agent node detects the child interrupt event and triggers a
+  parent interrupt checkpoint that remembers how to resume the child.
+
+This example also demonstrates the difference between:
+
+- Node Identifier (Node ID): where the graph paused (in the current graph).
+- Task Identifier (Task ID): the resume key used by `ResumeMap`. For
+  `graph.Interrupt(ctx, state, key, prompt)`, the Task ID equals `key`.
 
 This example uses a local Structured Query Language (SQL) database (SQLite) as
 the checkpoint storage so you can run `run` and `resume` as separate commands.
@@ -35,11 +42,14 @@ the checkpoint storage so you can run `run` and `resume` as separate commands.
 ```bash
 cd examples/graph/nested_interrupt
 
-# 1) Start (will interrupt)
-go run . -mode run -lineage-id demo
+# 1) Start (will interrupt). Depth 2 means: parent -> 1 child GraphAgent.
+go run . -mode run -depth 2 -lineage-id demo
+
+# Or try depth 3 (parent -> child -> grandchild):
+go run . -mode run -depth 3 -lineage-id demo
 
 # 2) Resume (replace with the checkpoint ID printed above)
-go run . -mode resume -lineage-id demo \
+go run . -mode resume -depth 3 -lineage-id demo \
   -checkpoint-id <checkpoint-id> \
   -resume-value approved
 ```
@@ -47,10 +57,12 @@ go run . -mode resume -lineage-id demo \
 ## Flags
 
 - `-mode`: `run` or `resume`
+- `-depth`: how many GraphAgents are nested (must be ≥ 2)
 - `-lineage-id`: stable identifier used to group checkpoints
 - `-db`: SQLite database file path
 - `-checkpoint-id`: required for `resume`
-- `-resume-value`: value returned by `graph.Interrupt` on resume
+- `-resume-value`: value returned by `graph.Interrupt` on resume (this example
+  uses `ResumeMap` internally and routes it by Task ID)
 
 ## Files
 
