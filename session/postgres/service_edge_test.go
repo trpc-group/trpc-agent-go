@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -258,6 +259,211 @@ func TestAppendEvent_ToExpiredSession(t *testing.T) {
 	err := s.AppendEvent(context.Background(), sess, evt)
 	require.NoError(t, err)
 
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddEvent_UnmarshalStateError(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow([]byte("invalid-json"), nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnRows(rows)
+
+	evt := &event.Event{}
+
+	err := s.addEvent(context.Background(), key, evt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal session state failed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddEvent_SkipInsertWhenResponseMissing(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	stateData := &SessionState{State: session.StateMap{"foo": []byte("bar")}}
+	stateBytes, _ := json.Marshal(stateData)
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnRows(rows)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			"test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	evt := &event.Event{}
+
+	err := s.addEvent(context.Background(), key, evt)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddEvent_MarshalEventError(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	stateData := &SessionState{State: session.StateMap{}}
+	stateBytes, _ := json.Marshal(stateData)
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnRows(rows)
+
+	evt := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{
+							{
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name:      "demo",
+									Arguments: []byte("{}"),
+								},
+								ExtraFields: map[string]any{
+									"unsupported": math.Inf(1),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := s.addEvent(context.Background(), key, evt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "marshal event failed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddTrackEvent_UnmarshalStateError(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow([]byte("invalid-json"), nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnRows(rows)
+
+	trackEvt := &session.TrackEvent{
+		Track:     session.Track("timeline"),
+		Payload:   json.RawMessage([]byte("{\"foo\":\"bar\"}")),
+		Timestamp: time.Now(),
+	}
+
+	err := s.addTrackEvent(context.Background(), key, trackEvt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal session state failed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddTrackEvent_EnsureTrackExistsError(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	invalidState := session.StateMap{
+		"tracks": []byte("not-json"),
+	}
+	stateBytes, _ := json.Marshal(&SessionState{State: invalidState})
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnRows(rows)
+
+	trackEvt := &session.TrackEvent{
+		Track:     session.Track("timeline"),
+		Payload:   json.RawMessage([]byte("{\"foo\":\"bar\"}")),
+		Timestamp: time.Now(),
+	}
+
+	err := s.addTrackEvent(context.Background(), key, trackEvt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ensure track indexed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddTrackEvent_TransactionInsertError(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	stateData := &SessionState{State: session.StateMap{"tracks": []byte("[]")}}
+	stateBytes, _ := json.Marshal(stateData)
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnRows(rows)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			"test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO session_track_events").
+		WithArgs("test-app", "test-user", "test-session", "timeline",
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg()).
+		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	trackEvt := &session.TrackEvent{
+		Track:     session.Track("timeline"),
+		Payload:   json.RawMessage([]byte("{\"foo\":\"bar\"}")),
+		Timestamp: time.Now(),
+	}
+
+	err := s.addTrackEvent(context.Background(), key, trackEvt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "store track event failed")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

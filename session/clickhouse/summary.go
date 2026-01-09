@@ -55,9 +55,9 @@ func (s *Service) CreateSessionSummary(
 		return fmt.Errorf("marshal summary failed: %w", err)
 	}
 
-	now := time.Now()
 	// Note: expires_at is set to NULL - summaries are bound to session
 	// lifecycle and will be deleted when session is deleted or expires.
+	now := time.Now()
 	// INSERT new version (ReplacingMergeTree will deduplicate based on updated_at).
 	err = s.chClient.Exec(ctx,
 		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, created_at, updated_at, expires_at)

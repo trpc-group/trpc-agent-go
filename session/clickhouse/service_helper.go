@@ -231,8 +231,6 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, evt *event.Even
 		return fmt.Errorf("unmarshal session state failed: %w", err)
 	}
 
-	// Set ID from query parameter for consistency.
-	sessState.ID = key.SessionID
 	sessState.UpdatedAt = now
 	sessState.CreatedAt = createdAt
 	if sessState.State == nil {
