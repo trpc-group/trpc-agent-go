@@ -124,10 +124,10 @@ func (s *Service) GetSessionSummaryText(
 	rows, err := s.chClient.Query(ctx,
 		fmt.Sprintf(`SELECT summary FROM %s FINAL
 		WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
-		AND (expires_at IS NULL OR expires_at > ?)
 		AND updated_at >= ?
+		AND (expires_at IS NULL OR expires_at > ?)
 		AND deleted_at IS NULL`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, filterKey, time.Now(), sess.CreatedAt)
+		key.AppName, key.UserID, key.SessionID, filterKey, sess.CreatedAt, time.Now())
 
 	if err != nil {
 		return "", false
@@ -146,36 +146,36 @@ func (s *Service) GetSessionSummaryText(
 		summaryText = sum.Summary
 	}
 
-	if summaryText != "" {
-		return summaryText, true
-	}
-
 	// If requested filterKey not found, try fallback to full-session summary.
-	if filterKey != session.SummaryFilterKeyAllContents {
+	if summaryText == "" && filterKey != session.SummaryFilterKeyAllContents {
 		rows2, err := s.chClient.Query(ctx,
 			fmt.Sprintf(`SELECT summary FROM %s FINAL
 			WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
-			AND (expires_at IS NULL OR expires_at > ?)
 			AND updated_at >= ?
+			AND (expires_at IS NULL OR expires_at > ?)
 			AND deleted_at IS NULL`, s.tableSessionSummaries),
-			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now(), sess.CreatedAt)
+			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, sess.CreatedAt, time.Now())
 
-		if err == nil {
-			defer rows2.Close()
-			if rows2.Next() {
-				var summaryBytes []byte
-				if err := rows2.Scan(&summaryBytes); err == nil {
-					var sum session.Summary
-					if err := json.Unmarshal(summaryBytes, &sum); err == nil {
-						summaryText = sum.Summary
-					}
-				}
-			}
+		if err != nil {
+			return "", false
 		}
-		if summaryText != "" {
-			return summaryText, true
+		defer rows2.Close()
+
+		if rows2.Next() {
+			var summaryBytes []byte
+			if err := rows2.Scan(&summaryBytes); err != nil {
+				return "", false
+			}
+			var sum session.Summary
+			if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+				return "", false
+			}
+			summaryText = sum.Summary
 		}
 	}
 
-	return "", false
+	if summaryText == "" {
+		return "", false
+	}
+	return summaryText, true
 }
