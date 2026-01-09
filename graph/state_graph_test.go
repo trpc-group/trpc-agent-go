@@ -1669,7 +1669,13 @@ func TestLLMRunnerSetsLastResponseID(t *testing.T) {
 		{
 			name: "one-shot",
 			run: func(r *llmRunner) (State, error) {
-				res, err := r.executeOneShotStage(ctx, State{}, []model.Message{model.NewUserMessage("hi")}, span)
+				res, err := r.executeOneShotStage(
+					ctx,
+					State{},
+					[]model.Message{model.NewUserMessage("hi")},
+					span,
+					nil,
+				)
 				require.NoError(t, err)
 				return res.(State), nil
 			},
@@ -1703,6 +1709,63 @@ func TestLLMRunnerSetsLastResponseID(t *testing.T) {
 			require.Equal(t, tt.expect, state[StateKeyLastResponseID])
 		})
 	}
+}
+
+func TestLLMRunner_OneShotMessagesByNode_TakesPrecedence(t *testing.T) {
+	ctx, span := trace.Tracer.Start(context.Background(), "test")
+	defer span.End()
+
+	runner := newRunner("resp")
+	runner.nodeID = "llm1"
+
+	state := State{
+		StateKeyOneShotMessagesByNode: map[string][]model.Message{
+			"llm1": {model.NewUserMessage("by-node")},
+		},
+		StateKeyOneShotMessages: []model.Message{
+			model.NewUserMessage("global"),
+		},
+	}
+
+	res, err := runner.execute(ctx, state, span)
+	require.NoError(t, err)
+
+	out := res.(State)
+	_, hasGlobalClear := out[StateKeyOneShotMessages]
+	require.False(t, hasGlobalClear)
+
+	byNode, ok := out[StateKeyOneShotMessagesByNode].(map[string][]model.Message)
+	require.True(t, ok)
+	_, exists := byNode["llm1"]
+	require.True(t, exists)
+	require.Len(t, byNode["llm1"], 0)
+}
+
+func TestLLMRunner_OneShotMessagesByNode_FallsBackToGlobal(t *testing.T) {
+	ctx, span := trace.Tracer.Start(context.Background(), "test")
+	defer span.End()
+
+	runner := newRunner("resp")
+	runner.nodeID = "llm1"
+
+	state := State{
+		StateKeyOneShotMessagesByNode: map[string][]model.Message{
+			"llm2": {model.NewUserMessage("by-node-other")},
+		},
+		StateKeyOneShotMessages: []model.Message{
+			model.NewUserMessage("global"),
+		},
+	}
+
+	res, err := runner.execute(ctx, state, span)
+	require.NoError(t, err)
+
+	out := res.(State)
+	_, hasByNodeClear := out[StateKeyOneShotMessagesByNode]
+	require.False(t, hasByNodeClear)
+
+	_, hasGlobalClear := out[StateKeyOneShotMessages]
+	require.True(t, hasGlobalClear)
 }
 
 func TestExecuteSingleToolCallPropagatesResponseID(t *testing.T) {
