@@ -194,7 +194,13 @@ func TestService_GetSession_NoTTLRefresh(t *testing.T) {
 	// Mock queries for getSession
 	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
 		if strings.Contains(query, "FROM session_states") {
-			return newMockRows([][]any{{"{}", time.Now(), time.Now()}}), nil
+			// Create proper SessionState JSON with ID
+			sessState := SessionState{
+				ID:    key.SessionID,
+				State: make(session.StateMap),
+			}
+			stateBytes, _ := json.Marshal(sessState)
+			return newMockRows([][]any{{string(stateBytes), time.Now(), time.Now()}}), nil
 		}
 		if strings.Contains(query, "FROM app_states") {
 			return newMockRows([][]any{}), nil

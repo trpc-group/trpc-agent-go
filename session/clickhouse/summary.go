@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
@@ -117,15 +116,6 @@ func (s *Service) GetSessionSummaryText(
 		return "", false
 	}
 
-	// Refresh summary TTLs if session has TTL configured and we're accessing summaries
-	// This ensures summaries remain valid when session TTL is refreshed
-	if s.opts.sessionTTL > 0 {
-		if err := s.refreshSessionSummaryTTLs(ctx, key); err != nil {
-			// Log warning but don't fail the operation
-			log.DebugfContext(ctx, "refresh session summary TTLs failed: %v", err)
-		}
-	}
-
 	// Try in-memory summaries first.
 	if text, ok := isummary.GetSummaryTextFromSession(sess, opts...); ok {
 		return text, true
@@ -192,23 +182,4 @@ func (s *Service) GetSessionSummaryText(
 	}
 
 	return "", false
-}
-
-// refreshSessionSummaryTTLs updates the expires_at timestamps of all summaries for a session.
-// This ensures summaries remain valid when the session TTL is refreshed.
-func (s *Service) refreshSessionSummaryTTLs(ctx context.Context, key session.Key) error {
-	now := time.Now()
-	expiresAt := now.Add(s.opts.sessionTTL)
-
-	// Update all summaries for this session
-	err := s.chClient.Exec(ctx,
-		fmt.Sprintf(`UPDATE %s SET expires_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
-			s.tableSessionSummaries),
-		expiresAt, key.AppName, key.UserID, key.SessionID)
-
-	if err != nil {
-		return fmt.Errorf("refresh session summary TTLs failed: %w", err)
-	}
-
-	return nil
 }

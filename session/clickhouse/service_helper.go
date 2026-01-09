@@ -47,9 +47,7 @@ func (s *Service) getSession(
 		if err := rows.Scan(&stateStr, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
-		sessState = &SessionState{
-			ID: key.SessionID,
-		}
+		sessState = &SessionState{}
 		if err := json.Unmarshal([]byte(stateStr), sessState); err != nil {
 			return nil, fmt.Errorf("unmarshal session state failed: %w", err)
 		}
@@ -233,6 +231,8 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, evt *event.Even
 		return fmt.Errorf("unmarshal session state failed: %w", err)
 	}
 
+	// Set ID from query parameter for consistency.
+	sessState.ID = key.SessionID
 	sessState.UpdatedAt = now
 	sessState.CreatedAt = createdAt
 	if sessState.State == nil {

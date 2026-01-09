@@ -5,12 +5,12 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package postgres
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -20,41 +20,43 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-func TestRefreshSessionSummaryTTLs(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
+func TestRefreshSessionTTL_Success(t *testing.T) {
+	s, mock, db := setupMockService(t, &TestServiceOpts{sessionTTL: time.Hour})
 	defer db.Close()
 
-	s := createTestService(t, db, WithSessionTTL(time.Hour))
-	ctx := context.Background()
-	key := session.Key{AppName: "test-app", UserID: "user-123", SessionID: "session-456"}
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
 
-	// Mock successful update
-	mock.ExpectExec(`UPDATE session_summaries`).
-		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
-		WillReturnResult(sqlmock.NewResult(0, 5)) // 5 rows affected
+	// Mock the UPDATE query for refreshing TTL.
+	mock.ExpectExec("UPDATE session_states").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	err = s.refreshSessionSummaryTTLs(ctx, key)
-	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
+	err := s.refreshSessionTTL(context.Background(), key)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestRefreshSessionSummaryTTLs_Error(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
+func TestRefreshSessionTTL_Error(t *testing.T) {
+	s, mock, db := setupMockService(t, &TestServiceOpts{sessionTTL: time.Hour})
 	defer db.Close()
 
-	s := createTestService(t, db, WithSessionTTL(time.Hour))
-	ctx := context.Background()
-	key := session.Key{AppName: "test-app", UserID: "user-123", SessionID: "session-456"}
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
 
-	// Mock update error
-	mock.ExpectExec(`UPDATE session_summaries`).
-		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
-		WillReturnError(fmt.Errorf("update error"))
+	// Mock UPDATE error.
+	mock.ExpectExec("UPDATE session_states").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WillReturnError(assert.AnError)
 
-	err = s.refreshSessionSummaryTTLs(ctx, key)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "refresh session summary TTLs failed")
-	assert.NoError(t, mock.ExpectationsWereMet())
+	err := s.refreshSessionTTL(context.Background(), key)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refresh session TTL failed")
+	require.NoError(t, mock.ExpectationsWereMet())
 }
