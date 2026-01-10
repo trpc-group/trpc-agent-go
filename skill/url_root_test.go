@@ -49,6 +49,9 @@ func TestCacheURLRoot_RemoveAllError(t *testing.T) {
 	))
 	require.NoError(t, os.Chmod(destDir, 0o500))
 	t.Cleanup(func() { _ = os.Chmod(destDir, dirPerm) })
+	if err := os.Remove(filepath.Join(destDir, "x")); err == nil {
+		t.Skip("skip due to permission policy: expected remove to fail")
+	}
 
 	_, err := NewFSRepository(urlRoot)
 	require.Error(t, err)
