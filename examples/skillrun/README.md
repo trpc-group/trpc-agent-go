@@ -36,6 +36,7 @@ tool calls and tool responses, and executes skill scripts via the
 | `-model`        | Name of the model to use           | `deepseek-chat`  |
 | `-stream`       | Stream responses                   | `true`           |
 | `-skills-root`  | Skills repository root directory   | `env or ./skills` |
+| `-skills-guidance` | Include built-in skills tooling/workspace guidance in the system message | `true` |
 | `-executor`     | Workspace executor: local|container | `local`          |
 | `-inputs-host`  | Host dir exposed as `inputs/` inside skill workspaces (local or container) | `` |
 | `-artifacts`    | Save files via artifact service     | `false`          |
@@ -49,6 +50,13 @@ cd examples/skillrun
 export OPENAI_API_KEY="your-api-key"
 # Optional: export SKILLS_ROOT to point at your skills repo
 go run .
+```
+
+To reduce system prompt size (for example, when you only need docs and
+won't run commands), disable the built-in guidance:
+
+```bash
+go run . -skills-guidance=false
 ```
 
 Workspace paths and env vars:

@@ -42,10 +42,15 @@ import (
 )
 
 var (
-	flagModel  = flag.String("model", "deepseek-chat", "model name")
-	flagStream = flag.Bool("stream", true, "stream responses")
-	flagSkills = flag.String("skills-root", "", "skills root dir")
-	flagExec   = flag.String(
+	flagModel          = flag.String("model", "deepseek-chat", "model name")
+	flagStream         = flag.Bool("stream", true, "stream responses")
+	flagSkills         = flag.String("skills-root", "", "skills root dir")
+	flagSkillsGuidance = flag.Bool(
+		"skills-guidance",
+		true,
+		"include built-in skills tooling/workspace guidance",
+	)
+	flagExec = flag.String(
 		"executor", "local",
 		"workspace executor: local|container",
 	)
@@ -191,18 +196,12 @@ func (c *skillChat) setup(_ context.Context) error {
 
 	llm := llmagent.New(
 		"skills-chat",
-		llmagent.WithModel(mdl),
-		llmagent.WithDescription(
-			"General assistant that can use Agent Skills to run commands "+
-				"and handle files.",
-		),
-		llmagent.WithInstruction(
-			instructionText,
-		),
-		llmagent.WithGenerationConfig(gen),
-		llmagent.WithSkills(repo),
-		llmagent.WithCodeExecutor(we),
-		llmagent.WithToolCallbacks(buildToolCallbacks()),
+		buildAgentOptions(
+			mdl,
+			repo,
+			we,
+			gen,
+		)...,
 	)
 
 	// Runner + artifact service (in-memory for demo).
@@ -254,6 +253,33 @@ func (c *skillChat) setup(_ context.Context) error {
 	fmt.Println(" - Type /exit to quit.")
 	fmt.Println()
 	return nil
+}
+
+func buildAgentOptions(
+	mdl model.Model,
+	repo skill.Repository,
+	exec codeexecutor.CodeExecutor,
+	gen model.GenerationConfig,
+) []llmagent.Option {
+	opts := []llmagent.Option{
+		llmagent.WithModel(mdl),
+		llmagent.WithDescription(
+			"General assistant that can use Agent Skills to run commands " +
+				"and handle files.",
+		),
+		llmagent.WithInstruction(instructionText),
+		llmagent.WithGenerationConfig(gen),
+		llmagent.WithSkills(repo),
+		llmagent.WithCodeExecutor(exec),
+		llmagent.WithToolCallbacks(buildToolCallbacks()),
+	}
+	if !*flagSkillsGuidance {
+		opts = append(
+			opts,
+			llmagent.WithSkillsToolingGuidance(""),
+		)
+	}
+	return opts
 }
 
 // buildToolCallbacks injects default artifact parameters into

@@ -82,9 +82,9 @@ func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 	idx := 0
 	require.Equal(t, model.RoleSystem, req.Messages[idx].Role)
 	sys := req.Messages[idx].Content
-	require.Contains(t, sys, "Available skills:")
+	require.Contains(t, sys, skillsOverviewHeader)
 	require.Contains(t, sys, "- calc: math ops")
-	require.Contains(t, sys, "Tooling and workspace guidance:")
+	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.Contains(t, sys, "[Loaded] calc")
 	require.Contains(t, sys, "Calc body")
 	require.Contains(t, sys, "[Doc] USAGE.md")
@@ -114,8 +114,29 @@ func TestSkillsRequestProcessor_NoDuplicateOverview(t *testing.T) {
 
 	sys := req.Messages[0].Content
 	// Count occurrences of header.
-	cnt := strings.Count(sys, "Available skills:")
+	cnt := strings.Count(sys, skillsOverviewHeader)
 	require.Equal(t, 1, cnt)
+}
+
+func TestSkillsRequestProcessor_ToolingGuidance_Disabled(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "x", Description: "d"}},
+		full: map[string]*skill.Skill{},
+	}
+	inv := &agent.Invocation{Session: &session.Session{}}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillsToolingGuidance(""),
+	)
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	require.NotEmpty(t, req.Messages)
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, skillsOverviewHeader)
+	require.NotContains(t, sys, skillsToolingGuidanceHeader)
 }
 
 func TestSkillsRequestProcessor_ArrayDocs_NoSystemMessage(t *testing.T) {
@@ -147,7 +168,7 @@ func TestSkillsRequestProcessor_ArrayDocs_NoSystemMessage(t *testing.T) {
 	require.NotEmpty(t, req.Messages)
 	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	sys := req.Messages[0].Content
-	require.Contains(t, sys, "Available skills:")
+	require.Contains(t, sys, skillsOverviewHeader)
 	require.Contains(t, sys, "[Loaded] calc")
 	require.Contains(t, sys, "USAGE.md")
 	// EXTRA.txt not selected
