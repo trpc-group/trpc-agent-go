@@ -152,15 +152,6 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if err != nil {
 		return nil, fmt.Errorf("resolve run option: %w", err)
 	}
-	trans, err := r.translatorFactory(
-		ctx,
-		runAgentInput,
-		translator.WithGraphNodeStartActivityEnabled(r.graphNodeStartActivityEnabled),
-		translator.WithGraphNodeInterruptActivityEnabled(r.graphNodeInterruptActivityEnabled),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create translator: %w", err)
-	}
 	ctx, span, err := r.startSpan(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("start span: %w", err)
@@ -169,6 +160,16 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if !ok {
 		span.End()
 		return nil, errors.New("last message content is not a string")
+	}
+	trans, err := r.translatorFactory(
+		ctx,
+		runAgentInput,
+		translator.WithGraphNodeStartActivityEnabled(r.graphNodeStartActivityEnabled),
+		translator.WithGraphNodeInterruptActivityEnabled(r.graphNodeInterruptActivityEnabled),
+	)
+	if err != nil {
+		span.End()
+		return nil, fmt.Errorf("create translator: %w", err)
 	}
 	input := &runInput{
 		key: session.Key{
