@@ -102,10 +102,12 @@ agent := llmagent.New(
 - 工具自动注册：开启 `WithSkills` 后，`skill_load`、
   `skill_select_docs`、`skill_list_docs` 与 `skill_run`
   会自动出现在工具列表中，无需手动添加。
-- 自动提示注入：框架会在系统消息中加入简洁的“工具使用指引”，
-  引导模型在合适时机先 `skill_load`，需要时用 `skill_select_docs`
-  选择文档，再 `skill_run`（参见源码
-  的指引文案拼接逻辑）。
+- 默认提示指引：框架会在系统消息里，在 `Available skills:` 列表后追加一段
+  `Tooling and workspace guidance:` 指引文本。
+  - 关闭该指引（减少提示词占用）：`llmagent.WithSkillsToolingGuidance("")`。
+  - 或用自定义文本替换：`llmagent.WithSkillsToolingGuidance("...")`。
+  - 如果你关闭它，请在自己的指令里说明何时使用 `skill_load`、
+    `skill_select_docs` 和 `skill_run`。
   - 加载器： [tool/skill/load.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go)
   - 运行器： [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go)
 

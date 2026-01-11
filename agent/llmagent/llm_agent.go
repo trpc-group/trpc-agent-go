@@ -251,8 +251,18 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	// sees available skills (names/descriptions) and any loaded
 	// SKILL.md/doc texts before deciding on tool calls.
 	if options.skillsRepository != nil {
+		var skillsOpts []processor.SkillsRequestProcessorOption
+		if options.skillsToolingGuidance != nil {
+			skillsOpts = append(
+				skillsOpts,
+				processor.WithSkillsToolingGuidance(
+					*options.skillsToolingGuidance,
+				),
+			)
+		}
 		skillsProcessor := processor.NewSkillsRequestProcessor(
 			options.skillsRepository,
+			skillsOpts...,
 		)
 		requestProcessors = append(requestProcessors, skillsProcessor)
 	}
