@@ -23,6 +23,35 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
+const (
+	skillsOverviewHeader = "Available skills:"
+
+	skillsToolingGuidanceHeader = "Tooling and workspace guidance:"
+)
+
+type skillsRequestProcessorOptions struct {
+	toolingGuidance *string
+}
+
+// SkillsRequestProcessorOption configures SkillsRequestProcessor.
+type SkillsRequestProcessorOption func(*skillsRequestProcessorOptions)
+
+// WithSkillsToolingGuidance overrides the tooling/workspace guidance
+// block appended to the skills overview.
+//
+// Behavior:
+//   - Not configured: use the built-in default guidance.
+//   - Configured with empty string: omit the guidance block.
+//   - Configured with non-empty string: append the provided text.
+func WithSkillsToolingGuidance(
+	guidance string,
+) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		text := guidance
+		o.toolingGuidance = &text
+	}
+}
+
 // SkillsRequestProcessor injects skill overviews and loaded contents.
 //
 // Behavior:
@@ -35,14 +64,26 @@ import (
 //   - skill.StateKeyDocsPrefix+name ->
 //     "*" or JSON array of file names.
 type SkillsRequestProcessor struct {
-	repo skill.Repository
+	repo            skill.Repository
+	toolingGuidance *string
 }
 
 // NewSkillsRequestProcessor creates a processor instance.
 func NewSkillsRequestProcessor(
 	repo skill.Repository,
+	opts ...SkillsRequestProcessorOption,
 ) *SkillsRequestProcessor {
-	return &SkillsRequestProcessor{repo: repo}
+	var options skillsRequestProcessorOptions
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(&options)
+	}
+	return &SkillsRequestProcessor{
+		repo:            repo,
+		toolingGuidance: options.toolingGuidance,
+	}
 }
 
 // ProcessRequest implements flow.RequestProcessor.
@@ -110,21 +151,51 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 }
 
 func (p *SkillsRequestProcessor) injectOverview(req *model.Request) {
-	const header = "Available skills:"
 	sums := p.repo.Summaries()
 	if len(sums) == 0 {
 		return
 	}
 	var b strings.Builder
-	b.WriteString(header)
+	b.WriteString(skillsOverviewHeader)
 	b.WriteString("\n")
 	for _, s := range sums {
 		line := fmt.Sprintf("- %s: %s\n", s.Name, s.Description)
 		b.WriteString(line)
 	}
-	// Add concise guidance for tool and workspace usage. Text is kept
-	// generic so it applies across executors.
-	b.WriteString("\nTooling and workspace guidance:\n")
+	if guidance := p.toolingGuidanceText(); guidance != "" {
+		b.WriteString(guidance)
+	}
+	overview := b.String()
+
+	idx := findSystemMessageIndex(req.Messages)
+	if idx >= 0 {
+		sys := &req.Messages[idx]
+		if !strings.Contains(sys.Content, skillsOverviewHeader) {
+			if sys.Content != "" {
+				sys.Content += "\n\n" + overview
+			} else {
+				sys.Content = overview
+			}
+		}
+		return
+	}
+	// No system message yet: create one at the front.
+	msg := model.NewSystemMessage(overview)
+	req.Messages = append([]model.Message{msg}, req.Messages...)
+}
+
+func (p *SkillsRequestProcessor) toolingGuidanceText() string {
+	if p.toolingGuidance == nil {
+		return defaultToolingAndWorkspaceGuidance()
+	}
+	return normalizeGuidance(*p.toolingGuidance)
+}
+
+func defaultToolingAndWorkspaceGuidance() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(skillsToolingGuidanceHeader)
+	b.WriteString("\n")
 	b.WriteString("- Skills run inside an isolated workspace; you see ")
 	b.WriteString("only files that are in the workspace or have been ")
 	b.WriteString("staged there by tools.\n")
@@ -154,23 +225,20 @@ func (p *SkillsRequestProcessor) injectOverview(req *model.Request) {
 	b.WriteString("docs.\n")
 	b.WriteString("- When body and needed docs are present, call ")
 	b.WriteString("skill_run to execute commands.\n")
-	overview := b.String()
+	return b.String()
+}
 
-	idx := findSystemMessageIndex(req.Messages)
-	if idx >= 0 {
-		sys := &req.Messages[idx]
-		if !strings.Contains(sys.Content, header) {
-			if sys.Content != "" {
-				sys.Content += "\n\n" + overview
-			} else {
-				sys.Content = overview
-			}
-		}
-		return
+func normalizeGuidance(guidance string) string {
+	if guidance == "" {
+		return ""
 	}
-	// No system message yet: create one at the front.
-	msg := model.NewSystemMessage(overview)
-	req.Messages = append([]model.Message{msg}, req.Messages...)
+	if !strings.HasPrefix(guidance, "\n") {
+		guidance = "\n" + guidance
+	}
+	if !strings.HasSuffix(guidance, "\n") {
+		guidance += "\n"
+	}
+	return guidance
 }
 
 func (p *SkillsRequestProcessor) getLoadedSkills(
