@@ -820,7 +820,7 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletion
 		toolNames = append(toolNames, name)
 	}
 	sort.Strings(toolNames)
-	
+
 	// Build tools in sorted order
 	var result []openai.ChatCompletionToolParam
 	for _, name := range toolNames {

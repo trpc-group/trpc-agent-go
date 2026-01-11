@@ -1667,15 +1667,15 @@ func TestShouldEnableCache(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:  "custom decision func returns false",
-			model: New("claude-3-5-sonnet", WithEnablePromptCache(true), WithCacheDecisionFunc(func(req *model.Request) bool { return false })),
-			request: &model.Request{Messages: []model.Message{{Role: model.RoleSystem, Content: largeSystemContent}}},
+			name:     "custom decision func returns false",
+			model:    New("claude-3-5-sonnet", WithEnablePromptCache(true), WithCacheDecisionFunc(func(req *model.Request) bool { return false })),
+			request:  &model.Request{Messages: []model.Message{{Role: model.RoleSystem, Content: largeSystemContent}}},
 			expected: false,
 		},
 		{
-			name:  "custom decision func returns true",
-			model: New("claude-3-5-sonnet", WithEnablePromptCache(true), WithCacheDecisionFunc(func(req *model.Request) bool { return true })),
-			request: &model.Request{Messages: []model.Message{{Role: model.RoleSystem, Content: "tiny"}}},
+			name:     "custom decision func returns true",
+			model:    New("claude-3-5-sonnet", WithEnablePromptCache(true), WithCacheDecisionFunc(func(req *model.Request) bool { return true })),
+			request:  &model.Request{Messages: []model.Message{{Role: model.RoleSystem, Content: "tiny"}}},
 			expected: true,
 		},
 		{
@@ -1744,8 +1744,8 @@ func TestEstimateSystemTokens(t *testing.T) {
 	m := New("claude-3-5-sonnet")
 
 	tests := []struct {
-		name     string
-		messages []model.Message
+		name      string
+		messages  []model.Message
 		minTokens int
 		maxTokens int
 	}{
@@ -1768,7 +1768,7 @@ func TestEstimateSystemTokens(t *testing.T) {
 			messages: []model.Message{
 				{Role: model.RoleSystem, Content: "You are a helpful assistant"},
 			},
-			minTokens: 5,  // ~28 chars / 4 = 7
+			minTokens: 5, // ~28 chars / 4 = 7
 			maxTokens: 10,
 		},
 		{

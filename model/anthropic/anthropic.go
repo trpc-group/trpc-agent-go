@@ -255,10 +255,10 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 	if len(messages) == 0 {
 		return nil, fmt.Errorf("request must include at least one message")
 	}
-	
+
 	// Convert tools
 	tools := convertTools(request.Tools)
-	
+
 	// Apply prompt cache control if enabled.
 	// Strategy: Set cache_control only at the last position to maximize cache efficiency.
 	// - If tools exist: cache System+Tools together by setting cache_control on last tool
@@ -273,7 +273,7 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 			systemPrompts = m.applyCacheControlToSystem(systemPrompts)
 		}
 	}
-	
+
 	// Build chat request.
 	chatRequest := &anthropic.MessageNewParams{
 		Model:    anthropic.Model(m.name),
@@ -306,12 +306,12 @@ func (m *Model) shouldEnableCache(request *model.Request) bool {
 	if !m.enablePromptCache {
 		return false
 	}
-	
+
 	// Use custom decision function if provided
 	if m.cacheDecisionFunc != nil {
 		return m.cacheDecisionFunc(request)
 	}
-	
+
 	// Optimized strategy: prioritize tools caching as it covers both System+Tools
 	// 1. If tools exist and are substantial, cache at tools (this includes system)
 	if m.cacheTools && len(request.Tools) > 0 {
@@ -322,7 +322,7 @@ func (m *Model) shouldEnableCache(request *model.Request) bool {
 			return true
 		}
 	}
-	
+
 	// 2. If no tools or tools are too small, check system prompt alone
 	if m.cacheSystemPrompt {
 		systemTokens := m.estimateSystemTokens(request.Messages)
@@ -330,7 +330,7 @@ func (m *Model) shouldEnableCache(request *model.Request) bool {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -375,12 +375,12 @@ func (m *Model) applyCacheControlToSystem(systemPrompts []anthropic.TextBlockPar
 	if len(systemPrompts) == 0 {
 		return systemPrompts
 	}
-	
+
 	// Add cache control to the last system block to create a cache breakpoint
 	// This tells Anthropic to cache everything up to and including this block
 	lastIdx := len(systemPrompts) - 1
 	systemPrompts[lastIdx].CacheControl = anthropic.NewCacheControlEphemeralParam()
-	
+
 	return systemPrompts
 }
 
@@ -392,14 +392,14 @@ func (m *Model) applyCacheControlToTools(tools []anthropic.ToolUnionParam) []ant
 	if len(tools) == 0 || !m.cacheTools {
 		return tools
 	}
-	
+
 	// Add cache control to the last tool to create a cache breakpoint
 	// This caches all tool definitions up to and including this one
 	lastIdx := len(tools) - 1
 	if tools[lastIdx].OfTool != nil {
 		tools[lastIdx].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
 	}
-	
+
 	return tools
 }
 
@@ -685,7 +685,7 @@ func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
 		toolNames = append(toolNames, name)
 	}
 	sort.Strings(toolNames)
-	
+
 	// Build tools in sorted order
 	var result []anthropic.ToolUnionParam
 	for _, name := range toolNames {

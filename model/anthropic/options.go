@@ -20,11 +20,11 @@ import (
 )
 
 const (
-	defaultChannelBufferSize       = 256
-	defaultEnablePromptCache       = true  // Enable prompt cache by default for cost optimization
-	defaultMinCacheableTokens      = 1024  // Minimum tokens to enable caching
-	defaultCacheSystemPrompt       = true  // Cache system prompt by default
-	defaultCacheTools              = true  // Cache tools by default
+	defaultChannelBufferSize  = 256
+	defaultEnablePromptCache  = true // Enable prompt cache by default for cost optimization
+	defaultMinCacheableTokens = 1024 // Minimum tokens to enable caching
+	defaultCacheSystemPrompt  = true // Cache system prompt by default
+	defaultCacheTools         = true // Cache tools by default
 )
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -88,7 +88,7 @@ type options struct {
 	maxInputTokens int
 	// tokenTailoringConfig allows customization of token tailoring parameters.
 	tokenTailoringConfig *model.TokenTailoringConfig
-	
+
 	// Prompt cache configuration
 	// enablePromptCache enables Anthropic's prompt caching feature for cost optimization.
 	// When enabled, frequently used content (system prompts, tools) will be cached
