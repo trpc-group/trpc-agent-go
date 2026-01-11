@@ -259,10 +259,19 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 	// Convert tools
 	tools := convertTools(request.Tools)
 	
-	// Apply prompt cache control if enabled
+	// Apply prompt cache control if enabled.
+	// Strategy: Set cache_control only at the last position to maximize cache efficiency.
+	// - If tools exist: cache System+Tools together by setting cache_control on last tool
+	// - If no tools: cache System by setting cache_control on last system block
+	// This creates a single cache block instead of multiple independent blocks.
 	if m.shouldEnableCache(request) {
-		systemPrompts = m.applyCacheControlToSystem(systemPrompts)
-		tools = m.applyCacheControlToTools(tools)
+		if len(tools) > 0 && m.cacheTools {
+			// Prefer caching at tools (covers System+Tools)
+			tools = m.applyCacheControlToTools(tools)
+		} else if m.cacheSystemPrompt {
+			// Only cache system when no tools available
+			systemPrompts = m.applyCacheControlToSystem(systemPrompts)
+		}
 	}
 	
 	// Build chat request.
@@ -303,17 +312,21 @@ func (m *Model) shouldEnableCache(request *model.Request) bool {
 		return m.cacheDecisionFunc(request)
 	}
 	
-	// Default strategy: enable if system prompt or tools are substantial
-	if m.cacheSystemPrompt {
+	// Optimized strategy: prioritize tools caching as it covers both System+Tools
+	// 1. If tools exist and are substantial, cache at tools (this includes system)
+	if m.cacheTools && len(request.Tools) > 0 {
+		toolTokens := m.estimateToolTokens(request.Tools)
 		systemTokens := m.estimateSystemTokens(request.Messages)
-		if systemTokens >= m.minCacheableTokens {
+		totalTokens := systemTokens + toolTokens
+		if totalTokens >= m.minCacheableTokens {
 			return true
 		}
 	}
 	
-	if m.cacheTools && len(request.Tools) > 0 {
-		toolTokens := m.estimateToolTokens(request.Tools)
-		if toolTokens >= m.minCacheableTokens {
+	// 2. If no tools or tools are too small, check system prompt alone
+	if m.cacheSystemPrompt {
+		systemTokens := m.estimateSystemTokens(request.Messages)
+		if systemTokens >= m.minCacheableTokens {
 			return true
 		}
 	}
