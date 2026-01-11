@@ -236,17 +236,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		requestProcessors = append(requestProcessors, identityProcessor)
 	}
 
-	// 5. Time processor - adds current time information if enabled.
-	if options.AddCurrentTime {
-		timeProcessor := processor.NewTimeRequestProcessor(
-			processor.WithAddCurrentTime(true),
-			processor.WithTimezone(options.Timezone),
-			processor.WithTimeFormat(options.TimeFormat),
-		)
-		requestProcessors = append(requestProcessors, timeProcessor)
-	}
-
-	// 6. Skills processor - injects skill overview and loaded contents
+	// 5. Skills processor - injects skill overview and loaded contents
 	// when a skills repository is configured. This ensures the model
 	// sees available skills (names/descriptions) and any loaded
 	// SKILL.md/doc texts before deciding on tool calls.
@@ -257,7 +247,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		requestProcessors = append(requestProcessors, skillsProcessor)
 	}
 
-	// 7. Content processor - appends conversation/context history.
+	// 6. Content processor - appends conversation/context history.
 	contentOpts := []processor.ContentOption{
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
@@ -276,6 +266,19 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	}
 	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
+
+	// 7. Time processor - adds current time information if enabled.
+	// Moved after content processor to avoid invalidating system message cache.
+	// Time information changes frequently, so placing it last allows previous
+	// stable content (instructions, identity, skills, history) to be cached.
+	if options.AddCurrentTime {
+		timeProcessor := processor.NewTimeRequestProcessor(
+			processor.WithAddCurrentTime(true),
+			processor.WithTimezone(options.Timezone),
+			processor.WithTimeFormat(options.TimeFormat),
+		)
+		requestProcessors = append(requestProcessors, timeProcessor)
+	}
 
 	return requestProcessors
 }

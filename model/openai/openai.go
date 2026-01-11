@@ -21,6 +21,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
@@ -813,8 +814,17 @@ func (m *Model) convertToolCalls(toolCalls []model.ToolCall) []openai.ChatComple
 }
 
 func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletionToolParam {
+	// Extract and sort tool names for stable ordering to improve cache hit rate
+	toolNames := make([]string, 0, len(tools))
+	for name := range tools {
+		toolNames = append(toolNames, name)
+	}
+	sort.Strings(toolNames)
+	
+	// Build tools in sorted order
 	var result []openai.ChatCompletionToolParam
-	for _, tool := range tools {
+	for _, name := range toolNames {
+		tool := tools[name]
 		declaration := tool.Declaration()
 		// Convert the InputSchema to JSON to correctly map to OpenAI's expected format
 		schemaBytes, err := json.Marshal(declaration.InputSchema)
