@@ -21,6 +21,7 @@ English | [中文](README.zh_CN.md)
 - **GraphAgent**: Type-safe graph workflows with multi-conditional routing, functionally equivalent to LangGraph for Go
 - **Agent Skills**: Reusable `SKILL.md` workflows with safe execution
 - **Artifacts**: Versioned storage for files produced by agents and tools
+- **Prompt Caching**: Automatic cost optimization with 90% savings on cached content
 - **Evaluation & Benchmarks**: Eval sets + metrics to measure quality over time
 - **UI & Server Integration**: AG-UI (Agent-User Interaction),
   and Agent-to-Agent (A2A) interoperability
@@ -157,12 +158,12 @@ _ = result.OverallStatus
 - [tRPC-Agent-Go](#trpc-agent-go)
   - [Use Cases](#use-cases)
   - [Key Features](#key-features)
-    - [**Multi-Agent Orchestration**](#multi-agent-orchestration)
-    - [**Advanced Memory System**](#advanced-memory-system)
-    - [**Rich Tool Integration**](#rich-tool-integration)
-    - [**Production Observability**](#production-observability)
-    - [**Agent Skills**](#agent-skills)
-    - [**Evaluation \& Benchmarks**](#evaluation--benchmarks)
+    - [Multi-Agent Orchestration](#multi-agent-orchestration)
+    - [Advanced Memory System](#advanced-memory-system)
+    - [Rich Tool Integration](#rich-tool-integration)
+    - [Production Observability](#production-observability)
+    - [Agent Skills](#agent-skills)
+    - [Evaluation \& Benchmarks](#evaluation--benchmarks)
   - [Table of Contents](#table-of-contents)
   - [Documentation](#documentation)
   - [Quick Start](#quick-start)
@@ -170,6 +171,12 @@ _ = result.OverallStatus
     - [Run the Example](#run-the-example)
     - [Basic Usage](#basic-usage)
   - [Examples](#examples)
+  - [Prompt Caching](#prompt-caching)
+    - [Supported Models](#supported-models)
+    - [How It Works](#how-it-works)
+    - [Configuration Options](#configuration-options)
+    - [When to Disable Caching](#when-to-disable-caching)
+    - [Cost Savings Example](#cost-savings-example)
     - [1. Tool Usage](#1-tool-usage)
     - [2. LLM-Only Agent](#2-llm-only-agent)
     - [3. Multi-Agent Runners](#3-multi-agent-runners)
@@ -335,6 +342,93 @@ type calculatorRsp struct {
 ## Examples
 
 The `examples` directory contains runnable demos covering every major feature.
+
+## Prompt Caching
+
+tRPC-Agent-Go automatically enables **Prompt Caching** for supported models to optimize costs and performance. Frequently used content (system prompts, tools) is cached, providing up to **90% cost savings** on cached tokens.
+
+### Supported Models
+
+- **Anthropic Claude**: Explicit cache control with `cache_control` breakpoints (enabled by default)
+- **OpenAI GPT**: Automatic caching with optimized message ordering (enabled by default)
+- **Google Gemini**: Native cached content support
+
+### How It Works
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+// Anthropic: Cache is enabled by default
+model := anthropic.New("claude-3-5-sonnet-20241022",
+    anthropic.WithAPIKey(os.Getenv("ANTHROPIC_API_KEY")),
+    // System prompts and tools are automatically cached when > 1024 tokens
+)
+
+// OpenAI: Cache optimization is enabled by default
+model := openai.New("gpt-4o",
+    openai.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
+    // System messages are automatically moved to the front for better cache hits
+)
+
+// Monitor cache effectiveness
+response := <-model.GenerateContent(ctx, request)
+if response.Usage != nil {
+    fmt.Printf("Cached tokens: %d\n", response.Usage.PromptTokensDetails.CachedTokens)
+    fmt.Printf("Cache savings: %.2f%%\n", 
+        float64(response.Usage.PromptTokensDetails.CachedTokens) / 
+        float64(response.Usage.PromptTokens) * 100)
+}
+```
+
+### Configuration Options
+
+```go
+// Anthropic: Customize cache behavior
+model := anthropic.New("claude-3-5-sonnet-20241022",
+    anthropic.WithEnablePromptCache(true),        // Enable/disable (default: true)
+    anthropic.WithMinCacheableTokens(2048),       // Minimum tokens for caching
+    anthropic.WithCacheSystemPrompt(true),        // Cache system prompts (default: true)
+    anthropic.WithCacheTools(true),               // Cache tool definitions (default: true)
+    anthropic.WithCacheDecisionFunc(func(req *model.Request) bool {
+        // Custom logic: only cache in production
+        return os.Getenv("ENV") == "production"
+    }),
+)
+
+// OpenAI: Optimize for cache
+model := openai.New("gpt-4o",
+    openai.WithOptimizeForCache(true),  // Reorder messages for cache (default: true)
+)
+```
+
+### When to Disable Caching
+
+You may want to disable prompt caching for:
+
+- **Testing/Debugging**: When you need deterministic behavior
+- **Single-shot requests**: When cache won't be reused
+- **Variable content**: When prompts change frequently
+- **Strict message ordering**: When order must be preserved exactly
+
+```go
+// Disable caching for testing
+testModel := anthropic.New("claude-3-5-sonnet-20241022",
+    anthropic.WithEnablePromptCache(false),
+)
+```
+
+### Cost Savings Example
+
+For a typical multi-turn conversation with Claude Sonnet:
+
+- System prompt: 3,000 tokens
+- Cache hit rate: 50%
+- Input pricing: $3/MTok (uncached) → $0.30/MTok (cached)
+- **Savings per request**: ~$0.00405
+- **Daily savings (1M requests)**: ~$4,050
 
 ### 1. Tool Usage
 

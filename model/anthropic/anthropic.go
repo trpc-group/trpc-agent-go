@@ -53,6 +53,12 @@ type Model struct {
 	outputTokensFloor      int
 	safetyMarginRatio      float64
 	maxInputTokensRatio    float64
+	// Prompt cache configuration
+	enablePromptCache  bool
+	minCacheableTokens int
+	cacheSystemPrompt  bool
+	cacheTools         bool
+	cacheDecisionFunc  func(request *model.Request) bool
 }
 
 // New creates a new Anthropic model adapter.
@@ -98,6 +104,11 @@ func New(name string, opts ...Option) *Model {
 		outputTokensFloor:          o.tokenTailoringConfig.OutputTokensFloor,
 		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
 		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
+		enablePromptCache:          o.enablePromptCache,
+		minCacheableTokens:         o.minCacheableTokens,
+		cacheSystemPrompt:          o.cacheSystemPrompt,
+		cacheTools:                 o.cacheTools,
+		cacheDecisionFunc:          o.cacheDecisionFunc,
 	}
 }
 
@@ -243,11 +254,21 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 	if len(messages) == 0 {
 		return nil, fmt.Errorf("request must include at least one message")
 	}
+	
+	// Convert tools
+	tools := convertTools(request.Tools)
+	
+	// Apply prompt cache control if enabled
+	if m.shouldEnableCache(request) {
+		systemPrompts = m.applyCacheControlToSystem(systemPrompts)
+		tools = m.applyCacheControlToTools(tools)
+	}
+	
 	// Build chat request.
 	chatRequest := &anthropic.MessageNewParams{
 		Model:    anthropic.Model(m.name),
 		Messages: messages,
-		Tools:    convertTools(request.Tools),
+		Tools:    tools,
 	}
 	if len(systemPrompts) > 0 {
 		chatRequest.System = systemPrompts
@@ -268,6 +289,104 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 		chatRequest.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(*request.ThinkingTokens))
 	}
 	return chatRequest, nil
+}
+
+// shouldEnableCache determines whether to enable prompt caching for this request.
+func (m *Model) shouldEnableCache(request *model.Request) bool {
+	if !m.enablePromptCache {
+		return false
+	}
+	
+	// Use custom decision function if provided
+	if m.cacheDecisionFunc != nil {
+		return m.cacheDecisionFunc(request)
+	}
+	
+	// Default strategy: enable if system prompt or tools are substantial
+	if m.cacheSystemPrompt {
+		systemTokens := m.estimateSystemTokens(request.Messages)
+		if systemTokens >= m.minCacheableTokens {
+			return true
+		}
+	}
+	
+	if m.cacheTools && len(request.Tools) > 0 {
+		toolTokens := m.estimateToolTokens(request.Tools)
+		if toolTokens >= m.minCacheableTokens {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// estimateSystemTokens estimates the token count of system messages.
+func (m *Model) estimateSystemTokens(messages []model.Message) int {
+	count := 0
+	for _, msg := range messages {
+		if msg.Role == model.RoleSystem {
+			// Rough estimate: 1 token ~= 4 characters
+			count += len(msg.Content) / 4
+			for _, part := range msg.ContentParts {
+				if part.Type == model.ContentTypeText && part.Text != nil {
+					count += len(*part.Text) / 4
+				}
+			}
+		}
+	}
+	return count
+}
+
+// estimateToolTokens estimates the token count of tool definitions.
+func (m *Model) estimateToolTokens(tools map[string]tool.Tool) int {
+	count := 0
+	for _, t := range tools {
+		decl := t.Declaration()
+		// Rough estimate based on JSON schema size
+		count += len(decl.Name) / 4
+		count += len(decl.Description) / 4
+		if decl.InputSchema != nil {
+			// Estimate JSON schema size
+			count += 100 // Base overhead for schema structure
+		}
+	}
+	return count
+}
+
+// applyCacheControlToSystem adds cache control to system prompts.
+// According to Anthropic's docs, we should add cache_control to the last
+// block in system prompts to create a cache breakpoint.
+// This enables prompt caching with up to 90% cost savings on cached tokens.
+func (m *Model) applyCacheControlToSystem(systemPrompts []anthropic.TextBlockParam) []anthropic.TextBlockParam {
+	if len(systemPrompts) == 0 {
+		return systemPrompts
+	}
+	
+	// Add cache control to the last system block to create a cache breakpoint
+	// This tells Anthropic to cache everything up to and including this block
+	lastIdx := len(systemPrompts) - 1
+	systemPrompts[lastIdx].CacheControl = anthropic.NewCacheControlEphemeralParam()
+	
+	return systemPrompts
+}
+
+// applyCacheControlToTools adds cache control to tool definitions.
+// According to Anthropic's docs, we should add cache_control to the last
+// tool to create a cache breakpoint for all tool definitions.
+// This is particularly useful when you have many tools with large schemas.
+func (m *Model) applyCacheControlToTools(tools []anthropic.ToolUnionParam) []anthropic.ToolUnionParam {
+	if len(tools) == 0 || !m.cacheTools {
+		return tools
+	}
+	
+	// Add cache control to the last tool to create a cache breakpoint
+	// This caches all tool definitions up to and including this one
+	lastIdx := len(tools) - 1
+	if tools[lastIdx].OfTool != nil {
+		tools[lastIdx].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	}
+	
+	return tools
 }
 
 // handleNonStreamingResponse sends a non-streaming request to the Anthropic API and emits exactly one final response.
@@ -313,6 +432,11 @@ func (m *Model) handleNonStreamingResponse(
 			PromptTokens:     int(message.Usage.InputTokens),
 			CompletionTokens: int(message.Usage.OutputTokens),
 			TotalTokens:      int(message.Usage.InputTokens + message.Usage.OutputTokens),
+			PromptTokensDetails: model.PromptTokensDetails{
+				CachedTokens:        int(message.Usage.CacheReadInputTokens),
+				CacheCreationTokens: int(message.Usage.CacheCreationInputTokens),
+				CacheReadTokens:     int(message.Usage.CacheReadInputTokens),
+			},
 		}
 	}
 	// Emit final response.
@@ -478,6 +602,11 @@ func buildStreamingFinalResponse(acc anthropic.Message) *model.Response {
 			PromptTokens:     int(acc.Usage.InputTokens),
 			CompletionTokens: int(acc.Usage.OutputTokens),
 			TotalTokens:      int(acc.Usage.InputTokens + acc.Usage.OutputTokens),
+			PromptTokensDetails: model.PromptTokensDetails{
+				CachedTokens:        int(acc.Usage.CacheReadInputTokens),
+				CacheCreationTokens: int(acc.Usage.CacheCreationInputTokens),
+				CacheReadTokens:     int(acc.Usage.CacheReadInputTokens),
+			},
 		},
 		Timestamp: now,
 		Done:      true,

@@ -102,6 +102,11 @@ type options struct {
 	// suppressed until the final aggregated response.
 	ShowToolCallDelta    bool
 	accumulateChunkUsage AccumulateChunkUsage
+	// OptimizeForCache controls whether to optimize message structure for prompt caching.
+	// When enabled, system messages will be moved to the front to improve cache hit rates.
+	// OpenAI's prompt caching is automatic and doesn't require explicit cache control,
+	// but message ordering affects cache effectiveness.
+	OptimizeForCache bool
 }
 
 var (
@@ -118,6 +123,7 @@ var (
 			OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
 			MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
 		},
+		OptimizeForCache: true, // Enable cache optimization by default
 	}
 )
 
@@ -402,5 +408,31 @@ func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 func WithShowToolCallDelta(show bool) Option {
 	return func(opts *options) {
 		opts.ShowToolCallDelta = show
+	}
+}
+
+// WithOptimizeForCache controls whether to optimize message structure for prompt caching.
+// When enabled (default), system messages will be moved to the front of the message list
+// to improve cache hit rates with OpenAI's automatic prompt caching.
+//
+// OpenAI's prompt caching works automatically and doesn't require explicit cache control,
+// but consistent message ordering significantly improves cache effectiveness.
+//
+// Enable this (default) for:
+// - Multi-turn conversations with consistent system prompts
+// - Scenarios where system context is reused across requests
+//
+// Disable for:
+// - Cases where message order must be strictly preserved
+// - Testing scenarios requiring deterministic behavior
+//
+// Example:
+//
+//	model := openai.New("gpt-4o",
+//	    openai.WithOptimizeForCache(false),  // Disable cache optimization
+//	)
+func WithOptimizeForCache(optimize bool) Option {
+	return func(opts *options) {
+		opts.OptimizeForCache = optimize
 	}
 }
