@@ -2117,10 +2117,12 @@
 - 工具自动注册：开启 <code>WithSkills</code> 后，<code>skill_load</code>、
   <code>skill_select_docs</code>、<code>skill_list_docs</code> 与 <code>skill_run</code>
   会自动出现在工具列表中，无需手动添加。
-- 自动提示注入：框架会在系统消息中加入简洁的“工具使用指引”，
-  引导模型在合适时机先 <code>skill_load</code>，需要时用 <code>skill_select_docs</code>
-  选择文档，再 <code>skill_run</code>（参见源码
-  的指引文案拼接逻辑）。
+- 默认提示指引：框架会在系统消息里，在 <code>Available skills:</code> 列表后追加一段
+  <code>Tooling and workspace guidance:</code> 指引文本。
+  - 关闭该指引（减少提示词占用）：<code>llmagent.WithSkillsToolingGuidance("")</code>。
+  - 或用自定义文本替换：<code>llmagent.WithSkillsToolingGuidance("...")</code>。
+  - 如果你关闭它，请在自己的指令里说明何时使用 <code>skill_load</code>、
+    <code>skill_select_docs</code> 和 <code>skill_run</code>。
   - 加载器： <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go">tool/skill/load.go</a>
   - 运行器： <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go">tool/skill/run.go</a></p>
 <h3 id="3">3) 运行示例</h3>
@@ -2381,7 +2383,7 @@ https://github.com/anthropics/skills</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月31日 03:19:26 UTC">2025-12-31 03:19:26</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月11日 07:09:52 UTC">2026-01-11 07:09:52</span>
   </span>
 
     
