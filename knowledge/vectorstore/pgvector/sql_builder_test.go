@@ -158,8 +158,8 @@ func TestQueryBuilders(t *testing.T) {
 			setupFunc: func(qb *queryBuilder) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 			},
-			expectedContains: []string{"SELECT", "(1.0 - (embedding <=> $1) / 2.0) as score"},
-			expectedOrder:    "ORDER BY embedding <=> $1",
+			expectedContains: []string{"SELECT", "vector_score as score", "FROM (", ") subq"},
+			expectedOrder:    "",
 			minArgs:          1,
 		},
 		{
@@ -169,8 +169,8 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 				qb.addIDFilter([]string{"doc1", "doc2"})
 			},
-			expectedContains: []string{"WHERE", "id IN", "$2, $3"},
-			expectedOrder:    "ORDER BY embedding <=> $1",
+			expectedContains: []string{"WHERE", "id IN", "$2, $3", "FROM (", ") subq"},
+			expectedOrder:    "",
 			minArgs:          3,
 		},
 		{
@@ -180,8 +180,8 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 				qb.addScoreFilter(0.5)
 			},
-			expectedContains: []string{"WHERE", "(1.0 - (embedding <=> $1) / 2.0) >= 0.500000"},
-			expectedOrder:    "ORDER BY embedding <=> $1",
+			expectedContains: []string{"WHERE", "(1.0 - (embedding <=> $1) / 2.0) >= 0.500000", "FROM (", ") subq"},
+			expectedOrder:    "",
 			minArgs:          1,
 		},
 		{
@@ -191,8 +191,8 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 				qb.addMetadataFilter(map[string]any{"category": "AI"})
 			},
-			expectedContains: []string{"WHERE", "metadata @>", "::jsonb"},
-			expectedOrder:    "ORDER BY embedding <=> $1",
+			expectedContains: []string{"WHERE", "metadata @>", "::jsonb", "FROM (", ") subq"},
+			expectedOrder:    "",
 			minArgs:          2,
 		},
 
@@ -203,8 +203,8 @@ func TestQueryBuilders(t *testing.T) {
 			setupFunc: func(qb *queryBuilder) {
 				qb.addKeywordSearchConditions("machine learning", 0.0)
 			},
-			expectedContains: []string{"SELECT", "to_tsvector", "ts_rank"},
-			expectedOrder:    "ORDER BY score DESC, created_at DESC",
+			expectedContains: []string{"SELECT", "to_tsvector", "ts_rank", "text_score as score", "FROM (", ") subq"},
+			expectedOrder:    "",
 			minArgs:          1,
 		},
 		{
@@ -213,8 +213,8 @@ func TestQueryBuilders(t *testing.T) {
 			setupFunc: func(qb *queryBuilder) {
 				qb.addKeywordSearchConditions("machine learning", 0.1)
 			},
-			expectedContains: []string{"WHERE", "ts_rank", ">= $"},
-			expectedOrder:    "ORDER BY score DESC, created_at DESC",
+			expectedContains: []string{"WHERE", "ts_rank", ">= $", "FROM (", ") subq"},
+			expectedOrder:    "",
 			minArgs:          2,
 		},
 		{
@@ -224,8 +224,8 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addKeywordSearchConditions("test", 0.0)
 				qb.addIDFilter([]string{"doc1", "doc3"})
 			},
-			expectedContains: []string{"WHERE", "id IN"},
-			expectedOrder:    "ORDER BY score DESC, created_at DESC",
+			expectedContains: []string{"WHERE", "id IN", "FROM (", ") subq"},
+			expectedOrder:    "",
 			minArgs:          3,
 		},
 

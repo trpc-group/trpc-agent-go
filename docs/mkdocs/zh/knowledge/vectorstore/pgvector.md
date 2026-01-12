@@ -170,14 +170,17 @@ PGVector 支持多种搜索模式，所有模式的 score 都归一化到 `[0, 1
 
 ### 1. Vector Search (向量搜索)
 
-**SQL 模板**:
+**SQL 模板** (使用子查询避免重复计算):
 ```sql
-SELECT *, 
-       (1.0 - (embedding <=> $1) / 2.0) as vector_score,
-       0.0 as text_score,
-       (1.0 - (embedding <=> $1) / 2.0) as score
-FROM table_name
-ORDER BY embedding <=> $1
+SELECT *, vector_score as score
+FROM (
+  SELECT *, 
+         (1.0 - (embedding <=> $1) / 2.0) as vector_score,
+         0.0 as text_score
+  FROM table_name
+  WHERE ...
+  ORDER BY embedding <=> $1
+) subq
 LIMIT 10
 ```
 
@@ -203,16 +206,18 @@ vector_score = 1.0 - (cosine_distance / 2.0)
 
 ### 2. Keyword Search (关键词搜索)
 
-**SQL 模板**:
+**SQL 模板** (使用子查询避免重复计算):
 ```sql
-SELECT *, 
-       0.0 as vector_score,
-       (ts_rank(to_tsvector('english', content), websearch_to_tsquery('english', $1)) 
-        / (ts_rank(to_tsvector('english', content), websearch_to_tsquery('english', $1)) + 0.1)) as text_score,
-       (ts_rank(...) / (ts_rank(...) + 0.1)) as score
-FROM table_name
-WHERE to_tsvector('english', content) @@ websearch_to_tsquery('english', $1)
-ORDER BY score DESC
+SELECT *, text_score as score
+FROM (
+  SELECT *, 
+         0.0 as vector_score,
+         (ts_rank(to_tsvector('english', content), websearch_to_tsquery('english', $1)) 
+          / (ts_rank(to_tsvector('english', content), websearch_to_tsquery('english', $1)) + 0.1)) as text_score
+  FROM table_name
+  WHERE to_tsvector('english', content) @@ websearch_to_tsquery('english', $1)
+) subq
+ORDER BY score DESC, created_at DESC
 LIMIT 10
 ```
 

@@ -287,20 +287,25 @@ func (qb *queryBuilder) addFtsCondition(query string) {
 func (qb *queryBuilder) build(limit int) (string, []any) {
 	whereClause := strings.Join(qb.conditions, " AND ")
 
-	// For hybrid search, use subquery to avoid duplicate calculations
-	if qb.searchMode == vectorstore.SearchModeHybrid {
+	// Use subquery for vector/keyword/hybrid search to avoid duplicate calculations
+	switch qb.searchMode {
+	case vectorstore.SearchModeVector:
+		return qb.buildVectorQueryWithSubquery(whereClause, limit)
+	case vectorstore.SearchModeKeyword:
+		return qb.buildKeywordQueryWithSubquery(whereClause, limit)
+	case vectorstore.SearchModeHybrid:
 		return qb.buildHybridQueryWithSubquery(whereClause, limit)
+	default:
+		// Filter search or other modes use direct query
+		finalSelectClause := qb.buildSelectClause()
+		sql := fmt.Sprintf(`
+			SELECT %s
+			FROM %s
+			WHERE %s
+			%s
+			LIMIT %d`, finalSelectClause, qb.o.table, whereClause, qb.orderClause, limit)
+		return sql, qb.args
 	}
-
-	finalSelectClause := qb.buildSelectClause()
-	sql := fmt.Sprintf(`
-		SELECT %s
-		FROM %s
-		WHERE %s
-		%s
-		LIMIT %d`, finalSelectClause, qb.o.table, whereClause, qb.orderClause, limit)
-
-	return sql, qb.args
 }
 
 // buildSelectClause generates the appropriate SELECT clause based on search mode.
@@ -321,6 +326,25 @@ func (qb *queryBuilder) buildSelectClause() string {
 func (qb *queryBuilder) buildVectorSelectClause() string {
 	vExpr := qb.getVectorScoreExpr()
 	return fmt.Sprintf("%s, %s as vector_score, 0.0 as text_score, %s as score", commonFieldsStr, vExpr, vExpr)
+}
+
+// buildVectorQueryWithSubquery generates vector search query using subquery.
+// Inner query calculates vector_score once.
+// Outer query reuses the computed score to avoid duplicate calculations.
+func (qb *queryBuilder) buildVectorQueryWithSubquery(whereClause string, limit int) (string, []any) {
+	vExpr := qb.getVectorScoreExpr()
+
+	sql := fmt.Sprintf(`
+		SELECT *, vector_score as score
+		FROM (
+			SELECT %s, %s as vector_score, 0.0 as text_score
+			FROM %s
+			WHERE %s
+			ORDER BY %s <=> $1
+		) subq
+		LIMIT %d`, commonFieldsStr, vExpr, qb.o.table, whereClause, qb.o.embeddingFieldName, limit)
+
+	return sql, qb.args
 }
 
 // buildHybridQueryWithSubquery generates hybrid search query using subquery.
@@ -375,6 +399,36 @@ func (qb *queryBuilder) buildKeywordSelectClause() string {
 		return fmt.Sprintf("%s, 0.0 as vector_score, %s as text_score, %s as score", commonFieldsStr, tExpr, tExpr)
 	}
 	return fmt.Sprintf("%s, 0.0 as vector_score, 0.0 as text_score, 0.0 as score", commonFieldsStr)
+}
+
+// buildKeywordQueryWithSubquery generates keyword search query using subquery.
+// Inner query calculates text_score once.
+// Outer query reuses the computed score to avoid duplicate calculations.
+func (qb *queryBuilder) buildKeywordQueryWithSubquery(whereClause string, limit int) (string, []any) {
+	if qb.textQueryPos <= 0 {
+		// No text query, return simple query
+		sql := fmt.Sprintf(`
+			SELECT %s, 0.0 as vector_score, 0.0 as text_score, 0.0 as score
+			FROM %s
+			WHERE %s
+			ORDER BY %s DESC
+			LIMIT %d`, commonFieldsStr, qb.o.table, whereClause, qb.o.createdAtFieldName, limit)
+		return sql, qb.args
+	}
+
+	tExpr := qb.getKeywordScoreExpr()
+
+	sql := fmt.Sprintf(`
+		SELECT *, text_score as score
+		FROM (
+			SELECT %s, 0.0 as vector_score, %s as text_score
+			FROM %s
+			WHERE %s
+		) subq
+		ORDER BY score DESC, %s DESC
+		LIMIT %d`, commonFieldsStr, tExpr, qb.o.table, whereClause, qb.o.createdAtFieldName, limit)
+
+	return sql, qb.args
 }
 
 // Helper methods to generate score expressions

@@ -67,8 +67,6 @@ func defaultDocBuilder(row pgx.Row) (*vectorstore.ScoredDocument, []float64, err
 	var createdAt, updatedAt int64
 	var score, vectorScore, textScore float64
 
-	// Row scan order must match SQL select order:
-	// commonFields (*), vector_score, text_score, score
 	if err := row.Scan(&id, &name, &content, &vector, &metadataJSON, &createdAt, &updatedAt, &vectorScore, &textScore, &score); err != nil {
 		return nil, nil, err
 	}
@@ -77,7 +75,6 @@ func defaultDocBuilder(row pgx.Row) (*vectorstore.ScoredDocument, []float64, err
 		return nil, nil, fmt.Errorf("pgvector parse metadata: %w", err)
 	}
 
-	// Add vector and text scores to metadata for debug purposes
 	if metadata == nil {
 		metadata = make(map[string]any)
 	}
