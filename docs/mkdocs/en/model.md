@@ -919,6 +919,22 @@ For a complete interactive example, see [examples/model/batch](https://github.co
 
 The retry mechanism is an automatic error recovery technique that automatically retries failed requests. This feature is provided by the underlying OpenAI SDK, with the framework passing retry parameters to the SDK through configuration options.
 
+##### Timeouts and deadlines
+
+Request lifecycle is bounded by two independent limits:
+
+- The **caller context deadline** (for example, Runner max duration, or `context.WithTimeout`).
+- The **OpenAI request timeout** configured by `openaiopt.WithRequestTimeout`.
+
+The effective budget is the earlier one:
+
+- effective_deadline = min(ctx_deadline, request_timeout)
+
+Important notes:
+
+- `github.com/openai/openai-go` does not hardcode timeout by default. If you observe timeout in logs, it typically comes from an upstream deadline (gateway/caller context) or from your own `WithRequestTimeout` configuration.
+- If you expect long-running calls (streaming, large prompts, tools, or reasoning models), configure `WithRequestTimeout` to match your service deadline and service level objective (SLO).
+
 ##### Core Features
 
 - **Automatic Retry**: SDK automatically handles retryable errors
@@ -1106,6 +1122,77 @@ llm := openai.New("deepseek-chat",
                     r.Header.Set("X-Feature-Flag", "on")
                 }
                 return next(r)
+            },
+        ),
+    ),
+)
+```
+
+##### Logging raw HTTP request and response
+
+You can use `openaiopt.WithMiddleware` to log the underlying HTTP request and
+response. Be careful about secrets (API keys, Authorization headers) and body
+consumption.
+
+Key points:
+
+- Redact sensitive headers before logging.
+- Reading `req.Body` or `resp.Body` consumes the stream, so you must restore it.
+- Do not read `resp.Body` for streaming responses (for example,
+  `Content-Type: text/event-stream`) because it may block or break the stream.
+
+```go
+import (
+    "bytes"
+    "io"
+    "net/http"
+    "net/http/httputil"
+    "strings"
+
+    openaiopt "github.com/openai/openai-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/log"
+)
+
+const (
+    redacted = "***REDACTED***"
+)
+
+llm := openai.New("deepseek-chat",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMiddleware(
+            func(req *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
+                // Log request (redact sensitive headers)
+                dumpReq := req.Clone(req.Context())
+                for _, k := range []string{"Authorization", "api-key"} {
+                    if dumpReq.Header.Get(k) != "" {
+                        dumpReq.Header.Set(k, redacted)
+                    }
+                }
+                if b, err := httputil.DumpRequestOut(dumpReq, true); err == nil {
+                    log.DebugfContext(req.Context(), "openai http request:\n%s.", string(b))
+                }
+
+                resp, err := next(req)
+                if err != nil || resp == nil {
+                    return resp, err
+                }
+
+                // Log response headers
+                dumpResp := &http.Response{Header: resp.Header.Clone()}
+                if b, err := httputil.DumpResponse(dumpResp, false); err == nil {
+                    log.DebugfContext(req.Context(), "openai http response:\n%s.", string(b))
+                }
+
+                // Log non-streaming response body
+                if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") &&
+                    resp.ContentLength > 0 {
+                    if body, err := io.ReadAll(resp.Body); err == nil {
+                        resp.Body = io.NopCloser(bytes.NewReader(body))
+                        log.DebugfContext(req.Context(), "openai http response body:\n%s.", string(body))
+                    }
+                }
+
+                return resp, nil
             },
         ),
     ),

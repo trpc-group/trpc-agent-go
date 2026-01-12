@@ -916,6 +916,22 @@ Batch API 的执行流程：
 
 重试机制是一种自动错误恢复技术，用于在请求失败时自动重试。该功能由底层 OpenAI SDK 提供，框架通过配置选项将重试参数传递给 SDK。
 
+##### 超时与 deadline
+
+一次模型请求的生命周期通常受到两类独立限制：
+
+- 调用方 `ctx` 的 deadline（例如 Runner 的最大运行时长，或 `context.WithTimeout`）。
+- 通过 `openaiopt.WithRequestTimeout` 配置的 OpenAI 请求超时。
+
+最终生效的上限取两者更早者：
+
+- effective_deadline = min(ctx_deadline, request_timeout)
+
+重要说明：
+
+- `github.com/openai/openai-go` 默认不硬编码超时。如果你在日志里看到超时，通常来自上游的 deadline（网关/调用方 context）或者自己配置了 `WithRequestTimeout`。
+- 如果预期请求耗时较长（流式输出、大 prompt、工具调用、推理模型等），建议将 `WithRequestTimeout` 配置到与你的服务 deadline 和服务质量目标（SLO）一致。
+
 ##### 核心特性
 
 - **自动重试**：SDK 自动处理可重试的错误
@@ -1101,6 +1117,75 @@ llm := openai.New("deepseek-chat",
                     r.Header.Set("X-Feature-Flag", "on")
                 }
                 return next(r)
+            },
+        ),
+    ),
+)
+```
+
+##### 在中间件里打印原始 HTTP 请求与响应
+
+你可以用 `openaiopt.WithMiddleware` 在最底层 HTTP 请求发出前/返回后打印
+请求与响应。注意要做鉴权信息脱敏，并且避免误伤 `Body` 读取。
+
+关键点：
+
+- 对敏感头部做脱敏（例如 `Authorization`、`api-key`）。
+- 读取 `req.Body`/`resp.Body` 会消耗流，必须在读取后恢复 `Body`。
+- 流式响应（`text/event-stream`）不要读取响应体，否则可能阻塞流式链路。
+
+```go
+import (
+    "bytes"
+    "io"
+    "net/http"
+    "net/http/httputil"
+    "strings"
+
+    openaiopt "github.com/openai/openai-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/log"
+)
+
+const (
+    redacted = "***REDACTED***"
+)
+
+llm := openai.New("deepseek-chat",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMiddleware(
+            func(req *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
+                // 打印请求 (脱敏头部)
+                dumpReq := req.Clone(req.Context())
+                for _, k := range []string{"Authorization", "api-key"} {
+                    if dumpReq.Header.Get(k) != "" {
+                        dumpReq.Header.Set(k, redacted)
+                    }
+                }
+                if b, err := httputil.DumpRequestOut(dumpReq, true); err == nil {
+                    log.DebugfContext(req.Context(), "openai http request:\n%s.", string(b))
+                }
+
+                resp, err := next(req)
+                if err != nil || resp == nil {
+                    return resp, err
+                }
+
+                // 打印响应头
+                dumpResp := &http.Response{Header: resp.Header.Clone()}
+                if b, err := httputil.DumpResponse(dumpResp, false); err == nil {
+                    log.DebugfContext(req.Context(), "openai http response:\n%s.", string(b))
+                }
+
+                // 打印非流式响应体
+                if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") &&
+                    resp.ContentLength > 0 {
+                    if body, err := io.ReadAll(resp.Body); err == nil {
+                        resp.Body = io.NopCloser(bytes.NewReader(body))
+                        log.DebugfContext(req.Context(), "openai http response body:\n%s.", string(body))
+                    }
+                }
+
+                return resp, nil
             },
         ),
     ),
