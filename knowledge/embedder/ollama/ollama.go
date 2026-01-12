@@ -54,6 +54,9 @@ type Embedder struct {
 	client        *api.Client
 	truncate      *bool
 	dimensions    int
+
+	serverAddress *string // for telemetry
+	serverPort    *int    // for telemetry
 }
 
 // Option represents a functional option for configuring the Embedder.
@@ -170,6 +173,9 @@ func New(opts ...Option) *Embedder {
 	if n, err := strconv.ParseInt(port, 10, 32); err != nil || n > 65535 || n < 0 {
 		port = defaultPort
 	}
+	n, _ := strconv.ParseInt(port, 10, 32)
+	portInt := int(n)
+	e.serverAddress, e.serverPort = &host, &portInt
 
 	baseURL := &url.URL{
 		Scheme: scheme,
@@ -247,8 +253,10 @@ func (e *Embedder) response(ctx context.Context, text string) (rsp *embedRespons
 	}
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationEmbeddings, e.model))
 	embeddingAttributes := &itelemetry.EmbeddingAttributes{
-		RequestModel: e.model,
-		Dimensions:   e.dimensions,
+		RequestModel:  e.model,
+		Dimensions:    e.dimensions,
+		ServerAddress: e.serverAddress,
+		ServerPort:    e.serverPort,
 	}
 	defer func() {
 		embeddingAttributes.Error = err

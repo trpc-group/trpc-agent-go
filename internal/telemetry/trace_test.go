@@ -285,6 +285,8 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	embReq := "hello"
 	embRsp := "[0.1,0.2]"
 	encFormat := "floats"
+	srvAddr := "localhost"
+	srvPort := 8080
 	s6 := newRecordingSpan()
 	TraceEmbedding(s6, &EmbeddingAttributes{
 		RequestEncodingFormat: &encFormat,
@@ -292,6 +294,8 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 		Dimensions:            dims,
 		Request:               &embReq,
 		Response:              &embRsp,
+		ServerAddress:         &srvAddr,
+		ServerPort:            &srvPort,
 	})
 	if !hasAttr(s6.attrs, KeyGenAIRequestModel, "text-emb") {
 		t.Fatalf("missing model")
@@ -307,6 +311,12 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	}
 	if !hasAttr(s6.attrs, semconvtrace.KeyGenAIEmbeddingsResponse, embRsp) {
 		t.Fatalf("missing embedding response")
+	}
+	if !hasAttr(s6.attrs, semconvtrace.KeyServerAddress, srvAddr) {
+		t.Fatalf("missing server address")
+	}
+	if !hasAttr(s6.attrs, semconvtrace.KeyServerPort, int64(srvPort)) {
+		t.Fatalf("missing server port")
 	}
 	tok := int64(10)
 	s7 := newRecordingSpan()

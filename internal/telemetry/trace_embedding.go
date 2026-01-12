@@ -16,6 +16,7 @@ import (
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
 
+// EmbeddingAttributes represents the attributes of an embedding call.
 type EmbeddingAttributes struct {
 	RequestEncodingFormat *string
 	RequestModel          string
@@ -24,6 +25,8 @@ type EmbeddingAttributes struct {
 	InputToken            *int64
 	Request               *string
 	Response              *string
+	ServerAddress         *string
+	ServerPort            *int
 }
 
 // TraceEmbedding traces the invocation of an embedding call.
@@ -54,6 +57,12 @@ func buildEmbeddingAttributes(embeddingAttributes *EmbeddingAttributes) []attrib
 	}
 	if embeddingAttributes.Error != nil {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyErrorType, semconvtrace.ValueDefaultErrorType), attribute.String(semconvtrace.KeyErrorMessage, embeddingAttributes.Error.Error()))
+	}
+	if embeddingAttributes.ServerAddress != nil {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyServerAddress, *embeddingAttributes.ServerAddress))
+	}
+	if embeddingAttributes.ServerPort != nil {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyServerPort, *embeddingAttributes.ServerPort))
 	}
 	return attrs
 }
