@@ -761,8 +761,10 @@ func (e *Executor) createCheckpointAndSave(
 		}
 	}
 
-	// Set channel versions in checkpoint for version semantics.
-	checkpoint.ChannelVersions = newVersions
+	// Persist all per-run channel versions for correct resume semantics.
+	// Version-based triggering relies on monotonic channel versions even when a
+	// channel is not currently "available" (it may have been acknowledged).
+	checkpoint.ChannelVersions = e.collectChannelVersions(execCtx)
 
 	// Set next nodes and channels for recovery.
 	if source == CheckpointSourceInput && step == -1 {
@@ -2797,15 +2799,7 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 		}
 	}
 
-	// Create channel versions from current channel states (per execution).
-	channelVersions := make(map[string]int64)
-	if execCtx != nil && execCtx.channels != nil {
-		for channelName, ch := range execCtx.channels.GetAllChannels() {
-			if ch.IsAvailable() {
-				channelVersions[channelName] = ch.Version
-			}
-		}
-	}
+	channelVersions := e.collectChannelVersions(execCtx)
 
 	// Create versions seen from execution context.
 	versionsSeen := make(map[string]map[string]int64)
@@ -2833,6 +2827,24 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 		checkpoint.UpdatedChannels = e.getUpdatedChannels(execCtx)
 	}
 	return checkpoint
+}
+
+func (e *Executor) collectChannelVersions(
+	execCtx *ExecutionContext,
+) map[string]int64 {
+	channelVersions := make(map[string]int64)
+	if execCtx == nil || execCtx.channels == nil {
+		return channelVersions
+	}
+
+	for name, ch := range execCtx.channels.GetAllChannels() {
+		if ch == nil {
+			continue
+		}
+		channelVersions[name] = ch.Version
+	}
+
+	return channelVersions
 }
 
 // getNextNodes determines which nodes should be executed next based on the current state.
