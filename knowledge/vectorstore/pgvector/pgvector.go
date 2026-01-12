@@ -681,8 +681,7 @@ func (vs *VectorStore) addUpdateField(ub *updateByFilterBuilder, field string, v
 		if metadataKey == "" {
 			return fmt.Errorf("invalid metadata field: %q", field)
 		}
-		ub.addMetadataField(metadataKey, value)
-		return nil
+		return ub.addMetadataField(metadataKey, value)
 	}
 
 	// Handle regular fields (name, content)
@@ -691,7 +690,7 @@ func (vs *VectorStore) addUpdateField(ub *updateByFilterBuilder, field string, v
 		return nil
 	}
 
-	return fmt.Errorf("unsupported update field: %q (supported: %s, %s, %s, %s.*)",
+	return fmt.Errorf("unsupported update field: %q (supported fields: %s, %s, %s, %s.{key})",
 		field, vs.option.nameFieldName, vs.option.contentFieldName,
 		vs.option.embeddingFieldName, vs.option.metadataFieldName)
 }

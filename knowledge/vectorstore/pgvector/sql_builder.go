@@ -161,17 +161,22 @@ func (ub *updateByFilterBuilder) addField(field string, value any) {
 
 // addMetadataField updates a specific metadata field using jsonb_set.
 // field should be the metadata key (without "metadata." prefix).
-func (ub *updateByFilterBuilder) addMetadataField(field string, value any) {
+func (ub *updateByFilterBuilder) addMetadataField(field string, value any) error {
+	// Convert value to JSON string for jsonb_set
+	jsonValue, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata value for field %q: %w", field, err)
+	}
+
 	// Store metadata update to be combined later
 	ub.metadataUpdates = append(ub.metadataUpdates, metadataUpdate{
 		field:    field,
 		argIndex: ub.argIndex,
 	})
 
-	// Convert value to JSON string for jsonb_set
-	jsonValue, _ := json.Marshal(value)
 	ub.args = append(ub.args, string(jsonValue))
 	ub.argIndex++
+	return nil
 }
 
 // addEmbeddingField adds an embedding field to update.
