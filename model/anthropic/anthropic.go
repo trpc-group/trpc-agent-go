@@ -390,34 +390,37 @@ func (m *Model) applyCacheControlToMessages(messages []anthropic.MessageParam, i
 	result := make([]anthropic.MessageParam, len(messages))
 	copy(result, messages)
 
-	// Add cache control to the last content block of the target message
+	// Add cache control to the last cacheable content block of the target message.
+	// We iterate backwards to find the first block that supports cache control,
+	// in case the last block is an image or other unsupported media type.
 	msg := result[index]
-	if len(msg.Content) > 0 {
-		lastContentIdx := len(msg.Content) - 1
-		content := msg.Content[lastContentIdx]
+	for i := len(msg.Content) - 1; i >= 0; i-- {
+		content := msg.Content[i]
+		cacheApplied := false
 
 		// Apply cache control based on content type
 		if content.OfText != nil {
 			newContent := *content.OfText
 			newContent.CacheControl = anthropic.NewCacheControlEphemeralParam()
-			msg.Content[lastContentIdx] = anthropic.ContentBlockParamUnion{
-				OfText: &newContent,
-			}
+			msg.Content[i] = anthropic.ContentBlockParamUnion{OfText: &newContent}
+			cacheApplied = true
 		} else if content.OfToolResult != nil {
 			newContent := *content.OfToolResult
 			newContent.CacheControl = anthropic.NewCacheControlEphemeralParam()
-			msg.Content[lastContentIdx] = anthropic.ContentBlockParamUnion{
-				OfToolResult: &newContent,
-			}
+			msg.Content[i] = anthropic.ContentBlockParamUnion{OfToolResult: &newContent}
+			cacheApplied = true
 		} else if content.OfToolUse != nil {
 			newContent := *content.OfToolUse
 			newContent.CacheControl = anthropic.NewCacheControlEphemeralParam()
-			msg.Content[lastContentIdx] = anthropic.ContentBlockParamUnion{
-				OfToolUse: &newContent,
-			}
+			msg.Content[i] = anthropic.ContentBlockParamUnion{OfToolUse: &newContent}
+			cacheApplied = true
 		}
-		result[index] = msg
+
+		if cacheApplied {
+			break // Stop after applying to the first valid block from the end
+		}
 	}
+	result[index] = msg
 
 	return result
 }
