@@ -61,7 +61,11 @@ import (
 // The compiled Graph can then be executed with NewExecutor(graph).
 type StateGraph struct {
 	graph       *Graph
-	buildErrors []error
+	buildErrors *stateGraphBuildErrors
+}
+
+type stateGraphBuildErrors struct {
+	errs []error
 }
 
 // NewStateGraph creates a new graph builder with the given state schema.
@@ -75,11 +79,17 @@ func (sg *StateGraph) addBuildError(err error) {
 	if err == nil {
 		return
 	}
-	sg.buildErrors = append(sg.buildErrors, err)
+	if sg.buildErrors == nil {
+		sg.buildErrors = &stateGraphBuildErrors{}
+	}
+	sg.buildErrors.errs = append(sg.buildErrors.errs, err)
 }
 
 func (sg *StateGraph) buildErr() error {
-	return errors.Join(sg.buildErrors...)
+	if sg.buildErrors == nil {
+		return nil
+	}
+	return errors.Join(sg.buildErrors.errs...)
 }
 
 // Option is a function that configures a Node.
