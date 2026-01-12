@@ -14,6 +14,7 @@ import (
 	"strconv"
 )
 
+// ServerAddrPortFromBaseURL extracts the server address and port from a base URL.
 func ServerAddrPortFromBaseURL(baseURL string) (addr *string, port *int) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
