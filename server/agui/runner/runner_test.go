@@ -38,6 +38,7 @@ func TestNew(t *testing.T) {
 	assert.True(t, ok)
 
 	assert.NotNil(t, runner.runAgentInputHook)
+	assert.NotNil(t, runner.stateResolver)
 	trans, err := runner.translatorFactory(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
 	assert.NoError(t, err)
 	assert.NotNil(t, trans)
@@ -411,6 +412,7 @@ func TestRunIgnoresRequestCancelButRespectsBackendTimeout(t *testing.T) {
 		runner:            underlying,
 		translatorFactory: defaultTranslatorFactory,
 		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		startSpan:         defaultStartSpan,
 		timeout:           200 * time.Millisecond,
@@ -467,6 +469,7 @@ func TestRunTimeoutUsesMinRequestDeadlineAndBackendTimeout(t *testing.T) {
 		runner:            underlying,
 		translatorFactory: defaultTranslatorFactory,
 		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		startSpan:         defaultStartSpan,
 		timeout:           500 * time.Millisecond,
@@ -524,6 +527,7 @@ func TestRunNoMessages(t *testing.T) {
 			return fakeTrans, nil
 		},
 		userIDResolver:    NewOptions().UserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 	}
 
@@ -545,6 +549,7 @@ func TestRunUserIDResolverError(t *testing.T) {
 		userIDResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
 			return "", errors.New("boom")
 		},
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 	}
 
@@ -596,6 +601,7 @@ func TestRunUnderlyingRunnerError(t *testing.T) {
 			return fakeTrans, nil
 		},
 		userIDResolver:    NewOptions().UserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		startSpan:         defaultStartSpan,
 	}
@@ -629,6 +635,7 @@ func TestRunRunOptionResolverError(t *testing.T) {
 			return fakeTrans, nil
 		},
 		userIDResolver: NewOptions().UserIDResolver,
+		stateResolver:  defaultStateResolver,
 		runOptionResolver: func(ctx context.Context, in *adapter.RunAgentInput) ([]agent.RunOption, error) {
 			assert.Same(t, input, in)
 			return nil, wantErr
@@ -656,6 +663,7 @@ func TestRunStartSpanError(t *testing.T) {
 			return &fakeTranslator{}, nil
 		},
 		userIDResolver: defaultUserIDResolver,
+		stateResolver:  defaultStateResolver,
 		runOptionResolver: func(ctx context.Context, in *adapter.RunAgentInput) ([]agent.RunOption, error) {
 			assert.Same(t, input, in)
 			return nil, nil
@@ -691,6 +699,7 @@ func TestRunLastMessageContentNotString(t *testing.T) {
 			return fakeTrans, nil
 		},
 		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		startSpan: func(ctx context.Context, in *adapter.RunAgentInput) (context.Context, trace.Span, error) {
 			assert.Same(t, input, in)
@@ -723,6 +732,7 @@ func TestRunFlushesTracker(t *testing.T) {
 		runner:            underlying,
 		translatorFactory: defaultTranslatorFactory,
 		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		tracker:           recorder,
 		startSpan:         defaultStartSpan,
@@ -832,6 +842,7 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 		userIDResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
 			return "user-123", nil
 		},
+		stateResolver: defaultStateResolver,
 		runOptionResolver: func(ctx context.Context, in *adapter.RunAgentInput) ([]agent.RunOption, error) {
 			assert.Same(t, input, in)
 			resolverCalled = true
@@ -847,6 +858,75 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 	assert.True(t, resolverCalled)
 	assert.True(t, optionsApplied)
 	assert.Equal(t, 1, underlying.calls)
+}
+
+func TestRunStateResolverOverridesRuntimeState(t *testing.T) {
+	var runOpts agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			for _, opt := range opts {
+				opt(&runOpts)
+			}
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithStateResolver(func(context.Context, *adapter.RunAgentInput) (map[string]any, error) {
+			return map[string]any{
+				"k1":                  "v1",
+				graph.CfgKeyLineageID: "from-state",
+			}, nil
+		}),
+		WithRunOptionResolver(func(context.Context, *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			return []agent.RunOption{
+				agent.WithRuntimeState(map[string]any{
+					graph.CfgKeyLineageID: "from-runopt",
+					"k2":                  "v2",
+				}),
+			}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	_ = collectEvents(t, eventsCh)
+
+	require.NotNil(t, runOpts.RuntimeState)
+	assert.Equal(t, "v1", runOpts.RuntimeState["k1"])
+	assert.Equal(t, "from-state", runOpts.RuntimeState[graph.CfgKeyLineageID])
+	_, ok := runOpts.RuntimeState["k2"]
+	assert.False(t, ok)
+}
+
+func TestRunStateResolverError(t *testing.T) {
+	underlying := &fakeRunner{}
+	wantErr := errors.New("state resolver failed")
+	r := New(
+		underlying,
+		WithStateResolver(func(context.Context, *adapter.RunAgentInput) (map[string]any, error) {
+			return nil, wantErr
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.Nil(t, eventsCh)
+	assert.ErrorContains(t, err, "resolve state")
+	assert.ErrorIs(t, err, wantErr)
+	assert.Equal(t, 0, underlying.calls)
 }
 
 func TestRunTranslateError(t *testing.T) {
@@ -869,6 +949,7 @@ func TestRunTranslateError(t *testing.T) {
 			return fakeTrans, nil
 		},
 		userIDResolver:    NewOptions().UserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		startSpan:         defaultStartSpan,
 	}
@@ -912,6 +993,7 @@ func TestRunNormal(t *testing.T) {
 		userIDResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
 			return "user-123", nil
 		},
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		startSpan:         defaultStartSpan,
 	}
@@ -968,6 +1050,7 @@ func TestRunAgentInputHook(t *testing.T) {
 				assert.Equal(t, replaced, input)
 				return "user-123", nil
 			},
+			stateResolver: defaultStateResolver,
 			runAgentInputHook: func(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
 				assert.Equal(t, baseInput, input)
 				return replaced, nil
@@ -1010,6 +1093,7 @@ func TestRunAgentInputHook(t *testing.T) {
 				assert.Same(t, originalInput, in)
 				return "user", nil
 			},
+			stateResolver: defaultStateResolver,
 			runAgentInputHook: func(ctx context.Context, in *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
 				return nil, nil
 			},
@@ -1304,6 +1388,7 @@ func TestRunnerAfterTranslateCallbackOverridesEmission(t *testing.T) {
 			return fakeTrans, nil
 		},
 		userIDResolver:     NewOptions().UserIDResolver,
+		stateResolver:      defaultStateResolver,
 		translateCallbacks: callbacks,
 		runOptionResolver:  defaultRunOptionResolver,
 		startSpan:          defaultStartSpan,
@@ -1427,6 +1512,7 @@ func TestRunTrackingErrorsAreIgnored(t *testing.T) {
 		runner:            underlying,
 		translatorFactory: defaultTranslatorFactory,
 		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		tracker: &errorTracker{
 			appendErr: appendErr,
@@ -1488,6 +1574,7 @@ func TestTranslateCallbackError(t *testing.T) {
 			translateCallbacks: callbacks,
 			translatorFactory:  defaultTranslatorFactory,
 			userIDResolver:     defaultUserIDResolver,
+			stateResolver:      defaultStateResolver,
 			runOptionResolver:  defaultRunOptionResolver,
 			startSpan:          defaultStartSpan,
 		}
@@ -1521,6 +1608,7 @@ func TestTranslateCallbackError(t *testing.T) {
 			translateCallbacks: callbacks,
 			translatorFactory:  defaultTranslatorFactory,
 			userIDResolver:     defaultUserIDResolver,
+			stateResolver:      defaultStateResolver,
 			runOptionResolver:  defaultRunOptionResolver,
 			startSpan:          defaultStartSpan,
 		}

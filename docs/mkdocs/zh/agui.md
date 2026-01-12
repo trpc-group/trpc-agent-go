@@ -323,6 +323,34 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 若返回错误，则会发送 `RunError` 事件；返回 `nil` 则表示不追加任何 `RunOption`。
 
+### 自定义 `StateResolver`
+
+默认情况下，AG-UI Runner 不会读取 `RunAgentInput.State` 并写入 `RunOptions.RuntimeState`。
+
+如果希望基于 `State` 构造 RuntimeState，可以实现 `StateResolver` 并通过 `aguirunner.WithStateResolver` 注入。返回的 map 会在调用底层 `runner.Run` 前写入 `RunOptions.RuntimeState`，并覆盖此前通过 `RunOptionResolver` 等设置的 `RuntimeState`。
+
+注意：若返回 `nil` 则表示不设置 `RuntimeState`；若返回空 map 则会将 `RuntimeState` 置为空。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
+stateResolver := func(_ context.Context, input *adapter.RunAgentInput) (map[string]any, error) {
+	state, ok := input.State.(map[string]any)
+	if !ok || state == nil {
+		return nil, nil
+	}
+	return map[string]any{
+		"custom_key": state["custom_key"],
+	}, nil
+}
+
+server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithStateResolver(stateResolver)))
+```
+
 ### 可观测平台上报
 
 在 `RunOptionResolver` 里附加自定义 span 属性，框架会在 Agent 入口 span 处自动打标：

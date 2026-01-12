@@ -39,7 +39,9 @@ go run ./server/graph \
 
 ## Verify with curl
 
-First request: the graph will interrupt at `confirm` after the tool is executed.
+First request: start a fresh run. The graph will interrupt at `confirm` after the tool is executed.
+
+`state.lineage_id` is optional for the first run. If omitted, the server generates one and includes it in the interrupt event payload so you can reuse it for resuming later. `state.checkpoint_id` and `state.resume_map` are only needed for resume runs.
 
 ```bash
 curl --no-buffer --location 'http://127.0.0.1:8080/agui' \
@@ -47,7 +49,7 @@ curl --no-buffer --location 'http://127.0.0.1:8080/agui' \
   --data '{
     "threadId": "demo-thread",
     "runId": "demo-run-1",
-    "forwardedProps": {
+    "state": {
       "lineage_id": "demo-lineage"
     },
     "messages": [
@@ -56,7 +58,10 @@ curl --no-buffer --location 'http://127.0.0.1:8080/agui' \
   }'
 ```
 
-Second request: resume from the latest checkpoint in the same lineage. Provide `forwardedProps.resume_map` and `forwardedProps.checkpoint_id`. Use an empty string for the latest checkpoint.
+Second request: resume from a checkpoint in the same lineage.
+
+- Provide `state.lineage_id` and `state.resume_map`.
+- `state.checkpoint_id` is optional. Use an empty string (or omit the field) to resume from the latest checkpoint, or set it to the `checkpointId` returned by the interrupt event to resume a specific checkpoint.
 
 ```bash
 curl --no-buffer --location 'http://127.0.0.1:8080/agui' \
@@ -64,7 +69,7 @@ curl --no-buffer --location 'http://127.0.0.1:8080/agui' \
   --data '{
     "threadId": "demo-thread",
     "runId": "demo-run-2",
-    "forwardedProps": {
+    "state": {
       "lineage_id": "demo-lineage",
       "checkpoint_id": "",
       "resume_map": {
@@ -131,7 +136,7 @@ Resume ack:
 
 This event is emitted before any `graph.node.start` events for the run. It clears `/interrupt` to `null` and writes the resume input to `/resume`. `/resume` contains `resumeMap` or `resume`. It may also include `checkpointId` and `lineageId`.
 
-Example captured from the second request above. `checkpointId` is omitted because `forwardedProps.checkpoint_id` is an empty string.
+Example captured from the second request above. `checkpointId` is omitted because `state.checkpoint_id` is an empty string.
 
 ```json
 {

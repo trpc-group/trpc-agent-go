@@ -48,6 +48,11 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Same(t, input, modified)
 
+	assert.NotNil(t, opts.StateResolver)
+	resolvedState, err := opts.StateResolver(context.Background(), input)
+	assert.NoError(t, err)
+	assert.Nil(t, resolvedState)
+
 	assert.NotNil(t, opts.RunOptionResolver)
 	resolvedOpts, err := opts.RunOptionResolver(context.Background(), input)
 	assert.NoError(t, err)
@@ -176,6 +181,18 @@ func TestWithRunOptionResolver(t *testing.T) {
 	opts := NewOptions(WithRunOptionResolver(resolver))
 	assert.NotNil(t, opts.RunOptionResolver)
 	opts.RunOptionResolver(context.Background(), nil)
+	assert.True(t, called)
+}
+
+func TestWithStateResolver(t *testing.T) {
+	called := false
+	resolver := func(ctx context.Context, input *adapter.RunAgentInput) (map[string]any, error) {
+		called = true
+		return nil, nil
+	}
+	opts := NewOptions(WithStateResolver(resolver))
+	assert.NotNil(t, opts.StateResolver)
+	opts.StateResolver(context.Background(), nil)
 	assert.True(t, called)
 }
 

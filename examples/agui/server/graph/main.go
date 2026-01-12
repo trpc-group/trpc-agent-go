@@ -15,8 +15,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"net/http"
-	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
@@ -95,7 +95,7 @@ func main() {
 		agui.WithGraphNodeStartActivityEnabled(true),
 		agui.WithGraphNodeInterruptActivityEnabled(true),
 		agui.WithAGUIRunnerOptions(
-			aguirunner.WithRunOptionResolver(resolveRunOptions),
+			aguirunner.WithStateResolver(resolveRuntimeState),
 		),
 	)
 	if err != nil {
@@ -224,54 +224,28 @@ func calculator(ctx context.Context, args calculatorArgs) (calculatorResult, err
 	}
 }
 
-func resolveRunOptions(ctx context.Context, input *aguiadapter.RunAgentInput) ([]agent.RunOption, error) {
+func resolveRuntimeState(_ context.Context, input *aguiadapter.RunAgentInput) (map[string]any, error) {
 	if input == nil {
-		return nil, errors.New("run input is nil")
+		return nil, nil
+	}
+	state, _ := input.State.(map[string]any)
+	if state == nil {
+		return nil, nil
 	}
 
-	forwardedProps, ok := input.ForwardedProps.(map[string]any)
-	if !ok || forwardedProps == nil {
-		return nil, errors.New("forwardedProps must be an object")
+	runtimeState := make(map[string]any)
+	if lineageID, ok := state[graph.CfgKeyLineageID].(string); ok {
+		runtimeState[graph.CfgKeyLineageID] = lineageID
 	}
-	rawLineageID, exists := forwardedProps[graph.CfgKeyLineageID]
-	if !exists {
-		return nil, fmt.Errorf("missing forwardedProps.%s", graph.CfgKeyLineageID)
-	}
-	lineageID, ok := rawLineageID.(string)
-	if !ok {
-		return nil, fmt.Errorf("forwardedProps.%s must be a string", graph.CfgKeyLineageID)
-	}
-	lineageID = strings.TrimSpace(lineageID)
-	if lineageID == "" {
-		return nil, fmt.Errorf("forwardedProps.%s cannot be empty", graph.CfgKeyLineageID)
-	}
-	runtimeState := map[string]any{
-		graph.CfgKeyLineageID: lineageID,
-	}
-
-	if rawCheckpointID, exists := forwardedProps[graph.CfgKeyCheckpointID]; exists {
-		checkpointID, ok := rawCheckpointID.(string)
-		if !ok {
-			return nil, fmt.Errorf("forwardedProps.%s must be a string", graph.CfgKeyCheckpointID)
-		}
+	if checkpointID, ok := state[graph.CfgKeyCheckpointID].(string); ok {
 		runtimeState[graph.CfgKeyCheckpointID] = checkpointID
 	}
-
-	if rawResumeMap, exists := forwardedProps[graph.CfgKeyResumeMap]; exists {
-		resumeMap, ok := rawResumeMap.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("forwardedProps.%s must be an object", graph.CfgKeyResumeMap)
-		}
-		if len(resumeMap) == 0 {
-			return nil, fmt.Errorf("forwardedProps.%s cannot be empty", graph.CfgKeyResumeMap)
-		}
-		if _, hasCheckpointID := runtimeState[graph.CfgKeyCheckpointID]; !hasCheckpointID {
-			return nil, fmt.Errorf("forwardedProps.%s is required when forwardedProps.%s is set", graph.CfgKeyCheckpointID, graph.CfgKeyResumeMap)
-		}
-		runtimeState[graph.StateKeyCommand] = &graph.Command{ResumeMap: resumeMap}
+	if resumeMap, ok := state[graph.CfgKeyResumeMap].(map[string]any); ok && len(resumeMap) > 0 {
+		copied := make(map[string]any)
+		maps.Copy(copied, resumeMap)
+		runtimeState[graph.StateKeyResumeMap] = copied
 	}
-
-	return []agent.RunOption{agent.WithRuntimeState(runtimeState)}, nil
+	return runtimeState, nil
 }
 
 func intPtr(i int) *int { return &i }

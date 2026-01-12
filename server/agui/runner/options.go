@@ -36,6 +36,7 @@ type Options struct {
 	RunAgentInputHook                 RunAgentInputHook     // RunAgentInputHook allows modifying the run input before processing.
 	AppName                           string                // AppName is the name of the application.
 	SessionService                    session.Service       // SessionService is the session service.
+	StateResolver                     StateResolver         // StateResolver resolves runtime state for an AG-UI run.
 	RunOptionResolver                 RunOptionResolver     // RunOptionResolver resolves the runner options for an AG-UI run.
 	AggregatorFactory                 aggregator.Factory    // AggregatorFactory builds an aggregator for each run.
 	AggregationOption                 []aggregator.Option   // AggregationOption is the aggregation options for each run.
@@ -52,6 +53,7 @@ func NewOptions(opt ...Option) *Options {
 		UserIDResolver:                    defaultUserIDResolver,
 		TranslatorFactory:                 defaultTranslatorFactory,
 		RunAgentInputHook:                 defaultRunAgentInputHook,
+		StateResolver:                     defaultStateResolver,
 		RunOptionResolver:                 defaultRunOptionResolver,
 		AggregatorFactory:                 aggregator.New,
 		FlushInterval:                     track.DefaultFlushInterval,
@@ -118,6 +120,16 @@ func WithAppName(n string) Option {
 func WithSessionService(s session.Service) Option {
 	return func(o *Options) {
 		o.SessionService = s
+	}
+}
+
+// StateResolver is a function that derives runtime state for an AG-UI run.
+type StateResolver func(ctx context.Context, input *adapter.RunAgentInput) (map[string]any, error)
+
+// WithStateResolver sets the runtime state resolver.
+func WithStateResolver(r StateResolver) Option {
+	return func(o *Options) {
+		o.StateResolver = r
 	}
 }
 
@@ -200,6 +212,11 @@ func defaultRunAgentInputHook(ctx context.Context, input *adapter.RunAgentInput)
 
 // defaultRunOptionResolver is the default run option resolver.
 func defaultRunOptionResolver(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+	return nil, nil
+}
+
+// defaultStateResolver returns no runtime state.
+func defaultStateResolver(ctx context.Context, input *adapter.RunAgentInput) (map[string]any, error) {
 	return nil, nil
 }
 

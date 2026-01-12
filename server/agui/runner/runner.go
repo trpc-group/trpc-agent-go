@@ -71,6 +71,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		userIDResolver:                    opts.UserIDResolver,
 		translateCallbacks:                opts.TranslateCallbacks,
 		runAgentInputHook:                 opts.RunAgentInputHook,
+		stateResolver:                     opts.StateResolver,
 		runOptionResolver:                 opts.RunOptionResolver,
 		tracker:                           tracker,
 		running:                           make(map[session.Key]*sessionContext),
@@ -90,6 +91,7 @@ type runner struct {
 	userIDResolver                    UserIDResolver
 	translateCallbacks                *translator.Callbacks
 	runAgentInputHook                 RunAgentInputHook
+	stateResolver                     StateResolver
 	runOptionResolver                 RunOptionResolver
 	tracker                           track.Tracker
 	runningMu                         sync.Mutex
@@ -151,6 +153,13 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	runOption, err := r.runOptionResolver(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("resolve run option: %w", err)
+	}
+	runtimeState, err := r.stateResolver(ctx, runAgentInput)
+	if err != nil {
+		return nil, fmt.Errorf("resolve state: %w", err)
+	}
+	if runtimeState != nil {
+		runOption = append(runOption, agent.WithRuntimeState(runtimeState))
 	}
 	ctx, span, err := r.startSpan(ctx, runAgentInput)
 	if err != nil {

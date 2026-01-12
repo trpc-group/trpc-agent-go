@@ -319,6 +319,34 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 `RunOptionResolver` executes for every incoming `RunAgentInput`. Its return value is forwarded to `runner.Run` in order. Returning an error surfaces a `RunError` to the client, while returning `nil` means no extra options are added.
 
+### Custom `StateResolver`
+
+By default, the AG-UI Runner does not read `RunAgentInput.State` and write it into `RunOptions.RuntimeState`.
+
+If you want to derive RuntimeState from `state`, implement `StateResolver` and inject it with `aguirunner.WithStateResolver`. The returned map is assigned to `RunOptions.RuntimeState` before calling the underlying `runner.Run`, overriding any RuntimeState set by other options (for example, `RunOptionResolver`).
+
+Note: returning `nil` means no override, while returning an empty map clears RuntimeState.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
+stateResolver := func(_ context.Context, input *adapter.RunAgentInput) (map[string]any, error) {
+	state, ok := input.State.(map[string]any)
+	if !ok || state == nil {
+		return nil, nil
+	}
+	return map[string]any{
+		"custom_key": state["custom_key"],
+	}, nil
+}
+
+server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithStateResolver(stateResolver)))
+```
+
 ### Observability Reporting
 
 Attach custom span attributes in `RunOptionResolver`; the framework will stamp them onto the agent entry span automatically:
