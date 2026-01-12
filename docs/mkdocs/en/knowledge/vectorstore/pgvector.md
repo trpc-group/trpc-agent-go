@@ -237,20 +237,20 @@ Where `c = 0.1` (sparseNormConstant)
 
 **Computation Flow Example**:
 
-Assume user query is `"vector database"`, and the database has a document with content `"Vector databases enable similarity search..."`
+Assume user query is `"machine learning"`, and the database has a document with content `"Machine learning enables intelligent systems..."`
 
 ```sql
 -- Step 1: Convert query to tsquery
-websearch_to_tsquery('english', 'vector database')
-→ 'vector' & 'databas'  -- (automatic stemming)
+websearch_to_tsquery('english', 'machine learning')
+→ 'machin' & 'learn'  -- (automatic stemming: machine → machin, learning → learn)
 
 -- Step 2: Convert document content to tsvector
-to_tsvector('english', 'Vector databases enable similarity search...')
-→ 'databas':2 'enabl':3 'search':5 'similar':4 'vector':1
+to_tsvector('english', 'Machine learning enables intelligent systems...')
+→ 'enabl':3 'intellig':4 'learn':2 'machin':1 'system':5
 
 -- Step 3: Check match (@@)
 to_tsvector(...) @@ websearch_to_tsquery(...)
-→ true  -- (contains vector and databas)
+→ true  -- (contains both 'machin' and 'learn' stems)
 
 -- Step 4: Calculate relevance score
 ts_rank(to_tsvector(...), websearch_to_tsquery(...))
@@ -271,15 +271,16 @@ text_score = 2.5 / (2.5 + 0.1) = 0.961
 
 ### 3. Hybrid Search
 
-**SQL Template**:
+**SQL Template** (using subquery to avoid duplicate calculations):
 ```sql
-SELECT *, 
-       (1.0 - (embedding <=> $1) / 2.0) as vector_score,
-       (COALESCE(ts_rank(...), 0) / (COALESCE(ts_rank(...), 0) + 0.1)) as text_score,
-       ((1.0 - (embedding <=> $1) / 2.0) * 0.7 + 
-        (COALESCE(ts_rank(...), 0) / (COALESCE(ts_rank(...), 0) + 0.1)) * 0.3) as score
-FROM table_name
-WHERE to_tsvector('english', content) @@ websearch_to_tsquery('english', $2)
+SELECT *, (vector_score * 0.7 + text_score * 0.3) as score
+FROM (
+  SELECT *, 
+         (1.0 - (embedding <=> $1) / 2.0) as vector_score,
+         (COALESCE(ts_rank(...), 0) / (COALESCE(ts_rank(...), 0) + 0.1)) as text_score
+  FROM table_name
+  WHERE to_tsvector('english', content) @@ websearch_to_tsquery('english', $2)
+) subq
 ORDER BY score DESC
 LIMIT 10
 ```

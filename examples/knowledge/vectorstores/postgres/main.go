@@ -35,7 +35,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/url"
 	"strconv"
 
@@ -47,6 +46,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	openaimodel "trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -82,7 +82,7 @@ func main() {
 	vs, err := pgvector.New(
 		pgvector.WithPGVectorClientDSN(dsn),
 		pgvector.WithTable(table),
-		pgvector.WithEnableTSVector(true),
+		pgvector.WithEnableTSVector(true), // enable full text search, TSVector
 	)
 	if err != nil {
 		log.Fatalf("Failed to create vector store: %v", err)
