@@ -266,10 +266,10 @@ type UsageStats struct {
 	// - cache_read_input_tokens: tokens read from cache
 	// - cache_creation_input_tokens: tokens used to create cache
 	// Total input = input_tokens + cache_read_input_tokens
-	TotalInputTokens        int // input_tokens (new tokens processed)
-	TotalCacheReadTokens    int // cache_read_input_tokens
-	TotalRequests           int
-	RequestsWithCacheRead   int
+	TotalInputTokens      int // input_tokens (new tokens processed)
+	TotalCacheReadTokens  int // cache_read_input_tokens
+	TotalRequests         int
+	RequestsWithCacheRead int
 }
 
 func (u *UsageStats) Add(usage *model.Usage) {
@@ -292,13 +292,13 @@ func (u *UsageStats) Print() {
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Printf("Total Requests:           %d\n", u.TotalRequests)
 	fmt.Printf("Requests with Cache Read: %d\n", u.RequestsWithCacheRead)
-	
+
 	// Total input = new tokens + cached tokens
 	totalInput := u.TotalInputTokens + u.TotalCacheReadTokens
 	fmt.Printf("Total Input Tokens:       %d\n", totalInput)
 	fmt.Printf("  - New (processed):      %d\n", u.TotalInputTokens)
 	fmt.Printf("  - Cached (read):        %d\n", u.TotalCacheReadTokens)
-	
+
 	if totalInput > 0 {
 		cacheRate := float64(u.TotalCacheReadTokens) / float64(totalInput) * 100
 		fmt.Printf("Cache Hit Rate:           %.2f%%\n", cacheRate)
@@ -519,7 +519,7 @@ func main() {
 		if usage != nil {
 			stats.Add(usage)
 			fmt.Printf("   ⏱️  Time: %v\n", elapsed)
-			
+
 			// Anthropic: total input = input_tokens + cache_read_input_tokens
 			totalInput := usage.PromptTokens + usage.PromptTokensDetails.CachedTokens
 			fmt.Printf("   📊 Total input: %d (new: %d, cached: %d)\n",
