@@ -13,7 +13,6 @@ package source
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 )
@@ -136,27 +135,4 @@ func GetAllMetadataKeys(sources []Source) []string {
 		result = append(result, key)
 	}
 	return result
-}
-
-// filterInternalMetadata removes internal metadata keys with MetaPrefix from the metadata map.
-// Internal keys starting with MetaPrefix are hidden except for specific allowed keys:
-// - MetaChunkIndex: chunk sequence number
-// - MetaMarkdownHeaderPath: markdown header path for navigation
-// - MetadataDenseScore: dense vector search score
-// - MetadataSparseScore: sparse keyword search score
-func filterInternalMetadata(metadata map[string]any) map[string]any {
-	if metadata == nil {
-		return nil
-	}
-	filtered := make(map[string]any)
-	for k, v := range metadata {
-		if !strings.HasPrefix(k, MetaPrefix) ||
-			k == MetaChunkIndex ||
-			k == MetaMarkdownHeaderPath ||
-			k == MetadataDenseScore ||
-			k == MetadataSparseScore {
-			filtered[k] = v
-		}
-	}
-	return filtered
 }
