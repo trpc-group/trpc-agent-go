@@ -127,8 +127,8 @@ func (ub *updateBuilder) build() (string, []any) {
 }
 
 type metadataUpdate struct {
-	field    string
-	argIndex int
+	fieldArgIndex int // argument index for field name (used in ARRAY[$n])
+	valueArgIndex int // argument index for value (jsonb)
 }
 
 // updateByFilterBuilder builds UPDATE SQL statements with filter conditions.
@@ -161,6 +161,7 @@ func (ub *updateByFilterBuilder) addField(field string, value any) {
 
 // addMetadataField updates a specific metadata field using jsonb_set.
 // field should be the metadata key (without "metadata." prefix).
+// Uses SQL ARRAY constructor with parameterized field name to prevent injection.
 func (ub *updateByFilterBuilder) addMetadataField(field string, value any) error {
 	// Convert value to JSON string for jsonb_set
 	jsonValue, err := json.Marshal(value)
@@ -168,14 +169,21 @@ func (ub *updateByFilterBuilder) addMetadataField(field string, value any) error
 		return fmt.Errorf("failed to marshal metadata value for field %q: %w", field, err)
 	}
 
-	// Store metadata update to be combined later
+	// Store metadata update with parameterized field name and value
+	// Uses ARRAY[$n]::text[] in SQL to construct the path, avoiding driver-specific array types
+	fieldArgIndex := ub.argIndex
+	ub.args = append(ub.args, field) // plain string, SQL will wrap it in ARRAY[]
+	ub.argIndex++
+
+	valueArgIndex := ub.argIndex
+	ub.args = append(ub.args, string(jsonValue)) // value as jsonb
+	ub.argIndex++
+
 	ub.metadataUpdates = append(ub.metadataUpdates, metadataUpdate{
-		field:    field,
-		argIndex: ub.argIndex,
+		fieldArgIndex: fieldArgIndex,
+		valueArgIndex: valueArgIndex,
 	})
 
-	ub.args = append(ub.args, string(jsonValue))
-	ub.argIndex++
 	return nil
 }
 
@@ -194,10 +202,12 @@ func (ub *updateByFilterBuilder) addEmbeddingField(value []float64) {
 // build builds the UPDATE query with all conditions.
 func (ub *updateByFilterBuilder) build() (string, []any) {
 	// Combine all metadata updates into a single assignment using chained jsonb_set
+	// Uses ARRAY[$n]::text[] to construct path from parameterized field name
+	// This approach is driver-agnostic and prevents injection
 	if len(ub.metadataUpdates) > 0 {
 		expr := fmt.Sprintf("COALESCE(%s, '{}'::jsonb)", ub.o.metadataFieldName)
 		for _, update := range ub.metadataUpdates {
-			expr = fmt.Sprintf("jsonb_set(%s, '{%s}', $%d::jsonb)", expr, update.field, update.argIndex)
+			expr = fmt.Sprintf("jsonb_set(%s, ARRAY[$%d]::text[], $%d::jsonb)", expr, update.fieldArgIndex, update.valueArgIndex)
 		}
 		ub.setParts = append(ub.setParts, fmt.Sprintf("%s = %s", ub.o.metadataFieldName, expr))
 	}

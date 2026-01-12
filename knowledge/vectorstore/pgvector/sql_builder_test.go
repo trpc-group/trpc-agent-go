@@ -825,10 +825,11 @@ func TestUpdateByFilterBuilder(t *testing.T) {
 		sql, args := ub.build()
 
 		assert.Contains(t, sql, "jsonb_set")
-		assert.Contains(t, sql, "'{status}'")
-		assert.Contains(t, sql, "::jsonb")
-		assert.Len(t, args, 3) // timestamp + metadata value + 1 id
-		assert.Equal(t, `"archived"`, args[1]) // JSON encoded string
+		assert.Contains(t, sql, "ARRAY[$2]::text[]") // SQL ARRAY constructor
+		assert.Contains(t, sql, "$3::jsonb")         // parameterized value
+		assert.Len(t, args, 4)                       // timestamp + field + value + 1 id
+		assert.Equal(t, "status", args[1])           // plain string field name
+		assert.Equal(t, `"archived"`, args[2])       // JSON encoded string
 	})
 
 	t.Run("metadata_field_with_number", func(t *testing.T) {
@@ -839,8 +840,9 @@ func TestUpdateByFilterBuilder(t *testing.T) {
 		sql, args := ub.build()
 
 		assert.Contains(t, sql, "jsonb_set")
-		assert.Contains(t, sql, "'{score}'")
-		assert.Equal(t, "95", args[1]) // JSON encoded number
+		assert.Contains(t, sql, "ARRAY[$2]::text[]")
+		assert.Equal(t, "score", args[1]) // plain string field name
+		assert.Equal(t, "95", args[2])    // JSON encoded number
 	})
 
 	t.Run("metadata_field_with_bool", func(t *testing.T) {
@@ -851,8 +853,9 @@ func TestUpdateByFilterBuilder(t *testing.T) {
 		sql, args := ub.build()
 
 		assert.Contains(t, sql, "jsonb_set")
-		assert.Contains(t, sql, "'{active}'")
-		assert.Equal(t, "true", args[1]) // JSON encoded bool
+		assert.Contains(t, sql, "ARRAY[$2]::text[]")
+		assert.Equal(t, "active", args[1]) // plain string field name
+		assert.Equal(t, "true", args[2])   // JSON encoded bool
 	})
 
 	t.Run("embedding_field_update", func(t *testing.T) {
@@ -892,8 +895,8 @@ func TestUpdateByFilterBuilder(t *testing.T) {
 		assert.Contains(t, sql, "jsonb_set")
 		assert.Contains(t, sql, "id IN")
 		assert.Contains(t, sql, "metadata @>")
-		// timestamp + name + metadata_status + 2 ids + metadata filter
-		assert.Len(t, args, 6)
+		// timestamp + name + path + value + 2 ids + metadata filter
+		assert.Len(t, args, 7)
 	})
 
 	t.Run("with_filter_condition", func(t *testing.T) {
@@ -908,5 +911,31 @@ func TestUpdateByFilterBuilder(t *testing.T) {
 
 		assert.Contains(t, sql, "created_at >")
 		assert.Len(t, args, 3) // timestamp + name + created_at value
+	})
+
+	t.Run("metadata_field_with_special_chars", func(t *testing.T) {
+		// With ARRAY[$n] constructor, special characters are safe
+		testCases := []struct {
+			field string
+			desc  string
+		}{
+			{field: "test}", desc: "closing brace"},
+			{field: "test{", desc: "opening brace"},
+			{field: `test"`, desc: "double quote"},
+			{field: "test'", desc: "single quote"},
+			{field: `test\`, desc: "backslash"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.desc, func(t *testing.T) {
+				ub := newUpdateByFilterBuilder(defaultOptions)
+				err := ub.addMetadataField(tc.field, "value")
+				assert.NoError(t, err) // parameterized field handles special chars safely
+
+				sql, args := ub.build()
+				assert.Contains(t, sql, "ARRAY[$2]::text[]")
+				assert.Equal(t, tc.field, args[1]) // field preserved as plain string
+			})
+		}
 	})
 }
