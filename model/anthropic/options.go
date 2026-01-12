@@ -25,6 +25,7 @@ const (
 	defaultMinCacheableTokens = 1024 // Minimum tokens to enable caching
 	defaultCacheSystemPrompt  = true // Cache system prompt by default
 	defaultCacheTools         = true // Cache tools by default
+	defaultCacheMessages      = true // Cache messages by default for multi-turn conversations
 )
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -101,8 +102,10 @@ type options struct {
 	cacheSystemPrompt bool
 	// cacheTools controls whether to cache tool definitions.
 	cacheTools bool
-	// cacheDecisionFunc allows custom logic to decide whether to enable cache for a request.
-	cacheDecisionFunc func(request *model.Request) bool
+	// cacheMessages controls whether to cache messages for multi-turn conversations.
+	// When enabled, cache control will be applied to the last assistant message
+	// to maximize cache reuse in subsequent turns.
+	cacheMessages bool
 }
 
 var (
@@ -122,6 +125,7 @@ var (
 		minCacheableTokens: defaultMinCacheableTokens,
 		cacheSystemPrompt:  defaultCacheSystemPrompt,
 		cacheTools:         defaultCacheTools,
+		cacheMessages:      defaultCacheMessages,
 	}
 )
 
@@ -351,21 +355,18 @@ func WithCacheTools(cache bool) Option {
 	}
 }
 
-// WithCacheDecisionFunc sets a custom function to determine whether to enable
-// cache for a specific request. This provides maximum flexibility for advanced use cases.
+// WithCacheMessages controls whether to cache messages for multi-turn conversations.
+// When enabled, cache control will be applied to the last assistant message
+// to maximize cache reuse in subsequent turns.
 //
-// The function receives the request and should return true to enable caching.
-// If not set, the default strategy uses minCacheableTokens, cacheSystemPrompt,
-// and cacheTools settings.
+// This implements the optimal caching strategy for multi-turn conversations:
+// - The cache breakpoint is dynamically moved to the latest assistant message
+// - Each new turn reuses the cached prefix (system + tools + previous messages)
+// - Only the new user message needs to be processed
 //
-// Example:
-//
-//	anthropic.WithCacheDecisionFunc(func(req *model.Request) bool {
-//	    // Only cache in production environment
-//	    return os.Getenv("ENV") == "production"
-//	})
-func WithCacheDecisionFunc(fn func(request *model.Request) bool) Option {
+// Default: true (enabled)
+func WithCacheMessages(cache bool) Option {
 	return func(opts *options) {
-		opts.cacheDecisionFunc = fn
+		opts.cacheMessages = cache
 	}
 }

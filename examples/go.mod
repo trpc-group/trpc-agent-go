@@ -5,6 +5,10 @@ go 1.24.4
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
 	trpc.group/trpc-go/trpc-agent-go/evaluation => ../evaluation
+	trpc.group/trpc-go/trpc-agent-go/model/anthropic => ../model/anthropic
+	trpc.group/trpc-go/trpc-agent-go/model/gemini => ../model/gemini
+	trpc.group/trpc-go/trpc-agent-go/model/ollama => ../model/ollama
+	trpc.group/trpc-go/trpc-agent-go/model/provider => ../model/provider
 	trpc.group/trpc-go/trpc-agent-go/tool/openapi => ../tool/openapi
 	trpc.group/trpc-go/trpc-agent-go/tool/wikipedia => ../tool/wikipedia
 )
