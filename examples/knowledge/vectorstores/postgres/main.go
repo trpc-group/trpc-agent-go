@@ -82,6 +82,7 @@ func main() {
 	vs, err := pgvector.New(
 		pgvector.WithPGVectorClientDSN(dsn),
 		pgvector.WithTable(table),
+		pgvector.WithEnableTSVector(true),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create vector store: %v", err)
@@ -126,7 +127,7 @@ func main() {
 	// Test query
 	fmt.Println("\n🔍 Querying knowledge from PostgreSQL...")
 	eventChan, err := r.Run(ctx, "user", "session-1",
-		model.NewUserMessage("What are Large Language Models?"))
+		model.NewUserMessage("What are LLMs ?"))
 	if err != nil {
 		log.Fatalf("Run failed: %v", err)
 	}

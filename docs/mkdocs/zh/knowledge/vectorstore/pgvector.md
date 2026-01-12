@@ -17,6 +17,7 @@ pgVS, err := vectorpgvector.New(
     vectorpgvector.WithPGVectorClientDSN("postgres://postgres:your-password@127.0.0.1:5432/your-database?sslmode=disable"),
     // 根据 embedding 模型设置索引维度（text-embedding-3-small 为 1536）
     vectorpgvector.WithIndexDimension(1536),
+    // vectorpgvector.WithEnableTSVector(true), // 启用全文检索，支持 Keyword/Hybrid 搜索
 )
 if err != nil {
     // 处理 error
@@ -32,9 +33,56 @@ kb := knowledge.New(
 
 ### 连接配置
 
+PGVector 支持两种连接配置方式（按优先级从高到低）：
+
+#### 1. 直接连接配置
+
+```go
+// Option 1: Use DSN connection string (recommended)
+pgVS, err := vectorpgvector.New(
+    vectorpgvector.WithPGVectorClientDSN("postgres://user:password@localhost:5432/mydb?sslmode=disable"),
+    vectorpgvector.WithIndexDimension(1536),
+)
+
+// Option 2: Use individual connection parameters
+// pgVS, err := vectorpgvector.New(
+//     vectorpgvector.WithHost("localhost"),
+//     vectorpgvector.WithPort(5432),
+//     vectorpgvector.WithUser("postgres"),
+//     vectorpgvector.WithPassword("your-password"),
+//     vectorpgvector.WithDatabase("mydb"),
+//     vectorpgvector.WithSSLMode("disable"),
+//     vectorpgvector.WithTable("documents"),
+//     vectorpgvector.WithIndexDimension(1536),
+// )
+```
+
+#### 2. 使用已注册实例
+
+复用已在 `storage/postgres` 中注册的 PostgreSQL 实例，适合多个组件共享同一数据库连接的场景。
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
+
+// Step 1: Register instance
+postgres.RegisterPostgresInstance("my-postgres",
+    postgres.WithClientConnString("postgres://user:password@localhost:5432/mydb?sslmode=disable"),
+)
+
+// Step 2: Use registered instance
+pgVS, err := vectorpgvector.New(
+    vectorpgvector.WithPostgresInstance("my-postgres"),
+    vectorpgvector.WithIndexDimension(1536),
+)
+```
+
+**优先级规则**：
+- `WithPGVectorClientDSN()` / `WithHost()...` > `WithPostgresInstance()`
+- 如果同时指定多个方式，优先级高的生效
+
 | 选项 | 说明 | 默认值 |
 |------|------|--------|
-| `WithPGVectorClientDSN(dsn)` | PostgreSQL 连接字符串（优先级最高） | - |
+| `WithPGVectorClientDSN(dsn)` | PostgreSQL 连接字符串 | - |
 | `WithHost(host)` | 数据库主机地址 | `"localhost"` |
 | `WithPort(port)` | 数据库端口 | `5432` |
 | `WithUser(user)` | 数据库用户名 | - |
@@ -42,7 +90,7 @@ kb := knowledge.New(
 | `WithDatabase(database)` | 数据库名称 | `"trpc_agent_go"` |
 | `WithTable(table)` | 表名称 | `"documents"` |
 | `WithSSLMode(mode)` | SSL 模式 | `"disable"` |
-| `WithPostgresInstance(name)` | 使用已注册的 PostgreSQL 实例（优先级低于直接连接配置） | - |
+| `WithPostgresInstance(name)` | 使用已注册的 PostgreSQL 实例 | - |
 
 ### 向量配置
 
@@ -81,15 +129,197 @@ kb := knowledge.New(
 | `WithCreatedAtField(field)` | 创建时间字段名 | `"created_at"` |
 | `WithUpdatedAtField(field)` | 更新时间字段名 | `"updated_at"` |
 
-## 混合检索
+## 全文检索
 
-PGVector 支持混合检索，结合向量相似度搜索和全文检索：
+PGVector 支持全文检索（TSVector），可用于 Keyword Search 和 Hybrid Search（混合检索）。
+
+> **⚠️ 重要提示**: Keyword Search 和 Hybrid Search 需要通过 `WithEnableTSVector(true)` 启用 PostgreSQL 全文检索功能。
 
 ```go
 pgVS, err := vectorpgvector.New(
     vectorpgvector.WithPGVectorClientDSN(dsn),
     vectorpgvector.WithIndexDimension(1536),
-    vectorpgvector.WithEnableTSVector(true),           // 启用全文检索
-    vectorpgvector.WithHybridSearchWeights(0.7, 0.3),  // 70% 向量 + 30% 文本
+    vectorpgvector.WithEnableTSVector(true),           // ✅ 开启全文检索支持
+    vectorpgvector.WithHybridSearchWeights(0.7, 0.3),  // 设置混合检索权重 (70% 向量 + 30% 文本)
+    vectorpgvector.WithLanguageExtension("english"),   // 设置分词语言（支持中文需安装 zhparser/jieba）
 )
 ```
+
+### 搜索模式支持
+
+| 搜索模式 | 是否需要 TSVector | 说明 |
+|---------|------------------|------|
+| **Vector Search** | ❌ | 仅使用向量索引 |
+| **Keyword Search** | ✅ 必需 | 依赖 PostgreSQL `tsvector` 全文索引 |
+| **Hybrid Search** | ✅ 必需 | 同时使用向量索引和 `tsvector` 索引 |
+| **Filter Search** | ❌ | 仅过滤元数据 |
+
+**如果未启用 `WithEnableTSVector(true)`**:
+
+系统会自动降级搜索模式，不会报错：
+- 尝试使用 Keyword/Hybrid 搜索时 → 自动降级为 **Vector Search**（有向量）或 **Filter Search**（无向量）
+- 会输出 INFO 日志提示降级原因
+
+**注意**: 从 SearchTool 到 VectorStore 的默认调用链路不会主动指定 `SearchModeKeyword`，因此通常不会触发 Keyword Search，而是使用默认的 Vector 或 Hybrid 搜索。
+
+## 搜索模式与 Score 归一化
+
+> **💡 提示**: 本节内容为具体计算细节，默认用户无需关心。PGVector 会自动处理所有搜索模式的评分归一化。
+
+PGVector 支持多种搜索模式，所有模式的 score 都归一化到 `[0, 1]` 范围，分数越高表示相关性越强。
+
+### 1. Vector Search (向量搜索)
+
+**SQL 模板**:
+```sql
+SELECT *, 
+       (1.0 - (embedding <=> $1) / 2.0) as vector_score,
+       0.0 as text_score,
+       (1.0 - (embedding <=> $1) / 2.0) as score
+FROM table_name
+ORDER BY embedding <=> $1
+LIMIT 10
+```
+
+**归一化公式**:
+```
+vector_score = 1.0 - (cosine_distance / 2.0)
+```
+
+**数学原理**:
+- PGVector `<=>` 操作符返回 **Cosine Distance**: `d ∈ [0, 2]`
+  - `d = 0`: 向量完全相同
+  - `d = 1`: 向量正交
+  - `d = 2`: 向量完全相反
+- Cosine Similarity: `s = 1 - d ∈ [-1, 1]`
+- 归一化到 `[0, 1]`: `score = (s + 1) / 2 = (2 - d) / 2 = 1 - d/2`
+
+**示例**:
+- `distance = 0.2` → `score = 1 - 0.2/2 = 0.90` (高度相似)
+- `distance = 1.0` → `score = 1 - 1.0/2 = 0.50` (正交)
+- `distance = 1.8` → `score = 1 - 1.8/2 = 0.10` (几乎相反)
+
+---
+
+### 2. Keyword Search (关键词搜索)
+
+**SQL 模板**:
+```sql
+SELECT *, 
+       0.0 as vector_score,
+       (ts_rank(to_tsvector('english', content), websearch_to_tsquery('english', $1)) 
+        / (ts_rank(to_tsvector('english', content), websearch_to_tsquery('english', $1)) + 0.1)) as text_score,
+       (ts_rank(...) / (ts_rank(...) + 0.1)) as score
+FROM table_name
+WHERE to_tsvector('english', content) @@ websearch_to_tsquery('english', $1)
+ORDER BY score DESC
+LIMIT 10
+```
+
+**归一化公式**:
+```
+text_score = rank / (rank + c)
+```
+其中 `c = 0.1` (sparseNormConstant)
+
+**数学原理**:
+- PostgreSQL `ts_rank()` 返回原始文本相关性分数，范围不固定（通常 `[0, ∞)`）
+- 使用双曲函数归一化: `f(x) = x / (x + c)` 将其映射到 `[0, 1)`
+- 参数 `c` 控制敏感度：
+  - `c` 越小：对小 rank 值更敏感，区分度更高
+  - `c` 越大：对大 rank 值更宽容，趋于饱和
+
+**示例** (c = 0.1):
+- `rank = 1.0` → `score = 1.0 / 1.1 = 0.909`
+- `rank = 0.5` → `score = 0.5 / 0.6 = 0.833`
+- `rank = 0.1` → `score = 0.1 / 0.2 = 0.500`
+- `rank = 0.01` → `score = 0.01 / 0.11 = 0.091`
+
+**计算流程示例**:
+
+假设用户查询 `"vector database"`，数据库中有一篇文档内容为 `"Vector databases enable similarity search..."`
+
+```sql
+-- Step 1: 将查询转换为 tsquery
+websearch_to_tsquery('english', 'vector database')
+→ 'vector' & 'databas'  -- (自动词干化)
+
+-- Step 2: 将文档内容转换为 tsvector
+to_tsvector('english', 'Vector databases enable similarity search...')
+→ 'databas':2 'enabl':3 'search':5 'similar':4 'vector':1
+
+-- Step 3: 检查是否匹配 (@@)
+to_tsvector(...) @@ websearch_to_tsquery(...)
+→ true  -- (包含 vector 和 databas)
+
+-- Step 4: 计算相关性分数
+ts_rank(to_tsvector(...), websearch_to_tsquery(...))
+→ 2.5  -- (原始 rank 值)
+
+-- Step 5: 归一化到 [0, 1)
+text_score = 2.5 / (2.5 + 0.1) = 0.961
+```
+
+**核心函数**:
+- `to_tsvector()`: 文本 → 可搜索向量（分词、词干化）
+- `websearch_to_tsquery()`: 用户查询 → 搜索表达式（支持 `"引号"`, `OR`, `-排除`）
+- `@@`: 匹配检查（true/false）
+- `ts_rank()`: 计算相关性分数
+
+
+---
+
+### 3. Hybrid Search (混合搜索)
+
+**SQL 模板**:
+```sql
+SELECT *, 
+       (1.0 - (embedding <=> $1) / 2.0) as vector_score,
+       (COALESCE(ts_rank(...), 0) / (COALESCE(ts_rank(...), 0) + 0.1)) as text_score,
+       ((1.0 - (embedding <=> $1) / 2.0) * 0.7 + 
+        (COALESCE(ts_rank(...), 0) / (COALESCE(ts_rank(...), 0) + 0.1)) * 0.3) as score
+FROM table_name
+WHERE to_tsvector('english', content) @@ websearch_to_tsquery('english', $2)
+ORDER BY score DESC
+LIMIT 10
+```
+
+**归一化公式**:
+```
+hybrid_score = vector_score × w_v + text_score × w_t
+```
+其中默认权重: `w_v = 0.7`, `w_t = 0.3`
+
+**数学原理**:
+- 分别计算 `vector_score` 和 `text_score`（如上述两个模式）
+- 使用线性加权组合，权重可通过 `WithHybridSearchWeights()` 配置
+- 由于两个 score 都在 `[0, 1]` 范围且 `w_v + w_t = 1`，最终 `hybrid_score ∈ [0, 1]`
+
+**示例**:
+```
+vector_score = 0.85, text_score = 0.90
+hybrid_score = 0.85 × 0.7 + 0.90 × 0.3 = 0.595 + 0.27 = 0.865
+```
+
+---
+
+### 4. Filter Search (过滤搜索)
+
+**SQL 模板**:
+```sql
+SELECT *, 
+       0.0 as vector_score,
+       0.0 as text_score,
+       1.0 as score
+FROM table_name
+WHERE [metadata filters]
+ORDER BY created_at DESC
+LIMIT 10
+```
+
+**说明**:
+- 纯元数据过滤，不涉及向量或文本相似度
+- 所有结果 `score = 1.0`（因为都满足过滤条件）
+- 按创建时间降序排序
+
+---
