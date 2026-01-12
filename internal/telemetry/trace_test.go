@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -280,16 +281,53 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	}
 
 	// Embedding paths
+	dims := 1536
+	embReq := "hello"
+	embRsp := "[0.1,0.2]"
+	encFormat := "floats"
 	s6 := newRecordingSpan()
-	TraceEmbedding(s6, "floats", "text-emb", nil, nil)
+	TraceEmbedding(s6, &EmbeddingAttributes{
+		RequestEncodingFormat: &encFormat,
+		RequestModel:          "text-emb",
+		Dimensions:            dims,
+		Request:               &embReq,
+		Response:              &embRsp,
+	})
 	if !hasAttr(s6.attrs, KeyGenAIRequestModel, "text-emb") {
 		t.Fatalf("missing model")
 	}
+	if !hasAttr(s6.attrs, semconvtrace.KeyGenAIRequestEncodingFormats, []string{"floats"}) {
+		t.Fatalf("missing encoding format")
+	}
+	if !hasAttr(s6.attrs, semconvtrace.KeyGenAIEmbeddingsDimensionCount, int64(dims)) {
+		t.Fatalf("missing dimensions")
+	}
+	if !hasAttr(s6.attrs, semconvtrace.KeyGenAIEmbeddingsRequest, embReq) {
+		t.Fatalf("missing embedding request")
+	}
+	if !hasAttr(s6.attrs, semconvtrace.KeyGenAIEmbeddingsResponse, embRsp) {
+		t.Fatalf("missing embedding response")
+	}
 	tok := int64(10)
 	s7 := newRecordingSpan()
-	TraceEmbedding(s7, "floats", "text-emb", &tok, errors.New("bad"))
+	TraceEmbedding(s7, &EmbeddingAttributes{
+		RequestEncodingFormat: &encFormat,
+		RequestModel:          "text-emb",
+		Dimensions:            dims,
+		InputToken:            &tok,
+		Error:                 errors.New("bad"),
+	})
 	if s7.status != codes.Error {
 		t.Fatalf("embedding expected error status")
+	}
+	if !hasAttr(s7.attrs, KeyGenAIUsageInputTokens, tok) {
+		t.Fatalf("missing input token")
+	}
+	if !hasAttr(s7.attrs, KeyErrorType, ValueDefaultErrorType) {
+		t.Fatalf("missing error type")
+	}
+	if !hasAttr(s7.attrs, KeyErrorMessage, "bad") {
+		t.Fatalf("missing error message")
 	}
 }
 

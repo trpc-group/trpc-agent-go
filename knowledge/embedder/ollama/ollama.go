@@ -246,8 +246,17 @@ func (e *Embedder) response(ctx context.Context, text string) (rsp *embedRespons
 		return nil, fmt.Errorf("text cannot be empty")
 	}
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationEmbeddings, e.model))
+	embeddingAttributes := &itelemetry.EmbeddingAttributes{
+		RequestModel: e.model,
+		Dimensions:   e.dimensions,
+	}
 	defer func() {
-		itelemetry.TraceEmbedding(span, "", e.model, nil, err)
+		embeddingAttributes.Error = err
+		if rsp != nil && rsp.PromptEvalCount > 0 {
+			inputTokens := int64(rsp.PromptEvalCount)
+			embeddingAttributes.InputToken = &inputTokens
+		}
+		itelemetry.TraceEmbedding(span, embeddingAttributes)
 		span.End()
 	}()
 	if e.useEmbeddings {
