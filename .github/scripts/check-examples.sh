@@ -22,6 +22,8 @@ fi
 
 has_mod_issues=false
 has_build_issues=false
+mod_issue_modules=()
+build_issue_modules=()
 
 for mod_file in "${go_mod_files[@]}"; do
     mod_dir="$(dirname "$mod_file")"
@@ -29,6 +31,7 @@ for mod_file in "${go_mod_files[@]}"; do
     if [ "$rel_path" = "." ]; then
         rel_path=""
     fi
+    module_path="examples/${rel_path:-root}"
 
     echo "::group::Checking ${rel_path:-examples}"
 
@@ -67,6 +70,7 @@ for mod_file in "${go_mod_files[@]}"; do
 
     if [ "$mod_changed" = true ] || [ "$sum_changed" = true ]; then
         has_mod_issues=true
+        mod_issue_modules+=("$module_path")
         if [ "$mod_changed" = true ]; then
             echo "::error::examples/${rel_path:-root}/go.mod is not up-to-date. Run 'go mod tidy' in examples/${rel_path:-root} directory."
         fi
@@ -81,22 +85,23 @@ for mod_file in "${go_mod_files[@]}"; do
     fi
 
     # Check if the module can build successfully
-    echo "Building examples/${rel_path:-root}..."
+    echo "Building ${module_path}..."
 
     # Try standard build first
     if go build ./... 2>/dev/null; then
-        echo "examples/${rel_path:-root} builds successfully"
+        echo "${module_path} builds successfully"
     else
         # If standard build fails, try building to a temporary directory
         temp_dir="/tmp/go-build-check-${rel_path:-root}-$$"
         mkdir -p "$temp_dir"
 
         if go build -o "$temp_dir/" ./... 2>/dev/null; then
-            echo "examples/${rel_path:-root} builds successfully"
+            echo "${module_path} builds successfully"
             rm -rf "$temp_dir"
         else
             has_build_issues=true
-            echo "::error::examples/${rel_path:-root} failed to build. Please check dependencies and imports."
+            build_issue_modules+=("$module_path")
+            echo "::error::${module_path} failed to build. Please check dependencies and imports."
             rm -rf "$temp_dir" 2>/dev/null || true
         fi
     fi
@@ -106,15 +111,31 @@ done
 
 cd "$repo_root"
 
+if [ "${#mod_issue_modules[@]}" -gt 0 ] || [ "${#build_issue_modules[@]}" -gt 0 ]; then
+    echo "::group::Examples check summary"
+    if [ "${#mod_issue_modules[@]}" -gt 0 ]; then
+        echo "Directories with go.mod/go.sum issues:"
+        printf '%s\n' "${mod_issue_modules[@]}" | sed 's/^/- /'
+    fi
+    if [ "${#build_issue_modules[@]}" -gt 0 ]; then
+        echo "Directories with build failures:"
+        printf '%s\n' "${build_issue_modules[@]}" | sed 's/^/- /'
+    fi
+    echo "::endgroup::"
+fi
+
 # Report issues with specific error messages
 if [ "$has_mod_issues" = true ] && [ "$has_build_issues" = true ]; then
     echo "::error::Some examples modules have go.mod/go.sum issues and some have build failures"
+    echo "::endgroup::"
     exit 1
 elif [ "$has_mod_issues" = true ]; then
     echo "::error::Some examples modules have go.mod/go.sum files that are not up-to-date"
+    echo "::endgroup::"
     exit 1
 elif [ "$has_build_issues" = true ]; then
     echo "::error::Some examples modules failed to build"
+    echo "::endgroup::"
     exit 1
 fi
 
