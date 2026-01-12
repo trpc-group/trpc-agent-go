@@ -148,6 +148,40 @@ func TestStateGraph_Compile_FailsOnBufferedJoinEdgeErrors(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestStateGraph_Compile_FailsOnBufferedJoinEdgeSourceErrors(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	pass := func(ctx context.Context, st State) (any, error) { return st, nil }
+
+	sg.AddNode("A", pass)
+	sg.AddNode("C", pass)
+	sg.AddJoinEdge([]string{"A", "missing"}, "C")
+	sg.SetEntryPoint("A").SetFinishPoint("C")
+
+	_, err := sg.Compile()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "graph build failed")
+	require.Contains(t, err.Error(), "AddJoinEdge")
+	require.Contains(t, err.Error(), "source node missing does not exist")
+
+	starts := normalizeJoinStarts([]string{"A", "missing"})
+	joinChan := joinChannelName("C", starts)
+	_, ok := sg.graph.getChannel(joinChan)
+	require.False(t, ok)
+}
+
+func TestStateGraph_AddJoinEdge_ToEnd_DoesNotRecordBuildError(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	pass := func(ctx context.Context, st State) (any, error) { return st, nil }
+
+	sg.AddNode("A", pass)
+	sg.AddNode("B", pass)
+	sg.AddJoinEdge([]string{"A", "B"}, End)
+	sg.SetEntryPoint("A")
+
+	_, err := sg.Compile()
+	require.NoError(t, err)
+}
+
 func TestStateGraph_AddEdge_ErrorDoesNotMutatePregelArtifacts(t *testing.T) {
 	sg := NewStateGraph(NewStateSchema())
 	pass := func(ctx context.Context, st State) (any, error) { return st, nil }
