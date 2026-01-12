@@ -11,10 +11,24 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestStateGraph_BuildErr_JoinsAndIgnoresNil(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+
+	sg.addBuildError(nil)
+	sg.addBuildError(errors.New("first build error"))
+	sg.addBuildError(errors.New("second build error"))
+
+	err := sg.buildErr()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "first build error")
+	require.Contains(t, err.Error(), "second build error")
+}
 
 func TestStateGraph_Compile_FailsOnBufferedAddErrors(t *testing.T) {
 	sg := NewStateGraph(NewStateSchema())
@@ -33,6 +47,105 @@ func TestStateGraph_Compile_FailsOnBufferedAddErrors(t *testing.T) {
 	require.Contains(t, err.Error(), "graph build failed")
 	require.Contains(t, err.Error(), "AddToolsConditionalEdges")
 	require.Contains(t, err.Error(), "source node llm does not exist")
+}
+
+func TestStateGraph_Compile_FailsOnBufferedAddNodeErrors(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	pass := func(ctx context.Context, st State) (any, error) { return st, nil }
+
+	sg.AddNode("", pass)
+	sg.AddNode("A", pass)
+	sg.SetEntryPoint("A").SetFinishPoint("A")
+
+	_, err := sg.Compile()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "graph build failed")
+	require.Contains(t, err.Error(), "AddNode")
+
+	_, ok := sg.graph.getChannel("trigger:")
+	require.False(t, ok)
+}
+
+func TestStateGraph_Compile_FailsOnBufferedSetEntryPointErrors(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	pass := func(ctx context.Context, st State) (any, error) { return st, nil }
+
+	sg.SetEntryPoint("A")
+	sg.AddNode("A", pass)
+	sg.SetFinishPoint("A")
+
+	_, err := sg.Compile()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "graph build failed")
+	require.Contains(t, err.Error(), "SetEntryPoint")
+	require.Len(t, sg.graph.Edges(Start), 0)
+}
+
+func TestStateGraph_Compile_FailsOnBufferedConditionalEdgeErrors(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	pass := func(ctx context.Context, st State) (any, error) { return st, nil }
+
+	sg.AddConditionalEdges("A", func(ctx context.Context, st State) (string, error) { return "B", nil }, map[string]string{"B": "B"})
+	sg.AddNode("A", pass)
+	sg.AddNode("B", pass)
+	sg.SetEntryPoint("A").SetFinishPoint("B")
+
+	_, err := sg.Compile()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "graph build failed")
+	require.Contains(t, err.Error(), "AddConditionalEdges")
+}
+
+func TestStateGraph_Compile_FailsOnBufferedMultiConditionalEdgeErrors(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	pass := func(ctx context.Context, st State) (any, error) { return st, nil }
+
+	sg.AddNode("A", pass)
+	sg.AddMultiConditionalEdges("A", func(ctx context.Context, st State) ([]string, error) { return []string{"B"}, nil }, map[string]string{"B": "B"})
+	sg.AddNode("B", pass)
+	sg.SetEntryPoint("A").SetFinishPoint("B")
+
+	_, err := sg.Compile()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "graph build failed")
+	require.Contains(t, err.Error(), "AddMultiConditionalEdges")
+}
+
+func TestStateGraph_Compile_FailsOnBufferedToolsConditionalEdgeTargetErrors(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	pass := func(ctx context.Context, st State) (any, error) { return st, nil }
+
+	sg.AddNode("llm", pass)
+	sg.AddNode("fallback", pass)
+	sg.AddToolsConditionalEdges("llm", "tools", "fallback")
+	sg.AddNode("tools", pass)
+	sg.SetEntryPoint("llm").SetFinishPoint("fallback")
+
+	_, err := sg.Compile()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "graph build failed")
+	require.Contains(t, err.Error(), "AddToolsConditionalEdges")
+	require.Contains(t, err.Error(), "target node tools does not exist")
+}
+
+func TestStateGraph_Compile_FailsOnBufferedJoinEdgeErrors(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	pass := func(ctx context.Context, st State) (any, error) { return st, nil }
+
+	sg.AddNode("A", pass)
+	sg.AddNode("B", pass)
+	sg.AddJoinEdge([]string{"A", "B"}, "C")
+	sg.AddNode("C", pass)
+	sg.SetEntryPoint("A").SetFinishPoint("C")
+
+	_, err := sg.Compile()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "graph build failed")
+	require.Contains(t, err.Error(), "AddJoinEdge")
+
+	joinChan := joinChannelName("C", []string{"A", "B"})
+	_, ok := sg.graph.getChannel(joinChan)
+	require.False(t, ok)
 }
 
 func TestStateGraph_AddEdge_ErrorDoesNotMutatePregelArtifacts(t *testing.T) {
