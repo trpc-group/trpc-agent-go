@@ -854,6 +854,9 @@ func (r *runner) handleEventPersistence(
 	}
 	// Do not enqueue full-session summary here. The worker will cascade
 	// a full-session summarization after a branch update when appropriate.
+
+	// Note: Auto memory extraction is triggered once at runner completion,
+	// not here, to avoid redundant extraction calls.
 }
 
 // shouldPersistEvent determines if an event should be persisted to the session.
@@ -936,6 +939,9 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 
 	// Send the runner completion event to output channel.
 	agent.EmitEvent(ctx, loop.invocation, loop.processedEventCh, runnerCompletionEvent)
+
+	// Enqueue auto memory extraction job if memory service is configured.
+	r.enqueueAutoMemoryJob(ctx, loop.sess)
 }
 
 // propagateGraphCompletion propagates graph-level completion data (state delta
@@ -1027,7 +1033,8 @@ func finalResponseIDFromStateDelta(finalStateDelta map[string][]byte) string {
 	return responseID
 }
 
-// shouldAppendUserMessage checks if the incoming user message should be appended to the session.
+// shouldAppendUserMessage checks if the incoming user message should be
+// appended to the session.
 func shouldAppendUserMessage(message model.Message, seed []model.Message) bool {
 	if len(seed) == 0 {
 		return true
@@ -1102,4 +1109,16 @@ func RunWithMessages(
 		}
 	}
 	return r.Run(ctx, userID, sessionID, latestUser, runOpts...)
+}
+
+// enqueueAutoMemoryJob triggers auto memory extraction if memory service is
+// configured.
+func (r *runner) enqueueAutoMemoryJob(ctx context.Context, sess *session.Session) {
+	if r.memoryService == nil || sess == nil {
+		return
+	}
+	if err := r.memoryService.EnqueueAutoMemoryJob(ctx, sess); err != nil {
+		log.DebugfContext(ctx, "Auto memory extraction skipped or failed: %v", err)
+		return
+	}
 }

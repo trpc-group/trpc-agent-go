@@ -11,15 +11,19 @@
 package inmemory
 
 import (
+	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 )
 
 var (
 	defaultOptions = serviceOpts{
-		memoryLimit:  imemory.DefaultMemoryLimit,
-		toolCreators: imemory.AllToolCreators,
-		enabledTools: imemory.DefaultEnabledTools,
+		memoryLimit:    imemory.DefaultMemoryLimit,
+		toolCreators:   imemory.AllToolCreators,
+		enabledTools:   imemory.DefaultEnabledTools,
+		asyncMemoryNum: imemory.DefaultAsyncMemoryNum,
 	}
 )
 
@@ -31,6 +35,17 @@ type serviceOpts struct {
 	toolCreators map[string]memory.ToolCreator
 	// enabledTools are the names of tools to enable.
 	enabledTools map[string]bool
+	// userExplicitlySet tracks which tools were explicitly set by user via WithToolEnabled.
+	userExplicitlySet map[string]bool
+
+	// Memory extractor for auto memory mode.
+	// When set, write tools (add/update/delete) are not exposed to agent.
+	extractor extractor.MemoryExtractor
+
+	// Async memory worker configuration.
+	asyncMemoryNum   int           // Number of async workers, default 3.
+	memoryQueueSize  int           // Queue size per worker, default 100.
+	memoryJobTimeout time.Duration // Timeout per job, default 30s.
 }
 
 func (o serviceOpts) clone() serviceOpts {
@@ -45,6 +60,9 @@ func (o serviceOpts) clone() serviceOpts {
 	for name, enabled := range o.enabledTools {
 		opts.enabledTools[name] = enabled
 	}
+
+	// Initialize userExplicitlySet map (empty for new clone).
+	opts.userExplicitlySet = make(map[string]bool)
 
 	return opts
 }
@@ -75,6 +93,8 @@ func WithCustomTool(toolName string, creator memory.ToolCreator) ServiceOpt {
 
 // WithToolEnabled sets which tool is enabled.
 // If the tool name is invalid, this option will do nothing.
+// User settings via WithToolEnabled take precedence over auto mode defaults,
+// regardless of option order.
 func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 	return func(opts *serviceOpts) {
 		// If the tool name is invalid, do nothing.
@@ -82,5 +102,42 @@ func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 			return
 		}
 		opts.enabledTools[toolName] = enabled
+		opts.userExplicitlySet[toolName] = true
+	}
+}
+
+// WithExtractor sets the memory extractor for auto memory mode.
+// When enabled, auto mode defaults are applied to enabledTools,
+// but user settings via WithToolEnabled (before or after) take precedence.
+func WithExtractor(e extractor.MemoryExtractor) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.extractor = e
+	}
+}
+
+// WithAsyncMemoryNum sets the number of async memory workers.
+func WithAsyncMemoryNum(num int) ServiceOpt {
+	return func(opts *serviceOpts) {
+		if num < 1 {
+			num = imemory.DefaultAsyncMemoryNum
+		}
+		opts.asyncMemoryNum = num
+	}
+}
+
+// WithMemoryQueueSize sets the queue size for memory jobs.
+func WithMemoryQueueSize(size int) ServiceOpt {
+	return func(opts *serviceOpts) {
+		if size < 1 {
+			size = imemory.DefaultMemoryQueueSize
+		}
+		opts.memoryQueueSize = size
+	}
+}
+
+// WithMemoryJobTimeout sets the timeout for each memory job.
+func WithMemoryJobTimeout(timeout time.Duration) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.memoryJobTimeout = timeout
 	}
 }

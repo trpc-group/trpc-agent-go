@@ -15,6 +15,7 @@ import (
 	"errors"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -28,6 +29,13 @@ const (
 	LoadToolName   = "memory_load"
 )
 
+// Session state keys for memory features.
+const (
+	// SessionStateKeyAutoMemoryLastExtractAt stores the last included event
+	// timestamp for auto memory extraction.
+	SessionStateKeyAutoMemoryLastExtractAt = "memory:last_extract_at"
+)
+
 var (
 	// ErrAppNameRequired is the error for app name required.
 	ErrAppNameRequired = errors.New("appName is required")
@@ -39,7 +47,7 @@ var (
 
 // Service defines the interface for memory service operations.
 type Service interface {
-	// AddMemory adds a new memory for a user.
+	// AddMemory adds or updates a memory for a user (idempotent).
 	AddMemory(ctx context.Context, userKey UserKey, memory string, topics []string) error
 
 	// UpdateMemory updates an existing memory for a user.
@@ -59,6 +67,15 @@ type Service interface {
 
 	// Tools returns the list of available memory tools.
 	Tools() []tool.Tool
+
+	// EnqueueAutoMemoryJob enqueues an auto memory extraction job for async
+	// processing. The session contains the full transcript and state for
+	// incremental extraction.
+	EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error
+
+	// Close closes the service and releases resources.
+	// This includes stopping async memory workers if configured.
+	Close() error
 }
 
 // ToolCreator creates a tool.
