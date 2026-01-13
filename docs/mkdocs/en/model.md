@@ -919,6 +919,22 @@ For a complete interactive example, see [examples/model/batch](https://github.co
 
 The retry mechanism is an automatic error recovery technique that automatically retries failed requests. This feature is provided by the underlying OpenAI SDK, with the framework passing retry parameters to the SDK through configuration options.
 
+##### Timeouts and deadlines
+
+Request lifecycle is bounded by two independent limits:
+
+- The **caller context deadline** (for example, Runner max duration, or `context.WithTimeout`).
+- The **OpenAI request timeout** configured by `openaiopt.WithRequestTimeout`.
+
+The effective budget is the earlier one:
+
+- effective_deadline = min(ctx_deadline, request_timeout)
+
+Important notes:
+
+- `github.com/openai/openai-go` does not hardcode timeout by default. If you observe timeout in logs, it typically comes from an upstream deadline (gateway/caller context) or from your own `WithRequestTimeout` configuration.
+- If you expect long-running calls (streaming, large prompts, tools, or reasoning models), configure `WithRequestTimeout` to match your service deadline and service level objective (SLO).
+
 ##### Core Features
 
 - **Automatic Retry**: SDK automatically handles retryable errors
@@ -1118,6 +1134,87 @@ Notes for authentication variants:
   `Authorization: Bearer ...` under the hood.
 - Azure/OpenAI‑compatible that use `api-key`: omit `WithAPIKey` and set
   `openaiopt.WithHeader("api-key", "<key>")` instead.
+
+##### Logging raw HTTP request and response
+
+You can use `openaiopt.WithMiddleware` to log the underlying HTTP request and
+response. Be careful about secrets (API keys, Authorization headers) and body
+consumption.
+
+Key points:
+
+- Reading `req.Body` or `resp.Body` consumes the stream, so you must restore it.
+- Do not read `resp.Body` for streaming responses (for example,
+  `Content-Type: text/event-stream`); skip body logging to avoid blocking
+  or breaking the stream.
+
+```go
+import (
+    "bytes"
+    "io"
+    "net/http"
+    "strings"
+
+    openaiopt "github.com/openai/openai-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/log"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+const streamContentType = "text/event-stream"
+
+llm := openai.New("deepseek-chat",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMiddleware(
+            func(
+                req *http.Request,
+                next openaiopt.MiddlewareNext,
+            ) (*http.Response, error) {
+                // 1. Read req.Body.
+                bodyBytes, err := io.ReadAll(req.Body)
+                if err != nil {
+                    return nil, err
+                }
+                // 2. Log req.Body.
+                log.DebugfContext(
+                    req.Context(),
+                    "Middleware req: %+v",
+                    string(bodyBytes),
+                )
+
+                // 3. Restore req.Body (critical step).
+                req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+                resp, err := next(req)
+                if err != nil || resp == nil {
+                    return resp, err
+                }
+
+                // 4. Skip body logging for streaming responses.
+                contentType := resp.Header.Get("Content-Type")
+                if strings.Contains(contentType, streamContentType) {
+                    return resp, nil
+                }
+
+                // 5. Read resp.Body.
+                respBodyBytes, err := io.ReadAll(resp.Body)
+                if err != nil {
+                    return resp, err
+                }
+                // 6. Log resp.Body.
+                log.DebugfContext(
+                    req.Context(),
+                    "Middleware rsp: %+v",
+                    string(respBodyBytes),
+                )
+
+                // 7. Restore resp.Body (critical step).
+                resp.Body = io.NopCloser(bytes.NewBuffer(respBodyBytes))
+                return resp, nil
+            },
+        ),
+    ),
+)
+```
 
 ##### 3. Custom http.RoundTripper (advanced)
 
