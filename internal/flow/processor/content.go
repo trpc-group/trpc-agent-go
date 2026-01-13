@@ -238,6 +238,8 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 	skipHistory := includeMode == "none"
 
+	p.injectInjectedContextMessages(invocation, req)
+
 	// Append per-filter messages from session events when allowed.
 	needToAddInvocationMessage := true
 	if invocation.Session != nil {
@@ -291,6 +293,19 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingContent),
 	))
+}
+
+// injectInjectedContextMessages inserts per-run context messages into the request
+// before session-derived history is appended.
+func (p *ContentRequestProcessor) injectInjectedContextMessages(invocation *agent.Invocation, req *model.Request) {
+	if invocation == nil || req == nil {
+		return
+	}
+	messages := invocation.RunOptions.InjectedContextMessages
+	if len(messages) == 0 {
+		return
+	}
+	req.Messages = append(req.Messages, messages...)
 }
 
 // getSessionSummaryMessage returns the current-branch session summary as a
