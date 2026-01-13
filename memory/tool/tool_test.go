@@ -123,6 +123,14 @@ func (m *mockMemoryService) Tools() []tool.Tool {
 	return []tool.Tool{}
 }
 
+func (m *mockMemoryService) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error {
+	return nil
+}
+
+func (m *mockMemoryService) Close() error {
+	return nil
+}
+
 func (m *mockMemoryService) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
 	return "", false
 }
@@ -1042,6 +1050,14 @@ func (m *mockMemoryServiceWithError) SearchMemories(ctx context.Context, userKey
 
 func (m *mockMemoryServiceWithError) Tools() []tool.Tool {
 	return []tool.Tool{}
+}
+
+func (m *mockMemoryServiceWithError) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error {
+	return fmt.Errorf("mock enqueue error")
+}
+
+func (m *mockMemoryServiceWithError) Close() error {
+	return fmt.Errorf("mock close error")
 }
 
 func (m *mockMemoryServiceWithError) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
