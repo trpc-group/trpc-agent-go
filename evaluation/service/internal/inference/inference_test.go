@@ -135,6 +135,17 @@ func TestInferenceValidation(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestInferenceRejectsNilContextMessage(t *testing.T) {
+	input := []*evalset.Invocation{
+		{
+			InvocationID: "input",
+			UserContent:  &model.Message{Role: model.RoleUser, Content: "question"},
+		},
+	}
+	_, err := Inference(context.Background(), &fakeRunner{}, input, &evalset.SessionInput{UserID: "user"}, "session", []*model.Message{nil})
+	assert.Error(t, err)
+}
+
 func TestInferencePerInvocationErrors(t *testing.T) {
 
 	ctx := context.Background()

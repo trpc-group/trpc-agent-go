@@ -252,7 +252,7 @@ func WithMessages(messages []model.Message) RunOption {
 	}
 }
 
-// WithInjectedContextMessages sets per-run messages that are injected into the
+// WithInjectedContextMessages appends per-run messages that are injected into the
 // model request context but are not persisted into the session transcript.
 func WithInjectedContextMessages(messages []model.Message) RunOption {
 	return func(opts *RunOptions) {

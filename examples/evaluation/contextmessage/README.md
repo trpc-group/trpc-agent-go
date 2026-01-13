@@ -42,7 +42,7 @@ go run . \
 
 It prints a case-by-case summary and writes detailed JSON artifacts to `./output/contextmessage-app`.
 
-The agent prints the request `messages` payload in a callback so you can verify that `contextMessages` are injected.
+The example demonstrates how `contextMessages` influence the agent responses without being persisted into the session transcript.
 
 ## Data Layout
 
@@ -84,5 +84,5 @@ Eval Set: contextmessage-basic
 Overall Status: passed
 Runs: 1
 Case identity_name -> passed
-  Metric llm_final_response: score 1.00 (threshold 0.90) => passed
+  Metric llm_final_response: score 1.00 (threshold 1.00) => passed
 ```
