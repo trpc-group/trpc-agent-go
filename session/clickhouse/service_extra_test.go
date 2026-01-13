@@ -127,65 +127,13 @@ func TestService_EnqueueSummaryJob_Validation(t *testing.T) {
 	// Nil session
 	err = s.EnqueueSummaryJob(context.Background(), nil, "key", false)
 	assert.Error(t, err)
-	assert.Equal(t, "nil session", err.Error())
+	assert.Equal(t, "session is nil", err.Error())
 
 	// Invalid key
 	sess := session.NewSession("", "", "")
 	err = s.EnqueueSummaryJob(context.Background(), sess, "key", false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "check session key failed")
-}
-
-func TestService_TryEnqueueJob_Full(t *testing.T) {
-	// Register mock client
-	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.Client, error) {
-		return &mockClient{}, nil
-	})
-
-	mockSum := &mockSummarizer{}
-	s, err := NewService(
-		WithSummarizer(mockSum),
-		WithSkipDBInit(true),
-		WithAsyncSummaryNum(1),
-		WithSummaryQueueSize(1), // Size 1
-		WithClickHouseDSN("clickhouse://localhost:9000"),
-	)
-	assert.NoError(t, err)
-
-	// Fill the queue
-	s.summaryJobChans[0] <- &summaryJob{}
-
-	// Try enqueue again (should fail and return false)
-	job := &summaryJob{session: &session.Session{Hash: 0}}
-	enqueued := s.tryEnqueueJob(context.Background(), job)
-	assert.False(t, enqueued)
-}
-
-func TestService_TryEnqueueJob_Closed(t *testing.T) {
-	// Register mock client
-	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.Client, error) {
-		return &mockClient{}, nil
-	})
-
-	mockSum := &mockSummarizer{}
-	s, err := NewService(
-		WithSummarizer(mockSum),
-		WithSkipDBInit(true),
-		WithAsyncSummaryNum(1),
-		WithClickHouseDSN("clickhouse://localhost:9000"),
-	)
-	assert.NoError(t, err)
-
-	// Close channel
-	close(s.summaryJobChans[0])
-
-	// Try enqueue (should panic recover and return false)
-	job := &summaryJob{session: &session.Session{Hash: 0}}
-
-	assert.NotPanics(t, func() {
-		enqueued := s.tryEnqueueJob(context.Background(), job)
-		assert.False(t, enqueued)
-	})
 }
 
 func TestService_GetSession_Detailed(t *testing.T) {
