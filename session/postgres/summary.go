@@ -59,12 +59,8 @@ func (s *Service) CreateSessionSummary(
 		return fmt.Errorf("marshal summary failed: %w", err)
 	}
 
-	var expiresAt *time.Time
-	if s.opts.sessionTTL > 0 {
-		t := sum.UpdatedAt.Add(s.opts.sessionTTL)
-		expiresAt = &t
-	}
-
+	// Note: expires_at is set to NULL - summaries are bound to session
+	// lifecycle and will be deleted when session is deleted or expires.
 	// Use UPSERT (INSERT ... ON CONFLICT) for atomic operation.
 	// This handles both insert and update in a single, race-condition-free operation.
 	// Note: Last write wins - no timestamp comparison to avoid silent failures.
@@ -76,7 +72,7 @@ func (s *Service) CreateSessionSummary(
 		   summary = EXCLUDED.summary,
 		   updated_at = EXCLUDED.updated_at,
 		   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries),
-		sess.AppName, sess.UserID, sess.ID, filterKey, summaryBytes, sum.UpdatedAt, expiresAt)
+		sess.AppName, sess.UserID, sess.ID, filterKey, summaryBytes, sum.UpdatedAt, nil)
 
 	if err != nil {
 		return fmt.Errorf("upsert summary failed: %w", err)
