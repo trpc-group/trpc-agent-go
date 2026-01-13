@@ -608,7 +608,8 @@ func (vs *VectorStore) deleteByFilter(ctx context.Context, config *vectorstore.D
 //   - embedding: update document embedding vector (value must be []float64)
 //   - metadata.{key}: update specific metadata field (e.g., metadata.category, metadata.status)
 //
-// Note: id, embedding, created_at fields cannot be updated via this method.
+// Note: id, created_at, updated_at fields cannot be updated via this method.
+// The updated_at field is automatically set to the current timestamp.
 // Returns the number of rows affected.
 func (vs *VectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
 	config, err := vectorstore.ApplyUpdateByFilterOptions(opts...)
