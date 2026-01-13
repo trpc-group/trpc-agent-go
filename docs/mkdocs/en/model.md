@@ -1128,6 +1128,13 @@ llm := openai.New("deepseek-chat",
 )
 ```
 
+Notes for authentication variants:
+
+- OpenAI style: keep `openai.WithAPIKey("sk-...")` which sets
+  `Authorization: Bearer ...` under the hood.
+- Azure/OpenAI‑compatible that use `api-key`: omit `WithAPIKey` and set
+  `openaiopt.WithHeader("api-key", "<key>")` instead.
+
 ##### Logging raw HTTP request and response
 
 You can use `openaiopt.WithMiddleware` to log the underlying HTTP request and

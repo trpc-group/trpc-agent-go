@@ -1123,6 +1123,14 @@ llm := openai.New("deepseek-chat",
 )
 ```
 
+鉴权差异注意事项：
+
+- OpenAI 风格：保留 `openai.WithAPIKey("sk-...")`，底层会设置
+  `Authorization: Bearer ...`。
+- Azure/部分 OpenAI 兼容：若要求 `api-key` 头部，则不要调用
+  `WithAPIKey`，改为使用
+  `openaiopt.WithHeader("api-key", "<key>")`。
+
 ##### 在中间件里打印原始 HTTP 请求与响应
 
 你可以用 `openaiopt.WithMiddleware` 在最底层 HTTP 请求发出前/返回后打印
