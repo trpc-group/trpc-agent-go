@@ -244,11 +244,19 @@ func WithKnowledgeConditionedFilter(filter *searchfilter.UniversalFilterConditio
 // Runner uses this history to auto-seed an empty Session (once) and to
 // populate `invocation.Message` via RunWithMessages for compatibility. The
 // content processor itself does not read this field; it derives messages from
-// Session events (and may fall back to a single `invocation.Message` when the
-// Session is empty).
+// Session events and may fall back to a single `invocation.Message` when the
+// Session is empty.
 func WithMessages(messages []model.Message) RunOption {
 	return func(opts *RunOptions) {
 		opts.Messages = messages
+	}
+}
+
+// WithInjectedContextMessages appends per-run messages that are injected into the
+// model request context but are not persisted into the session transcript.
+func WithInjectedContextMessages(messages []model.Message) RunOption {
+	return func(opts *RunOptions) {
+		opts.InjectedContextMessages = append(opts.InjectedContextMessages, messages...)
 	}
 }
 
@@ -369,19 +377,28 @@ func WithModelName(name string) RunOption {
 	}
 }
 
+// WithStream enables or disables streaming for this specific run.
+//
+// When set, it overrides the agent's default Stream setting for this Run.
+func WithStream(stream bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.Stream = &stream
+	}
+}
+
 // WithInstruction sets the instruction for this specific run.
-// If set, it temporarily overrides the agent's instruction for this
-// request only. This does not modify the agent instance.
+// If set, it temporarily overrides the agent's instruction for this request
+// only. This does not modify the agent instance.
 func WithInstruction(instruction string) RunOption {
 	return func(opts *RunOptions) {
 		opts.Instruction = instruction
 	}
 }
 
-// WithGlobalInstruction sets the global instruction (system prompt) for
-// this specific run.
-// If set, it temporarily overrides the agent's global instruction for
-// this request only. This does not modify the agent instance.
+// WithGlobalInstruction sets the global instruction (system prompt) for this
+// specific run.
+// If set, it temporarily overrides the agent's global instruction for this
+// request only. This does not modify the agent instance.
 func WithGlobalInstruction(instruction string) RunOption {
 	return func(opts *RunOptions) {
 		opts.GlobalInstruction = instruction
@@ -529,6 +546,11 @@ type RunOptions struct {
 	// `invocation.Message` when no events exist).
 	Messages []model.Message
 
+	// InjectedContextMessages allows callers to inject additional context messages
+	// into the model request for this run. These messages are not persisted into
+	// session events and therefore must be provided on every run if needed.
+	InjectedContextMessages []model.Message
+
 	// Resume indicates whether this run should attempt to resume from existing
 	// session context before making a new model call. When true, flows may
 	// inspect the latest session events (for example, assistant messages with
@@ -605,13 +627,19 @@ type RunOptions struct {
 	// If both Model and ModelName are set, Model takes precedence.
 	ModelName string
 
+	// Stream overrides GenerationConfig.Stream for this run when non-nil.
+	//
+	// This is useful when you want to switch between streaming and
+	// non-streaming responses per request without rebuilding the agent.
+	Stream *bool
+
 	// Instruction overrides the agent's instruction for this run.
-	// If set, it temporarily overrides the agent's instruction for this
-	// request only.
+	// If set, it temporarily overrides the agent's instruction for this request
+	// only.
 	Instruction string
 
-	// GlobalInstruction overrides the agent's global instruction (system
-	// prompt) for this run.
+	// GlobalInstruction overrides the agent's global instruction (system prompt)
+	// for this run.
 	// If set, it temporarily overrides the agent's global instruction for
 	// this request only.
 	GlobalInstruction string

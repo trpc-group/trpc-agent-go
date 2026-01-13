@@ -51,6 +51,20 @@ func (m *mockOCRExtractor) Close() error {
 	return nil
 }
 
+type mockTransformer struct{}
+
+func (m *mockTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func (m *mockTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func (m *mockTransformer) Name() string {
+	return "MockTransformer"
+}
+
 // TestReadDocuments verifies that File Source correctly reads documents with
 // and without custom chunk configuration.
 func TestReadDocuments(t *testing.T) {
@@ -389,6 +403,16 @@ func TestWithOCRExtractor(t *testing.T) {
 
 	if src.ocrExtractor == nil {
 		t.Error("WithOCRExtractor did not set OCR extractor")
+	}
+}
+
+// TestWithTransformers verifies the WithTransformers option.
+func TestWithTransformers(t *testing.T) {
+	t1 := &mockTransformer{}
+	src := New([]string{"dummy.txt"}, WithTransformers(t1))
+
+	if len(src.transformers) != 1 {
+		t.Fatalf("expected 1 transformer, got %d", len(src.transformers))
 	}
 }
 

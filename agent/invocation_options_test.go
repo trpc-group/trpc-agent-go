@@ -114,6 +114,18 @@ func TestRunOptionsAgentSelectors(t *testing.T) {
 	assert.Equal(t, override, opts.Agent)
 }
 
+func TestRunOptionsStreamSelector(t *testing.T) {
+	opts := &RunOptions{}
+
+	WithStream(true)(opts)
+	require.NotNil(t, opts.Stream)
+	assert.True(t, *opts.Stream)
+
+	WithStream(false)(opts)
+	require.NotNil(t, opts.Stream)
+	assert.False(t, *opts.Stream)
+}
+
 func TestGetRuntimeStateValue(t *testing.T) {
 	t.Run("key not found", func(t *testing.T) {
 		opts := &RunOptions{
@@ -405,6 +417,14 @@ func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.U
 }
 
 func (m *mockMemoryService) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *mockMemoryService) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error {
+	return nil
+}
+
+func (m *mockMemoryService) Close() error {
 	return nil
 }
 

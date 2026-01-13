@@ -40,6 +40,7 @@ import (
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
+	iembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
@@ -65,6 +66,9 @@ type Embedder struct {
 	truncationDirection TruncateDirection
 	embedRoute          EmbedRoute
 	client              *http.Client
+
+	serverAddress *string // for telemetry
+	serverPort    *int    // for telemetry
 }
 
 // TruncateDirection represents the truncation direction for the embedding.
@@ -168,6 +172,7 @@ func New(opts ...Option) *Embedder {
 	for _, opt := range opts {
 		opt(e)
 	}
+	e.serverAddress, e.serverPort = iembedder.ServerAddrPortFromBaseURL(e.baseURL)
 	return e
 }
 
@@ -209,8 +214,14 @@ func (e *Embedder) response(ctx context.Context, text string) (rsp *embedRespons
 		return nil, fmt.Errorf("text cannot be empty")
 	}
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationEmbeddings, e.baseURL))
+	embeddingAttributes := &itelemetry.EmbeddingAttributes{
+		Dimensions:    e.dimensions,
+		ServerAddress: e.serverAddress,
+		ServerPort:    e.serverPort,
+	}
 	defer func() {
-		itelemetry.TraceEmbedding(span, "", e.baseURL, nil, err)
+		embeddingAttributes.Error = err
+		itelemetry.TraceEmbedding(span, embeddingAttributes)
 		span.End()
 	}()
 

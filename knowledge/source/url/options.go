@@ -14,6 +14,7 @@ import (
 	"net/http"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 // Option represents a functional option for configuring Source.
@@ -77,5 +78,20 @@ func WithChunkSize(size int) Option {
 func WithChunkOverlap(overlap int) Option {
 	return func(s *Source) {
 		s.chunkOverlap = overlap
+	}
+}
+
+// WithTransformers sets transformers for document processing.
+// Transformers are applied before and after chunking.
+//
+// Example:
+//
+//	source := url.New(urls, url.WithTransformers(
+//	    transform.NewCharFilter("\n", "\t"),
+//	    transform.NewCharDedup(" "),
+//	))
+func WithTransformers(transformers ...transform.Transformer) Option {
+	return func(s *Source) {
+		s.transformers = append(s.transformers, transformers...)
 	}
 }

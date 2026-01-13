@@ -661,10 +661,14 @@ eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
 
 - `agent.RunOptions.Model`：直接指定模型实例
 - `agent.RunOptions.ModelName`：指定预注册的模型名称
+- `agent.RunOptions.Stream`：覆盖是否使用流式输出（使用 `agent.WithStream(...)`）
 - `agent.RunOptions.Instruction`：仅本次请求覆盖 Instruction（使用 `agent.WithInstruction(...)`）
 - `agent.RunOptions.GlobalInstruction`：仅本次请求覆盖 Global Instruction（系统提示词，使用 `agent.WithGlobalInstruction(...)`）
 - 优先级：`Model` > `ModelName` > Agent 默认模型
 - 如果 `ModelName` 指定的模型不存在，将回退到 Agent 默认模型
+
+你可以通过 `agent.WithStream(true)` 或 `agent.WithStream(false)` 在单次
+请求中切换流式/非流式输出。
 
 ##### Agent 级别 vs 请求级别对比
 
@@ -912,6 +916,22 @@ Batch API 的执行流程：
 
 重试机制是一种自动错误恢复技术，用于在请求失败时自动重试。该功能由底层 OpenAI SDK 提供，框架通过配置选项将重试参数传递给 SDK。
 
+##### 超时与 deadline
+
+一次模型请求的生命周期通常受到两类独立限制：
+
+- 调用方 `ctx` 的 deadline（例如 Runner 的最大运行时长，或 `context.WithTimeout`）。
+- 通过 `openaiopt.WithRequestTimeout` 配置的 OpenAI 请求超时。
+
+最终生效的上限取两者更早者：
+
+- effective_deadline = min(ctx_deadline, request_timeout)
+
+重要说明：
+
+- `github.com/openai/openai-go` 默认不硬编码超时。如果你在日志里看到超时，通常来自上游的 deadline（网关/调用方 context）或者自己配置了 `WithRequestTimeout`。
+- 如果预期请求耗时较长（流式输出、大 prompt、工具调用、推理模型等），建议将 `WithRequestTimeout` 配置到与你的服务 deadline 和服务质量目标（SLO）一致。
+
 ##### 核心特性
 
 - **自动重试**：SDK 自动处理可重试的错误
@@ -1110,6 +1130,83 @@ llm := openai.New("deepseek-chat",
 - Azure/部分 OpenAI 兼容：若要求 `api-key` 头部，则不要调用
   `WithAPIKey`，改为使用
   `openaiopt.WithHeader("api-key", "<key>")`。
+
+##### 在中间件里打印原始 HTTP 请求与响应
+
+你可以用 `openaiopt.WithMiddleware` 在最底层 HTTP 请求发出前/返回后打印
+请求与响应。注意要做鉴权信息脱敏，并且避免误伤 `Body` 读取。
+
+关键点：
+
+- 读取 `req.Body`/`resp.Body` 会消耗流，必须在读取后恢复 `Body`。
+- 流式响应（`text/event-stream`）不要读取响应体，跳过响应体打印，
+  否则可能阻塞流式链路。
+
+```go
+import (
+    "bytes"
+    "io"
+    "net/http"
+    "strings"
+
+    openaiopt "github.com/openai/openai-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/log"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+const streamContentType = "text/event-stream"
+
+llm := openai.New("deepseek-chat",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMiddleware(
+            func(req *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
+                // 1. 读取 req.Body
+                bodyBytes, err := io.ReadAll(req.Body)
+                if err != nil {
+                    return nil, err
+                }
+                // 2. 打印 req.Body
+                log.DebugfContext(
+                    req.Context(),
+                    "Middleware req: %+v",
+                    string(bodyBytes),
+                )
+
+                // 3. 重新赋值 req.Body（关键步骤）
+                req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+                resp, err := next(req)
+                if err != nil || resp == nil {
+                    return resp, err
+                }
+
+                // 4. 流式响应跳过响应体打印
+                contentType := resp.Header.Get("Content-Type")
+                if strings.Contains(contentType, streamContentType) {
+                    return resp, nil
+                }
+
+                // 5. 读取 resp.Body
+                respBodyBytes, err := io.ReadAll(resp.Body)
+                if err != nil {
+                    return resp, err
+                }
+                // 6. 打印 resp.Body
+                log.DebugfContext(
+                    req.Context(),
+                    "Middleware rsp: %+v",
+                    string(respBodyBytes),
+                )
+
+                // 7. 重新赋值 resp.Body（关键步骤）
+                resp.Body = io.NopCloser(bytes.NewBuffer(respBodyBytes))
+                return resp, nil
+            },
+        ),
+    ),
+)
+```
+
 
 ##### 3. 使用自定义 http.RoundTripper（进阶）
 
