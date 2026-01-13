@@ -39,11 +39,11 @@ func TestVectorStore_Search(t *testing.T) {
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := mockSearchResultRow("doc_1", "First Doc", "First content",
-					[]float64{0.9, 0.5, 0.2}, map[string]any{"rank": 1}, 0.95)
+					[]float64{0.9, 0.5, 0.2}, map[string]any{"rank": 1}, 0.975)
 				rows.AddRow("doc_2", "Second Doc", "Second content", "[0.8,0.4,0.3]",
-					mapToJSON(map[string]any{"rank": 2}), 1000000, 2000000, 0.85)
+					mapToJSON(map[string]any{"rank": 2}), 1000000, 2000000, 0.85, 0.05, 0.925)
 				rows.AddRow("doc_3", "Third Doc", "Third content", "[0.7,0.6,0.1]",
-					mapToJSON(map[string]any{"rank": 3}), 1000000, 2000000, 0.75)
+					mapToJSON(map[string]any{"rank": 3}), 1000000, 2000000, 0.70, 0.05, 0.80)
 
 				// Match any SELECT query with LIMIT
 				mock.ExpectQuery("SELECT .+ FROM documents .+ LIMIT").
@@ -53,9 +53,9 @@ func TestVectorStore_Search(t *testing.T) {
 			validate: func(t *testing.T, result *vectorstore.SearchResult) {
 				require.Len(t, result.Results, 3)
 				assert.Equal(t, "doc_1", result.Results[0].Document.ID)
-				assert.Equal(t, 0.95, result.Results[0].Score)
+				assert.Equal(t, 0.975, result.Results[0].Score)
 				assert.Equal(t, "doc_2", result.Results[1].Document.ID)
-				assert.Equal(t, 0.85, result.Results[1].Score)
+				assert.Equal(t, 0.925, result.Results[1].Score)
 			},
 		},
 		{
@@ -95,7 +95,7 @@ func TestVectorStore_Search(t *testing.T) {
 				SearchMode: vectorstore.SearchModeVector,
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
-				rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"})
+				rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"})
 				mock.ExpectQuery("SELECT .+ FROM documents .+ LIMIT").
 					WillReturnRows(rows)
 			},
@@ -229,7 +229,7 @@ func TestVectorStore_SearchEmptyResults(t *testing.T) {
 			defer tc.Close()
 
 			// Mock empty result set
-			emptyRows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"})
+			emptyRows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"})
 			tc.mock.ExpectQuery("SELECT .+ FROM documents").
 				WillReturnRows(emptyRows)
 
@@ -256,7 +256,7 @@ func TestVectorStore_SearchByKeyword(t *testing.T) {
 		}
 
 		// Should fall back to filter search
-		rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"})
+		rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"})
 		tc.mock.ExpectQuery("SELECT .+ FROM documents").WillReturnRows(rows)
 
 		result, err := vs.Search(context.Background(), query)
@@ -340,7 +340,7 @@ func TestVectorStore_SearchByHybrid(t *testing.T) {
 		}
 
 		// Should fall back to vector search
-		rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"})
+		rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"})
 		tc.mock.ExpectQuery("SELECT .+ FROM documents").WillReturnRows(rows)
 
 		result, err := vs.Search(context.Background(), query)
@@ -445,7 +445,7 @@ func TestVectorStore_SearchByFilter(t *testing.T) {
 			Limit: 5,
 		}
 
-		rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"})
+		rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"})
 		tc.mock.ExpectQuery("SELECT .+ FROM documents .+ LIMIT").WillReturnRows(rows)
 
 		result, err := vs.Search(context.Background(), query)

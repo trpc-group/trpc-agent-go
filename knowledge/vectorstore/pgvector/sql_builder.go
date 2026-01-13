@@ -50,7 +50,7 @@ func (b *baseSQLBuilder) addFilterCondition(cond *condConvertResult) {
 		b.argIndex++
 	}
 	c := fmt.Sprintf(cond.cond, indexes...)
-	if len(b.conditions) > 0 {
+	if len(b.conditions) > 1 {
 		c = fmt.Sprintf("(%s)", c)
 	}
 	b.conditions = append(b.conditions, c)
@@ -97,8 +97,6 @@ func (b *baseSQLBuilder) addMetadataFilter(metadata map[string]any) {
 // updateBuilder builds UPDATE SQL statements safely.
 type updateBuilder struct {
 	*baseSQLBuilder
-	table    string
-	id       string
 	setParts []string
 }
 
@@ -109,7 +107,6 @@ func newUpdateBuilder(o options, id string) *updateBuilder {
 			args:     []any{id, time.Now().Unix()},
 			argIndex: 3,
 		},
-		id:       id,
 		setParts: []string{o.updatedAtFieldName + " = $2"},
 	}
 }
@@ -150,7 +147,7 @@ func newQueryBuilder(o options) *queryBuilder {
 			args:       make([]any, 0),
 			argIndex:   1,
 		},
-		selectClause: fmt.Sprintf("%s, 0.0 as score", commonFieldsStr),
+		selectClause: fmt.Sprintf("%s, 0.0 as vector_score, 0.0 as text_score, 0.0 as score", commonFieldsStr),
 	}
 }
 
@@ -212,9 +209,9 @@ func newQueryBuilderWithMode(o options, mode vectorstore.SearchMode, vectorWeigh
 	case vectorstore.SearchModeKeyword:
 		qb.orderClause = fmt.Sprintf("ORDER BY score DESC, %s DESC", o.createdAtFieldName)
 	case vectorstore.SearchModeHybrid:
-		qb.orderClause = "ORDER BY score DESC"
+		qb.orderClause = "ORDER BY (vector_score * " + fmt.Sprintf("%.3f", vectorWeight) + " + text_score * " + fmt.Sprintf("%.3f", textWeight) + ") DESC"
 	case vectorstore.SearchModeFilter:
-		qb.addSelectClause("1.0 as score")
+		qb.addSelectClause("0.0 as vector_score, 0.0 as text_score, 1.0 as score")
 		qb.orderClause = fmt.Sprintf("ORDER BY %s DESC", o.createdAtFieldName)
 	}
 
@@ -230,10 +227,8 @@ func (qb *queryBuilder) addKeywordSearchConditions(query string, minScore float6
 
 	// Add score filter if needed.
 	if minScore > 0 {
-		scoreCondition := fmt.Sprintf("ts_rank_cd(to_tsvector('%s', %s), plainto_tsquery('%s', $%d)) >= $%d",
-			qb.o.language, qb.o.contentFieldName,
-			qb.o.language, qb.textQueryPos,
-			qb.argIndex)
+		scoreExpr := qb.getKeywordScoreExpr()
+		scoreCondition := fmt.Sprintf("%s >= $%d", scoreExpr, qb.argIndex)
 		qb.conditions = append(qb.conditions, scoreCondition)
 		qb.args = append(qb.args, minScore)
 		qb.argIndex++
@@ -260,15 +255,26 @@ func (qb *queryBuilder) addSelectClause(scoreExpression string) {
 
 // addScoreFilter adds score filter to the query.
 func (qb *queryBuilder) addScoreFilter(minScore float64) {
-	condition := fmt.Sprintf("(1 - (%s <=> $1)) >= %f", qb.o.embeddingFieldName, minScore)
+	var scoreExpr string
+	switch qb.searchMode {
+	case vectorstore.SearchModeVector:
+		scoreExpr = qb.getVectorScoreExpr()
+	case vectorstore.SearchModeHybrid:
+		scoreExpr = qb.getHybridScoreExpr()
+	default:
+		// Fallback for unexpected modes, though likely unused
+		scoreExpr = qb.getVectorScoreExpr()
+	}
+
+	condition := fmt.Sprintf("%s >= %f", scoreExpr, minScore)
 	qb.conditions = append(qb.conditions, condition)
 }
 
 // addFtsCondition is a helper to add full-text search conditions.
 func (qb *queryBuilder) addFtsCondition(query string) {
-	condition := fmt.Sprintf("to_tsvector('%s', %s) @@ plainto_tsquery('%s', $%d)",
+	condition := fmt.Sprintf("to_tsvector('%s', %s) @@ %s('%s', $%d)",
 		qb.o.language, qb.o.contentFieldName,
-		qb.o.language, qb.argIndex)
+		qb.o.sparseQueryFunc, qb.o.language, qb.argIndex)
 	qb.conditions = append(qb.conditions, condition)
 	qb.args = append(qb.args, query)
 	qb.argIndex++
@@ -276,17 +282,27 @@ func (qb *queryBuilder) addFtsCondition(query string) {
 
 // build constructs the final SQL query based on the search mode.
 func (qb *queryBuilder) build(limit int) (string, []any) {
-	finalSelectClause := qb.buildSelectClause()
 	whereClause := strings.Join(qb.conditions, " AND ")
 
-	sql := fmt.Sprintf(`
-		SELECT %s
-		FROM %s
-		WHERE %s
-		%s
-		LIMIT %d`, finalSelectClause, qb.o.table, whereClause, qb.orderClause, limit)
-
-	return sql, qb.args
+	// Use subquery for vector/keyword/hybrid search to avoid duplicate calculations
+	switch qb.searchMode {
+	case vectorstore.SearchModeVector:
+		return qb.buildVectorQueryWithSubquery(whereClause, limit)
+	case vectorstore.SearchModeKeyword:
+		return qb.buildKeywordQueryWithSubquery(whereClause, limit)
+	case vectorstore.SearchModeHybrid:
+		return qb.buildHybridQueryWithSubquery(whereClause, limit)
+	default:
+		// Filter search or other modes use direct query
+		finalSelectClause := qb.buildSelectClause()
+		sql := fmt.Sprintf(`
+			SELECT %s
+			FROM %s
+			WHERE %s
+			%s
+			LIMIT %d`, finalSelectClause, qb.o.table, whereClause, qb.orderClause, limit)
+		return sql, qb.args
+	}
 }
 
 // buildSelectClause generates the appropriate SELECT clause based on search mode.
@@ -305,38 +321,164 @@ func (qb *queryBuilder) buildSelectClause() string {
 
 // buildVectorSelectClause generates SELECT clause for vector search.
 func (qb *queryBuilder) buildVectorSelectClause() string {
-	return fmt.Sprintf("%s, 1 - (%s <=> $1) as score", commonFieldsStr, qb.o.embeddingFieldName)
+	vExpr := qb.getVectorScoreExpr()
+	return fmt.Sprintf("%s, %s as vector_score, 0.0 as text_score, %s as score", commonFieldsStr, vExpr, vExpr)
+}
+
+// buildVectorQueryWithSubquery generates vector search query using subquery.
+// Inner query calculates vector_score once, applies ORDER BY and LIMIT for performance.
+// Outer query reuses the computed score to avoid duplicate calculations.
+func (qb *queryBuilder) buildVectorQueryWithSubquery(whereClause string, limit int) (string, []any) {
+	vExpr := qb.getVectorScoreExpr()
+
+	// Use vector index operator for efficient ordering, then expose vector_score for outer query
+	sql := fmt.Sprintf(`
+		SELECT *, vector_score as score
+		FROM (
+			SELECT %s, %s as vector_score, 0.0 as text_score
+			FROM %s
+			WHERE %s
+			ORDER BY %s <=> $1
+			LIMIT %d
+		) subq`, commonFieldsStr, vExpr, qb.o.table, whereClause, qb.o.embeddingFieldName, limit)
+
+	return sql, qb.args
+}
+
+// buildHybridQueryWithSubquery generates hybrid search query using subquery.
+// Inner query calculates vector_score and text_score once, then orders by hybrid score.
+// Outer query reuses the computed scores to avoid duplicate calculations.
+func (qb *queryBuilder) buildHybridQueryWithSubquery(whereClause string, limit int) (string, []any) {
+	vExpr := qb.getVectorScoreExpr()
+
+	tExpr := "0.0"
+	if qb.textQueryPos > 0 {
+		rankExpr := fmt.Sprintf("COALESCE(%s(to_tsvector('%s', %s), %s('%s', $%d)), 0)",
+			qb.o.sparseRankFunc, qb.o.language, qb.o.contentFieldName,
+			qb.o.sparseQueryFunc, qb.o.language, qb.textQueryPos)
+		tExpr = fmt.Sprintf("(%s / (%s + %.4f))", rankExpr, rankExpr, qb.o.sparseNormConstant)
+	}
+
+	hybridScoreExpr := fmt.Sprintf("(%s * %.3f + %s * %.3f)", vExpr, qb.vectorWeight, tExpr, qb.textWeight)
+
+	sql := fmt.Sprintf(`
+		SELECT *, (vector_score * %.3f + text_score * %.3f) as score
+		FROM (
+			SELECT %s, %s as vector_score, %s as text_score
+			FROM %s
+			WHERE %s
+			ORDER BY %s DESC
+			LIMIT %d
+		) subq`, qb.vectorWeight, qb.textWeight, commonFieldsStr, vExpr, tExpr, qb.o.table, whereClause, hybridScoreExpr, limit)
+
+	return sql, qb.args
 }
 
 // buildHybridSelectClause generates SELECT clause for hybrid search.
-// Uses COALESCE to handle cases where text search doesn't match, returning 0 for text score.
 func (qb *queryBuilder) buildHybridSelectClause() string {
-	var scoreExpr string
+	vExpr := qb.getVectorScoreExpr()
+
+	tExpr := "0.0"
 	if qb.textQueryPos > 0 {
-		// Hybrid search: vector + text.
-		// Use COALESCE to return 0 for text score when there's no match.
-		scoreExpr = fmt.Sprintf(
-			"(1 - (%s <=> $1)) * %.3f + COALESCE(ts_rank_cd(to_tsvector('%s', %s), plainto_tsquery('%s', $%d)), 0) * %.3f",
-			qb.o.embeddingFieldName, qb.vectorWeight,
-			qb.o.language, qb.o.contentFieldName,
-			qb.o.language, qb.textQueryPos, qb.textWeight)
-	} else {
-		// Pure vector search: only vector similarity.
-		scoreExpr = fmt.Sprintf("(1 - (%s <=> $1)) * %.3f", qb.o.embeddingFieldName, qb.vectorWeight)
+		rankExpr := fmt.Sprintf("COALESCE(%s(to_tsvector('%s', %s), %s('%s', $%d)), 0)",
+			qb.o.sparseRankFunc, qb.o.language, qb.o.contentFieldName,
+			qb.o.sparseQueryFunc, qb.o.language, qb.textQueryPos)
+		tExpr = fmt.Sprintf("(%s / (%s + %.4f))", rankExpr, rankExpr, qb.o.sparseNormConstant)
 	}
-	return fmt.Sprintf("%s, %s as score", commonFieldsStr, scoreExpr)
+
+	hybridScoreExpr := fmt.Sprintf("(%s * %.3f + %s * %.3f)", vExpr, qb.vectorWeight, tExpr, qb.textWeight)
+
+	return fmt.Sprintf("%s, %s as vector_score, %s as text_score, %s as score",
+		commonFieldsStr, vExpr, tExpr, hybridScoreExpr)
 }
 
 // buildKeywordSelectClause generates SELECT clause for keyword search.
 func (qb *queryBuilder) buildKeywordSelectClause() string {
 	if qb.textQueryPos > 0 {
-		scoreExpr := fmt.Sprintf(
-			"ts_rank_cd(to_tsvector('%s', %s), plainto_tsquery('%s', $%d))",
-			qb.o.language, qb.o.contentFieldName,
-			qb.o.language, qb.textQueryPos)
-		return fmt.Sprintf("%s, %s as score", commonFieldsStr, scoreExpr)
+		tExpr := qb.getKeywordScoreExpr()
+		return fmt.Sprintf("%s, 0.0 as vector_score, %s as text_score, %s as score", commonFieldsStr, tExpr, tExpr)
 	}
-	return fmt.Sprintf("%s, 0.0 as score", commonFieldsStr)
+	return fmt.Sprintf("%s, 0.0 as vector_score, 0.0 as text_score, 0.0 as score", commonFieldsStr)
+}
+
+// buildKeywordQueryWithSubquery generates keyword search query using subquery.
+// Inner query calculates text_score once, applies ORDER BY and LIMIT for performance.
+// Outer query reuses the computed score to avoid duplicate calculations.
+func (qb *queryBuilder) buildKeywordQueryWithSubquery(whereClause string, limit int) (string, []any) {
+	if qb.textQueryPos <= 0 {
+		// No text query, return simple query
+		sql := fmt.Sprintf(`
+			SELECT %s, 0.0 as vector_score, 0.0 as text_score, 0.0 as score
+			FROM %s
+			WHERE %s
+			ORDER BY %s DESC
+			LIMIT %d`, commonFieldsStr, qb.o.table, whereClause, qb.o.createdAtFieldName, limit)
+		return sql, qb.args
+	}
+
+	tExpr := qb.getKeywordScoreExpr()
+
+	sql := fmt.Sprintf(`
+		SELECT *, text_score as score
+		FROM (
+			SELECT %s, 0.0 as vector_score, %s as text_score
+			FROM %s
+			WHERE %s
+			ORDER BY %s DESC, %s DESC
+			LIMIT %d
+		) subq`, commonFieldsStr, tExpr, qb.o.table, whereClause, tExpr, qb.o.createdAtFieldName, limit)
+
+	return sql, qb.args
+}
+
+// Helper methods to generate score expressions
+// These ensure consistency between SELECT clauses and WHERE filters
+
+// getVectorScoreExpr returns the expression for normalized vector similarity score [0, 1].
+//
+// Mathematical derivation:
+// - Cosine Distance d ∈ [0, 2]: d = 1 - cosine_similarity
+//   - d = 0: vectors are identical
+//   - d = 1: vectors are orthogonal
+//   - d = 2: vectors are opposite
+//
+// - Cosine Similarity s = 1 - d ∈ [-1, 1]
+// - Normalized Score = (s + 1) / 2 = (2 - d) / 2 = 1 - d/2 ∈ [0, 1]
+//
+// This normalization maps cosine distance [0, 2] to a similarity score [0, 1],
+// where higher scores indicate greater similarity.
+func (qb *queryBuilder) getVectorScoreExpr() string {
+	return fmt.Sprintf("(1.0 - (%s <=> $1) / 2.0)", qb.o.embeddingFieldName)
+}
+
+// getKeywordScoreExpr returns the expression for normalized text rank score [0, 1)
+// Formula: rank / (rank + c) where c is sparseNormConstant
+func (qb *queryBuilder) getKeywordScoreExpr() string {
+	if qb.textQueryPos <= 0 {
+		return "0.0"
+	}
+	rankExpr := fmt.Sprintf("%s(to_tsvector('%s', %s), %s('%s', $%d))",
+		qb.o.sparseRankFunc, qb.o.language, qb.o.contentFieldName,
+		qb.o.sparseQueryFunc, qb.o.language, qb.textQueryPos)
+
+	// Use COALESCE to handle potential nulls if used in contexts where match isn't guaranteed (though usually is)
+	return fmt.Sprintf("(%s / (%s + %.4f))", rankExpr, rankExpr, qb.o.sparseNormConstant)
+}
+
+// getHybridScoreExpr returns the expression for weighted hybrid score [0, 1]
+// Formula: (vector_score * wv) + (text_score * wt)
+func (qb *queryBuilder) getHybridScoreExpr() string {
+	vExpr := qb.getVectorScoreExpr()
+
+	if qb.textQueryPos > 0 {
+		rankExpr := fmt.Sprintf("COALESCE(%s(to_tsvector('%s', %s), %s('%s', $%d)), 0)",
+			qb.o.sparseRankFunc, qb.o.language, qb.o.contentFieldName,
+			qb.o.sparseQueryFunc, qb.o.language, qb.textQueryPos)
+		tExpr := fmt.Sprintf("(%s / (%s + %.4f))", rankExpr, rankExpr, qb.o.sparseNormConstant)
+		return fmt.Sprintf("(%s * %.3f + %s * %.3f)", vExpr, qb.vectorWeight, tExpr, qb.textWeight)
+	}
+
+	return fmt.Sprintf("(%s * %.3f)", vExpr, qb.vectorWeight)
 }
 
 // metadataQueryBuilder builds SQL queries specifically for metadata retrieval
@@ -369,7 +511,7 @@ func (mqb *metadataQueryBuilder) buildWithPagination(limit, offset int) (string,
 	mqb.args = append(mqb.args, offset)
 
 	sql := fmt.Sprintf(`
-		SELECT *, 0.0 as score
+		SELECT *, 0.0 as vector_score, 0.0 as text_score, 0.0 as score
 		FROM %s
 		WHERE %s
 		ORDER BY %s

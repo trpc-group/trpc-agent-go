@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
@@ -226,6 +227,14 @@ func printDocumentResults(toolResult map[string]any) bool {
 		fmt.Printf("  #%d", idx+1)
 		if hasScore {
 			fmt.Printf(" score=%.3f", score)
+		}
+		if metaMap, ok := docMap["metadata"].(map[string]any); ok {
+			if denseScore, ok := metaMap[source.MetadataDenseScore]; ok {
+				fmt.Printf(" dense=%v", denseScore)
+			}
+			if sparseScore, ok := metaMap[source.MetadataSparseScore]; ok {
+				fmt.Printf(" sparse=%v", sparseScore)
+			}
 		}
 		fmt.Println()
 
