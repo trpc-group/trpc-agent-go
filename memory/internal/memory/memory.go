@@ -11,11 +11,15 @@
 package memory
 
 import (
+	"crypto/sha256"
+	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -24,6 +28,35 @@ const (
 	// DefaultMemoryLimit is the default limit of memories per user.
 	DefaultMemoryLimit = 1000
 )
+
+// GenerateMemoryID generates a unique ID for memory based on content and user context.
+// Uses SHA256 hash of memory content, sorted topics, app name, and user ID for consistent ID generation.
+// This ensures that:
+// 1. Same content with different topic order produces the same ID.
+// 2. Different users with same content produce different IDs.
+func GenerateMemoryID(mem *memory.Memory, appName, userID string) string {
+	var builder strings.Builder
+	builder.WriteString("memory:")
+	builder.WriteString(mem.Memory)
+
+	if len(mem.Topics) > 0 {
+		// Sort topics to ensure consistent ordering.
+		sortedTopics := make([]string, len(mem.Topics))
+		copy(sortedTopics, mem.Topics)
+		slices.Sort(sortedTopics)
+		builder.WriteString("|topics:")
+		builder.WriteString(strings.Join(sortedTopics, ","))
+	}
+
+	// Include app name and user ID to prevent cross-user conflicts.
+	builder.WriteString("|app:")
+	builder.WriteString(appName)
+	builder.WriteString("|user:")
+	builder.WriteString(userID)
+
+	hash := sha256.Sum256([]byte(builder.String()))
+	return fmt.Sprintf("%x", hash)
+}
 
 // AllToolCreators contains creators for all valid memory tools.
 // This is shared between different memory service implementations.
@@ -59,6 +92,106 @@ var validToolNames = map[string]struct{}{
 func IsValidToolName(toolName string) bool {
 	_, ok := validToolNames[toolName]
 	return ok
+}
+
+// autoModeDefaultEnabledTools defines default enabled tools for auto memory mode.
+// When extractor is configured, these defaults are applied to enabledTools.
+// In auto mode:
+//   - Add/Delete/Update: run in background by extractor, not exposed to agent.
+//   - Search/Load: can be exposed to agent via Tools().
+//   - Clear: dangerous operation, disabled by default.
+var autoModeDefaultEnabledTools = map[string]bool{
+	memory.AddToolName:    true,  // Enabled for extractor background operations.
+	memory.UpdateToolName: true,  // Enabled for extractor background operations.
+	memory.DeleteToolName: true,  // Enabled for extractor background operations.
+	memory.ClearToolName:  false, // Disabled by default, dangerous operation.
+	memory.SearchToolName: true,  // Enabled and exposed to agent via Tools().
+	memory.LoadToolName:   false, // Disabled by default, can be enabled by user.
+}
+
+// ApplyAutoModeDefaults applies auto mode default enabledTools settings.
+// This function sets auto mode defaults only for tools that haven't been
+// explicitly set by user via WithToolEnabled.
+// User settings take precedence over auto mode defaults regardless of option order.
+// The enabledTools map is modified in place.
+// Parameters:
+//   - enabledTools: map of tool name to enabled status.
+//   - userExplicitlySet: map tracking which tools were explicitly set by user.
+func ApplyAutoModeDefaults(enabledTools, userExplicitlySet map[string]bool) {
+	if enabledTools == nil {
+		return
+	}
+	// Apply auto mode defaults only for tools not explicitly set by user.
+	for toolName, defaultValue := range autoModeDefaultEnabledTools {
+		if userExplicitlySet[toolName] {
+			// User explicitly set this tool, don't override.
+			continue
+		}
+		enabledTools[toolName] = defaultValue
+	}
+}
+
+// BuildToolsList builds the tools list based on configuration.
+// This is a shared implementation for all memory service backends.
+// Parameters:
+//   - ext: the memory extractor (nil for agentic mode).
+//   - toolCreators: map of tool name to creator function.
+//   - enabledTools: map of tool name to enabled status.
+//   - cachedTools: map to cache created tools (will be modified).
+func BuildToolsList(
+	ext extractor.MemoryExtractor,
+	toolCreators map[string]memory.ToolCreator,
+	enabledTools map[string]bool,
+	cachedTools map[string]tool.Tool,
+) []tool.Tool {
+	// Collect tool names and sort for stable order.
+	names := make([]string, 0, len(toolCreators))
+	for name := range toolCreators {
+		if !shouldIncludeTool(name, ext, enabledTools) {
+			continue
+		}
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	tools := make([]tool.Tool, 0, len(names))
+	for _, name := range names {
+		if _, ok := cachedTools[name]; !ok {
+			cachedTools[name] = toolCreators[name]()
+		}
+		tools = append(tools, cachedTools[name])
+	}
+	return tools
+}
+
+// shouldIncludeTool determines if a tool should be included based on mode and settings.
+func shouldIncludeTool(name string, ext extractor.MemoryExtractor, enabledTools map[string]bool) bool {
+	// In auto memory mode, handle auto memory tools with special logic.
+	if ext != nil {
+		return shouldIncludeAutoMemoryTool(name, enabledTools)
+	}
+
+	// In agentic mode, respect enabledTools setting.
+	return enabledTools[name]
+}
+
+// autoModeExposedTools defines which tools can be exposed to agent in auto mode.
+// Only Search and Load are front-end tools; others run in background.
+var autoModeExposedTools = map[string]bool{
+	memory.SearchToolName: true,
+	memory.LoadToolName:   true,
+}
+
+// shouldIncludeAutoMemoryTool checks if an auto memory tool should be included.
+// In auto mode, only Search and Load tools can be exposed to agent.
+// Other tools (Add/Update/Delete/Clear) run in background and are never exposed.
+func shouldIncludeAutoMemoryTool(name string, enabledTools map[string]bool) bool {
+	// Only Search and Load tools can be exposed to agent in auto mode.
+	if !autoModeExposedTools[name] {
+		return false
+	}
+	// Check if the tool is enabled.
+	return enabledTools[name]
 }
 
 // BuildSearchTokens builds tokens for searching memory content.

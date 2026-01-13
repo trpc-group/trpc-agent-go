@@ -170,7 +170,7 @@ func TestVectorStore_Get(t *testing.T) {
 			name:  "document_not_found",
 			docID: "non_existent",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"})
+				rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"})
 				mock.ExpectQuery("SELECT (.+) FROM documents WHERE id").
 					WithArgs("non_existent").
 					WillReturnRows(rows)
@@ -622,7 +622,7 @@ func TestVectorStore_GetMetadata(t *testing.T) {
 		vs, tc := newTestVectorStore(t)
 		defer tc.Close()
 
-		rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"})
+		rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"})
 		tc.mock.ExpectQuery("SELECT .+ FROM documents .+ LIMIT .+ OFFSET").
 			WillReturnRows(rows)
 
@@ -801,8 +801,8 @@ func TestVectorStore_ExecuteSearch_ParseError(t *testing.T) {
 
 	// Mock query that returns invalid data causing parse error
 	tc.mock.ExpectQuery("SELECT (.+) FROM documents").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"}).
-			AddRow("test_001", "Test", "Content", "invalid_json", "{}", 1000000, 2000000, 0.9))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"}).
+			AddRow("test_001", "Test", "Content", "invalid_json", "{}", 1000000, 2000000, 0.9, 0.0, 0.9))
 
 	query := "SELECT * FROM documents"
 	result, err := vs.executeSearch(context.Background(), query, []any{}, vectorstore.SearchModeVector)
@@ -927,9 +927,9 @@ func TestVectorStore_GetAllMetadata_BatchError(t *testing.T) {
 
 	// Create enough rows to trigger a second batch (metadataBatchSize = 5000)
 	// We'll mock the first batch with exactly 5000 rows to trigger continuation
-	rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"})
+	rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"})
 	for i := 0; i < 5000; i++ {
-		rows.AddRow(fmt.Sprintf("test_%d", i), "Test", "Content", "[1.0,0.5,0.2]", `{"key":"value"}`, 1000000, 2000000, 0.0)
+		rows.AddRow(fmt.Sprintf("test_%d", i), "Test", "Content", "[1.0,0.5,0.2]", `{"key":"value"}`, 1000000, 2000000, 0.0, 0.0, 0.0)
 	}
 	tc.mock.ExpectQuery("SELECT (.+) FROM documents").
 		WillReturnRows(rows)
@@ -970,8 +970,8 @@ func TestVectorStore_QueryMetadataBatch_BuildError(t *testing.T) {
 
 	// Mock query that returns invalid embedding data causing parse error
 	tc.mock.ExpectQuery("SELECT (.+) FROM documents").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"}).
-			AddRow("test_001", "Test", "Content", "invalid_vector", "{}", 1000000, 2000000, 0.0))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"}).
+			AddRow("test_001", "Test", "Content", "invalid_vector", "{}", 1000000, 2000000, 0.0, 0.0, 0.0))
 
 	result, err := vs.queryMetadataBatch(context.Background(), 10, 0, nil, nil)
 	require.Error(t, err)

@@ -18,6 +18,8 @@ import (
 type EvalCase struct {
 	// EvalID uniquely identifies this evaluation case.
 	EvalID string `json:"evalId,omitempty"`
+	// ContextMessages contains per-case context messages injected into each inference run.
+	ContextMessages []*model.Message `json:"contextMessages,omitempty"`
 	// Conversation contains the sequence of invocations.
 	Conversation []*Invocation `json:"conversation,omitempty"`
 	// SessionInput contains initialization data for the session.
