@@ -1189,7 +1189,7 @@
         <li class="md-nav__item">
   <a href="#_2" class="md-nav__link">
     <span class="md-ellipsis">
-      过滤器支持
+      搜索模式
     </span>
   </a>
   
@@ -1197,6 +1197,15 @@
       
         <li class="md-nav__item">
   <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      过滤器支持
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
     <span class="md-ellipsis">
       更多内容
     </span>
@@ -1642,7 +1651,7 @@
         <li class="md-nav__item">
   <a href="#_2" class="md-nav__link">
     <span class="md-ellipsis">
-      过滤器支持
+      搜索模式
     </span>
   </a>
   
@@ -1650,6 +1659,15 @@
       
         <li class="md-nav__item">
   <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      过滤器支持
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
     <span class="md-ellipsis">
       更多内容
     </span>
@@ -1730,9 +1748,64 @@
 </tr>
 </tbody>
 </table>
-<h2 id="_2">过滤器支持</h2>
+<h2 id="_2">搜索模式</h2>
+<p>向量存储支持四种搜索模式，系统会根据查询内容<strong>自动选择</strong>最合适的模式：</p>
+<table>
+<thead>
+<tr>
+<th>搜索模式</th>
+<th>枚举值</th>
+<th>说明</th>
+<th>特殊要求</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Vector</strong></td>
+<td><code>SearchModeVector</code></td>
+<td>语义相似度搜索，理解查询意图</td>
+<td>需要 Embedder</td>
+</tr>
+<tr>
+<td><strong>Keyword</strong></td>
+<td><code>SearchModeKeyword</code></td>
+<td>关键词精确匹配，适合专业术语</td>
+<td>PGVector 需启用 <code>WithEnableTSVector(true)</code></td>
+</tr>
+<tr>
+<td><strong>Hybrid</strong></td>
+<td><code>SearchModeHybrid</code></td>
+<td>混合向量和关键词（推荐，默认）</td>
+<td>PGVector 需启用 <code>WithEnableTSVector(true)</code></td>
+</tr>
+<tr>
+<td><strong>Filter</strong></td>
+<td><code>SearchModeFilter</code></td>
+<td>仅按元数据过滤，不计算相似度</td>
+<td>-</td>
+</tr>
+</tbody>
+</table>
+<p><strong>示例</strong>:
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span>
+<span class="normal"><a href="#__codelineno-0-3">3</a></span>
+<span class="normal"><a href="#__codelineno-0-4">4</a></span>
+<span class="normal"><a href="#__codelineno-0-5">5</a></span>
+<span class="normal"><a href="#__codelineno-0-6">6</a></span>
+<span class="normal"><a href="#__codelineno-0-7">7</a></span>
+<span class="normal"><a href="#__codelineno-0-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="c1">// Default automatic search mode selection</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="nx">results</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Search</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;Large language model applications&quot;</span><span class="p">)</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="c1">// Filter by metadata</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">searchfilter</span><span class="p">.</span><span class="nx">NewFilter</span><span class="p">(</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="nx">searchfilter</span><span class="p">.</span><span class="nx">WithMetadata</span><span class="p">(</span><span class="s">&quot;category&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;technical docs&quot;</span><span class="p">),</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="p">)</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="nx">results</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Search</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithSearchFilter</span><span class="p">(</span><span class="nx">filter</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div></p>
+<h2 id="_3">过滤器支持</h2>
 <p>所有向量存储都支持过滤器功能，包括 ID 过滤、元数据过滤和复杂条件过滤（<code>FilterCondition</code>）。</p>
-<h2 id="_3">更多内容</h2>
+<h2 id="_4">更多内容</h2>
 <ul>
 <li><a href="inmemory/">Memory</a> - 内存向量存储配置</li>
 <li><a href="pgvector/">PGVector</a> - PostgreSQL + pgvector 配置</li>
@@ -1763,7 +1836,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月8日 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月13日 03:14:39 UTC">2026-01-13 03:14:39</span>
   </span>
 
     
