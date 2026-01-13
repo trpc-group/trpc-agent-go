@@ -15,11 +15,17 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -531,4 +537,226 @@ func TestSearchMemories_NilUser(t *testing.T) {
 	results, err := service.SearchMemories(ctx, userKey, "query")
 	require.NoError(t, err, "SearchMemories failed")
 	assert.Len(t, results, 0, "Expected 0 results for non-existent user")
+}
+
+// mockExtractor is a mock implementation of extractor.MemoryExtractor.
+type mockExtractor struct {
+	extractCalled bool
+}
+
+func (m *mockExtractor) Extract(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*extractor.Operation, error) {
+	m.extractCalled = true
+	return nil, nil
+}
+
+func (m *mockExtractor) ShouldExtract(ctx *extractor.ExtractionContext) bool {
+	return true
+}
+
+func (m *mockExtractor) SetPrompt(prompt string) {}
+
+func (m *mockExtractor) SetModel(mdl model.Model) {}
+
+func (m *mockExtractor) Metadata() map[string]any {
+	return map[string]any{}
+}
+
+func TestWithExtractor(t *testing.T) {
+	ext := &mockExtractor{}
+	service := NewMemoryService(WithExtractor(ext))
+	require.NotNil(t, service)
+	defer service.Close()
+
+	// Verify auto memory worker is initialized.
+	assert.NotNil(t, service.autoMemoryWorker)
+}
+
+func TestWithAsyncMemoryNum(t *testing.T) {
+	t.Run("valid value", func(t *testing.T) {
+		service := NewMemoryService(WithAsyncMemoryNum(5))
+		require.NotNil(t, service)
+		assert.Equal(t, 5, service.opts.asyncMemoryNum)
+	})
+
+	t.Run("invalid value uses default", func(t *testing.T) {
+		service := NewMemoryService(WithAsyncMemoryNum(0))
+		require.NotNil(t, service)
+		assert.Equal(t, imemory.DefaultAsyncMemoryNum, service.opts.asyncMemoryNum)
+	})
+}
+
+func TestWithMemoryQueueSize(t *testing.T) {
+	t.Run("valid value", func(t *testing.T) {
+		service := NewMemoryService(WithMemoryQueueSize(200))
+		require.NotNil(t, service)
+		assert.Equal(t, 200, service.opts.memoryQueueSize)
+	})
+
+	t.Run("invalid value uses default", func(t *testing.T) {
+		service := NewMemoryService(WithMemoryQueueSize(0))
+		require.NotNil(t, service)
+		assert.Equal(t, imemory.DefaultMemoryQueueSize, service.opts.memoryQueueSize)
+	})
+}
+
+func TestWithMemoryJobTimeout(t *testing.T) {
+	service := NewMemoryService(WithMemoryJobTimeout(time.Minute))
+	require.NotNil(t, service)
+	assert.Equal(t, time.Minute, service.opts.memoryJobTimeout)
+}
+
+func TestEnqueueAutoMemoryJob_NoExtractor(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+	sess := session.NewSession("test-app", "test-user", "test-session")
+
+	// Should return nil when no extractor is configured.
+	err := service.EnqueueAutoMemoryJob(ctx, sess)
+	assert.NoError(t, err)
+}
+
+func TestEnqueueAutoMemoryJob_WithExtractor(t *testing.T) {
+	ext := &mockExtractor{}
+	service := NewMemoryService(
+		WithExtractor(ext),
+		WithAsyncMemoryNum(1),
+		WithMemoryQueueSize(10),
+	)
+	defer service.Close()
+
+	ctx := context.Background()
+	sess := session.NewSession("test-app", "test-user", "test-session")
+	sess.Events = []event.Event{
+		{
+			Timestamp: time.Now(),
+			Response: &model.Response{
+				Choices: []model.Choice{{Message: model.NewUserMessage("hello")}},
+			},
+		},
+	}
+
+	err := service.EnqueueAutoMemoryJob(ctx, sess)
+	assert.NoError(t, err)
+
+	// Wait for async processing.
+	time.Sleep(50 * time.Millisecond)
+	assert.True(t, ext.extractCalled)
+}
+
+func TestClose(t *testing.T) {
+	t.Run("without extractor", func(t *testing.T) {
+		service := NewMemoryService()
+		err := service.Close()
+		assert.NoError(t, err)
+	})
+
+	t.Run("with extractor", func(t *testing.T) {
+		ext := &mockExtractor{}
+		service := NewMemoryService(WithExtractor(ext))
+		err := service.Close()
+		assert.NoError(t, err)
+	})
+}
+
+func TestTools_AutoMemoryMode(t *testing.T) {
+	ext := &mockExtractor{}
+	service := NewMemoryService(WithExtractor(ext))
+	defer service.Close()
+
+	tools := service.Tools()
+
+	// In auto memory mode, Search is enabled by default.
+	assert.Len(t, tools, 1, "Auto mode should return Search tool by default")
+	toolNames := make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	assert.True(t, toolNames[memory.SearchToolName], "Search tool should be returned by default")
+
+	// Enable Load tool explicitly.
+	service = NewMemoryService(
+		WithExtractor(ext),
+		WithToolEnabled(memory.LoadToolName, true),
+	)
+	defer service.Close()
+
+	tools = service.Tools()
+	assert.Len(t, tools, 2, "Auto mode should return Search and Load tools when Load is enabled")
+	toolNames = make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	assert.True(t, toolNames[memory.SearchToolName], "Search tool should be returned")
+	assert.True(t, toolNames[memory.LoadToolName], "Load tool should be returned when enabled")
+	assert.False(t, toolNames[memory.AddToolName], "Add tool should not be exposed via Tools()")
+	assert.False(t, toolNames[memory.ClearToolName], "Clear tool should not be exposed via Tools()")
+}
+
+func TestTools_AutoMemoryMode_OptionOrder(t *testing.T) {
+	ext := &mockExtractor{}
+
+	// Test: WithToolEnabled BEFORE WithExtractor should still work.
+	service := NewMemoryService(
+		WithToolEnabled(memory.LoadToolName, true), // Before WithExtractor.
+		WithExtractor(ext),
+	)
+	defer service.Close()
+
+	tools := service.Tools()
+	toolNames := make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	assert.True(t, toolNames[memory.SearchToolName], "Search should be enabled")
+	assert.True(t, toolNames[memory.LoadToolName], "Load should be enabled even when set before WithExtractor")
+	assert.Len(t, tools, 2)
+
+	// Test: WithToolEnabled AFTER WithExtractor should also work.
+	service2 := NewMemoryService(
+		WithExtractor(ext),
+		WithToolEnabled(memory.LoadToolName, true), // After WithExtractor.
+	)
+	defer service2.Close()
+
+	tools2 := service2.Tools()
+	toolNames2 := make(map[string]bool)
+	for _, tool := range tools2 {
+		toolNames2[tool.Declaration().Name] = true
+	}
+	assert.True(t, toolNames2[memory.SearchToolName], "Search should be enabled")
+	assert.True(t, toolNames2[memory.LoadToolName], "Load should be enabled when set after WithExtractor")
+	assert.Len(t, tools2, 2)
+
+	// Test: Disable Search tool explicitly (before WithExtractor).
+	service3 := NewMemoryService(
+		WithToolEnabled(memory.SearchToolName, false), // Disable Search.
+		WithExtractor(ext),
+	)
+	defer service3.Close()
+
+	tools3 := service3.Tools()
+	assert.Len(t, tools3, 0, "No tools should be returned when Search is disabled")
+}
+
+func TestTools_AgenticMode(t *testing.T) {
+	service := NewMemoryService()
+
+	tools := service.Tools()
+
+	// In agentic mode, all default enabled tools should be returned.
+	assert.Greater(t, len(tools), 1)
+
+	// Verify search tool is included.
+	hasSearch := false
+	for _, tool := range tools {
+		if tool.Declaration().Name == memory.SearchToolName {
+			hasSearch = true
+			break
+		}
+	}
+	assert.True(t, hasSearch)
 }
