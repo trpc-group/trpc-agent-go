@@ -70,6 +70,7 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 	return service, nil
 }
 
+// Close closes the eval service and releases owned resources.
 func (s *local) Close() error {
 	if s.evalCaseInferencePool != nil {
 		s.evalCaseInferencePool.Release()
