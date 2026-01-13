@@ -75,6 +75,103 @@ func TestProcessRequest_IncludeInvocationMessage_WhenNoSession(t *testing.T) {
 	require.True(t, model.MessagesEqual(model.NewUserMessage("hi there"), req.Messages[0]))
 }
 
+func TestProcessRequest_InsertsInjectedContextMessages_AfterSystemMessages(t *testing.T) {
+	requestContext := []model.Message{
+		model.NewSystemMessage("ctx system"),
+		model.NewUserMessage("ctx user"),
+		model.NewAssistantMessage("ctx assistant"),
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-ctx",
+		AgentName:    "test-agent",
+		Session:      &session.Session{},
+		Message:      model.NewUserMessage("hi there"),
+		RunOptions: agent.RunOptions{
+			InjectedContextMessages: requestContext,
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("agent system prompt"),
+			model.NewSystemMessage("session summary"),
+		},
+	}
+	p := NewContentRequestProcessor()
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 2+len(requestContext)+1)
+	require.True(t, model.MessagesEqual(model.NewSystemMessage("agent system prompt"), req.Messages[0]))
+	require.True(t, model.MessagesEqual(model.NewSystemMessage("session summary"), req.Messages[1]))
+	require.True(t, model.MessagesEqual(model.NewSystemMessage("ctx system"), req.Messages[2]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("ctx user"), req.Messages[3]))
+	require.True(t, model.MessagesEqual(model.NewAssistantMessage("ctx assistant"), req.Messages[4]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("hi there"), req.Messages[5]))
+}
+
+func TestProcessRequest_InsertsInjectedContextMessages_WhenNoSystemMessages(t *testing.T) {
+	requestContext := []model.Message{
+		model.NewUserMessage("ctx user"),
+		model.NewAssistantMessage("ctx assistant"),
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-ctx-no-system",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("hi there"),
+		RunOptions: agent.RunOptions{
+			InjectedContextMessages: requestContext,
+		},
+	}
+
+	req := &model.Request{}
+	p := NewContentRequestProcessor()
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, len(requestContext)+1)
+	require.True(t, model.MessagesEqual(model.NewUserMessage("ctx user"), req.Messages[0]))
+	require.True(t, model.MessagesEqual(model.NewAssistantMessage("ctx assistant"), req.Messages[1]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("hi there"), req.Messages[2]))
+}
+
+func TestProcessRequest_InsertsInjectedContextMessages_BeforeSessionHistory(t *testing.T) {
+	requestContext := []model.Message{
+		model.NewSystemMessage("ctx system"),
+		model.NewUserMessage("ctx user"),
+	}
+
+	sess := &session.Session{}
+	sess.Events = append(sess.Events,
+		newSessionEvent("user", model.NewUserMessage("hello")),
+		newSessionEvent("test-agent", model.NewAssistantMessage("hi")),
+	)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-ctx-history",
+		AgentName:    "test-agent",
+		Session:      sess,
+		Message:      model.NewUserMessage("current"),
+		RunOptions: agent.RunOptions{
+			InjectedContextMessages: requestContext,
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{model.NewSystemMessage("agent system prompt")},
+	}
+	p := NewContentRequestProcessor()
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 1+len(requestContext)+3)
+	require.True(t, model.MessagesEqual(model.NewSystemMessage("agent system prompt"), req.Messages[0]))
+	require.True(t, model.MessagesEqual(model.NewSystemMessage("ctx system"), req.Messages[1]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("ctx user"), req.Messages[2]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("hello"), req.Messages[3]))
+	require.True(t, model.MessagesEqual(model.NewAssistantMessage("hi"), req.Messages[4]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("current"), req.Messages[5]))
+}
+
 func TestProcessRequest_NoDuplicateInvocationToolMessage(t *testing.T) {
 	const (
 		requestID   = "req-tool-message"

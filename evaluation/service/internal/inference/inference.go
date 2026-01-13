@@ -30,6 +30,7 @@ func Inference(
 	invocations []*evalset.Invocation,
 	initialSession *evalset.SessionInput,
 	sessionID string,
+	contextMessages []*model.Message,
 ) ([]*evalset.Invocation, error) {
 	if len(invocations) == 0 {
 		return nil, errors.New("invocations are empty")
@@ -40,7 +41,7 @@ func Inference(
 	// Accumulate each invocation response.
 	responseInvocations := make([]*evalset.Invocation, 0, len(invocations))
 	for _, invocation := range invocations {
-		responseInvocation, err := inferenceInvocation(ctx, runner, sessionID, initialSession, invocation)
+		responseInvocation, err := inferenceInvocation(ctx, runner, sessionID, initialSession, invocation, contextMessages)
 		if err != nil {
 			return nil, err
 		}
@@ -56,11 +57,19 @@ func inferenceInvocation(
 	sessionID string,
 	initialSession *evalset.SessionInput,
 	invocation *evalset.Invocation,
+	contextMessages []*model.Message,
 ) (*evalset.Invocation, error) {
 	if invocation.UserContent == nil {
 		return nil, fmt.Errorf("invocation user content is nil for eval case invocation %q", invocation.InvocationID)
 	}
-	events, err := r.Run(ctx, initialSession.UserID, sessionID, *invocation.UserContent, agent.WithRuntimeState(initialSession.State))
+	events, err := r.Run(
+		ctx,
+		initialSession.UserID,
+		sessionID,
+		*invocation.UserContent,
+		agent.WithRuntimeState(initialSession.State),
+		agent.WithInjectedContextMessages(buildSeedMessages(contextMessages)),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
 	}
@@ -151,4 +160,15 @@ func mergeToolResultResponse(event *event.Event, toolIDIdx map[string]int, tools
 		tools[idx].Result = result
 	}
 	return nil
+}
+
+func buildSeedMessages(messages []*model.Message) []model.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	seed := make([]model.Message, 0, len(messages))
+	for _, message := range messages {
+		seed = append(seed, *message)
+	}
+	return seed
 }

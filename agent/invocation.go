@@ -244,11 +244,19 @@ func WithKnowledgeConditionedFilter(filter *searchfilter.UniversalFilterConditio
 // Runner uses this history to auto-seed an empty Session (once) and to
 // populate `invocation.Message` via RunWithMessages for compatibility. The
 // content processor itself does not read this field; it derives messages from
-// Session events (and may fall back to a single `invocation.Message` when the
-// Session is empty).
+// Session events and may fall back to a single `invocation.Message` when the
+// Session is empty.
 func WithMessages(messages []model.Message) RunOption {
 	return func(opts *RunOptions) {
 		opts.Messages = messages
+	}
+}
+
+// WithInjectedContextMessages sets per-run messages that are injected into the
+// model request context but are not persisted into the session transcript.
+func WithInjectedContextMessages(messages []model.Message) RunOption {
+	return func(opts *RunOptions) {
+		opts.InjectedContextMessages = append(opts.InjectedContextMessages, messages...)
 	}
 }
 
@@ -461,6 +469,11 @@ type RunOptions struct {
 	// ignores this field and reads only from Session events (or falls back to
 	// `invocation.Message` when no events exist).
 	Messages []model.Message
+
+	// InjectedContextMessages allows callers to inject additional context messages
+	// into the model request for this run. These messages are not persisted into
+	// session events and therefore must be provided on every run if needed.
+	InjectedContextMessages []model.Message
 
 	// Resume indicates whether this run should attempt to resume from existing
 	// session context before making a new model call. When true, flows may
