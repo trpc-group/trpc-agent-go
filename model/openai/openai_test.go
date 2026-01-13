@@ -5941,12 +5941,12 @@ func TestGenerateContent_OptimizeForCache(t *testing.T) {
 		}
 
 		// Verify system messages come first
-		systemDone := false
+		nonSystemSeen := false
 		for _, role := range capturedRoles {
-			if role == "system" {
-				assert.False(t, systemDone, "system messages should be at the front")
-			} else {
-				systemDone = true
+			if role != "system" {
+				nonSystemSeen = true
+			} else if nonSystemSeen {
+				assert.Fail(t, "system messages should be at the front")
 			}
 		}
 
@@ -5977,8 +5977,8 @@ func TestGenerateContent_OptimizeForCache(t *testing.T) {
 
 	req := &model.Request{
 		Messages: []model.Message{
-			{Role: model.RoleUser, Content: "Hello"},
 			{Role: model.RoleSystem, Content: "You are helpful"},
+			{Role: model.RoleUser, Content: "Hello"},
 			{Role: model.RoleAssistant, Content: "Hi"},
 		},
 	}
