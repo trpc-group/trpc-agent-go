@@ -34,12 +34,9 @@ const (
 		"deleted_at TIMESTAMP NULL DEFAULT NULL" +
 		")"
 
-	sqlCreateAppUserIndexPattern =
-		"CREATE INDEX IF NOT EXISTS %s ON %s(app_name, user_id)"
-	sqlCreateUpdatedAtIndexPattern =
-		"CREATE INDEX IF NOT EXISTS %s ON %s(updated_at DESC)"
-	sqlCreateDeletedAtIndexPattern =
-		"CREATE INDEX IF NOT EXISTS %s ON %s(deleted_at)"
+	sqlCreateAppUserIndexPattern   = "CREATE INDEX IF NOT EXISTS %s ON %s(app_name, user_id)"
+	sqlCreateUpdatedAtIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s(updated_at DESC)"
+	sqlCreateDeletedAtIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s(deleted_at)"
 
 	sqlCreateHNSWIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s USING hnsw " +
 		"(embedding vector_cosine_ops) WITH (m = %d, ef_construction = %d)"

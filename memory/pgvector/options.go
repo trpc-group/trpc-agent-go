@@ -10,7 +10,6 @@
 package pgvector
 
 import (
-	"fmt"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
@@ -46,14 +45,6 @@ const (
 	defaultDBInitTimeout = 30 * time.Second
 )
 
-// VectorIndexType represents the type of vector index to use.
-type VectorIndexType string
-
-const (
-	// VectorIndexHNSW uses Hierarchical Navigable Small World (HNSW) index.
-	VectorIndexHNSW VectorIndexType = "hnsw"
-)
-
 // HNSWIndexParams contains parameters for HNSW index.
 type HNSWIndexParams struct {
 	// M is the maximum number of connections per layer (default: 16, range: 2-100).
@@ -64,14 +55,13 @@ type HNSWIndexParams struct {
 }
 
 var defaultOptions = ServiceOpts{
-	tableName:       defaultTableName,
-	indexDimension:  defaultIndexDimension,
-	maxResults:      defaultMaxResults,
-	memoryLimit:     imemory.DefaultMemoryLimit,
-	toolCreators:    imemory.AllToolCreators,
-	enabledTools:    imemory.DefaultEnabledTools,
-	asyncMemoryNum:  imemory.DefaultAsyncMemoryNum,
-	vectorIndexType: VectorIndexHNSW,
+	tableName:      defaultTableName,
+	indexDimension: defaultIndexDimension,
+	maxResults:     defaultMaxResults,
+	memoryLimit:    imemory.DefaultMemoryLimit,
+	toolCreators:   imemory.AllToolCreators,
+	enabledTools:   imemory.DefaultEnabledTools,
+	asyncMemoryNum: imemory.DefaultAsyncMemoryNum,
 	hnswParams: &HNSWIndexParams{
 		M:              defaultHNSWM,
 		EfConstruction: defaultHNSWEfConstruction,
@@ -99,8 +89,7 @@ type ServiceOpts struct {
 	softDelete     bool
 
 	// Vector index configuration.
-	vectorIndexType VectorIndexType
-	hnswParams      *HNSWIndexParams
+	hnswParams *HNSWIndexParams
 
 	// Tool related settings.
 	toolCreators      map[string]memory.ToolCreator
@@ -158,12 +147,12 @@ func (o ServiceOpts) clone() ServiceOpts {
 // ServiceOpt is the option for the pgvector memory service.
 type ServiceOpt func(*ServiceOpts)
 
-// WithPGVectorClientDSN sets the PostgreSQL DSN connection string directly
+// WithPGVectorClientDSN sets the PostgreSQL DSN connection string directly.
 // (recommended).
 // Example: "postgres://user:password@localhost:5432/dbname?sslmode=disable".
 //
 // Note: WithPGVectorClientDSN has the highest priority.
-// If DSN is specified, other connection settings (WithHost, WithPort, etc.)
+// If DSN is specified, other connection settings (WithHost, WithPort, etc.).
 // will be ignored.
 func WithPGVectorClientDSN(dsn string) ServiceOpt {
 	return func(opts *ServiceOpts) {
@@ -214,7 +203,7 @@ func WithSSLMode(sslMode string) ServiceOpt {
 }
 
 // WithPostgresInstance uses a postgres instance from storage.
-// Note: Direct connection settings (WithHost, WithPort, etc.) have higher
+// Note: Direct connection settings (WithHost, WithPort, etc.) have higher.
 // priority than WithPostgresInstance.
 // If both are specified, direct connection settings will be used.
 func WithPostgresInstance(instanceName string) ServiceOpt {
@@ -255,8 +244,7 @@ func WithMaxResults(maxResults int) ServiceOpt {
 }
 
 // WithSoftDelete enables or disables soft delete behavior.
-// When enabled, delete operations set deleted_at and queries filter deleted
-// rows.
+// When enabled, delete operations set deleted_at and queries filter deleted rows.
 // Default is disabled (hard delete).
 func WithSoftDelete(enabled bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
@@ -286,7 +274,7 @@ func WithCustomTool(toolName string, creator memory.ToolCreator) ServiceOpt {
 
 // WithToolEnabled sets which tool is enabled.
 // If the tool name is invalid, this option will do nothing.
-// User settings via WithToolEnabled take precedence over auto mode defaults,
+// User settings via WithToolEnabled take precedence over auto mode defaults.
 // regardless of option order.
 func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
@@ -313,7 +301,7 @@ func WithExtraOptions(extraOptions ...any) ServiceOpt {
 }
 
 // WithSkipDBInit skips database initialization (table and index creation).
-// Useful when:
+// Useful when.
 // - User doesn't have DDL permissions.
 // - Tables are managed by migration tools.
 // - Running in production environment where schema is pre-created.
@@ -324,8 +312,7 @@ func WithSkipDBInit(skip bool) ServiceOpt {
 }
 
 // WithSchema sets the PostgreSQL schema name where tables will be created.
-// If not set, tables will be created in the default schema (typically
-// "public").
+// If not set, tables will be created in the default schema (typically "public").
 //
 // Note: The schema must already exist in the database before using this option.
 func WithSchema(schema string) ServiceOpt {
@@ -346,7 +333,7 @@ func WithEmbedder(e embedder.Embedder) ServiceOpt {
 }
 
 // WithExtractor sets the memory extractor for auto memory mode.
-// When enabled, auto mode defaults are applied to enabledTools,
+// When enabled, auto mode defaults are applied to enabledTools.
 // but user settings via WithToolEnabled (before or after) take precedence.
 func WithExtractor(e extractor.MemoryExtractor) ServiceOpt {
 	return func(opts *ServiceOpts) {
@@ -378,21 +365,6 @@ func WithMemoryQueueSize(size int) ServiceOpt {
 func WithMemoryJobTimeout(timeout time.Duration) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.memoryJobTimeout = timeout
-	}
-}
-
-// WithVectorIndexType sets the type of vector index to use.
-// Currently only VectorIndexHNSW is supported.
-func WithVectorIndexType(indexType VectorIndexType) ServiceOpt {
-	return func(opts *ServiceOpts) {
-		switch indexType {
-		case "":
-			return
-		case VectorIndexHNSW:
-			opts.vectorIndexType = indexType
-		default:
-			panic(fmt.Sprintf("unsupported vector index type: %s", indexType))
-		}
 	}
 }
 

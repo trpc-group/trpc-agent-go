@@ -7,8 +7,8 @@
 //
 //
 
-// Package pgvector provides a pgvector-based memory service with vector
-// similarity search.
+// Package pgvector provides a pgvector-based memory service.
+// It supports vector similarity search.
 package pgvector
 
 import (
@@ -16,7 +16,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/lib/pq"
@@ -31,19 +30,17 @@ import (
 var _ memory.Service = (*Service)(nil)
 
 // Service is the pgvector memory service.
-// Storage structure:
-//
-//	Table: vector_memories (configurable)
-//	Columns: memory_id, app_name, user_id, memory_content, topics, embedding,
-//	         created_at, updated_at, deleted_at.
-//	Primary Key: memory_id.
-//	Indexes: (app_name, user_id), updated_at, deleted_at, HNSW on embedding.
+// Storage structure.
+// Table: vector_memories (configurable).
+// Columns: memory_id, app_name, user_id, memory_content, topics, embedding.
+// created_at, updated_at, deleted_at.
+// Primary key: memory_id.
+// Indexes: (app_name, user_id), updated_at, deleted_at, HNSW on embedding.
 type Service struct {
 	opts      ServiceOpts
 	db        storage.Client
 	tableName string
 
-	mu               sync.Mutex
 	cachedTools      map[string]tool.Tool
 	precomputedTools []tool.Tool
 	autoMemoryWorker *imemory.AutoMemoryWorker
@@ -180,30 +177,6 @@ func (s *Service) AddMemory(
 		return err
 	}
 
-	// Enforce memory limit if set.
-	if s.opts.memoryLimit > 0 {
-		countQuery := fmt.Sprintf(
-			"SELECT COUNT(*) FROM %s WHERE app_name = $1 AND user_id = $2",
-			s.tableName)
-		if s.opts.softDelete {
-			countQuery += " AND deleted_at IS NULL"
-		}
-		var count int
-		err := s.db.Query(ctx, func(rows *sql.Rows) error {
-			if rows.Next() {
-				return rows.Scan(&count)
-			}
-			return nil
-		}, countQuery, userKey.AppName, userKey.UserID)
-		if err != nil {
-			return fmt.Errorf("pgvector memory service check memory count failed: %w", err)
-		}
-		if count >= s.opts.memoryLimit {
-			return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
-				userKey.UserID, s.opts.memoryLimit, count)
-		}
-	}
-
 	// Generate embedding for the memory content.
 	embedding, err := s.opts.embedder.GetEmbedding(ctx, memoryStr)
 	if err != nil {
@@ -225,23 +198,76 @@ func (s *Service) AddMemory(
 	// Convert embedding to pgvector format.
 	vector := pgvector.NewVector(convertToFloat32(embedding))
 
-	insertQuery := fmt.Sprintf(
-		`INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, embedding,
-			created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (memory_id) DO UPDATE SET
-			memory_content = EXCLUDED.memory_content,
-			topics = EXCLUDED.topics,
-			embedding = EXCLUDED.embedding,
-			deleted_at = NULL,
-			updated_at = EXCLUDED.updated_at`,
-		s.tableName,
-	)
-	_, err = s.db.ExecContext(ctx, insertQuery,
-		memoryID, userKey.AppName, userKey.UserID, memoryStr,
-		pq.Array(topics), vector, now, now)
+	var insertQuery string
+	args := []any{
+		memoryID,
+		userKey.AppName,
+		userKey.UserID,
+		memoryStr,
+		pq.Array(topics),
+		vector,
+		now,
+		now,
+	}
+	if s.opts.memoryLimit > 0 {
+		deletedFilter := ""
+		if s.opts.softDelete {
+			deletedFilter = " AND deleted_at IS NULL"
+		}
+		insertQuery = fmt.Sprintf(
+			"WITH existing AS ("+
+				"SELECT 1 FROM %s "+
+				"WHERE memory_id = $1 AND app_name = $2 AND user_id = $3%s"+
+				"), cnt AS ("+
+				"SELECT COUNT(*) AS c FROM %s "+
+				"WHERE app_name = $2 AND user_id = $3%s"+
+				") "+
+				"INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, "+
+				"embedding, created_at, updated_at) "+
+				"SELECT $1, $2, $3, $4, $5, $6, $7, $8 "+
+				"WHERE (EXISTS (SELECT 1 FROM existing) OR "+
+				"(SELECT c FROM cnt) < $9) "+
+				"ON CONFLICT (memory_id) DO UPDATE SET "+
+				"memory_content = EXCLUDED.memory_content, "+
+				"topics = EXCLUDED.topics, "+
+				"embedding = EXCLUDED.embedding, "+
+				"deleted_at = NULL, "+
+				"updated_at = EXCLUDED.updated_at",
+			s.tableName,
+			deletedFilter,
+			s.tableName,
+			deletedFilter,
+			s.tableName,
+		)
+		args = append(args, s.opts.memoryLimit)
+	} else {
+		insertQuery = fmt.Sprintf(
+			"INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, "+
+				"embedding, created_at, updated_at) "+
+				"VALUES ($1, $2, $3, $4, $5, $6, $7, $8) "+
+				"ON CONFLICT (memory_id) DO UPDATE SET "+
+				"memory_content = EXCLUDED.memory_content, "+
+				"topics = EXCLUDED.topics, "+
+				"embedding = EXCLUDED.embedding, "+
+				"deleted_at = NULL, "+
+				"updated_at = EXCLUDED.updated_at",
+			s.tableName,
+		)
+	}
+
+	res, err := s.db.ExecContext(ctx, insertQuery, args...)
 	if err != nil {
 		return fmt.Errorf("store memory entry failed: %w", err)
+	}
+	if s.opts.memoryLimit > 0 {
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("store memory entry rows affected failed: %w", err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("memory limit exceeded for user %s, limit: %d",
+				userKey.UserID, s.opts.memoryLimit)
+		}
 	}
 
 	return nil
@@ -258,28 +284,6 @@ func (s *Service) UpdateMemory(
 		return err
 	}
 
-	// Check if memory exists.
-	selectQuery := fmt.Sprintf(
-		"SELECT memory_id FROM %s WHERE memory_id = $1 AND app_name = $2 AND user_id = $3",
-		s.tableName,
-	)
-	if s.opts.softDelete {
-		selectQuery += " AND deleted_at IS NULL"
-	}
-	var existingID string
-	err := s.db.Query(ctx, func(rows *sql.Rows) error {
-		if rows.Next() {
-			return rows.Scan(&existingID)
-		}
-		return sql.ErrNoRows
-	}, selectQuery, memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
-		}
-		return fmt.Errorf("get memory entry failed: %w", err)
-	}
-
 	// Generate new embedding for the updated memory content.
 	embedding, err := s.opts.embedder.GetEmbedding(ctx, memoryStr)
 	if err != nil {
@@ -294,18 +298,25 @@ func (s *Service) UpdateMemory(
 	vector := pgvector.NewVector(convertToFloat32(embedding))
 
 	updateQuery := fmt.Sprintf(
-		`UPDATE %s SET memory_content = $1, topics = $2, embedding = $3, updated_at = $4
-		WHERE memory_id = $5 AND app_name = $6 AND user_id = $7`,
+		"UPDATE %s SET memory_content = $1, topics = $2, embedding = $3, "+
+			"updated_at = $4 WHERE memory_id = $5 AND app_name = $6 AND user_id = $7",
 		s.tableName,
 	)
 	if s.opts.softDelete {
 		updateQuery += " AND deleted_at IS NULL"
 	}
-	_, err = s.db.ExecContext(ctx, updateQuery,
+	res, err := s.db.ExecContext(ctx, updateQuery,
 		memoryStr, pq.Array(topics), vector, now,
 		memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
 	if err != nil {
 		return fmt.Errorf("update memory entry failed: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update memory entry rows affected failed: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
 	}
 
 	return nil
@@ -324,8 +335,9 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 	if s.opts.softDelete {
 		now := time.Now()
 		query = fmt.Sprintf(
-			`UPDATE %s SET deleted_at = $1
-			WHERE memory_id = $2 AND app_name = $3 AND user_id = $4 AND deleted_at IS NULL`,
+			"UPDATE %s SET deleted_at = $1 "+
+				"WHERE memory_id = $2 AND app_name = $3 AND user_id = $4 "+
+				"AND deleted_at IS NULL",
 			s.tableName,
 		)
 		args = []any{now, memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID}
@@ -354,8 +366,8 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 	if s.opts.softDelete {
 		now := time.Now()
 		query := fmt.Sprintf(
-			`UPDATE %s SET deleted_at = $1
-			WHERE app_name = $2 AND user_id = $3 AND deleted_at IS NULL`,
+			"UPDATE %s SET deleted_at = $1 "+
+				"WHERE app_name = $2 AND user_id = $3 AND deleted_at IS NULL",
 			s.tableName,
 		)
 		_, err = s.db.ExecContext(ctx, query, now, userKey.AppName, userKey.UserID)
@@ -384,8 +396,8 @@ func (s *Service) ReadMemories(
 	}
 
 	query := fmt.Sprintf(
-		`SELECT memory_id, app_name, user_id, memory_content, topics, created_at, updated_at
-		FROM %s WHERE app_name = $1 AND user_id = $2`,
+		"SELECT memory_id, app_name, user_id, memory_content, topics, created_at, "+
+			"updated_at FROM %s WHERE app_name = $1 AND user_id = $2",
 		s.tableName,
 	)
 	if s.opts.softDelete {
@@ -445,10 +457,9 @@ func (s *Service) SearchMemories(
 	// Use cosine distance for similarity search.
 	// Order by distance ascending (smaller distance = more similar).
 	searchQuery := fmt.Sprintf(
-		`SELECT memory_id, app_name, user_id, memory_content, topics, created_at, updated_at,
-			1 - (embedding <=> $1) AS similarity
-		FROM %s
-		WHERE app_name = $2 AND user_id = $3`,
+		"SELECT memory_id, app_name, user_id, memory_content, topics, created_at, "+
+			"updated_at, 1 - (embedding <=> $1) AS similarity "+
+			"FROM %s WHERE app_name = $2 AND user_id = $3",
 		s.tableName,
 	)
 	if s.opts.softDelete {
@@ -485,9 +496,8 @@ func (s *Service) Tools() []tool.Tool {
 	return s.precomputedTools
 }
 
-// EnqueueAutoMemoryJob enqueues an auto memory extraction job for async
-// processing. The session contains the full transcript and state for
-// incremental extraction.
+// EnqueueAutoMemoryJob enqueues an auto memory extraction job for async processing.
+// The session contains the full transcript and state for incremental extraction.
 func (s *Service) EnqueueAutoMemoryJob(
 	ctx context.Context,
 	sess *session.Session,
@@ -542,8 +552,8 @@ func scanMemoryEntry(rows *sql.Rows) (*memory.Entry, error) {
 	}, nil
 }
 
-// scanMemoryEntryWithSimilarity scans a memory entry with similarity score
-// from database rows.
+// scanMemoryEntryWithSimilarity scans a memory entry with similarity score.
+// It reads the score from database rows.
 func scanMemoryEntryWithSimilarity(rows *sql.Rows) (*memory.Entry, error) {
 	var (
 		memoryID      string
