@@ -12,6 +12,8 @@ package runner
 
 import (
 	"context"
+	"errors"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -247,6 +249,435 @@ func TestMergeEnv_Overrides(t *testing.T) {
 		}
 	}
 	require.True(t, found)
+}
+
+func TestValidateRalphLoopConfig_RequiresStopCondition(t *testing.T) {
+	err := validateRalphLoopConfig(RalphLoopConfig{})
+	require.ErrorIs(t, err, errRalphLoopMissingStopCondition)
+}
+
+func TestNormalizeRalphLoopConfig_DefaultsApplied(t *testing.T) {
+	cfg := normalizeRalphLoopConfig(RalphLoopConfig{})
+	require.Equal(t, defaultRalphMaxIterations, cfg.MaxIterations)
+	require.Equal(t, defaultPromiseTagOpen, cfg.PromiseTagOpen)
+	require.Equal(t, defaultPromiseTagClose, cfg.PromiseTagClose)
+}
+
+func TestWrapAgentsWithRalphLoop_NoopOnEmptyMap(t *testing.T) {
+	wrapAgentsWithRalphLoop(nil, RalphLoopConfig{CompletionPromise: "DONE"})
+
+	agents := map[string]agent.Agent{
+		"nil": nil,
+		"a":   &infoAgent{info: agent.Info{Name: "a"}},
+	}
+	wrapAgentsWithRalphLoop(agents, RalphLoopConfig{CompletionPromise: "DONE"})
+	_, ok := agents["a"].(*ralphLoopAgent)
+	require.True(t, ok)
+	require.Nil(t, agents["nil"])
+}
+
+type toolDecl struct {
+	name string
+}
+
+func (t toolDecl) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
+
+type infoAgent struct {
+	info       agent.Info
+	tools      []tool.Tool
+	subAgents  []agent.Agent
+	subByName  map[string]agent.Agent
+	runErr     error
+	runContent string
+}
+
+func (a *infoAgent) Info() agent.Info { return a.info }
+
+func (a *infoAgent) Tools() []tool.Tool { return a.tools }
+
+func (a *infoAgent) SubAgents() []agent.Agent { return a.subAgents }
+
+func (a *infoAgent) FindSubAgent(name string) agent.Agent {
+	if a.subByName == nil {
+		return nil
+	}
+	return a.subByName[name]
+}
+
+func (a *infoAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	if a.runErr != nil {
+		return nil, a.runErr
+	}
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		evt := event.NewResponseEvent(
+			inv.InvocationID,
+			a.info.Name,
+			&model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: a.runContent,
+					},
+				}},
+			},
+		)
+		agent.InjectIntoEvent(inv, evt)
+		_ = event.EmitEvent(ctx, ch, evt)
+	}()
+	return ch, nil
+}
+
+func TestWrapAgentWithRalphLoop_NilAndAlreadyWrapped(t *testing.T) {
+	cfg := RalphLoopConfig{CompletionPromise: "DONE"}
+	require.Nil(t, wrapAgentWithRalphLoop(nil, cfg))
+
+	ag := &infoAgent{info: agent.Info{Name: "a"}}
+	wrapped := wrapAgentWithRalphLoop(ag, cfg)
+	_, ok := wrapped.(*ralphLoopAgent)
+	require.True(t, ok)
+
+	wrappedAgain := wrapAgentWithRalphLoop(wrapped, cfg)
+	require.Same(t, wrapped, wrappedAgain)
+}
+
+func TestRalphLoopAgent_InfoAndDelegation(t *testing.T) {
+	sub := &infoAgent{info: agent.Info{Name: "sub"}}
+	ag := &infoAgent{
+		info: agent.Info{Name: "a"},
+		tools: []tool.Tool{
+			toolDecl{name: "t"},
+		},
+		subAgents: []agent.Agent{sub},
+		subByName: map[string]agent.Agent{"sub": sub},
+	}
+
+	wrapped := wrapAgentWithRalphLoop(
+		ag,
+		RalphLoopConfig{CompletionPromise: "DONE"},
+	)
+	rl, ok := wrapped.(*ralphLoopAgent)
+	require.True(t, ok)
+
+	info := rl.Info()
+	require.Equal(t, "a", info.Name)
+	require.Equal(t, "Ralph loop enabled", info.Description)
+
+	require.Len(t, rl.Tools(), 1)
+	require.Len(t, rl.SubAgents(), 1)
+	require.Same(t, sub, rl.FindSubAgent("sub"))
+	require.Nil(t, rl.FindSubAgent("missing"))
+}
+
+func TestRalphLoopAgent_DelegationNilSafety(t *testing.T) {
+	var nilAgent *ralphLoopAgent
+	require.Equal(t, agent.Info{}, nilAgent.Info())
+	require.Nil(t, nilAgent.Tools())
+	require.Nil(t, nilAgent.SubAgents())
+	require.Nil(t, nilAgent.FindSubAgent("x"))
+
+	innerNil := &ralphLoopAgent{}
+	require.Equal(t, agent.Info{}, innerNil.Info())
+	require.Nil(t, innerNil.Tools())
+	require.Nil(t, innerNil.SubAgents())
+	require.Nil(t, innerNil.FindSubAgent("x"))
+}
+
+func TestRalphLoopAgent_Info_AppendsDescription(t *testing.T) {
+	ag := &infoAgent{
+		info: agent.Info{
+			Name:        "a",
+			Description: "base",
+		},
+	}
+	wrapped := wrapAgentWithRalphLoop(
+		ag,
+		RalphLoopConfig{CompletionPromise: "DONE"},
+	)
+	info := wrapped.Info()
+	require.Equal(t, "base (ralph loop)", info.Description)
+}
+
+func TestFirstTagTextInString_EdgeCases(t *testing.T) {
+	_, ok := firstTagTextInString("x", "", "</promise>")
+	require.False(t, ok)
+
+	_, ok = firstTagTextInString("x", "<promise>", "")
+	require.False(t, ok)
+
+	_, ok = firstTagTextInString("x", "<promise>", "</promise>")
+	require.False(t, ok)
+
+	_, ok = firstTagTextInString("<promise>", "<promise>", "</promise>")
+	require.False(t, ok)
+}
+
+func TestFirstTagText_ContentParts(t *testing.T) {
+	partText := "<promise>DONE</promise>"
+	evt := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ContentParts: []model.ContentPart{
+						{
+							Type: model.ContentTypeText,
+							Text: &partText,
+						},
+					},
+				},
+			}},
+		},
+	}
+	got, ok := firstTagText(evt, "<promise>", "</promise>")
+	require.True(t, ok)
+	require.Equal(t, "DONE", got)
+}
+
+func TestFirstTagText_SkipsNonAssistant(t *testing.T) {
+	evt := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{Message: model.Message{Role: model.RoleUser, Content: "x"}},
+				{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "<promise>DONE</promise>",
+					},
+				},
+			},
+		},
+	}
+	got, ok := firstTagText(evt, "<promise>", "</promise>")
+	require.True(t, ok)
+	require.Equal(t, "DONE", got)
+}
+
+func TestTextFromContentParts_IgnoresNonText(t *testing.T) {
+	a := "a"
+	b := "b"
+	out := textFromContentParts([]model.ContentPart{
+		{Type: model.ContentTypeText},
+		{Type: model.ContentTypeImage},
+		{Type: model.ContentTypeText, Text: &a},
+		{Type: model.ContentTypeText, Text: &b},
+	})
+	require.Equal(t, "a\nb", out)
+}
+
+func TestNormalizePromiseText_Whitespace(t *testing.T) {
+	require.Equal(t, "a b", normalizePromiseText(" a \n b\t"))
+	require.Equal(t, "", normalizePromiseText(" \n\t"))
+}
+
+func TestFormatCommandFailure_IncludesOutput(t *testing.T) {
+	msg := formatCommandFailure("cmd", RalphLoopCommandResult{
+		ExitCode: 7,
+		Stdout:   "out",
+		Stderr:   "err",
+		TimedOut: true,
+	})
+	require.Contains(t, msg, "Exit code: 7")
+	require.Contains(t, msg, "Stdout:")
+	require.Contains(t, msg, "out")
+	require.Contains(t, msg, "Stderr:")
+	require.Contains(t, msg, "err")
+	require.Contains(t, msg, "timed out")
+}
+
+func TestHostRalphLoopRunner_Run(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("host runner uses bash")
+	}
+
+	r := hostRalphLoopRunner{}
+	okRes, err := r.Run(context.Background(), RalphLoopCommandSpec{
+		Command: "echo hello",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, okRes.ExitCode)
+	require.Contains(t, okRes.Stdout, "hello")
+
+	failRes, err := r.Run(context.Background(), RalphLoopCommandSpec{
+		Command: "exit 7",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 7, failRes.ExitCode)
+
+	_, err = r.Run(context.Background(), RalphLoopCommandSpec{})
+	require.Error(t, err)
+}
+
+func TestHostRalphLoopRunner_RunTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("host runner uses bash")
+	}
+
+	r := hostRalphLoopRunner{}
+	res, err := r.Run(context.Background(), RalphLoopCommandSpec{
+		Command: "sleep 1",
+		Timeout: 50 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	require.True(t, res.TimedOut)
+}
+
+func TestPromiseSatisfied_EmptyExpected(t *testing.T) {
+	ag := &ralphLoopAgent{
+		cfg: normalizeRalphLoopConfig(RalphLoopConfig{}),
+	}
+	require.True(t, ag.promiseSatisfied(nil))
+}
+
+func TestNewInnerInvocation_NilBase(t *testing.T) {
+	ag := &ralphLoopAgent{}
+	require.Nil(t, ag.newInnerInvocation(nil))
+}
+
+type errVerifyRunner struct{}
+
+func (errVerifyRunner) Run(
+	_ context.Context,
+	_ RalphLoopCommandSpec,
+) (RalphLoopCommandResult, error) {
+	return RalphLoopCommandResult{}, errors.New("boom")
+}
+
+func TestCommandSatisfied_ReportsRunnerError(t *testing.T) {
+	ag := &ralphLoopAgent{
+		cfg: normalizeRalphLoopConfig(RalphLoopConfig{
+			VerifyCommand: "go test ./...",
+			VerifyRunner:  errVerifyRunner{},
+		}),
+	}
+	ok, report := ag.commandSatisfied(context.Background())
+	require.False(t, ok)
+	require.Contains(t, report, "Verify command failed:")
+	require.Contains(t, report, "Error: boom")
+}
+
+func TestAppendFeedback_NoSessionNoop(t *testing.T) {
+	ag := &ralphLoopAgent{
+		cfg: normalizeRalphLoopConfig(RalphLoopConfig{CompletionPromise: "DONE"}),
+	}
+	base := agent.NewInvocation(agent.WithInvocationBranch("b"))
+	require.NoError(t, ag.appendFeedback(
+		context.Background(),
+		base,
+		1,
+		"msg",
+	))
+}
+
+func TestAppendFeedback_NoAppenderAttached(t *testing.T) {
+	ag := &ralphLoopAgent{
+		cfg: normalizeRalphLoopConfig(RalphLoopConfig{CompletionPromise: "DONE"}),
+	}
+	base := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationBranch("b"),
+	)
+	err := ag.appendFeedback(context.Background(), base, 1, "msg")
+	require.Error(t, err)
+}
+
+func TestRunLoop_AppendFeedbackErrorEmitsStopError(t *testing.T) {
+	base := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationBranch("branch"),
+	)
+	inner := &infoAgent{
+		info:       agent.Info{Name: "worker"},
+		runContent: "not done",
+	}
+	ag := &ralphLoopAgent{
+		inner: inner,
+		cfg: normalizeRalphLoopConfig(RalphLoopConfig{
+			MaxIterations:     1,
+			CompletionPromise: "DONE",
+		}),
+	}
+
+	out := make(chan *event.Event, 16)
+	ag.runLoop(context.Background(), base, out)
+
+	stopErr := 0
+	for e := range out {
+		if e == nil || e.Error == nil {
+			continue
+		}
+		if e.Error.Type == agent.ErrorTypeStopAgentError {
+			stopErr++
+			require.Contains(t, e.Error.Message, "session appender")
+		}
+	}
+	require.Equal(t, 1, stopErr)
+}
+
+func TestRalphLoop_RunRejectsNilInvocation(t *testing.T) {
+	ag := wrapAgentWithRalphLoop(
+		&infoAgent{info: agent.Info{Name: "a"}},
+		RalphLoopConfig{CompletionPromise: "DONE"},
+	)
+	_, err := ag.Run(context.Background(), nil)
+	require.Error(t, err)
+}
+
+func TestRalphLoop_RunRejectsNilInner(t *testing.T) {
+	ag := &ralphLoopAgent{
+		cfg: normalizeRalphLoopConfig(
+			RalphLoopConfig{CompletionPromise: "DONE"},
+		),
+	}
+	_, err := ag.Run(context.Background(), &agent.Invocation{})
+	require.Error(t, err)
+}
+
+func TestRalphLoop_InnerRunErrorStops(t *testing.T) {
+	svc := sessioninmemory.NewSessionService()
+	base := &infoAgent{
+		info:   agent.Info{Name: "worker"},
+		runErr: errors.New("boom"),
+	}
+	r := NewRunner(
+		"app",
+		base,
+		WithSessionService(svc),
+		WithRalphLoop(RalphLoopConfig{
+			MaxIterations:     2,
+			CompletionPromise: "DONE",
+		}),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	ch, err := r.Run(
+		ctx,
+		"u",
+		"s",
+		model.Message{Role: model.RoleUser, Content: "task"},
+	)
+	require.NoError(t, err)
+
+	stopErr := 0
+	for e := range ch {
+		if e == nil || e.Error == nil {
+			continue
+		}
+		if e.Error.Type == agent.ErrorTypeStopAgentError {
+			stopErr++
+		}
+	}
+	require.Equal(t, 1, stopErr)
 }
 
 func mustGetSession(

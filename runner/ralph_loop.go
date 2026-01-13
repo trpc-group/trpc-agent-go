@@ -548,6 +548,8 @@ func (hostRalphLoopRunner) Run(
 		defer cancel()
 	}
 
+	// #nosec G204 — VerifyCommand is configured by a trusted caller.
+	// For untrusted input, provide a sandboxed VerifyRunner.
 	cmd := exec.CommandContext(
 		runCtx,
 		ralphVerifyShell,
