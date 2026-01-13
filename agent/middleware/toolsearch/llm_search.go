@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 
+	oteltrace "go.opentelemetry.io/otel/trace"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -99,14 +101,40 @@ type searchToolResponse struct {
 func searchTools(ctx context.Context, m model.Model, req *model.Request, tools map[string]tool.Tool) (results []string, err error) {
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(m.Info().Name))
 	defer span.End()
-	invocation, ok := agent.InvocationFromContext(ctx)
-	if ok || invocation == nil {
-		invocation = agent.NewInvocation()
-	}
+	invocation := invocationFromContextOrNew(ctx)
 	timingInfo := invocation.GetOrCreateTimingInfo()
 	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, req, timingInfo, &err)
 	defer tracker.RecordMetrics()()
 
+	final, err := generateFinalResponse(ctx, m, req)
+	if err != nil {
+		return nil, err
+	}
+	content, err := extractFirstChoiceContent(final)
+	if err != nil {
+		return nil, err
+	}
+
+	trackAndTraceToolSearch(span, tracker, invocation, req, final, timingInfo)
+
+	parsed, err := parseSearchToolResponse(content)
+	if err != nil {
+		return nil, err
+	}
+	return validateAndDedupeSelectedTools(parsed.Tools, tools)
+}
+
+func invocationFromContextOrNew(ctx context.Context) *agent.Invocation {
+	invocation, ok := agent.InvocationFromContext(ctx)
+	// Preserve existing behavior: a new invocation is created when `ok` is true,
+	// or when the invocation is missing.
+	if ok || invocation == nil {
+		invocation = agent.NewInvocation()
+	}
+	return invocation
+}
+
+func generateFinalResponse(ctx context.Context, m model.Model, req *model.Request) (*model.Response, error) {
 	respCh, err := m.GenerateContent(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("searching tools: model call failed: %w", err)
@@ -127,47 +155,68 @@ func searchTools(ctx context.Context, m model.Model, req *model.Request, tools m
 	if final == nil || len(final.Choices) == 0 {
 		return nil, fmt.Errorf("searching tools: model returned empty response")
 	}
+	return final, nil
+}
+
+func extractFirstChoiceContent(final *model.Response) (string, error) {
 	content := strings.TrimSpace(final.Choices[0].Message.Content)
 	if content == "" {
 		content = strings.TrimSpace(final.Choices[0].Delta.Content)
 	}
 	if content == "" {
-		return nil, fmt.Errorf("searching tools: model returned empty content")
+		return "", fmt.Errorf("searching tools: model returned empty content")
 	}
+	return content, nil
+}
 
+func trackAndTraceToolSearch(
+	span oteltrace.Span,
+	tracker *itelemetry.ChatMetricsTracker,
+	invocation *agent.Invocation,
+	req *model.Request,
+	final *model.Response,
+	timingInfo *model.TimingInfo,
+) {
 	tracker.TrackResponse(final)
 	if final.Usage == nil {
 		final.Usage = &model.Usage{}
 	}
 	final.Usage.TimingInfo = timingInfo
 	itelemetry.TraceChat(span, invocation, req, final, "", tracker.FirstTokenTimeDuration())
+}
 
+func parseSearchToolResponse(content string) (searchToolResponse, error) {
 	var parsed searchToolResponse
-	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+	if err := json.Unmarshal([]byte(content), &parsed); err == nil {
+		return parsed, nil
+	} else {
 		// Best-effort: extract a JSON object from surrounding text.
 		start := strings.Index(content, "{")
 		end := strings.LastIndex(content, "}")
 		if start >= 0 && end > start {
-			if err2 := json.Unmarshal([]byte(content[start:end+1]), &parsed); err2 != nil {
-				return nil, fmt.Errorf(
+			if err2 := json.Unmarshal([]byte(content[start:end+1]), &parsed); err2 == nil {
+				return parsed, nil
+			} else {
+				return searchToolResponse{}, fmt.Errorf(
 					"searching tools: failed to parse selection JSON: %w",
 					errors.Join(err, err2),
 				)
 			}
-		} else {
-			return nil, fmt.Errorf("searching tools: failed to parse selection JSON: %w", err)
 		}
+		return searchToolResponse{}, fmt.Errorf("searching tools: failed to parse selection JSON: %w", err)
 	}
+}
 
+func validateAndDedupeSelectedTools(parsed []string, tools map[string]tool.Tool) ([]string, error) {
 	valid := make(map[string]bool, len(tools))
 	for name := range tools {
 		valid[name] = true
 	}
 
-	selected := make([]string, 0, len(parsed.Tools))
-	seen := make(map[string]bool, len(parsed.Tools))
+	selected := make([]string, 0, len(parsed))
+	seen := make(map[string]bool, len(parsed))
 	invalid := make([]string, 0)
-	for _, n := range parsed.Tools {
+	for _, n := range parsed {
 		if !valid[n] {
 			invalid = append(invalid, n)
 			continue
