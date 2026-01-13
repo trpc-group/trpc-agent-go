@@ -80,7 +80,7 @@ func TestService_EnqueueSummaryJob_Invalid(t *testing.T) {
 	// Nil session
 	err := s.EnqueueSummaryJob(ctx, nil, "", false)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "nil session")
+	assert.Contains(t, err.Error(), "session is nil")
 }
 
 func TestService_CreateSessionSummary_Invalid(t *testing.T) {
@@ -93,5 +93,5 @@ func TestService_CreateSessionSummary_Invalid(t *testing.T) {
 	// Nil session
 	err := s.CreateSessionSummary(ctx, nil, "", false)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "nil session")
+	assert.Contains(t, err.Error(), "session is nil")
 }
