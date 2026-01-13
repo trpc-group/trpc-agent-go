@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -53,12 +54,17 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 	if a.numRuns <= 0 {
 		return nil, errors.New("num runs must be greater than 0")
 	}
+	if opts.evalCaseParallelInferenceEnabled && opts.evalCaseParallelism <= 0 {
+		return nil, errors.New("eval case parallelism must be greater than 0")
+	}
 	if a.evalService == nil {
 		evalService, err := local.New(
 			a.runner,
 			service.WithEvalSetManager(a.evalSetManager),
 			service.WithEvalResultManager(a.evalResultManager),
 			service.WithRegistry(a.registry),
+			service.WithEvalCaseParallelism(opts.evalCaseParallelism),
+			service.WithEvalCaseParallelInferenceEnabled(opts.evalCaseParallelInferenceEnabled),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("create eval service: %w", err)
@@ -124,6 +130,17 @@ func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string) (*Evalu
 
 // collectCaseResults runs evaluation on the specified eval set across multiple runs and groups results by case ID.
 func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID string) ([]*EvaluationCaseResult, error) {
+	// Determine eval case ordering from the eval set definition when possible.
+	evalSetIndex := make(map[string]int)
+	if a.evalSetManager != nil {
+		evalSet, err := a.evalSetManager.Get(ctx, a.appName, evalSetID)
+		if err != nil {
+			return nil, fmt.Errorf("get eval set: %w", err)
+		}
+		for i, evalCase := range evalSet.EvalCases {
+			evalSetIndex[evalCase.EvalID] = i
+		}
+	}
 	// Due to multiple runs, an evaluation case may be evaluated multiple times and generate multiple evaluation
 	// case results. So EvalCaseResults need to be grouped by case ID.
 	// caseResultsByID is a map from case ID to a list of eval case results.
@@ -148,6 +165,17 @@ func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID strin
 		}
 		evalCaseResults = append(evalCaseResults, evalCaseResult)
 	}
+	sort.SliceStable(evalCaseResults, func(i, j int) bool {
+		leftIndex, leftOK := evalSetIndex[evalCaseResults[i].EvalCaseID]
+		rightIndex, rightOK := evalSetIndex[evalCaseResults[j].EvalCaseID]
+		if leftOK && rightOK {
+			return leftIndex < rightIndex
+		}
+		if leftOK != rightOK {
+			return leftOK
+		}
+		return evalCaseResults[i].EvalCaseID < evalCaseResults[j].EvalCaseID
+	})
 	return evalCaseResults, nil
 }
 

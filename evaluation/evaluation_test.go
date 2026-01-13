@@ -76,6 +76,10 @@ func (f *fakeService) Evaluate(ctx context.Context, req *service.EvaluateRequest
 	}, nil
 }
 
+func (f *fakeService) Close() error {
+	return nil
+}
+
 type fakeMetricManager struct {
 	listErr error
 	getErr  error
@@ -197,6 +201,10 @@ func TestAgentEvaluatorEvaluateSuccess(t *testing.T) {
 	err := metricMgr.Add(ctx, appName, evalSetID, &metric.EvalMetric{MetricName: metricName, Threshold: 1})
 	assert.NoError(t, err)
 
+	evalSetMgr := evalsetinmemory.New()
+	_, err = evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
 	svc := &fakeService{
 		inferenceResults: [][]*service.InferenceResult{
 			{{
@@ -238,7 +246,7 @@ func TestAgentEvaluatorEvaluateSuccess(t *testing.T) {
 		appName,
 		stubRunner{},
 		WithMetricManager(metricMgr),
-		WithEvalSetManager(evalsetinmemory.New()),
+		WithEvalSetManager(evalSetMgr),
 		WithRegistry(registry.New()),
 		WithEvaluationService(svc),
 		WithNumRuns(2),
