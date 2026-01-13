@@ -10,6 +10,7 @@
 package csv
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,7 +19,90 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
+
+type errorTransformer struct {
+	preprocessErr  error
+	postprocessErr error
+}
+
+func (e *errorTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	if e.preprocessErr != nil {
+		return nil, e.preprocessErr
+	}
+	return docs, nil
+}
+
+func (e *errorTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	if e.postprocessErr != nil {
+		return nil, e.postprocessErr
+	}
+	return docs, nil
+}
+
+func (e *errorTransformer) Name() string { return "ErrorTransformer" }
+
+func TestCSVReader_TransformerErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		transformer *errorTransformer
+		wantErr     string
+	}{
+		{
+			name:        "preprocess error",
+			transformer: &errorTransformer{preprocessErr: errors.New("preprocess failed")},
+			wantErr:     "failed to apply preprocess",
+		},
+		{
+			name:        "postprocess error",
+			transformer: &errorTransformer{postprocessErr: errors.New("postprocess failed")},
+			wantErr:     "failed to apply postprocess",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rdr := New(reader.WithTransformers(tt.transformer))
+			csvData := "col1,col2\nval1,val2"
+
+			// Test ReadFromReader
+			_, err := rdr.ReadFromReader("test", strings.NewReader(csvData))
+			if err == nil {
+				t.Error("ReadFromReader expected error, got nil")
+			} else if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("ReadFromReader expected error containing %q, got %q", tt.wantErr, err.Error())
+			}
+
+			// Test ReadFromFile
+			tmp, _ := os.CreateTemp(t.TempDir(), "*.csv")
+			tmp.WriteString(csvData)
+			tmp.Close()
+			_, err = rdr.ReadFromFile(tmp.Name())
+			if err == nil {
+				t.Error("ReadFromFile expected error, got nil")
+			} else if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("ReadFromFile expected error containing %q, got %q", tt.wantErr, err.Error())
+			}
+		})
+	}
+}
+
+func TestCSVReader_WithTransformers(t *testing.T) {
+	data := "name,age\nAlice,30\n"
+
+	// Transformer that changes "Alice" to "Bob"
+	t1 := transform.NewCharDedup(",") // Dummy transform to verify integration
+
+	rdr := New(reader.WithTransformers(t1))
+	docs, err := rdr.ReadFromReader("test", strings.NewReader(data))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected docs")
+	}
+}
 
 func TestCSVReader_Read_NoChunk(t *testing.T) {
 	data := "name,age\nAlice,30\nBob,25\n"
@@ -64,6 +148,24 @@ func TestCSVReader_ChunkingAndHelpers(t *testing.T) {
 	name := rdr.extractFileNameFromURL("https://example.com/path/data.csv?version=1#top")
 	if name != "data" {
 		t.Errorf("extractFileNameFromURL got %s", name)
+	}
+}
+
+// mockErrorChunker implements chunking.Strategy returning error.
+type mockErrorChunker struct{}
+
+func (m mockErrorChunker) Chunk(doc *document.Document) ([]*document.Document, error) {
+	return nil, errors.New("chunking error")
+}
+
+func TestCSVReader_ChunkError(t *testing.T) {
+	rdr := New(reader.WithCustomChunkingStrategy(mockErrorChunker{}))
+	_, err := rdr.ReadFromReader("test", strings.NewReader("a,b\n1,2"))
+	if err == nil {
+		t.Error("expected chunking error")
+	}
+	if !strings.Contains(err.Error(), "chunking error") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -190,6 +292,7 @@ func TestCSVReader_ExtractFileNameFromURL(t *testing.T) {
 	}{
 		{"simple_filename", "https://example.com/data.csv", "data"},
 		{"with_query_params", "https://example.com/export.csv?format=csv", "export"},
+		{"with_fragment", "https://example.com/data.csv#table1", "data"},
 		{"root_path", "https://example.com/", ""},
 	}
 

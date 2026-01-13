@@ -32,6 +32,82 @@ func (m *mockChunkingStrategy) Chunk(doc *document.Document) ([]*document.Docume
 	return []*document.Document{doc}, nil
 }
 
+type mockTransformer struct{}
+
+func (m *mockTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func (m *mockTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func (m *mockTransformer) Name() string {
+	return "MockTransformer"
+}
+
+func TestWithTransformers(t *testing.T) {
+	t1 := &mockTransformer{}
+	src := New([]string{"test"}, WithTransformers(t1))
+
+	if len(src.transformers) != 1 {
+		t.Fatalf("expected 1 transformer, got %d", len(src.transformers))
+	}
+}
+
+func TestTransformerPropagation(t *testing.T) {
+	ctx := context.Background()
+	t1 := &mockTransformer{}
+
+	// 1. Test propagation to URL source
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte("content"))
+	}))
+	defer ts.Close()
+
+	srcURL := New([]string{ts.URL}, WithTransformers(t1))
+	if _, err := srcURL.ReadDocuments(ctx); err != nil {
+		t.Fatalf("URL ReadDocuments failed: %v", err)
+	}
+
+	// 2. Test propagation to File source
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "test.txt")
+	os.WriteFile(tmpFile, []byte("content"), 0600)
+
+	srcFile := New([]string{tmpFile}, WithTransformers(t1))
+	if _, err := srcFile.ReadDocuments(ctx); err != nil {
+		t.Fatalf("File ReadDocuments failed: %v", err)
+	}
+
+	// 3. Test propagation to Directory source
+	srcDir := New([]string{tmpDir}, WithTransformers(t1))
+	if _, err := srcDir.ReadDocuments(ctx); err != nil {
+		t.Fatalf("Dir ReadDocuments failed: %v", err)
+	}
+}
+
+func TestMetadataPropagationToURLSource(t *testing.T) {
+	ctx := context.Background()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("content"))
+	}))
+	defer ts.Close()
+
+	src := New([]string{ts.URL}, WithMetadataValue("key", "val"))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected docs")
+	}
+	if docs[0].Metadata["key"] != "val" {
+		t.Errorf("metadata not propagated to URL source docs")
+	}
+}
+
 // TestReadDocuments verifies Auto Source handles plain text input with and
 // without custom chunk configuration.
 func TestReadDocuments(t *testing.T) {
