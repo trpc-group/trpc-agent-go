@@ -526,13 +526,63 @@ func TestConvertTools_UsesOutputSchemaInDescription(t *testing.T) {
 // TestModel_Callbacks tests that callback functions are properly called with
 // the correct parameters including the request parameter.
 func TestModel_Callbacks(t *testing.T) {
-	// Skip this test if no API key is provided.
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		t.Skip("OPENAI_API_KEY not set, skipping integration test")
+	newNonStreamingServer := func(t *testing.T) *httptest.Server {
+		t.Helper()
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{
+				"id": "test",
+				"object": "chat.completion",
+				"created": 1699200000,
+				"model": "gpt-3.5-turbo",
+				"choices": [
+					{
+						"index": 0,
+						"message": {
+							"role": "assistant",
+							"content": "ok"
+						},
+						"finish_reason": "stop"
+					}
+				]
+			}`)
+		}))
+	}
+
+	newStreamingServer := func(t *testing.T) *httptest.Server {
+		t.Helper()
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+
+			chunks := []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]}`,
+				`data: [DONE]`,
+			}
+			for _, chunk := range chunks {
+				fmt.Fprintf(w, "%s\n\n", chunk)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		}))
 	}
 
 	t.Run("chat request callback", func(t *testing.T) {
+		server := newNonStreamingServer(t)
+		defer server.Close()
+
 		var capturedRequest *openaigo.ChatCompletionNewParams
 		var capturedCtx context.Context
 		callbackCalled := make(chan struct{})
@@ -544,7 +594,8 @@ func TestModel_Callbacks(t *testing.T) {
 		}
 
 		m := New("gpt-3.5-turbo",
-			WithAPIKey(apiKey),
+			WithBaseURL(server.URL),
+			WithAPIKey("test-key"),
 			WithChatRequestCallback(requestCallback),
 		)
 
@@ -564,7 +615,7 @@ func TestModel_Callbacks(t *testing.T) {
 		// Wait for callback to be called.
 		select {
 		case <-callbackCalled:
-		case <-time.After(10 * time.Second):
+		case <-time.After(3 * time.Second):
 			require.Fail(t, "timeout waiting for request callback")
 		}
 
@@ -582,18 +633,24 @@ func TestModel_Callbacks(t *testing.T) {
 	})
 
 	t.Run("chat response callback", func(t *testing.T) {
+		server := newNonStreamingServer(t)
+		defer server.Close()
+
 		var capturedRequest *openaigo.ChatCompletionNewParams
 		var capturedCtx context.Context
+		var capturedResponse *openaigo.ChatCompletion
 		callbackCalled := make(chan struct{})
 
 		responseCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams, resp *openaigo.ChatCompletion) {
 			capturedCtx = ctx
 			capturedRequest = req
+			capturedResponse = resp
 			close(callbackCalled)
 		}
 
 		m := New("gpt-3.5-turbo",
-			WithAPIKey(apiKey),
+			WithBaseURL(server.URL),
+			WithAPIKey("test-key"),
 			WithChatResponseCallback(responseCallback),
 		)
 
@@ -620,22 +677,21 @@ func TestModel_Callbacks(t *testing.T) {
 		// Wait for callback to be called.
 		select {
 		case <-callbackCalled:
-		case <-time.After(10 * time.Second):
+		case <-time.After(3 * time.Second):
 			require.Fail(t, "timeout waiting for response callback")
 		}
 
 		// Verify the callback was called with correct parameters.
 		require.NotNil(t, capturedCtx, "expected context to be captured in callback")
 		require.NotNil(t, capturedRequest, "expected request to be captured in callback")
-		// Note: capturedResponse might be nil if there was an API error.
-		// We only check if it's not nil when we expect a successful response.
+		require.NotNil(t, capturedResponse, "expected response to be captured in callback")
 		assert.Equal(t, "gpt-3.5-turbo", capturedRequest.Model, "expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
-		// Only check response model if we got a successful response.
-		// Note: Due to potential OpenAI API/SDK issues, we only verify the callback was called.
-		// The actual model field validation is skipped as it may be empty due to external factors.
 	})
 
 	t.Run("chat chunk callback", func(t *testing.T) {
+		server := newStreamingServer(t)
+		defer server.Close()
+
 		var capturedRequest *openaigo.ChatCompletionNewParams
 		var capturedChunk *openaigo.ChatCompletionChunk
 		var capturedCtx context.Context
@@ -653,7 +709,8 @@ func TestModel_Callbacks(t *testing.T) {
 		}
 
 		m := New("gpt-3.5-turbo",
-			WithAPIKey(apiKey),
+			WithBaseURL(server.URL),
+			WithAPIKey("test-key"),
 			WithChatChunkCallback(chunkCallback),
 		)
 
@@ -673,34 +730,26 @@ func TestModel_Callbacks(t *testing.T) {
 		// Wait for callback to be called or for responses to complete.
 		select {
 		case <-callbackCalled:
-			// Callback was called, consume remaining responses.
-			for response := range responseChan {
-				if response.Done {
-					break
-				}
-			}
-		case <-time.After(15 * time.Second):
-			// Timeout - consume responses anyway to avoid blocking.
-			t.Log("timeout waiting for chunk callback, consuming responses")
-			for response := range responseChan {
-				if response.Done {
-					break
-				}
-			}
-			// Don't fail the test if callback wasn't called - it might be due to API issues.
-			t.Skip("skipping chunk callback test due to timeout - API might be slow or failing")
+		case <-time.After(3 * time.Second):
+			require.Fail(t, "timeout waiting for chunk callback")
+		}
+
+		for response := range responseChan {
+			require.Nilf(t, response.Error, "Response error: %v", response.Error)
 		}
 
 		// Verify the callback was called with correct parameters (if it was called).
-		if capturedCtx != nil {
-			require.NotNil(t, capturedRequest, "expected request to be captured in callback")
-			require.NotNil(t, capturedChunk, "expected chunk to be captured in callback")
-			assert.Equal(t, "gpt-3.5-turbo", capturedRequest.Model, "expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
-			require.Greater(t, chunkCount, 0, "expected chunk callback to be called at least once")
-		}
+		require.NotNil(t, capturedCtx, "expected context to be captured in callback")
+		require.NotNil(t, capturedRequest, "expected request to be captured in callback")
+		require.NotNil(t, capturedChunk, "expected chunk to be captured in callback")
+		assert.Equal(t, "gpt-3.5-turbo", capturedRequest.Model, "expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
+		require.Greater(t, chunkCount, 0, "expected chunk callback to be called at least once")
 	})
 
 	t.Run("chat stream complete callback", func(t *testing.T) {
+		server := newStreamingServer(t)
+		defer server.Close()
+
 		var capturedRequest *openaigo.ChatCompletionNewParams
 		var capturedAccumulator *openaigo.ChatCompletionAccumulator
 		var capturedStreamErr error
@@ -716,7 +765,8 @@ func TestModel_Callbacks(t *testing.T) {
 		}
 
 		m := New("gpt-3.5-turbo",
-			WithAPIKey(apiKey),
+			WithBaseURL(server.URL),
+			WithAPIKey("test-key"),
 			WithChatStreamCompleteCallback(streamCompleteCallback),
 		)
 
@@ -744,21 +794,22 @@ func TestModel_Callbacks(t *testing.T) {
 		select {
 		case <-callbackCalled:
 			// Success - callback was called
-		case <-time.After(30 * time.Second):
-			// Timeout - this is expected when API key is invalid
-			t.Skip("skipping stream complete callback test due to timeout - API might be slow or failing")
+		case <-time.After(3 * time.Second):
+			require.Fail(t, "timeout waiting for stream complete callback")
 		}
 
-		// Verify the callback was called with correct parameters (if it was called)
-		if capturedCtx != nil {
-			require.NotNil(t, capturedRequest, "expected request to be captured in callback")
-			assert.Equal(t, "gpt-3.5-turbo", capturedRequest.Model, "expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
-			// Either accumulator should be non-nil (success) or streamErr should be non-nil (failure)
-			require.True(t, capturedAccumulator != nil || capturedStreamErr != nil, "expected either accumulator or streamErr to be set")
-		}
+		// Verify the callback was called with correct parameters.
+		require.NotNil(t, capturedCtx, "expected context to be captured in callback")
+		require.NotNil(t, capturedRequest, "expected request to be captured in callback")
+		assert.Equal(t, "gpt-3.5-turbo", capturedRequest.Model, "expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
+		require.NotNil(t, capturedAccumulator, "expected accumulator to be set on success")
+		require.NoError(t, capturedStreamErr)
 	})
 
 	t.Run("multiple callbacks", func(t *testing.T) {
+		server := newNonStreamingServer(t)
+		defer server.Close()
+
 		requestCalled := false
 		responseCalled := false
 		chunkCalled := false
@@ -780,7 +831,8 @@ func TestModel_Callbacks(t *testing.T) {
 		}
 
 		m := New("gpt-3.5-turbo",
-			WithAPIKey(apiKey),
+			WithBaseURL(server.URL),
+			WithAPIKey("test-key"),
 			WithChatRequestCallback(requestCallback),
 			WithChatResponseCallback(responseCallback),
 			WithChatChunkCallback(chunkCallback),
@@ -802,7 +854,7 @@ func TestModel_Callbacks(t *testing.T) {
 		// Wait for request callback.
 		select {
 		case <-requestCallbackDone:
-		case <-time.After(10 * time.Second):
+		case <-time.After(3 * time.Second):
 			require.Fail(t, "timeout waiting for request callback")
 		}
 
@@ -816,7 +868,7 @@ func TestModel_Callbacks(t *testing.T) {
 		// Wait for response callback.
 		select {
 		case <-responseCallbackDone:
-		case <-time.After(10 * time.Second):
+		case <-time.After(3 * time.Second):
 			require.Fail(t, "timeout waiting for response callback")
 		}
 
@@ -828,8 +880,11 @@ func TestModel_Callbacks(t *testing.T) {
 	})
 
 	t.Run("nil callbacks", func(t *testing.T) {
+		server := newNonStreamingServer(t)
+		defer server.Close()
+
 		// Test that the model works correctly when callbacks are nil.
-		m := New("gpt-3.5-turbo", WithAPIKey(apiKey))
+		m := New("gpt-3.5-turbo", WithBaseURL(server.URL), WithAPIKey("test-key"))
 
 		ctx := context.Background()
 		request := &model.Request{
@@ -856,11 +911,30 @@ func TestModel_Callbacks(t *testing.T) {
 // TestModel_CallbackParameters verifies that callback functions receive the
 // correct parameter types and values.
 func TestModel_CallbackParameters(t *testing.T) {
-	// Skip this test if no API key is provided.
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		t.Skip("OPENAI_API_KEY not set, skipping integration test")
-	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "test",
+			"object": "chat.completion",
+			"created": 1699200000,
+			"model": "gpt-3.5-turbo",
+			"choices": [
+				{
+					"index": 0,
+					"message": {
+						"role": "assistant",
+						"content": "ok"
+					},
+					"finish_reason": "stop"
+				}
+			]
+		}`)
+	}))
+	defer server.Close()
 
 	t.Run("callback parameter types", func(t *testing.T) {
 		var requestParam *openaigo.ChatCompletionNewParams
@@ -884,7 +958,8 @@ func TestModel_CallbackParameters(t *testing.T) {
 		}
 
 		m := New("gpt-3.5-turbo",
-			WithAPIKey(apiKey),
+			WithBaseURL(server.URL),
+			WithAPIKey("test-key"),
 			WithChatRequestCallback(requestCallback),
 			WithChatResponseCallback(responseCallback),
 			WithChatChunkCallback(chunkCallback),
@@ -906,7 +981,7 @@ func TestModel_CallbackParameters(t *testing.T) {
 		// Wait for request callback.
 		select {
 		case <-requestCallbackDone:
-		case <-time.After(10 * time.Second):
+		case <-time.After(3 * time.Second):
 			require.Fail(t, "timeout waiting for request callback")
 		}
 
@@ -920,7 +995,7 @@ func TestModel_CallbackParameters(t *testing.T) {
 		// Wait for response callback.
 		select {
 		case <-responseCallbackDone:
-		case <-time.After(10 * time.Second):
+		case <-time.After(3 * time.Second):
 			require.Fail(t, "timeout waiting for response callback")
 		}
 
@@ -928,11 +1003,8 @@ func TestModel_CallbackParameters(t *testing.T) {
 		require.NotNil(t, requestParam, "expected request parameter to be set")
 		assert.Equal(t, reflect.TypeOf(&openaigo.ChatCompletionNewParams{}), reflect.TypeOf(requestParam), "expected request parameter type %T, got %T", &openaigo.ChatCompletionNewParams{}, requestParam)
 
-		// Note: responseParam might be nil if there was an API error.
-		// We only check the type if we got a successful response.
-		if responseParam != nil {
-			assert.Equal(t, reflect.TypeOf(&openaigo.ChatCompletion{}), reflect.TypeOf(responseParam), "expected response parameter type %T, got %T", &openaigo.ChatCompletion{}, responseParam)
-		}
+		require.NotNil(t, responseParam, "expected response parameter to be set")
+		assert.Equal(t, reflect.TypeOf(&openaigo.ChatCompletion{}), reflect.TypeOf(responseParam), "expected response parameter type %T, got %T", &openaigo.ChatCompletion{}, responseParam)
 
 		// Chunk parameter should be nil for non-streaming requests.
 		assert.Nil(t, chunkParam, "expected chunk parameter to be nil for non-streaming requests")

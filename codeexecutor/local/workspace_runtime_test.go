@@ -146,13 +146,13 @@ func TestRuntime_PutSkill_ReadOnly(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Attempt to append to the file should fail due to a-w.
 	target := filepath.Join(ws.Path, "tool", "script.sh")
-	ff, err := os.OpenFile(target, os.O_WRONLY|os.O_APPEND, 0)
-	require.Error(t, err)
-	if ff != nil {
-		_ = ff.Close()
-	}
+	st, err := os.Stat(target)
+	require.NoError(t, err)
+	// Verify the staged skill is made non-writable for all users.
+	require.Zero(t, st.Mode().Perm()&0o222)
+	// Verify the script remains executable after staging.
+	require.NotZero(t, st.Mode().Perm()&0o111)
 
 	// Still executable: run it.
 	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
