@@ -180,8 +180,8 @@ FROM (
   FROM table_name
   WHERE ...
   ORDER BY embedding <=> $1
+  LIMIT 10
 ) subq
-LIMIT 10
 ```
 
 **Normalization Formula**:
@@ -216,9 +216,9 @@ FROM (
           / (ts_rank(to_tsvector('english', content), websearch_to_tsquery('english', $1)) + 0.1)) as text_score
   FROM table_name
   WHERE to_tsvector('english', content) @@ websearch_to_tsquery('english', $1)
+  ORDER BY (ts_rank(...) / (ts_rank(...) + 0.1)) DESC, created_at DESC
+  LIMIT 10
 ) subq
-ORDER BY score DESC, created_at DESC
-LIMIT 10
 ```
 
 **Normalization Formula**:
@@ -284,10 +284,10 @@ FROM (
          (1.0 - (embedding <=> $1) / 2.0) as vector_score,
          (COALESCE(ts_rank(...), 0) / (COALESCE(ts_rank(...), 0) + 0.1)) as text_score
   FROM table_name
-  WHERE to_tsvector('english', content) @@ websearch_to_tsquery('english', $2)
+  WHERE [metadata_filters]
+  ORDER BY ((1.0 - (embedding <=> $1) / 2.0) * 0.7 + (ts_rank_expr) * 0.3) DESC
+  LIMIT 10
 ) subq
-ORDER BY score DESC
-LIMIT 10
 ```
 
 **Normalization Formula**:
@@ -300,11 +300,17 @@ Where default weights: `w_v = 0.7`, `w_t = 0.3`
 - Calculate `vector_score` and `text_score` separately (as in the two modes above)
 - Use linear weighted combination, weights configurable via `WithHybridSearchWeights()`
 - Since both scores are in `[0, 1]` range and `w_v + w_t = 1`, the final `hybrid_score ∈ [0, 1]`
+- **Important**: Documents without text match are not forcibly filtered out, because vector similarity has higher weight (0.7), even without text match, high-quality results may still be returned
 
-**Example**:
+**Examples**:
 ```
-vector_score = 0.85, text_score = 0.90
-hybrid_score = 0.85 × 0.7 + 0.90 × 0.3 = 0.595 + 0.27 = 0.865
+Case 1: Both vector and text match well
+  vector_score = 0.85, text_score = 0.90
+  hybrid_score = 0.85 × 0.7 + 0.90 × 0.3 = 0.865
+
+Case 2: High vector similarity but no text match
+  vector_score = 0.95, text_score = 0.0
+  hybrid_score = 0.95 × 0.7 + 0.0 × 0.3 = 0.665  -- Still returns high-quality result
 ```
 
 ---

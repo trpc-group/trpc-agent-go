@@ -116,7 +116,7 @@ func TestUpdateBuilder(t *testing.T) {
 			ub := newUpdateBuilder(defaultOptions, tt.docID)
 
 			// Verify initial state
-			assert.Equal(t, tt.docID, ub.id)
+			assert.Equal(t, tt.docID, ub.args[0])
 
 			// Add fields
 			for field, value := range tt.fields {
@@ -239,7 +239,7 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 				qb.addHybridFtsCondition("machine learning")
 			},
-			expectedContains: []string{"0.700", "0.300", "ts_rank", "/ (COALESCE(ts_rank", "ORDER BY score DESC"},
+			expectedContains: []string{"0.700", "0.300", "ts_rank", "/ (COALESCE(ts_rank", "ORDER BY", "DESC"},
 			expectedOrder:    "",
 			minArgs:          2,
 		},
@@ -251,7 +251,7 @@ func TestQueryBuilders(t *testing.T) {
 			setupFunc: func(qb *queryBuilder) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 			},
-			expectedContains: []string{"1.000", "as score", "ORDER BY score DESC"},
+			expectedContains: []string{"1.000", "as score", "ORDER BY", "DESC"},
 			expectedOrder:    "",
 			minArgs:          1,
 		},
@@ -265,7 +265,7 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addHybridFtsCondition("test")
 				qb.addScoreFilter(0.5)
 			},
-			expectedContains: []string{"WHERE", ">= 0.500", "ORDER BY score DESC"},
+			expectedContains: []string{"WHERE", ">= 0.500", "ORDER BY", "DESC"},
 			expectedOrder:    "",
 			minArgs:          2,
 		},

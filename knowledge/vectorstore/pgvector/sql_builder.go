@@ -50,7 +50,7 @@ func (b *baseSQLBuilder) addFilterCondition(cond *condConvertResult) {
 		b.argIndex++
 	}
 	c := fmt.Sprintf(cond.cond, indexes...)
-	if len(b.conditions) > 0 {
+	if len(b.conditions) > 1 {
 		c = fmt.Sprintf("(%s)", c)
 	}
 	b.conditions = append(b.conditions, c)
@@ -97,8 +97,6 @@ func (b *baseSQLBuilder) addMetadataFilter(metadata map[string]any) {
 // updateBuilder builds UPDATE SQL statements safely.
 type updateBuilder struct {
 	*baseSQLBuilder
-	table    string
-	id       string
 	setParts []string
 }
 
@@ -109,7 +107,6 @@ func newUpdateBuilder(o options, id string) *updateBuilder {
 			args:     []any{id, time.Now().Unix()},
 			argIndex: 3,
 		},
-		id:       id,
 		setParts: []string{o.updatedAtFieldName + " = $2"},
 	}
 }
@@ -275,9 +272,9 @@ func (qb *queryBuilder) addScoreFilter(minScore float64) {
 
 // addFtsCondition is a helper to add full-text search conditions.
 func (qb *queryBuilder) addFtsCondition(query string) {
-	condition := fmt.Sprintf("to_tsvector('%s', %s) @@ plainto_tsquery('%s', $%d)",
+	condition := fmt.Sprintf("to_tsvector('%s', %s) @@ %s('%s', $%d)",
 		qb.o.language, qb.o.contentFieldName,
-		qb.o.language, qb.argIndex)
+		qb.o.sparseQueryFunc, qb.o.language, qb.argIndex)
 	qb.conditions = append(qb.conditions, condition)
 	qb.args = append(qb.args, query)
 	qb.argIndex++
@@ -329,11 +326,12 @@ func (qb *queryBuilder) buildVectorSelectClause() string {
 }
 
 // buildVectorQueryWithSubquery generates vector search query using subquery.
-// Inner query calculates vector_score once.
+// Inner query calculates vector_score once, applies ORDER BY and LIMIT for performance.
 // Outer query reuses the computed score to avoid duplicate calculations.
 func (qb *queryBuilder) buildVectorQueryWithSubquery(whereClause string, limit int) (string, []any) {
 	vExpr := qb.getVectorScoreExpr()
 
+	// Use vector index operator for efficient ordering, then expose vector_score for outer query
 	sql := fmt.Sprintf(`
 		SELECT *, vector_score as score
 		FROM (
@@ -341,15 +339,15 @@ func (qb *queryBuilder) buildVectorQueryWithSubquery(whereClause string, limit i
 			FROM %s
 			WHERE %s
 			ORDER BY %s <=> $1
-		) subq
-		LIMIT %d`, commonFieldsStr, vExpr, qb.o.table, whereClause, qb.o.embeddingFieldName, limit)
+			LIMIT %d
+		) subq`, commonFieldsStr, vExpr, qb.o.table, whereClause, qb.o.embeddingFieldName, limit)
 
 	return sql, qb.args
 }
 
 // buildHybridQueryWithSubquery generates hybrid search query using subquery.
-// Inner query calculates vector_score and text_score once.
-// Outer query calculates weighted score from pre-computed scores to avoid duplicate calculations.
+// Inner query calculates vector_score and text_score once, then orders by hybrid score.
+// Outer query reuses the computed scores to avoid duplicate calculations.
 func (qb *queryBuilder) buildHybridQueryWithSubquery(whereClause string, limit int) (string, []any) {
 	vExpr := qb.getVectorScoreExpr()
 
@@ -361,15 +359,17 @@ func (qb *queryBuilder) buildHybridQueryWithSubquery(whereClause string, limit i
 		tExpr = fmt.Sprintf("(%s / (%s + %.4f))", rankExpr, rankExpr, qb.o.sparseNormConstant)
 	}
 
+	hybridScoreExpr := fmt.Sprintf("(%s * %.3f + %s * %.3f)", vExpr, qb.vectorWeight, tExpr, qb.textWeight)
+
 	sql := fmt.Sprintf(`
 		SELECT *, (vector_score * %.3f + text_score * %.3f) as score
 		FROM (
 			SELECT %s, %s as vector_score, %s as text_score
 			FROM %s
 			WHERE %s
-		) subq
-		ORDER BY score DESC
-		LIMIT %d`, qb.vectorWeight, qb.textWeight, commonFieldsStr, vExpr, tExpr, qb.o.table, whereClause, limit)
+			ORDER BY %s DESC
+			LIMIT %d
+		) subq`, qb.vectorWeight, qb.textWeight, commonFieldsStr, vExpr, tExpr, qb.o.table, whereClause, hybridScoreExpr, limit)
 
 	return sql, qb.args
 }
@@ -402,7 +402,7 @@ func (qb *queryBuilder) buildKeywordSelectClause() string {
 }
 
 // buildKeywordQueryWithSubquery generates keyword search query using subquery.
-// Inner query calculates text_score once.
+// Inner query calculates text_score once, applies ORDER BY and LIMIT for performance.
 // Outer query reuses the computed score to avoid duplicate calculations.
 func (qb *queryBuilder) buildKeywordQueryWithSubquery(whereClause string, limit int) (string, []any) {
 	if qb.textQueryPos <= 0 {
@@ -424,9 +424,9 @@ func (qb *queryBuilder) buildKeywordQueryWithSubquery(whereClause string, limit 
 			SELECT %s, 0.0 as vector_score, %s as text_score
 			FROM %s
 			WHERE %s
-		) subq
-		ORDER BY score DESC, %s DESC
-		LIMIT %d`, commonFieldsStr, tExpr, qb.o.table, whereClause, qb.o.createdAtFieldName, limit)
+			ORDER BY %s DESC, %s DESC
+			LIMIT %d
+		) subq`, commonFieldsStr, tExpr, qb.o.table, whereClause, tExpr, qb.o.createdAtFieldName, limit)
 
 	return sql, qb.args
 }

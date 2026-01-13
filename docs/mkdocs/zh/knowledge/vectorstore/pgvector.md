@@ -180,8 +180,8 @@ FROM (
   FROM table_name
   WHERE ...
   ORDER BY embedding <=> $1
+  LIMIT 10
 ) subq
-LIMIT 10
 ```
 
 **归一化公式**:
@@ -216,9 +216,9 @@ FROM (
           / (ts_rank(to_tsvector('english', content), websearch_to_tsquery('english', $1)) + 0.1)) as text_score
   FROM table_name
   WHERE to_tsvector('english', content) @@ websearch_to_tsquery('english', $1)
+  ORDER BY (ts_rank(...) / (ts_rank(...) + 0.1)) DESC, created_at DESC
+  LIMIT 10
 ) subq
-ORDER BY score DESC, created_at DESC
-LIMIT 10
 ```
 
 **归一化公式**:
@@ -284,10 +284,10 @@ FROM (
          (1.0 - (embedding <=> $1) / 2.0) as vector_score,
          (COALESCE(ts_rank(...), 0) / (COALESCE(ts_rank(...), 0) + 0.1)) as text_score
   FROM table_name
-  WHERE to_tsvector('english', content) @@ websearch_to_tsquery('english', $2)
+  WHERE ...
+  ORDER BY ((1.0 - (embedding <=> $1) / 2.0) * 0.7 + (ts_rank_expr) * 0.3) DESC
+  LIMIT 10
 ) subq
-ORDER BY score DESC
-LIMIT 10
 ```
 
 **归一化公式**:
@@ -300,11 +300,17 @@ hybrid_score = vector_score × w_v + text_score × w_t
 - 分别计算 `vector_score` 和 `text_score`（如上述两个模式）
 - 使用线性加权组合，权重可通过 `WithHybridSearchWeights()` 配置
 - 由于两个 score 都在 `[0, 1]` 范围且 `w_v + w_t = 1`，最终 `hybrid_score ∈ [0, 1]`
+- **重要**: 不会强制过滤文本不匹配的文档，因为向量相似度权重更高(0.7)，即使文本不匹配也可能返回高质量结果
 
 **示例**:
 ```
-vector_score = 0.85, text_score = 0.90
-hybrid_score = 0.85 × 0.7 + 0.90 × 0.3 = 0.595 + 0.27 = 0.865
+Case 1: Both vector and text match well
+  vector_score = 0.85, text_score = 0.90
+  hybrid_score = 0.85 × 0.7 + 0.90 × 0.3 = 0.865
+
+Case 2: High vector similarity but no text match
+  vector_score = 0.95, text_score = 0.0
+  hybrid_score = 0.95 × 0.7 + 0.0 × 0.3 = 0.665  -- Still returns high-quality result
 ```
 
 ---
