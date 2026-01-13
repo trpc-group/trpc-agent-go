@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/pgvector/pgvector-go"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
@@ -64,15 +65,22 @@ func defaultDocBuilder(row pgx.Row) (*vectorstore.ScoredDocument, []float64, err
 	var id, name, content, metadataJSON string
 	var vector pgvector.Vector
 	var createdAt, updatedAt int64
-	var score float64
+	var score, vectorScore, textScore float64
 
-	if err := row.Scan(&id, &name, &content, &vector, &metadataJSON, &createdAt, &updatedAt, &score); err != nil {
+	if err := row.Scan(&id, &name, &content, &vector, &metadataJSON, &createdAt, &updatedAt, &vectorScore, &textScore, &score); err != nil {
 		return nil, nil, err
 	}
 	metadata, err := jsonToMap(metadataJSON)
 	if err != nil {
 		return nil, nil, fmt.Errorf("pgvector parse metadata: %w", err)
 	}
+
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	metadata[source.MetadataDenseScore] = vectorScore
+	metadata[source.MetadataSparseScore] = textScore
+
 	doc := &document.Document{
 		ID:        id,
 		Name:      name,
@@ -112,6 +120,11 @@ type options struct {
 	textWeight   float64 // Weight for text relevance (0.0-1.0)
 	language     string  // Default: english, if you install zhparser or jieba, you can set it to your configuration
 
+	// Sparse (text) score configuration (internal use only, not exposed as public options)
+	sparseRankFunc     string  // PostgreSQL ranking function: ts_rank or ts_rank_cd (default: ts_rank)
+	sparseQueryFunc    string  // PostgreSQL query parsing function: plainto_tsquery, phraseto_tsquery, or websearch_to_tsquery (default: websearch_to_tsquery)
+	sparseNormConstant float64 // Normalization constant for sparse score formula x/(x+c), smaller c means more sensitive (default: 0.1)
+
 	docBuilder DocBuilderFunc
 
 	maxResults int // Maximum number of search results
@@ -135,16 +148,19 @@ type options struct {
 
 // defaultOptions is the default options for pgvector.
 var defaultOptions = options{
-	database:       "trpc_agent_go",
-	table:          "documents",
-	enableTSVector: true,
-	indexDimension: 1536,
-	sslMode:        "disable",
-	vectorWeight:   0.7, // Default: Vector similarity weight 70%
-	textWeight:     0.3, // Default: Text relevance weight 30%
-	language:       "english",
-	maxResults:     defaultMaxResults,
-	docBuilder:     defaultDocBuilder,
+	database:           "trpc_agent_go",
+	table:              "documents",
+	enableTSVector:     true,
+	indexDimension:     1536,
+	sslMode:            "disable",
+	vectorWeight:       0.7,                    // Default: Vector similarity weight 70%
+	textWeight:         0.3,                    // Default: Text relevance weight 30%
+	sparseRankFunc:     "ts_rank",              // Default: more generous ranking than ts_rank_cd
+	sparseQueryFunc:    "websearch_to_tsquery", // Default: more flexible than plainto_tsquery
+	sparseNormConstant: 0.1,                    // Default: normalization constant for text score
+	language:           "english",
+	maxResults:         defaultMaxResults,
+	docBuilder:         defaultDocBuilder,
 
 	// Vector index defaults (HNSW)
 	vectorIndexType: VectorIndexHNSW,

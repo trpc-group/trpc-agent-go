@@ -116,7 +116,7 @@ func TestUpdateBuilder(t *testing.T) {
 			ub := newUpdateBuilder(defaultOptions, tt.docID)
 
 			// Verify initial state
-			assert.Equal(t, tt.docID, ub.id)
+			assert.Equal(t, tt.docID, ub.args[0])
 
 			// Add fields
 			for field, value := range tt.fields {
@@ -158,8 +158,8 @@ func TestQueryBuilders(t *testing.T) {
 			setupFunc: func(qb *queryBuilder) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 			},
-			expectedContains: []string{"SELECT", "1 - (embedding <=> $1) as score"},
-			expectedOrder:    "ORDER BY embedding <=> $1",
+			expectedContains: []string{"SELECT", "vector_score as score", "FROM (", ") subq"},
+			expectedOrder:    "",
 			minArgs:          1,
 		},
 		{
@@ -169,8 +169,8 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 				qb.addIDFilter([]string{"doc1", "doc2"})
 			},
-			expectedContains: []string{"WHERE", "id IN", "$2, $3"},
-			expectedOrder:    "ORDER BY embedding <=> $1",
+			expectedContains: []string{"WHERE", "id IN", "$2, $3", "FROM (", ") subq"},
+			expectedOrder:    "",
 			minArgs:          3,
 		},
 		{
@@ -180,8 +180,8 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 				qb.addScoreFilter(0.5)
 			},
-			expectedContains: []string{"WHERE", ">= 0.500000"},
-			expectedOrder:    "ORDER BY embedding <=> $1",
+			expectedContains: []string{"WHERE", "(1.0 - (embedding <=> $1) / 2.0) >= 0.500000", "FROM (", ") subq"},
+			expectedOrder:    "",
 			minArgs:          1,
 		},
 		{
@@ -191,8 +191,8 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 				qb.addMetadataFilter(map[string]any{"category": "AI"})
 			},
-			expectedContains: []string{"WHERE", "metadata @>", "::jsonb"},
-			expectedOrder:    "ORDER BY embedding <=> $1",
+			expectedContains: []string{"WHERE", "metadata @>", "::jsonb", "FROM (", ") subq"},
+			expectedOrder:    "",
 			minArgs:          2,
 		},
 
@@ -203,8 +203,8 @@ func TestQueryBuilders(t *testing.T) {
 			setupFunc: func(qb *queryBuilder) {
 				qb.addKeywordSearchConditions("machine learning", 0.0)
 			},
-			expectedContains: []string{"SELECT", "to_tsvector", "ts_rank_cd"},
-			expectedOrder:    "ORDER BY score DESC, created_at DESC",
+			expectedContains: []string{"SELECT", "to_tsvector", "ts_rank", "text_score as score", "FROM (", ") subq"},
+			expectedOrder:    "",
 			minArgs:          1,
 		},
 		{
@@ -213,8 +213,8 @@ func TestQueryBuilders(t *testing.T) {
 			setupFunc: func(qb *queryBuilder) {
 				qb.addKeywordSearchConditions("machine learning", 0.1)
 			},
-			expectedContains: []string{"WHERE", "ts_rank_cd", ">= $"},
-			expectedOrder:    "ORDER BY score DESC, created_at DESC",
+			expectedContains: []string{"WHERE", "ts_rank", ">= $", "FROM (", ") subq"},
+			expectedOrder:    "",
 			minArgs:          2,
 		},
 		{
@@ -224,8 +224,8 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addKeywordSearchConditions("test", 0.0)
 				qb.addIDFilter([]string{"doc1", "doc3"})
 			},
-			expectedContains: []string{"WHERE", "id IN"},
-			expectedOrder:    "ORDER BY score DESC, created_at DESC",
+			expectedContains: []string{"WHERE", "id IN", "FROM (", ") subq"},
+			expectedOrder:    "",
 			minArgs:          3,
 		},
 
@@ -239,8 +239,8 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 				qb.addHybridFtsCondition("machine learning")
 			},
-			expectedContains: []string{"0.700", "0.300", "ts_rank_cd"},
-			expectedOrder:    "ORDER BY score DESC",
+			expectedContains: []string{"0.700", "0.300", "ts_rank", "/ (COALESCE(ts_rank", "ORDER BY", "DESC"},
+			expectedOrder:    "",
 			minArgs:          2,
 		},
 		{
@@ -251,8 +251,8 @@ func TestQueryBuilders(t *testing.T) {
 			setupFunc: func(qb *queryBuilder) {
 				qb.addVectorArg(pgvector.NewVector([]float32{0.1, 0.2, 0.3}))
 			},
-			expectedContains: []string{"1.000", "as score"},
-			expectedOrder:    "ORDER BY score DESC",
+			expectedContains: []string{"1.000", "as score", "ORDER BY", "DESC"},
+			expectedOrder:    "",
 			minArgs:          1,
 		},
 		{
@@ -265,8 +265,8 @@ func TestQueryBuilders(t *testing.T) {
 				qb.addHybridFtsCondition("test")
 				qb.addScoreFilter(0.5)
 			},
-			expectedContains: []string{"WHERE", ">= 0.500"},
-			expectedOrder:    "ORDER BY score DESC",
+			expectedContains: []string{"WHERE", ">= 0.500", "ORDER BY", "DESC"},
+			expectedOrder:    "",
 			minArgs:          2,
 		},
 
@@ -323,7 +323,9 @@ func TestQueryBuilders(t *testing.T) {
 
 			// Verify builder configuration
 			assert.Equal(t, tt.builderType, qb.searchMode)
-			assert.Equal(t, tt.expectedOrder, qb.orderClause)
+			if tt.expectedOrder != "" {
+				assert.Equal(t, tt.expectedOrder, qb.orderClause)
+			}
 
 			// Setup and build query
 			tt.setupFunc(qb)
@@ -354,13 +356,13 @@ func TestBuildSelectClause(t *testing.T) {
 		{
 			name:             "vector_mode",
 			mode:             vectorstore.SearchModeVector,
-			expectedContains: []string{"1 - (embedding <=> $1) as score"},
+			expectedContains: []string{"(1.0 - (embedding <=> $1) / 2.0) as score"},
 		},
 		{
 			name:             "keyword_mode_with_text",
 			mode:             vectorstore.SearchModeKeyword,
 			textQueryPos:     1,
-			expectedContains: []string{"ts_rank_cd", "as score"},
+			expectedContains: []string{"ts_rank", "as score"},
 		},
 		{
 			name:             "keyword_mode_without_text",
@@ -374,7 +376,7 @@ func TestBuildSelectClause(t *testing.T) {
 			vectorWeight:     0.6,
 			textWeight:       0.4,
 			textQueryPos:     2,
-			expectedContains: []string{"0.600", "0.400", "as score", "ts_rank_cd"},
+			expectedContains: []string{"0.600", "0.400", "as score", "ts_rank", "/ (COALESCE(ts_rank"},
 		},
 		{
 			name:                "hybrid_mode_without_text",
@@ -383,7 +385,7 @@ func TestBuildSelectClause(t *testing.T) {
 			textWeight:          0.2,
 			textQueryPos:        0,
 			expectedContains:    []string{"0.800", "as score"},
-			expectedNotContains: []string{"ts_rank_cd"},
+			expectedNotContains: []string{"ts_rank"},
 		},
 		{
 			name:             "filter_mode",
@@ -505,7 +507,10 @@ func TestMetadataQueryBuilder(t *testing.T) {
 			limit:     10,
 			offset:    0,
 			expectedContains: []string{
-				"SELECT *, 0.0 as score",
+				"SELECT *",
+				"0.0 as vector_score",
+				"0.0 as text_score",
+				"0.0 as score",
 				"FROM documents",
 				"WHERE 1=1",
 				"ORDER BY created_at",

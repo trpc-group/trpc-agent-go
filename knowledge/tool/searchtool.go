@@ -343,8 +343,11 @@ func filterMetadata(metadata map[string]any) map[string]any {
 	}
 	filtered := make(map[string]any)
 	for k, v := range metadata {
-		// Skip internal metadata keys with trpc_agent_go_ prefix, except for MetaChunkIndex and MetaMarkdownHeaderPath
-		if !strings.HasPrefix(k, source.MetaPrefix) || k == source.MetaChunkIndex || k == source.MetaMarkdownHeaderPath {
+		if !strings.HasPrefix(k, source.MetaPrefix) ||
+			k == source.MetaChunkIndex ||
+			k == source.MetaMarkdownHeaderPath ||
+			k == source.MetadataDenseScore ||
+			k == source.MetadataSparseScore {
 			filtered[k] = v
 		}
 	}

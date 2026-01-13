@@ -22,6 +22,7 @@ import (
 	"github.com/pgvector/pgvector-go"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/storage/postgres"
@@ -75,7 +76,7 @@ const (
 			%s = EXCLUDED.%s,
 			%s = EXCLUDED.%s`
 
-	sqlSelectDocument = `SELECT *, 0.0 as score FROM %s WHERE %s = $1 LIMIT 1`
+	sqlSelectDocument = `SELECT *, 0.0 as vector_score, 0.0 as text_score, 0.0 as score FROM %s WHERE %s = $1 LIMIT 1`
 
 	sqlDeleteDocument = `DELETE FROM %s WHERE %s = $1`
 
@@ -519,14 +520,20 @@ func (vs *VectorStore) executeSearch(ctx context.Context, query string, args []a
 			}
 			var score float64
 			var id string
+			var vectorScore, textScore any
+
 			if scoredDoc != nil && scoredDoc.Document != nil {
 				score = scoredDoc.Score
 				id = scoredDoc.Document.ID
+
+				// Extract raw scores from metadata for logging
+				vectorScore = scoredDoc.Document.Metadata[source.MetadataDenseScore]
+				textScore = scoredDoc.Document.Metadata[source.MetadataSparseScore]
 				result.Results = append(result.Results, scoredDoc)
 			}
 			log.DebugfContext(ctx,
-				"pgvector search result: score: %v id: %v searchMode: %v, query: %v",
-				score, id, searchMode, query)
+				"pgvector search result: score: %v (dense: %v, sparse: %v) id: %v searchMode: %v, query: %v",
+				score, vectorScore, textScore, id, searchMode, query)
 		}
 		return nil
 	}, query, args...)
