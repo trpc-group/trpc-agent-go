@@ -20,7 +20,8 @@ A simple example that demonstrates manual memory tool integration where LLM agen
 **Key Features:**
 
 - Manual tool registration and control
-- Full access to all memory tools (add, update, search, load, delete, clear)
+- Access to 6 memory tools (default: add, update, search, load; configurable:
+  delete, clear)
 - Custom tool implementations
 - Streaming and non-streaming response modes
 - Multiple storage backends (in-memory, Redis, MySQL, PostgreSQL)
@@ -28,7 +29,7 @@ A simple example that demonstrates manual memory tool integration where LLM agen
 **Use Cases:**
 
 - When you want explicit control over memory operations
-- When you need full access to all memory tools
+- When you need comprehensive memory tool access with configurable options
 - When you prefer simpler setup and configuration
 
 **Getting Started:**
@@ -110,7 +111,7 @@ All examples support multiple storage backends:
 | ----------------- | ---------------------------------------- | -------------------------------------- |
 | Tool Registration | Manual (`WithTools`)                  | Automatic (`WithExtractor`)              |
 | Memory Extraction | Agent calls tools directly               | Background extraction                     |
-| Tools Available   | All 6 tools                               | Limited (search, optional load)         |
+| Tools Available   | 6 tools (4 default, 2 configurable)       | Limited (search, optional load)         |
 | Control Level     | High (explicit)                        | Medium (background)                     |
 | Setup Complexity  | Simple                                   | Complex                                 |
 | Best For          | Fine-grained control needs                 | Transparent memory needs                   |

@@ -305,6 +305,6 @@ func (c *memoryChat) startNewSession() {
 	fmt.Printf("🆕 Started new memory session!\n")
 	fmt.Printf("   Previous: %s\n", oldSessionID)
 	fmt.Printf("   Current:  %s\n", c.sessionID)
-	fmt.Printf("   (Memory and conversation history have been reset)\n")
+	fmt.Printf("   (Conversation history has been reset, memories are preserved)\n")
 	fmt.Println()
 }
