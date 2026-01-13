@@ -13,6 +13,7 @@ package dir
 import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 // Option represents a functional option for configuring directory sources.
@@ -85,5 +86,20 @@ func WithChunkOverlap(overlap int) Option {
 func WithOCRExtractor(extractor ocr.Extractor) Option {
 	return func(s *Source) {
 		s.ocrExtractor = extractor
+	}
+}
+
+// WithTransformers sets transformers for document processing.
+// Transformers are applied before and after chunking.
+//
+// Example:
+//
+//	source := dir.New(paths, dir.WithTransformers(
+//	    transform.NewCharFilter("\n", "\t"),
+//	    transform.NewCharDedup(" "),
+//	))
+func WithTransformers(transformers ...transform.Transformer) Option {
+	return func(s *Source) {
+		s.transformers = append(s.transformers, transformers...)
 	}
 }

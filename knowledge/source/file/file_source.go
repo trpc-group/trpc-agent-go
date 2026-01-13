@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	isource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/internal/source"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 const (
@@ -39,6 +40,7 @@ type Source struct {
 	chunkOverlap           int
 	customChunkingStrategy chunking.Strategy
 	ocrExtractor           ocr.Extractor
+	transformers           []transform.Transformer
 }
 
 // New creates a new file knowledge source.
@@ -69,6 +71,9 @@ func New(filePaths []string, opts ...Option) *Source {
 	}
 	if s.ocrExtractor != nil {
 		readerOpts = append(readerOpts, isource.WithOCRExtractor(s.ocrExtractor))
+	}
+	if len(s.transformers) > 0 {
+		readerOpts = append(readerOpts, isource.WithTransformers(s.transformers...))
 	}
 
 	// Initialize readers with configuration

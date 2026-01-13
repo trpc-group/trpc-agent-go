@@ -18,9 +18,36 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 type mockChunkingStrategy struct{}
+
+// ... existing code ...
+type mockTransformer struct{}
+
+func (m *mockTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func (m *mockTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func (m *mockTransformer) Name() string {
+	return "MockTransformer"
+}
+
+func TestWithTransformers(t *testing.T) {
+	t1 := &mockTransformer{}
+	t2 := &mockTransformer{}
+
+	config := &ReaderConfig{}
+	opt := WithTransformers(t1, t2)
+	opt(config)
+
+	require.Len(t, config.transformers, 2)
+}
 
 func (m *mockChunkingStrategy) Chunk(doc *document.Document) ([]*document.Document, error) {
 	return []*document.Document{doc}, nil
@@ -172,12 +199,19 @@ func TestGetReaders_WithOptions(t *testing.T) {
 		require.NotNil(t, readers)
 	})
 
+	t.Run("with transformers", func(t *testing.T) {
+		t1 := &mockTransformer{}
+		readers := GetReaders(WithTransformers(t1))
+		require.NotNil(t, readers)
+	})
+
 	t.Run("with multiple options", func(t *testing.T) {
 		readers := GetReaders(
 			WithChunkSize(300),
 			WithChunkOverlap(30),
 			WithCustomChunkingStrategy(&mockChunkingStrategy{}),
 			WithOCRExtractor(&mockOCRExtractor{}),
+			WithTransformers(&mockTransformer{}),
 		)
 		require.NotNil(t, readers)
 	})
@@ -214,15 +248,22 @@ func TestBuildReaderOptions(t *testing.T) {
 		require.Len(t, opts, 1)
 	})
 
+	t.Run("with transformers", func(t *testing.T) {
+		config := &ReaderConfig{transformers: []transform.Transformer{&mockTransformer{}}}
+		opts := buildReaderOptions(config)
+		require.Len(t, opts, 1)
+	})
+
 	t.Run("with all options", func(t *testing.T) {
 		config := &ReaderConfig{
 			chunkSize:              100,
 			chunkOverlap:           20,
 			customChunkingStrategy: &mockChunkingStrategy{},
 			ocrExtractor:           &mockOCRExtractor{},
+			transformers:           []transform.Transformer{&mockTransformer{}},
 		}
 		opts := buildReaderOptions(config)
-		require.Len(t, opts, 4)
+		require.Len(t, opts, 5)
 	})
 
 	t.Run("zero chunk size not included", func(t *testing.T) {
