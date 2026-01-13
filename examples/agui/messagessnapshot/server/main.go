@@ -87,11 +87,18 @@ func main() {
 	if err := http.ListenAndServe(*address, server.Handler()); err != nil {
 		log.Fatalf("server stopped with error: %v", err)
 	}
-
 }
 
 func userIDResolver(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
-	if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
+	forwardedProps, ok := input.ForwardedProps.(map[string]any)
+	if !ok {
+		return "anonymous", nil
+	}
+	user, ok := forwardedProps["userId"].(string)
+	if !ok {
+		return "anonymous", nil
+	}
+	if user != "" {
 		return user, nil
 	}
 	return "anonymous", nil

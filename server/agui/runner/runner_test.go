@@ -16,7 +16,9 @@ import (
 	"time"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
@@ -57,6 +59,128 @@ func TestRunValidatesInput(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestRunIgnoresRequestCancelButRespectsBackendTimeout(t *testing.T) {
+	ctxCh := make(chan context.Context, 1)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ctxCh <- ctx
+			ch := make(chan *agentevent.Event)
+			go func() {
+				<-ctx.Done()
+				close(ch)
+			}()
+			return ch, nil
+		},
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+		timeout:           200 * time.Millisecond,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	reqCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eventsCh, err := r.Run(reqCtx, input)
+	require.NoError(t, err)
+
+	select {
+	case evt := <-eventsCh:
+		assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for run started event")
+	}
+
+	var runCtx context.Context
+	select {
+	case runCtx = <-ctxCh:
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for underlying runner context")
+	}
+
+	cancel()
+
+	assert.Eventually(t, func() bool {
+		return errors.Is(runCtx.Err(), context.DeadlineExceeded)
+	}, time.Second, 5*time.Millisecond)
+
+	_ = collectEvents(t, eventsCh)
+}
+
+func TestRunTimeoutUsesMinRequestDeadlineAndBackendTimeout(t *testing.T) {
+	ctxCh := make(chan context.Context, 1)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ctxCh <- ctx
+			ch := make(chan *agentevent.Event)
+			go func() {
+				<-ctx.Done()
+				close(ch)
+			}()
+			return ch, nil
+		},
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+		timeout:           500 * time.Millisecond,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	reqCtx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	reqDeadline, ok := reqCtx.Deadline()
+	require.True(t, ok)
+
+	eventsCh, err := r.Run(reqCtx, input)
+	require.NoError(t, err)
+
+	select {
+	case evt := <-eventsCh:
+		assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for run started event")
+	}
+
+	var runCtx context.Context
+	select {
+	case runCtx = <-ctxCh:
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for underlying runner context")
+	}
+
+	deadline, ok := runCtx.Deadline()
+	require.True(t, ok)
+	assert.WithinDuration(t, reqDeadline, deadline, 50*time.Millisecond)
+
+	cancel()
+
+	wait := time.Until(deadline) + 200*time.Millisecond
+	if wait < 0 {
+		wait = 200 * time.Millisecond
+	}
+	assert.Eventually(t, func() bool {
+		return errors.Is(runCtx.Err(), context.DeadlineExceeded)
+	}, wait, 5*time.Millisecond)
+
+	_ = collectEvents(t, eventsCh)
+}
+
 func TestRunNoMessages(t *testing.T) {
 	underlying := &fakeRunner{}
 	fakeTrans := &fakeTranslator{}
@@ -89,7 +213,7 @@ func TestRunUserIDResolverError(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 	}
 	eventsCh, err := r.Run(context.Background(), input)
 	assert.Nil(t, eventsCh)
@@ -111,7 +235,7 @@ func TestRunLastMessageNotUser(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{{Role: model.RoleAssistant, Content: "bot"}},
+		Messages: []types.Message{{Role: types.RoleAssistant, Content: "bot"}},
 	}
 	eventsCh, err := r.Run(context.Background(), input)
 	assert.Nil(t, eventsCh)
@@ -137,7 +261,7 @@ func TestRunUnderlyingRunnerError(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 	}
 	eventsCh, err := r.Run(context.Background(), input)
 	assert.NoError(t, err)
@@ -155,7 +279,7 @@ func TestRunRunOptionResolverError(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 	}
 	r := &runner{
 		runner:            underlying,
@@ -180,7 +304,7 @@ func TestRunStartSpanError(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 	}
 	r := &runner{
 		runner: underlying,
@@ -204,6 +328,41 @@ func TestRunStartSpanError(t *testing.T) {
 	assert.Equal(t, 0, underlying.calls)
 }
 
+func TestRunLastMessageContentNotString(t *testing.T) {
+	underlying := &fakeRunner{}
+	fakeTrans := &fakeTranslator{}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{
+			Role:    types.RoleUser,
+			Content: []types.InputContent{{Type: types.InputContentTypeText, Text: "hi"}},
+		}},
+	}
+	startSpanCalled := false
+	var span *spySpan
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator { return fakeTrans },
+		userIDResolver:    defaultUserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan: func(ctx context.Context, in *adapter.RunAgentInput) (context.Context, trace.Span, error) {
+			assert.Same(t, input, in)
+			startSpanCalled = true
+			span = &spySpan{Span: trace.SpanFromContext(ctx)}
+			return ctx, span, nil
+		},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.Nil(t, eventsCh)
+	assert.EqualError(t, err, "last message content is not a string")
+	assert.True(t, startSpanCalled)
+	assert.Equal(t, 0, underlying.calls)
+	assert.NotNil(t, span)
+	assert.Equal(t, 1, span.endCalls)
+}
+
 func TestRunFlushesTracker(t *testing.T) {
 	recorder := &flushRecorder{}
 	underlying := &fakeRunner{
@@ -225,7 +384,7 @@ func TestRunFlushesTracker(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 	}
 	ch, err := r.Run(context.Background(), input)
 	assert.NoError(t, err)
@@ -248,6 +407,17 @@ func TestNewWithSessionServiceEnablesTracker(t *testing.T) {
 	assert.NotNil(t, run.tracker)
 }
 
+type nonTrackSessionService struct {
+	session.Service
+}
+
+func TestNewWithSessionServiceWithoutTrackDisablesTracker(t *testing.T) {
+	r := New(nil, WithSessionService(nonTrackSessionService{Service: inmemory.NewSessionService()}))
+	run, ok := r.(*runner)
+	assert.True(t, ok)
+	assert.Nil(t, run.tracker)
+}
+
 func TestRunRejectsConcurrentSession(t *testing.T) {
 	ch := make(chan *agentevent.Event)
 	underlying := &fakeRunner{
@@ -260,17 +430,21 @@ func TestRunRejectsConcurrentSession(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 	}
 
 	events1, err := r.Run(context.Background(), input)
 	assert.NoError(t, err)
-	go collectEvents(t, events1)
 
-	events2, err := r.Run(context.Background(), input)
+	input2 := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run-2",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi again"}},
+	}
+	events2, err := r.Run(context.Background(), input2)
 	assert.Nil(t, events2)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "session is already running")
+	assert.ErrorIs(t, err, ErrRunAlreadyExists)
 
 	close(ch)
 	collectEvents(t, events1)
@@ -302,7 +476,7 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 	}
 	r := &runner{
 		runner:            underlying,
@@ -353,7 +527,7 @@ func TestRunTranslateError(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 	}
 	aguiCh, err := r.Run(context.Background(), input)
 	assert.NoError(t, err)
@@ -395,13 +569,11 @@ func TestRunNormal(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 	}
 
 	aguiCh, err := r.Run(context.Background(), input)
-	if !assert.NoError(t, err) {
-		return
-	}
+	require.NoError(t, err)
 	evts := collectEvents(t, aguiCh)
 	assert.Len(t, evts, 4)
 	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
@@ -430,12 +602,12 @@ func TestRunAgentInputHook(t *testing.T) {
 		baseInput := &adapter.RunAgentInput{
 			ThreadID: "thread",
 			RunID:    "run",
-			Messages: []model.Message{{Role: model.RoleUser, Content: "old"}},
+			Messages: []types.Message{{Role: types.RoleUser, Content: "old"}},
 		}
 		replaced := &adapter.RunAgentInput{
 			ThreadID: "new-thread",
 			RunID:    "run",
-			Messages: []model.Message{{Role: model.RoleUser, Content: "new message"}},
+			Messages: []types.Message{{Role: types.RoleUser, Content: "new message"}},
 		}
 		r := &runner{
 			runner: underlying,
@@ -473,19 +645,19 @@ func TestRunAgentInputHook(t *testing.T) {
 			}()
 			return ch, nil
 		}
-		input := &adapter.RunAgentInput{
+		originalInput := &adapter.RunAgentInput{
 			ThreadID: "thread",
 			RunID:    "run",
-			Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+			Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 		}
 		r := &runner{
 			runner: underlying,
-			translatorFactory: func(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
-				assert.Same(t, input, input)
+			translatorFactory: func(ctx context.Context, in *adapter.RunAgentInput) translator.Translator {
+				assert.Same(t, originalInput, in)
 				return &fakeTranslator{}
 			},
 			userIDResolver: func(ctx context.Context, in *adapter.RunAgentInput) (string, error) {
-				assert.Same(t, input, in)
+				assert.Same(t, originalInput, in)
 				return "user", nil
 			},
 			runAgentInputHook: func(ctx context.Context, in *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
@@ -495,7 +667,7 @@ func TestRunAgentInputHook(t *testing.T) {
 			startSpan:         defaultStartSpan,
 		}
 
-		ch, err := r.Run(context.Background(), input)
+		ch, err := r.Run(context.Background(), originalInput)
 		assert.NoError(t, err)
 		collectEvents(t, ch)
 		assert.Equal(t, 1, underlying.calls)
@@ -513,7 +685,7 @@ func TestRunAgentInputHook(t *testing.T) {
 		}
 		_, err := r.Run(context.Background(), &adapter.RunAgentInput{})
 		assert.Error(t, err)
-		assert.ErrorContains(t, err, "agui: run input hook")
+		assert.ErrorContains(t, err, "run input hook")
 		assert.ErrorIs(t, err, wantErr)
 	})
 }
@@ -741,7 +913,7 @@ func TestRunnerBeforeTranslateCallbackOverridesInput(t *testing.T) {
 	r := New(underlying, WithTranslateCallbacks(callbacks))
 
 	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}}
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hello"}}}
 	ch, err := r.Run(context.Background(), input)
 	assert.NoError(t, err)
 	out := collectEvents(t, ch)
@@ -790,7 +962,7 @@ func TestRunnerAfterTranslateCallbackOverridesEmission(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hello"}},
 	}
 	ch, err := r.Run(context.Background(), input)
 	assert.NoError(t, err)
@@ -855,6 +1027,16 @@ func (e *errorTracker) Flush(ctx context.Context,
 	return e.flushErr
 }
 
+type spySpan struct {
+	trace.Span
+	endCalls int
+}
+
+func (s *spySpan) End(options ...trace.SpanEndOption) {
+	s.endCalls++
+	s.Span.End(options...)
+}
+
 type fakeRunner struct {
 	run func(ctx context.Context,
 		userID, sessionID string,
@@ -905,9 +1087,9 @@ func TestRunTrackingErrorsAreIgnored(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []model.Message{
+		Messages: []types.Message{
 			{
-				Role:    model.RoleUser,
+				Role:    types.RoleUser,
 				Content: "hi",
 			},
 		},
@@ -931,7 +1113,8 @@ func collectEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Event 
 			}
 			out = append(out, evt)
 		case <-time.After(time.Second):
-			t.Fatalf("timeout collecting events")
+			assert.FailNow(t, "timeout collecting events")
+			return out
 		}
 	}
 }
@@ -961,7 +1144,7 @@ func TestTranslateCallbackError(t *testing.T) {
 		input := &adapter.RunAgentInput{
 			ThreadID: "thread",
 			RunID:    "run",
-			Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+			Messages: []types.Message{{Role: types.RoleUser, Content: "hello"}},
 		}
 		ch, err := r.Run(context.Background(), input)
 		assert.NoError(t, err)
@@ -994,7 +1177,7 @@ func TestTranslateCallbackError(t *testing.T) {
 		input := &adapter.RunAgentInput{
 			ThreadID: "thread",
 			RunID:    "run",
-			Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+			Messages: []types.Message{{Role: types.RoleUser, Content: "hello"}},
 		}
 		ch, err := r.Run(context.Background(), input)
 		assert.NoError(t, err)
@@ -1003,4 +1186,53 @@ func TestTranslateCallbackError(t *testing.T) {
 		_, ok := evts[0].(*aguievents.RunErrorEvent)
 		assert.True(t, ok)
 	})
+}
+
+func TestEmitEventStopsWhenContextDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	r := &runner{}
+	events := make(chan aguievents.Event)
+	input := &runInput{threadID: "thread", runID: "run"}
+
+	ok := r.emitEvent(ctx, events, aguievents.NewRunStartedEvent("thread", "run"), input)
+
+	assert.False(t, ok)
+}
+
+func TestEmitEventStopsWhenAfterTranslateFailsAndContextDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	r := &runner{
+		translateCallbacks: translator.NewCallbacks().RegisterAfterTranslate(
+			func(context.Context, aguievents.Event) (aguievents.Event, error) {
+				return nil, errors.New("after translate fail")
+			},
+		),
+	}
+	events := make(chan aguievents.Event)
+	input := &runInput{threadID: "thread", runID: "run"}
+
+	ok := r.emitEvent(ctx, events, aguievents.NewRunStartedEvent("thread", "run"), input)
+
+	assert.False(t, ok)
+}
+
+func TestHandleAgentEventStopsWhenEmitCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	r := &runner{}
+	events := make(chan aguievents.Event)
+	input := &runInput{
+		threadID:   "thread",
+		runID:      "run",
+		translator: &fakeTranslator{events: [][]aguievents.Event{{aguievents.NewRunFinishedEvent("thread", "run")}}},
+	}
+
+	ok := r.handleAgentEvent(ctx, events, input, agentevent.New("inv", "assistant"))
+
+	assert.False(t, ok)
 }

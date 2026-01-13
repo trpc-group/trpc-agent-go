@@ -27,7 +27,7 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 
 tRPC-Agent-Go 的会话管理通过 `runner.WithSessionService` 集成到 Runner 中，Runner 会自动处理会话的创建、加载、更新和持久化。
 
-**支持的存储后端：** 内存（Memory）、Redis、PostgreSQL、MySQL
+**支持的存储后端：** 内存（Memory）、Redis、PostgreSQL、MySQL、ClickHouse
 
 **默认行为：** 如果不配置 `runner.WithSessionService`，Runner 会默认使用内存存储（Memory），数据在进程重启后会丢失。
 
@@ -282,6 +282,52 @@ When AddSessionSummary = false:
 └─────────────────────────────────────────┘
 ```
 
+#### 摘要格式自定义
+
+默认情况下，会话摘要会以包含上下文标签和关于优先考虑当前对话信息的提示进行格式化：
+
+**默认格式：**
+
+```
+Here is a brief summary of your previous interactions:
+
+<summary_of_previous_interactions>
+[摘要内容]
+</summary_of_previous_interactions>
+
+Note: this information is from previous interactions and may be outdated. You should ALWAYS prefer information from this conversation over the past summary.
+```
+
+您可以使用 `WithSummaryFormatter`（在 `llmagent` 和 `graphagent` 中可用）来自定义摘要格式，以更好地匹配您的特定使用场景或模型需求。
+
+**自定义格式示例：**
+
+```go
+// 使用简化格式的自定义格式化器
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithSummaryFormatter(func(summary string) string {
+        return fmt.Sprintf("## Previous Context\n\n%s", summary)
+    }),
+)
+```
+
+**使用场景：**
+
+- **简化格式**：使用简洁的标题和最少的上下文提示来减少 token 消耗
+- **语言本地化**：将上下文提示翻译为目标语言（例如：中文、日语）
+- **角色特定格式**：为不同的 Agent 角色提供不同的格式（助手、研究员、程序员）
+- **模型优化**：根据特定模型的偏好调整格式（某些模型对特定的提示结构响应更好）
+
+**重要注意事项：**
+
+- 格式化函数接收来自会话的原始摘要文本并返回格式化后的字符串
+- 自定义格式化器应确保摘要可与其他消息清楚地区分开
+- 默认格式设计为与大多数模型和使用场景兼容
+- 当使用 `WithAddSessionSummary(false)` 时，格式化器**不会生效**
+
 **重要提示：** 启用 `WithAddSessionSummary(true)` 时，`WithMaxHistoryRuns` 参数将被忽略，摘要后的所有事件都会完整保留。
 
 详细配置和高级用法请参见 [会话摘要](#会话摘要) 章节。
@@ -345,14 +391,15 @@ sessionService := inmemory.NewSessionService(
 
 ## 存储后端对比
 
-tRPC-Agent-Go 提供四种会话存储后端，满足不同场景需求：
+tRPC-Agent-Go 提供五种会话存储后端，满足不同场景需求：
 
-| 存储类型   | 适用场景           | 优势                              | 劣势                     |
-| ---------- | ------------------ | --------------------------------- | ------------------------ |
-| 内存存储   | 开发测试、小规模   | 简单快速、无需外部依赖            | 数据不持久、不支持分布式 |
-| Redis 存储 | 生产环境、分布式   | 高性能、支持分布式、自动过期      | 需要 Redis 服务          |
-| PostgreSQL | 生产环境、复杂查询 | 关系型数据库、支持复杂查询、JSONB | 相对较重、需要数据库     |
-| MySQL      | 生产环境、复杂查询 | 广泛使用、支持复杂查询、JSON      | 相对较重、需要数据库     |
+| 存储类型   | 适用场景           |
+| ---------- | ------------------ |
+| 内存存储   | 开发测试、小规模   |
+| Redis 存储 | 生产环境、分布式   |
+| PostgreSQL | 生产环境、复杂查询 |
+| MySQL      | 生产环境、复杂查询 |
+| ClickHouse | 生产环境、海量日志 |
 
 ## 内存存储（Memory）
 
@@ -784,7 +831,7 @@ sessionService, err := mysql.NewService(
 // - 连接 localhost:3306，数据库 trpc_sessions
 // - 每个会话最多 1000 个事件
 // - 数据永不过期
-// - 2 个异步持久化 worker
+// - 默认 10 个异步持久化 worker（可通过 WithAsyncPersisterNum 调整）
 
 // 生产环境完整配置
 sessionService, err := mysql.NewService(
@@ -904,6 +951,267 @@ sessionService, err := mysql.NewService(
 
 完整的表定义请参考 [session/mysql/schema.sql](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema.sql)
 
+### 版本升级
+
+#### 旧版本数据迁移
+
+如果您的数据库是使用旧版本创建的，需要执行以下迁移步骤。
+
+**影响版本**：v1.2.0 之前的版本  
+**修复版本**：v1.2.0 及之后
+
+**问题背景**：早期版本的 `session_summaries` 表存在索引设计问题：
+
+- 最初版本使用包含 `deleted_at` 列的唯一索引，但 MySQL 中 `NULL != NULL`，导致多条 `deleted_at = NULL` 的记录无法触发唯一约束
+- 后续版本改为普通 lookup 索引（非唯一），同样无法防止重复数据
+
+这两种情况都可能导致重复数据产生。
+
+**旧版索引**（以下两种之一）：
+
+- `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key, deleted_at)` — 唯一索引但包含 deleted_at
+- `idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)` — 普通索引
+
+**新版索引**：`idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key)` — 唯一索引，不包含 deleted_at
+
+**迁移步骤**：
+
+```sql
+-- ============================================================================
+-- 迁移脚本：修复 session_summaries 唯一索引问题
+-- 执行前请备份数据！
+-- ============================================================================
+
+-- Step 1: 查看当前索引，确认旧索引名称
+SHOW INDEX FROM session_summaries;
+
+-- Step 2: 清理重复数据（保留最新记录）
+-- 如果存在多条 deleted_at = NULL 的重复记录，保留 id 最大的那条。
+DELETE t1 FROM session_summaries t1
+INNER JOIN session_summaries t2
+WHERE t1.app_name = t2.app_name
+  AND t1.user_id = t2.user_id
+  AND t1.session_id = t2.session_id
+  AND t1.filter_key = t2.filter_key
+  AND t1.deleted_at IS NULL
+  AND t2.deleted_at IS NULL
+  AND t1.id < t2.id;
+
+-- Step 3: 硬删除软删除记录（summary 数据可再生，无需保留）
+-- 如果需要保留软删除记录，可跳过此步骤，但需要在 Step 5 之前手动处理冲突。
+DELETE FROM session_summaries WHERE deleted_at IS NOT NULL;
+
+-- Step 4: 删除旧索引（根据 Step 1 的结果选择正确的索引名）
+-- 注意：索引名称可能带有表前缀，请根据实际情况调整。
+-- 如果是 lookup 索引：
+DROP INDEX idx_session_summaries_lookup ON session_summaries;
+-- 如果是旧的 unique_active 索引（包含 deleted_at）：
+-- DROP INDEX idx_session_summaries_unique_active ON session_summaries;
+
+-- Step 5: 创建新的唯一索引（不包含 deleted_at）
+-- 注意：索引名称可能带有表前缀，请根据实际情况调整。
+CREATE UNIQUE INDEX idx_session_summaries_unique_active 
+ON session_summaries(app_name, user_id, session_id, filter_key);
+
+-- Step 6: 验证迁移结果
+SELECT COUNT(*) as duplicate_count FROM (
+    SELECT app_name, user_id, session_id, filter_key, COUNT(*) as cnt
+    FROM session_summaries
+    WHERE deleted_at IS NULL
+    GROUP BY app_name, user_id, session_id, filter_key
+    HAVING cnt > 1
+) t;
+-- 期望结果：duplicate_count = 0
+
+-- Step 7: 验证索引是否创建成功
+SHOW INDEX FROM session_summaries WHERE Key_name = 'idx_session_summaries_unique_active';
+-- 期望结果：显示新创建的唯一索引，且不包含 deleted_at 列
+```
+
+**注意事项**：
+
+1. 如果使用了 `WithTablePrefix("trpc_")` 配置，表名和索引名会带有前缀：
+   - 表名：`trpc_session_summaries`
+   - 旧索引名：`idx_trpc_session_summaries_lookup` 或 `idx_trpc_session_summaries_unique_active`
+   - 新索引名：`idx_trpc_session_summaries_unique_active`
+   - 请根据实际配置调整上述 SQL 中的表名和索引名。
+
+2. 新索引不包含 `deleted_at` 列，这意味着软删除的 summary 记录会阻止相同业务键的新记录插入。由于 summary 数据可再生，迁移时建议硬删除软删除记录（Step 3）。如果跳过此步骤，需手动处理冲突。
+
+
+## ClickHouse 存储
+
+适用于生产环境和海量数据场景，利用 ClickHouse 强大的写入吞吐量和数据压缩能力。
+
+### 配置选项
+
+**连接配置：**
+
+- **`WithClickHouseDSN(dsn string)`**：ClickHouse DSN 连接字符串（推荐）。
+  - 格式：`clickhouse://user:password@host:port/database?dial_timeout=10s`
+- **`WithClickHouseInstance(name string)`**：使用预配置的 ClickHouse 实例。
+- **`WithExtraOptions(opts ...any)`**：为 ClickHouse 客户端设置额外选项。
+
+**会话配置：**
+
+- **`WithSessionEventLimit(limit int)`**：每个会话最大事件数量。默认值为 1000。
+- **`WithSessionTTL(ttl time.Duration)`**：会话 TTL。默认值为 0（不过期）。
+- **`WithAppStateTTL(ttl time.Duration)`**：应用状态 TTL。默认值为 0（不过期）。
+- **`WithUserStateTTL(ttl time.Duration)`**：用户状态 TTL。默认值为 0（不过期）。
+- **`WithDeletedRetention(retention time.Duration)`**：软删除数据保留时间。默认值为 0（禁用应用层物理清理）。启用后将通过 `ALTER TABLE DELETE` 定期清理软删除数据，生产环境**不建议开启**，建议优先使用 ClickHouse 表级 TTL。
+- **`WithCleanupInterval(interval time.Duration)`**：清理任务间隔。
+
+**异步持久化配置：**
+
+- **`WithEnableAsyncPersist(enable bool)`**：启用异步持久化。默认值为 `false`。
+- **`WithAsyncPersisterNum(num int)`**：异步持久化 worker 数量。默认值为 10。
+- **`WithBatchSize(size int)`**：批量写入大小。默认值为 100。
+- **`WithBatchTimeout(timeout time.Duration)`**：批量写入超时。默认值为 100ms。
+
+**摘要配置：**
+
+- **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
+- **`WithAsyncSummaryNum(num int)`**：摘要处理 worker 数量。默认值为 3。
+- **`WithSummaryQueueSize(size int)`**：摘要任务队列大小。默认值为 100。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：单个摘要任务超时时间。
+
+**Schema 配置：**
+
+- **`WithTablePrefix(prefix string)`**：表名前缀。
+- **`WithSkipDBInit(skip bool)`**：跳过自动建表。
+
+**Hook 配置：**
+
+- **`WithAppendEventHook(hooks ...session.AppendEventHook)`**：添加事件写入 Hook。
+- **`WithGetSessionHook(hooks ...session.GetSessionHook)`**：添加会话读取 Hook。
+
+### 基础配置示例
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
+
+// 默认配置（最简）
+sessionService, err := clickhouse.NewService(
+    clickhouse.WithClickHouseDSN("clickhouse://default:password@localhost:9000/default"),
+)
+```
+
+### 配置复用
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
+    sessionch "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
+)
+
+// 注册 ClickHouse 实例
+clickhouse.RegisterClickHouseInstance("my-clickhouse",
+    clickhouse.WithClientBuilderDSN("clickhouse://localhost:9000/default"),
+)
+
+// 在会话服务中使用
+sessionService, err := sessionch.NewService(
+    sessionch.WithClickHouseInstance("my-clickhouse"),
+)
+```
+
+### 存储结构
+
+ClickHouse 实现使用了 `ReplacingMergeTree` 引擎来处理数据更新和去重。
+
+**关键特性：**
+
+1.  **ReplacingMergeTree**：利用 `updated_at` 字段，ClickHouse 会在后台自动合并相同主键的记录，保留最新版本。
+2.  **FINAL 查询**：所有读取操作都使用 `FINAL` 关键字（如 `SELECT ... FINAL`），确保在查询时合并所有数据部分，保证读取一致性。
+3.  **Soft Delete**：删除操作通过插入一条带有 `deleted_at` 时间戳的新记录实现。查询时过滤 `deleted_at IS NULL`。
+
+```sql
+-- 会话状态表
+CREATE TABLE IF NOT EXISTS session_states (
+    app_name    String,
+    user_id     String,
+    session_id  String,
+    state       JSON COMMENT 'Session state in JSON format',
+    extra_data  JSON COMMENT 'Additional metadata',
+    created_at  DateTime64(6),
+    updated_at  DateTime64(6),
+    expires_at  Nullable(DateTime64(6)) COMMENT 'Expiration time (application-level)',
+    deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+-- CRITICAL: Removed deleted_at from ORDER BY to allow ReplacingMergeTree to collapse deleted records
+ORDER BY (app_name, user_id, session_id)
+SETTINGS allow_nullable_key = 1
+COMMENT 'Session states table';
+
+-- 会话事件表
+CREATE TABLE IF NOT EXISTS session_events (
+    app_name    String,
+    user_id     String,
+    session_id  String,
+    event_id    String,
+    event       JSON COMMENT 'Event data in JSON format',
+    extra_data  JSON COMMENT 'Additional metadata',
+    created_at  DateTime64(6),
+    updated_at  DateTime64(6),
+    expires_at  Nullable(DateTime64(6)) COMMENT 'Reserved for future use',
+    deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+-- CRITICAL: Removed deleted_at from ORDER BY to allow ReplacingMergeTree to collapse deleted records
+ORDER BY (app_name, user_id, session_id, event_id)
+SETTINGS allow_nullable_key = 1
+COMMENT 'Session events table';
+
+-- 会话摘要表
+CREATE TABLE IF NOT EXISTS session_summaries (
+    app_name    String,
+    user_id     String,
+    session_id  String,
+    filter_key  String COMMENT 'Filter key for multiple summaries per session',
+    summary     JSON COMMENT 'Summary data in JSON format',
+    created_at  DateTime64(6),
+    updated_at  DateTime64(6),
+    expires_at  Nullable(DateTime64(6)) COMMENT 'Reserved for future use',
+    deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+-- CRITICAL: Removed deleted_at from ORDER BY to allow ReplacingMergeTree to collapse deleted records
+ORDER BY (app_name, user_id, session_id, filter_key)
+SETTINGS allow_nullable_key = 1
+COMMENT 'Session summaries table';
+
+-- 应用状态表
+CREATE TABLE IF NOT EXISTS app_states (
+    app_name    String,
+    key         String COMMENT 'State key',
+    value       String COMMENT 'State value',
+    updated_at  DateTime64(6),
+    expires_at  Nullable(DateTime64(6)) COMMENT 'Expiration time (application-level)',
+    deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY app_name
+-- CRITICAL: Removed deleted_at from ORDER BY to allow ReplacingMergeTree to collapse deleted records
+ORDER BY (app_name, key)
+SETTINGS allow_nullable_key = 1
+COMMENT 'Application states table';
+
+-- 用户状态表
+CREATE TABLE IF NOT EXISTS user_states (
+    app_name    String,
+    user_id     String,
+    key         String COMMENT 'State key',
+    value       String COMMENT 'State value',
+    updated_at  DateTime64(6),
+    expires_at  Nullable(DateTime64(6)) COMMENT 'Expiration time (application-level)',
+    deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+-- CRITICAL: Removed deleted_at from ORDER BY to allow ReplacingMergeTree to collapse deleted records
+ORDER BY (app_name, user_id, key)
+SETTINGS allow_nullable_key = 1
+COMMENT 'User states table';
+```
 
 ## 高级用法
 
@@ -1199,6 +1507,13 @@ sessionService, err := mysql.NewService(
     mysql.WithSummarizer(summarizer),
     mysql.WithAsyncSummaryNum(2),           // 2个异步 worker
     mysql.WithSummaryQueueSize(100),        // 队列大小 100
+)
+
+// ClickHouse 存储
+sessionService, err := clickhouse.NewService(
+    clickhouse.WithClickHouseDSN("clickhouse://default:password@localhost:9000/default"),
+    clickhouse.WithSummarizer(summarizer),
+    clickhouse.WithAsyncSummaryNum(2),
 )
 ```
 

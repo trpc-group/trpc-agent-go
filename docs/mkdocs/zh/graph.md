@@ -158,13 +158,14 @@ Graph 包提供了一些内置状态键，主要用于系统内部通信：
 - `StateKeyUserInput`：用户输入（一次性，消费后清空，由 LLM 节点自动持久化）
 - `StateKeyOneShotMessages`：一次性消息（完整覆盖本轮输入，消费后清空）
 - `StateKeyLastResponse`：最后响应（用于设置最终输出，Executor 会读取此值作为结果）
+- `StateKeyLastToolResponse`：最近一次工具输出（JSON 字符串，由 Tools 节点写入）
 - `StateKeyLastResponseID`：最近一次响应标识符（identifier，ID）（由 LLM 节点写入；当
   `StateKeyLastResponse` 由非模型节点写入时可能为空）
 - `StateKeyMessages`：消息历史（持久化，支持 append + MessageOp 补丁操作）
-- `StateKeyNodeResponses`：按节点存储的响应映射。键为节点 ID，值为该
-  节点的最终文本响应。`StateKeyLastResponse` 用于串行路径上的最终输
-  出；当多个并行节点在某处汇合时，应从 `StateKeyNodeResponses` 中按节
-  点读取各自的输出。
+- `StateKeyNodeResponses`：按节点存储的输出映射。键为节点 ID，值为该
+  节点的最终输出。对 LLM / Agent 节点而言是最终文本响应；对 Tools 节
+  点而言是工具输出的 JSON 数组字符串（每项包含 `tool_id`、`tool_name`
+  和 `output`）。
 - `StateKeyMetadata`：元数据（用户可用的通用元数据存储）
 
 **系统内部键**（用户不应直接使用）：
@@ -208,6 +209,8 @@ schema.AddField("counter", graph.StateField{
 
   - `user_input`：一次性用户输入，被下一个 LLM/Agent 节点消费后清空
   - `one_shot_messages`：一次性完整消息覆盖，用于下一次 LLM 调用，执行后清空
+  - `one_shot_messages_by_node`：按节点 ID 定向的一次性消息覆盖
+    （map[nodeID][]Message）。消费后只清空对应节点的 entry。
   - `messages`：持久化的消息历史（LLM/Tools 会追加），支持 MessageOp 补丁
   - `last_response`：最近一次助手文本回复
   - `last_response_id`：生成 `last_response` 的最近一次模型响应标识符（identifier，
@@ -221,7 +224,8 @@ schema.AddField("counter", graph.StateField{
 
 - LLM 节点
 
-  - 输入优先级：`one_shot_messages` → `user_input` → `messages`
+  - 输入优先级：`one_shot_messages_by_node[<node_id>]` →
+    `one_shot_messages` → `user_input` → `messages`
   - 输出：
     - 向 `messages` 追加助手消息
     - 设置 `last_response`
@@ -244,13 +248,91 @@ schema.AddField("counter", graph.StateField{
 推荐用法
 
 - 在 Schema 中声明业务字段（如 `parsed_time`、`final_payload`），函数节点写入/读取。
-- 需要给 LLM 节点注入结构化提示时，可在前置节点写入 `one_shot_messages`（例如加入包含解析信息的 system message）。
+- 需要给 LLM 节点注入结构化提示时，可在前置节点写入 `one_shot_messages`
+  （例如加入包含解析信息的 system message）。
+- 并行分支：如果多个分支需要为不同的 LLM 节点准备不同的一次性输入，
+  不要同时写 `one_shot_messages`，优先使用 `one_shot_messages_by_node`。
 - 需要消费上游文本结果时：紧邻下游读取 `last_response`，或在任意后续节点读取 `node_responses[节点ID]`。
+
+按节点 ID 定向的一次性消息覆盖示例：
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const (
+    llm1NodeID = "llm1"
+    llm2NodeID = "llm2"
+)
+
+func prepForLLM1(ctx context.Context, state graph.State) (any, error) {
+    msgs := []model.Message{
+        model.NewUserMessage("question for llm1"),
+    }
+    return graph.SetOneShotMessagesForNode(llm1NodeID, msgs), nil
+}
+
+func prepForLLM2(ctx context.Context, state graph.State) (any, error) {
+    msgs := []model.Message{
+        model.NewUserMessage("question for llm2"),
+    }
+    return graph.SetOneShotMessagesForNode(llm2NodeID, msgs), nil
+}
+```
+
+在单个上游节点里同时为多个下游节点准备 one-shot：
+
+在 Go 里，`map` 对同一个 key 的赋值会覆盖旧值。由于
+`SetOneShotMessagesForNode(...)` 每次都会写入同一个顶层 key
+（`one_shot_messages_by_node`），因此不要在一个函数里多次调用它，然后再用
+`result[k] = v` 这种方式去“合并”多个 `graph.State`（最后一次写入会覆盖前面的）。
+
+推荐做法是：先构造一个 `map[nodeID][]model.Message`，一次性写入：
+
+```go
+func preprocess(ctx context.Context, state graph.State) (any, error) {
+    byNode := map[string][]model.Message{
+        llm1NodeID: {
+            model.NewSystemMessage("You are llm1."),
+            model.NewUserMessage("question for llm1"),
+        },
+        llm2NodeID: {
+            model.NewSystemMessage("You are llm2."),
+            model.NewUserMessage("question for llm2"),
+        },
+    }
+    return graph.SetOneShotMessagesByNode(byNode), nil
+}
+```
+
+另一种写法（不使用辅助函数）：直接返回 State delta map（当你在同一个节点里
+还要同时更新其它键时很方便）：
+
+```go
+func preprocess(ctx context.Context, state graph.State) (any, error) {
+    // byNode := ...
+    return graph.State{
+        graph.StateKeyOneShotMessagesByNode: byNode,
+    }, nil
+}
+```
+
+注意：
+
+- `llm1NodeID` / `llm2NodeID` 必须与 `AddLLMNode` 里传入的节点 ID 一致。
+- 每个 LLM 节点只会消费一次 `one_shot_messages_by_node[自己的ID]`，
+  并且只清理自己的 entry。
 
 示例：
 
 - `examples/graph/io_conventions`：函数 + LLM + Agent 的 I/O 演示
 - `examples/graph/io_conventions_tools`：加入 Tools 节点，展示如何获取工具 JSON 并落入 State
+- `examples/graph/oneshot_by_node`：按 LLM 节点 ID 定向的一次性输入
+- `examples/graph/oneshot_by_node_preprocess`：在单个上游节点里为多个 LLM 节点准备 OneShot
 - `examples/graph/retry`：节点级重试/退避演示
 
 #### 状态键常量与来源（可直接引用）
@@ -262,10 +344,19 @@ schema.AddField("counter", graph.StateField{
 
   - `user_input` → 常量 `graph.StateKeyUserInput`
   - `one_shot_messages` → 常量 `graph.StateKeyOneShotMessages`
+  - `one_shot_messages_by_node` → 常量 `graph.StateKeyOneShotMessagesByNode`
   - `messages` → 常量 `graph.StateKeyMessages`
   - `last_response` → 常量 `graph.StateKeyLastResponse`
   - `last_response_id` → 常量 `graph.StateKeyLastResponseID`
   - `node_responses` → 常量 `graph.StateKeyNodeResponses`
+
+- OneShot 辅助函数
+
+  - `SetOneShotMessagesForNode(nodeID, msgs)`：设置单个节点的 OneShot
+  - `SetOneShotMessagesByNode(byNode)`：一次性设置多个节点的 OneShot
+  - `ClearOneShotMessagesForNode(nodeID)`：清理单个节点 entry
+  - `ClearOneShotMessagesByNode()`：清理整个 map
+  - `GetOneShotMessagesForNode(state, nodeID)`：读取单个节点 entry
 
 - 其他常用键
   - `session` → `graph.StateKeySession`
@@ -579,7 +670,9 @@ func processNodeFunc(ctx context.Context, state graph.State) (any, error) {
 
 LLM 节点实现了固定的三段式输入规则，无需配置：
 
-1. **OneShot 优先**：若存在 `one_shot_messages`，以它为本轮输入。
+1. **OneShot 优先**：
+   - 若存在 `one_shot_messages_by_node[<node_id>]`，以它为本轮输入。
+   - 否则若存在 `one_shot_messages`，以它为本轮输入。
 2. **UserInput 其次**：否则若存在 `user_input`，自动持久化一次。
 3. **历史默认**：否则以持久化历史作为输入。
 
@@ -600,7 +693,12 @@ stateGraph.AddLLMNode("analyze", model,
 **重要说明**：
 
 - SystemPrompt 仅用于本次输入，不落持久化状态。
-- 一次性键（`user_input`/`one_shot_messages`）在成功执行后自动清空。
+- 一次性键（`user_input`/`one_shot_messages`/`one_shot_messages_by_node`）
+  在成功执行后自动清空。
+- 并行分支：如果需要为不同的 LLM 节点准备不同的一次性输入，优先写
+  `one_shot_messages_by_node`，避免多个分支同时写 `one_shot_messages`
+  互相覆盖/清空。若由单个上游节点同时为多个 LLM 节点准备输入，推荐使用
+  `graph.SetOneShotMessagesByNode(...)` 一次性写入所有 entry。
 - 所有状态更新都是原子性的，确保一致性。
 - GraphAgent/Runner 仅设置 `user_input`，不再预先把用户消息写入
   `messages`。这样可以允许在 LLM 节点之前的任意节点对 `user_input`
@@ -629,6 +727,11 @@ stateGraph.AddLLMNode("analyze", model,
 Runner 运行时开启 `agent.WithGraphEmitFinalModelResponses(true)`。该选项的详细语义、
 示例和注意事项请参见 `runner.md`。
 
+小贴士：如果你通过 Runner 运行，并且主要只关心流式的大语言模型（Large Language
+Model，LLM）消息（例如用于用户界面（User Interface，UI）的流式展示），可以使用
+`agent.WithStreamMode(...)` 作为统一开关（见下文“事件监控”）。当选择
+`agent.StreamModeMessages` 时，Runner 会为本次运行自动开启 Graph 的最终响应事件输出。
+
 #### 三种输入范式
 
 - OneShot（`StateKeyOneShotMessages`）：
@@ -636,6 +739,10 @@ Runner 运行时开启 `agent.WithGraphEmitFinalModelResponses(true)`。该选�
   - 当该键存在时，本轮仅使用这里提供的 `[]model.Message` 调用模型，
     通常包含完整的 system prompt 与 user prompt。调用后自动清空。
   - 适用场景：前置节点专门构造 prompt 的工作流，需完全覆盖本轮输入。
+  - 并行分支：当多个分支需要为不同的 LLM 节点准备 OneShot 输入时，
+    优先使用 `StateKeyOneShotMessagesByNode`，避免共享键互相覆盖。
+  - 若由单个上游节点同时为多个 LLM 节点准备 OneShot 输入，推荐使用
+    `graph.SetOneShotMessagesByNode(...)` 一次性写入。
 
 - UserInput（`StateKeyUserInput`）：
 
@@ -657,10 +764,12 @@ LLM 节点的 `instruction` 支持占位符注入（与 LLMAgent 规则一致）
 - `{key}` / `{{key}}` → 替换为会话状态中键 `key` 对应的字符串值（可通过 `sess.SetState("key", ...)` 或 SessionService 写入）
 - `{key?}` / `{{key?}}` → 可选，缺失时替换为空
 - `{user:subkey}`、`{app:subkey}`、`{temp:subkey}`（以及其 Mustache 写法）→ 访问用户/应用/临时命名空间（SessionService 会将 app/user 作用域合并到 session，并带上前缀）
+- `{invocation:subkey}` / `{{invocation:subkey}}` → 替换为 `invocation.state["subkey"]`（可通过 `invocation.SetState("subkey", v)` 设置）
 
 说明：
 
 - GraphAgent 会把当前 `*session.Session` 写入图状态的 `StateKeySession`，LLM 节点据此读取注入值
+- `{invocation:*}` 从本次运行的 `*agent.Invocation` 读取
 - 无前缀键（如 `research_topics`）需要直接存在于 `session.State`
 
 示例：
@@ -831,6 +940,52 @@ graphAgent, err := graphagent.New(
 - `WithAddSessionSummary(true)` 仅在 `Session.Summaries` 中已有对应 `FilterKey` 的摘要时生效。摘要通常由 SessionService + SessionSummarizer 生成，Runner 在落库事件后会自动触发 `EnqueueSummaryJob`。
 - GraphAgent 只读取摘要，不生成摘要。如果绕过 Runner，需在写入事件后自行调用 `sessionService.CreateSessionSummary` 或 `EnqueueSummaryJob`。
 - 摘要仅在 `TimelineFilterAll` 下生效。
+
+#### 摘要格式自定义
+
+默认情况下，会话摘要会以包含上下文标签和关于优先考虑当前对话信息的提示进行格式化：
+
+**默认格式：**
+
+```
+Here is a brief summary of your previous interactions:
+
+<summary_of_previous_interactions>
+[摘要内容]
+</summary_of_previous_interactions>
+
+Note: this information is from previous interactions and may be outdated. You should ALWAYS prefer information from this conversation over the past summary.
+```
+
+您可以使用 `WithSummaryFormatter` 来自定义摘要格式，以更好地匹配您的特定使用场景或模型需求。
+
+**自定义格式示例：**
+
+```go
+// 使用简化格式的自定义格式化器
+ga := graphagent.New(
+    "my-graph",
+    graphagent.WithInitialState(initialState),
+    graphagent.WithAddSessionSummary(true),
+    graphagent.WithSummaryFormatter(func(summary string) string {
+        return fmt.Sprintf("## Previous Context\n\n%s", summary)
+    }),
+)
+```
+
+**使用场景：**
+
+- **简化格式**：使用简洁的标题和最少的上下文提示来减少 token 消耗
+- **语言本地化**：将上下文提示翻译为目标语言（例如：中文、日语）
+- **角色特定格式**：为不同的 Agent 角色提供不同的格式
+- **模型优化**：根据特定模型的偏好调整格式
+
+**重要注意事项：**
+
+- 格式化函数接收来自会话的原始摘要文本并返回格式化后的字符串
+- 自定义格式化器应确保摘要可与其他消息清楚地区分开
+- 默认格式设计为与大多数模型和使用场景兼容
+- 当使用 `WithAddSessionSummary(false)` 时，格式化器永远不会被调用
 
 #### 并发使用注意事项
 
@@ -1429,6 +1584,7 @@ schema := graph.MessagesStateSchema()
 
 // 其他一次性/系统键（按需使用）：
 // - graph.StateKeyOneShotMessages ("one_shot_messages")  一次性覆盖本轮输入（[]model.Message）
+// - graph.StateKeyOneShotMessagesByNode ("one_shot_messages_by_node")  按节点 ID 定向的一次性覆盖（map[string][]model.Message）
 // - graph.StateKeySession         ("session")            会话对象（系统使用）
 // - graph.StateKeyExecContext     ("exec_context")       执行上下文（事件流等，系统使用）
 ```
@@ -1513,7 +1669,11 @@ model := openai.New(llmModelName)
 sg.AddLLMNode(llmNodeAssistant, model, llmSystemPrompt, tools)
 
 // LLM 节点的输入输出规则：
-// 输入优先级: graph.StateKeyOneShotMessages > graph.StateKeyUserInput > graph.StateKeyMessages
+// 输入优先级:
+// graph.StateKeyOneShotMessagesByNode[<node_id>] >
+// graph.StateKeyOneShotMessages >
+// graph.StateKeyUserInput >
+// graph.StateKeyMessages
 // 输出: graph.StateKeyLastResponse、graph.StateKeyMessages(原子更新)、graph.StateKeyNodeResponses（包含当前节点输出，便于并行汇总）
 ```
 
@@ -1821,9 +1981,17 @@ sg.AddToolsNode(nodeTools, tools)
 // 如需并行，应该使用多个节点 + 并行边
 // 配对规则：从 messages 尾部回溯定位最近的 assistant(tool_calls)
 // 消息，遇到新的 user 即停止，确保与本轮工具调用配对。
+// 输出：追加工具消息到 graph.StateKeyMessages，设置
+// graph.StateKeyLastToolResponse，并将
+// graph.StateKeyNodeResponses[nodeTools] 写为 JSON 数组字符串。
 ```
 
 #### 将工具结果写入 State
+
+Tools 节点已直接暴露输出：
+
+- `graph.StateKeyLastToolResponse`：本次节点执行中最后一个工具输出的 JSON 字符串
+- `graph.StateKeyNodeResponses[<tools_node_id>]`：本次节点执行的所有工具输出（JSON 数组字符串）
 
 在 Tools 节点之后，添加一个函数节点，从 `graph.StateKeyMessages` 汇总工具结果并写入结构化 State：
 
@@ -1946,6 +2114,35 @@ const (
 sg.AddEdge(nodeSplit, nodeBranch1)
 sg.AddEdge(nodeSplit, nodeBranch2)  // branch1 和 branch2 会并行执行
 ```
+
+#### Join（等待所有分支的汇聚）
+
+当一个节点有多个并行上游分支时，普通 `AddEdge(from, to)` 的语义是：只要任意
+一个上游节点更新了对应的边通道（Channel），`to` 就会被触发。这很适合增量/
+流式场景，但也意味着 `to` 可能会执行多次。
+
+如果你需要经典的 “等待所有分支都完成后再执行下游节点” 的 fan-in（汇聚）
+语义，可以使用 `AddJoinEdge`：
+
+```go
+const (
+    nodeSplit = "split"
+    nodeA     = "branch_a"
+    nodeB     = "branch_b"
+    nodeJoin  = "join"
+)
+
+sg.AddEdge(nodeSplit, nodeA)
+sg.AddEdge(nodeSplit, nodeB)
+
+// 等待 A 和 B 都完成后再执行 join。
+sg.AddJoinEdge([]string{nodeA, nodeB}, nodeJoin)
+```
+
+`AddJoinEdge` 会创建一个内部 barrier（屏障）通道，只有当上游节点列表里的每个
+节点都“报到”后才触发 `to`。触发后屏障会重置，因此在循环图里可以再次汇聚。
+
+参考示例：`examples/graph/join_edge`。
 
 提示：设置入口与结束点时，会隐式连接到虚拟的 Start/End 节点：
 
@@ -2614,7 +2811,10 @@ Graph 的状态底层是 `map[string]any`，通过 `StateSchema` 提供运行时
 
 #### 常用键常量参考
 
-- 用户可见：`graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、`graph.StateKeyMessages`、`graph.StateKeyLastResponse`、`graph.StateKeyLastResponseID`、`graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
+- 用户可见：`graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、
+  `graph.StateKeyOneShotMessagesByNode`、`graph.StateKeyMessages`、
+  `graph.StateKeyLastResponse`、`graph.StateKeyLastResponseID`、
+  `graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
 - 系统内部：`session`、`exec_context`、`tool_callbacks`、`model_callbacks`、`agent_callbacks`、`current_node_id`、`parent_agent`
 - 命令/恢复：`__command__`、`__resume_map__`
 
@@ -2766,12 +2966,17 @@ stateGraph.
 
 - LLM 节点
 
-  - 输入优先级：`graph.StateKeyOneShotMessages` → `graph.StateKeyUserInput` → `graph.StateKeyMessages`
+  - 输入优先级：
+    `graph.StateKeyOneShotMessagesByNode[<node_id>]` →
+    `graph.StateKeyOneShotMessages` →
+    `graph.StateKeyUserInput` →
+    `graph.StateKeyMessages`
   - 输出：原子写回 `graph.StateKeyMessages`、设置 `graph.StateKeyLastResponse`、设置 `graph.StateKeyNodeResponses[<llm_node_id>]`
 
 - 工具节点（Tools）
 
   - 自 `graph.StateKeyMessages` 尾部配对当前轮的 `assistant(tool_calls)`，按顺序追加工具返回到 `graph.StateKeyMessages`
+  - 输出：设置 `graph.StateKeyLastToolResponse`，并写入 `graph.StateKeyNodeResponses[<tools_node_id>]`（JSON 数组字符串）
   - 多个工具按 LLM 返回顺序顺序执行
 
 - Agent 节点
@@ -2797,7 +3002,7 @@ stateGraph.
 
 - 常用 State 键（用户可见）
 
-  - `graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、`graph.StateKeyMessages`、`graph.StateKeyLastResponse`、`graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
+  - `graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、`graph.StateKeyMessages`、`graph.StateKeyLastResponse`、`graph.StateKeyLastToolResponse`、`graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
 
 - 节点级可选项
 
@@ -3123,6 +3328,41 @@ for ev := range eventCh {
     }
 }
 ```
+
+#### StreamMode
+
+Runner 可以在事件到达你的业务代码之前先做一次过滤，这样你只会收到你关心的一小类事件
+（例如只关心模型输出用于流式展示）。
+
+使用 `agent.WithStreamMode(...)`：
+
+```go
+eventCh, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithStreamMode(
+        agent.StreamModeMessages,
+        agent.StreamModeCustom,
+    ),
+)
+```
+
+支持的模式（图式工作流）：
+
+- `messages`：模型输出事件（例如 `chat.completion.chunk`）
+- `updates`：`graph.state.update` / `graph.channel.update` / `graph.execution`
+- `checkpoints`：`graph.checkpoint.*`
+- `tasks`：任务生命周期事件（`graph.node.*`、`graph.pregel.*`）
+- `debug`：等价于 `checkpoints` + `tasks`
+- `custom`：节点主动发出的自定义事件（`graph.node.custom`）
+
+注意事项：
+
+- 当选择 `agent.StreamModeMessages` 时，Runner 会为本次运行自动开启 Graph 的最终响应事件
+  输出。若你需要关闭该行为，请在 `agent.WithStreamMode(...)` 之后调用
+  `agent.WithGraphEmitFinalModelResponses(false)` 覆盖。
+- StreamMode 只影响 Runner 向你的 `eventCh` 转发哪些事件；Runner 内部仍会处理并持久化
+  所有事件。
+- 对于图式工作流，部分事件类型（例如 `graph.checkpoint.*`）只会在选择对应模式时才会产生。
+- Runner 总会额外发出一条 `runner.completion` 完成事件。
 
 #### 事件元数据（StateDelta）
 

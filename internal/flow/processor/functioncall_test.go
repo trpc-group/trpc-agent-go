@@ -334,6 +334,59 @@ func TestExecuteToolCall_ToolResultMessagesCallback_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "tool callback error")
 }
 
+func TestExecuteToolCall_ToolResultMessagesCallback_Panic(t *testing.T) {
+	ctx := context.Background()
+
+	tools := map[string]tool.Tool{
+		"panic-tool": &mockCallableTool{
+			declaration: &tool.Declaration{
+				Name:        "panic-tool",
+				Description: "panic-tool",
+			},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+	}
+
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		_ context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		panic("boom")
+	})
+
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := &agent.Invocation{AgentName: "panic-agent"}
+
+	tc := model.ToolCall{
+		ID: "call-panic",
+		Function: model.FunctionDefinitionParam{
+			Name:      "panic-tool",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	const panicErrStage = "tool result messages callback panic"
+	var err error
+	var shouldIgnore bool
+	require.NotPanics(t, func() {
+		_, _, _, shouldIgnore, err = p.executeToolCall(
+			ctx,
+			inv,
+			tc,
+			tools,
+			0,
+			nil,
+		)
+	})
+	require.Error(t, err)
+	require.True(t, shouldIgnore)
+	assert.Contains(t, err.Error(), "tool callback error")
+	assert.Contains(t, err.Error(), panicErrStage)
+}
+
 func TestExecuteToolCall_ToolResultMessagesCallback_UnsupportedReturnType(t *testing.T) {
 	ctx := context.Background()
 

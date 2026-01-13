@@ -41,6 +41,123 @@ On the client side you can pair the server with frameworks that understand the A
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
+## Core Concepts
+
+### RunAgentInput
+
+`RunAgentInput` is the request payload for the AG-UI chat route and the messages snapshot route. It describes the input and context required for a conversation run. The structure is shown below.
+
+```go
+type RunAgentInput struct {
+	ThreadID       string // Conversation thread identifier. The framework uses it as `SessionID`.
+	RunID          string // Run ID. Used to correlate `RUN_STARTED`, `RUN_FINISHED`, and other events.
+	ParentRunID    *string // Parent run ID. Optional.
+	State          any    // Arbitrary state.
+	Messages       []Message // Message list. The framework requires the last message to be `role=user` and uses its content as input.
+	Tools          []Tool    // Tool definitions. Protocol field. Optional.
+	Context        []Context // Context entries. Protocol field. Optional.
+	ForwardedProps any    // Arbitrary forwarded properties. Typically used to carry business custom parameters.
+}
+```
+
+For the full field definition, refer to [AG-UI Go SDK](https://github.com/ag-ui-protocol/ag-ui/blob/main/sdks/community/go/pkg/core/types/types.go).
+
+Minimal request JSON example:
+
+```json
+{
+    "threadId": "thread-id",
+    "runId": "run-id",
+    "messages": [
+        {
+            "role": "user",
+            "content": "hello"
+        }
+    ],
+    "forwardedProps": {
+        "userId": "alice"
+    }
+}
+```
+
+### Real-time conversation route
+
+The real-time conversation route handles a real-time conversation request and streams the events produced during execution to the client via SSE. The default route is `/` and can be customised with `agui.WithPath`.
+
+For the same `SessionKey` (`AppName` + `userID` + `sessionID`), only one real-time conversation request can run at a time; repeated requests return `409 Conflict`.
+
+Even if the client SSE connection is closed, the backend continues executing until it finishes normally (or is cancelled / times out). By default, a single request can run for up to 1 hour. You can adjust this with `agui.WithTimeout(d)`, and set it to `0` to disable the timeout; the effective deadline is the earlier of the request context deadline and `agui.WithTimeout(d)`.
+
+A complete example is available at [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default).
+
+### Cancel route
+
+If you want to interrupt a running real-time conversation, enable the cancel route with `agui.WithCancelEnabled(true)` (disabled by default). The default route is `/cancel` and can be customised with `agui.WithCancelPath`.
+
+The cancel route uses the same request body as the real-time conversation route. To cancel successfully, you must provide the same `SessionKey` (`AppName` + `userID` + `sessionID`) as the corresponding real-time conversation request.
+
+### Message Snapshot route
+
+Message snapshots restore conversation history when a page is initialised or after a reconnect. The feature is controlled by `agui.WithMessagesSnapshotEnabled(true)` and is disabled by default. The default route is `/history`, can be customised with `WithMessagesSnapshotPath`, and returns the event stream `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED`.
+
+This route supports concurrent access for the same `userID + sessionID` (threadId), and you can also query the snapshot for the same session while a real-time conversation is running.
+
+To enable message snapshots, configure the following options:
+
+- `agui.WithMessagesSnapshotEnabled(true)` enables message snapshots;
+- `agui.WithMessagesSnapshotPath` sets the custom message snapshot route, defaulting to `/history`;
+- `agui.WithAppName(name)` specifies the application name;
+- `agui.WithSessionService(service)` injects the `session.Service` used to look up historical events;
+- `aguirunner.WithUserIDResolver(resolver)` customises how `userID` is resolved, defaulting to `"user"`.
+
+When handling a message snapshot request, the framework extracts `threadId` as the `SessionID` from the AG-UI request body `RunAgentInput`, resolves `userID` using the custom `UserIDResolver`, and then builds `session.Key` with `appName`. It then queries the `Session` via `session.Service`, converts the stored events `Session.Events` into AG-UI messages, wraps them in a `MESSAGES_SNAPSHOT` event, and sends matching `RUN_STARTED` and `RUN_FINISHED` events.
+
+Example:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
+    forwardedProps, ok := input.ForwardedProps.(map[string]any)
+    if !ok {
+        return "anonymous", nil
+    }
+    user, ok := forwardedProps["userId"].(string)
+    if !ok || user == "" {
+        return "anonymous", nil
+    }
+    return user, nil
+}
+
+sessionService := inmemory.NewService(context.Background())
+server, err := agui.New(
+    runner,
+    agui.WithPath("/chat"),                    // Customise the real-time conversation route, defaults to "/".
+    agui.WithAppName("demo-app"),              // Set AppName to scope stored history per application.
+    agui.WithSessionService(sessionService),   // Set the Session Service to load historical events.
+    agui.WithMessagesSnapshotEnabled(true),    // Enable message snapshots.
+    agui.WithMessagesSnapshotPath("/history"), // Set the message snapshot route, defaults to "/history".
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithUserIDResolver(resolver), // Customise the UserID resolution logic.
+    ),
+)
+if err != nil {
+	log.Fatalf("create agui server failed: %v", err)
+}
+if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
+	log.Fatalf("server stopped with error: %v", err)
+}
+```
+
+You can find a complete example at [examples/agui/messagessnapshot](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot).
+
+The format of AG-UI's MessagesSnapshotEvent can be found at [messages](https://docs.ag-ui.com/concepts/messages).
+
 ## Advanced Usage
 
 ### Custom transport
@@ -146,10 +263,15 @@ import (
 )
 
 resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
-    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
-        return user, nil
+    forwardedProps, ok := input.ForwardedProps.(map[string]any)
+    if !ok {
+        return "anonymous", nil
     }
-    return "anonymous", nil
+    user, ok := forwardedProps["userId"].(string)
+    if !ok || user == "" {
+        return "anonymous", nil
+    }
+    return user, nil
 }
 
 runner := runner.NewRunner(agent.Info().Name, agent)
@@ -173,14 +295,15 @@ resolver := func(_ context.Context, input *adapter.RunAgentInput) ([]agent.RunOp
 	if input == nil {
 		return nil, errors.New("empty input")
 	}
-	if input.ForwardedProps == nil {
+	forwardedProps, ok := input.ForwardedProps.(map[string]any)
+	if !ok || forwardedProps == nil {
 		return nil, nil
 	}
 	opts := make([]agent.RunOption, 0, 2)
-	if modelName, ok := input.ForwardedProps["modelName"].(string); ok && modelName != "" {
+	if modelName, ok := forwardedProps["modelName"].(string); ok && modelName != "" {
 		opts = append(opts, agent.WithModelName(modelName))
 	}
-	if filter, ok := input.ForwardedProps["knowledgeFilter"].(map[string]any); ok {
+	if filter, ok := forwardedProps["knowledgeFilter"].(map[string]any); ok {
 		opts = append(opts, agent.WithKnowledgeFilter(filter))
 	}
 	return opts, nil
@@ -207,13 +330,20 @@ import (
 )
 
 runOptionResolver := func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
-    attrs := []attribute.KeyValue{
-        attribute.String("trace.input", input.Messages[len(input.Messages)-1].Content),
-    }
-    if scenario, ok := input.ForwardedProps["scenario"].(string); ok {
-        attrs = append(attrs, attribute.String("conversation.scenario", scenario))
-    }
-    return []agent.RunOption{agent.WithSpanAttributes(attrs...)}, nil
+	content, ok := input.Messages[len(input.Messages)-1].ContentString()
+	if !ok {
+		return nil, errors.New("last message content is not a string")
+	}
+	attrs := []attribute.KeyValue{
+		attribute.String("trace.input", content),
+	}
+	forwardedProps, ok := input.ForwardedProps.(map[string]any)
+	if ok {
+		if scenario, ok := forwardedProps["scenario"].(string); ok {
+			attrs = append(attrs, attribute.String("conversation.scenario", scenario))
+		}
+	}
+	return []agent.RunOption{agent.WithSpanAttributes(attrs...)}, nil
 }
 
 r := runner.NewRunner(agent.Info().Name, agent)
@@ -254,13 +384,13 @@ import (
 
 callbacks := translator.NewCallbacks().
     RegisterBeforeTranslate(func(ctx context.Context, event *event.Event) (*event.Event, error) {
-        // Logic to execute before event translation
+        // Logic to execute before event translation.
         return nil, nil
     }).
     RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
-        // Logic to execute after event translation
+        // Logic to execute after event translation.
         if msg, ok := event.(*aguievents.TextMessageContentEvent); ok {
-            // Modify the message content in the event
+            // Modify the message content in the event.
             return aguievents.NewTextMessageContentEvent(msg.MessageID, msg.Delta+" [via callback]"), nil
         }
         return nil, nil
@@ -293,15 +423,20 @@ hook := func(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAge
 	if len(input.Messages) == 0 {
 		return nil, errors.New("missing messages")
 	}
-	if input.ForwardedProps == nil {
+	forwardedProps, ok := input.ForwardedProps.(map[string]any)
+	if !ok || forwardedProps == nil {
 		return input, nil
 	}
-	otherContent, ok := input.ForwardedProps["other_content"].(string)
+	otherContent, ok := forwardedProps["other_content"].(string)
 	if !ok {
 		return input, nil
 	}
 
-	input.Messages[len(input.Messages)-1].Content += otherContent
+	content, ok := input.Messages[len(input.Messages)-1].ContentString()
+	if !ok {
+		return input, nil
+	}
+	input.Messages[len(input.Messages)-1].Content = content + otherContent
 	return input, nil
 }
 
@@ -369,8 +504,8 @@ server, err := agui.New(
     agui.WithSessionService(sessionService),
     agui.WithAGUIRunnerOptions(
         aguirunner.WithUserIDResolver(userIDResolver),
-        aguirunner.WithAggregationOption(aggregator.WithEnabled(true)), // Enable event aggregation, enabled by default
-        aguirunner.WithFlushInterval(time.Second),                      // Set the periodic flush interval for aggregation results, default is 1 second
+        aguirunner.WithAggregationOption(aggregator.WithEnabled(true)), // Enable event aggregation, enabled by default.
+        aguirunner.WithFlushInterval(time.Second),                      // Set the periodic flush interval for aggregation results, default is 1 second.
     ),
 )
 ```
@@ -407,7 +542,7 @@ func (c *thinkAggregator) Append(ctx context.Context, event aguievents.Event) ([
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// For custom "think" events, use a strategy of "accumulate only, do not emit immediately":
+	// For custom "think" events, use a strategy of "accumulate only, do not emit immediately".
 	// 1. Force flush inner first to fully emit previously accumulated normal events.
 	// 2. Append the current think content to the buffer only, without returning it immediately.
 	// This ensures that think fragments are not interrupted by normal events, and that previous normal events are emitted before new thinking content.
@@ -435,7 +570,7 @@ func (c *thinkAggregator) Append(ctx context.Context, event aguievents.Event) ([
 		return events, nil
 	}
 
-	// If there is accumulated think content, insert a single aggregated think event before the current batch of events:
+	// If there is accumulated think content, insert a single aggregated think event before the current batch of events.
 	// 1. Package the buffer content into a single CustomEvent.
 	// 2. Clear the buffer to avoid sending duplicate content.
 	// 3. Place this think event before the current events to preserve the time order: output the complete thinking content first, then subsequent events.
@@ -459,9 +594,9 @@ func (c *thinkAggregator) Flush(ctx context.Context) ([]aguievents.Event, error)
 		return nil, err
 	}
 
-	// If there is still unflushed content in the think buffer,
-	// wrap it into a single aggregated think event and insert it at the front of the current batch,
-	// ensuring that the aggregated thinking content is not reordered by events produced by subsequent flushes.
+	// If there is still unflushed content in the think buffer.
+	// Wrap it into a single aggregated think event and insert it at the front of the current batch.
+	// This ensures that the aggregated thinking content is not reordered by events produced by subsequent flushes.
 	if c.think.Len() > 0 {
 		think := aguievents.NewCustomEvent(string(thinkEventTypeContent), aguievents.WithValue(c.think.String()))
 		c.think.Reset()
@@ -487,86 +622,30 @@ server, err := agui.New(
 )
 ```
 
-### Message Snapshot
-
-Message snapshots restore historical conversations when a page is first opened or a connection is re-established. The feature is controlled by `agui.WithMessagesSnapshotEnabled(true)` and is disabled by default. Once enabled, AG-UI exposes both the chat route and the snapshot route:
-
-- The chat route defaults to `/` and can be customised with `agui.WithPath`;
-- The snapshot route defaults to `/history`, can be customised with `WithMessagesSnapshotPath`, and returns the event flow `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED`.
-
-When enabling message snapshots, configure the following options:
-
-- `agui.WithMessagesSnapshotEnabled(true)` enables the snapshot endpoint;
-- `agui.WithMessagesSnapshotPath` sets the custom snapshot route, defaulting to `/history`;
-- `agui.WithAppName(name)` specifies the application name;
-- `agui.WithSessionService(service)` injects the `session.Service` used to look up historical events;
-- `aguirunner.WithUserIDResolver(resolver)` customises how `userID` is resolved, defaulting to `"user"`.
-
-While serving a snapshot request, the framework parses `threadId` from the `RunAgentInput` as the `SessionID`, combines it with the custom `UserIDResolver` to obtain `userID`, and then builds a `session.Key` together with `appName`. It queries the session through `session.Service`, converts the stored events (`Session.Events`) into AG-UI messages, and wraps them in a `MESSAGES_SNAPSHOT` event alongside matching `RUN_STARTED` and `RUN_FINISHED` events.
-
-Example:
-
-```go
-import (
-	"trpc.group/trpc-go/trpc-agent-go/server/agui"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
-	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
-	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-)
-
-resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
-    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
-        return user, nil
-    }
-    return "anonymous", nil
-}
-
-sessionService := inmemory.NewService(context.Background())
-server, err := agui.New(
-    runner,
-    agui.WithPath("/chat"),                    // Custom chat route, defaults to "/"
-    agui.WithAppName("demo-app"),              // AppName used to build the session key
-    agui.WithSessionService(sessionService),   // Session Service used to query sessions
-    agui.WithMessagesSnapshotEnabled(true),    // Enable message snapshots
-    agui.WithMessagesSnapshotPath("/history"), // Snapshot route, defaults to "/history"
-    agui.WithAGUIRunnerOptions(
-        aguirunner.WithUserIDResolver(resolver), // Custom userID resolver
-    ),
-)
-if err != nil {
-	log.Fatalf("create agui server failed: %v", err)
-}
-if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
-	log.Fatalf("server stopped with error: %v", err)
-}
-```
-
-You can find a complete example at [examples/agui/messagessnapshot](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot).
-
-The format of AG-UI's MessagesSnapshot event can be found at [messages](https://docs.ag-ui.com/concepts/messages).
-
 ### Setting the BasePath for Routes
 
-`agui.WithBasePath` sets the base route prefix for the AG-UI service. The default value is `/`, and it is used to mount the chat route and message snapshot route under a unified prefix, avoiding conflicts with existing services.
+`agui.WithBasePath` sets the base route prefix for the AG-UI service. The default value is `/`, and it is used to mount the real-time conversation route, message snapshot route, and the cancel route (when enabled) under a unified prefix, avoiding conflicts with existing services.
 
-`agui.WithPath` and `agui.WithMessagesSnapshotPath` only define sub-routes under the base path. The framework will use `url.JoinPath` to concatenate them with the base path to form the final accessible routes.
+`agui.WithPath`, `agui.WithMessagesSnapshotPath`, and `agui.WithCancelPath` only define sub-routes under the base path. The framework will concatenate them with the base path to form the final accessible routes.
 
 Here’s an example of usage:
 
 ```go
 server, err := agui.New(
     runner,
-    agui.WithBasePath("/agui"),                // Set the AG-UI prefix route
-    agui.WithPath("/chat"),                    // Set the chat route, default is "/"
-    agui.WithMessagesSnapshotEnabled(true),    // Enable message snapshot feature
-    agui.WithMessagesSnapshotPath("/history"), // Set the message snapshot route, default is "/history"
+    agui.WithBasePath("/agui"),                // Set the AG-UI prefix route.
+    agui.WithPath("/chat"),                    // Set the real-time conversation route, default is "/".
+    agui.WithCancelEnabled(true),              // Enable the cancel route.
+    agui.WithCancelPath("/cancel"),            // Set the cancel route, default is "/cancel".
+    agui.WithMessagesSnapshotEnabled(true),    // Enable the message snapshot feature.
+    agui.WithMessagesSnapshotPath("/history"), // Set the message snapshot route, default is "/history".
 )
 if err != nil {
     log.Fatalf("create agui server failed: %v", err)
 }
 ```
 
-In this case, the chat route will be `/agui/chat`, and the message snapshot route will be `/agui/history`.
+In this case, the real-time conversation route will be `/agui/chat`, the cancel route will be `/agui/cancel`, and the message snapshot route will be `/agui/history`.
 
 ## Best Practices
 
@@ -615,3 +694,31 @@ The effect is shown below. For a full example, refer to
 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report).
 
 ![report](../assets/gif/agui/report.gif)
+
+### GraphAgent Node Execution Progress
+
+With `GraphAgent`, a single run typically executes multiple nodes along the graph. To help the frontend clearly show “which node is currently executing”, the framework sends an `ACTIVITY_DELTA` event before each node starts executing.
+
+This event is emitted before the node actually runs. It is also emitted before resuming from an interrupt, which makes it suitable for consistent progress tracking.
+
+Example `ACTIVITY_DELTA` event (the `patch` follows [JSON Patch](https://jsonpatch.com/)):
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.start",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node"
+      }
+    }
+  ]
+}
+```
+
+Frontend handling suggestion: listen for `ACTIVITY_DELTA` events with `activityType == "graph.node.start"`, read `nodeId` from the patch, and locate the corresponding node in the UI.
+
+For a complete example, see [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph).

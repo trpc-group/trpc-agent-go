@@ -45,10 +45,15 @@ func (s *Service) CreateSessionSummary(
 		return err
 	}
 
-	// Persist to MySQL.
+	// Persist to MySQL using INSERT ... ON DUPLICATE KEY UPDATE for atomic upsert.
+	// This ensures no duplicate records can be created even under concurrent writes.
 	sess.SummariesMu.RLock()
 	sum := sess.Summaries[filterKey]
 	sess.SummariesMu.RUnlock()
+
+	if sum == nil {
+		return nil
+	}
 
 	summaryBytes, err := json.Marshal(sum)
 	if err != nil {
@@ -61,33 +66,20 @@ func (s *Service) CreateSessionSummary(
 		expiresAt = &t
 	}
 
-	// Try UPDATE first, then INSERT if no rows affected
-	result, err := s.mysqlClient.Exec(ctx,
+	_, err = s.mysqlClient.Exec(ctx,
 		fmt.Sprintf(
-			`UPDATE %s SET summary = ?, updated_at = ?, expires_at = ?
-			WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ? AND deleted_at IS NULL`,
+			`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+			ON DUPLICATE KEY UPDATE
+				summary = VALUES(summary),
+				updated_at = VALUES(updated_at),
+				expires_at = VALUES(expires_at),
+				deleted_at = NULL`,
 			s.tableSessionSummaries,
 		),
-		summaryBytes, sum.UpdatedAt, expiresAt, key.AppName, key.UserID, key.SessionID, filterKey)
-
+		key.AppName, key.UserID, key.SessionID, filterKey, summaryBytes, sum.UpdatedAt, expiresAt)
 	if err != nil {
-		return fmt.Errorf("update summary failed: %w", err)
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		// No existing record, insert new one
-		_, err = s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(
-				`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
-				s.tableSessionSummaries,
-			),
-			key.AppName, key.UserID, key.SessionID, filterKey, summaryBytes, sum.UpdatedAt, expiresAt)
-
-		if err != nil {
-			return fmt.Errorf("insert summary failed: %w", err)
-		}
+		return fmt.Errorf("upsert summary failed: %w", err)
 	}
 
 	return nil

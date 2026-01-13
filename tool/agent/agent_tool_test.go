@@ -1106,6 +1106,97 @@ func TestTool_StreamableCall_DefersCompletionToRunner(t *testing.T) {
 	require.Len(t, parent.Session.Events, 0)
 }
 
+type toolCallIDDroppingContext struct {
+	context.Context
+}
+
+func (c toolCallIDDroppingContext) Value(key any) any {
+	if _, ok := key.(tool.ContextKeyToolCallID); ok {
+		return nil
+	}
+	return c.Context.Value(key)
+}
+
+func TestTool_StreamableCall_DefersCompletion_ContextCloneDropsToolCallID(
+	t *testing.T,
+) {
+	const (
+		testToolCallID    = "call-1"
+		testSessionApp    = "app"
+		testSessionUser   = "user"
+		testSessionID     = "session"
+		testParentFilter  = "parent-agent"
+		testWaitAgentName = "waiter"
+		testToolPayload   = `{"request":"payload"}`
+	)
+
+	t.Cleanup(func() { agent.SetGoroutineContextCloner(nil) })
+	agent.SetGoroutineContextCloner(func(ctx context.Context) context.Context {
+		return toolCallIDDroppingContext{Context: ctx}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(
+			session.NewSession(
+				testSessionApp,
+				testSessionUser,
+				testSessionID,
+			),
+		),
+		agent.WithInvocationEventFilterKey(testParentFilter),
+	)
+	appender.Attach(parent, func(_ context.Context, evt *event.Event) error {
+		if evt == nil {
+			return nil
+		}
+		parent.Session.UpdateUserSession(evt)
+		return nil
+	})
+
+	at := NewTool(
+		&completionWaitAgent{name: testWaitAgentName},
+		WithStreamInner(true),
+	)
+
+	toolCtx := agent.NewInvocationContext(ctx, parent)
+	ctxWithToolCallID := context.WithValue(
+		toolCtx,
+		tool.ContextKeyToolCallID{},
+		testToolCallID,
+	)
+
+	reader, err := at.StreamableCall(
+		ctxWithToolCallID,
+		[]byte(testToolPayload),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	first, err := reader.Recv()
+	require.NoError(t, err)
+	barrierEvt, ok := first.Content.(*event.Event)
+	require.True(t, ok)
+	require.True(t, barrierEvt.RequiresCompletion)
+
+	require.Len(t, parent.Session.Events, 0)
+
+	completionID := agent.GetAppendEventNoticeKey(barrierEvt.ID)
+	require.NoError(t, parent.NotifyCompletion(ctx, completionID))
+
+	for {
+		_, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+	}
+
+	require.Len(t, parent.Session.Events, 0)
+}
+
 func TestShouldDeferStreamCompletion_NoSession(t *testing.T) {
 	ctxWithID := context.WithValue(
 		context.Background(),

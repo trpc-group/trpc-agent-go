@@ -108,6 +108,13 @@ type Options struct {
 	// GlobalInstruction is the global instruction for the agent.
 	// It will be used for all agents in the agent tree.
 	GlobalInstruction string
+	// ModelInstructions maps model.Info().Name to a model-specific instruction.
+	// When present, it overrides Instruction for matching models.
+	ModelInstructions map[string]string
+	// ModelGlobalInstructions maps model.Info().Name to a model-specific system
+	// prompt.
+	// When present, it overrides GlobalInstruction for matching models.
+	ModelGlobalInstructions map[string]string
 	// GenerationConfig contains the generation configuration.
 	GenerationConfig model.GenerationConfig
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
@@ -166,6 +173,12 @@ type Options struct {
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message when available (default: false).
 	AddSessionSummary bool
+	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
+	// When 0 (default), no limit is applied.
+	MaxHistoryRuns int
+	// summaryFormatter allows custom formatting of session summary content.
+	// When nil (default), uses the default formatSummaryContent function.
+	summaryFormatter func(summary string) string
 
 	// MaxLLMCalls is an optional upper bound on the number of LLM calls
 	// allowed per invocation for this agent. When the value is:
@@ -180,10 +193,6 @@ type Options struct {
 	//   - > 0: the limit is enforced per invocation.
 	//   - <= 0: no limit is applied (default, preserves existing behavior).
 	MaxToolIterations int
-
-	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
-	// When 0 (default), no limit is applied.
-	MaxHistoryRuns int
 
 	// PreserveSameBranch controls whether the content request processor
 	// should preserve original roles (assistant/tool) for events that
@@ -219,6 +228,8 @@ type Options struct {
 
 	// skillsRepository enables agent skills when non-nil.
 	skillsRepository skill.Repository
+	// skillsToolingGuidance overrides the built-in skills guidance block.
+	skillsToolingGuidance *string
 	// skillRunAllowedCommands restricts skill_run to allowlisted commands.
 	skillRunAllowedCommands []string
 	// skillRunDeniedCommands rejects denylisted commands for skill_run.
@@ -270,6 +281,22 @@ func WithInstruction(instruction string) Option {
 func WithGlobalInstruction(instruction string) Option {
 	return func(opts *Options) {
 		opts.GlobalInstruction = instruction
+	}
+}
+
+// WithModelInstructions sets model-specific instruction overrides.
+// Key: model.Info().Name, Value: instruction text.
+func WithModelInstructions(instructions map[string]string) Option {
+	return func(opts *Options) {
+		opts.ModelInstructions = cloneStringMap(instructions)
+	}
+}
+
+// WithModelGlobalInstructions sets model-specific system prompt overrides.
+// Key: model.Info().Name, Value: system prompt text.
+func WithModelGlobalInstructions(prompts map[string]string) Option {
+	return func(opts *Options) {
+		opts.ModelGlobalInstructions = cloneStringMap(prompts)
 	}
 }
 
@@ -349,6 +376,22 @@ func WithRefreshToolSetsOnRun(refresh bool) Option {
 func WithSkills(repo skill.Repository) Option {
 	return func(opts *Options) {
 		opts.skillsRepository = repo
+	}
+}
+
+// WithSkillsToolingGuidance overrides the tooling/workspace guidance
+// block appended to the skills overview in the system message.
+//
+// Behavior:
+//   - Not configured: use the built-in default guidance.
+//   - Configured with empty string: omit the guidance block.
+//   - Configured with non-empty string: append the provided text.
+func WithSkillsToolingGuidance(
+	guidance string,
+) Option {
+	return func(opts *Options) {
+		text := guidance
+		opts.skillsToolingGuidance = &text
 	}
 }
 
@@ -464,6 +507,32 @@ func WithDefaultTransferMessage(msg string) Option {
 	}
 }
 
+// WithStructuredOutputJSONSchema sets a JSON schema structured output for normal runs.
+//
+// Unlike WithOutputSchema, this uses the model-native response_format json_schema mechanism
+// (when supported by the provider) and can be used together with tools/toolsets.
+//
+// name should be a short identifier for the schema. Some providers (e.g. OpenAI) require it.
+func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict bool, description string) Option {
+	return func(opts *Options) {
+		if schema == nil {
+			return
+		}
+		if name == "" {
+			name = "output"
+		}
+		opts.StructuredOutput = &model.StructuredOutput{
+			Type: model.StructuredOutputJSONSchema,
+			JSONSchema: &model.JSONSchemaConfig{
+				Name:        name,
+				Schema:      schema,
+				Strict:      strict,
+				Description: description,
+			},
+		}
+	}
+}
+
 // WithStructuredOutputJSON sets a JSON schema structured output for normal runs.
 // The schema is constructed automatically from the provided example type.
 // Provide a typed zero-value pointer like: new(MyStruct) or (*MyStruct)(nil) and we infer the type.
@@ -483,6 +552,9 @@ func WithStructuredOutputJSON(examplePtr any, strict bool, description string) O
 		gen := jsonschema.New()
 		schema := gen.Generate(t.Elem())
 		name := t.Elem().Name()
+		if name == "" {
+			name = "output"
+		}
 		opts.StructuredOutput = &model.StructuredOutput{
 			Type: model.StructuredOutputJSONSchema,
 			JSONSchema: &model.JSONSchemaConfig{
@@ -618,6 +690,19 @@ func WithReasoningContentMode(mode string) Option {
 	}
 }
 
+// WithSummaryFormatter sets a custom formatter for session summary content.
+// This allows users to customize how summaries are presented to the model.
+// Example:
+//
+//	llmagent.WithSummaryFormatter(func(summary string) string {
+//	    return fmt.Sprintf("## Previous Context\n\n%s", summary)
+//	})
+func WithSummaryFormatter(formatter func(summary string) string) Option {
+	return func(opts *Options) {
+		opts.summaryFormatter = formatter
+	}
+}
+
 // WithToolFilter sets the tool filter function.
 func WithToolFilter(filter tool.FilterFunc) Option {
 	return func(opts *Options) {
@@ -645,4 +730,15 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 			panic("invalid option value")
 		}
 	}
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }

@@ -824,6 +824,202 @@ func TestRunner_GraphCompletion_DedupFinalChoices(t *testing.T) {
 	require.Empty(t, completion.Response.Choices)
 }
 
+func TestRunner_StreamMode_FiltersEvents(t *testing.T) {
+	const (
+		appName   = "stream-mode-app"
+		userID    = "user"
+		sessionID = "session"
+		agentName = "stream-mode-agent"
+	)
+
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &streamModeMockAgent{name: agentName}
+	r := NewRunner(appName, ag, WithSessionService(sessionService))
+
+	tests := []struct {
+		name     string
+		opts     []agent.RunOption
+		allowed  map[string]bool
+		required map[string]bool
+	}{
+		{
+			name: "messages",
+			opts: []agent.RunOption{
+				agent.WithStreamMode(agent.StreamModeMessages),
+			},
+			allowed: map[string]bool{
+				model.ObjectTypeChatCompletionChunk: true,
+				model.ObjectTypeChatCompletion:      true,
+				model.ObjectTypeRunnerCompletion:    true,
+			},
+			required: map[string]bool{
+				model.ObjectTypeChatCompletionChunk: true,
+				model.ObjectTypeRunnerCompletion:    true,
+			},
+		},
+		{
+			name: "updates",
+			opts: []agent.RunOption{
+				agent.WithStreamMode(agent.StreamModeUpdates),
+			},
+			allowed: map[string]bool{
+				graph.ObjectTypeGraphStateUpdate:   true,
+				graph.ObjectTypeGraphChannelUpdate: true,
+				graph.ObjectTypeGraphExecution:     true,
+				model.ObjectTypeStateUpdate:        true,
+				model.ObjectTypeRunnerCompletion:   true,
+			},
+			required: map[string]bool{
+				graph.ObjectTypeGraphStateUpdate: true,
+				model.ObjectTypeRunnerCompletion: true,
+			},
+		},
+		{
+			name: "checkpoints",
+			opts: []agent.RunOption{
+				agent.WithStreamMode(agent.StreamModeCheckpoints),
+			},
+			allowed: map[string]bool{
+				graph.ObjectTypeGraphCheckpointCommitted: true,
+				model.ObjectTypeRunnerCompletion:         true,
+			},
+			required: map[string]bool{
+				graph.ObjectTypeGraphCheckpointCommitted: true,
+				model.ObjectTypeRunnerCompletion:         true,
+			},
+		},
+		{
+			name: "tasks",
+			opts: []agent.RunOption{
+				agent.WithStreamMode(agent.StreamModeTasks),
+			},
+			allowed: map[string]bool{
+				graph.ObjectTypeGraphNodeStart:    true,
+				graph.ObjectTypeGraphNodeComplete: true,
+				graph.ObjectTypeGraphPregelStep:   true,
+				model.ObjectTypeRunnerCompletion:  true,
+			},
+			required: map[string]bool{
+				graph.ObjectTypeGraphNodeStart:   true,
+				model.ObjectTypeRunnerCompletion: true,
+			},
+		},
+		{
+			name: "custom",
+			opts: []agent.RunOption{
+				agent.WithStreamMode(agent.StreamModeCustom),
+			},
+			allowed: map[string]bool{
+				graph.ObjectTypeGraphNodeCustom:  true,
+				model.ObjectTypeRunnerCompletion: true,
+			},
+			required: map[string]bool{
+				graph.ObjectTypeGraphNodeCustom:  true,
+				model.ObjectTypeRunnerCompletion: true,
+			},
+		},
+		{
+			name: "debug",
+			opts: []agent.RunOption{
+				agent.WithStreamMode(agent.StreamModeDebug),
+			},
+			allowed: map[string]bool{
+				graph.ObjectTypeGraphNodeStart:           true,
+				graph.ObjectTypeGraphNodeComplete:        true,
+				graph.ObjectTypeGraphCheckpointCommitted: true,
+				graph.ObjectTypeGraphPregelStep:          true,
+				model.ObjectTypeRunnerCompletion:         true,
+			},
+			required: map[string]bool{
+				graph.ObjectTypeGraphNodeStart:           true,
+				graph.ObjectTypeGraphCheckpointCommitted: true,
+				model.ObjectTypeRunnerCompletion:         true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch, err := r.Run(
+				context.Background(),
+				userID,
+				sessionID,
+				model.NewUserMessage("hi"),
+				tt.opts...,
+			)
+			require.NoError(t, err)
+
+			seen := make(map[string]bool)
+			for e := range ch {
+				require.NotNil(t, e)
+				seen[e.Object] = true
+				if !tt.allowed[e.Object] {
+					t.Fatalf("unexpected event object: %q", e.Object)
+				}
+			}
+
+			for obj := range tt.required {
+				require.True(t, seen[obj], "missing %q", obj)
+			}
+		})
+	}
+}
+
+type streamModeMockAgent struct {
+	name string
+}
+
+func (m *streamModeMockAgent) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *streamModeMockAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *streamModeMockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *streamModeMockAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *streamModeMockAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 8)
+	go func() {
+		defer close(ch)
+		ch <- event.New(invocation.InvocationID, m.name,
+			event.WithObject(graph.ObjectTypeGraphNodeStart))
+		ch <- event.New(invocation.InvocationID, m.name,
+			event.WithObject(graph.ObjectTypeGraphStateUpdate))
+		ch <- event.New(invocation.InvocationID, m.name,
+			event.WithObject(graph.ObjectTypeGraphCheckpointCommitted))
+		ch <- event.New(invocation.InvocationID, m.name,
+			event.WithObject(graph.ObjectTypeGraphNodeCustom))
+		ch <- event.NewResponseEvent(invocation.InvocationID, m.name,
+			&model.Response{
+				Object: model.ObjectTypeChatCompletionChunk,
+				Done:   false,
+				Choices: []model.Choice{{
+					Index: 0,
+					Delta: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "hi",
+					},
+				}},
+			})
+		ch <- event.New(invocation.InvocationID, m.name,
+			event.WithObject(graph.ObjectTypeGraphPregelStep))
+		ch <- event.New(invocation.InvocationID, m.name,
+			event.WithObject(graph.ObjectTypeGraphNodeComplete))
+	}()
+	return ch, nil
+}
+
 // graphCompletionMockAgent emits a graph completion event with state delta
 // and choices.
 type graphCompletionMockAgent struct {
@@ -1742,6 +1938,58 @@ func (m *oneEventAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan 
 	return ch, nil
 }
 
+type tickCtxAgent struct {
+	name     string
+	interval time.Duration
+}
+
+func (m *tickCtxAgent) Info() agent.Info { return agent.Info{Name: m.name} }
+
+func (m *tickCtxAgent) SubAgents() []agent.Agent { return nil }
+
+func (m *tickCtxAgent) FindSubAgent(name string) agent.Agent { return nil }
+
+func (m *tickCtxAgent) Tools() []tool.Tool { return nil }
+
+func (m *tickCtxAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	const tickContent = "tick"
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		ticker := time.NewTicker(m.interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				evt := event.NewResponseEvent(
+					inv.InvocationID,
+					m.name,
+					&model.Response{
+						Done: false,
+						Choices: []model.Choice{{
+							Index: 0,
+							Message: model.NewAssistantMessage(
+								tickContent,
+							),
+						}},
+					},
+				)
+				select {
+				case <-ctx.Done():
+					return
+				case ch <- evt:
+				}
+			}
+		}
+	}()
+	return ch, nil
+}
+
 func TestProcessAgentEvents_EmitEventContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before running; EmitEvent should take ctx.Done() branch
@@ -1756,6 +2004,196 @@ func TestProcessAgentEvents_EmitEventContextCanceled(t *testing.T) {
 	require.Equal(t, 0, got)
 }
 
+func TestRunner_Run_DetachedCancelKeepsDeadline(t *testing.T) {
+	const (
+		timeout  = 80 * time.Millisecond
+		maxWait  = 500 * time.Millisecond
+		interval = 10 * time.Millisecond
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	cancel()
+
+	r := NewRunner(
+		"app",
+		&tickCtxAgent{name: "t", interval: interval},
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	ch, err := r.Run(
+		ctx,
+		"u",
+		"s",
+		model.NewUserMessage(""),
+		agent.WithDetachedCancel(true),
+	)
+	require.NoError(t, err)
+
+	deadline := time.After(maxWait)
+	var events int
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				require.Greater(t, events, 0)
+				return
+			}
+			events++
+		case <-deadline:
+			t.Fatal("run did not finish in time")
+		}
+	}
+}
+
+func TestRunner_Run_MaxRunDuration(t *testing.T) {
+	const (
+		parentTimeout = time.Second
+		maxRun        = 50 * time.Millisecond
+		maxWait       = 500 * time.Millisecond
+		interval      = 10 * time.Millisecond
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), parentTimeout)
+	defer cancel()
+
+	r := NewRunner(
+		"app",
+		&tickCtxAgent{name: "t", interval: interval},
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	ch, err := r.Run(
+		ctx,
+		"u",
+		"s",
+		model.NewUserMessage(""),
+		agent.WithMaxRunDuration(maxRun),
+	)
+	require.NoError(t, err)
+
+	deadline := time.After(maxWait)
+	select {
+	case <-deadline:
+		t.Fatal("run did not finish in time")
+	case <-drainChannel(ch):
+	}
+}
+
+func TestRunner_ManagedRunner_CancelAndStatus(t *testing.T) {
+	const (
+		requestID = "req-cancel-1"
+		maxWait   = 500 * time.Millisecond
+		interval  = 10 * time.Millisecond
+	)
+
+	r := NewRunner(
+		"app",
+		&tickCtxAgent{name: "t", interval: interval},
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	mr, ok := r.(ManagedRunner)
+	require.True(t, ok)
+
+	ctx := context.Background()
+	ch, err := r.Run(
+		ctx,
+		"u",
+		"s",
+		model.NewUserMessage(""),
+		agent.WithRequestID(requestID),
+		agent.WithDetachedCancel(true),
+	)
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(maxWait):
+		t.Fatal("did not receive first event")
+	case _, ok := <-ch:
+		require.True(t, ok)
+	}
+
+	status, ok := mr.RunStatus(requestID)
+	require.True(t, ok)
+	require.Equal(t, requestID, status.RequestID)
+	require.NotEmpty(t, status.InvocationID)
+	require.GreaterOrEqual(t, status.EventCount, 1)
+	require.False(t, status.LastEventAt.IsZero())
+
+	require.True(t, mr.Cancel(requestID))
+
+	select {
+	case <-time.After(maxWait):
+		t.Fatal("run did not finish after cancel")
+	case <-drainChannel(ch):
+	}
+
+	_, ok = mr.RunStatus(requestID)
+	require.False(t, ok)
+	require.False(t, mr.Cancel(requestID))
+}
+
+func TestRunner_Close_CancelsRunningRuns(t *testing.T) {
+	const (
+		requestID = "req-close-1"
+		maxWait   = 500 * time.Millisecond
+		interval  = 10 * time.Millisecond
+	)
+
+	r := NewRunner(
+		"app",
+		&tickCtxAgent{name: "t", interval: interval},
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	mr, ok := r.(ManagedRunner)
+	require.True(t, ok)
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage(""),
+		agent.WithRequestID(requestID),
+	)
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(maxWait):
+		t.Fatal("did not receive first event")
+	case _, ok := <-ch:
+		require.True(t, ok)
+	}
+
+	require.NoError(t, r.Close())
+
+	select {
+	case <-time.After(maxWait):
+		t.Fatal("run did not finish after close")
+	case <-drainChannel(ch):
+	}
+
+	_, ok = mr.RunStatus(requestID)
+	require.False(t, ok)
+}
+
+func TestRunner_registerRun_ValidatesInput(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+
+	_, err := rr.registerRun("", RunStatus{}, func() {})
+	require.Error(t, err)
+
+	_, err = rr.registerRun("run", RunStatus{}, nil)
+	require.Error(t, err)
+}
+
+func TestRunner_registerRun_DuplicateRunID(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+
+	handle, err := rr.registerRun("run", RunStatus{}, func() {})
+	require.NoError(t, err)
+	require.NotNil(t, handle)
+
+	_, err = rr.registerRun("run", RunStatus{}, func() {})
+	require.Error(t, err)
+}
+
 func TestProcessAgentEvents_EmitEventErrorBranch_Direct(t *testing.T) {
 	// Call processAgentEvents directly to deterministically exercise the emit error branch.
 	rr := NewRunner("app", &noOpAgent{name: "a"}, WithSessionService(sessioninmemory.NewSessionService())).(*runner)
@@ -1767,7 +2205,7 @@ func TestProcessAgentEvents_EmitEventErrorBranch_Direct(t *testing.T) {
 	agentCh := make(chan *event.Event)
 	flushCh := make(chan *flush.FlushRequest)
 	// No Attach needed because processAgentEvents will attach using this channel.
-	processed := rr.processAgentEvents(ctx, sess, inv, agentCh, flushCh)
+	processed := rr.processAgentEvents(ctx, sess, inv, agentCh, flushCh, nil)
 	// Send one event, then close agentCh
 	go func() {
 		agentCh <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("x")}}}}
@@ -1781,6 +2219,16 @@ func TestProcessAgentEvents_EmitEventErrorBranch_Direct(t *testing.T) {
 		n++
 	}
 	require.Equal(t, 0, n)
+}
+
+func drainChannel(ch <-chan *event.Event) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		for range ch {
+		}
+		close(done)
+	}()
+	return done
 }
 
 func TestShouldAppendUserMessage_Cases(t *testing.T) {

@@ -33,6 +33,7 @@ type options struct {
 	sharding       uint32
 	enableTSVector bool
 	instanceName   string
+	extraOptions   []any
 
 	// Remote embedding configuration.
 	// When embeddingModel is set, remote embedding is automatically enabled.
@@ -207,6 +208,14 @@ func WithLanguage(language string) Option {
 func WithTCVectorInstance(name string) Option {
 	return func(o *options) {
 		o.instanceName = name
+	}
+}
+
+// WithExtraOptions passes through extra client builder options to storage tcvector.
+// It is mainly for customized client builders; the default builder ignores them.
+func WithExtraOptions(extraOptions ...any) Option {
+	return func(o *options) {
+		o.extraOptions = append(o.extraOptions, extraOptions...)
 	}
 }
 

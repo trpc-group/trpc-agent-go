@@ -186,6 +186,63 @@ Notes:
 eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
 ```
 
+#### Request ID (requestID) and Run Control
+
+Each call to `Runner.Run` is a **run**. If you want to cancel a run or query
+its status, you need a request identifier (requestID).
+
+You can provide your own requestID (recommended) via `agent.WithRequestID`
+(for example, a Universally Unique Identifier (UUID)). Runner injects it into
+every emitted `event.Event` (`event.RequestID`).
+
+```go
+requestID := "req-123"
+
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithRequestID(requestID),
+)
+if err != nil {
+    panic(err)
+}
+
+managed := r.(runner.ManagedRunner)
+status, ok := managed.RunStatus(requestID)
+_ = status
+_ = ok
+
+// Cancel the run by requestID.
+managed.Cancel(requestID)
+```
+
+#### Detached Cancellation (background execution)
+
+In Go, `context.Context` (often named `ctx`) carries both cancellation and a
+deadline. By default, Runner stops when `ctx` is cancelled.
+
+If you want the run to continue after a parent cancellation, enable detached
+cancellation and use a timeout to bound the total runtime:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithRequestID(requestID),
+    agent.WithDetachedCancel(true),
+    agent.WithMaxRunDuration(30*time.Second),
+)
+```
+
+Runner enforces the earlier of:
+
+- the parent context deadline (if any)
+- `MaxRunDuration` (if set)
+
 #### Resume Interrupted Runs (tools-first resume)
 
 In long-running conversations, users may interrupt the agent while it is still
@@ -322,21 +379,75 @@ eventChan, err := r.Run(
 
 Behavior summary:
 
-- Default (`false`): graph LLM nodes emit only partial chunks. The workflow’s
-  final text is available on the Runner completion event via
-  `StateDelta[graph.StateKeyLastResponse]`.
-- Enabled (`true`): graph LLM nodes also emit the final `Done=true` assistant
-  message events.
-  - Intermediate nodes may now emit assistant messages (and Runner may persist
-    them into the Session).
-  - Runner may omit echoing the final assistant message in its completion event
-    if it can prove (by response identifier (ID)) that the same final message
-    was already emitted earlier, avoiding duplicate display.
+First, one key idea: this option controls whether each graph Large Language
+Model (LLM) node emits an extra final `Done=true` assistant message event. It
+does not mean the Runner completion event will always have (or not have)
+`Response.Choices`.
+
+Assume your graph is `llm1 -> llm2 -> llm3`, and `llm3` produces the final
+answer:
+
+- Case 1: `agent.WithGraphEmitFinalModelResponses(false)` (default)
+  - `llm1/llm2/llm3`: emit only partial chunks (`Done=false`), no final
+    `Done=true` assistant message events.
+  - Runner completion event: to keep the “read only the last event” pattern
+    working, Runner echoes `llm3`’s final output into completion
+    `Response.Choices` (when the graph provides final choices). The final text
+    is also always available via `StateDelta[graph.StateKeyLastResponse]`.
+- Case 2: `agent.WithGraphEmitFinalModelResponses(true)`
+  - `llm1/llm2/llm3`: in addition to partial chunks, each node emits a final
+    `Done=true` assistant message event (so intermediate nodes may now produce
+    complete assistant messages, and Runner may persist those non-partial events
+    into the Session).
+  - Runner completion event: to avoid duplicating the final message, Runner
+    deduplicates by response identifier (ID). When it can confirm the final
+    message already appeared earlier, it omits the echo, so completion
+    `Response.Choices` may be empty. The final text should still be read from
+    `StateDelta[graph.StateKeyLastResponse]`.
 
 Recommendation: for GraphAgent workflows, always read the final output from the
 Runner completion event’s `StateDelta` (for example,
 `graph.StateKeyLastResponse`). Treat `Response.Choices` on the completion event
 as optional when this option is enabled.
+
+#### 🎛️ Option: StreamMode
+
+Runner can filter the event stream before it reaches your application code.
+This provides a single, run-level switch to select which categories of events
+are forwarded to your `eventChan`.
+
+Use `agent.WithStreamMode(...)`:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithStreamMode(agent.StreamModeMessages),
+)
+```
+
+Supported modes (graph workflows):
+
+- `messages`: model output events (for example, `chat.completion.chunk`)
+- `updates`: `graph.state.update` / `graph.channel.update` / `graph.execution`
+- `checkpoints`: `graph.checkpoint.*`
+- `tasks`: task lifecycle events (`graph.node.*`, `graph.pregel.*`)
+- `debug`: same as `checkpoints` + `tasks`
+- `custom`: node-emitted events (`graph.node.custom`)
+
+Notes:
+
+- When `agent.StreamModeMessages` is selected, graph-based Large Language Model
+  (LLM) nodes enable final model response events automatically for that run.
+  To override it, call `agent.WithGraphEmitFinalModelResponses(false)` after
+  `agent.WithStreamMode(...)`.
+- StreamMode only affects what Runner forwards to your `eventChan`. Runner still
+  processes and persists events internally.
+- For graph workflows, some event types (for example, `graph.checkpoint.*`)
+  are emitted only when their corresponding mode is selected.
+- Runner always emits a final `runner.completion` event.
 
 ## 💾 Session Management
 
