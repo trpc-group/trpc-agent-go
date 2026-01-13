@@ -429,7 +429,7 @@ metricManager.Add(ctx, appName, evalSetID, evalMetric)
 
 An EvalSet is a collection of EvalCase instances, identified by a unique EvalSetID, serving as session data within the evaluation process.
 
-An EvalCase represents a set of evaluation cases within the same Session and includes a unique identifier (EvalID), the conversation content, and session initialization information.
+An EvalCase represents a set of evaluation cases within the same Session and includes a unique identifier (EvalID), the conversation content, optional `contextMessages`, and session initialization information.
 
 Conversation data includes three types of content:
 
@@ -456,6 +456,7 @@ type EvalSet struct {
 // EvalCase represents a single evaluation case.
 type EvalCase struct {
 	EvalID            string               // Unique identifier of the case.
+	ContextMessages   []*model.Message     // Context messages injected into each inference run.
 	Conversation      []*Invocation        // Conversation sequence.
 	SessionInput      *SessionInput        // Session initialization data.
 	CreationTimestamp *epochtime.EpochTime // Creation time.
@@ -1840,3 +1841,44 @@ An example metric config file:
 ```
 
 This evaluator requires the Agent’s tool calls to return retrieval results. See the complete example at [examples/evaluation/llm/knowledgerecall](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/knowledgerecall).
+
+## Best Practices
+
+### Context Injection
+
+`contextMessages` provides additional context messages for an EvalCase. It is commonly used to add background information, role setup, or examples. It also supports pure model evaluation by configuring the system prompt per case as evaluation data to compare different model and prompt combinations.
+
+Context injection example:
+
+```json
+{
+  "evalSetId": "contextmessage-basic",
+  "name": "contextmessage-basic",
+  "evalCases": [
+    {
+      "evalId": "identity_name",
+      "contextMessages": [
+        {
+          "role": "system",
+          "content": "You are trpc-agent-go bot."
+        }
+      ],
+      "conversation": [
+        {
+          "invocationId": "identity_name-1",
+          "userContent": {
+            "role": "user",
+            "content": "Who are you?"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "contextmessage-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}
+```
+
+For a complete example, see [examples/evaluation/contextmessage](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/contextmessage).

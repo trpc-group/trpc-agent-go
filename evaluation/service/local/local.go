@@ -113,6 +113,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, evalSetID string,
 		evalCase.Conversation,
 		evalCase.SessionInput,
 		sessionID,
+		evalCase.ContextMessages,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("inference: %w", err)
