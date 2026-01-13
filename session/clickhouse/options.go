@@ -27,8 +27,8 @@ const (
 	defaultBatchTimeout        = 100 * time.Millisecond
 	defaultAsyncSummaryNum     = 3
 	defaultSummaryQueueSize    = 100
+	defaultSummaryJobTimeout   = 30 * time.Second
 	defaultAsyncPersistTimeout = 10 * time.Second
-	defaultDeletedRetention    = 24 * time.Hour
 )
 
 // ServiceOpts is the options for the ClickHouse session service.
@@ -84,6 +84,7 @@ var defaultOptions = ServiceOpts{
 	batchTimeout:      defaultBatchTimeout,
 	asyncSummaryNum:   defaultAsyncSummaryNum,
 	summaryQueueSize:  defaultSummaryQueueSize,
+	summaryJobTimeout: defaultSummaryJobTimeout,
 	deletedRetention:  0, // Disabled by default, relying on Native TTL
 }
 

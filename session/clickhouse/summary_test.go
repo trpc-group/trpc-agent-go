@@ -158,3 +158,43 @@ func TestService_CreateSessionSummary_Error(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "upsert summary failed")
 }
+
+func TestService_CreateSessionSummary_NoTTL(t *testing.T) {
+	// Register mock client
+	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockClient{}, nil
+	})
+
+	mockCli := &mockClient{}
+	mockSum := &mockSummarizer{}
+	s, err := NewService(WithSummarizer(mockSum), WithSkipDBInit(true), WithSessionTTL(0), WithClickHouseDSN("clickhouse://localhost:9000"))
+	assert.NoError(t, err)
+	s.chClient = mockCli
+
+	sess := &session.Session{
+		ID:        "sess1",
+		AppName:   "app1",
+		UserID:    "user1",
+		Summaries: make(map[string]*session.Summary),
+		Events:    []event.Event{{ID: "1"}},
+	}
+
+	mockSum.summarizeFunc = func(ctx context.Context, sess *session.Session) (string, error) {
+		return "test summary", nil
+	}
+
+	// Mock exec - should pass nil for expires_at since sessionTTL is 0
+	execCalled := false
+	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
+		execCalled = true
+		assert.Contains(t, query, "INSERT INTO session_summaries")
+		// expires_at should be nil (last argument)
+		assert.Len(t, args, 8)
+		assert.Nil(t, args[7]) // expires_at should be nil
+		return nil
+	}
+
+	err = s.CreateSessionSummary(context.Background(), sess, "key", true)
+	assert.NoError(t, err)
+	assert.True(t, execCalled)
+}

@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
 )
 
@@ -39,16 +40,15 @@ type SessionState struct {
 
 // Service is the ClickHouse session service.
 type Service struct {
-	opts            ServiceOpts
-	chClient        storage.Client
-	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
-	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
-	cleanupTicker   *time.Ticker             // ticker for automatic cleanup
-	cleanupDone     chan struct{}            // signal to stop cleanup routine
-	cleanupOnce     sync.Once                // ensure cleanup routine is stopped only once
-	summaryWg       sync.WaitGroup           // wait group for summary workers
-	persistWg       sync.WaitGroup           // wait group for persist workers
-	once            sync.Once
+	opts           ServiceOpts
+	chClient       storage.Client
+	asyncWorker    *isummary.AsyncSummaryWorker // async summary worker
+	eventPairChans []chan *sessionEventPair     // channel for session events to persistence
+	cleanupTicker  *time.Ticker                 // ticker for automatic cleanup
+	cleanupDone    chan struct{}                // signal to stop cleanup routine
+	cleanupOnce    sync.Once                    // ensure cleanup routine is stopped only once
+	persistWg      sync.WaitGroup               // wait group for persist workers
+	once           sync.Once
 
 	// Table names with prefix applied
 	tableSessionStates    string
@@ -61,14 +61,6 @@ type Service struct {
 type sessionEventPair struct {
 	key   session.Key
 	event *event.Event
-}
-
-// summaryJob represents a summary job to be processed asynchronously.
-type summaryJob struct {
-	ctx       context.Context
-	filterKey string
-	force     bool
-	session   *session.Session
 }
 
 // NewService creates a new ClickHouse session service.
@@ -131,8 +123,15 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 
 	// Start async summary workers if summarizer is configured
-	if opts.summarizer != nil {
-		s.startAsyncSummaryWorker()
+	if opts.summarizer != nil && opts.asyncSummaryNum > 0 {
+		s.asyncWorker = isummary.NewAsyncSummaryWorker(isummary.AsyncSummaryConfig{
+			Summarizer:        opts.summarizer,
+			AsyncSummaryNum:   opts.asyncSummaryNum,
+			SummaryQueueSize:  opts.summaryQueueSize,
+			SummaryJobTimeout: opts.summaryJobTimeout,
+			CreateSummaryFunc: s.CreateSessionSummary,
+		})
+		s.asyncWorker.Start()
 	}
 
 	// Start cleanup routine if any TTL is configured
@@ -158,11 +157,8 @@ func (s *Service) Close() error {
 		s.persistWg.Wait()
 
 		// Close async summary workers and wait for them to finish
-		if s.summaryJobChans != nil {
-			for _, ch := range s.summaryJobChans {
-				close(ch)
-			}
-			s.summaryWg.Wait()
+		if s.asyncWorker != nil {
+			s.asyncWorker.Stop()
 		}
 
 		// Close ClickHouse client
@@ -302,7 +298,7 @@ func (s *Service) GetSession(
 		// Refresh session TTL if configured and session exists
 		if sess != nil && s.opts.sessionTTL > 0 {
 			if err := s.refreshSessionTTL(c.Context, c.Key); err != nil {
-				log.Warnf("failed to refresh session TTL: %v", err)
+				log.WarnfContext(c.Context, "failed to refresh session TTL: %v", err)
 				// Don't fail the GetSession call, just log the warning
 			}
 		}

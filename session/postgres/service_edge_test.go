@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -258,6 +259,211 @@ func TestAppendEvent_ToExpiredSession(t *testing.T) {
 	err := s.AppendEvent(context.Background(), sess, evt)
 	require.NoError(t, err)
 
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddEvent_UnmarshalStateError(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow([]byte("invalid-json"), nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnRows(rows)
+
+	evt := &event.Event{}
+
+	err := s.addEvent(context.Background(), key, evt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal session state failed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddEvent_SkipInsertWhenResponseMissing(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	stateData := &SessionState{State: session.StateMap{"foo": []byte("bar")}}
+	stateBytes, _ := json.Marshal(stateData)
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnRows(rows)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			"test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	evt := &event.Event{}
+
+	err := s.addEvent(context.Background(), key, evt)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddEvent_MarshalEventError(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	stateData := &SessionState{State: session.StateMap{}}
+	stateBytes, _ := json.Marshal(stateData)
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnRows(rows)
+
+	evt := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{
+							{
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name:      "demo",
+									Arguments: []byte("{}"),
+								},
+								ExtraFields: map[string]any{
+									"unsupported": math.Inf(1),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := s.addEvent(context.Background(), key, evt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "marshal event failed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddTrackEvent_UnmarshalStateError(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow([]byte("invalid-json"), nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnRows(rows)
+
+	trackEvt := &session.TrackEvent{
+		Track:     session.Track("timeline"),
+		Payload:   json.RawMessage([]byte("{\"foo\":\"bar\"}")),
+		Timestamp: time.Now(),
+	}
+
+	err := s.addTrackEvent(context.Background(), key, trackEvt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal session state failed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddTrackEvent_EnsureTrackExistsError(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	invalidState := session.StateMap{
+		"tracks": []byte("not-json"),
+	}
+	stateBytes, _ := json.Marshal(&SessionState{State: invalidState})
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnRows(rows)
+
+	trackEvt := &session.TrackEvent{
+		Track:     session.Track("timeline"),
+		Payload:   json.RawMessage([]byte("{\"foo\":\"bar\"}")),
+		Timestamp: time.Now(),
+	}
+
+	err := s.addTrackEvent(context.Background(), key, trackEvt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ensure track indexed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddTrackEvent_TransactionInsertError(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	stateData := &SessionState{State: session.StateMap{"tracks": []byte("[]")}}
+	stateBytes, _ := json.Marshal(stateData)
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnRows(rows)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			"test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO session_track_events").
+		WithArgs("test-app", "test-user", "test-session", "timeline",
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg()).
+		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	trackEvt := &session.TrackEvent{
+		Track:     session.Track("timeline"),
+		Payload:   json.RawMessage([]byte("{\"foo\":\"bar\"}")),
+		Timestamp: time.Now(),
+	}
+
+	err := s.addTrackEvent(context.Background(), key, trackEvt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "store track event failed")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -709,5 +915,273 @@ func TestGetSummariesList(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "unmarshal summary failed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteSessionState_SoftDelete_StateError(t *testing.T) {
+	s, mock, db := setupMockService(t, &TestServiceOpts{
+		softDelete: boolPtr(true),
+	})
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	mock.ExpectBegin()
+
+	// Mock soft delete session state - returns error.
+	mock.ExpectExec("UPDATE session_states SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WillReturnError(assert.AnError)
+
+	mock.ExpectRollback()
+
+	err := s.DeleteSession(context.Background(), key)
+	require.Error(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteSessionState_SoftDelete_SummariesError(t *testing.T) {
+	s, mock, db := setupMockService(t, &TestServiceOpts{
+		softDelete: boolPtr(true),
+	})
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	mock.ExpectBegin()
+
+	// Mock soft delete session state - success.
+	mock.ExpectExec("UPDATE session_states SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock soft delete session summaries - returns error.
+	mock.ExpectExec("UPDATE session_summaries SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WillReturnError(assert.AnError)
+
+	mock.ExpectRollback()
+
+	err := s.DeleteSession(context.Background(), key)
+	require.Error(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteSessionState_SoftDelete_EventsError(t *testing.T) {
+	s, mock, db := setupMockService(t, &TestServiceOpts{
+		softDelete: boolPtr(true),
+	})
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	mock.ExpectBegin()
+
+	// Mock soft delete session state - success.
+	mock.ExpectExec("UPDATE session_states SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock soft delete session summaries - success.
+	mock.ExpectExec("UPDATE session_summaries SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock soft delete session events - returns error.
+	mock.ExpectExec("UPDATE session_events SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WillReturnError(assert.AnError)
+
+	mock.ExpectRollback()
+
+	err := s.DeleteSession(context.Background(), key)
+	require.Error(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteSessionState_SoftDelete_TracksError(t *testing.T) {
+	s, mock, db := setupMockService(t, &TestServiceOpts{
+		softDelete: boolPtr(true),
+	})
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	mock.ExpectBegin()
+
+	// Mock soft delete session state - success.
+	mock.ExpectExec("UPDATE session_states SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock soft delete session summaries - success.
+	mock.ExpectExec("UPDATE session_summaries SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock soft delete session events - success.
+	mock.ExpectExec("UPDATE session_events SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock soft delete session tracks - returns error.
+	mock.ExpectExec("UPDATE session_track_events SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WillReturnError(assert.AnError)
+
+	mock.ExpectRollback()
+
+	err := s.DeleteSession(context.Background(), key)
+	require.Error(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteSessionState_HardDelete_StateError(t *testing.T) {
+	s, mock, db := setupMockService(t, &TestServiceOpts{
+		softDelete: boolPtr(false),
+	})
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	mock.ExpectBegin()
+
+	// Mock hard delete session state - returns error.
+	mock.ExpectExec("DELETE FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnError(assert.AnError)
+
+	mock.ExpectRollback()
+
+	err := s.DeleteSession(context.Background(), key)
+	require.Error(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteSessionState_HardDelete_SummariesError(t *testing.T) {
+	s, mock, db := setupMockService(t, &TestServiceOpts{
+		softDelete: boolPtr(false),
+	})
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	mock.ExpectBegin()
+
+	// Mock hard delete session state - success.
+	mock.ExpectExec("DELETE FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock hard delete session summaries - returns error.
+	mock.ExpectExec("DELETE FROM session_summaries").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnError(assert.AnError)
+
+	mock.ExpectRollback()
+
+	err := s.DeleteSession(context.Background(), key)
+	require.Error(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteSessionState_HardDelete_EventsError(t *testing.T) {
+	s, mock, db := setupMockService(t, &TestServiceOpts{
+		softDelete: boolPtr(false),
+	})
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	mock.ExpectBegin()
+
+	// Mock hard delete session state - success.
+	mock.ExpectExec("DELETE FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock hard delete session summaries - success.
+	mock.ExpectExec("DELETE FROM session_summaries").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock hard delete session events - returns error.
+	mock.ExpectExec("DELETE FROM session_events").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnError(assert.AnError)
+
+	mock.ExpectRollback()
+
+	err := s.DeleteSession(context.Background(), key)
+	require.Error(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteSessionState_HardDelete_TracksError(t *testing.T) {
+	s, mock, db := setupMockService(t, &TestServiceOpts{
+		softDelete: boolPtr(false),
+	})
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	mock.ExpectBegin()
+
+	// Mock hard delete session state - success.
+	mock.ExpectExec("DELETE FROM session_states").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock hard delete session summaries - success.
+	mock.ExpectExec("DELETE FROM session_summaries").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock hard delete session events - success.
+	mock.ExpectExec("DELETE FROM session_events").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 5))
+
+	// Mock hard delete session tracks - returns error.
+	mock.ExpectExec("DELETE FROM session_track_events").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnError(assert.AnError)
+
+	mock.ExpectRollback()
+
+	err := s.DeleteSession(context.Background(), key)
+	require.Error(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

@@ -25,8 +25,9 @@ const (
 
 	defaultAsyncPersistTimeout = 10 * time.Second
 
-	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 100
+	defaultAsyncSummaryNum   = 3
+	defaultSummaryQueueSize  = 100
+	defaultSummaryJobTimeout = 30 * time.Second
 )
 
 // ServiceOpts is the options for the MySQL session service.
@@ -77,6 +78,7 @@ var (
 		asyncPersisterNum: defaultAsyncPersisterNum,
 		asyncSummaryNum:   defaultAsyncSummaryNum,
 		summaryQueueSize:  defaultSummaryQueueSize,
+		summaryJobTimeout: defaultSummaryJobTimeout,
 		softDelete:        true, // default: enable soft delete
 	}
 )
