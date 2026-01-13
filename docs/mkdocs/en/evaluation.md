@@ -938,6 +938,21 @@ Because the Agent's execution process may be uncertain, `evaluation.WithNumRuns`
 - By specifying `evaluation.WithNumRuns(n)`, each evaluation case can be run multiple times;
 - The final result is based on the combined statistical results of multiple runs. The default statistical method is the average of the evaluation scores of multiple runs.
 
+To accelerate the inference phase for large evaluation sets, parallel inference across evaluation cases can be enabled.
+
+- `evaluation.WithEvalCaseParallelInferenceEnabled(true)` enables parallel inference across eval cases. It is disabled by default.
+- `evaluation.WithEvalCaseParallelism(n)` sets the maximum number of eval cases inferred in parallel. The default value is `runtime.GOMAXPROCS(0)`.
+
+```go
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalCaseParallelInferenceEnabled(true),
+	evaluation.WithEvalCaseParallelism(runtime.GOMAXPROCS(0)),
+)
+defer agentEvaluator.Close()
+```
+
 ## Usage Guide
 
 ### Local File Path

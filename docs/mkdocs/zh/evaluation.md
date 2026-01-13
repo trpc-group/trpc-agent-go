@@ -922,6 +922,21 @@ defer agentEvaluator.Close()
 - 通过指定 `evaluation.WithNumRuns(n)`，可对每个评估用例运行多次；
 - 最终结果将基于多次运行的综合统计结果得出，默认统计方法是多次运行评估得分的平均值。
 
+对于较大的评估集，为了加速 inference 阶段，可以开启 EvalCase 级别的并发推理：
+
+- `evaluation.WithEvalCaseParallelInferenceEnabled(true)`：开启 eval case 并发推理，默认关闭。
+- `evaluation.WithEvalCaseParallelism(n)`：设置最大并发数，默认值为 `runtime.GOMAXPROCS(0)`。
+
+```go
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalCaseParallelInferenceEnabled(true),
+	evaluation.WithEvalCaseParallelism(runtime.GOMAXPROCS(0)),
+)
+defer agentEvaluator.Close()
+```
+
 ## 使用指南
 
 ### 本地文件路径
