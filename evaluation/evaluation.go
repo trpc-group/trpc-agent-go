@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -33,6 +34,10 @@ import (
 type AgentEvaluator interface {
 	// Evaluate runs evaluation against the specified eval set.
 	Evaluate(ctx context.Context, evalSetID string) (*EvaluationResult, error)
+	// Close closes the evaluator and releases owned resources.
+	// It is safe to call Close multiple times.
+	// Only resources created by the evaluator (not provided by user) will be closed.
+	Close() error
 }
 
 // New creates an AgentEvaluator with the supplied agent and options.
@@ -70,6 +75,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 			return nil, fmt.Errorf("create eval service: %w", err)
 		}
 		a.evalService = evalService
+		a.ownsEvalService = true
 	}
 	return a, nil
 }
@@ -84,6 +90,10 @@ type agentEvaluator struct {
 	registry          registry.Registry
 	evalService       service.Service
 	numRuns           int
+
+	closeOnce       sync.Once
+	closeErr        error
+	ownsEvalService bool
 }
 
 // EvaluationResult contains the aggregated outcome of running an evaluation across multiple runs.
@@ -126,6 +136,15 @@ func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string) (*Evalu
 		ExecutionTime: time.Since(start),
 		EvalCases:     evalCases,
 	}, nil
+}
+
+func (a *agentEvaluator) Close() error {
+	a.closeOnce.Do(func() {
+		if a.ownsEvalService && a.evalService != nil {
+			a.closeErr = a.evalService.Close()
+		}
+	})
+	return a.closeErr
 }
 
 // collectCaseResults runs evaluation on the specified eval set across multiple runs and groups results by case ID.

@@ -12,6 +12,7 @@ package evaluation
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -77,6 +78,26 @@ func (f *fakeService) Evaluate(ctx context.Context, req *service.EvaluateRequest
 }
 
 func (f *fakeService) Close() error {
+	return nil
+}
+
+type countingService struct {
+	closed int32
+}
+
+func (c *countingService) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
+	return []*service.InferenceResult{}, nil
+}
+
+func (c *countingService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*evalresult.EvalSetResult, error) {
+	return &evalresult.EvalSetResult{
+		EvalSetID:       req.EvalSetID,
+		EvalCaseResults: []*evalresult.EvalCaseResult{},
+	}, nil
+}
+
+func (c *countingService) Close() error {
+	atomic.AddInt32(&c.closed, 1)
 	return nil
 }
 
@@ -179,6 +200,7 @@ func TestNewAgentEvaluatorValidation(t *testing.T) {
 	impl, ok := ae.(*agentEvaluator)
 	assert.True(t, ok)
 	assert.NotNil(t, impl.evalService)
+	assert.NoError(t, ae.Close())
 }
 
 func TestNewAgentEvaluatorWithCustomService(t *testing.T) {
@@ -188,6 +210,31 @@ func TestNewAgentEvaluatorWithCustomService(t *testing.T) {
 	impl, ok := ae.(*agentEvaluator)
 	assert.True(t, ok)
 	assert.Equal(t, customSvc, impl.evalService)
+}
+
+func TestAgentEvaluatorCloseLifecycle(t *testing.T) {
+	t.Run("close owned service once", func(t *testing.T) {
+		customSvc := &countingService{}
+		ae := &agentEvaluator{
+			evalService:       customSvc,
+			ownsEvalService:   true,
+			evalResultManager: evalresultinmemory.New(),
+			evalSetManager:    evalsetinmemory.New(),
+			metricManager:     metricinmemory.New(),
+			registry:          registry.New(),
+		}
+		assert.NoError(t, ae.Close())
+		assert.NoError(t, ae.Close())
+		assert.Equal(t, int32(1), atomic.LoadInt32(&customSvc.closed))
+	})
+
+	t.Run("do not close injected service", func(t *testing.T) {
+		customSvc := &countingService{}
+		ae, err := New("app", stubRunner{}, WithEvaluationService(customSvc))
+		assert.NoError(t, err)
+		assert.NoError(t, ae.Close())
+		assert.Equal(t, int32(0), atomic.LoadInt32(&customSvc.closed))
+	})
 }
 
 func TestAgentEvaluatorEvaluateSuccess(t *testing.T) {
