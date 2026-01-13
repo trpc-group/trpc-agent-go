@@ -1136,75 +1136,78 @@ consumption.
 
 Key points:
 
-- Redact sensitive headers before logging.
 - Reading `req.Body` or `resp.Body` consumes the stream, so you must restore it.
 - Do not read `resp.Body` for streaming responses (for example,
-  `Content-Type: text/event-stream`) because it may block or break the stream.
+  `Content-Type: text/event-stream`); skip body logging to avoid blocking
+  or breaking the stream.
 
 ```go
 import (
     "bytes"
     "io"
     "net/http"
-    "net/http/httputil"
     "strings"
 
     openaiopt "github.com/openai/openai-go/option"
     "trpc.group/trpc-go/trpc-agent-go/log"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-const (
-    redacted = "***REDACTED***"
-)
+const streamContentType = "text/event-stream"
 
 llm := openai.New("deepseek-chat",
     openai.WithOpenAIOptions(
         openaiopt.WithMiddleware(
-            func(req *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
-                // Log request (redact sensitive headers)
-                dumpReq := req.Clone(req.Context())
-                for _, k := range []string{"Authorization", "api-key"} {
-                    if dumpReq.Header.Get(k) != "" {
-                        dumpReq.Header.Set(k, redacted)
-                    }
+            func(
+                req *http.Request,
+                next openaiopt.MiddlewareNext,
+            ) (*http.Response, error) {
+                // 1. Read req.Body.
+                bodyBytes, err := io.ReadAll(req.Body)
+                if err != nil {
+                    return nil, err
                 }
-                if b, err := httputil.DumpRequestOut(dumpReq, true); err == nil {
-                    log.DebugfContext(req.Context(), "openai http request:\n%s.", string(b))
-                }
+                // 2. Log req.Body.
+                log.DebugfContext(
+                    req.Context(),
+                    "Middleware req: %+v",
+                    string(bodyBytes),
+                )
+
+                // 3. Restore req.Body (critical step).
+                req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
                 resp, err := next(req)
                 if err != nil || resp == nil {
                     return resp, err
                 }
 
-                // Log response headers
-                dumpResp := &http.Response{Header: resp.Header.Clone()}
-                if b, err := httputil.DumpResponse(dumpResp, false); err == nil {
-                    log.DebugfContext(req.Context(), "openai http response:\n%s.", string(b))
+                // 4. Skip body logging for streaming responses.
+                contentType := resp.Header.Get("Content-Type")
+                if strings.Contains(contentType, streamContentType) {
+                    return resp, nil
                 }
 
-                // Log non-streaming response body
-                if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") &&
-                    resp.ContentLength > 0 {
-                    if body, err := io.ReadAll(resp.Body); err == nil {
-                        resp.Body = io.NopCloser(bytes.NewReader(body))
-                        log.DebugfContext(req.Context(), "openai http response body:\n%s.", string(body))
-                    }
+                // 5. Read resp.Body.
+                respBodyBytes, err := io.ReadAll(resp.Body)
+                if err != nil {
+                    return resp, err
                 }
+                // 6. Log resp.Body.
+                log.DebugfContext(
+                    req.Context(),
+                    "Middleware rsp: %+v",
+                    string(respBodyBytes),
+                )
 
+                // 7. Restore resp.Body (critical step).
+                resp.Body = io.NopCloser(bytes.NewBuffer(respBodyBytes))
                 return resp, nil
             },
         ),
     ),
 )
 ```
-
-Notes for authentication variants:
-
-- OpenAI style: keep `openai.WithAPIKey("sk-...")` which sets
-  `Authorization: Bearer ...` under the hood.
-- Azure/OpenAI‑compatible that use `api-key`: omit `WithAPIKey` and set
-  `openaiopt.WithHeader("api-key", "<key>")` instead.
 
 ##### 3. Custom http.RoundTripper (advanced)
 

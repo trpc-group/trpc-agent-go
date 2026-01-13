@@ -1130,61 +1130,68 @@ llm := openai.New("deepseek-chat",
 
 关键点：
 
-- 对敏感头部做脱敏（例如 `Authorization`、`api-key`）。
 - 读取 `req.Body`/`resp.Body` 会消耗流，必须在读取后恢复 `Body`。
-- 流式响应（`text/event-stream`）不要读取响应体，否则可能阻塞流式链路。
+- 流式响应（`text/event-stream`）不要读取响应体，跳过响应体打印，
+  否则可能阻塞流式链路。
 
 ```go
 import (
     "bytes"
     "io"
     "net/http"
-    "net/http/httputil"
     "strings"
 
     openaiopt "github.com/openai/openai-go/option"
     "trpc.group/trpc-go/trpc-agent-go/log"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-const (
-    redacted = "***REDACTED***"
-)
+const streamContentType = "text/event-stream"
 
 llm := openai.New("deepseek-chat",
     openai.WithOpenAIOptions(
         openaiopt.WithMiddleware(
             func(req *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
-                // 打印请求 (脱敏头部)
-                dumpReq := req.Clone(req.Context())
-                for _, k := range []string{"Authorization", "api-key"} {
-                    if dumpReq.Header.Get(k) != "" {
-                        dumpReq.Header.Set(k, redacted)
-                    }
+                // 1. 读取 req.Body
+                bodyBytes, err := io.ReadAll(req.Body)
+                if err != nil {
+                    return nil, err
                 }
-                if b, err := httputil.DumpRequestOut(dumpReq, true); err == nil {
-                    log.DebugfContext(req.Context(), "openai http request:\n%s.", string(b))
-                }
+                // 2. 打印 req.Body
+                log.DebugfContext(
+                    req.Context(),
+                    "Middleware req: %+v",
+                    string(bodyBytes),
+                )
+
+                // 3. 重新赋值 req.Body（关键步骤）
+                req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
                 resp, err := next(req)
                 if err != nil || resp == nil {
                     return resp, err
                 }
 
-                // 打印响应头
-                dumpResp := &http.Response{Header: resp.Header.Clone()}
-                if b, err := httputil.DumpResponse(dumpResp, false); err == nil {
-                    log.DebugfContext(req.Context(), "openai http response:\n%s.", string(b))
+                // 4. 流式响应跳过响应体打印
+                contentType := resp.Header.Get("Content-Type")
+                if strings.Contains(contentType, streamContentType) {
+                    return resp, nil
                 }
 
-                // 打印非流式响应体
-                if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") &&
-                    resp.ContentLength > 0 {
-                    if body, err := io.ReadAll(resp.Body); err == nil {
-                        resp.Body = io.NopCloser(bytes.NewReader(body))
-                        log.DebugfContext(req.Context(), "openai http response body:\n%s.", string(body))
-                    }
+                // 5. 读取 resp.Body
+                respBodyBytes, err := io.ReadAll(resp.Body)
+                if err != nil {
+                    return resp, err
                 }
+                // 6. 打印 resp.Body
+                log.DebugfContext(
+                    req.Context(),
+                    "Middleware rsp: %+v",
+                    string(respBodyBytes),
+                )
 
+                // 7. 重新赋值 resp.Body（关键步骤）
+                resp.Body = io.NopCloser(bytes.NewBuffer(respBodyBytes))
                 return resp, nil
             },
         ),
@@ -1192,13 +1199,6 @@ llm := openai.New("deepseek-chat",
 )
 ```
 
-鉴权差异注意事项：
-
-- OpenAI 风格：保留 `openai.WithAPIKey("sk-...")`，底层会设置
-  `Authorization: Bearer ...`。
-- Azure/部分 OpenAI 兼容：若要求 `api-key` 头部，则不要调用
-  `WithAPIKey`，改为使用
-  `openaiopt.WithHeader("api-key", "<key>")`。
 
 ##### 3. 使用自定义 http.RoundTripper（进阶）
 
