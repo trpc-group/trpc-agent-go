@@ -185,15 +185,9 @@ func TestFSRepository_Get_SkipsUnreadableDocs(t *testing.T) {
 	sdir := writeSkill(t, root, skillName)
 
 	docPath := filepath.Join(sdir, docName)
-	require.NoError(t, os.WriteFile(
-		docPath,
-		[]byte("secret"),
-		0o644,
-	))
-	if err := os.Chmod(docPath, 0o000); err != nil {
-		t.Skipf("chmod not supported: %v", err)
+	if err := os.Symlink(filepath.Join(root, "missing-target"), docPath); err != nil {
+		t.Skipf("symlink not supported: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(docPath, 0o644) })
 
 	r, err := NewFSRepository(root)
 	require.NoError(t, err)

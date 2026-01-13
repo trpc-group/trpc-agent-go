@@ -44,6 +44,10 @@ func TestReadMultipleFiles(t *testing.T) {
 		}
 	}
 	assert.NoError(t, os.Chmod(filepath.Join(base, "noaccess.txt"), 0000))
+	expectedNoAccess := ""
+	if _, err := os.ReadFile(filepath.Join(base, "noaccess.txt")); err == nil {
+		expectedNoAccess = "data"
+	}
 	// Detect whether the underlying filesystem is case-sensitive within the temp base.
 	fsCaseSensitive := func(dir string) bool {
 		sub := filepath.Join(dir, "_casesens_check")
@@ -134,7 +138,7 @@ func TestReadMultipleFiles(t *testing.T) {
 			name: "read permission denied",
 			req:  readMultipleFilesRequest{Patterns: []string{"noaccess.txt"}},
 			expectedContents: map[string]string{
-				"noaccess.txt": "",
+				"noaccess.txt": expectedNoAccess,
 			},
 		},
 	}
