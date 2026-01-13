@@ -80,6 +80,18 @@ func TestWithTimeout(t *testing.T) {
 	assert.Equal(t, 2*time.Second, ro.Timeout)
 }
 
+func TestWithGraphNodeStartActivityEnabled(t *testing.T) {
+	opts := newOptions(WithGraphNodeStartActivityEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.GraphNodeStartActivityEnabled)
+}
+
+func TestWithGraphNodeInterruptActivityEnabled(t *testing.T) {
+	opts := newOptions(WithGraphNodeInterruptActivityEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.GraphNodeInterruptActivityEnabled)
+}
+
 func TestWithCancelEnabled(t *testing.T) {
 	opts := newOptions(WithCancelEnabled(true))
 	assert.True(t, opts.cancelEnabled)

@@ -18,6 +18,8 @@ import (
 type InterruptError struct {
 	// Value is the value that was passed to interrupt().
 	Value any
+	// Key is the key that was passed to Interrupt().
+	Key string
 	// NodeID is the ID of the node where the interrupt occurred.
 	NodeID string
 	// TaskID is the ID of the task that was interrupted.

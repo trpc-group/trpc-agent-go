@@ -24,10 +24,15 @@ type finishResultTranslator struct {
 	inner            translator.Translator
 }
 
-func newTranslator(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
-	return &finishResultTranslator{
-		inner: translator.New(ctx, input.ThreadID, input.RunID),
+func newTranslator(ctx context.Context, input *adapter.RunAgentInput,
+	opts ...translator.Option) (translator.Translator, error) {
+	inner, err := translator.New(ctx, input.ThreadID, input.RunID, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("create inner translator: %w", err)
 	}
+	return &finishResultTranslator{
+		inner: inner,
+	}, nil
 }
 
 func (t *finishResultTranslator) Translate(ctx context.Context, event *event.Event) ([]aguievents.Event, error) {

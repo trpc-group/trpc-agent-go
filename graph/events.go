@@ -286,8 +286,14 @@ type PregelStepMetadata struct {
 	Error string `json:"error,omitempty"`
 	// NodeID is the ID of the node where interrupt occurred.
 	NodeID string `json:"nodeID,omitempty"`
+	// InterruptKey is the key that was passed to Interrupt().
+	InterruptKey string `json:"interruptKey,omitempty"`
 	// InterruptValue is the value passed to interrupt().
 	InterruptValue any `json:"interruptValue,omitempty"`
+	// LineageID is the lineage ID of the checkpoint that the interrupt belongs to.
+	LineageID string `json:"lineageId,omitempty"`
+	// CheckpointID is the checkpoint ID that can be used for resuming.
+	CheckpointID string `json:"checkpointId,omitempty"`
 }
 
 // ChannelUpdateMetadata contains metadata about channel updates.
@@ -854,7 +860,10 @@ type PregelEventOptions struct {
 	EndTime         time.Time
 	Error           string
 	NodeID          string
+	InterruptKey    string
 	InterruptValue  any
+	LineageID       string
+	CheckpointID    string
 }
 
 // PregelEventOption is a function that configures Pregel event options.
@@ -930,10 +939,31 @@ func WithPregelEventNodeID(nodeID string) PregelEventOption {
 	}
 }
 
+// WithPregelEventInterruptKey sets the interrupt key for Pregel events.
+func WithPregelEventInterruptKey(key string) PregelEventOption {
+	return func(opts *PregelEventOptions) {
+		opts.InterruptKey = key
+	}
+}
+
 // WithPregelEventInterruptValue sets the interrupt value for Pregel events.
 func WithPregelEventInterruptValue(value any) PregelEventOption {
 	return func(opts *PregelEventOptions) {
 		opts.InterruptValue = value
+	}
+}
+
+// WithPregelEventLineageID sets the lineage ID for Pregel events.
+func WithPregelEventLineageID(lineageID string) PregelEventOption {
+	return func(opts *PregelEventOptions) {
+		opts.LineageID = lineageID
+	}
+}
+
+// WithPregelEventCheckpointID sets the checkpoint ID for Pregel events.
+func WithPregelEventCheckpointID(checkpointID string) PregelEventOption {
+	return func(opts *PregelEventOptions) {
+		opts.CheckpointID = checkpointID
 	}
 }
 
@@ -1310,7 +1340,10 @@ func NewPregelInterruptEvent(opts ...PregelEventOption) *event.Event {
 		EndTime:        options.EndTime,
 		Duration:       options.EndTime.Sub(options.StartTime),
 		NodeID:         options.NodeID,
+		InterruptKey:   options.InterruptKey,
 		InterruptValue: options.InterruptValue,
+		LineageID:      options.LineageID,
+		CheckpointID:   options.CheckpointID,
 	}
 	return NewGraphEvent(options.InvocationID, AuthorGraphPregel, ObjectTypeGraphPregelStep,
 		WithPregelMetadata(metadata))
