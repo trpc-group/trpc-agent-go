@@ -24,6 +24,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/knowledge/document/internal/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	itransform "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/transform"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 var (
@@ -40,6 +42,7 @@ func init() {
 type Reader struct {
 	chunk            bool
 	chunkingStrategy chunking.Strategy
+	transformers     []transform.Transformer
 }
 
 // New creates a new JSON reader with the given options.
@@ -60,6 +63,7 @@ func New(opts ...reader.Option) reader.Reader {
 	return &Reader{
 		chunk:            config.Chunk,
 		chunkingStrategy: strategy,
+		transformers:     config.Transformers,
 	}
 }
 
@@ -75,9 +79,9 @@ func buildDefaultChunkingStrategy(chunkSize, overlap int) chunking.Strategy {
 }
 
 // ReadFromReader reads JSON content from an io.Reader and returns a list of documents.
-func (r *Reader) ReadFromReader(name string, reader io.Reader) ([]*document.Document, error) {
+func (r *Reader) ReadFromReader(name string, rd io.Reader) ([]*document.Document, error) {
 	// Read content from reader.
-	content, err := io.ReadAll(reader)
+	content, err := io.ReadAll(rd)
 	if err != nil {
 		return nil, err
 	}
@@ -91,12 +95,27 @@ func (r *Reader) ReadFromReader(name string, reader io.Reader) ([]*document.Docu
 	// Create document.
 	doc := idocument.CreateDocument(textContent, name)
 
-	// Apply chunking if enabled.
-	if r.chunk {
-		return r.chunkDocument(doc)
+	// Apply preprocess.
+	docs, err := itransform.ApplyPreprocess([]*document.Document{doc}, r.transformers...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply preprocess: %w", err)
 	}
 
-	return []*document.Document{doc}, nil
+	// Apply chunking if enabled.
+	if r.chunk {
+		docs, err = r.chunkDocuments(docs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Apply postprocess.
+	docs, err = itransform.ApplyPostprocess(docs, r.transformers...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply postprocess: %w", err)
+	}
+
+	return docs, nil
 }
 
 // ReadFromFile reads JSON content from a file path and returns a list of documents.
@@ -119,12 +138,27 @@ func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
 	// Create document.
 	doc := idocument.CreateDocument(textContent, fileName)
 
-	// Apply chunking if enabled.
-	if r.chunk {
-		return r.chunkDocument(doc)
+	// Apply preprocess.
+	docs, err := itransform.ApplyPreprocess([]*document.Document{doc}, r.transformers...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply preprocess: %w", err)
 	}
 
-	return []*document.Document{doc}, nil
+	// Apply chunking if enabled.
+	if r.chunk {
+		docs, err = r.chunkDocuments(docs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Apply postprocess.
+	docs, err = itransform.ApplyPostprocess(docs, r.transformers...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply postprocess: %w", err)
+	}
+
+	return docs, nil
 }
 
 // ReadFromURL reads JSON content from a URL and returns a list of documents.
@@ -167,13 +201,21 @@ func (r *Reader) jsonToText(jsonContent string) (string, error) {
 	return string(prettyJSON), nil
 }
 
-// chunkDocument applies chunking to a document.
-func (r *Reader) chunkDocument(doc *document.Document) ([]*document.Document, error) {
+// chunkDocuments applies chunking to documents.
+func (r *Reader) chunkDocuments(docs []*document.Document) ([]*document.Document, error) {
 	if r.chunkingStrategy == nil {
-		r.chunkingStrategy = chunking.NewFixedSizeChunking()
+		r.chunkingStrategy = chunking.NewJSONChunking()
 	}
 
-	return r.chunkingStrategy.Chunk(doc)
+	var result []*document.Document
+	for _, doc := range docs {
+		chunks, err := r.chunkingStrategy.Chunk(doc)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, chunks...)
+	}
+	return result, nil
 }
 
 // extractFileNameFromURL extracts a file name from a URL.

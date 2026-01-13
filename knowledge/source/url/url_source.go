@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	isource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/internal/source"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 const (
@@ -43,6 +44,7 @@ type Source struct {
 	chunkSize              int
 	chunkOverlap           int
 	customChunkingStrategy chunking.Strategy
+	transformers           []transform.Transformer
 }
 
 // New creates a new URL knowledge source.
@@ -71,6 +73,9 @@ func New(urls []string, opts ...Option) *Source {
 	}
 	if s.customChunkingStrategy != nil {
 		readerOpts = append(readerOpts, isource.WithCustomChunkingStrategy(s.customChunkingStrategy))
+	}
+	if len(s.transformers) > 0 {
+		readerOpts = append(readerOpts, isource.WithTransformers(s.transformers...))
 	}
 
 	// Initialize readers with configuration

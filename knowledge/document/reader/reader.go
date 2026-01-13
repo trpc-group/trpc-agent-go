@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 // Config holds configuration for readers.
@@ -26,6 +27,7 @@ type Config struct {
 	ChunkOverlap           int
 	CustomChunkingStrategy chunking.Strategy
 	OCRExtractor           ocr.Extractor
+	Transformers           []transform.Transformer
 }
 
 // Option is a functional option for configuring readers.
@@ -69,6 +71,14 @@ func WithCustomChunkingStrategy(strategy chunking.Strategy) Option {
 func WithOCRExtractor(extractor ocr.Extractor) Option {
 	return func(c *Config) {
 		c.OCRExtractor = extractor
+	}
+}
+
+// WithTransformers sets the transformers for document processing.
+// Transformers are applied to documents before and after chunking.
+func WithTransformers(transformers ...transform.Transformer) Option {
+	return func(c *Config) {
+		c.Transformers = append(c.Transformers, transformers...)
 	}
 }
 

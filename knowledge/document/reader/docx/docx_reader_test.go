@@ -77,6 +77,24 @@ func TestReader_ReadFile_ChunkError(t *testing.T) {
 	}
 }
 
+func TestReader_ReadFromReader_ChunkError(t *testing.T) {
+	data := createDocx(t, "Reader Mode")
+
+	// Trigger chunk error path in readFromReader.
+	rdrErr := New(reader.WithCustomChunkingStrategy(errChunker{}))
+	_, err := rdrErr.ReadFromReader("test", bytes.NewReader(data))
+	if err == nil {
+		t.Fatalf("expected chunk error in ReadFromReader")
+	}
+}
+
+func TestReader_BuildDefaultChunkingStrategy_Coverage(t *testing.T) {
+	// Cover branches in buildDefaultChunkingStrategy
+	_ = New(reader.WithChunkSize(100))
+	_ = New(reader.WithChunkOverlap(10))
+	_ = New(reader.WithChunkSize(100), reader.WithChunkOverlap(10))
+}
+
 func TestReader_ReadFromURL(t *testing.T) {
 	data := createDocx(t, "URL Mode")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -181,6 +199,7 @@ func TestDOCXReader_ExtractFileNameFromURL(t *testing.T) {
 	}{
 		{"simple_filename", "https://example.com/document.docx", "document"},
 		{"with_query_params", "https://example.com/report.docx?v=1", "report"},
+		{"with_fragment", "https://example.com/report.docx#section1", "report"},
 		{"root_path", "https://example.com/", ""},
 	}
 

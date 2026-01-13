@@ -19,7 +19,89 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
+
+type errorTransformer struct {
+	preprocessErr  error
+	postprocessErr error
+}
+
+func (e *errorTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	if e.preprocessErr != nil {
+		return nil, e.preprocessErr
+	}
+	return docs, nil
+}
+
+func (e *errorTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	if e.postprocessErr != nil {
+		return nil, e.postprocessErr
+	}
+	return docs, nil
+}
+
+func (e *errorTransformer) Name() string { return "ErrorTransformer" }
+
+func TestJSONReader_TransformerErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		transformer *errorTransformer
+		wantErr     string
+	}{
+		{
+			name:        "preprocess error",
+			transformer: &errorTransformer{preprocessErr: errors.New("preprocess failed")},
+			wantErr:     "failed to apply preprocess",
+		},
+		{
+			name:        "postprocess error",
+			transformer: &errorTransformer{postprocessErr: errors.New("postprocess failed")},
+			wantErr:     "failed to apply postprocess",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rdr := New(reader.WithTransformers(tt.transformer))
+			jsonData := `{"key":"val"}`
+
+			// Test ReadFromReader
+			_, err := rdr.ReadFromReader("test", strings.NewReader(jsonData))
+			if err == nil {
+				t.Error("ReadFromReader expected error, got nil")
+			} else if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("ReadFromReader expected error containing %q, got %q", tt.wantErr, err.Error())
+			}
+
+			// Test ReadFromFile
+			tmp, _ := os.CreateTemp(t.TempDir(), "*.json")
+			tmp.WriteString(jsonData)
+			tmp.Close()
+			_, err = rdr.ReadFromFile(tmp.Name())
+			if err == nil {
+				t.Error("ReadFromFile expected error, got nil")
+			} else if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("ReadFromFile expected error containing %q, got %q", tt.wantErr, err.Error())
+			}
+		})
+	}
+}
+
+func TestJSONReader_WithTransformers(t *testing.T) {
+	data := `{"key":"val"}`
+
+	t1 := transform.NewCharFilter("\n") // Dummy transform
+
+	rdr := New(reader.WithTransformers(t1))
+	docs, err := rdr.ReadFromReader("test", strings.NewReader(data))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected docs")
+	}
+}
 
 func TestJSONReadFromReaderNoChunk(t *testing.T) {
 	data := `{"name":"Alice","age":30}`
@@ -183,6 +265,7 @@ func TestJSONReader_ExtractFileNameFromURL(t *testing.T) {
 	}{
 		{"simple_filename", "https://api.example.com/data.json", "data"},
 		{"with_query_params", "https://api.example.com/api.json?key=value", "api"},
+		{"with_fragment", "https://api.example.com/data.json#item1", "data"},
 		{"root_path", "https://example.com/", ""},
 	}
 

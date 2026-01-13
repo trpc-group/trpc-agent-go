@@ -66,6 +66,159 @@ func createTempPDF(t *testing.T, data []byte) string {
 	return tmp.Name()
 }
 
+// mockTransformer implements transformer.Transformer for testing
+type mockTransformer struct{}
+
+func (m *mockTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func (m *mockTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func (m *mockTransformer) Name() string {
+	return "MockTransformer"
+}
+
+type errorTransformer struct {
+	preprocessErr  error
+	postprocessErr error
+}
+
+func (e *errorTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	if e.preprocessErr != nil {
+		return nil, e.preprocessErr
+	}
+	return docs, nil
+}
+
+func (e *errorTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	if e.postprocessErr != nil {
+		return nil, e.postprocessErr
+	}
+	return docs, nil
+}
+
+func (e *errorTransformer) Name() string { return "ErrorTransformer" }
+
+func TestReader_TransformerErrors(t *testing.T) {
+	data := newTestPDF(t)
+
+	tests := []struct {
+		name        string
+		transformer *errorTransformer
+		wantErr     string
+	}{
+		{
+			name:        "preprocess error",
+			transformer: &errorTransformer{preprocessErr: errors.New("preprocess failed")},
+			wantErr:     "failed to apply preprocess",
+		},
+		{
+			name:        "postprocess error",
+			transformer: &errorTransformer{postprocessErr: errors.New("postprocess failed")},
+			wantErr:     "failed to apply postprocess",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test ReadFromReader path
+			rdr := New(reader.WithTransformers(tt.transformer))
+			_, err := rdr.ReadFromReader("test", bytes.NewReader(data))
+			if err == nil {
+				t.Error("ReadFromReader expected error, got nil")
+			} else if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("ReadFromReader expected error containing %q, got %q", tt.wantErr, err.Error())
+			}
+
+			// Test ReadFromFile path (text-only)
+			tmpPath := createTempPDF(t, data)
+			_, err = rdr.ReadFromFile(tmpPath)
+			if err == nil {
+				t.Error("ReadFromFile expected error, got nil")
+			} else if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("ReadFromFile expected error containing %q, got %q", tt.wantErr, err.Error())
+			}
+		})
+	}
+}
+
+func TestReader_WithTransformers(t *testing.T) {
+	data := newTestPDF(t)
+	mockT := &mockTransformer{}
+
+	rdr := New(reader.WithTransformers(mockT))
+
+	// Test ReadFromReader
+	docs, err := rdr.ReadFromReader("test", bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("ReadFromReader with transformer failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected docs")
+	}
+
+	// Test ReadFromFile (text-only)
+	tmpPath := createTempPDF(t, data)
+	docs, err = rdr.ReadFromFile(tmpPath)
+	if err != nil {
+		t.Fatalf("ReadFromFile with transformer failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected docs")
+	}
+}
+
+func TestReader_OCRTransformerErrors(t *testing.T) {
+	data := newTestPDF(t)
+	tmpPath := createTempPDF(t, data)
+	mockOCR := &mockOCRExtractor{}
+
+	tests := []struct {
+		name        string
+		transformer *errorTransformer
+		wantErr     string
+	}{
+		{
+			name:        "preprocess error",
+			transformer: &errorTransformer{preprocessErr: errors.New("preprocess failed")},
+			wantErr:     "failed to apply preprocess",
+		},
+		{
+			name:        "postprocess error",
+			transformer: &errorTransformer{postprocessErr: errors.New("postprocess failed")},
+			wantErr:     "failed to apply postprocess",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rdr := New(
+				reader.WithOCRExtractor(mockOCR),
+				reader.WithTransformers(tt.transformer),
+			)
+
+			// Test ReadFromReader path (with OCR)
+			_, err := rdr.ReadFromReader("test", bytes.NewReader(data))
+			if err == nil {
+				t.Error("ReadFromReader expected error, got nil")
+			} else if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("ReadFromReader expected error containing %q, got %q", tt.wantErr, err.Error())
+			}
+
+			// Test ReadFromFile path (with OCR)
+			_, err = rdr.ReadFromFile(tmpPath)
+			if err == nil {
+				t.Error("ReadFromFile expected error, got nil")
+			} else if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("ReadFromFile expected error containing %q, got %q", tt.wantErr, err.Error())
+			}
+		})
+	}
+}
+
 func TestReader_ReadFromReader(t *testing.T) {
 	data := newTestPDF(t)
 

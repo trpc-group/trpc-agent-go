@@ -28,6 +28,7 @@ import (
 	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 	urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 const (
@@ -44,6 +45,7 @@ type Source struct {
 	chunkOverlap           int
 	customChunkingStrategy chunking.Strategy
 	ocrExtractor           ocr.Extractor
+	transformers           []transform.Transformer
 }
 
 // New creates a new auto knowledge source.
@@ -79,6 +81,9 @@ func (s *Source) initializeReaders() {
 	}
 	if s.customChunkingStrategy != nil {
 		opts = append(opts, reader.WithCustomChunkingStrategy(s.customChunkingStrategy))
+	}
+	if len(s.transformers) > 0 {
+		opts = append(opts, reader.WithTransformers(s.transformers...))
 	}
 
 	s.textReader = text.New(opts...)
@@ -148,11 +153,14 @@ func (s *Source) isFile(input string) bool {
 
 // processAsURL processes the input as a URL.
 func (s *Source) processAsURL(ctx context.Context, input string) ([]*document.Document, error) {
-	urlSource := urlsource.New(
-		[]string{input},
-		urlsource.WithChunkSize(s.chunkSize),
-		urlsource.WithChunkOverlap(s.chunkOverlap),
-	)
+	var opts []urlsource.Option
+	opts = append(opts, urlsource.WithChunkSize(s.chunkSize))
+	opts = append(opts, urlsource.WithChunkOverlap(s.chunkOverlap))
+	if len(s.transformers) > 0 {
+		opts = append(opts, urlsource.WithTransformers(s.transformers...))
+	}
+
+	urlSource := urlsource.New([]string{input}, opts...)
 	// Copy metadata.
 	for k, v := range s.metadata {
 		urlSource.SetMetadata(k, v)
@@ -179,6 +187,9 @@ func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*docum
 
 	if s.ocrExtractor != nil {
 		opts = append(opts, dirsource.WithOCRExtractor(s.ocrExtractor))
+	}
+	if len(s.transformers) > 0 {
+		opts = append(opts, dirsource.WithTransformers(s.transformers...))
 	}
 	dirSource := dirsource.New([]string{input}, opts...)
 	// Copy metadata.
@@ -207,6 +218,9 @@ func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.D
 
 	if s.ocrExtractor != nil {
 		opts = append(opts, filesource.WithOCRExtractor(s.ocrExtractor))
+	}
+	if len(s.transformers) > 0 {
+		opts = append(opts, filesource.WithTransformers(s.transformers...))
 	}
 	fileSource := filesource.New([]string{input}, opts...)
 

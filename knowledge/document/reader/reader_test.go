@@ -17,10 +17,41 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 type mockChunkingStrategy struct {
 	name string
+}
+
+// ... existing code ...
+type mockTransformer struct{}
+
+var _ transform.Transformer = (*mockTransformer)(nil)
+
+func (m *mockTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func (m *mockTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func (m *mockTransformer) Name() string {
+	return "MockTransformer"
+}
+
+func TestWithTransformers(t *testing.T) {
+	t1 := &mockTransformer{}
+	t2 := &mockTransformer{}
+
+	config := &Config{}
+	opt := WithTransformers(t1, t2)
+	opt(config)
+
+	if len(config.Transformers) != 2 {
+		t.Errorf("WithTransformers() expected 2 transformers, got %d", len(config.Transformers))
+	}
 }
 
 func (m *mockChunkingStrategy) Chunk(doc *document.Document) ([]*document.Document, error) {
