@@ -36,14 +36,22 @@ func TestNewOptionsDefaults(t *testing.T) {
 
 	assert.NotNil(t, opts.TranslatorFactory)
 	input := &adapter.RunAgentInput{ThreadID: "thread-1", RunID: "run-1"}
-	tr := opts.TranslatorFactory(context.Background(), input)
+	tr, err := opts.TranslatorFactory(context.Background(), input)
+	assert.NoError(t, err)
 	assert.NotNil(t, tr)
-	assert.IsType(t, translator.New(context.Background(), "", ""), tr)
+	expected, err := translator.New(context.Background(), "", "")
+	assert.NoError(t, err)
+	assert.IsType(t, expected, tr)
 
 	assert.NotNil(t, opts.RunAgentInputHook)
 	modified, err := opts.RunAgentInputHook(context.Background(), input)
 	assert.NoError(t, err)
 	assert.Same(t, input, modified)
+
+	assert.NotNil(t, opts.StateResolver)
+	resolvedState, err := opts.StateResolver(context.Background(), input)
+	assert.NoError(t, err)
+	assert.Nil(t, resolvedState)
 
 	assert.NotNil(t, opts.RunOptionResolver)
 	resolvedOpts, err := opts.RunOptionResolver(context.Background(), input)
@@ -58,6 +66,8 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, span)
 
 	assert.Equal(t, time.Hour, opts.Timeout)
+	assert.False(t, opts.GraphNodeStartActivityEnabled)
+	assert.False(t, opts.GraphNodeInterruptActivityEnabled)
 }
 
 func TestWithUserIDResolver(t *testing.T) {
@@ -77,22 +87,34 @@ func TestWithUserIDResolver(t *testing.T) {
 }
 
 func TestWithTranslatorFactory(t *testing.T) {
-	customTranslator := translator.New(context.Background(), "custom-thread", "custom-run")
+	customTranslator, err := translator.New(context.Background(), "custom-thread", "custom-run")
+	assert.NoError(t, err)
 	factoryCalled := false
 	opts := NewOptions(
 		WithTranslatorFactory(
-			func(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
+			func(ctx context.Context, input *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
 				factoryCalled = true
-				return customTranslator
+				return customTranslator, nil
 			},
 		),
 	)
 
 	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"}
-	tr := opts.TranslatorFactory(context.Background(), input)
+	tr, err := opts.TranslatorFactory(context.Background(), input)
+	assert.NoError(t, err)
 
 	assert.True(t, factoryCalled)
 	assert.Equal(t, customTranslator, tr)
+}
+
+func TestWithGraphNodeStartActivityEnabled(t *testing.T) {
+	opts := NewOptions(WithGraphNodeStartActivityEnabled(true))
+	assert.True(t, opts.GraphNodeStartActivityEnabled)
+}
+
+func TestWithGraphNodeInterruptActivityEnabled(t *testing.T) {
+	opts := NewOptions(WithGraphNodeInterruptActivityEnabled(true))
+	assert.True(t, opts.GraphNodeInterruptActivityEnabled)
 }
 
 func TestWithTranslateCallbacks(t *testing.T) {
@@ -159,6 +181,18 @@ func TestWithRunOptionResolver(t *testing.T) {
 	opts := NewOptions(WithRunOptionResolver(resolver))
 	assert.NotNil(t, opts.RunOptionResolver)
 	opts.RunOptionResolver(context.Background(), nil)
+	assert.True(t, called)
+}
+
+func TestWithStateResolver(t *testing.T) {
+	called := false
+	resolver := func(ctx context.Context, input *adapter.RunAgentInput) (map[string]any, error) {
+		called = true
+		return nil, nil
+	}
+	opts := NewOptions(WithStateResolver(resolver))
+	assert.NotNil(t, opts.StateResolver)
+	opts.StateResolver(context.Background(), nil)
 	assert.True(t, called)
 }
 

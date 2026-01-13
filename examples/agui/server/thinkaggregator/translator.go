@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -36,11 +37,16 @@ type thinkTranslator struct {
 	inner translator.Translator
 }
 
-func newTranslator(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
+func newTranslator(ctx context.Context, input *adapter.RunAgentInput,
+	opts ...translator.Option) (translator.Translator, error) {
+	inner, err := translator.New(ctx, input.ThreadID, input.RunID, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("create inner translator: %w", err)
+	}
 	return &thinkTranslator{
 		state: thinkingInitial,
-		inner: translator.New(ctx, input.ThreadID, input.RunID),
-	}
+		inner: inner,
+	}, nil
 }
 
 func (t *thinkTranslator) Translate(ctx context.Context, event *event.Event) ([]aguievents.Event, error) {

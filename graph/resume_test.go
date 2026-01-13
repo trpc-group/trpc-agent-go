@@ -64,6 +64,10 @@ func TestInterrupt_UsesAndConsumesValues(t *testing.T) {
 	v, err := Interrupt(ctx, state, "k1", "prompt")
 	require.Nil(t, v)
 	require.True(t, IsInterruptError(err))
+	interrupt, ok := GetInterruptError(err)
+	require.True(t, ok)
+	require.Equal(t, "k1", interrupt.Key)
+	require.Equal(t, "prompt", interrupt.Value)
 
 	// Provide resume through direct channel and call again: returns value and consumes it
 	state[ResumeChannel] = "answer"

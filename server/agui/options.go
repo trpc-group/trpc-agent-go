@@ -114,6 +114,20 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
+// WithGraphNodeStartActivityEnabled controls whether the AG-UI server emits graph node start activity events.
+func WithGraphNodeStartActivityEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithGraphNodeStartActivityEnabled(enabled))
+	}
+}
+
+// WithGraphNodeInterruptActivityEnabled controls whether the AG-UI server emits graph interrupt activity events.
+func WithGraphNodeInterruptActivityEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithGraphNodeInterruptActivityEnabled(enabled))
+	}
+}
+
 // WithMessagesSnapshotPath sets the HTTP path for the messages snapshot handler, "/history" in default.
 func WithMessagesSnapshotPath(p string) Option {
 	return func(o *options) {
