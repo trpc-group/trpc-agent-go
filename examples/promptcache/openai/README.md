@@ -154,10 +154,10 @@ model := anthropic.New("claude-3-5-sonnet-20241022",
 ### OpenAI: Message Optimization
 
 ```go
-// Optimize for cache (default)
+// Optimize for cache
 model := openai.New("gpt-4o",
     openai.WithAPIKey(apiKey),
-    openai.WithOptimizeForCache(true),  // System messages moved to front
+    openai.WithOptimizeForCache(true),  // Enable cache optimization: system messages moved to front
 )
 ```
 

@@ -5824,10 +5824,10 @@ func TestWithOptimizeForCache(t *testing.T) {
 	}
 }
 
-// TestOptimizeForCache_DefaultEnabled tests that cache optimization is enabled by default.
-func TestOptimizeForCache_DefaultEnabled(t *testing.T) {
+// TestOptimizeForCache_DefaultDisabled tests that cache optimization is disabled by default.
+func TestOptimizeForCache_DefaultDisabled(t *testing.T) {
 	m := New("gpt-4o", WithAPIKey("test-key"))
-	assert.True(t, m.optimizeForCache, "cache optimization should be enabled by default")
+	assert.False(t, m.optimizeForCache, "cache optimization should be disabled by default")
 }
 
 // TestOptimizeMessagesForCache tests the optimizeMessagesForCache function.

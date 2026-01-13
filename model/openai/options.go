@@ -123,7 +123,7 @@ var (
 			OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
 			MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
 		},
-		OptimizeForCache: true, // Enable cache optimization by default
+		OptimizeForCache: false, // Cache optimization is disabled by default
 	}
 )
 
@@ -412,24 +412,25 @@ func WithShowToolCallDelta(show bool) Option {
 }
 
 // WithOptimizeForCache controls whether to optimize message structure for prompt caching.
-// When enabled (default), system messages will be moved to the front of the message list
+// When enabled, system messages will be moved to the front of the message list
 // to improve cache hit rates with OpenAI's automatic prompt caching.
 //
 // OpenAI's prompt caching works automatically and doesn't require explicit cache control,
 // but consistent message ordering significantly improves cache effectiveness.
 //
-// Enable this (default) for:
+// Enable this for:
 // - Multi-turn conversations with consistent system prompts
 // - Scenarios where system context is reused across requests
 //
-// Disable for:
+// Disable (default) for:
 // - Cases where message order must be strictly preserved
 // - Testing scenarios requiring deterministic behavior
+// - When you want explicit control over message ordering
 //
 // Example:
 //
 //	model := openai.New("gpt-4o",
-//	    openai.WithOptimizeForCache(false),  // Disable cache optimization
+//	    openai.WithOptimizeForCache(true),  // Enable cache optimization
 //	)
 func WithOptimizeForCache(optimize bool) Option {
 	return func(opts *options) {
