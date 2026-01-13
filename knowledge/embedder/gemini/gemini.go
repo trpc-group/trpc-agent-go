@@ -241,8 +241,14 @@ func (e *Embedder) response(ctx context.Context, text string) (rsp *genai.EmbedC
 		return nil, fmt.Errorf("text cannot be empty")
 	}
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationEmbeddings, e.model))
+	embeddingAttributes := &itelemetry.EmbeddingAttributes{
+		RequestEncodingFormat: &e.requestOptions.MIMEType,
+		RequestModel:          e.model,
+		Dimensions:            e.dimensions,
+	}
 	defer func() {
-		itelemetry.TraceEmbedding(span, e.requestOptions.MIMEType, e.model, nil, err)
+		embeddingAttributes.Error = err
+		itelemetry.TraceEmbedding(span, embeddingAttributes)
 		span.End()
 	}()
 	// Remove the `models/` prefix from the model id if it exists.
