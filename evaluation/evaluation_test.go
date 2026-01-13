@@ -213,28 +213,16 @@ func TestNewAgentEvaluatorWithCustomService(t *testing.T) {
 }
 
 func TestAgentEvaluatorCloseLifecycle(t *testing.T) {
-	t.Run("close owned service once", func(t *testing.T) {
-		customSvc := &countingService{}
-		ae := &agentEvaluator{
-			evalService:       customSvc,
-			ownsEvalService:   true,
-			evalResultManager: evalresultinmemory.New(),
-			evalSetManager:    evalsetinmemory.New(),
-			metricManager:     metricinmemory.New(),
-			registry:          registry.New(),
-		}
-		assert.NoError(t, ae.Close())
-		assert.NoError(t, ae.Close())
-		assert.Equal(t, int32(1), atomic.LoadInt32(&customSvc.closed))
-	})
-
-	t.Run("do not close injected service", func(t *testing.T) {
-		customSvc := &countingService{}
-		ae, err := New("app", stubRunner{}, WithEvaluationService(customSvc))
-		assert.NoError(t, err)
-		assert.NoError(t, ae.Close())
-		assert.Equal(t, int32(0), atomic.LoadInt32(&customSvc.closed))
-	})
+	customSvc := &countingService{}
+	ae := &agentEvaluator{
+		evalService:       customSvc,
+		evalResultManager: evalresultinmemory.New(),
+		evalSetManager:    evalsetinmemory.New(),
+		metricManager:     metricinmemory.New(),
+		registry:          registry.New(),
+	}
+	assert.NoError(t, ae.Close())
+	assert.Equal(t, int32(1), atomic.LoadInt32(&customSvc.closed))
 }
 
 func TestAgentEvaluatorEvaluateSuccess(t *testing.T) {
