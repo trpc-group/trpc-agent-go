@@ -1,0 +1,95 @@
+{
+  "evalSetResultId": "contextmessage-app_contextmessage-basic_ae6d4fd9-87c4-4b58-980b-cf01b963f0df",
+  "evalSetResultName": "contextmessage-app_contextmessage-basic_ae6d4fd9-87c4-4b58-980b-cf01b963f0df",
+  "evalSetId": "contextmessage-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "contextmessage-basic",
+      "evalId": "identity_name",
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "llm_final_response",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "llmJudge": {
+              "judgeModel": {
+                "providerName": "openai",
+                "modelName": "deepseek-chat",
+                "baseURL": "https://api.deepseek.com/v1",
+                "numSamples": 3,
+                "generationConfig": {
+                  "max_tokens": 512,
+                  "temperature": 1,
+                  "stream": false
+                }
+              }
+            }
+          },
+          "details": {
+            "reason": "The agent's response matches the reference answer in meaning, providing the same key entity (\"trpc-agent-go bot\"). The additional conversational text in the agent's response does not change the core answer or constitute a request for clarification.",
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "fd01b96c-7e6b-4c4e-9308-f50b57883409",
+            "userContent": {
+              "role": "user",
+              "content": "Who are you?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "I am trpc-agent-go bot, a helpful assistant designed to answer questions and assist with various tasks. How can I help you today?"
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "identity_name-1",
+            "userContent": {
+              "role": "user",
+              "content": "Who are you?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "trpc-agent-go bot"
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "llm_final_response",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "llmJudge": {
+                  "judgeModel": {
+                    "providerName": "openai",
+                    "modelName": "deepseek-chat",
+                    "baseURL": "https://api.deepseek.com/v1",
+                    "numSamples": 3,
+                    "generationConfig": {
+                      "max_tokens": 512,
+                      "temperature": 1,
+                      "stream": false
+                    }
+                  }
+                }
+              },
+              "details": {
+                "reason": "The agent's response matches the reference answer in meaning, providing the same key entity (\"trpc-agent-go bot\"). The additional conversational text in the agent's response does not change the core answer or constitute a request for clarification.",
+                "score": 1
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "672bfd65-1e87-4da8-9ebc-57383237c86a",
+      "userId": "demo-user"
+    }
+  ],
+  "creationTimestamp": 1768231157.5163162
+}

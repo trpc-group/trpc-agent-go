@@ -113,9 +113,6 @@ const (
 	// KeyGenAIToolCallResult is the attribute key for tool call result.
 	KeyGenAIToolCallResult = "gen_ai.tool.call.result"
 
-	// KeyGenAIRequestEncodingFormats is the attribute key for request encoding formats.
-	KeyGenAIRequestEncodingFormats = "gen_ai.request.encoding_formats"
-
 	// KeyErrorType is the attribute key for error type.
 	// Reference: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/general/recording-errors.md#recording-errors-on-spans
 	KeyErrorType = "error.type"

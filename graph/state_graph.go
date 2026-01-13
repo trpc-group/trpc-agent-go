@@ -60,7 +60,12 @@ import (
 //
 // The compiled Graph can then be executed with NewExecutor(graph).
 type StateGraph struct {
-	graph *Graph
+	graph       *Graph
+	buildErrors *stateGraphBuildErrors
+}
+
+type stateGraphBuildErrors struct {
+	errs []error
 }
 
 // NewStateGraph creates a new graph builder with the given state schema.
@@ -68,6 +73,23 @@ func NewStateGraph(schema *StateSchema) *StateGraph {
 	return &StateGraph{
 		graph: New(schema),
 	}
+}
+
+func (sg *StateGraph) addBuildError(err error) {
+	if err == nil {
+		return
+	}
+	if sg.buildErrors == nil {
+		sg.buildErrors = &stateGraphBuildErrors{}
+	}
+	sg.buildErrors.errs = append(sg.buildErrors.errs, err)
+}
+
+func (sg *StateGraph) buildErr() error {
+	if sg.buildErrors == nil {
+		return nil
+	}
+	return errors.Join(sg.buildErrors.errs...)
 }
 
 // Option is a function that configures a Node.
@@ -415,7 +437,10 @@ func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *Sta
 		return response, nil
 	}
 
-	sg.graph.addNode(node)
+	if err := sg.graph.addNode(node); err != nil {
+		sg.addBuildError(fmt.Errorf("AddNode(%q): %w", id, err))
+		return sg
+	}
 
 	// Automatically set up Pregel-style configuration
 	// Create a trigger channel for this node
@@ -503,7 +528,10 @@ func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 		From: from,
 		To:   to,
 	}
-	sg.graph.addEdge(edge)
+	if err := sg.graph.addEdge(edge); err != nil {
+		sg.addBuildError(fmt.Errorf("AddEdge(%q -> %q): %w", from, to, err))
+		return sg
+	}
 	// Automatically set up Pregel-style channel for the edge.
 	channelName := fmt.Sprintf("branch:to:%s", to)
 	sg.graph.addChannel(channelName, channel.BehaviorLastValue)
@@ -527,12 +555,32 @@ func (sg *StateGraph) AddJoinEdge(fromNodes []string, to string) *StateGraph {
 		return sg
 	}
 
+	sg.graph.mu.RLock()
+	if to != End {
+		if _, exists := sg.graph.nodes[to]; !exists {
+			sg.graph.mu.RUnlock()
+			sg.addBuildError(fmt.Errorf("AddJoinEdge(to=%q): target node %s does not exist", to, to))
+			return sg
+		}
+	}
+	for _, from := range starts {
+		if _, exists := sg.graph.nodes[from]; !exists {
+			sg.graph.mu.RUnlock()
+			sg.addBuildError(fmt.Errorf("AddJoinEdge(from=%q -> to=%q): source node %s does not exist", from, to, from))
+			return sg
+		}
+	}
+	sg.graph.mu.RUnlock()
+
 	for _, from := range starts {
 		edge := &Edge{
 			From: from,
 			To:   to,
 		}
-		sg.graph.addEdge(edge)
+		if err := sg.graph.addEdge(edge); err != nil {
+			sg.addBuildError(fmt.Errorf("AddJoinEdge(%q -> %q): %w", from, to, err))
+			return sg
+		}
 	}
 
 	channelName := joinChannelName(to, starts)
@@ -602,7 +650,10 @@ func (sg *StateGraph) AddConditionalEdges(
 		Condition: wrapperCondFunc(condFunc),
 		PathMap:   pathMap,
 	}
-	sg.graph.addConditionalEdge(condEdge)
+	if err := sg.graph.addConditionalEdge(condEdge); err != nil {
+		sg.addBuildError(fmt.Errorf("AddConditionalEdges(from=%q): %w", from, err))
+		return sg
+	}
 	return sg
 }
 
@@ -618,7 +669,10 @@ func (sg *StateGraph) AddMultiConditionalEdges(
 		Condition: wrapperCondFunc(condFunc),
 		PathMap:   pathMap,
 	}
-	sg.graph.addConditionalEdge(condEdge)
+	if err := sg.graph.addConditionalEdge(condEdge); err != nil {
+		sg.addBuildError(fmt.Errorf("AddMultiConditionalEdges(from=%q): %w", from, err))
+		return sg
+	}
 	return sg
 }
 
@@ -648,14 +702,23 @@ func (sg *StateGraph) AddToolsConditionalEdges(
 			fallbackNode: fallbackNode,
 		},
 	}
-	sg.graph.addConditionalEdge(condEdge)
+	if err := sg.graph.addConditionalEdge(condEdge); err != nil {
+		sg.addBuildError(fmt.Errorf(
+			"AddToolsConditionalEdges(from=%q, tools=%q, fallback=%q): %w",
+			fromLLMNode, toToolsNode, fallbackNode, err,
+		))
+		return sg
+	}
 	return sg
 }
 
 // SetEntryPoint sets the entry point of the graph.
 // This is equivalent to addEdge(Start, nodeId).
 func (sg *StateGraph) SetEntryPoint(nodeID string) *StateGraph {
-	sg.graph.setEntryPoint(nodeID)
+	if err := sg.graph.setEntryPoint(nodeID); err != nil {
+		sg.addBuildError(fmt.Errorf("SetEntryPoint(%q): %w", nodeID, err))
+		return sg
+	}
 	// Also add an edge from Start to make it explicit
 	sg.AddEdge(Start, nodeID)
 	return sg
@@ -670,6 +733,9 @@ func (sg *StateGraph) SetFinishPoint(nodeID string) *StateGraph {
 
 // Compile compiles the graph and returns it for execution.
 func (sg *StateGraph) Compile() (*Graph, error) {
+	if err := sg.buildErr(); err != nil {
+		return nil, fmt.Errorf("graph build failed: %w", err)
+	}
 	if err := sg.graph.validate(); err != nil {
 		return nil, fmt.Errorf("invalid graph: %w", err)
 	}

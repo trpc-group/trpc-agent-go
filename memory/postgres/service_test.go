@@ -22,46 +22,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
-
-func TestGenerateMemoryID(t *testing.T) {
-	tests := []struct {
-		name   string
-		memory *memory.Memory
-	}{
-		{
-			name: "memory with content only",
-			memory: &memory.Memory{
-				Memory: "test content",
-			},
-		},
-		{
-			name: "memory with content and topics",
-			memory: &memory.Memory{
-				Memory: "test content",
-				Topics: []string{"topic1", "topic2"},
-			},
-		},
-		{
-			name: "memory with empty topics",
-			memory: &memory.Memory{
-				Memory: "test content",
-				Topics: []string{},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			id := generateMemoryID(tt.memory)
-			assert.NotEmpty(t, id, "Generated memory ID should not be empty")
-			// The ID is a hex encoding, so it should be even length.
-			assert.Equal(t, 0, len(id)%2, "Generated memory ID should have even length")
-		})
-	}
-}
 
 func TestServiceOpts_Defaults(t *testing.T) {
 	opts := ServiceOpts{}
@@ -1050,6 +1017,40 @@ func TestService_AddMemory_Success(t *testing.T) {
 	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err := svc.AddMemory(ctx, userKey, "test memory", []string{"topic1"})
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_AddMemory_Idempotent(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(10))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+	memoryStr := "test memory"
+	topics := []string{"topic1"}
+
+	// Mock count query for first call.
+	mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	// Mock insert for first call.
+	mock.ExpectExec("INSERT INTO.*ON CONFLICT").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock count query for second call.
+	mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	// Mock upsert for second call (should update existing).
+	mock.ExpectExec("INSERT INTO.*ON CONFLICT").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// First call should succeed.
+	err := svc.AddMemory(ctx, userKey, memoryStr, topics)
+	require.NoError(t, err)
+
+	// Second call with same content should also succeed (idempotent).
+	err = svc.AddMemory(ctx, userKey, memoryStr, topics)
 	require.NoError(t, err)
 
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -2252,27 +2253,6 @@ func TestService_WithSchema(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// Test generateMemoryID with different inputs
-func TestGenerateMemoryID_DifferentContent(t *testing.T) {
-	mem1 := &memory.Memory{Memory: "content1"}
-	mem2 := &memory.Memory{Memory: "content2"}
-
-	id1 := generateMemoryID(mem1)
-	id2 := generateMemoryID(mem2)
-
-	assert.NotEqual(t, id1, id2, "Different content should generate different IDs")
-}
-
-func TestGenerateMemoryID_DifferentTopics(t *testing.T) {
-	mem1 := &memory.Memory{Memory: "content", Topics: []string{"topic1"}}
-	mem2 := &memory.Memory{Memory: "content", Topics: []string{"topic2"}}
-
-	id1 := generateMemoryID(mem1)
-	id2 := generateMemoryID(mem2)
-
-	assert.NotEqual(t, id1, id2, "Different topics should generate different IDs")
-}
-
 // Test parseTableName.
 func TestParseTableName(t *testing.T) {
 	tests := []struct {
@@ -3220,4 +3200,144 @@ func TestNewService_WithCustomTableName(t *testing.T) {
 
 	require.NoError(t, mock.ExpectationsWereMet())
 	service.Close()
+}
+
+// mockExtractor is a mock implementation of extractor.MemoryExtractor.
+type mockExtractor struct {
+	extractCalled bool
+}
+
+func (m *mockExtractor) Extract(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*extractor.Operation, error) {
+	m.extractCalled = true
+	return nil, nil
+}
+
+func (m *mockExtractor) ShouldExtract(ctx *extractor.ExtractionContext) bool {
+	return true
+}
+
+func (m *mockExtractor) SetPrompt(prompt string) {}
+
+func (m *mockExtractor) SetModel(mdl model.Model) {}
+
+func (m *mockExtractor) Metadata() map[string]any {
+	return map[string]any{}
+}
+
+func TestWithExtractor(t *testing.T) {
+	ext := &mockExtractor{}
+	opts := defaultOptions.clone()
+	WithExtractor(ext)(&opts)
+	assert.Equal(t, ext, opts.extractor)
+}
+
+func TestWithAsyncMemoryNum(t *testing.T) {
+	t.Run("valid value", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithAsyncMemoryNum(5)(&opts)
+		assert.Equal(t, 5, opts.asyncMemoryNum)
+	})
+
+	t.Run("invalid value uses default", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithAsyncMemoryNum(0)(&opts)
+		assert.Equal(t, imemory.DefaultAsyncMemoryNum, opts.asyncMemoryNum)
+	})
+}
+
+func TestWithMemoryQueueSize(t *testing.T) {
+	t.Run("valid value", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithMemoryQueueSize(200)(&opts)
+		assert.Equal(t, 200, opts.memoryQueueSize)
+	})
+
+	t.Run("invalid value uses default", func(t *testing.T) {
+		opts := defaultOptions.clone()
+		WithMemoryQueueSize(0)(&opts)
+		assert.Equal(t, imemory.DefaultMemoryQueueSize, opts.memoryQueueSize)
+	})
+}
+
+func TestWithMemoryJobTimeout(t *testing.T) {
+	opts := defaultOptions.clone()
+	WithMemoryJobTimeout(time.Minute)(&opts)
+	assert.Equal(t, time.Minute, opts.memoryJobTimeout)
+}
+
+func TestEnqueueAutoMemoryJob_NoWorker(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db, mock)
+
+	ctx := context.Background()
+	sess := session.NewSession("test-app", "test-user", "test-session")
+	// Should return nil when no worker is configured.
+	err := s.EnqueueAutoMemoryJob(ctx, sess)
+	assert.NoError(t, err)
+}
+
+func TestClose_NoWorker(t *testing.T) {
+	db, mock := setupMockDB(t)
+	s := setupMockService(t, db, mock)
+
+	// Expect db.Close() to be called.
+	mock.ExpectClose()
+
+	err := s.Close()
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTools_AutoMemoryMode(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db, mock)
+
+	// Enable auto memory mode.
+	s.opts.extractor = &mockExtractor{}
+	s.opts.toolCreators = imemory.AllToolCreators
+	// Apply auto mode defaults (nil for userExplicitlySet since this is a test).
+	imemory.ApplyAutoModeDefaults(s.opts.enabledTools, nil)
+	// Re-compute tools list after changing opts to simulate auto memory mode.
+	s.precomputedTools = imemory.BuildToolsList(
+		s.opts.extractor,
+		s.opts.toolCreators,
+		s.opts.enabledTools,
+		s.cachedTools,
+	)
+
+	tools := s.Tools()
+
+	// In auto memory mode, Search is enabled by default.
+	assert.Len(t, tools, 1, "Auto mode should return Search tool by default")
+	toolNames := make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	assert.True(t, toolNames[memory.SearchToolName], "Search tool should be returned by default")
+
+	// Enable Load tool explicitly.
+	s.opts.enabledTools[memory.LoadToolName] = true
+	s.precomputedTools = imemory.BuildToolsList(
+		s.opts.extractor,
+		s.opts.toolCreators,
+		s.opts.enabledTools,
+		s.cachedTools,
+	)
+
+	tools = s.Tools()
+	assert.Len(t, tools, 2, "Auto mode should return Search and Load tools when Load is enabled")
+	toolNames = make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	assert.True(t, toolNames[memory.SearchToolName], "Search tool should be returned")
+	assert.True(t, toolNames[memory.LoadToolName], "Load tool should be returned when enabled")
+	assert.False(t, toolNames[memory.AddToolName], "Add tool should not be exposed via Tools()")
+	assert.False(t, toolNames[memory.ClearToolName], "Clear tool should not be exposed via Tools()")
 }
