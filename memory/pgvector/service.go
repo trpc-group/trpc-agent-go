@@ -15,7 +15,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -234,6 +233,7 @@ func (s *Service) AddMemory(
 			memory_content = EXCLUDED.memory_content,
 			topics = EXCLUDED.topics,
 			embedding = EXCLUDED.embedding,
+			deleted_at = NULL,
 			updated_at = EXCLUDED.updated_at`,
 		s.tableName,
 	)
@@ -425,6 +425,11 @@ func (s *Service) SearchMemories(
 		return nil, err
 	}
 
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return []*memory.Entry{}, nil
+	}
+
 	// Generate embedding for the query.
 	queryEmbedding, err := s.opts.embedder.GetEmbedding(ctx, query)
 	if err != nil {
@@ -467,15 +472,6 @@ func (s *Service) SearchMemories(
 	if err != nil {
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
-
-	// Stable sort by updated time desc (already sorted by similarity, but
-	// preserve order for equal similarities).
-	sort.SliceStable(results, func(i, j int) bool {
-		if results[i].UpdatedAt.Equal(results[j].UpdatedAt) {
-			return results[i].CreatedAt.After(results[j].CreatedAt)
-		}
-		return results[i].UpdatedAt.After(results[j].UpdatedAt)
-	})
 
 	return results, nil
 }
