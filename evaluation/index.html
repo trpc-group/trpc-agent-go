@@ -1788,6 +1788,30 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      Best Practices
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Best Practices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#context-injection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Context Injection
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2329,6 +2353,30 @@
         
       </ul>
     </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      Best Practices
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Best Practices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#context-injection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Context Injection
+    </span>
+  </a>
   
 </li>
         
@@ -3120,7 +3168,7 @@
 </ul>
 <h3 id="evalset">EvalSet</h3>
 <p>An EvalSet is a collection of EvalCase instances, identified by a unique EvalSetID, serving as session data within the evaluation process.</p>
-<p>An EvalCase represents a set of evaluation cases within the same Session and includes a unique identifier (EvalID), the conversation content, and session initialization information.</p>
+<p>An EvalCase represents a set of evaluation cases within the same Session and includes a unique identifier (EvalID), the conversation content, optional <code>contextMessages</code>, and session initialization information.</p>
 <p>Conversation data includes three types of content:</p>
 <ul>
 <li>User input</li>
@@ -3173,7 +3221,8 @@
 <span class="normal"><a href="#__codelineno-7-43">43</a></span>
 <span class="normal"><a href="#__codelineno-7-44">44</a></span>
 <span class="normal"><a href="#__codelineno-7-45">45</a></span>
-<span class="normal"><a href="#__codelineno-7-46">46</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-7-46">46</a></span>
+<span class="normal"><a href="#__codelineno-7-47">47</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime&quot;</span>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
 </span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="p">)</span>
@@ -3190,35 +3239,36 @@
 </span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="c1">// EvalCase represents a single evaluation case.</span>
 </span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EvalCase</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="w">    </span><span class="nx">EvalID</span><span class="w">            </span><span class="kt">string</span><span class="w">               </span><span class="c1">// Unique identifier of the case.</span>
-</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">    </span><span class="nx">Conversation</span><span class="w">      </span><span class="p">[]</span><span class="o">*</span><span class="nx">Invocation</span><span class="w">        </span><span class="c1">// Conversation sequence.</span>
-</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="w">    </span><span class="nx">SessionInput</span><span class="w">      </span><span class="o">*</span><span class="nx">SessionInput</span><span class="w">        </span><span class="c1">// Session initialization data.</span>
-</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w"> </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// Creation time.</span>
-</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="p">}</span>
-</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a>
-</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23"></a><span class="c1">// Invocation represents a user-agent interaction.</span>
-</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Invocation</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w">          </span><span class="kt">string</span>
-</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26"></a><span class="w">    </span><span class="nx">UserContent</span><span class="w">           </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// User input.</span>
-</span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27"></a><span class="w">    </span><span class="nx">FinalResponse</span><span class="w">         </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// Agent final response.</span>
-</span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28"></a><span class="w">    </span><span class="nx">Tools</span><span class="w">                 </span><span class="p">[]</span><span class="o">*</span><span class="nx">Tool</span><span class="w">              </span><span class="c1">// Tool calls and results.</span>
-</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29"></a><span class="w">    </span><span class="nx">IntermediateResponses</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">     </span><span class="c1">// Intermediate responses.</span>
-</span><span id="__span-7-30"><a id="__codelineno-7-30" name="__codelineno-7-30"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w">     </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// Creation time.</span>
-</span><span id="__span-7-31"><a id="__codelineno-7-31" name="__codelineno-7-31"></a><span class="p">}</span>
-</span><span id="__span-7-32"><a id="__codelineno-7-32" name="__codelineno-7-32"></a>
-</span><span id="__span-7-33"><a id="__codelineno-7-33" name="__codelineno-7-33"></a><span class="c1">// Tool represents a single tool invocation and its execution result.</span>
-</span><span id="__span-7-34"><a id="__codelineno-7-34" name="__codelineno-7-34"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Tool</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-35"><a id="__codelineno-7-35" name="__codelineno-7-35"></a><span class="w">    </span><span class="nx">ID</span><span class="w">        </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Tool invocation ID.</span>
-</span><span id="__span-7-36"><a id="__codelineno-7-36" name="__codelineno-7-36"></a><span class="w">    </span><span class="nx">Name</span><span class="w">      </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Tool name.</span>
-</span><span id="__span-7-37"><a id="__codelineno-7-37" name="__codelineno-7-37"></a><span class="w">    </span><span class="nx">Arguments</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// Tool invocation parameters.</span>
-</span><span id="__span-7-38"><a id="__codelineno-7-38" name="__codelineno-7-38"></a><span class="w">    </span><span class="nx">Result</span><span class="w">    </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// Tool execution result.</span>
-</span><span id="__span-7-39"><a id="__codelineno-7-39" name="__codelineno-7-39"></a><span class="p">}</span>
-</span><span id="__span-7-40"><a id="__codelineno-7-40" name="__codelineno-7-40"></a>
-</span><span id="__span-7-41"><a id="__codelineno-7-41" name="__codelineno-7-41"></a><span class="c1">// SessionInput represents session initialization input.</span>
-</span><span id="__span-7-42"><a id="__codelineno-7-42" name="__codelineno-7-42"></a><span class="kd">type</span><span class="w"> </span><span class="nx">SessionInput</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-43"><a id="__codelineno-7-43" name="__codelineno-7-43"></a><span class="w">    </span><span class="nx">AppName</span><span class="w"> </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Application name.</span>
-</span><span id="__span-7-44"><a id="__codelineno-7-44" name="__codelineno-7-44"></a><span class="w">    </span><span class="nx">UserID</span><span class="w">  </span><span class="kt">string</span><span class="w">         </span><span class="c1">// User ID.</span>
-</span><span id="__span-7-45"><a id="__codelineno-7-45" name="__codelineno-7-45"></a><span class="w">    </span><span class="nx">State</span><span class="w">   </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// Initial state.</span>
-</span><span id="__span-7-46"><a id="__codelineno-7-46" name="__codelineno-7-46"></a><span class="p">}</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">    </span><span class="nx">ContextMessages</span><span class="w">   </span><span class="p">[]</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">     </span><span class="c1">// Context messages injected into each inference run.</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="w">    </span><span class="nx">Conversation</span><span class="w">      </span><span class="p">[]</span><span class="o">*</span><span class="nx">Invocation</span><span class="w">        </span><span class="c1">// Conversation sequence.</span>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="w">    </span><span class="nx">SessionInput</span><span class="w">      </span><span class="o">*</span><span class="nx">SessionInput</span><span class="w">        </span><span class="c1">// Session initialization data.</span>
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w"> </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// Creation time.</span>
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a><span class="p">}</span>
+</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23"></a>
+</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24"></a><span class="c1">// Invocation represents a user-agent interaction.</span>
+</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Invocation</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w">          </span><span class="kt">string</span>
+</span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27"></a><span class="w">    </span><span class="nx">UserContent</span><span class="w">           </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// User input.</span>
+</span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28"></a><span class="w">    </span><span class="nx">FinalResponse</span><span class="w">         </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// Agent final response.</span>
+</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29"></a><span class="w">    </span><span class="nx">Tools</span><span class="w">                 </span><span class="p">[]</span><span class="o">*</span><span class="nx">Tool</span><span class="w">              </span><span class="c1">// Tool calls and results.</span>
+</span><span id="__span-7-30"><a id="__codelineno-7-30" name="__codelineno-7-30"></a><span class="w">    </span><span class="nx">IntermediateResponses</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">     </span><span class="c1">// Intermediate responses.</span>
+</span><span id="__span-7-31"><a id="__codelineno-7-31" name="__codelineno-7-31"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w">     </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// Creation time.</span>
+</span><span id="__span-7-32"><a id="__codelineno-7-32" name="__codelineno-7-32"></a><span class="p">}</span>
+</span><span id="__span-7-33"><a id="__codelineno-7-33" name="__codelineno-7-33"></a>
+</span><span id="__span-7-34"><a id="__codelineno-7-34" name="__codelineno-7-34"></a><span class="c1">// Tool represents a single tool invocation and its execution result.</span>
+</span><span id="__span-7-35"><a id="__codelineno-7-35" name="__codelineno-7-35"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Tool</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-36"><a id="__codelineno-7-36" name="__codelineno-7-36"></a><span class="w">    </span><span class="nx">ID</span><span class="w">        </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Tool invocation ID.</span>
+</span><span id="__span-7-37"><a id="__codelineno-7-37" name="__codelineno-7-37"></a><span class="w">    </span><span class="nx">Name</span><span class="w">      </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Tool name.</span>
+</span><span id="__span-7-38"><a id="__codelineno-7-38" name="__codelineno-7-38"></a><span class="w">    </span><span class="nx">Arguments</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// Tool invocation parameters.</span>
+</span><span id="__span-7-39"><a id="__codelineno-7-39" name="__codelineno-7-39"></a><span class="w">    </span><span class="nx">Result</span><span class="w">    </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// Tool execution result.</span>
+</span><span id="__span-7-40"><a id="__codelineno-7-40" name="__codelineno-7-40"></a><span class="p">}</span>
+</span><span id="__span-7-41"><a id="__codelineno-7-41" name="__codelineno-7-41"></a>
+</span><span id="__span-7-42"><a id="__codelineno-7-42" name="__codelineno-7-42"></a><span class="c1">// SessionInput represents session initialization input.</span>
+</span><span id="__span-7-43"><a id="__codelineno-7-43" name="__codelineno-7-43"></a><span class="kd">type</span><span class="w"> </span><span class="nx">SessionInput</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-44"><a id="__codelineno-7-44" name="__codelineno-7-44"></a><span class="w">    </span><span class="nx">AppName</span><span class="w"> </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Application name.</span>
+</span><span id="__span-7-45"><a id="__codelineno-7-45" name="__codelineno-7-45"></a><span class="w">    </span><span class="nx">UserID</span><span class="w">  </span><span class="kt">string</span><span class="w">         </span><span class="c1">// User ID.</span>
+</span><span id="__span-7-46"><a id="__codelineno-7-46" name="__codelineno-7-46"></a><span class="w">    </span><span class="nx">State</span><span class="w">   </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// Initial state.</span>
+</span><span id="__span-7-47"><a id="__codelineno-7-47" name="__codelineno-7-47"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>The EvalSet Manager is responsible for performing operations such as adding, deleting, modifying, and querying evaluation sets. The interface definition is as follows:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1"> 1</a></span>
@@ -5302,6 +5352,67 @@ EvalCaseResult represents the evaluation result of a single evaluation case, inc
 </span><span id="__span-55-32"><a id="__codelineno-55-32" name="__codelineno-55-32"></a><span class="p">]</span>
 </span></code></pre></div></td></tr></table></div>
 <p>This evaluator requires the Agent’s tool calls to return retrieval results. See the complete example at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/knowledgerecall">examples/evaluation/llm/knowledgerecall</a>.</p>
+<h2 id="best-practices">Best Practices</h2>
+<h3 id="context-injection">Context Injection</h3>
+<p><code>contextMessages</code> provides additional context messages for an EvalCase. It is commonly used to add background information, role setup, or examples. It also supports pure model evaluation by configuring the system prompt per case as evaluation data to compare different model and prompt combinations.</p>
+<p>Context injection example:</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-56-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-56-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-56-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-56-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-56-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-56-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-56-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-56-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-56-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-56-10">10</a></span>
+<span class="normal"><a href="#__codelineno-56-11">11</a></span>
+<span class="normal"><a href="#__codelineno-56-12">12</a></span>
+<span class="normal"><a href="#__codelineno-56-13">13</a></span>
+<span class="normal"><a href="#__codelineno-56-14">14</a></span>
+<span class="normal"><a href="#__codelineno-56-15">15</a></span>
+<span class="normal"><a href="#__codelineno-56-16">16</a></span>
+<span class="normal"><a href="#__codelineno-56-17">17</a></span>
+<span class="normal"><a href="#__codelineno-56-18">18</a></span>
+<span class="normal"><a href="#__codelineno-56-19">19</a></span>
+<span class="normal"><a href="#__codelineno-56-20">20</a></span>
+<span class="normal"><a href="#__codelineno-56-21">21</a></span>
+<span class="normal"><a href="#__codelineno-56-22">22</a></span>
+<span class="normal"><a href="#__codelineno-56-23">23</a></span>
+<span class="normal"><a href="#__codelineno-56-24">24</a></span>
+<span class="normal"><a href="#__codelineno-56-25">25</a></span>
+<span class="normal"><a href="#__codelineno-56-26">26</a></span>
+<span class="normal"><a href="#__codelineno-56-27">27</a></span>
+<span class="normal"><a href="#__codelineno-56-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1"></a><span class="p">{</span>
+</span><span id="__span-56-2"><a id="__codelineno-56-2" name="__codelineno-56-2"></a><span class="w">  </span><span class="nt">&quot;evalSetId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;contextmessage-basic&quot;</span><span class="p">,</span>
+</span><span id="__span-56-3"><a id="__codelineno-56-3" name="__codelineno-56-3"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;contextmessage-basic&quot;</span><span class="p">,</span>
+</span><span id="__span-56-4"><a id="__codelineno-56-4" name="__codelineno-56-4"></a><span class="w">  </span><span class="nt">&quot;evalCases&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-56-5"><a id="__codelineno-56-5" name="__codelineno-56-5"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-56-6"><a id="__codelineno-56-6" name="__codelineno-56-6"></a><span class="w">      </span><span class="nt">&quot;evalId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;identity_name&quot;</span><span class="p">,</span>
+</span><span id="__span-56-7"><a id="__codelineno-56-7" name="__codelineno-56-7"></a><span class="w">      </span><span class="nt">&quot;contextMessages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-56-8"><a id="__codelineno-56-8" name="__codelineno-56-8"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-56-9"><a id="__codelineno-56-9" name="__codelineno-56-9"></a><span class="w">          </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;system&quot;</span><span class="p">,</span>
+</span><span id="__span-56-10"><a id="__codelineno-56-10" name="__codelineno-56-10"></a><span class="w">          </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;You are trpc-agent-go bot.&quot;</span>
+</span><span id="__span-56-11"><a id="__codelineno-56-11" name="__codelineno-56-11"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-56-12"><a id="__codelineno-56-12" name="__codelineno-56-12"></a><span class="w">      </span><span class="p">],</span>
+</span><span id="__span-56-13"><a id="__codelineno-56-13" name="__codelineno-56-13"></a><span class="w">      </span><span class="nt">&quot;conversation&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-56-14"><a id="__codelineno-56-14" name="__codelineno-56-14"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-56-15"><a id="__codelineno-56-15" name="__codelineno-56-15"></a><span class="w">          </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;identity_name-1&quot;</span><span class="p">,</span>
+</span><span id="__span-56-16"><a id="__codelineno-56-16" name="__codelineno-56-16"></a><span class="w">          </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-56-17"><a id="__codelineno-56-17" name="__codelineno-56-17"></a><span class="w">            </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
+</span><span id="__span-56-18"><a id="__codelineno-56-18" name="__codelineno-56-18"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Who are you?&quot;</span>
+</span><span id="__span-56-19"><a id="__codelineno-56-19" name="__codelineno-56-19"></a><span class="w">          </span><span class="p">}</span>
+</span><span id="__span-56-20"><a id="__codelineno-56-20" name="__codelineno-56-20"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-56-21"><a id="__codelineno-56-21" name="__codelineno-56-21"></a><span class="w">      </span><span class="p">],</span>
+</span><span id="__span-56-22"><a id="__codelineno-56-22" name="__codelineno-56-22"></a><span class="w">      </span><span class="nt">&quot;sessionInput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-56-23"><a id="__codelineno-56-23" name="__codelineno-56-23"></a><span class="w">        </span><span class="nt">&quot;appName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;contextmessage-app&quot;</span><span class="p">,</span>
+</span><span id="__span-56-24"><a id="__codelineno-56-24" name="__codelineno-56-24"></a><span class="w">        </span><span class="nt">&quot;userId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-user&quot;</span>
+</span><span id="__span-56-25"><a id="__codelineno-56-25" name="__codelineno-56-25"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-56-26"><a id="__codelineno-56-26" name="__codelineno-56-26"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-56-27"><a id="__codelineno-56-27" name="__codelineno-56-27"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-56-28"><a id="__codelineno-56-28" name="__codelineno-56-28"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>For a complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/contextmessage">examples/evaluation/contextmessage</a>.</p>
 
 
 
@@ -5324,7 +5435,7 @@ EvalCaseResult represents the evaluation result of a single evaluation case, inc
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 29, 2025 11:37:09 UTC">2025-12-29 11:37:09</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 13, 2026 03:07:05 UTC">2026-01-13 03:07:05</span>
   </span>
 
     

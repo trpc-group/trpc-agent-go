@@ -1788,6 +1788,30 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      最佳实践
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="最佳实践">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      上下文注入
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2329,6 +2353,30 @@
         
       </ul>
     </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      最佳实践
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="最佳实践">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      上下文注入
+    </span>
+  </a>
   
 </li>
         
@@ -3120,7 +3168,7 @@
 </ul>
 <h3 id="-evalset">评估集 -- EvalSet</h3>
 <p>EvalSet 是一组 EvalCase 的集合，通过唯一的 EvalSetID 进行标识，作为评估流程中的会话数据。</p>
-<p>而 EvalCase 表示同一 Session 下的一组评估用例，包含唯一标识符 EvalID、对话内容以及 Session 初始化信息。</p>
+<p>而 EvalCase 表示同一 Session 下的一组评估用例，包含唯一标识符 EvalID、对话内容、可选的 <code>contextMessages</code> 以及 Session 初始化信息。</p>
 <p>对话数据包括三类内容：</p>
 <ul>
 <li>用户输入</li>
@@ -3173,7 +3221,8 @@
 <span class="normal"><a href="#__codelineno-7-43">43</a></span>
 <span class="normal"><a href="#__codelineno-7-44">44</a></span>
 <span class="normal"><a href="#__codelineno-7-45">45</a></span>
-<span class="normal"><a href="#__codelineno-7-46">46</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-7-46">46</a></span>
+<span class="normal"><a href="#__codelineno-7-47">47</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime&quot;</span>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
 </span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="p">)</span>
@@ -3190,35 +3239,36 @@
 </span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="c1">// EvalCase 表示单个评估用例</span>
 </span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EvalCase</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="w">    </span><span class="nx">EvalID</span><span class="w">            </span><span class="kt">string</span><span class="w">               </span><span class="c1">// 用例唯一标识</span>
-</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">    </span><span class="nx">Conversation</span><span class="w">      </span><span class="p">[]</span><span class="o">*</span><span class="nx">Invocation</span><span class="w">        </span><span class="c1">// 对话序列</span>
-</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="w">    </span><span class="nx">SessionInput</span><span class="w">      </span><span class="o">*</span><span class="nx">SessionInput</span><span class="w">        </span><span class="c1">// Session 初始化数据</span>
-</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w"> </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// 创建时间</span>
-</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="p">}</span>
-</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a>
-</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23"></a><span class="c1">// Invocation 表示一次用户与 Agent 的交互</span>
-</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Invocation</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w">          </span><span class="kt">string</span>
-</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26"></a><span class="w">    </span><span class="nx">UserContent</span><span class="w">           </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// 用户输入</span>
-</span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27"></a><span class="w">    </span><span class="nx">FinalResponse</span><span class="w">         </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// Agent 最终响应</span>
-</span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28"></a><span class="w">    </span><span class="nx">Tools</span><span class="w">                 </span><span class="p">[]</span><span class="o">*</span><span class="nx">Tool</span><span class="w">              </span><span class="c1">// 工具调用与工具执行结果</span>
-</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29"></a><span class="w">    </span><span class="nx">IntermediateResponses</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">     </span><span class="c1">// Agent 中间响应数据</span>
-</span><span id="__span-7-30"><a id="__codelineno-7-30" name="__codelineno-7-30"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w">     </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// 创建时间</span>
-</span><span id="__span-7-31"><a id="__codelineno-7-31" name="__codelineno-7-31"></a><span class="p">}</span>
-</span><span id="__span-7-32"><a id="__codelineno-7-32" name="__codelineno-7-32"></a>
-</span><span id="__span-7-33"><a id="__codelineno-7-33" name="__codelineno-7-33"></a><span class="c1">// Tool 表示一次工具调用和工具执行结果</span>
-</span><span id="__span-7-34"><a id="__codelineno-7-34" name="__codelineno-7-34"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Tool</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-35"><a id="__codelineno-7-35" name="__codelineno-7-35"></a><span class="w">    </span><span class="nx">ID</span><span class="w">        </span><span class="kt">string</span><span class="w">         </span><span class="c1">// 工具调用 ID</span>
-</span><span id="__span-7-36"><a id="__codelineno-7-36" name="__codelineno-7-36"></a><span class="w">    </span><span class="nx">Name</span><span class="w">      </span><span class="kt">string</span><span class="w">         </span><span class="c1">// 工具名</span>
-</span><span id="__span-7-37"><a id="__codelineno-7-37" name="__codelineno-7-37"></a><span class="w">    </span><span class="nx">Arguments</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// 工具调用输入参数</span>
-</span><span id="__span-7-38"><a id="__codelineno-7-38" name="__codelineno-7-38"></a><span class="w">    </span><span class="nx">Result</span><span class="w">    </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// 工具执行结果</span>
-</span><span id="__span-7-39"><a id="__codelineno-7-39" name="__codelineno-7-39"></a><span class="p">}</span>
-</span><span id="__span-7-40"><a id="__codelineno-7-40" name="__codelineno-7-40"></a>
-</span><span id="__span-7-41"><a id="__codelineno-7-41" name="__codelineno-7-41"></a><span class="c1">// SessionInput 表示 Session 初始化输入</span>
-</span><span id="__span-7-42"><a id="__codelineno-7-42" name="__codelineno-7-42"></a><span class="kd">type</span><span class="w"> </span><span class="nx">SessionInput</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-43"><a id="__codelineno-7-43" name="__codelineno-7-43"></a><span class="w">    </span><span class="nx">AppName</span><span class="w"> </span><span class="kt">string</span><span class="w">         </span><span class="c1">// 应用名</span>
-</span><span id="__span-7-44"><a id="__codelineno-7-44" name="__codelineno-7-44"></a><span class="w">    </span><span class="nx">UserID</span><span class="w">  </span><span class="kt">string</span><span class="w">         </span><span class="c1">// 用户 ID</span>
-</span><span id="__span-7-45"><a id="__codelineno-7-45" name="__codelineno-7-45"></a><span class="w">    </span><span class="nx">State</span><span class="w">   </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// 初始状态</span>
-</span><span id="__span-7-46"><a id="__codelineno-7-46" name="__codelineno-7-46"></a><span class="p">}</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">    </span><span class="nx">ContextMessages</span><span class="w">   </span><span class="p">[]</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">     </span><span class="c1">// 用于在每次推理时注入上下文消息。</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="w">    </span><span class="nx">Conversation</span><span class="w">      </span><span class="p">[]</span><span class="o">*</span><span class="nx">Invocation</span><span class="w">        </span><span class="c1">// 对话序列</span>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="w">    </span><span class="nx">SessionInput</span><span class="w">      </span><span class="o">*</span><span class="nx">SessionInput</span><span class="w">        </span><span class="c1">// Session 初始化数据</span>
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w"> </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// 创建时间</span>
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a><span class="p">}</span>
+</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23"></a>
+</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24"></a><span class="c1">// Invocation 表示一次用户与 Agent 的交互</span>
+</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Invocation</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w">          </span><span class="kt">string</span>
+</span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27"></a><span class="w">    </span><span class="nx">UserContent</span><span class="w">           </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// 用户输入</span>
+</span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28"></a><span class="w">    </span><span class="nx">FinalResponse</span><span class="w">         </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// Agent 最终响应</span>
+</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29"></a><span class="w">    </span><span class="nx">Tools</span><span class="w">                 </span><span class="p">[]</span><span class="o">*</span><span class="nx">Tool</span><span class="w">              </span><span class="c1">// 工具调用与工具执行结果</span>
+</span><span id="__span-7-30"><a id="__codelineno-7-30" name="__codelineno-7-30"></a><span class="w">    </span><span class="nx">IntermediateResponses</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">     </span><span class="c1">// Agent 中间响应数据</span>
+</span><span id="__span-7-31"><a id="__codelineno-7-31" name="__codelineno-7-31"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w">     </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// 创建时间</span>
+</span><span id="__span-7-32"><a id="__codelineno-7-32" name="__codelineno-7-32"></a><span class="p">}</span>
+</span><span id="__span-7-33"><a id="__codelineno-7-33" name="__codelineno-7-33"></a>
+</span><span id="__span-7-34"><a id="__codelineno-7-34" name="__codelineno-7-34"></a><span class="c1">// Tool 表示一次工具调用和工具执行结果</span>
+</span><span id="__span-7-35"><a id="__codelineno-7-35" name="__codelineno-7-35"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Tool</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-36"><a id="__codelineno-7-36" name="__codelineno-7-36"></a><span class="w">    </span><span class="nx">ID</span><span class="w">        </span><span class="kt">string</span><span class="w">         </span><span class="c1">// 工具调用 ID</span>
+</span><span id="__span-7-37"><a id="__codelineno-7-37" name="__codelineno-7-37"></a><span class="w">    </span><span class="nx">Name</span><span class="w">      </span><span class="kt">string</span><span class="w">         </span><span class="c1">// 工具名</span>
+</span><span id="__span-7-38"><a id="__codelineno-7-38" name="__codelineno-7-38"></a><span class="w">    </span><span class="nx">Arguments</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// 工具调用输入参数</span>
+</span><span id="__span-7-39"><a id="__codelineno-7-39" name="__codelineno-7-39"></a><span class="w">    </span><span class="nx">Result</span><span class="w">    </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// 工具执行结果</span>
+</span><span id="__span-7-40"><a id="__codelineno-7-40" name="__codelineno-7-40"></a><span class="p">}</span>
+</span><span id="__span-7-41"><a id="__codelineno-7-41" name="__codelineno-7-41"></a>
+</span><span id="__span-7-42"><a id="__codelineno-7-42" name="__codelineno-7-42"></a><span class="c1">// SessionInput 表示 Session 初始化输入</span>
+</span><span id="__span-7-43"><a id="__codelineno-7-43" name="__codelineno-7-43"></a><span class="kd">type</span><span class="w"> </span><span class="nx">SessionInput</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-44"><a id="__codelineno-7-44" name="__codelineno-7-44"></a><span class="w">    </span><span class="nx">AppName</span><span class="w"> </span><span class="kt">string</span><span class="w">         </span><span class="c1">// 应用名</span>
+</span><span id="__span-7-45"><a id="__codelineno-7-45" name="__codelineno-7-45"></a><span class="w">    </span><span class="nx">UserID</span><span class="w">  </span><span class="kt">string</span><span class="w">         </span><span class="c1">// 用户 ID</span>
+</span><span id="__span-7-46"><a id="__codelineno-7-46" name="__codelineno-7-46"></a><span class="w">    </span><span class="nx">State</span><span class="w">   </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// 初始状态</span>
+</span><span id="__span-7-47"><a id="__codelineno-7-47" name="__codelineno-7-47"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>EvalSet Manager 负责对评估集进行增删改查等操作，接口定义如下：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1"> 1</a></span>
@@ -5272,6 +5322,67 @@
 </span><span id="__span-55-32"><a id="__codelineno-55-32" name="__codelineno-55-32"></a><span class="p">]</span>
 </span></code></pre></div></td></tr></table></div>
 <p>该评估器要求 Agent 的工具调用返回检索结果，完整示例参见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/knowledgerecall">examples/evaluation/llm/knowledgerecall</a>。</p>
+<h2 id="_13">最佳实践</h2>
+<h3 id="_14">上下文注入</h3>
+<p><code>contextMessages</code> 用于为 EvalCase 提供一组额外上下文消息，常用于补充背景信息、角色设定或样本示例。它也适用于纯模型评估场景，将 system prompt 作为评估数据按用例配置，便于对比不同模型与提示词组合的能力。</p>
+<p>上下文注入示例：</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-56-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-56-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-56-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-56-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-56-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-56-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-56-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-56-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-56-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-56-10">10</a></span>
+<span class="normal"><a href="#__codelineno-56-11">11</a></span>
+<span class="normal"><a href="#__codelineno-56-12">12</a></span>
+<span class="normal"><a href="#__codelineno-56-13">13</a></span>
+<span class="normal"><a href="#__codelineno-56-14">14</a></span>
+<span class="normal"><a href="#__codelineno-56-15">15</a></span>
+<span class="normal"><a href="#__codelineno-56-16">16</a></span>
+<span class="normal"><a href="#__codelineno-56-17">17</a></span>
+<span class="normal"><a href="#__codelineno-56-18">18</a></span>
+<span class="normal"><a href="#__codelineno-56-19">19</a></span>
+<span class="normal"><a href="#__codelineno-56-20">20</a></span>
+<span class="normal"><a href="#__codelineno-56-21">21</a></span>
+<span class="normal"><a href="#__codelineno-56-22">22</a></span>
+<span class="normal"><a href="#__codelineno-56-23">23</a></span>
+<span class="normal"><a href="#__codelineno-56-24">24</a></span>
+<span class="normal"><a href="#__codelineno-56-25">25</a></span>
+<span class="normal"><a href="#__codelineno-56-26">26</a></span>
+<span class="normal"><a href="#__codelineno-56-27">27</a></span>
+<span class="normal"><a href="#__codelineno-56-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1"></a><span class="p">{</span>
+</span><span id="__span-56-2"><a id="__codelineno-56-2" name="__codelineno-56-2"></a><span class="w">  </span><span class="nt">&quot;evalSetId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;contextmessage-basic&quot;</span><span class="p">,</span>
+</span><span id="__span-56-3"><a id="__codelineno-56-3" name="__codelineno-56-3"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;contextmessage-basic&quot;</span><span class="p">,</span>
+</span><span id="__span-56-4"><a id="__codelineno-56-4" name="__codelineno-56-4"></a><span class="w">  </span><span class="nt">&quot;evalCases&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-56-5"><a id="__codelineno-56-5" name="__codelineno-56-5"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-56-6"><a id="__codelineno-56-6" name="__codelineno-56-6"></a><span class="w">      </span><span class="nt">&quot;evalId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;identity_name&quot;</span><span class="p">,</span>
+</span><span id="__span-56-7"><a id="__codelineno-56-7" name="__codelineno-56-7"></a><span class="w">      </span><span class="nt">&quot;contextMessages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-56-8"><a id="__codelineno-56-8" name="__codelineno-56-8"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-56-9"><a id="__codelineno-56-9" name="__codelineno-56-9"></a><span class="w">          </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;system&quot;</span><span class="p">,</span>
+</span><span id="__span-56-10"><a id="__codelineno-56-10" name="__codelineno-56-10"></a><span class="w">          </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;You are trpc-agent-go bot.&quot;</span>
+</span><span id="__span-56-11"><a id="__codelineno-56-11" name="__codelineno-56-11"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-56-12"><a id="__codelineno-56-12" name="__codelineno-56-12"></a><span class="w">      </span><span class="p">],</span>
+</span><span id="__span-56-13"><a id="__codelineno-56-13" name="__codelineno-56-13"></a><span class="w">      </span><span class="nt">&quot;conversation&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-56-14"><a id="__codelineno-56-14" name="__codelineno-56-14"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-56-15"><a id="__codelineno-56-15" name="__codelineno-56-15"></a><span class="w">          </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;identity_name-1&quot;</span><span class="p">,</span>
+</span><span id="__span-56-16"><a id="__codelineno-56-16" name="__codelineno-56-16"></a><span class="w">          </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-56-17"><a id="__codelineno-56-17" name="__codelineno-56-17"></a><span class="w">            </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
+</span><span id="__span-56-18"><a id="__codelineno-56-18" name="__codelineno-56-18"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Who are you?&quot;</span>
+</span><span id="__span-56-19"><a id="__codelineno-56-19" name="__codelineno-56-19"></a><span class="w">          </span><span class="p">}</span>
+</span><span id="__span-56-20"><a id="__codelineno-56-20" name="__codelineno-56-20"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-56-21"><a id="__codelineno-56-21" name="__codelineno-56-21"></a><span class="w">      </span><span class="p">],</span>
+</span><span id="__span-56-22"><a id="__codelineno-56-22" name="__codelineno-56-22"></a><span class="w">      </span><span class="nt">&quot;sessionInput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-56-23"><a id="__codelineno-56-23" name="__codelineno-56-23"></a><span class="w">        </span><span class="nt">&quot;appName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;contextmessage-app&quot;</span><span class="p">,</span>
+</span><span id="__span-56-24"><a id="__codelineno-56-24" name="__codelineno-56-24"></a><span class="w">        </span><span class="nt">&quot;userId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-user&quot;</span>
+</span><span id="__span-56-25"><a id="__codelineno-56-25" name="__codelineno-56-25"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-56-26"><a id="__codelineno-56-26" name="__codelineno-56-26"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-56-27"><a id="__codelineno-56-27" name="__codelineno-56-27"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-56-28"><a id="__codelineno-56-28" name="__codelineno-56-28"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>完整示例参见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/contextmessage">examples/evaluation/contextmessage</a>。</p>
 
 
 
@@ -5294,7 +5405,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月29日 11:37:09 UTC">2025-12-29 11:37:09</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月13日 03:07:05 UTC">2026-01-13 03:07:05</span>
   </span>
 
     
