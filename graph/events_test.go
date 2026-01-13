@@ -224,12 +224,18 @@ func TestNewPregelAndChannelStateEvents(t *testing.T) {
 		WithPregelEventStartTime(start),
 		WithPregelEventEndTime(end),
 		WithPregelEventNodeID("nodeX"),
+		WithPregelEventInterruptKey("k1"),
 		WithPregelEventInterruptValue("ask"),
+		WithPregelEventLineageID("ln"),
+		WithPregelEventCheckpointID("ck"),
 	)
 	require.Equal(t, ObjectTypeGraphPregelStep, pi.Object)
 	require.NoError(t, json.Unmarshal(pi.StateDelta[MetadataKeyPregel], &pmeta))
 	require.Equal(t, "nodeX", pmeta.NodeID)
+	require.Equal(t, "k1", pmeta.InterruptKey)
 	require.Equal(t, "ask", pmeta.InterruptValue)
+	require.Equal(t, "ln", pmeta.LineageID)
+	require.Equal(t, "ck", pmeta.CheckpointID)
 
 	ce := NewChannelUpdateEvent(
 		WithChannelEventInvocationID("inv"),
