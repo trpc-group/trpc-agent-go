@@ -165,7 +165,7 @@ Include:
 
 	sg.SetEntryPoint(nodePrepare)
 	sg.AddEdge(nodePrepare, nodeRecipeCalcLLM)
-	sg.AddEdge(nodeRecipeCalcLLM, nodeExecuteTools)
+	sg.AddToolsConditionalEdges(nodeRecipeCalcLLM, nodeExecuteTools, nodeConfirm)
 	sg.AddEdge(nodeExecuteTools, nodeConfirm)
 	sg.AddEdge(nodeConfirm, nodeDraftMessageLLM)
 	sg.AddEdge(nodeDraftMessageLLM, nodePolishMessageAgent)
