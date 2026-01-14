@@ -11,6 +11,7 @@ package qdrant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/qdrant/go-client/qdrant"
@@ -209,6 +210,12 @@ func (vs *VectorStore) DeleteByFilter(ctx context.Context, opts ...vectorstore.D
 		// No criteria specified: nothing to delete, succeed silently.
 		return nil
 	}
+}
+
+// UpdateByFilter updates documents matching the filter with the specified field values.
+// This operation is not yet supported by Qdrant VectorStore.
+func (vs *VectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
+	return 0, errors.New("UpdateByFilter is not implemented for Qdrant")
 }
 
 // validateEmbedding checks that the embedding is valid.

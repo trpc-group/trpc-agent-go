@@ -32,12 +32,14 @@ import (
 	util "trpc.group/trpc-go/trpc-agent-go/examples/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
 var (
-	vectorStore = flag.String("vectorstore", "inmemory", "Vector store type: inmemory|pgvector|tcvector|elasticsearch")
+	vectorStore = flag.String("vectorstore", "pgvector", "Vector store type: inmemory|pgvector|tcvector|elasticsearch")
 )
 
 func main() {
@@ -153,6 +155,42 @@ func main() {
 		printSearchResults(result)
 	}
 
+	// Step 7: Update Metadata Directly
+	fmt.Println("\n7️⃣ Updating Metadata via VectorStore (LLMDocs -> category: reviewed-docs)...")
+
+	// Show document info before update
+	printDocInfo(ctx, kb, "Before Update:")
+
+	updates := map[string]any{
+		"metadata.category": "reviewed-docs", // Update existing field
+		"metadata.status":   "published",     // Add new field
+	}
+
+	rows, err := vs.UpdateByFilter(ctx,
+		vectorstore.WithUpdateByFilterCondition(&searchfilter.UniversalFilterCondition{
+			Field:    "metadata.topic",
+			Operator: searchfilter.OperatorEqual,
+			Value:    "llm",
+		}),
+		vectorstore.WithUpdateByFilterUpdates(updates),
+	)
+
+	if err != nil {
+		// Handle "not supported" for non-pgvector stores
+		if storeType != util.VectorStorePGVector && strings.Contains(err.Error(), "not supported") {
+			fmt.Printf("   ⚠️ UpdateByFilter not supported by %s (expected)\n", storeType)
+		} else {
+			log.Printf("   ❌ Failed to update metadata: %v", err)
+		}
+	} else {
+		fmt.Printf("   ✅ Updated %d documents\n", rows)
+		// Wait for data refresh if needed
+		util.WaitForIndexRefresh(storeType)
+
+		// Show document info after update
+		printDocInfo(ctx, kb, "After Update:")
+	}
+
 	fmt.Println("\n✅ Demo completed!")
 }
 
@@ -191,6 +229,40 @@ func printSearchResults(result *knowledge.SearchResult) {
 			content = content[:80] + "..."
 		}
 		fmt.Printf("   %d. [%s] score=%.3f: %s\n", i+1, sourceName, doc.Score, content)
+	}
+}
+
+func printDocInfo(ctx context.Context, kb *knowledge.BuiltinKnowledge, label string) {
+	docInfos, err := kb.ShowDocumentInfo(ctx, knowledge.WithShowDocumentInfoFilter(map[string]any{
+		"topic": "llm",
+	}))
+	if err != nil {
+		log.Printf("   ❌ Failed to fetch docInfo: %v", err)
+		return
+	}
+	if len(docInfos) == 0 {
+		fmt.Printf("   ℹ️  No documents found for the filter\n")
+		return
+	}
+
+	docInfo := docInfos[0]
+	fmt.Printf("   📄 %s\n", label)
+	fmt.Printf("      ID: %s\n", docInfo.DocumentID)
+	fmt.Printf("      Source: %s\n", docInfo.SourceName)
+	fmt.Printf("      URI: %s\n", docInfo.URI)
+
+	// Filter out metadata keys starting with "trpc_agent_go"
+	filteredMeta := make(map[string]any)
+	for k, v := range docInfo.AllMeta {
+		if !strings.HasPrefix(k, "trpc_agent_go") {
+			filteredMeta[k] = v
+		}
+	}
+
+	// Print metadata nicely
+	fmt.Printf("      Metadata:\n")
+	for k, v := range filteredMeta {
+		fmt.Printf("        %s: %v\n", k, v)
 	}
 }
 
