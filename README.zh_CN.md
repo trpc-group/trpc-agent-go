@@ -141,8 +141,8 @@ tools := []tool.Tool{
 ### 评测与基准
 
 ```go
-evaluator, _ := evaluation.New("app", runner,
-    evaluation.WithNumRuns(3))
+evaluator, _ := evaluation.New("app", runner, evaluation.WithNumRuns(3))
+defer evaluator.Close()
 result, _ := evaluator.Evaluate(ctx, "math-basic")
 _ = result.OverallStatus
 ```

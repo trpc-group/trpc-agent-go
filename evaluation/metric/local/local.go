@@ -76,13 +76,15 @@ func (m *manager) Get(_ context.Context, appName, evalSetID, metricName string) 
 	if metricName == "" {
 		return nil, errors.New("empty metric name")
 	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	metrics, err := m.load(appName, evalSetID)
 	if err != nil {
 		return nil, fmt.Errorf("load metrics %s.%s of evalset: %w", appName, evalSetID, err)
 	}
-	for _, m := range metrics {
-		if m != nil && m.MetricName == metricName {
-			return m, nil
+	for _, evalMetric := range metrics {
+		if evalMetric != nil && evalMetric.MetricName == metricName {
+			return evalMetric, nil
 		}
 	}
 	return nil, fmt.Errorf("get metric %s: %w", metricName, os.ErrNotExist)
@@ -102,6 +104,8 @@ func (m *manager) Add(ctx context.Context, appName, evalSetID string, metricInpu
 	if metricInput.MetricName == "" {
 		return errors.New("metric name is empty")
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	metrics, err := m.load(appName, evalSetID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -133,6 +137,8 @@ func (m *manager) Delete(ctx context.Context, appName, evalSetID, metricName str
 	if metricName == "" {
 		return errors.New("metric name is empty")
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	metrics, err := m.load(appName, evalSetID)
 	if err != nil {
 		return fmt.Errorf("load metrics of evalset %s.%s: %w", appName, evalSetID, err)
@@ -150,33 +156,35 @@ func (m *manager) Delete(ctx context.Context, appName, evalSetID, metricName str
 }
 
 // Update updates the metric identified by evalSetID and metric.MetricName.
-func (m *manager) Update(ctx context.Context, appName, evalSetID string, metric *metric.EvalMetric) error {
+func (m *manager) Update(ctx context.Context, appName, evalSetID string, metricInput *metric.EvalMetric) error {
 	if appName == "" {
 		return errors.New("empty app name")
 	}
 	if evalSetID == "" {
 		return errors.New("empty eval set id")
 	}
-	if metric == nil {
+	if metricInput == nil {
 		return errors.New("metric is nil")
 	}
-	if metric.MetricName == "" {
+	if metricInput.MetricName == "" {
 		return errors.New("metric name is empty")
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	metrics, err := m.load(appName, evalSetID)
 	if err != nil {
 		return fmt.Errorf("load metrics of evalset %s.%s: %w", appName, evalSetID, err)
 	}
 	for i, evalMetric := range metrics {
-		if evalMetric != nil && evalMetric.MetricName == metric.MetricName {
-			metrics[i] = metric
+		if evalMetric != nil && evalMetric.MetricName == metricInput.MetricName {
+			metrics[i] = metricInput
 			if err := m.store(appName, evalSetID, metrics); err != nil {
 				return fmt.Errorf("store metrics of evalset %s.%s: %w", appName, evalSetID, err)
 			}
 			return nil
 		}
 	}
-	return fmt.Errorf("metric %s.%s.%s not found: %w", appName, evalSetID, metric.MetricName, os.ErrNotExist)
+	return fmt.Errorf("metric %s.%s.%s not found: %w", appName, evalSetID, metricInput.MetricName, os.ErrNotExist)
 }
 
 func (m *manager) metricFilePath(appName, evalSetID string) string {
