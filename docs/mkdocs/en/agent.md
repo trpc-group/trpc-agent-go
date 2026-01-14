@@ -956,7 +956,8 @@ Patterns
 
 - Persistent per‑user value: store under `user:*` and reference `{user:key}`.
 - Persistent per‑app value: store under `app:*` and reference `{app:key}`.
-- Per‑turn ephemeral value: write into the session’s `temp:*` namespace and reference `{temp:key}` (not persisted).
+- Session-scoped temporary value: write into the session’s `temp:*`
+  namespace and reference `{temp:key}` (not `user:*`/`app:*`).
 
 Example: per‑user dynamic instruction
 
@@ -999,7 +1000,7 @@ Example: per‑turn temp value via a before‑agent callback
 callbacks := agent.NewCallbacks()
 callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
   if args.Invocation != nil && args.Invocation.Session != nil {
-    // Write a one-off instruction for this turn only
+    // Write a temporary instruction for this run
     args.Invocation.Session.SetState("temp:sys", []byte("Translate to French."))
   }
   return nil, nil
@@ -1014,5 +1015,7 @@ llm := llmagent.New(
 
 Caveats
 
-- In-memory `UpdateUserState` intentionally forbids `temp:*` updates; write `temp:*` via `invocation.Session.SetState` (e.g., via a callback) when you need ephemeral, per‑turn values.
+- In-memory `UpdateUserState` intentionally forbids `temp:*` updates;
+  write `temp:*` via `invocation.Session.SetState` (e.g., via a callback)
+  when you need session-scoped temporary values.
 - Placeholders are resolved at request time; changing the stored value updates behavior on the next model request without recreating the agent.
