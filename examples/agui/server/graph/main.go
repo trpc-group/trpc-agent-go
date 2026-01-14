@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	aguiadapter "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -86,17 +87,21 @@ func main() {
 		log.Fatalf("create graph agent failed: %v", err)
 	}
 
-	r := runner.NewRunner(ga.Info().Name, ga)
+	sessionService := sessioninmemory.NewSessionService()
+	r := runner.NewRunner(ga.Info().Name, ga, runner.WithSessionService(sessionService))
 	defer r.Close()
 
 	server, err := agui.New(
 		r,
 		agui.WithPath(*path),
-		agui.WithGraphNodeStartActivityEnabled(true),
+		agui.WithGraphNodeLifecycleActivityEnabled(true),
 		agui.WithGraphNodeInterruptActivityEnabled(true),
 		agui.WithAGUIRunnerOptions(
 			aguirunner.WithStateResolver(resolveRuntimeState),
 		),
+		agui.WithMessagesSnapshotEnabled(true),
+		agui.WithSessionService(sessionService),
+		agui.WithAppName(ga.Info().Name),
 	)
 	if err != nil {
 		log.Fatalf("create AG-UI server failed: %v", err)
@@ -183,10 +188,21 @@ func confirmNode(ctx context.Context, state graph.State) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if confirmed, ok := v.(bool); ok && confirmed {
+	confirmed, ok := v.(bool)
+	if !ok {
+		return nil, fmt.Errorf("invalid confirmation value: %T", v)
+	}
+	if confirmed {
 		return nil, nil
 	}
-	return nil, errors.New("continuation not confirmed")
+	return &graph.Command{
+		Update: graph.State{
+			graph.StateKeyMetadata: map[string]any{
+				"finish": "canceled",
+			},
+		},
+		GoTo: graph.End,
+	}, nil
 }
 
 func finishNode(ctx context.Context, state graph.State) (any, error) {
@@ -243,7 +259,7 @@ func resolveRuntimeState(_ context.Context, input *aguiadapter.RunAgentInput) (m
 	if resumeMap, ok := state[graph.CfgKeyResumeMap].(map[string]any); ok && len(resumeMap) > 0 {
 		copied := make(map[string]any)
 		maps.Copy(copied, resumeMap)
-		runtimeState[graph.StateKeyResumeMap] = copied
+		runtimeState[graph.StateKeyCommand] = &graph.Command{ResumeMap: copied}
 	}
 	return runtimeState, nil
 }

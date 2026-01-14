@@ -681,31 +681,34 @@ In this case, the real-time conversation route will be `/agui/chat`, the cancel 
 
 ### GraphAgent Node Activity Events
 
-With `GraphAgent`, a single run typically executes multiple nodes along the graph. To help the frontend highlight the active node and render Human-in-the-Loop prompts, the framework can emit two additional `ACTIVITY_DELTA` events. For the event format, see the [AG-UI official docs](https://docs.ag-ui.com/concepts/events#activitydelta). They are disabled by default and can be enabled when constructing the AG-UI server.
+With `GraphAgent`, a single run typically executes multiple nodes along the graph. To help the frontend highlight the active node and render Human-in-the-Loop prompts, the framework can emit node lifecycle and interrupt-related `ACTIVITY_DELTA` events. For the event format, see the [AG-UI official docs](https://docs.ag-ui.com/concepts/events#activitydelta). They are disabled by default and can be enabled when constructing the AG-UI server.
 
-#### Node start (`graph.node.start`)
+#### Node lifecycle (`graph.node.lifecycle`)
 
-This event is disabled by default; enable it via `agui.WithGraphNodeStartActivityEnabled(true)` when constructing the AG-UI server.
+This event is disabled by default; enable it via `agui.WithGraphNodeLifecycleActivityEnabled(true)` when constructing the AG-UI server.
 
 ```go
 server, err := agui.New(
 	runner,
-	agui.WithGraphNodeStartActivityEnabled(true),
+	agui.WithGraphNodeLifecycleActivityEnabled(true),
 )
 ```
 
-`activityType` is `graph.node.start`. It is emitted before a node runs and writes the current node to `/node` via `add /node`:
+When enabled, the server emits `ACTIVITY_DELTA` for `start` / `complete` / `error` phases with the same `activityType: graph.node.lifecycle`, and uses `/node.phase` to distinguish the phase.
+
+For the node start phase (`phase=start`), it is emitted before a node runs and writes the current node to `/node` via `add /node`:
 
 ```json
 {
   "type": "ACTIVITY_DELTA",
-  "activityType": "graph.node.start",
+  "activityType": "graph.node.lifecycle",
   "patch": [
     {
       "op": "add",
       "path": "/node",
       "value": {
-        "nodeId": "plan_llm_node"
+        "nodeId": "plan_llm_node",
+        "phase": "start"
       }
     }
   ]
@@ -713,6 +716,45 @@ server, err := agui.New(
 ```
 
 This event helps the frontend track progress. The frontend can treat `/node.nodeId` as the currently active node and use it to highlight the graph execution.
+
+For the node success end phase (`phase=complete`), it is emitted after a node finishes successfully and writes the node result to `/node` via `add /node`:
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "complete"
+      }
+    }
+  ]
+}
+```
+
+For the node failure end phase (`phase=error`, non-interrupt), it includes an error message in `/node`:
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "error",
+        "error": "node execution failed"
+      }
+    }
+  ]
+}
+```
 
 #### Interrupt (`graph.node.interrupt`)
 
@@ -742,6 +784,14 @@ server, err := agui.New(
         "checkpointId": "checkpoint-xxx",
         "lineageId": "lineage-xxx"
       }
+    },
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "confirm",
+        "phase": "interrupt"
+      }
     }
   ]
 }
@@ -751,7 +801,7 @@ This event indicates the run is paused at the node. The frontend can render `/in
 
 #### Resume ack (`graph.node.interrupt`)
 
-When a run starts with resume input, the AG-UI server emits an extra `ACTIVITY_DELTA` at the beginning of the run, before any `graph.node.start` events. It uses `activityType: graph.node.interrupt`, clears the previous interrupt state by setting `/interrupt` to `null`, and writes the resume input to `/resume`. `/resume` contains `resumeMap` or `resume` plus optional `checkpointId` and `lineageId`:
+When a run starts with resume input, the AG-UI server emits an extra `ACTIVITY_DELTA` at the beginning of the run, before any `graph.node.lifecycle` events. It uses `activityType: graph.node.interrupt`, clears the previous interrupt state by setting `/interrupt` to `null`, and writes the resume input to `/resume`. `/resume` contains `resumeMap` or `resume` plus optional `checkpointId` and `lineageId`:
 
 ```json
 {

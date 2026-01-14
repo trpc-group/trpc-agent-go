@@ -41,7 +41,7 @@ func New(ctx context.Context, threadID, runID string, opts ...Option) (Translato
 		receivingMessage:                  false,
 		seenResponseIDs:                   make(map[string]struct{}),
 		seenToolCallIDs:                   make(map[string]struct{}),
-		graphNodeStartActivityEnabled:     options.graphNodeStartActivityEnabled,
+		graphNodeLifecycleActivityEnabled: options.graphNodeLifecycleActivityEnabled,
 		graphNodeInterruptActivityEnabled: options.graphNodeInterruptActivityEnabled,
 	}, nil
 }
@@ -54,7 +54,7 @@ type translator struct {
 	receivingMessage                  bool
 	seenResponseIDs                   map[string]struct{}
 	seenToolCallIDs                   map[string]struct{}
-	graphNodeStartActivityEnabled     bool
+	graphNodeLifecycleActivityEnabled bool
 	graphNodeInterruptActivityEnabled bool
 }
 
@@ -73,8 +73,8 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 			len(event.StateDelta[graph.MetadataKeyPregel]) > 0)
 
 	// GraphAgent emits model/tool metadata via StateDelta instead of raw tool_calls.
-	if t.graphNodeStartActivityEnabled {
-		events = append(events, t.graphNodeStartActivityEvents(event)...)
+	if t.graphNodeLifecycleActivityEnabled {
+		events = append(events, t.graphNodeActivityEvents(event)...)
 	}
 	if t.graphNodeInterruptActivityEnabled {
 		events = append(events, t.graphNodeInterruptActivityEvents(event)...)
@@ -127,14 +127,16 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 }
 
 const (
-	graphNodeStartActivityType     = "graph.node.start"
-	graphNodeStartPatchPath        = "/node"
+	graphNodeLifecycleActivityType = "graph.node.lifecycle"
+	graphNodePatchPath             = "/node"
 	graphNodeInterruptActivityType = "graph.node.interrupt"
 	graphNodeInterruptPatchPath    = "/interrupt"
 )
 
-type graphNodeStartPatchValue struct {
+type graphNodePatchValue struct {
 	NodeID string `json:"nodeId"`
+	Phase  string `json:"phase"`
+	Error  string `json:"error,omitempty"`
 }
 
 type graphNodeInterruptPatchValue struct {
@@ -145,7 +147,7 @@ type graphNodeInterruptPatchValue struct {
 	LineageID    string `json:"lineageId,omitempty"`
 }
 
-func (t *translator) graphNodeStartActivityEvents(evt *agentevent.Event) []aguievents.Event {
+func (t *translator) graphNodeActivityEvents(evt *agentevent.Event) []aguievents.Event {
 	if evt == nil || evt.StateDelta == nil {
 		return nil
 	}
@@ -160,7 +162,7 @@ func (t *translator) graphNodeStartActivityEvents(evt *agentevent.Event) []aguie
 			aguievents.WithRunID(t.runID),
 		)}
 	}
-	if meta.Phase != graph.ExecutionPhaseStart || meta.NodeID == "" {
+	if meta.NodeID == "" {
 		return nil
 	}
 	// Agent nodes emit an additional start event without attempt metadata; ignore it to avoid duplicates.
@@ -168,17 +170,25 @@ func (t *translator) graphNodeStartActivityEvents(evt *agentevent.Event) []aguie
 		return nil
 	}
 
-	patch := make([]aguievents.JSONPatchOperation, 0, 1)
-	patch = append(patch, aguievents.JSONPatchOperation{
-		Op:   "add",
-		Path: graphNodeStartPatchPath,
-		Value: graphNodeStartPatchValue{
-			NodeID: meta.NodeID,
+	value := graphNodePatchValue{NodeID: meta.NodeID, Phase: string(meta.Phase)}
+	switch meta.Phase {
+	case graph.ExecutionPhaseStart, graph.ExecutionPhaseComplete:
+	case graph.ExecutionPhaseError:
+		value.Error = meta.Error
+	default:
+		return nil
+	}
+
+	patch := []aguievents.JSONPatchOperation{
+		{
+			Op:    "add",
+			Path:  graphNodePatchPath,
+			Value: value,
 		},
-	})
+	}
 
 	return []aguievents.Event{
-		aguievents.NewActivityDeltaEvent(uuid.NewString(), graphNodeStartActivityType, patch),
+		aguievents.NewActivityDeltaEvent(uuid.NewString(), graphNodeLifecycleActivityType, patch),
 	}
 }
 
@@ -211,6 +221,14 @@ func (t *translator) graphNodeInterruptActivityEvents(evt *agentevent.Event) []a
 				Prompt:       meta.InterruptValue,
 				CheckpointID: meta.CheckpointID,
 				LineageID:    meta.LineageID,
+			},
+		},
+		{
+			Op:   "add",
+			Path: graphNodePatchPath,
+			Value: graphNodePatchValue{
+				NodeID: meta.NodeID,
+				Phase:  "interrupt",
 			},
 		},
 	}

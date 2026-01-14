@@ -66,7 +66,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, span)
 
 	assert.Equal(t, time.Hour, opts.Timeout)
-	assert.False(t, opts.GraphNodeStartActivityEnabled)
+	assert.False(t, opts.GraphNodeLifecycleActivityEnabled)
 	assert.False(t, opts.GraphNodeInterruptActivityEnabled)
 }
 
@@ -107,9 +107,9 @@ func TestWithTranslatorFactory(t *testing.T) {
 	assert.Equal(t, customTranslator, tr)
 }
 
-func TestWithGraphNodeStartActivityEnabled(t *testing.T) {
-	opts := NewOptions(WithGraphNodeStartActivityEnabled(true))
-	assert.True(t, opts.GraphNodeStartActivityEnabled)
+func TestWithGraphNodeLifecycleActivityEnabled(t *testing.T) {
+	opts := NewOptions(WithGraphNodeLifecycleActivityEnabled(true))
+	assert.True(t, opts.GraphNodeLifecycleActivityEnabled)
 }
 
 func TestWithGraphNodeInterruptActivityEnabled(t *testing.T) {

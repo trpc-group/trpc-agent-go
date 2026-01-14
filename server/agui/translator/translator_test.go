@@ -1229,7 +1229,7 @@ func TestTranslateSubagentGraph_NonStream(t *testing.T) {
 }
 
 func TestGraphNodeStartEmitsActivityDelta(t *testing.T) {
-	tr := newTranslatorImplForTest(t, WithGraphNodeStartActivityEnabled(true))
+	tr := newTranslatorImplForTest(t, WithGraphNodeLifecycleActivityEnabled(true))
 	if tr == nil {
 		return
 	}
@@ -1259,11 +1259,11 @@ func TestGraphNodeStartEmitsActivityDelta(t *testing.T) {
 	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
 	assert.True(t, ok)
 	assert.NotEmpty(t, delta.MessageID)
-	assert.Equal(t, graphNodeStartActivityType, delta.ActivityType)
+	assert.Equal(t, graphNodeLifecycleActivityType, delta.ActivityType)
 	assert.Len(t, delta.Patch, 1)
 	assert.Equal(t, "add", delta.Patch[0].Op)
-	assert.Equal(t, graphNodeStartPatchPath, delta.Patch[0].Path)
-	assert.Equal(t, graphNodeStartPatchValue{NodeID: "node-1"}, delta.Patch[0].Value)
+	assert.Equal(t, graphNodePatchPath, delta.Patch[0].Path)
+	assert.Equal(t, graphNodePatchValue{NodeID: "node-1", Phase: "start"}, delta.Patch[0].Value)
 
 	meta2 := meta
 	meta2.NodeID = "node-2"
@@ -1287,13 +1287,13 @@ func TestGraphNodeStartEmitsActivityDelta(t *testing.T) {
 	assert.NotEmpty(t, delta2.MessageID)
 	assert.NotEqual(t, delta.MessageID, delta2.MessageID)
 	assert.Len(t, delta2.Patch, 1)
-	assert.Equal(t, graphNodeStartPatchPath, delta2.Patch[0].Path)
-	assert.Equal(t, graphNodeStartPatchValue{NodeID: "node-2"}, delta2.Patch[0].Value)
+	assert.Equal(t, graphNodePatchPath, delta2.Patch[0].Path)
+	assert.Equal(t, graphNodePatchValue{NodeID: "node-2", Phase: "start"}, delta2.Patch[0].Value)
 }
 
 func TestGraphNodeStartDoesNotResetInterruptStateWhenEnabled(t *testing.T) {
 	tr := newTranslatorImplForTest(t,
-		WithGraphNodeStartActivityEnabled(true),
+		WithGraphNodeLifecycleActivityEnabled(true),
 		WithGraphNodeInterruptActivityEnabled(true),
 	)
 	if tr == nil {
@@ -1322,11 +1322,11 @@ func TestGraphNodeStartDoesNotResetInterruptStateWhenEnabled(t *testing.T) {
 
 	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
 	assert.True(t, ok)
-	assert.Equal(t, graphNodeStartActivityType, delta.ActivityType)
+	assert.Equal(t, graphNodeLifecycleActivityType, delta.ActivityType)
 	assert.Len(t, delta.Patch, 1)
 	assert.Equal(t, "add", delta.Patch[0].Op)
-	assert.Equal(t, graphNodeStartPatchPath, delta.Patch[0].Path)
-	assert.Equal(t, graphNodeStartPatchValue{NodeID: "node-1"}, delta.Patch[0].Value)
+	assert.Equal(t, graphNodePatchPath, delta.Patch[0].Path)
+	assert.Equal(t, graphNodePatchValue{NodeID: "node-1", Phase: "start"}, delta.Patch[0].Value)
 }
 
 func TestGraphNodeStartActivityDisabledByDefault(t *testing.T) {
@@ -1411,10 +1411,13 @@ func TestGraphNodeInterruptEmitsActivityDelta(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotEmpty(t, delta.MessageID)
 	assert.Equal(t, graphNodeInterruptActivityType, delta.ActivityType)
-	assert.Len(t, delta.Patch, 1)
+	assert.Len(t, delta.Patch, 2)
 	assert.Equal(t, "add", delta.Patch[0].Op)
 	assert.Equal(t, graphNodeInterruptPatchPath, delta.Patch[0].Path)
 	assert.Equal(t, graphNodeInterruptPatchValue{NodeID: "nodeX", Prompt: "ask"}, delta.Patch[0].Value)
+	assert.Equal(t, "add", delta.Patch[1].Op)
+	assert.Equal(t, graphNodePatchPath, delta.Patch[1].Path)
+	assert.Equal(t, graphNodePatchValue{NodeID: "nodeX", Phase: "interrupt"}, delta.Patch[1].Value)
 }
 
 func TestGraphNodeInterruptUnmarshalErrorEmitsRunError(t *testing.T) {
@@ -1494,10 +1497,13 @@ func TestGraphNodeInterruptAllowsNilPrompt(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotEmpty(t, delta.MessageID)
 	assert.Equal(t, graphNodeInterruptActivityType, delta.ActivityType)
-	assert.Len(t, delta.Patch, 1)
+	assert.Len(t, delta.Patch, 2)
 	assert.Equal(t, "add", delta.Patch[0].Op)
 	assert.Equal(t, graphNodeInterruptPatchPath, delta.Patch[0].Path)
 	assert.Equal(t, graphNodeInterruptPatchValue{NodeID: "nodeX"}, delta.Patch[0].Value)
+	assert.Equal(t, "add", delta.Patch[1].Op)
+	assert.Equal(t, graphNodePatchPath, delta.Patch[1].Path)
+	assert.Equal(t, graphNodePatchValue{NodeID: "nodeX", Phase: "interrupt"}, delta.Patch[1].Value)
 }
 
 func TestGraphNodeInterruptIncludesKeyAndCheckpointFields(t *testing.T) {
@@ -1532,7 +1538,7 @@ func TestGraphNodeInterruptIncludesKeyAndCheckpointFields(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotEmpty(t, delta.MessageID)
 	assert.Equal(t, graphNodeInterruptActivityType, delta.ActivityType)
-	assert.Len(t, delta.Patch, 1)
+	assert.Len(t, delta.Patch, 2)
 	assert.Equal(t, "add", delta.Patch[0].Op)
 	assert.Equal(t, graphNodeInterruptPatchPath, delta.Patch[0].Path)
 	assert.Equal(t, graphNodeInterruptPatchValue{
@@ -1542,10 +1548,13 @@ func TestGraphNodeInterruptIncludesKeyAndCheckpointFields(t *testing.T) {
 		CheckpointID: "ckpt-uuid-xxx",
 		LineageID:    "thread-123",
 	}, delta.Patch[0].Value)
+	assert.Equal(t, "add", delta.Patch[1].Op)
+	assert.Equal(t, graphNodePatchPath, delta.Patch[1].Path)
+	assert.Equal(t, graphNodePatchValue{NodeID: "nodeX", Phase: "interrupt"}, delta.Patch[1].Value)
 }
 
 func TestGraphNodeStartEmitsActivityDeltaForAgentNode(t *testing.T) {
-	tr := newTranslatorForTest(t, WithGraphNodeStartActivityEnabled(true))
+	tr := newTranslatorForTest(t, WithGraphNodeLifecycleActivityEnabled(true))
 	if tr == nil {
 		return
 	}
@@ -1573,13 +1582,13 @@ func TestGraphNodeStartEmitsActivityDeltaForAgentNode(t *testing.T) {
 	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
 	assert.True(t, ok)
 	assert.NotEmpty(t, delta.MessageID)
-	assert.Equal(t, graphNodeStartActivityType, delta.ActivityType)
+	assert.Equal(t, graphNodeLifecycleActivityType, delta.ActivityType)
 	assert.Len(t, delta.Patch, 1)
-	assert.Equal(t, graphNodeStartPatchValue{NodeID: "agent-node-1"}, delta.Patch[0].Value)
+	assert.Equal(t, graphNodePatchValue{NodeID: "agent-node-1", Phase: "start"}, delta.Patch[0].Value)
 }
 
 func TestGraphNodeStartIgnoresAgentStartWithoutAttempt(t *testing.T) {
-	tr := newTranslatorForTest(t, WithGraphNodeStartActivityEnabled(true))
+	tr := newTranslatorForTest(t, WithGraphNodeLifecycleActivityEnabled(true))
 	if tr == nil {
 		return
 	}
@@ -1604,8 +1613,8 @@ func TestGraphNodeStartIgnoresAgentStartWithoutAttempt(t *testing.T) {
 	assert.Empty(t, events)
 }
 
-func TestGraphNodeStartIgnoresNonStartPhase(t *testing.T) {
-	tr := newTranslatorForTest(t, WithGraphNodeStartActivityEnabled(true))
+func TestGraphNodeCompleteEmitsActivityDelta(t *testing.T) {
+	tr := newTranslatorForTest(t, WithGraphNodeLifecycleActivityEnabled(true))
 	if tr == nil {
 		return
 	}
@@ -1627,11 +1636,52 @@ func TestGraphNodeStartIgnoresNonStartPhase(t *testing.T) {
 	}
 	events, err := tr.Translate(context.Background(), evt)
 	assert.NoError(t, err)
-	assert.Empty(t, events)
+	assert.Len(t, events, 1)
+
+	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+	assert.Equal(t, graphNodeLifecycleActivityType, delta.ActivityType)
+	assert.Len(t, delta.Patch, 1)
+	assert.Equal(t, graphNodePatchPath, delta.Patch[0].Path)
+	assert.Equal(t, graphNodePatchValue{NodeID: "node-complete", Phase: "complete"}, delta.Patch[0].Value)
+}
+
+func TestGraphNodeErrorEmitsActivityDelta(t *testing.T) {
+	tr := newTranslatorForTest(t, WithGraphNodeLifecycleActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+
+	meta := graph.NodeExecutionMetadata{
+		NodeID:   "node-error",
+		NodeType: graph.NodeTypeFunction,
+		Phase:    graph.ExecutionPhaseError,
+		Error:    "boom",
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "node-error-evt",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNode: raw,
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+	assert.Equal(t, graphNodeLifecycleActivityType, delta.ActivityType)
+	assert.Len(t, delta.Patch, 1)
+	assert.Equal(t, graphNodePatchPath, delta.Patch[0].Path)
+	assert.Equal(t, graphNodePatchValue{NodeID: "node-error", Phase: "error", Error: "boom"}, delta.Patch[0].Value)
 }
 
 func TestGraphNodeStartInvalidMetadataEmitsRunError(t *testing.T) {
-	tr := newTranslatorForTest(t, WithGraphNodeStartActivityEnabled(true))
+	tr := newTranslatorForTest(t, WithGraphNodeLifecycleActivityEnabled(true))
 	if tr == nil {
 		return
 	}
