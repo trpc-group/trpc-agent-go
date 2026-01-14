@@ -229,6 +229,60 @@ func TestConvertToolCallResponse(t *testing.T) {
 	assert.Equal(t, map[string]any{"count": float64(1)}, result[0].Arguments)
 }
 
+func TestConvertToolCallResponseArrayArguments(t *testing.T) {
+	args, err := json.Marshal([]any{1, 2})
+	assert.NoError(t, err)
+	ev := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{
+							{
+								ID: "call-1",
+								Function: model.FunctionDefinitionParam{
+									Name:      "tool",
+									Arguments: args,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	result, err := convertTools(ev)
+	assert.NoError(t, err)
+	assert.Len(t, result, 1)
+	assert.Equal(t, []any{float64(1), float64(2)}, result[0].Arguments)
+}
+
+func TestConvertToolCallResponseInvalidJSONArguments(t *testing.T) {
+	ev := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{
+							{
+								ID: "call-1",
+								Function: model.FunctionDefinitionParam{
+									Name:      "tool",
+									Arguments: []byte("a=1"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	result, err := convertTools(ev)
+	assert.NoError(t, err)
+	assert.Len(t, result, 1)
+	assert.Equal(t, "a=1", result[0].Arguments)
+}
+
 func TestMergeToolResultResponse(t *testing.T) {
 	ev := &event.Event{
 		Response: &model.Response{
@@ -288,7 +342,48 @@ func TestMergeToolResultResponseInvalidJSON(t *testing.T) {
 	tools := []*evalset.Tool{{ID: "call-1"}}
 	idx := map[string]int{"call-1": 0}
 	err := mergeToolResultResponse(ev, idx, tools)
-	assert.Error(t, err)
+	assert.NoError(t, err)
+	assert.Equal(t, "{", tools[0].Result)
+}
+
+func TestMergeToolResultResponseStringContent(t *testing.T) {
+	ev := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						ToolID:  "call-1",
+						Content: "tool execution failed",
+					},
+				},
+			},
+		},
+	}
+	tools := []*evalset.Tool{{ID: "call-1"}}
+	idx := map[string]int{"call-1": 0}
+	err := mergeToolResultResponse(ev, idx, tools)
+	assert.NoError(t, err)
+	assert.Equal(t, "tool execution failed", tools[0].Result)
+}
+
+func TestMergeToolResultResponseArrayContent(t *testing.T) {
+	ev := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						ToolID:  "call-1",
+						Content: `[1,2]`,
+					},
+				},
+			},
+		},
+	}
+	tools := []*evalset.Tool{{ID: "call-1"}}
+	idx := map[string]int{"call-1": 0}
+	err := mergeToolResultResponse(ev, idx, tools)
+	assert.NoError(t, err)
+	assert.Equal(t, []any{float64(1), float64(2)}, tools[0].Result)
 }
 
 func ptr[T any](v T) *T {
