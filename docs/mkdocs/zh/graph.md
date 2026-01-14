@@ -788,7 +788,8 @@ stateGraph.AddLLMNode(
 
 将检索结果与用户输入注入指令
 
-- 在进入 LLM 节点前的任意节点，将临时值写入会话的 `temp:` 命名空间，LLM 指令即可用占位符读取。
+- 在进入 LLM 节点前的任意节点，将临时值写入会话的 `temp:`
+  命名空间，LLM 指令即可用占位符读取。
 - 示例模式：
 
 ```go
@@ -815,7 +816,10 @@ stateGraph.AddLLMNode("answer", mdl,
 
 占位符与会话状态的最佳实践
 
-- 短期 vs 持久：只用于本轮提示词组装的数据写到 `temp:*`（建议通过 `sess.SetState` 写入）；需要跨轮/跨会话保留的配置，请通过 SessionService（会话服务）更新 `user:*`/`app:*`。
+- 会话内临时 vs 持久：通常用于提示词组装的临时数据写到 `temp:*`
+  （常见做法是每轮覆盖，建议通过 `sess.SetState` 写入）；需要跨轮/
+  跨会话保留的配置，请通过 SessionService（会话服务）更新
+  `user:*`/`app:*`。
 - 为什么推荐用 SetState：LLM 节点从图状态里的会话对象读取并展开占位符，使用 `sess.SetState` 可避免不安全的并发 map 访问。
 - 服务侧护栏：内存实现禁止通过“更新用户态”的接口写 `temp:*`（以及 `app:*` via user updater），见 [session/inmemory/service.go](https://github.com/trpc-group/trpc-agent-go/blob/main/session/inmemory/service.go)。
 - 并发建议：并行分支不要同时改同一批 `session.State` 键；建议汇总到单节点合并后一次写入，或先放图状态再一次写到 `temp:*`。

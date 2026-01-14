@@ -173,13 +173,17 @@ Input:
 - `include_all_docs` (optional bool)
 
 Behavior:
-- Writes ephemeral session keys (per turn):
+- Writes session-scoped `temp:*` keys:
   - `temp:skill:loaded:<name>` = "1"
   - `temp:skill:docs:<name>` = "*" or JSON array
 - Request processor injects `SKILL.md` body and docs into system message
 
 Notes:
 - Safe to call multiple times to add or replace docs.
+- These keys are stored on the session state and can remain effective
+  across turns in the same session until overwritten/cleared or the
+  session expires.
+- The keys store only selection metadata, not full doc contents.
 
 ### `skill_select_docs`
 
