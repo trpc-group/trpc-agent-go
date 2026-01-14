@@ -67,11 +67,11 @@ type Result struct {
 
 // Search defines the search parameters
 type Search struct {
-	Query      string        `json:"query" jsonschema:"title=query,description=query,type=string"`
-	IDList     []string      `json:"id_list" jsonschema:"title=id_list,description=id_list,type=array,items=string"`
-	MaxResults *int          `json:"max_results,omitempty" jsonschema:"title=max_results,description=max_results,type=integer"`
-	SortBy     SortCriterion `json:"sort_by" jsonschema:"title=sort_by,description=sort_by,type=string,enum=[\"relevance\",\"lastUpdatedDate\",\"submittedDate\"]"`
-	SortOrder  SortOrder     `json:"sort_order" jsonschema:"title=sort_order,description=sort_order,type=string,enum=[\"ascending\",\"descending\"]"`
+	Query      string        `json:"query" jsonschema:"description=The search query string for arXiv articles"`
+	IDList     []string      `json:"id_list,omitempty" jsonschema:"description=List of arXiv IDs to search for"`
+	MaxResults *int          `json:"max_results,omitempty" jsonschema:"description=Maximum number of results to return"`
+	SortBy     SortCriterion `json:"sort_by,omitempty" jsonschema:"description=Sort criterion: relevance or lastUpdatedDate or submittedDate,enum=relevance,enum=lastUpdatedDate,enum=submittedDate"`
+	SortOrder  SortOrder     `json:"sort_order,omitempty" jsonschema:"description=Sort order: ascending or descending,enum=ascending,enum=descending"`
 }
 
 // ClientConfig contains the configuration for the arXiv client
