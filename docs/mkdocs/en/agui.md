@@ -37,7 +37,10 @@ A complete version of this example lives in [examples/agui/server/default](https
 
 For an in-depth guide to Runners, refer to the [runner](./runner.md) documentation.
 
-On the client side you can pair the server with frameworks that understand the AG-UI protocol, such as [CopilotKit](https://github.com/CopilotKit/CopilotKit). It provides React/Next.js components with built-in SSE subscriptions. The sample at [examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit) builds a web UI that communicates with the agent through AG-UI, as shown below.
+On the client side you can pair the server with frameworks that understand the AG-UI protocol, such as [CopilotKit](https://github.com/CopilotKit/CopilotKit). It provides React/Next.js components with built-in SSE subscriptions. This repository ships with two runnable web UI samples:
+
+- [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat): a Vite + React client built with TDesign that demonstrates custom events, graph interrupt approvals (human-in-the-loop), message snapshot loading, and report side panels.
+- [examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit): a Next.js client built with CopilotKit.
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
@@ -681,31 +684,34 @@ In this case, the real-time conversation route will be `/agui/chat`, the cancel 
 
 ### GraphAgent Node Activity Events
 
-With `GraphAgent`, a single run typically executes multiple nodes along the graph. To help the frontend highlight the active node and render Human-in-the-Loop prompts, the framework can emit two additional `ACTIVITY_DELTA` events. For the event format, see the [AG-UI official docs](https://docs.ag-ui.com/concepts/events#activitydelta). They are disabled by default and can be enabled when constructing the AG-UI server.
+With `GraphAgent`, a single run typically executes multiple nodes along the graph. To help the frontend highlight the active node and render Human-in-the-Loop prompts, the framework can emit node lifecycle and interrupt-related `ACTIVITY_DELTA` events. For the event format, see the [AG-UI official docs](https://docs.ag-ui.com/concepts/events#activitydelta). They are disabled by default and can be enabled when constructing the AG-UI server.
 
-#### Node start (`graph.node.start`)
+#### Node lifecycle (`graph.node.lifecycle`)
 
-This event is disabled by default; enable it via `agui.WithGraphNodeStartActivityEnabled(true)` when constructing the AG-UI server.
+This event is disabled by default; enable it via `agui.WithGraphNodeLifecycleActivityEnabled(true)` when constructing the AG-UI server.
 
 ```go
 server, err := agui.New(
 	runner,
-	agui.WithGraphNodeStartActivityEnabled(true),
+	agui.WithGraphNodeLifecycleActivityEnabled(true),
 )
 ```
 
-`activityType` is `graph.node.start`. It is emitted before a node runs and writes the current node to `/node` via `add /node`:
+When enabled, the server emits `ACTIVITY_DELTA` for `start` / `complete` / `error` phases with the same `activityType: graph.node.lifecycle`, and uses `/node.phase` to distinguish the phase.
+
+For the node start phase (`phase=start`), it is emitted before a node runs and writes the current node to `/node` via `add /node`:
 
 ```json
 {
   "type": "ACTIVITY_DELTA",
-  "activityType": "graph.node.start",
+  "activityType": "graph.node.lifecycle",
   "patch": [
     {
       "op": "add",
       "path": "/node",
       "value": {
-        "nodeId": "plan_llm_node"
+        "nodeId": "plan_llm_node",
+        "phase": "start"
       }
     }
   ]
@@ -713,6 +719,45 @@ server, err := agui.New(
 ```
 
 This event helps the frontend track progress. The frontend can treat `/node.nodeId` as the currently active node and use it to highlight the graph execution.
+
+For the node success end phase (`phase=complete`), it is emitted after a node finishes successfully and writes the node result to `/node` via `add /node`:
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "complete"
+      }
+    }
+  ]
+}
+```
+
+For the node failure end phase (`phase=error`, non-interrupt), it includes an error message in `/node`:
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "error",
+        "error": "node execution failed"
+      }
+    }
+  ]
+}
+```
 
 #### Interrupt (`graph.node.interrupt`)
 
@@ -751,7 +796,7 @@ This event indicates the run is paused at the node. The frontend can render `/in
 
 #### Resume ack (`graph.node.interrupt`)
 
-When a run starts with resume input, the AG-UI server emits an extra `ACTIVITY_DELTA` at the beginning of the run, before any `graph.node.start` events. It uses `activityType: graph.node.interrupt`, clears the previous interrupt state by setting `/interrupt` to `null`, and writes the resume input to `/resume`. `/resume` contains `resumeMap` or `resume` plus optional `checkpointId` and `lineageId`:
+When a run starts with resume input, the AG-UI server emits an extra `ACTIVITY_DELTA` at the beginning of the run, before any `graph.node.lifecycle` events. It uses `activityType: graph.node.interrupt`, clears the previous interrupt state by setting `/interrupt` to `null`, and writes the resume input to `/resume`. `/resume` contains `resumeMap` or `resume` plus optional `checkpointId` and `lineageId`:
 
 ```json
 {
@@ -780,7 +825,7 @@ When a run starts with resume input, the AG-UI server emits an extra `ACTIVITY_D
 }
 ```
 
-For a complete example, see [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph).
+For a complete example, see [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph). For a client implementation, see [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
 
 ## Best Practices
 
@@ -826,6 +871,6 @@ If a long-form document is inserted directly into the main conversation, it can 
    * When a `close_report_document` tool event is captured: close the document panel (or mark it as completed).
 
 The effect is shown below. For a full example, refer to
-[examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report).
+[examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report). The corresponding client implementation lives in [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
 
 ![report](../assets/gif/agui/report.gif)

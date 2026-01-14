@@ -28,7 +28,7 @@ type JSONCriterion struct {
 	// NumberTolerance defines the allowed absolute difference between numeric values. 1e-6 is the default.
 	NumberTolerance *float64 `json:"numberTolerance,omitempty"`
 	// Compare overrides default comparison when provided.
-	Compare func(actual, expected map[string]any) (bool, error) `json:"-"`
+	Compare func(actual, expected any) (bool, error) `json:"-"`
 }
 
 // JSONMatchStrategy enumerates supported JSON comparison strategies.
@@ -51,8 +51,8 @@ func New(opt ...Option) *JSONCriterion {
 	}
 }
 
-// Match compares two JSON objects using custom logic or deep equality with numeric tolerance.
-func (j *JSONCriterion) Match(actual, expected map[string]any) (bool, error) {
+// Match compares two JSON values using custom logic or deep equality with numeric tolerance.
+func (j *JSONCriterion) Match(actual, expected any) (bool, error) {
 	if j.Ignore {
 		return true, nil
 	}
@@ -65,17 +65,53 @@ func (j *JSONCriterion) Match(actual, expected map[string]any) (bool, error) {
 	}
 	switch j.MatchStrategy {
 	case JSONMatchStrategyExact, "":
-		if err := compareTree(actual, expected, j.IgnoreTree, tolerance); err != nil {
-			return false, fmt.Errorf("actual %v and expected %v do not match: %w", actual, expected, err)
-		}
-		return true, nil
+		return matchValue(actual, expected, j.IgnoreTree, tolerance)
 	default:
 		return false, fmt.Errorf("invalid match strategy %s", j.MatchStrategy)
 	}
 }
 
-// compareTree compares two JSON objects using ignore tree and numeric tolerance.
-func compareTree(actual, expected, ignoreTree map[string]any, tolerance float64) error {
+func matchValue(actual, expected any, ignoreTree map[string]any, tolerance float64) (bool, error) {
+	if err := compareValue(actual, expected, ignoreTree, tolerance); err != nil {
+		return false, fmt.Errorf("actual %v and expected %v do not match: %w", actual, expected, err)
+	}
+	return true, nil
+}
+
+func compareValue(actual, expected any, ignoreTree map[string]any, tolerance float64) error {
+	if actual == nil && expected == nil {
+		return nil
+	}
+	if actual == nil || expected == nil {
+		return fmt.Errorf("actual %v and expected %v do not match", actual, expected)
+	}
+	if actualMap, ok := actual.(map[string]any); ok {
+		expectedMap, ok := expected.(map[string]any)
+		if !ok {
+			return fmt.Errorf("actual %v is a map but expected %v is not a map", actual, expected)
+		}
+		return compareObject(actualMap, expectedMap, ignoreTree, tolerance)
+	}
+	if _, ok := expected.(map[string]any); ok {
+		return fmt.Errorf("actual %v is not a map but expected %v is a map", actual, expected)
+	}
+	if actualList, ok := actual.([]any); ok {
+		expectedList, ok := expected.([]any)
+		if !ok {
+			return fmt.Errorf("actual %v is an array but expected %v is not an array", actual, expected)
+		}
+		return compareArray(actualList, expectedList, tolerance)
+	}
+	if _, ok := expected.([]any); ok {
+		return fmt.Errorf("actual %v is not an array but expected %v is an array", actual, expected)
+	}
+	if equalWithTolerance(actual, expected, tolerance) {
+		return nil
+	}
+	return fmt.Errorf("actual %v and expected %v do not match", actual, expected)
+}
+
+func compareObject(actual, expected, ignoreTree map[string]any, tolerance float64) error {
 	for k := range actual {
 		if isIgnore(ignoreTree, k) {
 			continue
@@ -96,23 +132,24 @@ func compareTree(actual, expected, ignoreTree map[string]any, tolerance float64)
 		if isIgnore(ignoreTree, k) {
 			continue
 		}
-		actualValue, ok := actual[k].(map[string]any)
+		childIgnoreTree, ok := ignoreTree[k].(map[string]any)
 		if !ok {
-			if equalWithTolerance(actual[k], expected[k], tolerance) {
-				continue
-			}
-			return fmt.Errorf("actual[%s] %v and expected[%s] %v do not match", k, actual[k], k, expected[k])
+			childIgnoreTree = nil
 		}
-		expectedValue, ok := expected[k].(map[string]any)
-		if !ok {
-			return fmt.Errorf("expected[%s] %v is not a map", k, expected[k])
-		}
-		ignoreTreeValue, ok := ignoreTree[k].(map[string]any)
-		if !ok {
-			ignoreTreeValue = nil
-		}
-		if err := compareTree(actualValue, expectedValue, ignoreTreeValue, tolerance); err != nil {
+		if err := compareValue(actual[k], expected[k], childIgnoreTree, tolerance); err != nil {
 			return fmt.Errorf("compare %s: %w", k, err)
+		}
+	}
+	return nil
+}
+
+func compareArray(actual, expected []any, tolerance float64) error {
+	if len(actual) != len(expected) {
+		return fmt.Errorf("array length mismatch: actual(%d) != expected(%d)", len(actual), len(expected))
+	}
+	for i := range actual {
+		if err := compareValue(actual[i], expected[i], nil, tolerance); err != nil {
+			return fmt.Errorf("compare index %d: %w", i, err)
 		}
 	}
 	return nil

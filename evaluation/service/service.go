@@ -27,6 +27,8 @@ type Service interface {
 	Inference(ctx context.Context, request *InferenceRequest) ([]*InferenceResult, error)
 	// Evaluate runs the evaluation on the inference results and returns the persisted eval set result.
 	Evaluate(ctx context.Context, request *EvaluateRequest) (*evalresult.EvalSetResult, error)
+	// Close releases resources owned by the service.
+	Close() error
 }
 
 // InferenceRequest represents a request for running the agent inference on an eval set.

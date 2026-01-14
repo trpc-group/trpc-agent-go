@@ -62,6 +62,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("create evaluator: %v", err)
 	}
+	defer func() { agentEvaluator.Close() }()
 	// Run evaluate.
 	result, err := agentEvaluator.Evaluate(ctx, *evalSetID)
 	if err != nil {

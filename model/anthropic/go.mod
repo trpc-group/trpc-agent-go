@@ -5,7 +5,7 @@ go 1.23.0
 replace trpc.group/trpc-go/trpc-agent-go => ../../
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.16.0
+	github.com/anthropics/anthropic-sdk-go v1.19.0
 	github.com/stretchr/testify v1.10.0
 	trpc.group/trpc-go/trpc-agent-go v0.0.0-20251126064502-c8c2594d2519
 )

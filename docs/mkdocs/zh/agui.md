@@ -37,7 +37,10 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 
 Runner 全面的使用方法参见 [runner](./runner.md)。
 
-在前端侧，可以配合 [CopilotKit](https://github.com/CopilotKit/CopilotKit) 等支持 AG-UI 协议的客户端框架，它提供 React/Next.js 组件并内置 SSE 订阅能力。[examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit) 使用 CopilotKit 搭建了 Web UI 界面，通过 AG-UI 协议与 Agent 通信，效果如下图所示。
+在前端侧，可以配合 [CopilotKit](https://github.com/CopilotKit/CopilotKit) 和 [TDesign Chat](https://tdesign.tencent.com/react-chat/overview) 等支持 AG-UI 协议的客户端框架，它提供 React/Next.js 组件并内置 SSE 订阅能力。仓库内提供两个可运行的 Web UI 示例：
+
+- [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)：基于 Vite + React + TDesign 的客户端，演示自定义事件、Graph interrupt 审批、消息快照加载以及报告侧边栏等能力。
+- [examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit)：基于 CopilotKit 搭建的 Next.js 客户端。
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
@@ -684,33 +687,36 @@ if err != nil {
 
 ### GraphAgent 节点活动事件
 
-在 `GraphAgent` 场景下，一个 run 通常会按图执行多个节点。为了让前端能持续展示“当前正在执行哪个节点”，并在 Human-in-the-Loop 场景中渲染中断提示，框架支持额外发送两类 `ACTIVITY_DELTA` 事件。该能力默认关闭，可在创建 AG-UI Server 时按需开启。
+在 `GraphAgent` 场景下，一个 run 通常会按图执行多个节点。为了让前端能持续展示“当前正在执行哪个节点”，并在 Human-in-the-Loop 场景中渲染中断提示，框架支持额外发送节点生命周期与中断相关的 `ACTIVITY_DELTA` 事件。该能力默认关闭，可在创建 AG-UI Server 时按需开启。
 
 `ACTIVITY_DELTA` 事件格式可参考 [AG-UI 官方文档](https://docs.ag-ui.com/concepts/events#activitydelta)
 
-#### 节点开始（`graph.node.start`）
+#### 节点生命周期（`graph.node.lifecycle`）
 
-该事件默认关闭，可在创建 AG-UI Server 时通过 `agui.WithGraphNodeStartActivityEnabled(true)` 开启。
+该事件默认关闭，可在创建 AG-UI Server 时通过 `agui.WithGraphNodeLifecycleActivityEnabled(true)` 开启。
 
 ```go
 server, err := agui.New(
 	runner,
-	agui.WithGraphNodeStartActivityEnabled(true),
+	agui.WithGraphNodeLifecycleActivityEnabled(true),
 )
 ```
 
-`activityType` 为 `graph.node.start`，在节点执行前发出，并通过 `add /node` 写入当前节点信息：
+启用后，节点在 `start` / `complete` / `error` 三个阶段都会发送 `ACTIVITY_DELTA`，且 `activityType` 均为 `graph.node.lifecycle`，通过 `/node.phase` 区分具体阶段。
+
+节点开始阶段（`phase=start`）在节点执行前发出，并通过 `add /node` 写入当前节点信息：
 
 ```json
 {
   "type": "ACTIVITY_DELTA",
-  "activityType": "graph.node.start",
+  "activityType": "graph.node.lifecycle",
   "patch": [
     {
       "op": "add",
       "path": "/node",
       "value": {
-        "nodeId": "plan_llm_node"
+        "nodeId": "plan_llm_node",
+        "phase": "start"
       }
     }
   ]
@@ -718,6 +724,45 @@ server, err := agui.New(
 ```
 
 该事件用于前端展示进度。前端可将 `/node.nodeId` 作为当前正在执行的节点，用于高亮或展示节点执行过程。
+
+节点成功结束阶段（`phase=complete`）在节点执行结束后发出，并通过 `add /node` 写入本次结束的节点信息：
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "complete"
+      }
+    }
+  ]
+}
+```
+
+节点失败结束阶段（`phase=error`）会在 `/node` 中携带错误信息：
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "error",
+        "error": "node execution failed"
+      }
+    }
+  ]
+}
+```
 
 #### 中断提示（`graph.node.interrupt`）
 
@@ -756,7 +801,7 @@ server, err := agui.New(
 
 #### 恢复回执（`graph.node.interrupt`）
 
-当新的 run 携带 resume 输入发起恢复时，AG-UI Server 会在该 run 的事件流开始处额外发送一条 `ACTIVITY_DELTA`，并且会先于任何 `graph.node.start` 事件发送。该事件同样使用 `activityType: graph.node.interrupt`，先将 `/interrupt` 置为 `null`，再通过 `add /resume` 写入本次恢复输入。`/resume` 包含 `resumeMap` 或 `resume`，并可包含 `checkpointId` 与 `lineageId`：
+当新的 run 携带 resume 输入发起恢复时，AG-UI Server 会在该 run 的事件流开始处额外发送一条 `ACTIVITY_DELTA`，并且会先于任何 `graph.node.lifecycle` 事件发送。该事件同样使用 `activityType: graph.node.interrupt`，先将 `/interrupt` 置为 `null`，再通过 `add /resume` 写入本次恢复输入。`/resume` 包含 `resumeMap` 或 `resume`，并可包含 `checkpointId` 与 `lineageId`：
 
 ```json
 {
@@ -785,7 +830,7 @@ server, err := agui.New(
 }
 ```
 
-完整示例可参考 [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph)。
+完整示例可参考 [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph)，前端渲染与审批交互可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 
 ## 最佳实践
 
@@ -830,6 +875,6 @@ server, err := agui.New(
    - 当捕捉到 `open_report_document` 工具事件时：创建文档面板，并将其后的文本消息内容写入该文档面板；
    - 当捕捉到 `close_report_document` 工具事件时：关闭文档面板（或将其标记为生成完成）。
 
-实际效果如下图所示，完整示例可参考 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report)。
+实际效果如下图所示，完整示例可参考 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 
 ![report](../assets/gif/agui/report.gif)

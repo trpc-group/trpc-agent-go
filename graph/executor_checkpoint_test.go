@@ -993,6 +993,126 @@ func TestExecutor_BuildExecutionContext_SeedsChannelVersions(t *testing.T) {
 	require.Equal(t, int64(7), ch.Version)
 }
 
+func TestExecutor_Resume_UsesAckedChannelVersions(t *testing.T) {
+	const (
+		lineageID = "ln-resume-acked-versions"
+		namespace = "ns-resume-acked-versions"
+		nodeA     = "A"
+		nodeB     = "B"
+		stateKeyA = "a_count"
+		stateKeyB = "b_count"
+	)
+
+	schema := NewStateSchema()
+	schema.AddField(
+		stateKeyA,
+		StateField{Type: reflect.TypeOf(0)},
+	)
+	schema.AddField(
+		stateKeyB,
+		StateField{Type: reflect.TypeOf(0)},
+	)
+
+	g, err := NewStateGraph(schema).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			count, _ := state[stateKeyA].(int)
+			return State{stateKeyA: count + 1}, nil
+		}).
+		AddNode(nodeB, func(ctx context.Context, state State) (any, error) {
+			count, _ := state[stateKeyB].(int)
+			return State{stateKeyB: count + 1}, nil
+		}).
+		SetEntryPoint(nodeA).
+		AddEdge(nodeA, nodeB).
+		AddEdge(nodeB, nodeA).
+		Compile()
+	require.NoError(t, err)
+
+	saver := newSubgraphTestSaver()
+
+	exec1, err := NewExecutor(
+		g,
+		WithCheckpointSaver(saver),
+		WithMaxSteps(3),
+	)
+	require.NoError(t, err)
+
+	init := State{
+		CfgKeyLineageID:    lineageID,
+		CfgKeyCheckpointNS: namespace,
+	}
+	ch, err := exec1.Execute(
+		context.Background(),
+		init,
+		&agent.Invocation{InvocationID: "inv-acked-init"},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	tuples, err := saver.List(
+		context.Background(),
+		CreateCheckpointConfig(lineageID, "", namespace),
+		nil,
+	)
+	require.NoError(t, err)
+
+	var resumeTuple *CheckpointTuple
+	for _, tuple := range tuples {
+		if tuple == nil || tuple.Metadata == nil || tuple.Checkpoint == nil {
+			continue
+		}
+		if tuple.Metadata.Source != CheckpointSourceLoop {
+			continue
+		}
+		if tuple.Metadata.Step != 2 {
+			continue
+		}
+		resumeTuple = tuple
+		break
+	}
+	require.NotNil(t, resumeTuple)
+
+	exec2, err := NewExecutor(
+		g,
+		WithCheckpointSaver(saver),
+		WithMaxSteps(5),
+	)
+	require.NoError(t, err)
+
+	resume := State{
+		CfgKeyLineageID:    lineageID,
+		CfgKeyCheckpointNS: namespace,
+		CfgKeyCheckpointID: resumeTuple.Checkpoint.ID,
+	}
+	ch2, err := exec2.Execute(
+		context.Background(),
+		resume,
+		&agent.Invocation{InvocationID: "inv-acked-resume"},
+	)
+	require.NoError(t, err)
+
+	var done *event.Event
+	for ev := range ch2 {
+		if ev == nil {
+			continue
+		}
+		if ev.Done && ev.Object == ObjectTypeGraphExecution {
+			done = ev
+		}
+	}
+	require.NotNil(t, done)
+	require.NotNil(t, done.StateDelta)
+
+	var aCount int
+	require.NoError(t, json.Unmarshal(done.StateDelta[stateKeyA], &aCount))
+	var bCount int
+	require.NoError(t, json.Unmarshal(done.StateDelta[stateKeyB], &bCount))
+
+	require.Equal(t, 3, aCount)
+	require.Equal(t, 2, bCount)
+}
+
 func TestExecutor_BuildExecutionContext_ResumedNilCheckpoint(t *testing.T) {
 	const (
 		barrierChannel = "barrier:ch"

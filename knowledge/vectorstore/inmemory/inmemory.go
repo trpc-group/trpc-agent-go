@@ -393,6 +393,12 @@ func (vs *VectorStore) Count(ctx context.Context, opts ...vectorstore.CountOptio
 	return count, nil
 }
 
+// UpdateByFilter updates documents matching the filter with the specified field values.
+// Note: This method is not supported in inmemory implementation.
+func (vs *VectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
+	return 0, errors.New("inmemory: UpdateByFilter is not supported")
+}
+
 // GetMetadata retrieves metadata from the vector store with filtering and pagination support.
 func (vs *VectorStore) GetMetadata(
 	ctx context.Context,
