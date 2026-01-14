@@ -10,6 +10,8 @@
 package evaluation
 
 import (
+	"runtime"
+
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -25,23 +27,27 @@ const defaultNumRuns = 1
 
 // options holds the configuration options for the evaluation.
 type options struct {
-	evalSetManager    evalset.Manager
-	evalResultManager evalresult.Manager
-	metricManager     metric.Manager
-	registry          registry.Registry
-	evalService       service.Service
-	numRuns           int
+	evalSetManager                   evalset.Manager
+	evalResultManager                evalresult.Manager
+	metricManager                    metric.Manager
+	registry                         registry.Registry
+	evalService                      service.Service
+	numRuns                          int
+	evalCaseParallelism              int
+	evalCaseParallelInferenceEnabled bool
 }
 
 // newOptions creates a new options with the default values.
 func newOptions(opt ...Option) *options {
 	// Initialize options with default values.
 	opts := &options{
-		numRuns:           defaultNumRuns,
-		evalSetManager:    evalsetinmemory.New(),
-		evalResultManager: evalresultinmemory.New(),
-		metricManager:     metricinmemory.New(),
-		registry:          registry.New(),
+		numRuns:                          defaultNumRuns,
+		evalSetManager:                   evalsetinmemory.New(),
+		evalResultManager:                evalresultinmemory.New(),
+		metricManager:                    metricinmemory.New(),
+		registry:                         registry.New(),
+		evalCaseParallelism:              runtime.GOMAXPROCS(0),
+		evalCaseParallelInferenceEnabled: false,
 	}
 	// Apply user options.
 	for _, o := range opt {
@@ -92,5 +98,19 @@ func WithEvaluationService(s service.Service) Option {
 func WithNumRuns(numRuns int) Option {
 	return func(o *options) {
 		o.numRuns = numRuns
+	}
+}
+
+// WithEvalCaseParallelism sets the maximum number of eval cases inferred in parallel.
+func WithEvalCaseParallelism(parallelism int) Option {
+	return func(o *options) {
+		o.evalCaseParallelism = parallelism
+	}
+}
+
+// WithEvalCaseParallelInferenceEnabled enables or disables parallel inference across eval cases.
+func WithEvalCaseParallelInferenceEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.evalCaseParallelInferenceEnabled = enabled
 	}
 }
