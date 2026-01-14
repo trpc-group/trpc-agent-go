@@ -13,77 +13,82 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/planner/ralphloop"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-type demoAgent struct {
-	name  string
+const (
+	agentName    = "demo-agent"
+	modelName    = "fake-model"
+	promiseValue = "DONE"
+)
+
+type fakeModel struct {
 	calls int32
 }
 
-func (a *demoAgent) Info() agent.Info {
-	return agent.Info{
-		Name:        a.name,
-		Description: "Agent that finishes on its second run",
-	}
-}
-
-func (a *demoAgent) Tools() []tool.Tool { return nil }
-
-func (a *demoAgent) SubAgents() []agent.Agent { return nil }
-
-func (a *demoAgent) FindSubAgent(string) agent.Agent { return nil }
-
-func (a *demoAgent) Run(
+func (m *fakeModel) GenerateContent(
 	ctx context.Context,
-	inv *agent.Invocation,
-) (<-chan *event.Event, error) {
-	ch := make(chan *event.Event, 1)
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	_ = req
+
+	ch := make(chan *model.Response, 1)
 	go func() {
 		defer close(ch)
 
-		iter := int(atomic.AddInt32(&a.calls, 1))
-		content := fmt.Sprintf("Iteration %d: still working.\n", iter)
-		if iter >= 2 {
-			content = "All done.\n<promise>DONE</promise>\n"
+		call := int(atomic.AddInt32(&m.calls, 1))
+		content := fmt.Sprintf("Iteration %d: still working.\n", call)
+		if call >= 2 {
+			content = strings.Join([]string{
+				"All done.",
+				"<promise>" + promiseValue + "</promise>",
+				"",
+			}, "\n")
 		}
 
-		evt := event.NewResponseEvent(
-			inv.InvocationID,
-			a.name,
-			&model.Response{
-				Done: true,
-				Choices: []model.Choice{{
-					Index: 0,
-					Message: model.Message{
-						Role:    model.RoleAssistant,
-						Content: content,
-					},
-				}},
-			},
-		)
-		agent.InjectIntoEvent(inv, evt)
-		_ = event.EmitEvent(ctx, ch, evt)
+		ch <- &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: content,
+				},
+			}},
+		}
 	}()
 	return ch, nil
 }
 
+func (m *fakeModel) Info() model.Info {
+	return model.Info{Name: modelName}
+}
+
 func main() {
-	a := &demoAgent{name: "demo"}
+	p, err := ralphloop.New(ralphloop.Config{
+		MaxIterations:     5,
+		CompletionPromise: promiseValue,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	a := llmagent.New(
+		agentName,
+		llmagent.WithModel(&fakeModel{}),
+		llmagent.WithPlanner(p),
+		llmagent.WithMaxLLMCalls(10),
+	)
 
 	r := runner.NewRunner(
 		"ralph-demo",
 		a,
-		runner.WithRalphLoop(runner.RalphLoopConfig{
-			MaxIterations:     5,
-			CompletionPromise: "DONE",
-		}),
 	)
 	defer r.Close()
 

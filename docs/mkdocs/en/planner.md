@@ -212,6 +212,51 @@ llmAgent := llmagent.New(
 
 For complete code examples, please refer to [examples/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/react).
 
+## RalphLoop Planner (Hard Ralph)
+
+Ralph Loop is an "outer loop" idea: instead of trusting a Large Language Model
+(LLM) to decide when it is done, the framework keeps iterating until a
+machine-checkable completion condition is met.
+
+The RalphLoop Planner is a "hard" implementation that runs inside `LLMAgent`
+(Large Language Model Agent). When the model tries to stop (it sets
+`model.Response.Done = true`), the planner can override that decision by
+changing `Done` back to `false` when completion conditions are not met. This
+forces the internal LLM flow loop to make another model call.
+
+Limitations:
+
+- Only affects `LLMAgent`, because planners are installed in the `LLMAgent` flow.
+
+Common completion conditions:
+
+- A completion promise in the assistant output (for example,
+  `<promise>DONE</promise>`).
+- Additional custom checks via `ralphloop.Verifier` (for example, run tests in
+  your own verifier and only pass when they succeed).
+
+Example:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/planner/ralphloop"
+)
+
+rl, err := ralphloop.New(ralphloop.Config{
+    MaxIterations:     20,
+    CompletionPromise: "DONE",
+})
+if err != nil { /* handle */ }
+
+llmAgent := llmagent.New(
+    "demo-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithPlanner(rl),
+    llmagent.WithMaxLLMCalls(50), // safety valve
+)
+```
+
 ## Custom Planner
 
 In addition to the two Planner implementations provided by the framework, you can also create a custom Planner by implementing the `Planner` interface to meet specific needs:

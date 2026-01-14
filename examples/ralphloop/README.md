@@ -1,7 +1,7 @@
 # Ralph Loop Example
 
-This example demonstrates `runner.WithRalphLoop`, a runner-level "outer loop"
-that keeps an agent running until a verifiable completion condition is met.
+This example demonstrates `planner/ralphloop`, a planner-based "Hard Ralph"
+mode for `LLMAgent` (Large Language Model Agent).
 
 Ralph Loop is useful when an agent tends to stop early because a Large
 Language Model (LLM) may *think* it is done, but the task is not actually
@@ -9,10 +9,11 @@ complete.
 
 ## What it does
 
-- Wraps an `agent.Agent` with Ralph Loop mode.
-- Runs the agent repeatedly until it outputs a completion promise:
+- Configures an `LLMAgent` with a RalphLoop Planner.
+- Uses a local fake model that "finishes" too early on the first call.
+- Forces the LLM flow to continue until the assistant outputs
   `<promise>DONE</promise>`.
-- Uses `MaxIterations` as a safety valve to prevent infinite loops.
+- Uses `MaxIterations` and `WithMaxLLMCalls` as safety valves.
 
 ## How to run
 
@@ -25,8 +26,7 @@ go run .
 
 ## Notes
 
-- In real projects, you typically combine a completion promise with an
-  objective verifier such as `go test ./...` (exit code must be 0).
-- When `MaxIterations` is reached without success, the runner emits an error
-  event with error type `stop_agent_error`.
-
+- In real projects, you usually use a real model provider instead of the fake
+  model used here.
+- If you need objective verification (for example, tests must pass), implement
+  a custom `ralphloop.Verifier` and pass it via `ralphloop.Config.Verifiers`.
