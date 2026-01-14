@@ -5867,3 +5867,267 @@ func TestModel_StreamingResponse_ContextCancellation(t *testing.T) {
 	// Should have received at least 2 responses before cancellation.
 	assert.GreaterOrEqual(t, len(responses), 2, "Expected at least 2 responses before cancellation")
 }
+
+// TestWithOptimizeForCache tests the WithOptimizeForCache option.
+func TestWithOptimizeForCache(t *testing.T) {
+	tests := []struct {
+		name     string
+		optimize bool
+		expected bool
+	}{
+		{
+			name:     "enable cache optimization",
+			optimize: true,
+			expected: true,
+		},
+		{
+			name:     "disable cache optimization",
+			optimize: false,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &options{}
+			WithOptimizeForCache(tt.optimize)(opts)
+			assert.Equal(t, tt.expected, opts.OptimizeForCache)
+		})
+	}
+}
+
+// TestOptimizeForCache_DefaultDisabled tests that cache optimization is disabled by default.
+func TestOptimizeForCache_DefaultDisabled(t *testing.T) {
+	m := New("gpt-4o", WithAPIKey("test-key"))
+	assert.False(t, m.optimizeForCache, "cache optimization should be disabled by default")
+}
+
+// TestOptimizeMessagesForCache tests the optimizeMessagesForCache function.
+func TestOptimizeMessagesForCache(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []model.Message
+		expected []model.Message
+	}{
+		{
+			name:     "empty messages",
+			messages: []model.Message{},
+			expected: []model.Message{},
+		},
+		{
+			name: "no system messages - no reordering",
+			messages: []model.Message{
+				{Role: model.RoleUser, Content: "Hello"},
+				{Role: model.RoleAssistant, Content: "Hi"},
+			},
+			expected: []model.Message{
+				{Role: model.RoleUser, Content: "Hello"},
+				{Role: model.RoleAssistant, Content: "Hi"},
+			},
+		},
+		{
+			name: "system message already first - no change",
+			messages: []model.Message{
+				{Role: model.RoleSystem, Content: "You are helpful"},
+				{Role: model.RoleUser, Content: "Hello"},
+			},
+			expected: []model.Message{
+				{Role: model.RoleSystem, Content: "You are helpful"},
+				{Role: model.RoleUser, Content: "Hello"},
+			},
+		},
+		{
+			name: "system message in middle - move to front",
+			messages: []model.Message{
+				{Role: model.RoleUser, Content: "Hello"},
+				{Role: model.RoleSystem, Content: "You are helpful"},
+				{Role: model.RoleAssistant, Content: "Hi"},
+			},
+			expected: []model.Message{
+				{Role: model.RoleSystem, Content: "You are helpful"},
+				{Role: model.RoleUser, Content: "Hello"},
+				{Role: model.RoleAssistant, Content: "Hi"},
+			},
+		},
+		{
+			name: "multiple system messages - all move to front",
+			messages: []model.Message{
+				{Role: model.RoleUser, Content: "Hello"},
+				{Role: model.RoleSystem, Content: "System 1"},
+				{Role: model.RoleAssistant, Content: "Hi"},
+				{Role: model.RoleSystem, Content: "System 2"},
+			},
+			expected: []model.Message{
+				{Role: model.RoleSystem, Content: "System 1"},
+				{Role: model.RoleSystem, Content: "System 2"},
+				{Role: model.RoleUser, Content: "Hello"},
+				{Role: model.RoleAssistant, Content: "Hi"},
+			},
+		},
+		{
+			name: "only system messages",
+			messages: []model.Message{
+				{Role: model.RoleSystem, Content: "System 1"},
+				{Role: model.RoleSystem, Content: "System 2"},
+			},
+			expected: []model.Message{
+				{Role: model.RoleSystem, Content: "System 1"},
+				{Role: model.RoleSystem, Content: "System 2"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New("gpt-4o", WithAPIKey("test-key"))
+			result := m.optimizeMessagesForCache(tt.messages)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestGenerateContent_OptimizeForCache tests that messages are optimized when cache is enabled.
+func TestGenerateContent_OptimizeForCache(t *testing.T) {
+	var capturedRoles []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Messages []json.RawMessage `json:"messages"`
+		}
+		json.Unmarshal(body, &req)
+
+		// Parse message roles
+		capturedRoles = nil
+		for _, msg := range req.Messages {
+			var m struct {
+				Role string `json:"role"`
+			}
+			json.Unmarshal(msg, &m)
+			capturedRoles = append(capturedRoles, m.Role)
+		}
+
+		// Verify system messages come first
+		nonSystemSeen := false
+		for _, role := range capturedRoles {
+			if role != "system" {
+				nonSystemSeen = true
+			} else if nonSystemSeen {
+				assert.Fail(t, "system messages should be at the front")
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "test-id",
+			"object":  "chat.completion",
+			"created": 1699200000,
+			"model":   "gpt-4o",
+			"choices": []map[string]any{
+				{
+					"index":         0,
+					"message":       map[string]any{"role": "assistant", "content": "Hello!"},
+					"finish_reason": "stop",
+				},
+			},
+			"usage": map[string]any{
+				"prompt_tokens":     100,
+				"completion_tokens": 10,
+				"total_tokens":      110,
+			},
+		})
+	}))
+	defer server.Close()
+
+	// Test with cache optimization enabled (default)
+	m := New("gpt-4o", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+	req := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleSystem, Content: "You are helpful"},
+			{Role: model.RoleUser, Content: "Hello"},
+			{Role: model.RoleAssistant, Content: "Hi"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, req)
+	require.NoError(t, err)
+
+	for range responseChan {
+		// Drain the channel
+	}
+
+	// Verify system message was moved to front
+	assert.Equal(t, "system", capturedRoles[0], "system message should be first")
+}
+
+// TestGenerateContent_OptimizeForCache_Disabled tests that messages are not reordered when disabled.
+func TestGenerateContent_OptimizeForCache_Disabled(t *testing.T) {
+	var capturedRoles []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Messages []json.RawMessage `json:"messages"`
+		}
+		json.Unmarshal(body, &req)
+
+		capturedRoles = nil
+		for _, msg := range req.Messages {
+			var m struct {
+				Role string `json:"role"`
+			}
+			json.Unmarshal(msg, &m)
+			capturedRoles = append(capturedRoles, m.Role)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "test-id",
+			"object":  "chat.completion",
+			"created": 1699200000,
+			"model":   "gpt-4o",
+			"choices": []map[string]any{
+				{
+					"index":         0,
+					"message":       map[string]any{"role": "assistant", "content": "Hello!"},
+					"finish_reason": "stop",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	// Test with cache optimization disabled
+	m := New("gpt-4o", WithBaseURL(server.URL), WithAPIKey("test-key"), WithOptimizeForCache(false))
+
+	req := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "Hello"},
+			{Role: model.RoleSystem, Content: "You are helpful"},
+			{Role: model.RoleAssistant, Content: "Hi"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, req)
+	require.NoError(t, err)
+
+	for range responseChan {
+		// Drain the channel
+	}
+
+	// Verify original order is preserved (user, system, assistant)
+	assert.Equal(t, []string{"user", "system", "assistant"}, capturedRoles)
+}

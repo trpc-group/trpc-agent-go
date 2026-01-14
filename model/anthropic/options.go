@@ -20,7 +20,12 @@ import (
 )
 
 const (
-	defaultChannelBufferSize = 256
+	defaultChannelBufferSize  = 256
+	defaultEnablePromptCache  = true // Enable prompt cache by default for cost optimization
+	defaultMinCacheableTokens = 1024 // Minimum tokens to enable caching
+	defaultCacheSystemPrompt  = true // Cache system prompt by default
+	defaultCacheTools         = true // Cache tools by default
+	defaultCacheMessages      = true // Cache messages by default for multi-turn conversations
 )
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -84,6 +89,23 @@ type options struct {
 	maxInputTokens int
 	// tokenTailoringConfig allows customization of token tailoring parameters.
 	tokenTailoringConfig *model.TokenTailoringConfig
+
+	// Prompt cache configuration
+	// enablePromptCache enables Anthropic's prompt caching feature for cost optimization.
+	// When enabled, frequently used content (system prompts, tools) will be cached
+	// to reduce input token costs (90% discount on cached tokens).
+	enablePromptCache bool
+	// minCacheableTokens is the minimum token count to enable caching for a block.
+	// Anthropic requires at least 1024 tokens for cache breakpoints.
+	minCacheableTokens int
+	// cacheSystemPrompt controls whether to cache system prompts.
+	cacheSystemPrompt bool
+	// cacheTools controls whether to cache tool definitions.
+	cacheTools bool
+	// cacheMessages controls whether to cache messages for multi-turn conversations.
+	// When enabled, cache control will be applied to the last assistant message
+	// to maximize cache reuse in subsequent turns.
+	cacheMessages bool
 }
 
 var (
@@ -98,6 +120,12 @@ var (
 			OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
 			MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
 		},
+		// Prompt cache defaults - enabled by default for cost optimization
+		enablePromptCache:  defaultEnablePromptCache,
+		minCacheableTokens: defaultMinCacheableTokens,
+		cacheSystemPrompt:  defaultCacheSystemPrompt,
+		cacheTools:         defaultCacheTools,
+		cacheMessages:      defaultCacheMessages,
 	}
 )
 
@@ -266,5 +294,79 @@ func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 			config.MaxInputTokensRatio = imodel.DefaultMaxInputTokensRatio
 		}
 		opts.tokenTailoringConfig = config
+	}
+}
+
+// WithEnablePromptCache enables or disables Anthropic's prompt caching feature.
+// When enabled (default), frequently used content will be cached to reduce costs.
+// Cached content receives a 90% discount on input token pricing.
+//
+// Prompt caching is enabled by default for optimal cost efficiency.
+// You may want to disable it for:
+// - Testing/debugging scenarios where deterministic behavior is required
+// - Single-shot requests where cache won't be reused
+// - Scenarios with strict privacy requirements
+//
+// Example:
+//
+//	// Disable prompt cache for testing
+//	model := anthropic.New("claude-3-5-sonnet-20241022",
+//	    anthropic.WithEnablePromptCache(false),
+//	)
+func WithEnablePromptCache(enabled bool) Option {
+	return func(opts *options) {
+		opts.enablePromptCache = enabled
+	}
+}
+
+// WithMinCacheableTokens sets the minimum token count required to enable caching.
+// Anthropic requires at least 1024 tokens for cache breakpoints.
+// This option allows you to set a higher threshold if desired.
+//
+// Default: 1024 tokens
+func WithMinCacheableTokens(tokens int) Option {
+	return func(opts *options) {
+		if tokens < 1024 {
+			tokens = 1024 // Anthropic's minimum requirement
+		}
+		opts.minCacheableTokens = tokens
+	}
+}
+
+// WithCacheSystemPrompt controls whether to cache system prompts.
+// System prompts are often large and reused across requests, making them
+// ideal candidates for caching.
+//
+// Default: true (enabled)
+func WithCacheSystemPrompt(cache bool) Option {
+	return func(opts *options) {
+		opts.cacheSystemPrompt = cache
+	}
+}
+
+// WithCacheTools controls whether to cache tool definitions.
+// Tool definitions with extensive schemas benefit from caching when
+// used repeatedly in a session.
+//
+// Default: true (enabled)
+func WithCacheTools(cache bool) Option {
+	return func(opts *options) {
+		opts.cacheTools = cache
+	}
+}
+
+// WithCacheMessages controls whether to cache messages for multi-turn conversations.
+// When enabled, cache control will be applied to the last assistant message
+// to maximize cache reuse in subsequent turns.
+//
+// This implements the optimal caching strategy for multi-turn conversations:
+// - The cache breakpoint is dynamically moved to the latest assistant message
+// - Each new turn reuses the cached prefix (system + tools + previous messages)
+// - Only the new user message needs to be processed
+//
+// Default: true (enabled)
+func WithCacheMessages(cache bool) Option {
+	return func(opts *options) {
+		opts.cacheMessages = cache
 	}
 }

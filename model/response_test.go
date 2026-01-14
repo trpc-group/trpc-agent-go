@@ -89,6 +89,109 @@ func TestUsage_Structure(t *testing.T) {
 	}
 }
 
+func TestPromptTokensDetails_Structure(t *testing.T) {
+	tests := []struct {
+		name    string
+		details PromptTokensDetails
+	}{
+		{
+			name: "OpenAI style - cached tokens only",
+			details: PromptTokensDetails{
+				CachedTokens: 100,
+			},
+		},
+		{
+			name: "Anthropic style - all cache fields",
+			details: PromptTokensDetails{
+				CachedTokens:        200,
+				CacheCreationTokens: 150,
+				CacheReadTokens:     200,
+			},
+		},
+		{
+			name: "zero values",
+			details: PromptTokensDetails{
+				CachedTokens:        0,
+				CacheCreationTokens: 0,
+				CacheReadTokens:     0,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.details.CachedTokens < 0 {
+				t.Errorf("CachedTokens should not be negative: %v", tt.details.CachedTokens)
+			}
+			if tt.details.CacheCreationTokens < 0 {
+				t.Errorf("CacheCreationTokens should not be negative: %v", tt.details.CacheCreationTokens)
+			}
+			if tt.details.CacheReadTokens < 0 {
+				t.Errorf("CacheReadTokens should not be negative: %v", tt.details.CacheReadTokens)
+			}
+		})
+	}
+}
+
+func TestUsage_WithPromptTokensDetails(t *testing.T) {
+	tests := []struct {
+		name  string
+		usage Usage
+	}{
+		{
+			name: "usage with OpenAI cache details",
+			usage: Usage{
+				PromptTokens:     1000,
+				CompletionTokens: 500,
+				TotalTokens:      1500,
+				PromptTokensDetails: PromptTokensDetails{
+					CachedTokens: 800,
+				},
+			},
+		},
+		{
+			name: "usage with Anthropic cache details",
+			usage: Usage{
+				PromptTokens:     2000,
+				CompletionTokens: 300,
+				TotalTokens:      2300,
+				PromptTokensDetails: PromptTokensDetails{
+					CachedTokens:        1500,
+					CacheCreationTokens: 500,
+					CacheReadTokens:     1500,
+				},
+			},
+		},
+		{
+			name: "usage without cache details",
+			usage: Usage{
+				PromptTokens:     100,
+				CompletionTokens: 50,
+				TotalTokens:      150,
+				PromptTokensDetails: PromptTokensDetails{
+					CachedTokens: 0,
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Verify basic usage fields
+			if tt.usage.TotalTokens != tt.usage.PromptTokens+tt.usage.CompletionTokens {
+				t.Errorf("TotalTokens mismatch: got %v, want %v",
+					tt.usage.TotalTokens, tt.usage.PromptTokens+tt.usage.CompletionTokens)
+			}
+
+			// Verify cache tokens don't exceed prompt tokens
+			if tt.usage.PromptTokensDetails.CachedTokens > tt.usage.PromptTokens {
+				t.Errorf("CachedTokens (%v) should not exceed PromptTokens (%v)",
+					tt.usage.PromptTokensDetails.CachedTokens, tt.usage.PromptTokens)
+			}
+		})
+	}
+}
+
 func TestResponse_Structure(t *testing.T) {
 	now := time.Now()
 	systemFingerprint := "fp_test_123"

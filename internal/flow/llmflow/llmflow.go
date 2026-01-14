@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -555,6 +556,13 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 			filtered = append(filtered, t)
 		}
 	}
+
+	// Sort tools by name to ensure stable order for better prompt cache hit rate.
+	// Map iteration order is random in Go, so sorting ensures consistent tool ordering
+	// across requests, which improves cache efficiency.
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].Declaration().Name < filtered[j].Declaration().Name
+	})
 
 	invocation.SetState(stateKeyToolsSnapshot, filtered)
 
