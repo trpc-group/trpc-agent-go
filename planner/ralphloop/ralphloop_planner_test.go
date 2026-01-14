@@ -291,6 +291,70 @@ func TestNew_AllowsVerifiersOnly(t *testing.T) {
 	require.NotNil(t, p)
 }
 
+func TestInternalHelpers_HandleNilAndEmptyInputs(t *testing.T) {
+	t.Parallel()
+
+	require.Panics(t, func() {
+		MustNew(Config{})
+	})
+
+	p, err := New(Config{CompletionPromise: testPromise})
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{}
+	req := &model.Request{}
+
+	instruction := p.BuildPlanningInstruction(nil, inv, req)
+	require.Contains(t, instruction, "Ralph Loop mode")
+	require.Empty(t, p.BuildPlanningInstruction(
+		context.Background(),
+		nil,
+		req,
+	))
+	require.Empty(t, p.BuildPlanningInstruction(
+		context.Background(),
+		inv,
+		nil,
+	))
+
+	require.Zero(t, incrementIteration(nil))
+	require.Contains(t, formatFeedback(1, 2, ""), "Verification failed")
+
+	require.Empty(t, assistantText(model.Message{}))
+	require.Empty(t, assistantText(model.Message{
+		ContentParts: []model.ContentPart{{
+			Type: model.ContentTypeImage,
+		}},
+	}))
+
+	_, ok := firstPromiseText(nil, defaultPromiseTagOpen, defaultPromiseTagClose)
+	require.False(t, ok)
+
+	_, ok = firstPromiseText(
+		assistantResponse(true, "<promise>"+testPromise+"</promise>"),
+		"",
+		defaultPromiseTagClose,
+	)
+	require.False(t, ok)
+
+	_, ok = firstPromiseText(&model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Index: 0,
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "<promise>" + testPromise + "</promise>",
+			},
+		}},
+	}, defaultPromiseTagOpen, defaultPromiseTagClose)
+	require.False(t, ok)
+
+	p.setPendingFeedback(nil, "x")
+	p.setPendingFeedback(inv, "")
+	p.injectPendingFeedback(nil, req)
+	p.injectPendingFeedback(inv, nil)
+}
+
 func assistantResponse(done bool, content string) *model.Response {
 	return &model.Response{
 		Done: done,
