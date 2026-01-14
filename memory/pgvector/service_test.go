@@ -22,7 +22,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -1202,4 +1204,746 @@ func TestBuildCreateHNSWIndexSQL_Defaults(t *testing.T) {
 
 	assert.Contains(t, sql, fmt.Sprintf("m = %d", defaultHNSWM))
 	assert.Contains(t, sql, fmt.Sprintf("ef_construction = %d", defaultHNSWEfConstruction))
+}
+
+func TestBuildCreateHNSWIndexSQL_PartialParams(t *testing.T) {
+	params := &HNSWIndexParams{M: 0, EfConstruction: 256}
+	sql := buildCreateHNSWIndexSQL("", "test_table", params)
+
+	// M should use default when <= 0.
+	assert.Contains(t, sql, fmt.Sprintf("m = %d", defaultHNSWM))
+	assert.Contains(t, sql, "ef_construction = 256")
+}
+
+func TestService_InitDB_ExtensionError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	// Mock extension creation failure.
+	mock.ExpectExec("CREATE EXTENSION IF NOT EXISTS vector").
+		WillReturnError(fmt.Errorf("insufficient privilege"))
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(
+		func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		},
+	)
+	t.Cleanup(func() {
+		storage.SetClientBuilder(originalBuilder)
+	})
+
+	_, err := NewService(
+		WithHost("localhost"),
+		WithEmbedder(newMockEmbedder(1536)),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "enable pgvector extension failed")
+}
+
+func TestService_InitDB_PrivilegeCheckError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	// Mock extension creation success.
+	mock.ExpectExec("CREATE EXTENSION IF NOT EXISTS vector").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock DDL privilege check failure.
+	mock.ExpectQuery("SELECT has_schema_privilege").
+		WillReturnError(fmt.Errorf("connection lost"))
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(
+		func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		},
+	)
+	t.Cleanup(func() {
+		storage.SetClientBuilder(originalBuilder)
+	})
+
+	_, err := NewService(
+		WithHost("localhost"),
+		WithEmbedder(newMockEmbedder(1536)),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "check DDL privilege")
+}
+
+func TestService_InitDB_NoPrivilege(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	// Mock extension creation success.
+	mock.ExpectExec("CREATE EXTENSION IF NOT EXISTS vector").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock DDL privilege check returns false.
+	mock.ExpectQuery("SELECT has_schema_privilege").
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(false))
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(
+		func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		},
+	)
+	t.Cleanup(func() {
+		storage.SetClientBuilder(originalBuilder)
+	})
+
+	svc, err := NewService(
+		WithHost("localhost"),
+		WithEmbedder(newMockEmbedder(1536)),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	// Service should be created without error (skips DDL operations).
+	assert.NotNil(t, svc)
+}
+
+func TestService_InitDB_TableCreateError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	// Mock extension creation success.
+	mock.ExpectExec("CREATE EXTENSION IF NOT EXISTS vector").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock DDL privilege check success.
+	mock.ExpectQuery("SELECT has_schema_privilege").
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+
+	// Mock table creation failure.
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").
+		WillReturnError(fmt.Errorf("disk full"))
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(
+		func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		},
+	)
+	t.Cleanup(func() {
+		storage.SetClientBuilder(originalBuilder)
+	})
+
+	_, err := NewService(
+		WithHost("localhost"),
+		WithEmbedder(newMockEmbedder(1536)),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create table")
+}
+
+func TestService_InitDB_IndexCreateError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	// Mock extension creation success.
+	mock.ExpectExec("CREATE EXTENSION IF NOT EXISTS vector").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock DDL privilege check success.
+	mock.ExpectQuery("SELECT has_schema_privilege").
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+
+	// Mock table creation success.
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock first index creation failure.
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
+		WillReturnError(fmt.Errorf("index creation failed"))
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(
+		func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		},
+	)
+	t.Cleanup(func() {
+		storage.SetClientBuilder(originalBuilder)
+	})
+
+	_, err := NewService(
+		WithHost("localhost"),
+		WithEmbedder(newMockEmbedder(1536)),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create index")
+}
+
+func TestService_InitDB_HNSWIndexError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	// Mock extension creation success.
+	mock.ExpectExec("CREATE EXTENSION IF NOT EXISTS vector").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock DDL privilege check success.
+	mock.ExpectQuery("SELECT has_schema_privilege").
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+
+	// Mock table creation success.
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock 3 regular index creations.
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock HNSW index creation failure.
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
+		WillReturnError(fmt.Errorf("HNSW index creation failed"))
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(
+		func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		},
+	)
+	t.Cleanup(func() {
+		storage.SetClientBuilder(originalBuilder)
+	})
+
+	_, err := NewService(
+		WithHost("localhost"),
+		WithEmbedder(newMockEmbedder(1536)),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create HNSW index")
+}
+
+func TestService_UpdateMemory_EmbeddingError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	errEmb := fmt.Errorf("embedding service down")
+	svc := setupMockService(t, db, mock,
+		WithSkipDBInit(true),
+		WithEmbedder(newMockEmbedderWithError(errEmb)),
+	)
+	defer svc.Close()
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	err := svc.UpdateMemory(ctx, memKey, "updated", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "generate embedding failed")
+}
+
+func TestService_UpdateMemory_DimensionMismatch(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock,
+		WithSkipDBInit(true),
+		WithIndexDimension(1536),
+		WithEmbedder(newMockEmbedder(768)),
+	)
+	defer svc.Close()
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	err := svc.UpdateMemory(ctx, memKey, "updated", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "embedding dimension mismatch")
+}
+
+func TestService_UpdateMemory_SoftDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true), WithSoftDelete(true))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	// Mock UPDATE with soft delete filter.
+	mock.ExpectExec("UPDATE").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.UpdateMemory(ctx, memKey, "updated", []string{"topic"})
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_UpdateMemory_SQLError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	// Mock UPDATE query with error.
+	mock.ExpectExec("UPDATE").
+		WillReturnError(fmt.Errorf("connection timeout"))
+
+	err := svc.UpdateMemory(ctx, memKey, "updated", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "update memory entry failed")
+}
+
+func TestService_UpdateMemory_RowsAffectedError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	// Mock UPDATE query with RowsAffected error.
+	mock.ExpectExec("UPDATE").
+		WillReturnResult(sqlmock.NewErrorResult(fmt.Errorf("rows affected failed")))
+
+	err := svc.UpdateMemory(ctx, memKey, "updated", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "update memory entry rows affected failed")
+}
+
+func TestService_DeleteMemory_SQLError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	// Mock DELETE with error.
+	mock.ExpectExec("DELETE FROM").
+		WillReturnError(fmt.Errorf("database locked"))
+
+	err := svc.DeleteMemory(ctx, memKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delete memory entry failed")
+}
+
+func TestService_ClearMemories_SQLError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Mock DELETE with error.
+	mock.ExpectExec("DELETE FROM").
+		WillReturnError(fmt.Errorf("database error"))
+
+	err := svc.ClearMemories(ctx, userKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "clear memories failed")
+}
+
+func TestService_ClearMemories_SoftDelete_SQLError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true), WithSoftDelete(true))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Mock UPDATE with error.
+	mock.ExpectExec("UPDATE").
+		WillReturnError(fmt.Errorf("update failed"))
+
+	err := svc.ClearMemories(ctx, userKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "clear memories failed")
+}
+
+func TestService_ReadMemories_SQLError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Mock SELECT with error.
+	mock.ExpectQuery("SELECT memory_id").
+		WillReturnError(fmt.Errorf("query timeout"))
+
+	_, err := svc.ReadMemories(ctx, userKey, 10)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list memories failed")
+}
+
+func TestService_ReadMemories_SoftDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true), WithSoftDelete(true))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Mock SELECT query with soft delete filter.
+	mock.ExpectQuery("SELECT memory_id").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"created_at", "updated_at"},
+		))
+
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	assert.Len(t, entries, 0)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_SearchMemories_DimensionMismatch(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock,
+		WithSkipDBInit(true),
+		WithIndexDimension(1536),
+		WithEmbedder(newMockEmbedder(768)),
+	)
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	_, err := svc.SearchMemories(ctx, userKey, "test query")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "query embedding dimension mismatch")
+}
+
+func TestService_SearchMemories_SQLError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Mock SELECT with error.
+	mock.ExpectQuery("SELECT memory_id").
+		WillReturnError(fmt.Errorf("search failed"))
+
+	_, err := svc.SearchMemories(ctx, userKey, "query")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "search memories failed")
+}
+
+func TestService_SearchMemories_SoftDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true), WithSoftDelete(true))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	now := time.Now()
+	// Mock query with soft delete filter.
+	mock.ExpectQuery("SELECT memory_id").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"created_at", "updated_at", "similarity"},
+		).
+			AddRow("mem-1", "test-app", "u1", "test", pq.Array([]string{"t"}),
+				now, now, 0.9))
+
+	results, err := svc.SearchMemories(ctx, userKey, "query")
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_AddMemory_SoftDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock,
+		WithSkipDBInit(true),
+		WithMemoryLimit(0),
+		WithSoftDelete(true),
+	)
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Mock INSERT with soft delete (deleted_at = NULL on conflict).
+	mock.ExpectExec("INSERT INTO").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := svc.AddMemory(ctx, userKey, "test", nil)
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_AddMemory_MemoryLimit_SoftDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock,
+		WithSkipDBInit(true),
+		WithMemoryLimit(5),
+		WithSoftDelete(true),
+	)
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Mock atomic insert with limit and soft delete filter.
+	mock.ExpectExec("WITH existing AS").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := svc.AddMemory(ctx, userKey, "test", nil)
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_AddMemory_SQLError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true), WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Mock INSERT with error.
+	mock.ExpectExec("INSERT INTO").
+		WillReturnError(fmt.Errorf("insert failed"))
+
+	err := svc.AddMemory(ctx, userKey, "test", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "store memory entry failed")
+}
+
+func TestService_AddMemory_RowsAffectedError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock,
+		WithSkipDBInit(true),
+		WithMemoryLimit(1),
+	)
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Mock with RowsAffected error.
+	mock.ExpectExec("WITH existing AS").
+		WillReturnResult(sqlmock.NewErrorResult(fmt.Errorf("rows affected err")))
+
+	err := svc.AddMemory(ctx, userKey, "test", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "store memory entry rows affected failed")
+}
+
+func TestServiceOpts_Clone_Nil(t *testing.T) {
+	opts := ServiceOpts{
+		hnswParams: nil,
+	}
+
+	cloned := opts.clone()
+	assert.Nil(t, cloned.hnswParams)
+}
+
+func TestBuildCreateIndexSQL(t *testing.T) {
+	sql := buildCreateIndexSQL("", "test_table", "test_idx",
+		"CREATE INDEX IF NOT EXISTS %s ON %s(col)")
+	assert.Contains(t, sql, "CREATE INDEX IF NOT EXISTS")
+	assert.Contains(t, sql, "test_table_test_idx")
+	assert.Contains(t, sql, "test_table")
+}
+
+func TestBuildFullTableName(t *testing.T) {
+	assert.Equal(t, "test_table", buildFullTableName("", "test_table"))
+	assert.Equal(t, "myschema.test_table",
+		buildFullTableName("myschema", "test_table"))
+}
+
+func TestBuildIndexName(t *testing.T) {
+	name := buildIndexName("test_table", "idx_suffix")
+	assert.Contains(t, name, "test_table")
+	assert.Contains(t, name, "idx_suffix")
+}
+
+func TestService_EnqueueAutoMemoryJob_WithWorker(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	// Mock extractor to enable auto memory worker.
+	mockExtractor := &mockMemoryExtractor{}
+	svc := setupMockService(t, db, mock,
+		WithSkipDBInit(true),
+		WithExtractor(mockExtractor),
+	)
+	defer svc.Close()
+
+	ctx := context.Background()
+	// Should not return error when worker is configured.
+	err := svc.EnqueueAutoMemoryJob(ctx, nil)
+	require.NoError(t, err)
+}
+
+// mockMemoryExtractor implements extractor.MemoryExtractor interface.
+type mockMemoryExtractor struct{}
+
+func (m *mockMemoryExtractor) Extract(ctx context.Context, messages []model.Message, existing []*memory.Entry) ([]*extractor.Operation, error) {
+	return []*extractor.Operation{
+		{Type: extractor.OperationAdd, Memory: "test memory", Topics: []string{"test"}},
+	}, nil
+}
+
+func (m *mockMemoryExtractor) ShouldExtract(ctx *extractor.ExtractionContext) bool {
+	return true
+}
+
+func (m *mockMemoryExtractor) SetPrompt(prompt string) {}
+
+func (m *mockMemoryExtractor) SetModel(md model.Model) {}
+
+func (m *mockMemoryExtractor) Metadata() map[string]any {
+	return map[string]any{"test": "mock"}
+}
+
+func TestWithExtractor(t *testing.T) {
+	opts := ServiceOpts{}
+	mockExt := &mockMemoryExtractor{}
+
+	WithExtractor(mockExt)(&opts)
+
+	assert.Equal(t, mockExt, opts.extractor)
+}
+
+func TestService_ScanMemoryEntry_Error(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Mock SELECT returning rows with invalid data (trigger scan error).
+	mock.ExpectQuery("SELECT memory_id").
+		WithArgs(userKey.AppName, userKey.UserID).
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"created_at", "updated_at"},
+		).AddRow("mem-1", "test-app", "u1", "memory", nil, "invalid-time", "invalid"))
+
+	_, err := svc.ReadMemories(ctx, userKey, 10)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list memories failed")
+}
+
+func TestService_ScanMemoryEntryWithSimilarity_Error(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Mock SELECT returning rows with invalid similarity data.
+	mock.ExpectQuery("SELECT memory_id").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"created_at", "updated_at", "similarity"},
+		).AddRow("mem-1", "test-app", "u1", "memory", nil, "invalid-time", "invalid", 0.9))
+
+	_, err := svc.SearchMemories(ctx, userKey, "query")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "search memories failed")
+}
+
+func TestService_Close_NilDB(t *testing.T) {
+	svc := &Service{
+		db: nil,
+	}
+
+	err := svc.Close()
+	require.NoError(t, err)
+}
+
+func TestService_CheckDDLPrivilege_NoRows(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	// Mock extension creation success.
+	mock.ExpectExec("CREATE EXTENSION IF NOT EXISTS vector").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock DDL privilege check returns no rows (hasPrivilege remains false).
+	mock.ExpectQuery("SELECT has_schema_privilege").
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}))
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(
+		func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		},
+	)
+	t.Cleanup(func() {
+		storage.SetClientBuilder(originalBuilder)
+	})
+
+	svc, err := NewService(
+		WithHost("localhost"),
+		WithEmbedder(newMockEmbedder(1536)),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	// Service should be created (no rows means no privilege, skips DDL).
+	assert.NotNil(t, svc)
 }
