@@ -82,9 +82,11 @@ func TestInterrupt_ResumePaths(t *testing.T) {
 	ctx := context.Background()
 	st := State{}
 	// First call interrupts
-	if _, err := Interrupt(ctx, st, "k", "prompt"); err == nil {
-		t.Fatalf("expected interrupt error")
-	}
+	_, err := Interrupt(ctx, st, "k", "prompt")
+	require.Error(t, err)
+	intr, ok := GetInterruptError(err)
+	require.True(t, ok)
+	require.Equal(t, "k", intr.TaskID)
 	// Provide direct resume value
 	st[ResumeChannel] = "answer"
 	v, err := Interrupt(ctx, st, "k", "prompt")
