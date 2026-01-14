@@ -941,7 +941,8 @@ llm := llmagent.New(
 
 - 持久化“按用户”：写到 `user:*`，在模板里用 `{user:key}` 引用
 - 持久化“按应用”：写到 `app:*`，在模板里用 `{app:key}` 引用
-- 每轮一次（临时）：写入会话的 `temp:*` 命名空间，模板用 `{temp:key}`（不会持久化）
+- 会话内临时：写入会话的 `temp:*` 命名空间，模板用 `{temp:key}`
+  引用（不属于 `user:*`/`app:*` 的持久化配置；常见用法是每轮覆盖）
 
 示例：按用户动态提示词
 
@@ -984,7 +985,7 @@ _, _ = run.Run(context.Background(), user, sid, model.NewUserMessage("Hi!"))
 callbacks := agent.NewCallbacks()
 callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
   if args.Invocation != nil && args.Invocation.Session != nil {
-    // 为"本轮"临时指定指令
+    // 为本次运行写入临时指令
     args.Invocation.Session.SetState("temp:sys", []byte("Translate to French."))
   }
   return nil, nil
@@ -999,5 +1000,6 @@ llm := llmagent.New(
 
 注意事项
 
-- 内存版 `UpdateUserState` 出于安全设计禁止写 `temp:*`；需要临时值时，通过 `invocation.Session.SetState` 写入（例如通过回调）。
+- 内存版 `UpdateUserState` 出于安全设计禁止写 `temp:*`；需要会话内
+  临时值时，通过 `invocation.Session.SetState` 写入（例如通过回调）。
 - 占位符是在“请求时”解析；只要你换了存储的值，下一次模型请求就会用新值，无需重建 Agent。
