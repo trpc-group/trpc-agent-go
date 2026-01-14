@@ -769,8 +769,10 @@ func (e *Executor) createCheckpointAndSave(
 		}
 	}
 
-	// Set channel versions in checkpoint for version semantics.
-	checkpoint.ChannelVersions = newVersions
+	// Persist all per-run channel versions for correct resume semantics.
+	// Version-based triggering relies on monotonic channel versions even when a
+	// channel is not currently "available" (it may have been acknowledged).
+	checkpoint.ChannelVersions = e.collectChannelVersions(execCtx)
 
 	// Set next nodes and channels for recovery.
 	if source == CheckpointSourceInput && step == -1 {
@@ -1658,7 +1660,9 @@ func (e *Executor) evaluateRetryDecision(
 	if IsInterruptError(retryCtx.err) {
 		if interrupt, ok := GetInterruptError(retryCtx.err); ok {
 			interrupt.NodeID = t.NodeID
-			interrupt.TaskID = t.NodeID
+			if interrupt.TaskID == "" {
+				interrupt.TaskID = t.NodeID
+			}
 			interrupt.Step = step
 		}
 		return false, retryCtx.err
@@ -2292,6 +2296,7 @@ func (e *Executor) syncResumeState(execCtx *ExecutionContext, source State) {
 	syncResumeKey(execCtx.State, source, ResumeChannel)
 	syncResumeKey(execCtx.State, source, StateKeyResumeMap)
 	syncResumeKey(execCtx.State, source, StateKeyUsedInterrupts)
+	syncResumeKey(execCtx.State, source, StateKeySubgraphInterrupt)
 }
 
 // syncResumeKey applies a specific resume key mutation from the node state.
@@ -2767,11 +2772,15 @@ func (e *Executor) handleInterrupt(
 	}
 
 	// Emit interrupt event.
+	interruptKey := interrupt.Key
+	if interruptKey == "" {
+		interruptKey = interrupt.TaskID
+	}
 	interruptEvent := NewPregelInterruptEvent(
 		WithPregelEventInvocationID(execCtx.InvocationID),
 		WithPregelEventStepNumber(step),
 		WithPregelEventNodeID(interrupt.NodeID),
-		WithPregelEventInterruptKey(interrupt.Key),
+		WithPregelEventInterruptKey(interruptKey),
 		WithPregelEventInterruptValue(interrupt.Value),
 		WithPregelEventLineageID(GetLineageID(checkpointConfig)),
 		WithPregelEventCheckpointID(GetCheckpointID(checkpointConfig)),
@@ -2804,15 +2813,7 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 		}
 	}
 
-	// Create channel versions from current channel states (per execution).
-	channelVersions := make(map[string]int64)
-	if execCtx != nil && execCtx.channels != nil {
-		for channelName, ch := range execCtx.channels.GetAllChannels() {
-			if ch.IsAvailable() {
-				channelVersions[channelName] = ch.Version
-			}
-		}
-	}
+	channelVersions := e.collectChannelVersions(execCtx)
 
 	// Create versions seen from execution context.
 	versionsSeen := make(map[string]map[string]int64)
@@ -2840,6 +2841,24 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 		checkpoint.UpdatedChannels = e.getUpdatedChannels(execCtx)
 	}
 	return checkpoint
+}
+
+func (e *Executor) collectChannelVersions(
+	execCtx *ExecutionContext,
+) map[string]int64 {
+	channelVersions := make(map[string]int64)
+	if execCtx == nil || execCtx.channels == nil {
+		return channelVersions
+	}
+
+	for name, ch := range execCtx.channels.GetAllChannels() {
+		if ch == nil {
+			continue
+		}
+		channelVersions[name] = ch.Version
+	}
+
+	return channelVersions
 }
 
 // getNextNodes determines which nodes should be executed next based on the current state.
