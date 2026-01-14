@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"sort"
 	"sync"
@@ -59,7 +60,12 @@ import (
 //
 // The compiled Graph can then be executed with NewExecutor(graph).
 type StateGraph struct {
-	graph *Graph
+	graph       *Graph
+	buildErrors *stateGraphBuildErrors
+}
+
+type stateGraphBuildErrors struct {
+	errs []error
 }
 
 // NewStateGraph creates a new graph builder with the given state schema.
@@ -67,6 +73,23 @@ func NewStateGraph(schema *StateSchema) *StateGraph {
 	return &StateGraph{
 		graph: New(schema),
 	}
+}
+
+func (sg *StateGraph) addBuildError(err error) {
+	if err == nil {
+		return
+	}
+	if sg.buildErrors == nil {
+		sg.buildErrors = &stateGraphBuildErrors{}
+	}
+	sg.buildErrors.errs = append(sg.buildErrors.errs, err)
+}
+
+func (sg *StateGraph) buildErr() error {
+	if sg.buildErrors == nil {
+		return nil
+	}
+	return errors.Join(sg.buildErrors.errs...)
 }
 
 // Option is a function that configures a Node.
@@ -414,7 +437,10 @@ func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *Sta
 		return response, nil
 	}
 
-	sg.graph.addNode(node)
+	if err := sg.graph.addNode(node); err != nil {
+		sg.addBuildError(fmt.Errorf("AddNode(%q): %w", id, err))
+		return sg
+	}
 
 	// Automatically set up Pregel-style configuration
 	// Create a trigger channel for this node
@@ -502,7 +528,10 @@ func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 		From: from,
 		To:   to,
 	}
-	sg.graph.addEdge(edge)
+	if err := sg.graph.addEdge(edge); err != nil {
+		sg.addBuildError(fmt.Errorf("AddEdge(%q -> %q): %w", from, to, err))
+		return sg
+	}
 	// Automatically set up Pregel-style channel for the edge.
 	channelName := fmt.Sprintf("branch:to:%s", to)
 	sg.graph.addChannel(channelName, channel.BehaviorLastValue)
@@ -526,12 +555,32 @@ func (sg *StateGraph) AddJoinEdge(fromNodes []string, to string) *StateGraph {
 		return sg
 	}
 
+	sg.graph.mu.RLock()
+	if to != End {
+		if _, exists := sg.graph.nodes[to]; !exists {
+			sg.graph.mu.RUnlock()
+			sg.addBuildError(fmt.Errorf("AddJoinEdge(to=%q): target node %s does not exist", to, to))
+			return sg
+		}
+	}
+	for _, from := range starts {
+		if _, exists := sg.graph.nodes[from]; !exists {
+			sg.graph.mu.RUnlock()
+			sg.addBuildError(fmt.Errorf("AddJoinEdge(from=%q -> to=%q): source node %s does not exist", from, to, from))
+			return sg
+		}
+	}
+	sg.graph.mu.RUnlock()
+
 	for _, from := range starts {
 		edge := &Edge{
 			From: from,
 			To:   to,
 		}
-		sg.graph.addEdge(edge)
+		if err := sg.graph.addEdge(edge); err != nil {
+			sg.addBuildError(fmt.Errorf("AddJoinEdge(%q -> %q): %w", from, to, err))
+			return sg
+		}
 	}
 
 	channelName := joinChannelName(to, starts)
@@ -601,7 +650,10 @@ func (sg *StateGraph) AddConditionalEdges(
 		Condition: wrapperCondFunc(condFunc),
 		PathMap:   pathMap,
 	}
-	sg.graph.addConditionalEdge(condEdge)
+	if err := sg.graph.addConditionalEdge(condEdge); err != nil {
+		sg.addBuildError(fmt.Errorf("AddConditionalEdges(from=%q): %w", from, err))
+		return sg
+	}
 	return sg
 }
 
@@ -617,7 +669,10 @@ func (sg *StateGraph) AddMultiConditionalEdges(
 		Condition: wrapperCondFunc(condFunc),
 		PathMap:   pathMap,
 	}
-	sg.graph.addConditionalEdge(condEdge)
+	if err := sg.graph.addConditionalEdge(condEdge); err != nil {
+		sg.addBuildError(fmt.Errorf("AddMultiConditionalEdges(from=%q): %w", from, err))
+		return sg
+	}
 	return sg
 }
 
@@ -647,14 +702,23 @@ func (sg *StateGraph) AddToolsConditionalEdges(
 			fallbackNode: fallbackNode,
 		},
 	}
-	sg.graph.addConditionalEdge(condEdge)
+	if err := sg.graph.addConditionalEdge(condEdge); err != nil {
+		sg.addBuildError(fmt.Errorf(
+			"AddToolsConditionalEdges(from=%q, tools=%q, fallback=%q): %w",
+			fromLLMNode, toToolsNode, fallbackNode, err,
+		))
+		return sg
+	}
 	return sg
 }
 
 // SetEntryPoint sets the entry point of the graph.
 // This is equivalent to addEdge(Start, nodeId).
 func (sg *StateGraph) SetEntryPoint(nodeID string) *StateGraph {
-	sg.graph.setEntryPoint(nodeID)
+	if err := sg.graph.setEntryPoint(nodeID); err != nil {
+		sg.addBuildError(fmt.Errorf("SetEntryPoint(%q): %w", nodeID, err))
+		return sg
+	}
 	// Also add an edge from Start to make it explicit
 	sg.AddEdge(Start, nodeID)
 	return sg
@@ -669,6 +733,9 @@ func (sg *StateGraph) SetFinishPoint(nodeID string) *StateGraph {
 
 // Compile compiles the graph and returns it for execution.
 func (sg *StateGraph) Compile() (*Graph, error) {
+	if err := sg.buildErr(); err != nil {
+		return nil, fmt.Errorf("graph build failed: %w", err)
+	}
 	if err := sg.graph.validate(); err != nil {
 		return nil, fmt.Errorf("invalid graph: %w", err)
 	}
@@ -856,8 +923,25 @@ type llmRunner struct {
 
 // execute implements the three-stage rule for LLM execution.
 func (r *llmRunner) execute(ctx context.Context, state State, span oteltrace.Span) (any, error) {
+	if msgs, ok := GetOneShotMessagesForNode(state, r.nodeID); ok {
+		return r.executeOneShotStage(
+			ctx,
+			state,
+			msgs,
+			span,
+			ClearOneShotMessagesForNode(r.nodeID),
+		)
+	}
 	if v, ok := state[StateKeyOneShotMessages].([]model.Message); ok && len(v) > 0 {
-		return r.executeOneShotStage(ctx, state, v, span)
+		return r.executeOneShotStage(
+			ctx,
+			state,
+			v,
+			span,
+			State{
+				StateKeyOneShotMessages: []model.Message(nil),
+			},
+		)
 	}
 	if userInput, exists := state[StateKeyUserInput]; exists {
 		if input, ok := userInput.(string); ok && input != "" {
@@ -872,6 +956,7 @@ func (r *llmRunner) executeOneShotStage(
 	state State,
 	oneShotMsgs []model.Message,
 	span oteltrace.Span,
+	clearUpdate State,
 ) (any, error) {
 	instr := r.processInstruction(state)
 	used := ensureSystemHead(oneShotMsgs, instr)
@@ -887,15 +972,16 @@ func (r *llmRunner) executeOneShotStage(
 	if asst != nil {
 		ops = append(ops, AppendMessages{Items: []model.Message{*asst}})
 	}
-	return State{
-		StateKeyMessages:        ops,
-		StateKeyOneShotMessages: []model.Message(nil), // Clear one-shot messages after execution.
-		StateKeyLastResponse:    asst.Content,
-		StateKeyLastResponseID:  extractResponseID(result),
+	out := State{
+		StateKeyMessages:       ops,
+		StateKeyLastResponse:   asst.Content,
+		StateKeyLastResponseID: extractResponseID(result),
 		StateKeyNodeResponses: map[string]any{
 			r.nodeID: asst.Content,
 		},
-	}, nil
+	}
+	maps.Copy(out, clearUpdate)
+	return out, nil
 }
 
 func (r *llmRunner) executeUserInputStage(
@@ -984,6 +1070,10 @@ func (r *llmRunner) executeModel(
 		Messages:         messages,
 		Tools:            tools,
 		GenerationConfig: r.generationConfig,
+	}
+	if inv, ok := agent.InvocationFromContext(ctx); ok &&
+		inv != nil && inv.RunOptions.Stream != nil {
+		request.GenerationConfig.Stream = *inv.RunOptions.Stream
 	}
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
@@ -1602,11 +1692,12 @@ func extractPregelInterrupt(e *event.Event) (*InterruptError, bool) {
 	}
 	intr := NewInterruptError(meta.InterruptValue)
 	intr.NodeID = meta.NodeID
-	taskID := meta.TaskID
-	if taskID == "" {
-		taskID = meta.NodeID
+	interruptKey := meta.InterruptKey
+	if interruptKey == "" {
+		interruptKey = meta.NodeID
 	}
-	intr.TaskID = taskID
+	intr.Key = interruptKey
+	intr.TaskID = interruptKey
 	return intr, true
 }
 
@@ -1679,11 +1770,21 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	scope := dummyNode.agentEventScope
 	inputFromLast := dummyNode.agentInputFromLastResponse
 	return func(ctx context.Context, state State) (a any, err error) {
-		ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, agentName))
+		ctx, span := trace.Tracer.Start(
+			ctx,
+			fmt.Sprintf(
+				"%s %s",
+				itelemetry.OperationInvokeAgent,
+				agentName,
+			),
+		)
 		defer func() {
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+				span.SetAttributes(attribute.String(
+					itelemetry.KeyErrorType,
+					itelemetry.ValueDefaultErrorType,
+				))
 			}
 			span.End()
 		}()
@@ -1692,12 +1793,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		invocationID, _, _, _, eventChan := extractExecutionContext(state)
 
 		// Extract current node ID from state.
-		var nodeID string
-		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
-			if id, ok := nodeIDData.(string); ok {
-				nodeID = id
-			}
-		}
+		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
 
 		// Extract parent agent from state to find the sub-agent.
 		parentAgent, parentExists := state[StateKeyParentAgent]
@@ -1713,12 +1809,10 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 
 		// Build child runtime state via optional mapper; default to a filtered shallow copy
 		// of the parent state to avoid leaking internal/ephemeral keys (exec context, callbacks, etc.).
-		var childState State
+		childState := State{}
 		if inputMapper != nil {
 			if s := inputMapper(state); s != nil {
 				childState = s
-			} else {
-				childState = State{}
 			}
 		} else {
 			childState = copyRuntimeStateFiltered(state)
@@ -1736,9 +1830,6 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		}
 		if isolated {
 			// Instruct child GraphAgent to not include session contents in its request.
-			if childState == nil {
-				childState = State{}
-			}
 			childState[CfgKeyIncludeContents] = "none"
 		}
 
@@ -1775,25 +1866,40 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		// Optionally map parent's last_response to user_input for this agent node.
 		parentForInput := state
 		if inputFromLast {
-			if lr, ok := state[StateKeyLastResponse]; ok {
-				if v, ok2 := lr.(string); ok2 && v != "" {
-					// Clone a shallow copy to avoid mutating the original state view.
-					cloned := state.Clone()
-					cloned[StateKeyUserInput] = v
-					parentForInput = cloned
-				}
+			lastResponse, ok := GetStateValue[string](
+				state,
+				StateKeyLastResponse,
+			)
+			if ok && lastResponse != "" {
+				// Clone a shallow copy to avoid mutating the original state view.
+				cloned := state.Clone()
+				cloned[StateKeyUserInput] = lastResponse
+				parentForInput = cloned
 			}
 		}
 
 		// Build invocation for the target agent with custom runtime state and scope.
 		invocation := buildAgentInvocationWithStateAndScope(ctx, parentForInput, childState, targetAgent, scope)
 
-		itelemetry.TraceBeforeInvokeAgent(span, invocation, targetAgent.Info().Description, "", dummyNode.llmGenerationConfig)
+		itelemetry.TraceBeforeInvokeAgent(
+			span,
+			invocation,
+			targetAgent.Info().Description,
+			"",
+			dummyNode.llmGenerationConfig,
+		)
 		var stream bool
-		if dummyNode.llmGenerationConfig != nil {
+		if invocation.RunOptions.Stream != nil {
+			stream = *invocation.RunOptions.Stream
+		} else if dummyNode.llmGenerationConfig != nil {
 			stream = dummyNode.llmGenerationConfig.Stream
 		}
-		tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &err)
+		tracker := itelemetry.NewInvokeAgentTracker(
+			ctx,
+			invocation,
+			stream,
+			&err,
+		)
 		defer tracker.RecordMetrics()()
 
 		// Emit agent execution start event.

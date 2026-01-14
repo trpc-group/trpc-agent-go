@@ -188,8 +188,8 @@ func mockDocumentRow(id, name, content string, vector []float64, metadata map[st
 	metadataJSON := mapToJSON(metadata)
 
 	return sqlmock.NewRows([]string{
-		"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score",
-	}).AddRow(id, name, content, vectorJSON, metadataJSON, 1000000, 2000000, 0.0)
+		"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score",
+	}).AddRow(id, name, content, vectorJSON, metadataJSON, 1000000, 2000000, 0.0, 0.0, 0.0)
 }
 
 // mockSearchResultRow creates a mock row for search results
@@ -204,10 +204,12 @@ func mockSearchResultRow(id, name, content string, vector []float64, metadata ma
 	vectorJSON += "]"
 
 	metadataJSON := mapToJSON(metadata)
+	vectorScore := score
+	textScore := 0.0
 
 	return sqlmock.NewRows([]string{
-		"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score",
-	}).AddRow(id, name, content, vectorJSON, metadataJSON, 1000000, 2000000, score)
+		"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score",
+	}).AddRow(id, name, content, vectorJSON, metadataJSON, 1000000, 2000000, vectorScore, textScore, score)
 }
 
 // mockCountRow creates a mock row for count query

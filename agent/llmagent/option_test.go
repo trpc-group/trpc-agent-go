@@ -166,6 +166,44 @@ func TestWithMaxLimits_OnOptions(t *testing.T) {
 	}
 }
 
+func TestWithPreloadMemory(t *testing.T) {
+	tests := []struct {
+		name          string
+		limit         int
+		expectedLimit int
+	}{
+		{
+			name:          "disable preloading",
+			limit:         0,
+			expectedLimit: 0,
+		},
+		{
+			name:          "load all memories",
+			limit:         -1,
+			expectedLimit: -1,
+		},
+		{
+			name:          "load specific number",
+			limit:         5,
+			expectedLimit: 5,
+		},
+		{
+			name:          "load large number",
+			limit:         100,
+			expectedLimit: 100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &Options{}
+			opt := WithPreloadMemory(tt.limit)
+			opt(opts)
+			require.Equal(t, tt.expectedLimit, opts.PreloadMemory)
+		})
+	}
+}
+
 func TestWithSkillRunAllowedCommands_CopiesSlice(t *testing.T) {
 	in := []string{"echo", "ls"}
 	opts := &Options{}

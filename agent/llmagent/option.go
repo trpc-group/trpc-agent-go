@@ -27,6 +27,7 @@ import (
 
 const (
 	defaultChannelBufferSize = 256
+
 	// defaultModelName is the model name used when only WithModel is set
 	// without WithModels.
 	defaultModelName = "__default__"
@@ -87,6 +88,15 @@ var (
 		// that downstream agents see a consolidated user message stream unless
 		// explicitly opted into preserving assistant/tool roles.
 		PreserveSameBranch: false,
+		// Default to disable memory preloading (use tools instead).
+		// PreloadMemory configuration values:
+		//   - 0 (default): Disable preloading (use tools instead).
+		//   - N > 0: Load the most recent N memories.
+		//   - -1: Load all memories.
+		//     WARNING: Loading all memories may significantly increase token usage
+		//     and API costs, especially for users with many stored memories.
+		//     Consider using a positive limit (e.g., 10-50) for production use.
+		PreloadMemory: 0,
 	}
 )
 
@@ -228,6 +238,8 @@ type Options struct {
 
 	// skillsRepository enables agent skills when non-nil.
 	skillsRepository skill.Repository
+	// skillsToolingGuidance overrides the built-in skills guidance block.
+	skillsToolingGuidance *string
 	// skillRunAllowedCommands restricts skill_run to allowlisted commands.
 	skillRunAllowedCommands []string
 	// skillRunDeniedCommands rejects denylisted commands for skill_run.
@@ -241,6 +253,12 @@ type Options struct {
 	ReasoningContentMode string
 
 	toolFilter tool.FilterFunc
+
+	// PreloadMemory sets the number of memories to preload into system prompt.
+	// When > 0, the specified number of most recent memories are loaded.
+	// When 0 (default), no memories are preloaded (use tools instead).
+	// When < 0, all memories are loaded.
+	PreloadMemory int
 }
 
 // WithModel sets the model to use.
@@ -374,6 +392,22 @@ func WithRefreshToolSetsOnRun(refresh bool) Option {
 func WithSkills(repo skill.Repository) Option {
 	return func(opts *Options) {
 		opts.skillsRepository = repo
+	}
+}
+
+// WithSkillsToolingGuidance overrides the tooling/workspace guidance
+// block appended to the skills overview in the system message.
+//
+// Behavior:
+//   - Not configured: use the built-in default guidance.
+//   - Configured with empty string: omit the guidance block.
+//   - Configured with non-empty string: append the provided text.
+func WithSkillsToolingGuidance(
+	guidance string,
+) Option {
+	return func(opts *Options) {
+		text := guidance
+		opts.skillsToolingGuidance = &text
 	}
 }
 
@@ -711,6 +745,19 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 		default:
 			panic("invalid option value")
 		}
+	}
+}
+
+// WithPreloadMemory sets the number of memories to preload into system prompt.
+//   - Set to 0 (default) to disable preloading (use tools instead).
+//   - Set to N (N > 0) to load the most recent N memories.
+//   - Set to -1 to load all memories.
+//     WARNING: Loading all memories may significantly increase token usage
+//     and API costs, especially for users with many stored memories.
+//     Consider using a positive limit (e.g., 10-50) for production use.
+func WithPreloadMemory(limit int) Option {
+	return func(opts *Options) {
+		opts.PreloadMemory = limit
 	}
 }
 

@@ -12,17 +12,16 @@ package postgres
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -41,14 +40,23 @@ type Service struct {
 	db        storage.Client
 	tableName string
 
-	cachedTools map[string]tool.Tool
+	cachedTools      map[string]tool.Tool
+	precomputedTools []tool.Tool
+	autoMemoryWorker *imemory.AutoMemoryWorker
 }
 
 // NewService creates a new postgres memory service.
 func NewService(options ...ServiceOpt) (*Service, error) {
 	opts := defaultOptions.clone()
+	// Apply user options.
 	for _, option := range options {
 		option(&opts)
+	}
+
+	// Apply auto mode defaults after all options are applied.
+	// User settings via WithToolEnabled take precedence regardless of option order.
+	if opts.extractor != nil {
+		imemory.ApplyAutoModeDefaults(opts.enabledTools, opts.userExplicitlySet)
 	}
 
 	builderOpts := []storage.ClientBuilderOpt{
@@ -95,6 +103,26 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		}
 	}
 
+	// Pre-compute tools list to avoid lock contention in Tools() method.
+	s.precomputedTools = imemory.BuildToolsList(
+		opts.extractor,
+		opts.toolCreators,
+		opts.enabledTools,
+		s.cachedTools,
+	)
+
+	// Initialize auto memory worker if extractor is configured.
+	if opts.extractor != nil {
+		config := imemory.AutoMemoryConfig{
+			Extractor:        opts.extractor,
+			AsyncMemoryNum:   opts.asyncMemoryNum,
+			MemoryQueueSize:  opts.memoryQueueSize,
+			MemoryJobTimeout: opts.memoryJobTimeout,
+		}
+		s.autoMemoryWorker = imemory.NewAutoMemoryWorker(config, s)
+		s.autoMemoryWorker.Start()
+	}
+
 	return s, nil
 }
 
@@ -132,7 +160,7 @@ func buildConnString(opts ServiceOpts) string {
 	return connString
 }
 
-// AddMemory adds a new memory for a user.
+// AddMemory adds or updates a memory for a user (idempotent).
 func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
@@ -167,7 +195,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		LastUpdated: &now,
 	}
 	entry := &memory.Entry{
-		ID:        generateMemoryID(mem),
+		ID:        imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID),
 		AppName:   userKey.AppName,
 		Memory:    mem,
 		UserID:    userKey.UserID,
@@ -180,8 +208,11 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		return fmt.Errorf("marshal memory entry failed: %w", err)
 	}
 
+	// Note: memory_data contains the full JSON with topics, so updating memory_data
+	// will also update the topics field.
 	insertQuery := fmt.Sprintf(
-		"INSERT INTO %s (memory_id, app_name, user_id, memory_data, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)",
+		"INSERT INTO %s (memory_id, app_name, user_id, memory_data, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6) "+
+			"ON CONFLICT (memory_id) DO UPDATE SET memory_data = EXCLUDED.memory_data, updated_at = EXCLUDED.updated_at",
 		s.tableName,
 	)
 	_, err = s.db.ExecContext(ctx, insertQuery, entry.ID, userKey.AppName, userKey.UserID, memoryData, now, now)
@@ -406,44 +437,31 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 }
 
 // Tools returns the list of available memory tools.
+// In auto memory mode (extractor is set), only front-end tools are returned.
+// By default, only Search is enabled; Load can be enabled explicitly.
+// In agentic mode, all enabled tools are returned.
+// The tools list is pre-computed at service creation time.
 func (s *Service) Tools() []tool.Tool {
-	// Concurrency-safe and stable order by name.
-	// Protect tool creators/enabled flags and cache with a single lock at
-	// call-site by converting to a local snapshot first (no struct-level
-	// mutex exists). We assume opts are immutable after construction.
-	names := make([]string, 0, len(s.opts.toolCreators))
-	for name := range s.opts.toolCreators {
-		if s.opts.enabledTools[name] {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-
-	tools := make([]tool.Tool, 0, len(names))
-	for _, name := range names {
-		if _, ok := s.cachedTools[name]; !ok {
-			s.cachedTools[name] = s.opts.toolCreators[name]()
-		}
-		tools = append(tools, s.cachedTools[name])
-	}
-	return tools
+	return s.precomputedTools
 }
 
-// Close closes the database connection.
+// EnqueueAutoMemoryJob enqueues an auto memory extraction job for async
+// processing. The session contains the full transcript and state for
+// incremental extraction.
+func (s *Service) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error {
+	if s.autoMemoryWorker == nil {
+		return nil
+	}
+	return s.autoMemoryWorker.EnqueueJob(ctx, sess)
+}
+
+// Close closes the database connection and stops async workers.
 func (s *Service) Close() error {
+	if s.autoMemoryWorker != nil {
+		s.autoMemoryWorker.Stop()
+	}
 	if s.db != nil {
 		return s.db.Close()
 	}
 	return nil
-}
-
-// generateMemoryID generates a memory ID from memory content.
-// Uses SHA256 to match the in-memory implementation for consistency.
-func generateMemoryID(mem *memory.Memory) string {
-	content := fmt.Sprintf("memory:%s", mem.Memory)
-	if len(mem.Topics) > 0 {
-		content += fmt.Sprintf("|topics:%s", strings.Join(mem.Topics, ","))
-	}
-	hash := sha256.Sum256([]byte(content))
-	return fmt.Sprintf("%x", hash)
 }

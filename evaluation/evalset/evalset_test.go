@@ -26,6 +26,20 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
   "evalCases": [
     {
       "evalId": "case-42",
+      "contextMessages": [
+        {
+          "role": "system",
+          "content": "You are a helpful assistant."
+        },
+        {
+          "role": "user",
+          "content": "Previous user message."
+        },
+        {
+          "role": "assistant",
+          "content": "Previous assistant message."
+        }
+      ],
       "conversation": [
         {
           "invocationId": "invoke-1",
@@ -88,6 +102,13 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
 
 	firstCase := evalSet.EvalCases[0]
 	assert.Equal(t, "case-42", firstCase.EvalID)
+	assert.Len(t, firstCase.ContextMessages, 3)
+	assert.Equal(t, model.RoleSystem, firstCase.ContextMessages[0].Role)
+	assert.Equal(t, "You are a helpful assistant.", firstCase.ContextMessages[0].Content)
+	assert.Equal(t, model.RoleUser, firstCase.ContextMessages[1].Role)
+	assert.Equal(t, "Previous user message.", firstCase.ContextMessages[1].Content)
+	assert.Equal(t, model.RoleAssistant, firstCase.ContextMessages[2].Role)
+	assert.Equal(t, "Previous assistant message.", firstCase.ContextMessages[2].Content)
 	assert.NotNil(t, firstCase.SessionInput)
 	assert.Equal(t, "demo-app", firstCase.SessionInput.AppName)
 	assert.Equal(t, "user-42", firstCase.SessionInput.UserID)

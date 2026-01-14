@@ -47,6 +47,7 @@ agentEvaluator, err := evaluation.New(
 if err != nil {
 	log.Fatalf("create evaluator: %v", err)
 }
+defer agentEvaluator.Close()
 // 执行评估
 result, err := agentEvaluator.Evaluate(context.Background(), evalSetID)
 if err != nil {
@@ -311,6 +312,7 @@ agentEvaluator, err := evaluation.New(
 if err != nil {
 	log.Fatalf("create evaluator: %v", err)
 }
+defer agentEvaluator.Close()
 // 执行评估
 result, err := agentEvaluator.Evaluate(ctx, evalSetID)
 if err != nil {
@@ -429,7 +431,7 @@ metricManager.Add(ctx, appName, evalSetID, evalMetric)
 
 EvalSet 是一组 EvalCase 的集合，通过唯一的 EvalSetID 进行标识，作为评估流程中的会话数据。
 
-而 EvalCase 表示同一 Session 下的一组评估用例，包含唯一标识符 EvalID、对话内容以及 Session 初始化信息。
+而 EvalCase 表示同一 Session 下的一组评估用例，包含唯一标识符 EvalID、对话内容、可选的 `contextMessages` 以及 Session 初始化信息。
 
 对话数据包括三类内容：
 
@@ -456,6 +458,7 @@ type EvalSet struct {
 // EvalCase 表示单个评估用例
 type EvalCase struct {
 	EvalID            string               // 用例唯一标识
+	ContextMessages   []*model.Message     // 用于在每次推理时注入上下文消息。
 	Conversation      []*Invocation        // 对话序列
 	SessionInput      *SessionInput        // Session 初始化数据
 	CreationTimestamp *epochtime.EpochTime // 创建时间
@@ -862,10 +865,12 @@ type EvaluateConfig struct {
 `AgentEvaluator` 用于根据配置的评估集 EvalSetID 对 Agent 进行评估。
 
 ```go
-// AgentEvaluator 根据评估集评估 Agent
+// AgentEvaluator evaluates an agent based on an evaluation set.
 type AgentEvaluator interface {
-	// Evaluate 对指定的评估集执行评估
+	// Evaluate evaluates the specified evaluation set.
 	Evaluate(ctx context.Context, evalSetID string) (*EvaluationResult, error)
+	// Close closes the evaluator and releases owned resources.
+	Close() error
 }
 ```
 
@@ -905,6 +910,10 @@ type EvaluationCaseResult struct {
 
 ```go
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithNumRuns(numRuns))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 由于 Agent 的运行过程可能存不确定性，`evaluation.WithNumRuns` 提供了多次评估运行的机制，用于降低单次运行带来的偶然性。
@@ -912,6 +921,21 @@ agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithNumRuns(nu
 - 默认运行次数为 1 次；
 - 通过指定 `evaluation.WithNumRuns(n)`，可对每个评估用例运行多次；
 - 最终结果将基于多次运行的综合统计结果得出，默认统计方法是多次运行评估得分的平均值。
+
+对于较大的评估集，为了加速 inference 阶段，可以开启 EvalCase 级别的并发推理：
+
+- `evaluation.WithEvalCaseParallelInferenceEnabled(true)`：开启 eval case 并发推理，默认关闭。
+- `evaluation.WithEvalCaseParallelism(n)`：设置最大并发数，默认值为 `runtime.GOMAXPROCS(0)`。
+
+```go
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalCaseParallelInferenceEnabled(true),
+	evaluation.WithEvalCaseParallelism(runtime.GOMAXPROCS(0)),
+)
+defer agentEvaluator.Close()
+```
 
 ## 使用指南
 
@@ -938,6 +962,10 @@ import (
 
 evalSetManager := evalsetlocal.New(evalset.WithBaseDir("<BaseDir>"))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalSetManager(evalSetManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 此外，若默认路径结构不满足需求，可通过实现 `Locator` 接口自定义文件路径规则，接口定义如下：
@@ -963,6 +991,10 @@ import (
 
 evalSetManager := evalsetlocal.New(evalset.WithLocator(&customLocator{}))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalSetManager(evalSetManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 
 type customLocator struct {
 }
@@ -1012,6 +1044,10 @@ import (
 
 metricManager := metriclocal.New(metric.WithBaseDir("<BaseDir>"))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithMetricManager(metricManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 此外，若默认路径结构不满足需求，可通过实现 `Locator` 接口自定义文件路径规则，接口定义如下：
@@ -1035,6 +1071,10 @@ import (
 
 metricManager := metriclocal.New(metric.WithLocator(&customLocator{}))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithMetricManager(metricManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 
 type customLocator struct {
 }
@@ -1060,6 +1100,10 @@ import (
 
 evalResultManager := evalresultlocal.New(evalresult.WithBaseDir("<BaseDir>"))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalResultManager(evalResultManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 此外，若默认路径结构不满足需求，可通过实现 `Locator` 接口自定义文件路径规则，接口定义如下：
@@ -1085,6 +1129,10 @@ import (
 
 evalResultManager := evalresultlocal.New(evalresult.WithLocator(&customLocator{}))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalResultManager(evalResultManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 
 type customLocator struct {
 }
@@ -1829,3 +1877,44 @@ evalMetric := &metric.EvalMetric{
 ```
 
 该评估器要求 Agent 的工具调用返回检索结果，完整示例参见 [examples/evaluation/llm/knowledgerecall](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/knowledgerecall)。
+
+## 最佳实践
+
+### 上下文注入
+
+`contextMessages` 用于为 EvalCase 提供一组额外上下文消息，常用于补充背景信息、角色设定或样本示例。它也适用于纯模型评估场景，将 system prompt 作为评估数据按用例配置，便于对比不同模型与提示词组合的能力。
+
+上下文注入示例：
+
+```json
+{
+  "evalSetId": "contextmessage-basic",
+  "name": "contextmessage-basic",
+  "evalCases": [
+    {
+      "evalId": "identity_name",
+      "contextMessages": [
+        {
+          "role": "system",
+          "content": "You are trpc-agent-go bot."
+        }
+      ],
+      "conversation": [
+        {
+          "invocationId": "identity_name-1",
+          "userContent": {
+            "role": "user",
+            "content": "Who are you?"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "contextmessage-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}
+```
+
+完整示例参见 [examples/evaluation/contextmessage](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/contextmessage)。

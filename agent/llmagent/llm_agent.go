@@ -236,28 +236,28 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		requestProcessors = append(requestProcessors, identityProcessor)
 	}
 
-	// 5. Time processor - adds current time information if enabled.
-	if options.AddCurrentTime {
-		timeProcessor := processor.NewTimeRequestProcessor(
-			processor.WithAddCurrentTime(true),
-			processor.WithTimezone(options.Timezone),
-			processor.WithTimeFormat(options.TimeFormat),
-		)
-		requestProcessors = append(requestProcessors, timeProcessor)
-	}
-
-	// 6. Skills processor - injects skill overview and loaded contents
+	// 5. Skills processor - injects skill overview and loaded contents
 	// when a skills repository is configured. This ensures the model
 	// sees available skills (names/descriptions) and any loaded
 	// SKILL.md/doc texts before deciding on tool calls.
 	if options.skillsRepository != nil {
+		var skillsOpts []processor.SkillsRequestProcessorOption
+		if options.skillsToolingGuidance != nil {
+			skillsOpts = append(
+				skillsOpts,
+				processor.WithSkillsToolingGuidance(
+					*options.skillsToolingGuidance,
+				),
+			)
+		}
 		skillsProcessor := processor.NewSkillsRequestProcessor(
 			options.skillsRepository,
+			skillsOpts...,
 		)
 		requestProcessors = append(requestProcessors, skillsProcessor)
 	}
 
-	// 7. Content processor - appends conversation/context history.
+	// 6. Content processor - appends conversation/context history.
 	contentOpts := []processor.ContentOption{
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
@@ -265,6 +265,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithPreserveSameBranch(options.PreserveSameBranch),
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
 		processor.WithBranchFilterMode(options.messageBranchFilterMode),
+		processor.WithPreloadMemory(options.PreloadMemory),
 	}
 	if options.ReasoningContentMode != "" {
 		contentOpts = append(contentOpts,
@@ -276,6 +277,19 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	}
 	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
+
+	// 7. Time processor - adds current time information if enabled.
+	// Moved after content processor to avoid invalidating system message cache.
+	// Time information changes frequently, so placing it last allows previous
+	// stable content (instructions, identity, skills, history) to be cached.
+	if options.AddCurrentTime {
+		timeProcessor := processor.NewTimeRequestProcessor(
+			processor.WithAddCurrentTime(true),
+			processor.WithTimezone(options.Timezone),
+			processor.WithTimeFormat(options.TimeFormat),
+		)
+		requestProcessors = append(requestProcessors, timeProcessor)
+	}
 
 	return requestProcessors
 }
@@ -441,7 +455,19 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
 
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
+	ctx, span := trace.Tracer.Start(
+		ctx,
+		fmt.Sprintf(
+			"%s %s",
+			itelemetry.OperationInvokeAgent,
+			a.name,
+		),
+	)
+	effectiveGenConfig := a.genConfig
+	if invocation.RunOptions.Stream != nil {
+		effectiveGenConfig.Stream = *invocation.RunOptions.Stream
+	}
+
 	promptText := a.systemPromptForInvocation(invocation) +
 		a.instructionForInvocation(invocation)
 	itelemetry.TraceBeforeInvokeAgent(
@@ -449,9 +475,14 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 		invocation,
 		a.description,
 		promptText,
-		&a.genConfig,
+		&effectiveGenConfig,
 	)
-	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, a.genConfig.Stream, &err)
+	tracker := itelemetry.NewInvokeAgentTracker(
+		ctx,
+		invocation,
+		effectiveGenConfig.Stream,
+		&err,
+	)
 
 	ctx, flowEventChan, err := a.executeAgentFlow(ctx, invocation)
 	if err != nil {

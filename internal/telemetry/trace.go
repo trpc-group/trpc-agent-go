@@ -190,8 +190,6 @@ var (
 	KeyGenAIToolCallArguments = semconvtrace.KeyGenAIToolCallArguments
 	KeyGenAIToolCallResult    = semconvtrace.KeyGenAIToolCallResult
 
-	KeyGenAIRequestEncodingFormats = semconvtrace.KeyGenAIRequestEncodingFormats
-
 	KeyErrorType          = semconvtrace.KeyErrorType
 	KeyErrorMessage       = semconvtrace.KeyErrorMessage
 	ValueDefaultErrorType = semconvtrace.ValueDefaultErrorType
@@ -559,22 +557,6 @@ func buildResponseAttributes(rsp *model.Response) []attribute.KeyValue {
 	}
 
 	return attrs
-}
-
-// TraceEmbedding traces the invocation of an embedding call.
-func TraceEmbedding(span trace.Span, requestEncodingFormat, requestModel string, inputToken *int64, err error) {
-	span.SetAttributes(
-		attribute.String(KeyGenAIOperationName, OperationEmbeddings),
-		attribute.String(KeyGenAIRequestModel, requestModel),
-		attribute.StringSlice(KeyGenAIRequestEncodingFormats, []string{requestEncodingFormat}),
-	)
-	if err != nil {
-		span.SetAttributes(attribute.String(KeyErrorType, ValueDefaultErrorType), attribute.String(KeyErrorMessage, err.Error()))
-		span.SetStatus(codes.Error, err.Error())
-	}
-	if inputToken != nil {
-		span.SetAttributes(attribute.Int64(KeyGenAIUsageInputTokens, *inputToken))
-	}
 }
 
 // NewGRPCConn creates a new gRPC connection to the OpenTelemetry Collector.

@@ -50,7 +50,9 @@ func TestDefaultDocBuilder(t *testing.T) {
 						*(dest[4].(*string)) = `{"key":"value"}`
 						*(dest[5].(*int64)) = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
 						*(dest[6].(*int64)) = time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC).Unix()
-						*(dest[7].(*float64)) = 0.95
+						*(dest[7].(*float64)) = 0.85
+						*(dest[8].(*float64)) = 0.10
+						*(dest[9].(*float64)) = 0.95
 						return nil
 					},
 				}
@@ -64,6 +66,8 @@ func TestDefaultDocBuilder(t *testing.T) {
 				assert.Equal(t, "test-content", doc.Document.Content)
 				assert.Equal(t, 0.95, doc.Score)
 				assert.Equal(t, "value", doc.Document.Metadata["key"])
+				assert.Equal(t, 0.85, doc.Document.Metadata["trpc_agent_go_dense_score"])
+				assert.Equal(t, 0.10, doc.Document.Metadata["trpc_agent_go_sparse_score"])
 				// Use InDelta for float comparison due to float32->float64 precision loss
 				assert.Len(t, vector, 3)
 				assert.InDelta(t, 0.1, vector[0], 0.0001)
@@ -86,6 +90,8 @@ func TestDefaultDocBuilder(t *testing.T) {
 						*(dest[5].(*int64)) = 0
 						*(dest[6].(*int64)) = 0
 						*(dest[7].(*float64)) = 0.8
+						*(dest[8].(*float64)) = 0.0
+						*(dest[9].(*float64)) = 0.8
 						return nil
 					},
 				}
@@ -95,7 +101,8 @@ func TestDefaultDocBuilder(t *testing.T) {
 				assert.NotNil(t, doc)
 				assert.Equal(t, "doc-2", doc.Document.ID)
 				assert.Equal(t, 0.8, doc.Score)
-				assert.Empty(t, doc.Document.Metadata)
+				assert.Equal(t, 0.8, doc.Document.Metadata["trpc_agent_go_dense_score"])
+				assert.Equal(t, 0.0, doc.Document.Metadata["trpc_agent_go_sparse_score"])
 				assert.Len(t, vector, 1)
 				assert.InDelta(t, 0.5, vector[0], 0.0001)
 			},
@@ -124,6 +131,8 @@ func TestDefaultDocBuilder(t *testing.T) {
 						*(dest[5].(*int64)) = 0
 						*(dest[6].(*int64)) = 0
 						*(dest[7].(*float64)) = 0.5
+						*(dest[8].(*float64)) = 0.0
+						*(dest[9].(*float64)) = 0.5
 						return nil
 					},
 				}

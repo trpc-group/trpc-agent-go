@@ -1670,6 +1670,44 @@ func newRunner(respID string) *llmRunner {
 	}
 }
 
+type streamRecordingModel struct {
+	lastStream bool
+}
+
+type testSubAgentProvider struct {
+	sub agent.Agent
+}
+
+func (p *testSubAgentProvider) FindSubAgent(name string) agent.Agent {
+	if p.sub == nil {
+		return nil
+	}
+	if name == p.sub.Info().Name {
+		return p.sub
+	}
+	return nil
+}
+
+func (m *streamRecordingModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.lastStream = req.GenerationConfig.Stream
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("ok"),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *streamRecordingModel) Info() model.Info {
+	return model.Info{Name: "stream-recording"}
+}
+
 func TestLLMRunnerSetsLastResponseID(t *testing.T) {
 	ctx, span := trace.Tracer.Start(context.Background(), "test")
 	defer span.End()
@@ -1682,7 +1720,13 @@ func TestLLMRunnerSetsLastResponseID(t *testing.T) {
 		{
 			name: "one-shot",
 			run: func(r *llmRunner) (State, error) {
-				res, err := r.executeOneShotStage(ctx, State{}, []model.Message{model.NewUserMessage("hi")}, span)
+				res, err := r.executeOneShotStage(
+					ctx,
+					State{},
+					[]model.Message{model.NewUserMessage("hi")},
+					span,
+					nil,
+				)
 				require.NoError(t, err)
 				return res.(State), nil
 			},
@@ -1716,6 +1760,123 @@ func TestLLMRunnerSetsLastResponseID(t *testing.T) {
 			require.Equal(t, tt.expect, state[StateKeyLastResponseID])
 		})
 	}
+}
+
+func TestLLMRunner_OverridesStreamFromRunOptions(t *testing.T) {
+	ctx, span := trace.Tracer.Start(context.Background(), "test")
+	defer span.End()
+
+	rm := &streamRecordingModel{}
+	runner := &llmRunner{
+		llmModel:         rm,
+		generationConfig: model.GenerationConfig{Stream: true},
+	}
+
+	stream := false
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{Stream: &stream}),
+	)
+	ctx = agent.NewInvocationContext(ctx, inv)
+
+	_, err := runner.executeModel(
+		ctx,
+		State{},
+		[]model.Message{model.NewUserMessage("hi")},
+		span,
+		"",
+	)
+	require.NoError(t, err)
+	require.False(t, rm.lastStream)
+}
+
+func TestAgentNodeFunc_OverridesStreamFromRunOptions(t *testing.T) {
+	const (
+		testInvocationID = "inv-1"
+		testNodeID       = "node-1"
+		testAgentName    = "agent-1"
+	)
+	target := &dummyAgent{name: testAgentName}
+	provider := &testSubAgentProvider{sub: target}
+
+	stream := false
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationID(testInvocationID),
+		agent.WithInvocationRunOptions(agent.RunOptions{Stream: &stream}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parentInv)
+
+	eventCh := make(chan *event.Event, 8)
+	exec := &ExecutionContext{
+		InvocationID: testInvocationID,
+		EventChan:    eventCh,
+	}
+	state := State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: testNodeID,
+		StateKeyParentAgent:   provider,
+		StateKeyUserInput:     "hi",
+	}
+
+	nodeFn := NewAgentNodeFunc(testAgentName)
+	_, err := nodeFn(ctx, state)
+	require.NoError(t, err)
+}
+
+func TestLLMRunner_OneShotMessagesByNode_TakesPrecedence(t *testing.T) {
+	ctx, span := trace.Tracer.Start(context.Background(), "test")
+	defer span.End()
+
+	runner := newRunner("resp")
+	runner.nodeID = "llm1"
+
+	state := State{
+		StateKeyOneShotMessagesByNode: map[string][]model.Message{
+			"llm1": {model.NewUserMessage("by-node")},
+		},
+		StateKeyOneShotMessages: []model.Message{
+			model.NewUserMessage("global"),
+		},
+	}
+
+	res, err := runner.execute(ctx, state, span)
+	require.NoError(t, err)
+
+	out := res.(State)
+	_, hasGlobalClear := out[StateKeyOneShotMessages]
+	require.False(t, hasGlobalClear)
+
+	byNode, ok := out[StateKeyOneShotMessagesByNode].(map[string][]model.Message)
+	require.True(t, ok)
+	_, exists := byNode["llm1"]
+	require.True(t, exists)
+	require.Len(t, byNode["llm1"], 0)
+}
+
+func TestLLMRunner_OneShotMessagesByNode_FallsBackToGlobal(t *testing.T) {
+	ctx, span := trace.Tracer.Start(context.Background(), "test")
+	defer span.End()
+
+	runner := newRunner("resp")
+	runner.nodeID = "llm1"
+
+	state := State{
+		StateKeyOneShotMessagesByNode: map[string][]model.Message{
+			"llm2": {model.NewUserMessage("by-node-other")},
+		},
+		StateKeyOneShotMessages: []model.Message{
+			model.NewUserMessage("global"),
+		},
+	}
+
+	res, err := runner.execute(ctx, state, span)
+	require.NoError(t, err)
+
+	out := res.(State)
+	_, hasByNodeClear := out[StateKeyOneShotMessagesByNode]
+	require.False(t, hasByNodeClear)
+
+	_, hasGlobalClear := out[StateKeyOneShotMessages]
+	require.True(t, hasGlobalClear)
 }
 
 func TestExecuteSingleToolCallPropagatesResponseID(t *testing.T) {
@@ -2140,7 +2301,7 @@ func TestExtractPregelInterrupt(t *testing.T) {
 		invocationID = "inv"
 		author       = "a"
 		nodeID       = "n"
-		taskID       = "k"
+		interruptKey = "k"
 		interruptVal = "prompt"
 	)
 
@@ -2198,11 +2359,12 @@ func TestExtractPregelInterrupt(t *testing.T) {
 	require.NotNil(t, intr)
 	require.Equal(t, nodeID, intr.NodeID)
 	require.Equal(t, nodeID, intr.TaskID)
+	require.Equal(t, nodeID, intr.Key)
 	require.Equal(t, interruptVal, intr.Value)
 
 	meta = PregelStepMetadata{
 		NodeID:         nodeID,
-		TaskID:         taskID,
+		InterruptKey:   interruptKey,
 		InterruptValue: interruptVal,
 	}
 	b, err = json.Marshal(meta)
@@ -2219,7 +2381,8 @@ func TestExtractPregelInterrupt(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, intr)
 	require.Equal(t, nodeID, intr.NodeID)
-	require.Equal(t, taskID, intr.TaskID)
+	require.Equal(t, interruptKey, intr.TaskID)
+	require.Equal(t, interruptKey, intr.Key)
 	require.Equal(t, interruptVal, intr.Value)
 
 	meta = PregelStepMetadata{

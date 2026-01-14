@@ -10,7 +10,6 @@ package summary
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -179,9 +178,6 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	if err != nil {
 		return "", fmt.Errorf("failed to generate summary for session %s: %w", sess.ID, err)
 	}
-	if summaryText == "" {
-		return "", fmt.Errorf("failed to generate summary for session %s (input_chars=%d)", sess.ID, len(conversationText))
-	}
 
 	s.recordLastIncludedTimestamp(sess, eventsToSummarize)
 
@@ -313,10 +309,6 @@ func (s *sessionSummarizer) extractConversationText(events []event.Event) string
 
 // generateSummary generates a summary using the LLM model.
 func (s *sessionSummarizer) generateSummary(ctx context.Context, conversationText string) (string, error) {
-	if s.model == nil {
-		return "", errors.New("no model configured for summarization")
-	}
-
 	// Create summarization prompt.
 	prompt := strings.Replace(s.prompt, conversationTextPlaceholder, conversationText, 1)
 

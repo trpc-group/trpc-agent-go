@@ -15,10 +15,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
+	"github.com/panjf2000/ants/v2"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -27,8 +27,6 @@ import (
 	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/service/internal/inference"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -36,90 +34,48 @@ const reasonSeparator = ";"
 
 // local is a local implementation of service.Service.
 type local struct {
-	runner            runner.Runner
-	evalSetManager    evalset.Manager
-	evalResultManager evalresult.Manager
-	registry          registry.Registry
-	sessionIDSupplier func(ctx context.Context) string
+	runner                           runner.Runner
+	evalSetManager                   evalset.Manager
+	evalResultManager                evalresult.Manager
+	registry                         registry.Registry
+	sessionIDSupplier                func(ctx context.Context) string
+	evalCaseParallelism              int
+	evalCaseParallelInferenceEnabled bool
+	evalCaseInferencePool            *ants.PoolWithFunc
 }
 
 // New returns a new local evaluation service.
 // If no service.Option is provided, the service will use the default options.
 func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 	opts := service.NewOptions(opt...)
+	if opts.EvalCaseParallelInferenceEnabled && opts.EvalCaseParallelism <= 0 {
+		return nil, errors.New("eval case parallelism must be greater than 0")
+	}
 	service := &local{
-		runner:            runner,
-		evalSetManager:    opts.EvalSetManager,
-		evalResultManager: opts.EvalResultManager,
-		registry:          opts.Registry,
-		sessionIDSupplier: opts.SessionIDSupplier,
+		runner:                           runner,
+		evalSetManager:                   opts.EvalSetManager,
+		evalResultManager:                opts.EvalResultManager,
+		registry:                         opts.Registry,
+		sessionIDSupplier:                opts.SessionIDSupplier,
+		evalCaseParallelism:              opts.EvalCaseParallelism,
+		evalCaseParallelInferenceEnabled: opts.EvalCaseParallelInferenceEnabled,
+	}
+	if service.evalCaseParallelInferenceEnabled {
+		pool, err := createEvalCaseInferencePool(service.evalCaseParallelism)
+		if err != nil {
+			return nil, fmt.Errorf("create eval case inference pool: %w", err)
+		}
+		service.evalCaseInferencePool = pool
 	}
 	return service, nil
 }
 
-// Inference runs the agent for the requested eval cases and returns the inference results for each case.
-func (s *local) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
-	if req == nil {
-		return nil, errors.New("inference request is nil")
+// Close closes the eval service and releases owned resources.
+func (s *local) Close() error {
+	if s.evalCaseInferencePool != nil {
+		s.evalCaseInferencePool.Release()
 	}
-	if req.AppName == "" {
-		return nil, errors.New("app name is empty")
-	}
-	if req.EvalSetID == "" {
-		return nil, errors.New("eval set id is empty")
-	}
-	// Get the eval set.
-	evalSet, err := s.evalSetManager.Get(ctx, req.AppName, req.EvalSetID)
-	if err != nil {
-		return nil, fmt.Errorf("get eval set: %w", err)
-	}
-	// If eval case IDs are provided, filter the eval cases to only include the specified eval case IDs.
-	// Otherwise, use all eval cases in the eval set.
-	evalCases := evalSet.EvalCases
-	if len(req.EvalCaseIDs) > 0 {
-		filteredEvalCases := evalCases[:0]
-		for _, evalCase := range evalCases {
-			if slices.Contains(req.EvalCaseIDs, evalCase.EvalID) {
-				filteredEvalCases = append(filteredEvalCases, evalCase)
-			}
-		}
-		evalCases = filteredEvalCases
-	}
-	// Run the agent for the requested eval cases and return the inference results for each case.
-	inferenceResults := make([]*service.InferenceResult, 0, len(evalCases))
-	for _, evalCase := range evalCases {
-		inference, err := s.inferenceEvalCase(ctx, req.EvalSetID, evalCase)
-		if err != nil {
-			return nil, fmt.Errorf("run inference for eval case %s: %w", evalCase.EvalID, err)
-		}
-		inferenceResults = append(inferenceResults, inference)
-	}
-	return inferenceResults, nil
-}
-
-// inferenceEvalCase runs the agent for a single eval case and returns the inference result.
-func (s *local) inferenceEvalCase(ctx context.Context, evalSetID string,
-	evalCase *evalset.EvalCase) (*service.InferenceResult, error) {
-	sessionID := s.sessionIDSupplier(ctx)
-	inferenceResult := &service.InferenceResult{
-		AppName:    evalCase.SessionInput.AppName,
-		EvalSetID:  evalSetID,
-		EvalCaseID: evalCase.EvalID,
-		SessionID:  sessionID,
-	}
-	inferences, err := inference.Inference(
-		ctx,
-		s.runner,
-		evalCase.Conversation,
-		evalCase.SessionInput,
-		sessionID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("inference: %w", err)
-	}
-	inferenceResult.Status = status.EvalStatusPassed
-	inferenceResult.Inferences = inferences
-	return inferenceResult, nil
+	return nil
 }
 
 // Evaluate runs the evaluation on the inference results and returns the persisted eval set result.
@@ -133,9 +89,14 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*ev
 	if req.EvalSetID == "" {
 		return nil, errors.New("eval set id is empty")
 	}
+	if req.EvaluateConfig == nil {
+		return nil, errors.New("evaluate config is nil")
+	}
 	evalCaseResults := make([]*evalresult.EvalCaseResult, 0, len(req.InferenceResults))
 	for _, inferenceResult := range req.InferenceResults {
-		// Run the evaluation on the inference result and return the case evaluation result.
+		if inferenceResult == nil {
+			return nil, errors.New("inference result is nil")
+		}
 		result, err := s.evaluatePerCase(ctx, inferenceResult, req.EvaluateConfig)
 		if err != nil {
 			return nil, fmt.Errorf("evaluate inference result for eval case %s: %w", inferenceResult.EvalCaseID, err)

@@ -501,15 +501,17 @@ func (e *Executor) restoreVersionsSeen(
 	lastCheckpoint *Checkpoint,
 ) map[string]map[string]int64 {
 	versionsSeen := make(map[string]map[string]int64)
-	if !resumed || lastCheckpoint == nil || lastCheckpoint.VersionsSeen == nil {
+	if !resumed || lastCheckpoint == nil ||
+		lastCheckpoint.VersionsSeen == nil {
 		return versionsSeen
 	}
 
 	for nodeID, nodeVersions := range lastCheckpoint.VersionsSeen {
-		versionsSeen[nodeID] = make(map[string]int64)
+		out := make(map[string]int64, len(nodeVersions))
 		for ch, version := range nodeVersions {
-			versionsSeen[nodeID][ch] = version
+			out[ch] = version
 		}
+		versionsSeen[nodeID] = out
 	}
 	log.Debugf(
 		"Restored versionsSeen for %d nodes from checkpoint",
@@ -527,13 +529,15 @@ func (e *Executor) buildChannelManager() *channel.Manager {
 			continue
 		}
 		channelManager.AddChannel(name, ch.Behavior)
+
 		if ch.Behavior != channel.BehaviorBarrier {
 			continue
 		}
-		if perRunCh, ok := channelManager.GetChannel(name); ok &&
-			perRunCh != nil {
-			perRunCh.SetBarrierExpected(ch.BarrierExpected)
+		perRunCh, ok := channelManager.GetChannel(name)
+		if !ok || perRunCh == nil {
+			continue
 		}
+		perRunCh.SetBarrierExpected(ch.BarrierExpected)
 	}
 	return channelManager
 }
@@ -545,14 +549,17 @@ func (e *Executor) restoreChannelVersions(
 	resumed bool,
 	lastCheckpoint *Checkpoint,
 ) {
-	if !resumed || lastCheckpoint == nil || lastCheckpoint.ChannelVersions == nil {
+	if !resumed || lastCheckpoint == nil ||
+		lastCheckpoint.ChannelVersions == nil {
 		return
 	}
 
 	for name, version := range lastCheckpoint.ChannelVersions {
-		if ch, ok := execCtx.channels.GetChannel(name); ok && ch != nil {
-			ch.Version = version
+		ch, ok := execCtx.channels.GetChannel(name)
+		if !ok || ch == nil {
+			continue
 		}
+		ch.Version = version
 	}
 }
 
@@ -563,7 +570,8 @@ func (e *Executor) restoreBarrierSets(
 	resumed bool,
 	lastCheckpoint *Checkpoint,
 ) {
-	if !resumed || lastCheckpoint == nil || len(lastCheckpoint.BarrierSets) == 0 {
+	if !resumed || lastCheckpoint == nil ||
+		len(lastCheckpoint.BarrierSets) == 0 {
 		return
 	}
 
@@ -2764,12 +2772,18 @@ func (e *Executor) handleInterrupt(
 	}
 
 	// Emit interrupt event.
+	interruptKey := interrupt.Key
+	if interruptKey == "" {
+		interruptKey = interrupt.TaskID
+	}
 	interruptEvent := NewPregelInterruptEvent(
 		WithPregelEventInvocationID(execCtx.InvocationID),
 		WithPregelEventStepNumber(step),
 		WithPregelEventNodeID(interrupt.NodeID),
-		WithPregelEventTaskID(interrupt.TaskID),
+		WithPregelEventInterruptKey(interruptKey),
 		WithPregelEventInterruptValue(interrupt.Value),
+		WithPregelEventLineageID(GetLineageID(checkpointConfig)),
+		WithPregelEventCheckpointID(GetCheckpointID(checkpointConfig)),
 	)
 
 	agent.EmitEvent(eventCtx, invocation, execCtx.EventChan, interruptEvent)

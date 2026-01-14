@@ -79,6 +79,9 @@ func (p *BasicRequestProcessor) ProcessRequest(
 
 	// Set generation configuration.
 	req.GenerationConfig = p.GenerationConfig
+	if invocation.RunOptions.Stream != nil {
+		req.GenerationConfig.Stream = *invocation.RunOptions.Stream
+	}
 
 	// Propagate structured output from invocation to request if present.
 	if invocation.StructuredOutput != nil {

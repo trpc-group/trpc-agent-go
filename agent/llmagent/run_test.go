@@ -128,3 +128,23 @@ func TestLLMAgent_CallbackContextPropagation(t *testing.T) {
 	// Verify that the context value was captured in AfterAgent callback.
 	require.Equal(t, testValue, capturedValue, "context value should be propagated from BeforeAgent to AfterAgent")
 }
+
+func TestLLMAgent_Run_StreamOverride(t *testing.T) {
+	a := New("agent")
+	a.flow = &mockFlow{done: true}
+
+	stream := false
+	invocation := &agent.Invocation{
+		InvocationID: "id",
+		AgentName:    "agent",
+		RunOptions: agent.RunOptions{
+			Stream: &stream,
+		},
+	}
+
+	events, err := a.Run(context.Background(), invocation)
+	require.NoError(t, err)
+
+	for range events {
+	}
+}
