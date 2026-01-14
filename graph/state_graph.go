@@ -203,6 +203,20 @@ func WithRetryPolicy(policies ...RetryPolicy) Option {
 	}
 }
 
+// WithInterruptBefore pauses execution before this node runs.
+func WithInterruptBefore() Option {
+	return func(node *Node) {
+		node.interruptBefore = true
+	}
+}
+
+// WithInterruptAfter pauses execution after this node runs.
+func WithInterruptAfter() Option {
+	return func(node *Node) {
+		node.interruptAfter = true
+	}
+}
+
 // WithGenerationConfig sets the generation config for an LLM node.
 // Effective only for nodes added via AddLLMNode.
 func WithGenerationConfig(cfg model.GenerationConfig) Option {
@@ -511,6 +525,54 @@ func (sg *StateGraph) AddAgentNode(
 // AddSubgraphNode is a sugar alias of AddAgentNode to emphasize subgraph semantics.
 func (sg *StateGraph) AddSubgraphNode(id string, opts ...Option) *StateGraph {
 	return sg.AddAgentNode(id, opts...)
+}
+
+// WithInterruptBeforeNodes enables static interrupts before the given nodes.
+func (sg *StateGraph) WithInterruptBeforeNodes(
+	nodeIDs ...string,
+) *StateGraph {
+	sg.setStaticInterruptNodes(nodeIDs, true)
+	return sg
+}
+
+// WithInterruptAfterNodes enables static interrupts after the given nodes.
+func (sg *StateGraph) WithInterruptAfterNodes(
+	nodeIDs ...string,
+) *StateGraph {
+	sg.setStaticInterruptNodes(nodeIDs, false)
+	return sg
+}
+
+func (sg *StateGraph) setStaticInterruptNodes(
+	nodeIDs []string,
+	before bool,
+) {
+	for _, nodeID := range nodeIDs {
+		sg.graph.mu.Lock()
+		node, ok := sg.graph.nodes[nodeID]
+		if ok && node != nil {
+			if before {
+				node.interruptBefore = true
+			} else {
+				node.interruptAfter = true
+			}
+		}
+		sg.graph.mu.Unlock()
+
+		if !ok || node == nil {
+			if before {
+				sg.addBuildError(fmt.Errorf(
+					"WithInterruptBeforeNodes(%q): node not found",
+					nodeID,
+				))
+				continue
+			}
+			sg.addBuildError(fmt.Errorf(
+				"WithInterruptAfterNodes(%q): node not found",
+				nodeID,
+			))
+		}
+	}
 }
 
 // channelUpdateMarker value for marking channel updates.

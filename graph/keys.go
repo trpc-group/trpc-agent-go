@@ -25,10 +25,11 @@ const (
 
 // State map keys (stored into execution state)
 const (
-	StateKeyCommand        = "__command__"
-	StateKeyResumeMap      = "__resume_map__"
-	StateKeyNextNodes      = "__next_nodes__"
-	StateKeyUsedInterrupts = "__used_interrupts__"
+	StateKeyCommand              = "__command__"
+	StateKeyResumeMap            = "__resume_map__"
+	StateKeyNextNodes            = "__next_nodes__"
+	StateKeyUsedInterrupts       = "__used_interrupts__"
+	StateKeyStaticInterruptSkips = "__static_interrupt_skips__"
 )
 
 // Checkpoint Metadata.Source enumeration values

@@ -1507,6 +1507,47 @@ func main() {
 
 The example shows how to declare nodes, connect edges, and run. Next, we'll cover execution with GraphAgent + Runner, then core concepts and common practices.
 
+### 2. Static Interrupts (Debug Breakpoints)
+
+Static interrupts are "breakpoints" that pause the graph **before** or
+**after** specific nodes execute. They are mainly used for debugging, and they
+do not require you to call `graph.Interrupt(...)` inside node logic.
+
+Key differences from HITL interrupts:
+
+- **HITL interrupt**: a node calls `graph.Interrupt(ctx, state, key, prompt)`.
+  Resuming requires providing a resume input for that `key`.
+- **Static interrupt**: you attach interrupt options when declaring nodes.
+  Resuming only requires the checkpoint coordinates (`lineage_id` +
+  `checkpoint_id`).
+
+Enable static interrupts:
+
+```go
+sg.AddNode("my_node", fn, graph.WithInterruptBefore())
+sg.AddNode("my_node", fn, graph.WithInterruptAfter())
+
+// Or enable by node IDs after building nodes:
+sg.WithInterruptBeforeNodes("my_node")
+sg.WithInterruptAfterNodes("my_node")
+```
+
+When a static interrupt is triggered, the executor raises an
+`*graph.InterruptError` with:
+
+- `Key` prefixed by `graph.StaticInterruptKeyPrefixBefore` or
+  `graph.StaticInterruptKeyPrefixAfter`
+- `Value` set to `graph.StaticInterruptPayload` (`phase`, `nodes`,
+  `activeNodes`)
+
+Resuming:
+
+- Run again with the same `lineage_id` and the `checkpoint_id` returned by the
+  interrupt event.
+- No resume input is required because no node called `graph.Interrupt(...)`.
+
+See `examples/graph/static_interrupt` for an end-to-end runnable demo.
+
 ### Execution
 
 - Wrap the compiled graph with `graphagent.New` (as a generic `agent.Agent`) and hand it to `runner.Runner` to manage sessions and streaming events.
@@ -3060,7 +3101,7 @@ Good practice:
 - Execution
   - `graphagent.New(name, compiledGraph, ...opts)` → `runner.NewRunner(app, agent)` → `Run(...)`
 
-See examples under `examples/graph` for end‑to‑end patterns (basic/parallel/multi‑turn/interrupts/tools/placeholder).
+See examples under `examples/graph` for end‑to‑end patterns (basic/parallel/multi‑turn/interrupts/static_interrupt/tools/placeholder).
 
 ## Visualization (DOT/Image)
 
@@ -3673,5 +3714,5 @@ This guide introduced the core usage of the `graph` package and GraphAgent: decl
   - I/O conventions: `io_conventions`, `io_conventions_tools`
   - Parallel/fan‑out: `parallel`, `fanout`, `diamond`
   - Placeholders: `placeholder`
-  - Checkpoints/interrupts: `checkpoint`, `interrupt`
+  - Checkpoints/interrupts: `checkpoint`, `interrupt`, `static_interrupt`
 - Further reading: `graph/state_graph.go`, `graph/executor.go`, `agent/graphagent`
