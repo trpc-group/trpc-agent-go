@@ -37,7 +37,7 @@ type fakeSearcher struct {
 	err error
 }
 
-func (s *fakeSearcher) Search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) ([]string, error) {
+func (s *fakeSearcher) Search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) (context.Context, []string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -47,7 +47,7 @@ func (s *fakeSearcher) Search(ctx context.Context, candidates map[string]tool.To
 	}
 	s.gotQuery = query
 	s.gotTopK = topK
-	return append([]string(nil), s.ret...), s.err
+	return ctx, append([]string(nil), s.ret...), s.err
 }
 
 type fakeModel struct {

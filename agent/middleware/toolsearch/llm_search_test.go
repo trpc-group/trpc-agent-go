@@ -28,7 +28,7 @@ func TestSearchTools_ModelCallError(t *testing.T) {
 			return nil, errors.New("net down")
 		},
 	}
-	_, err := searchTools(context.Background(), m, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
+	_, _, err := searchTools(context.Background(), m, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
 	if err == nil || !strings.Contains(err.Error(), "model call failed") {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestSearchTools_ResponseError(t *testing.T) {
 			return respCh(&model.Response{Error: &model.ResponseError{Message: "rate limit"}}), nil
 		},
 	}
-	_, err := searchTools(context.Background(), m, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
+	_, _, err := searchTools(context.Background(), m, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
 	if err == nil || !strings.Contains(err.Error(), "model returned error") {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestSearchTools_EmptyFinalOrEmptyContentErrors(t *testing.T) {
 			return respCh(&model.Response{}), nil
 		},
 	}
-	_, err := searchTools(context.Background(), m1, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
+	_, _, err := searchTools(context.Background(), m1, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
 	if err == nil || !strings.Contains(err.Error(), "empty response") {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestSearchTools_EmptyFinalOrEmptyContentErrors(t *testing.T) {
 			}), nil
 		},
 	}
-	_, err = searchTools(context.Background(), m2, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
+	_, _, err = searchTools(context.Background(), m2, &model.Request{}, map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}})
 	if err == nil || !strings.Contains(err.Error(), "empty content") {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestSearchTools_ParsesAndDedupes(t *testing.T) {
 		"a": fakeTool{decl: &tool.Declaration{Name: "a"}},
 		"b": fakeTool{decl: &tool.Declaration{Name: "b"}},
 	}
-	got, err := searchTools(context.Background(), m, &model.Request{}, tools)
+	_, got, err := searchTools(context.Background(), m, &model.Request{}, tools)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestSearchTools_UsesDeltaContentIfMessageEmpty(t *testing.T) {
 	tools := map[string]tool.Tool{
 		"a": fakeTool{decl: &tool.Declaration{Name: "a"}},
 	}
-	got, err := searchTools(context.Background(), m, &model.Request{}, tools)
+	_, got, err := searchTools(context.Background(), m, &model.Request{}, tools)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestSearchTools_ParsesJSONFromSurroundingText(t *testing.T) {
 	tools := map[string]tool.Tool{
 		"a": fakeTool{decl: &tool.Declaration{Name: "a"}},
 	}
-	got, err := searchTools(context.Background(), m, &model.Request{}, tools)
+	_, got, err := searchTools(context.Background(), m, &model.Request{}, tools)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestSearchTools_InvalidOrUnparsableErrors(t *testing.T) {
 				return respCh(&model.Response{Choices: []model.Choice{{Message: model.Message{Content: `{"tools":["nope"]}`}}}}), nil
 			},
 		}
-		_, err := searchTools(context.Background(), m, &model.Request{}, tools)
+		_, _, err := searchTools(context.Background(), m, &model.Request{}, tools)
 		if err == nil || !strings.Contains(err.Error(), "invalid tools") {
 			t.Fatalf("unexpected err: %v", err)
 		}
@@ -169,7 +169,7 @@ func TestSearchTools_InvalidOrUnparsableErrors(t *testing.T) {
 				return respCh(&model.Response{Choices: []model.Choice{{Message: model.Message{Content: "not json at all"}}}}), nil
 			},
 		}
-		_, err := searchTools(context.Background(), m, &model.Request{}, tools)
+		_, _, err := searchTools(context.Background(), m, &model.Request{}, tools)
 		if err == nil || !strings.Contains(err.Error(), "failed to parse selection JSON") {
 			t.Fatalf("unexpected err: %v", err)
 		}
@@ -190,7 +190,7 @@ func TestLlmSearch_TopKTruncation(t *testing.T) {
 		"b": fakeTool{decl: &tool.Declaration{Name: "b"}},
 		"c": fakeTool{decl: &tool.Declaration{Name: "c"}},
 	}
-	got, err := s.Search(context.Background(), candidates, "q", 2)
+	_, got, err := s.Search(context.Background(), candidates, "q", 2)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}

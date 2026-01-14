@@ -48,7 +48,7 @@ func newLlmSearch(model model.Model, systemPrompt string) *llmSearch {
 	}
 }
 
-func (s *llmSearch) Search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) ([]string, error) {
+func (s *llmSearch) Search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) (context.Context, []string, error) {
 	systemMsg := s.systemPrompt
 	if topK > 0 {
 		systemMsg += fmt.Sprintf(
@@ -83,22 +83,23 @@ func (s *llmSearch) Search(ctx context.Context, candidates map[string]tool.Tool,
 		},
 	}
 
-	selectedNames, err := searchTools(ctx, s.model, req, candidates)
+	ctx, selectedNames, err := searchTools(ctx, s.model, req, candidates)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 	if topK > 0 && len(selectedNames) > topK {
 		selectedNames = selectedNames[:topK]
 	}
 
-	return selectedNames, nil
+	return ctx, selectedNames, nil
 }
 
 type searchToolResponse struct {
 	Tools []string `json:"tools"`
 }
 
-func searchTools(ctx context.Context, m model.Model, req *model.Request, tools map[string]tool.Tool) (results []string, err error) {
+func searchTools(ctx context.Context, m model.Model, req *model.Request, tools map[string]tool.Tool) (context.Context, []string, error) {
+	var err error
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(m.Info().Name))
 	defer span.End()
 	invocation := invocationFromContextOrNew(ctx)
@@ -108,20 +109,21 @@ func searchTools(ctx context.Context, m model.Model, req *model.Request, tools m
 
 	final, err := generateFinalResponse(ctx, m, req)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 	content, err := extractFirstChoiceContent(final)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 
-	trackAndTraceToolSearch(span, tracker, invocation, req, final, timingInfo)
+	ctx = trackAndTraceToolSearch(ctx, span, tracker, invocation, req, final, timingInfo)
 
 	parsed, err := parseSearchToolResponse(content)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
-	return validateAndDedupeSelectedTools(parsed.Tools, tools)
+	selectedTools, err := validateAndDedupeSelectedTools(parsed.Tools, tools)
+	return ctx, selectedTools, err
 }
 
 func invocationFromContextOrNew(ctx context.Context) *agent.Invocation {
@@ -170,19 +172,23 @@ func extractFirstChoiceContent(final *model.Response) (string, error) {
 }
 
 func trackAndTraceToolSearch(
+	ctx context.Context,
 	span oteltrace.Span,
 	tracker *itelemetry.ChatMetricsTracker,
 	invocation *agent.Invocation,
 	req *model.Request,
 	final *model.Response,
 	timingInfo *model.TimingInfo,
-) {
+) context.Context {
 	tracker.TrackResponse(final)
 	if final.Usage == nil {
 		final.Usage = &model.Usage{}
 	}
 	final.Usage.TimingInfo = timingInfo
+	// Store usage in context
+	ctx = setToolSearchUsage(ctx, final.Usage)
 	itelemetry.TraceChat(span, invocation, req, final, "", tracker.FirstTokenTimeDuration())
+	return ctx
 }
 
 func parseSearchToolResponse(content string) (searchToolResponse, error) {

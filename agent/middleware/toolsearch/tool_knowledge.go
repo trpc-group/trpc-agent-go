@@ -58,10 +58,10 @@ func NewToolKnowledge(e embedder.Embedder, opts ...ToolKnowledgeOption) (*ToolKn
 	return k, nil
 }
 
-func (k *ToolKnowledge) search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) ([]string, error) {
+func (k *ToolKnowledge) search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) (context.Context, []string, error) {
 	embedding, err := k.e.GetEmbedding(ctx, query)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 	names := make([]string, 0, len(candidates))
 	for name := range candidates {
@@ -76,13 +76,13 @@ func (k *ToolKnowledge) search(ctx context.Context, candidates map[string]tool.T
 		},
 	})
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 	tools := make([]string, 0, len(results.Results))
 	for _, result := range results.Results {
 		tools = append(tools, result.Document.ID)
 	}
-	return tools, nil
+	return ctx, tools, nil
 }
 
 func (k *ToolKnowledge) upsert(ctx context.Context, ts map[string]tool.Tool) error {

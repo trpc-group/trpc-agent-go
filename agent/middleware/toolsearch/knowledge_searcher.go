@@ -41,18 +41,20 @@ func newKnowledgeSearcher(m model.Model, systemPrompt string, toolKnowledge *Too
 	}
 }
 
-func (s *knowledgeSearcher) Search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) ([]string, error) {
-	query, err := s.rewriteQuery(ctx, query)
+func (s *knowledgeSearcher) Search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) (context.Context, []string, error) {
+	ctx, query, err := s.rewriteQuery(ctx, query)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 	if err := s.toolKnowledge.upsert(ctx, candidates); err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
-	return s.toolKnowledge.search(ctx, candidates, query, topK)
+	ctx, selectedTools, err := s.toolKnowledge.search(ctx, candidates, query, topK)
+	return ctx, selectedTools, err
 }
 
-func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (content string, err error) {
+func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (context.Context, string, error) {
+	var err error
 
 	req := &model.Request{
 		Messages: []model.Message{
@@ -72,7 +74,7 @@ func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (con
 	defer tracker.RecordMetrics()()
 	respCh, err := s.model.GenerateContent(ctx, req)
 	if err != nil {
-		return "", fmt.Errorf("rewriting query: selection model call failed: %w", err)
+		return ctx, "", fmt.Errorf("rewriting query: selection model call failed: %w", err)
 	}
 
 	var final *model.Response
@@ -81,29 +83,30 @@ func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (con
 			continue
 		}
 		if r.Error != nil {
-			return "", fmt.Errorf("rewriting query: selection model returned error: %s", r.Error.Message)
+			return ctx, "", fmt.Errorf("rewriting query: selection model returned error: %s", r.Error.Message)
 		}
 		if !r.IsPartial {
 			final = r
 		}
 	}
 	if final == nil || len(final.Choices) == 0 {
-		return "", fmt.Errorf("rewriting query: selection model returned empty response")
+		return ctx, "", fmt.Errorf("rewriting query: selection model returned empty response")
 	}
 
-	content = strings.TrimSpace(final.Choices[0].Message.Content)
+	content := strings.TrimSpace(final.Choices[0].Message.Content)
 	if content == "" {
 		content = strings.TrimSpace(final.Choices[0].Delta.Content)
 	}
 	if content == "" {
-		return "", fmt.Errorf("rewriting query: selection model returned empty content")
+		return ctx, "", fmt.Errorf("rewriting query: selection model returned empty content")
 	}
 	tracker.TrackResponse(final)
 	if final.Usage == nil {
 		final.Usage = &model.Usage{}
 	}
+	ctx = setToolSearchUsage(ctx, final.Usage)
 	final.Usage.TimingInfo = timingInfo
 	itelemetry.TraceChat(span, invocation, req, final, "", tracker.FirstTokenTimeDuration())
 
-	return content, nil
+	return ctx, content, nil
 }

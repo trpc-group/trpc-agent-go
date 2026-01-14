@@ -88,14 +88,14 @@ func (s *ToolSearch) Callback() model.BeforeModelCallbackStructured {
 			return nil, err
 		}
 
-		selectedTools, err := s.searcher.Search(ctx, candidateTools, lastUser.Content, s.maxTools)
+		ctx, selectedTools, err := s.searcher.Search(ctx, candidateTools, lastUser.Content, s.maxTools)
 		if err != nil {
 			return nil, err
 		}
 
 		// Rebuild request tools map.
 		req.Tools = buildSelectedTools(baseTools, selectedTools, s.alwaysInclude)
-		return nil, nil
+		return &model.BeforeModelResult{Context: ctx}, nil
 	}
 }
 
