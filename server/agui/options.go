@@ -114,10 +114,10 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
-// WithGraphNodeStartActivityEnabled controls whether the AG-UI server emits graph node start activity events.
-func WithGraphNodeStartActivityEnabled(enabled bool) Option {
+// WithGraphNodeLifecycleActivityEnabled controls whether the AG-UI server emits graph node lifecycle activity events.
+func WithGraphNodeLifecycleActivityEnabled(enabled bool) Option {
 	return func(o *options) {
-		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithGraphNodeStartActivityEnabled(enabled))
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithGraphNodeLifecycleActivityEnabled(enabled))
 	}
 }
 
