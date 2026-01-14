@@ -67,10 +67,10 @@ examples/toolsearch/toollibrary/small/
 #### Token 消耗量
 
 
-| Case Name | Case Description | Tool Search (Chat Model) | Tool Search (Embedding Model) | Other Chat Model Token | Total Token |
-| --- | --- | ---| --- | --- | --- |
-| without tool search |all tools provided to LLM directly | 0 | 0 | 0 | 0 |
-| knowledge search |首先使用LLM重写查询,然后使用向量嵌入进行语义匹配| 0 | 0 | 0 | 0 |
-| llm search | 直接使用LLM从工具列表中选择相关工具,使用结构化输出 | 0 | 0 | 0 | 0 |
+| Case Name | Case Description | Tool Search (Chat Model) + Tool Search (Embedding Model) | Other Chat Model Token | Total Token |
+| --- | --- | ---| --- | --- |
+| without tool search |all tools provided to LLM directly | 0 | 0 | 0 |
+| knowledge search |首先使用LLM重写查询,然后使用向量嵌入进行语义匹配| 0 | 0 | 0 |
+| llm search | 直接使用LLM从工具列表中选择相关工具,使用结构化输出 | 0 | 0 | 0 |
 
 Total Token =  Tool Search (Chat Model) + Tool Search (Embedding Model) + Other Chat Model Token
