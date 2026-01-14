@@ -4643,7 +4643,8 @@ Model，LLM）消息（例如用于用户界面（User Interface，UI）的流�
 <p>可参考可运行示例：<code>examples/graph/placeholder</code>。</p>
 <p>将检索结果与用户输入注入指令</p>
 <ul>
-<li>在进入 LLM 节点前的任意节点，将临时值写入会话的 <code>temp:</code> 命名空间，LLM 指令即可用占位符读取。</li>
+<li>在进入 LLM 节点前的任意节点，将临时值写入会话的 <code>temp:</code>
+  命名空间，LLM 指令即可用占位符读取。</li>
 <li>示例模式：</li>
 </ul>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1"> 1</a></span>
@@ -4683,7 +4684,10 @@ Model，LLM）消息（例如用于用户界面（User Interface，UI）的流�
 <p>示例：<code>examples/graph/retrieval_placeholder</code>。</p>
 <p>占位符与会话状态的最佳实践</p>
 <ul>
-<li>短期 vs 持久：只用于本轮提示词组装的数据写到 <code>temp:*</code>（建议通过 <code>sess.SetState</code> 写入）；需要跨轮/跨会话保留的配置，请通过 SessionService（会话服务）更新 <code>user:*</code>/<code>app:*</code>。</li>
+<li>会话内临时 vs 持久：通常用于提示词组装的临时数据写到 <code>temp:*</code>
+  （常见做法是每轮覆盖，建议通过 <code>sess.SetState</code> 写入）；需要跨轮/
+  跨会话保留的配置，请通过 SessionService（会话服务）更新
+  <code>user:*</code>/<code>app:*</code>。</li>
 <li>为什么推荐用 SetState：LLM 节点从图状态里的会话对象读取并展开占位符，使用 <code>sess.SetState</code> 可避免不安全的并发 map 访问。</li>
 <li>服务侧护栏：内存实现禁止通过“更新用户态”的接口写 <code>temp:*</code>（以及 <code>app:*</code> via user updater），见 <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/session/inmemory/service.go">session/inmemory/service.go</a>。</li>
 <li>并发建议：并行分支不要同时改同一批 <code>session.State</code> 键；建议汇总到单节点合并后一次写入，或先放图状态再一次写到 <code>temp:*</code>。</li>
@@ -8816,7 +8820,7 @@ Model，LLM）消息（例如用于用户界面（User Interface，UI）的流�
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月9日 06:23:38 UTC">2026-01-09 06:23:38</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月14日 05:13:26 UTC">2026-01-14 05:13:26</span>
   </span>
 
     

@@ -3599,7 +3599,8 @@ different Instruction/system prompt for each model.</p>
 <ul>
 <li>Persistent per‑user value: store under <code>user:*</code> and reference <code>{user:key}</code>.</li>
 <li>Persistent per‑app value: store under <code>app:*</code> and reference <code>{app:key}</code>.</li>
-<li>Per‑turn ephemeral value: write into the session’s <code>temp:*</code> namespace and reference <code>{temp:key}</code> (not persisted).</li>
+<li>Session-scoped temporary value: write into the session’s <code>temp:*</code>
+  namespace and reference <code>{temp:key}</code> (not <code>user:*</code>/<code>app:*</code>).</li>
 </ul>
 <p>Example: per‑user dynamic instruction</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-29-1"> 1</a></span>
@@ -3677,7 +3678,7 @@ The structured callback API (recommended) requires <strong>trpc-agent-go &gt;= 0
 </span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2"></a><span class="nx">callbacks</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">()</span>
 </span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3"></a><span class="nx">callbacks</span><span class="p">.</span><span class="nx">RegisterBeforeAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">.</span><span class="nx">Session</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5"></a><span class="w">    </span><span class="c1">// Write a one-off instruction for this turn only</span>
+</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5"></a><span class="w">    </span><span class="c1">// Write a temporary instruction for this run</span>
 </span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6"></a><span class="w">    </span><span class="nx">args</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">.</span><span class="nx">Session</span><span class="p">.</span><span class="nx">SetState</span><span class="p">(</span><span class="s">&quot;temp:sys&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="s">&quot;Translate to French.&quot;</span><span class="p">))</span>
 </span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7"></a><span class="w">  </span><span class="p">}</span>
 </span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
@@ -3691,7 +3692,9 @@ The structured callback API (recommended) requires <strong>trpc-agent-go &gt;= 0
 </span></code></pre></div></td></tr></table></div>
 <p>Caveats</p>
 <ul>
-<li>In-memory <code>UpdateUserState</code> intentionally forbids <code>temp:*</code> updates; write <code>temp:*</code> via <code>invocation.Session.SetState</code> (e.g., via a callback) when you need ephemeral, per‑turn values.</li>
+<li>In-memory <code>UpdateUserState</code> intentionally forbids <code>temp:*</code> updates;
+  write <code>temp:*</code> via <code>invocation.Session.SetState</code> (e.g., via a callback)
+  when you need session-scoped temporary values.</li>
 <li>Placeholders are resolved at request time; changing the stored value updates behavior on the next model request without recreating the agent.</li>
 </ul>
 
@@ -3716,7 +3719,7 @@ The structured callback API (recommended) requires <strong>trpc-agent-go &gt;= 0
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 12:42:43 UTC">2026-01-08 12:42:43</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 14, 2026 05:13:26 UTC">2026-01-14 05:13:26</span>
   </span>
 
     

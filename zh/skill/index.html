@@ -2201,11 +2201,12 @@ https://github.com/anthropics/skills</p>
 - <code>docs</code>（可选）：要包含的文档文件名数组
 - <code>include_all_docs</code>（可选）：为 true 时包含所有文档</p>
 <p>行为：
-- 写入临时会话键（本轮有效）：
+- 写入会话临时键（同一会话内可跨轮保留）：
   - <code>temp:skill:loaded:&lt;name&gt;</code> = "1"
   - <code>temp:skill:docs:&lt;name&gt;</code> = "*" 或 JSON 字符串数组
 - 请求处理器读取这些键，把 <code>SKILL.md</code> 正文与文档注入到系统消息</p>
-<p>说明：可多次调用以新增或替换文档。</p>
+<p>说明：可多次调用以新增或替换文档；这些键写在会话状态里，同一会话
+内可跨轮生效（键本身只存技能名/文档名，不存正文）。</p>
 <h3 id="skill_select_docs"><code>skill_select_docs</code>（选择文档）</h3>
 <p>声明： <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/select_docs.go">tool/skill/select_docs.go</a></p>
 <p>输入：
@@ -2330,8 +2331,8 @@ https://github.com/anthropics/skills</p>
   提示词既昂贵又易泄漏。三层信息模型让“知道有何能力”与“在
   需要时获得细节/执行脚本”解耦，从而减少上下文开销并提升安全。</li>
 <li>注入与状态：通过事件中的 <code>StateDelta</code> 将加载选择以键值形式
-  写入临时会话，下一轮请求处理器据此拼接系统消息，形成“概览 →
-  正文/文档”的渐进式上下文。</li>
+  写入会话状态的 <code>temp:*</code> 命名空间，后续每轮请求处理器据此拼接
+  系统消息，形成“概览 → 正文/文档”的渐进式上下文。</li>
 <li>执行隔离：脚本以工作区为边界，输出文件由通配符精确收集，避免
   将脚本源码或非必要文件带入模型上下文。</li>
 </ul>
@@ -2383,7 +2384,7 @@ https://github.com/anthropics/skills</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月11日 07:09:52 UTC">2026-01-11 07:09:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月14日 05:13:26 UTC">2026-01-14 05:13:26</span>
   </span>
 
     
