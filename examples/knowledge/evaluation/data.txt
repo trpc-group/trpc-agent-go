@@ -1,0 +1,313 @@
+Using tRPC-Agent-Go knowledge base
+=== RAG Evaluation ===
+
+1. Loading QA items...
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+   Collected 1 unique source documents from QA items
+   Loaded 1 QA items.
+
+2. Loading documents (QA sources + random distractors)...
+   Reusing existing 31 documents in /data/home/homerpan/workspace/knowledgetool/trpc-agent-go/examples/knowledge/evaluation/dataset/huggingface/hf_docs
+   Found 31 documents.
+3. Building knowledge base...
+   Knowledge base built.
+
+4. Running Q&A with fresh sessions (evaluating retrieval + generation)...
+
+   [1/1] Q: What architecture is the `tokenizers-linux-x64-musl` binary designed for?
+...
+   A: Based on the information retrieved from the knowledge base, the `tokenizers-linux-x64-musl` binary is designed for the **x86_64-unknown-linux-musl** architecture.
+
+The search result clearly states: "T...
+   Retrieved 8 contexts, took 24.11s
+
+   === Full Answer ===
+Based on the information retrieved from the knowledge base, the `tokenizers-linux-x64-musl` binary is designed for the **x86_64-unknown-linux-musl** architecture.
+
+The search result clearly states: "This is the **x86_64-unknown-linux-musl** binary for `tokenizers`".
+
+This indicates that the binary is specifically compiled for:
+- **x86_64** (64-bit x86 architecture)
+- **linux** (Linux operating system)
+- **musl** (using musl libc instead of glibc)
+
+So the architecture is **x86_64-unknown-linux-musl**, which means it's a 64-bit x86 binary for Linux systems using the musl C library.
+
+   === Evaluation Contexts (for RAGAS) ===
+
+   [1] `tokenizers-linux-x64-musl`
+
+This is the **x86_64-unknown-linux-musl** binary for `tokenizers`
+
+   [2]  BartTokenizer
+
+
+[[autodoc]] BartTokenizer
+- all
+
+
+
+--- above content is overlap of prefix chunk ---
+
+## BartTokenizerFast
+
+
+[[autodoc]] BartTokenizerFast
+- all
+
+
+<frameworkcontent>
+<pt>
+
+
+
+   [3] ax_seq_length
+- "384"
+- --doc_stride
+- "128"
+- --o
+
+--- above content is overlap of prefix chunk ---
+
+utput_dir
+- "/tmp/pvc-mount/output"
+- --no_cuda
+- --ddp_backend
+- "ccl"
+- --use_ipex
+- --bf16  # Specify --bf16 if your hardware supports bfloat16
+env:
+- name: LD_PRELOAD
+value: "/usr/lib/x86_64-linux-gnu/libtcmalloc.so.4.5.9:/usr/local/lib/libiomp5.so"
+- name: TRANSFORMERS_CACHE
+value: "/tmp/pvc-mount/transformers_cache"
+- name: HF_DATASETS_CACHE
+value: "/tmp/pvc-mount/hf_datasets_cache"
+- name: LOGLEVEL
+value: "INFO"
+- name: CCL_WORKER_COUNT
+value: "1"
+- name: OMP_NUM_THREADS  # Can be tuned f
+
+   [4]  that represents the word's meaning, and keeping t
+
+--- above content is overlap of prefix chunk ---
+
+rack of these mappings requires an enormous number of weights when the vocabulary size is large. If we want our models to stay lean, we can opt for our tokenizer to ignore certain words that we don't necessarily need. For example, when training our tokenizer on a text, we might want to take the 10,000 most frequent words in that text to create our basic vocabulary, instead of taking all of that language's words. The tokenizer will know how to convert those 10,000 words into numbers, but any othe
+
+   [5] `tokenizers-linux-x64-musl`
+
+This is the **x86_64-unknown-linux-musl** binary for `tokenizers`
+
+   [6] ax_seq_length
+- "384"
+- --doc_stride
+- "128"
+- --o
+
+--- above content is overlap of prefix chunk ---
+
+utput_dir
+- "/tmp/pvc-mount/output"
+- --no_cuda
+- --ddp_backend
+- "ccl"
+- --use_ipex
+- --bf16  # Specify --bf16 if your hardware supports bfloat16
+env:
+- name: LD_PRELOAD
+value: "/usr/lib/x86_64-linux-gnu/libtcmalloc.so.4.5.9:/usr/local/lib/libiomp5.so"
+- name: TRANSFORMERS_CACHE
+value: "/tmp/pvc-mount/transformers_cache"
+- name: HF_DATASETS_CACHE
+value: "/tmp/pvc-mount/hf_datasets_cache"
+- name: LOGLEVEL
+value: "INFO"
+- name: CCL_WORKER_COUNT
+value: "1"
+- name: OMP_NUM_THREADS  # Can be tuned f
+
+   [7] `bash
+pip install torch torchvision torchaudio
+```
+
+--- above content is overlap of prefix chunk ---
+
+[`TrainingArguments`] uses the `mps` device by default if it's available which means you don't need to explicitly set the device. For example, you can run the [run_glue.py](https://github.com/huggingface/transformers/blob/main/examples/pytorch/text-classification/run_glue.py) script with the MPS backend automatically enabled without making any changes.
+
+```diff
+export TASK_NAME=mrpc
+
+   [8] be
+rendered properly in your Markdown viewer.
+
+-->
+
+--- above content is overlap of prefix chunk ---
+
+# PyTorch training on Apple silicon
+
+   Collected 1 samples, 0 errors
+   ⏱️  Q&A total time: 24.11s, avg per question: 24.11s
+
+5. Computing RAGAS metrics...
+Evaluating: 100%|██████████████████████| 7/7 [06:47<00:00, 58.20s/it]
+
+=== Evaluation Results ===
+
+--- Per-Sample Scores ---
+
+--- Answer Quality (Avg) ---
+Faithfulness: 0.6000
+Answer Relevancy: 0.9956
+Answer Correctness: 0.7779
+Answer Similarity: 0.8616
+--- Context Quality (Avg) ---
+Context Precision: 0.7000
+Context Recall: 1.0000
+Context Entity Recall: 1.0000
+--- Timing ---
+Q&A total time: 24.11s (avg 24.11s/question)
+RAGAS evaluation time: 411.15s
+Total time: 435.26s
+
+
+trpc-agent-go 日志
+ 700/731 doc(s) | source File Source
+2026-01-14T19:43:03+08:00       INFO    loader/aggregator.go:101        Processed 731/731 doc(s) | source File Source
+2026-01-14T19:43:03+08:00       INFO    knowledge/default.go:586        Successfully loaded source File Source
+2026-01-14T19:43:03+08:00       INFO    loader/stats.go:76      Document statistics - total: 731, avg: 416.4 B, min: 94 B, max: 1030 B
+2026-01-14T19:43:03+08:00       INFO    loader/stats.go:87        [0, 256): 162 document(s)
+2026-01-14T19:43:03+08:00       INFO    loader/stats.go:87        [256, 512): 286 document(s)
+2026-01-14T19:43:03+08:00       INFO    loader/stats.go:87        [512, 1024): 282 document(s)
+2026-01-14T19:43:03+08:00       INFO    loader/stats.go:87        [1024, 2048): 1 document(s)
+2026-01-14T19:43:03+08:00       INFO    trpc_knowledge/knowledge.go:158 [Load] Vector store count after loading: 272 documents
+2026-01-14T19:43:03+08:00       INFO    trpc_knowledge/knowledge.go:301 [Agent] ========== Processing question: What architecture is the `tokenizers-linux-x64-musl` binary designed for?
+ ==========
+2026-01-14T19:43:08+08:00       INFO    trpc_knowledge/knowledge.go:327 [Agent] [Reasoning Step 1 - Before Tool Call]: I'll search for information about the `tokenizers-linux-x64-musl` binary architecture.
+2026-01-14T19:43:08+08:00       INFO    trpc_knowledge/knowledge.go:437 [Agent] [Tool Call] knowledge_search (ID: call_377002283df04c4a93245d34) Args: {"query": "tokenizers-linux-x64-musl binary architecture"}
+2026-01-14T19:43:09+08:00       INFO    trpc_knowledge/knowledge.go:478 [Agent] [Context Extracted] (score=0.9020): `tokenizers-linux-x64-musl`  This is the **x86_64-unknown-linux-musl** binary for `tokenizers`
+2026-01-14T19:43:09+08:00       INFO    trpc_knowledge/knowledge.go:478 [Agent] [Context Extracted] (score=0.4788):  BartTokenizer   [[autodoc]] BartTokenizer - all    --- above content is overlap of prefix chunk ---  ## BartTokenizerFast   [[autodoc]] BartTokenizerFast - all   <frameworkcontent> <pt>  
+2026-01-14T19:43:09+08:00       INFO    trpc_knowledge/knowledge.go:478 [Agent] [Context Extracted] (score=0.4742): ax_seq_length - "384" - --doc_stride - "128" - --o  --- above content is overlap of prefix chunk ---  utput_dir - "/tmp/pvc-mount/output" - --no_cuda - --ddp_backend - "ccl" - --use_ipex - --bf16  # S...
+2026-01-14T19:43:09+08:00       INFO    trpc_knowledge/knowledge.go:478 [Agent] [Context Extracted] (score=0.4713):  that represents the word's meaning, and keeping t  --- above content is overlap of prefix chunk ---  rack of these mappings requires an enormous number of weights when the vocabulary size is large. I...
+2026-01-14T19:43:09+08:00       INFO    trpc_knowledge/knowledge.go:487 [Agent] [Tool Response] (ID: call_377002283df04c4a93245d34): {"documents":[{"text":"`tokenizers-linux-x64-musl`\n\nThis is the **x86_64-unknown-linux-musl** binary for `tokenizers`","metadata":{"trpc_agent_go_chunk_index":1,"trpc_agent_go_dense_score":0.903811741329642,"trpc_agent_go_sparse_score":0.8978004107497063},"score":0.9020083421556613},{"text":" Bart...
+2026-01-14T19:43:12+08:00       INFO    trpc_knowledge/knowledge.go:327 [Agent] [Reasoning Step 2 - Before Tool Call]: Let me search for more specific information about the architecture details.
+2026-01-14T19:43:12+08:00       INFO    trpc_knowledge/knowledge.go:437 [Agent] [Tool Call] knowledge_search (ID: call_0336de0a379f437c8c997308) Args: {"query": "x86_64-unknown-linux-musl architecture"}
+2026-01-14T19:43:12+08:00       INFO    trpc_knowledge/knowledge.go:478 [Agent] [Context Extracted] (score=0.8290): `tokenizers-linux-x64-musl`  This is the **x86_64-unknown-linux-musl** binary for `tokenizers`
+2026-01-14T19:43:12+08:00       INFO    trpc_knowledge/knowledge.go:478 [Agent] [Context Extracted] (score=0.4795): ax_seq_length - "384" - --doc_stride - "128" - --o  --- above content is overlap of prefix chunk ---  utput_dir - "/tmp/pvc-mount/output" - --no_cuda - --ddp_backend - "ccl" - --use_ipex - --bf16  # S...
+2026-01-14T19:43:12+08:00       INFO    trpc_knowledge/knowledge.go:478 [Agent] [Context Extracted] (score=0.4543): `bash pip install torch torchvision torchaudio ```  --- above content is overlap of prefix chunk ---  [`TrainingArguments`] uses the `mps` device by default if it's available which means you don't nee...
+2026-01-14T19:43:12+08:00       INFO    trpc_knowledge/knowledge.go:478 [Agent] [Context Extracted] (score=0.4518): be rendered properly in your Markdown viewer.  -->  --- above content is overlap of prefix chunk ---  # PyTorch training on Apple silicon
+2026-01-14T19:43:12+08:00       INFO    trpc_knowledge/knowledge.go:487 [Agent] [Tool Response] (ID: call_0336de0a379f437c8c997308): {"documents":[{"text":"`tokenizers-linux-x64-musl`\n\nThis is the **x86_64-unknown-linux-musl** binary for `tokenizers`","metadata":{"trpc_agent_go_chunk_index":1,"trpc_agent_go_dense_score":0.7982580510166375,"trpc_agent_go_sparse_score":0.9008569766042023},"score":0.8290377286929068},{"text":"ax_s...
+2026-01-14T19:43:27+08:00       INFO    trpc_knowledge/knowledge.go:367 [Agent] [Final Answer (after tool calls)]: Based on the information retrieved from the knowledge base, the `tokenizers-linux-x64-musl` binary is designed for the **x86_64-unknown-linux-musl** architecture.  The search result clearly states: "This is the **x86_64-unknown-linux-musl** binary for `tokenizers`".  This indicates that the binary i...
+2026-01-14T19:43:27+08:00       INFO    trpc_knowledge/knowledge.go:374 [Agent] ========== Trace Summary ==========
+2026-01-14T19:43:27+08:00       INFO    trpc_knowledge/knowledge.go:375 [Agent] Tool calls: 2
+2026-01-14T19:43:27+08:00       INFO    trpc_knowledge/knowledge.go:377 [Agent]   [1] knowledge_search (ID: call_377002283df04c4a93245d34) Args: {"query": "tokenizers-linux-x64-musl binary architecture"}
+2026-01-14T19:43:27+08:00       INFO    trpc_knowledge/knowledge.go:377 [Agent]   [2] knowledge_search (ID: call_0336de0a379f437c8c997308) Args: {"query": "x86_64-unknown-linux-musl architecture"}
+2026-01-14T19:43:27+08:00       INFO    trpc_knowledge/knowledge.go:379 [Agent] Tool responses: 2
+2026-01-14T19:43:27+08:00       INFO    trpc_knowledge/knowledge.go:381 [Agent]   [1] ID: call_377002283df04c4a93245d34 Content: {"documents":[{"text":"`tokenizers-linux-x64-musl`\n\nThis is the **x86_64-unknown-linux-musl** bina...
+2026-01-14T19:43:27+08:00       INFO    trpc_knowledge/knowledge.go:381 [Agent]   [2] ID: call_0336de0a379f437c8c997308 Content: {"documents":[{"text":"`tokenizers-linux-x64-musl`\n\nThis is the **x86_64-unknown-linux-musl** bina...
+2026-01-14T19:43:27+08:00       INFO    trpc_knowledge/knowledge.go:383 [Agent] Reasoning steps: 2
+2026-01-14T19:43:27+08:00       INFO    trpc_knowledge/knowledge.go:385 [Agent]   [1]: I'll search for information about the `tokenizers-linux-x64-musl` binary architecture.
+2026-01-14T19:43:27+08:00       INFO    trpc_knowledge/knowledge.go:385 [Agent]   [2]: Let me search for more specific information about the architecture details.
+2026-01-14T19:43:27+08:00       INFO    trpc_knowledge/knowledge.go:387 [Agent] Contexts extracted: 8
+2026-01-14T19:43:27+08:00       INFO    trpc_knowledge/knowledge.go:388 [Agent] ====================================
+
+
+=========================
+
+
+❯ python3 evaluator.py --kb=langchain --max-qa=1 --full-log
+Using LangChain knowledge base
+=== RAG Evaluation ===
+
+1. Loading QA items...
+   Collected 1 unique source documents from QA items
+   Loaded 1 QA items.
+
+2. Loading documents (QA sources + random distractors)...
+   Reusing existing 31 documents in /data/home/homerpan/workspace/knowledgetool/trpc-agent-go/examples/knowledge/evaluation/dataset/huggingface/hf_docs
+   Found 31 documents.
+3. Building knowledge base...
+   Knowledge base built.
+
+4. Running Q&A with fresh sessions (evaluating retrieval + generation)...
+
+   [1/1] Q: What architecture is the `tokenizers-linux-x64-musl` binary designed for?
+...
+   A: Based on the search results, I can provide a clear answer. The `tokenizers-linux-x64-musl` binary is designed for the **x86_64-unknown-linux-musl** architecture.
+
+This means:
+- **x86_64**: 64-bit x86 ...
+   Retrieved 8 contexts, took 43.28s
+
+   === Full Answer ===
+Based on the search results, I can provide a clear answer. The `tokenizers-linux-x64-musl` binary is designed for the **x86_64-unknown-linux-musl** architecture.
+
+This means:
+- **x86_64**: 64-bit x86 architecture (also known as AMD64 or Intel 64)
+- **linux**: Linux operating system
+- **musl**: Uses the musl libc library instead of glibc (a lightweight, fast, and standards-compliant C standard library implementation)
+
+So the binary is specifically compiled for 64-bit x86 processors running Linux with musl libc.
+
+   === Evaluation Contexts (for RAGAS) ===
+
+   [1] `tokenizers-linux-x64-musl`
+
+This is the **x86_64-unknown-linux-musl** binary for `tokenizers`
+
+   [2] http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+
+⚠️ Note that this file is in Markdown but contain specific syntax for our doc-builder (similar to MDX) that may not be
+rendered properly in your Markdown viewer.
+
+-->
+
+# PyTorch training on Apple silicon
+
+   [3] In this benchmark, we evaluated varying sizes of Llama 2 on a range of Amazon EC2 instance types with different load levels. Our goal was to measure latency (ms per token), and throughput (tokens per second) to find the optimal deployment strategies for three common use cases:
+
+   [4] The snippet below is an example of a Dockerfile that uses a base image that supports distributed CPU training and then
+extracts a Transformers release to the `/workspace` directory, so that the example scripts are included in the image:
+```
+FROM intel/ai-workflows:torch-2.0.1-huggingface-multinode-py3.9
+
+WORKDIR /workspace
+
+   [5] `tokenizers-linux-x64-musl`
+
+This is the **x86_64-unknown-linux-musl** binary for `tokenizers`
+
+   [6] XTREME-S covers speech recognition with Fleurs, Multilingual LibriSpeech (MLS) and VoxPopuli, speech translation with CoVoST-2, speech classification with LangID (Fleurs) and intent classification (MInds-14) and finally speech(-text) retrieval with Fleurs. Each of the tasks covers a subset of the 102 languages included in XTREME-S (shown here with their ISO 3166-1 codes): afr, amh, ara, asm, ast, azj, bel, ben, bos, cat, ceb, ces, cmn, cym, dan, deu, ell, eng, spa, est, fas, ful, fin, tgl, fra,
+
+   [7] In this benchmark, we evaluated varying sizes of Llama 2 on a range of Amazon EC2 instance types with different load levels. Our goal was to measure latency (ms per token), and throughput (tokens per second) to find the optimal deployment strategies for three common use cases:
+
+   [8] Next, you'll apply some [transforms](https://github.com/huggingface/diffusers/blob/65ef7a0c5c594b4f84092e328fbdd73183613b30/examples/wuerstchen/text_to_image/train_text_to_image_prior.py#L656) to the images and [tokenize](https://github.com/huggingface/diffusers/blob/65ef7a0c5c594b4f84092e328fbdd73183613b30/examples/wuerstchen/text_to_image/train_text_to_image_prior.py#L637) the captions:
+
+   Collected 1 samples, 0 errors
+   ⏱️  Q&A total time: 43.28s, avg per question: 43.28s
+
+5. Computing RAGAS metrics...
+Evaluating:  14%|█████▊                                   | 1/7 [01:23<08:21, 83.65s/it]LLM returned 1 generations instead of requested 3. Proceeding with 1 generations.
+Evaluating: 100%|█████████████████████████████████████████| 7/7 [05:08<00:00, 44.09s/it]
+
+=== Evaluation Results ===
+
+--- Per-Sample Scores ---
+
+--- Answer Quality (Avg) ---
+Faithfulness: 0.6250
+Answer Relevancy: 0.9957
+Answer Correctness: 0.3302
+Answer Similarity: 0.8591
+--- Context Quality (Avg) ---
+Context Precision: 0.7000
+Context Recall: 1.0000
+Context Entity Recall: 1.0000
+--- Timing ---
+Q&A total time: 43.28s (avg 43.28s/question)
+RAGAS evaluation time: 311.39s
+Total time: 354.68s

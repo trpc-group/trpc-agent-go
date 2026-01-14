@@ -30,6 +30,8 @@ pnpm-lock.yaml
 .gocache
 !.github/scripts/run-go-tests.sh
 .DS_Store
+.venv
+__pycache__
 .gomodcache
 next-env.d.ts
 .codebuddy
