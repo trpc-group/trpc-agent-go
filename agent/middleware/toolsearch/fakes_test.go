@@ -173,6 +173,11 @@ func (s *fakeVectorStore) Search(ctx context.Context, query *vectorstore.SearchQ
 func (s *fakeVectorStore) DeleteByFilter(ctx context.Context, opts ...vectorstore.DeleteOption) error {
 	return nil
 }
+
+func (s *fakeVectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
+	return 0, nil
+}
+
 func (s *fakeVectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
 	return 0, nil
 }

@@ -31,7 +31,7 @@ func TestKnowledgeSearcher_RewriteQuery(t *testing.T) {
 			},
 		}
 		s := newKnowledgeSearcher(m, "", &ToolKnowledge{})
-		_, _, err := s.rewriteQuery(context.Background(), "q")
+		_, _, _, err := s.rewriteQuery(context.Background(), "q")
 		if err == nil || !strings.Contains(err.Error(), "selection model call failed") {
 			t.Fatalf("unexpected err: %v", err)
 		}
@@ -44,7 +44,7 @@ func TestKnowledgeSearcher_RewriteQuery(t *testing.T) {
 			},
 		}
 		s := newKnowledgeSearcher(m, "", &ToolKnowledge{})
-		_, _, err := s.rewriteQuery(context.Background(), "q")
+		_, _, _, err := s.rewriteQuery(context.Background(), "q")
 		if err == nil || !strings.Contains(err.Error(), "selection model returned error") {
 			t.Fatalf("unexpected err: %v", err)
 		}
@@ -60,7 +60,7 @@ func TestKnowledgeSearcher_RewriteQuery(t *testing.T) {
 			},
 		}
 		s := newKnowledgeSearcher(m, "", &ToolKnowledge{})
-		_, got, err := s.rewriteQuery(context.Background(), "q")
+		_, got, _, err := s.rewriteQuery(context.Background(), "q")
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -76,7 +76,7 @@ func TestKnowledgeSearcher_RewriteQuery(t *testing.T) {
 			},
 		}
 		s := newKnowledgeSearcher(m, "", &ToolKnowledge{})
-		_, _, err := s.rewriteQuery(context.Background(), "q")
+		_, _, _, err := s.rewriteQuery(context.Background(), "q")
 		if err == nil || !strings.Contains(err.Error(), "empty response") {
 			t.Fatalf("unexpected err: %v", err)
 		}
@@ -92,7 +92,7 @@ func TestKnowledgeSearcher_RewriteQuery(t *testing.T) {
 			},
 		}
 		s := newKnowledgeSearcher(m, "", &ToolKnowledge{})
-		_, _, err := s.rewriteQuery(context.Background(), "q")
+		_, _, _, err := s.rewriteQuery(context.Background(), "q")
 		if err == nil || !strings.Contains(err.Error(), "empty content") {
 			t.Fatalf("unexpected err: %v", err)
 		}
@@ -185,7 +185,7 @@ func TestToolKnowledge_UpsertAndSearch_ErrorPaths(t *testing.T) {
 		vs := &fakeVectorStore{}
 		emb := &fakeEmbedder{embedErr: errors.New("embed fail")}
 		k := &ToolKnowledge{s: vs, e: emb, tools: map[string]tool.Tool{}}
-		err := k.upsert(context.Background(), map[string]tool.Tool{
+		_, err := k.upsert(context.Background(), map[string]tool.Tool{
 			"a": fakeTool{decl: &tool.Declaration{Name: "a"}},
 		})
 		if err == nil {
@@ -197,7 +197,7 @@ func TestToolKnowledge_UpsertAndSearch_ErrorPaths(t *testing.T) {
 		vs := &fakeVectorStore{addErr: errors.New("add fail")}
 		emb := &fakeEmbedder{}
 		k := &ToolKnowledge{s: vs, e: emb, tools: map[string]tool.Tool{}}
-		err := k.upsert(context.Background(), map[string]tool.Tool{
+		_, err := k.upsert(context.Background(), map[string]tool.Tool{
 			"a": fakeTool{decl: &tool.Declaration{Name: "a"}},
 		})
 		if err == nil {
@@ -209,7 +209,7 @@ func TestToolKnowledge_UpsertAndSearch_ErrorPaths(t *testing.T) {
 		vs := &fakeVectorStore{}
 		emb := &fakeEmbedder{embedErr: errors.New("embed fail")}
 		k := &ToolKnowledge{s: vs, e: emb, tools: map[string]tool.Tool{}}
-		_, _, err := k.search(context.Background(), map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}}, "q", 1)
+		_, _, _, err := k.search(context.Background(), map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}}, "q", 1)
 		if err == nil {
 			t.Fatalf("expected error")
 		}
@@ -219,7 +219,7 @@ func TestToolKnowledge_UpsertAndSearch_ErrorPaths(t *testing.T) {
 		vs := &fakeVectorStore{searchErr: errors.New("search fail")}
 		emb := &fakeEmbedder{}
 		k := &ToolKnowledge{s: vs, e: emb, tools: map[string]tool.Tool{}}
-		_, _, err := k.search(context.Background(), map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}}, "q", 1)
+		_, _, _, err := k.search(context.Background(), map[string]tool.Tool{"a": fakeTool{decl: &tool.Declaration{Name: "a"}}}, "q", 1)
 		if err == nil {
 			t.Fatalf("expected error")
 		}
