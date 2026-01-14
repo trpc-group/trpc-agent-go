@@ -246,10 +246,11 @@ func (f *Flow) runOneStep(
 		modelName = invocation.Model.Info().Name
 	}
 
-	callLLMCtx, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
+	_, span = trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
 	defer span.End()
+
 	// 2. Call LLM (get response channel).
-	responseChan, err := f.callLLM(callLLMCtx, invocation, llmRequest)
+	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
 		return nil, err
 	}
