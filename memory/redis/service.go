@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -41,7 +40,6 @@ type Service struct {
 	opts        ServiceOpts
 	redisClient redis.UniversalClient
 
-	mu               sync.Mutex
 	cachedTools      map[string]tool.Tool
 	precomputedTools []tool.Tool
 	autoMemoryWorker *imemory.AutoMemoryWorker

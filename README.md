@@ -21,6 +21,7 @@ English | [中文](README.zh_CN.md)
 - **GraphAgent**: Type-safe graph workflows with multi-conditional routing, functionally equivalent to LangGraph for Go
 - **Agent Skills**: Reusable `SKILL.md` workflows with safe execution
 - **Artifacts**: Versioned storage for files produced by agents and tools
+- **Prompt Caching**: Automatic cost optimization with 90% savings on cached content
 - **Evaluation & Benchmarks**: Eval sets + metrics to measure quality over time
 - **UI & Server Integration**: AG-UI (Agent-User Interaction),
   and Agent-to-Agent (A2A) interoperability
@@ -142,8 +143,8 @@ tools := []tool.Tool{
 ### Evaluation & Benchmarks
 
 ```go
-evaluator, _ := evaluation.New("app", runner,
-    evaluation.WithNumRuns(3))
+evaluator, _ := evaluation.New("app", runner, evaluation.WithNumRuns(3))
+defer evaluator.Close()
 result, _ := evaluator.Evaluate(ctx, "math-basic")
 _ = result.OverallStatus
 ```
@@ -157,12 +158,12 @@ _ = result.OverallStatus
 - [tRPC-Agent-Go](#trpc-agent-go)
   - [Use Cases](#use-cases)
   - [Key Features](#key-features)
-    - [**Multi-Agent Orchestration**](#multi-agent-orchestration)
-    - [**Advanced Memory System**](#advanced-memory-system)
-    - [**Rich Tool Integration**](#rich-tool-integration)
-    - [**Production Observability**](#production-observability)
-    - [**Agent Skills**](#agent-skills)
-    - [**Evaluation \& Benchmarks**](#evaluation--benchmarks)
+    - [Multi-Agent Orchestration](#multi-agent-orchestration)
+    - [Advanced Memory System](#advanced-memory-system)
+    - [Rich Tool Integration](#rich-tool-integration)
+    - [Production Observability](#production-observability)
+    - [Agent Skills](#agent-skills)
+    - [Evaluation \& Benchmarks](#evaluation--benchmarks)
   - [Table of Contents](#table-of-contents)
   - [Documentation](#documentation)
   - [Quick Start](#quick-start)
