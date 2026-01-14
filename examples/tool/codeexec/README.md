@@ -8,7 +8,7 @@ This example demonstrates how to use the `codeexec` tool, allowing the LLM to pr
 
 ```bash
 cd examples
-go build -o codeexec/codeexec-demo ./codeexec/
+go build -o tool/codeexec/codeexec-demo ./tool/codeexec/
 ```
 
 ### 2. Configure Environment Variables
@@ -27,7 +27,7 @@ export OPENAI_API_KEY="your-openai-api-key"
 #### Local executor (default)
 
 ```bash
-cd codeexec
+cd tool/codeexec
 ./codeexec-demo -model deepseek-chat
 ```
 
@@ -42,7 +42,7 @@ pip install jupyter_kernel_gateway
 Run with Jupyter backend:
 
 ```bash
-cd codeexec
+cd tool/codeexec
 ./codeexec-demo -model deepseek-chat -executor jupyter
 ```
 
