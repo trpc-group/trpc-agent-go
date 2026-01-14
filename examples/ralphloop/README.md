@@ -23,12 +23,13 @@ From the repo root:
 
 ```bash
 cd examples/ralphloop
-# DeepSeek (recommended)
-export DEEPSEEK_API_KEY="your-api-key"
+# OpenAI-compatible API key (works for DeepSeek too).
+export OPENAI_API_KEY="your-api-key"
+
+# DeepSeek
 go run . -model deepseek-chat -variant deepseek
 
 # OpenAI
-export OPENAI_API_KEY="your-api-key"
 go run . -model gpt-4o -variant openai
 ```
 

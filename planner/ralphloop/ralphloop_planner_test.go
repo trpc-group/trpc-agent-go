@@ -122,12 +122,16 @@ func TestPlanner_ProcessPlanningResponse_MaxIterationsStops(t *testing.T) {
 
 	second := p.ProcessPlanningResponse(context.Background(), inv, rsp)
 	require.NotNil(t, second)
-	require.True(t, second.Done)
-	require.Equal(t, model.ObjectTypeError, second.Object)
-	require.NotNil(t, second.Error)
-	require.Equal(t, model.ErrorTypeFlowError, second.Error.Type)
-	require.Contains(t, second.Error.Message, "max iterations (2) reached")
-	require.Contains(t, second.Error.Message, "Completion promise not detected")
+	require.False(t, second.Done)
+
+	third := p.ProcessPlanningResponse(context.Background(), inv, rsp)
+	require.NotNil(t, third)
+	require.True(t, third.Done)
+	require.Equal(t, model.ObjectTypeError, third.Object)
+	require.NotNil(t, third.Error)
+	require.Equal(t, model.ErrorTypeFlowError, third.Error.Type)
+	require.Contains(t, third.Error.Message, "max iterations (2) reached")
+	require.Contains(t, third.Error.Message, "Completion promise not detected")
 }
 
 func TestPlanner_ProcessPlanningResponse_SkipsToolCallResponses(
@@ -245,6 +249,37 @@ func TestPlanner_ProcessPlanningResponse_VerifierFailureContinues(
 
 	raw, _ := agent.GetStateValue[string](inv, stateKeyFeedback)
 	require.Contains(t, raw, verifierFeedback)
+}
+
+func TestPlanner_ProcessPlanningResponse_VerifierFailureNoFeedbackContinues(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	p, err := New(Config{
+		MaxIterations:     3,
+		CompletionPromise: testPromise,
+		Verifiers: []Verifier{
+			staticVerifier{
+				res: VerifyResult{Passed: false},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{}
+	rsp := assistantResponse(
+		true,
+		"<promise>"+testPromise+"</promise>",
+	)
+
+	processed := p.ProcessPlanningResponse(context.Background(), inv, rsp)
+	require.NotNil(t, processed)
+	require.False(t, processed.Done)
+
+	raw, _ := agent.GetStateValue[string](inv, stateKeyFeedback)
+	require.Contains(t, raw, "Ralph Loop iteration 1/3:")
+	require.Contains(t, raw, "Verification failed")
 }
 
 func TestPlanner_ProcessPlanningResponse_VerifierErrorStops(t *testing.T) {

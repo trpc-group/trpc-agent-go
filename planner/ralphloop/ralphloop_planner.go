@@ -160,7 +160,7 @@ func (p *Planner) ProcessPlanningResponse(
 	}
 
 	iter := incrementIteration(invocation)
-	if iter >= p.cfg.MaxIterations {
+	if iter > p.cfg.MaxIterations {
 		msg := fmt.Sprintf(
 			"ralph loop planner: max iterations (%d) reached",
 			p.cfg.MaxIterations,
@@ -189,6 +189,7 @@ func (p *Planner) verify(
 ) (complete bool, feedback string, err error) {
 	promiseOK, promiseFeedback := p.promiseSatisfied(response)
 
+	verifiersOK := true
 	var verifierFeedback []string
 	for _, v := range p.cfg.Verifiers {
 		if v == nil {
@@ -201,12 +202,12 @@ func (p *Planner) verify(
 		if res.Passed {
 			continue
 		}
+		verifiersOK = false
 		if strings.TrimSpace(res.Feedback) != "" {
 			verifierFeedback = append(verifierFeedback, res.Feedback)
 		}
 	}
 
-	verifiersOK := len(verifierFeedback) == 0
 	if promiseOK && verifiersOK {
 		return true, "", nil
 	}
