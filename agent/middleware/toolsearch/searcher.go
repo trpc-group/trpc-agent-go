@@ -30,6 +30,6 @@ func ToolSearchUsageFromContext(ctx context.Context) (*model.Usage, bool) {
 	return usage, ok
 }
 
-func setToolSearchUsage(ctx context.Context, usage *model.Usage) context.Context {
+func SetToolSearchUsage(ctx context.Context, usage *model.Usage) context.Context {
 	return context.WithValue(ctx, contextKeyToolSearchUsage{}, usage)
 }

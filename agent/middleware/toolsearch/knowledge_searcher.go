@@ -104,7 +104,7 @@ func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (con
 	if final.Usage == nil {
 		final.Usage = &model.Usage{}
 	}
-	ctx = setToolSearchUsage(ctx, final.Usage)
+	ctx = SetToolSearchUsage(ctx, final.Usage)
 	final.Usage.TimingInfo = timingInfo
 	itelemetry.TraceChat(span, invocation, req, final, "", tracker.FirstTokenTimeDuration())
 
