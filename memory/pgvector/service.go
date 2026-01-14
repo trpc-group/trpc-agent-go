@@ -297,15 +297,16 @@ func (s *Service) UpdateMemory(
 	now := time.Now()
 	vector := pgvector.NewVector(convertToFloat32(embedding))
 
-	updateQuery := fmt.Sprintf(
+	var updateQuery strings.Builder
+	fmt.Fprintf(&updateQuery,
 		"UPDATE %s SET memory_content = $1, topics = $2, embedding = $3, "+
 			"updated_at = $4 WHERE memory_id = $5 AND app_name = $6 AND user_id = $7",
 		s.tableName,
 	)
 	if s.opts.softDelete {
-		updateQuery += " AND deleted_at IS NULL"
+		updateQuery.WriteString(" AND deleted_at IS NULL")
 	}
-	res, err := s.db.ExecContext(ctx, updateQuery,
+	res, err := s.db.ExecContext(ctx, updateQuery.String(),
 		memoryStr, pq.Array(topics), vector, now,
 		memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
 	if err != nil {
@@ -395,17 +396,18 @@ func (s *Service) ReadMemories(
 		return nil, err
 	}
 
-	query := fmt.Sprintf(
+	var query strings.Builder
+	fmt.Fprintf(&query,
 		"SELECT memory_id, app_name, user_id, memory_content, topics, created_at, "+
 			"updated_at FROM %s WHERE app_name = $1 AND user_id = $2",
 		s.tableName,
 	)
 	if s.opts.softDelete {
-		query += " AND deleted_at IS NULL"
+		query.WriteString(" AND deleted_at IS NULL")
 	}
-	query += " ORDER BY updated_at DESC, created_at DESC"
+	query.WriteString(" ORDER BY updated_at DESC, created_at DESC")
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		fmt.Fprintf(&query, " LIMIT %d", limit)
 	}
 
 	entries := make([]*memory.Entry, 0)
@@ -418,7 +420,7 @@ func (s *Service) ReadMemories(
 			entries = append(entries, entry)
 		}
 		return nil
-	}, query, userKey.AppName, userKey.UserID)
+	}, query.String(), userKey.AppName, userKey.UserID)
 
 	if err != nil {
 		return nil, fmt.Errorf("list memories failed: %w", err)
@@ -456,17 +458,18 @@ func (s *Service) SearchMemories(
 
 	// Use cosine distance for similarity search.
 	// Order by distance ascending (smaller distance = more similar).
-	searchQuery := fmt.Sprintf(
+	var searchQuery strings.Builder
+	fmt.Fprintf(&searchQuery,
 		"SELECT memory_id, app_name, user_id, memory_content, topics, created_at, "+
 			"updated_at, 1 - (embedding <=> $1) AS similarity "+
 			"FROM %s WHERE app_name = $2 AND user_id = $3",
 		s.tableName,
 	)
 	if s.opts.softDelete {
-		searchQuery += " AND deleted_at IS NULL"
+		searchQuery.WriteString(" AND deleted_at IS NULL")
 	}
-	searchQuery += " ORDER BY embedding <=> $1"
-	searchQuery += fmt.Sprintf(" LIMIT %d", s.opts.maxResults)
+	searchQuery.WriteString(" ORDER BY embedding <=> $1")
+	fmt.Fprintf(&searchQuery, " LIMIT %d", s.opts.maxResults)
 
 	results := make([]*memory.Entry, 0)
 	err = s.db.Query(ctx, func(rows *sql.Rows) error {
@@ -478,7 +481,7 @@ func (s *Service) SearchMemories(
 			results = append(results, entry)
 		}
 		return nil
-	}, searchQuery, vector, userKey.AppName, userKey.UserID)
+	}, searchQuery.String(), vector, userKey.AppName, userKey.UserID)
 
 	if err != nil {
 		return nil, fmt.Errorf("search memories failed: %w", err)
