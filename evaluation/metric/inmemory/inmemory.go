@@ -45,16 +45,26 @@ func (m *manager) List(_ context.Context, appName, evalSetID string) ([]string, 
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	m.ensureEvalSetExist(appName, evalSetID)
-	metricNames := make([]string, 0, len(m.metrics[appName][evalSetID]))
-	for _, metric := range m.metrics[appName][evalSetID] {
-		metricNames = append(metricNames, metric.MetricName)
+	evalSets, ok := m.metrics[appName]
+	if !ok {
+		return []string{}, nil
+	}
+	metrics, ok := evalSets[evalSetID]
+	if !ok {
+		return []string{}, nil
+	}
+	metricNames := make([]string, 0, len(metrics))
+	for _, evalMetric := range metrics {
+		if evalMetric == nil {
+			continue
+		}
+		metricNames = append(metricNames, evalMetric.MetricName)
 	}
 	return metricNames, nil
 }
 
 // Get gets a metric identified by the given app name, eval set ID and metric name.
-func (m *manager) Get(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+func (m *manager) Get(_ context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
 	if appName == "" {
 		return nil, errors.New("empty app name")
 	}
@@ -66,10 +76,17 @@ func (m *manager) Get(ctx context.Context, appName, evalSetID, metricName string
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	m.ensureEvalSetExist(appName, evalSetID)
-	for _, metric := range m.metrics[appName][evalSetID] {
-		if metric != nil && metric.MetricName == metricName {
-			cloned, err := clone.Clone(metric)
+	evalSets, ok := m.metrics[appName]
+	if !ok {
+		return nil, fmt.Errorf("metric %s.%s.%s not found: %w", appName, evalSetID, metricName, os.ErrNotExist)
+	}
+	metrics, ok := evalSets[evalSetID]
+	if !ok {
+		return nil, fmt.Errorf("metric %s.%s.%s not found: %w", appName, evalSetID, metricName, os.ErrNotExist)
+	}
+	for _, evalMetric := range metrics {
+		if evalMetric != nil && evalMetric.MetricName == metricName {
+			cloned, err := clone.Clone(evalMetric)
 			if err != nil {
 				return nil, fmt.Errorf("clone metric: %w", err)
 			}
@@ -80,31 +97,42 @@ func (m *manager) Get(ctx context.Context, appName, evalSetID, metricName string
 }
 
 // Add adds a metric to EvalSet identified by evalSetID.
-func (m *manager) Add(ctx context.Context, appName, evalSetID string, metric *metric.EvalMetric) error {
+func (m *manager) Add(_ context.Context, appName, evalSetID string, metricInput *metric.EvalMetric) error {
 	if appName == "" {
 		return errors.New("empty app name")
 	}
 	if evalSetID == "" {
 		return errors.New("empty eval set id")
 	}
-	if metric == nil {
+	if metricInput == nil {
 		return errors.New("metric is nil")
 	}
-	if metric.MetricName == "" {
+	if metricInput.MetricName == "" {
 		return errors.New("metric name is empty")
 	}
-	m.ensureEvalSetExist(appName, evalSetID)
-	for _, evalMetric := range m.metrics[appName][evalSetID] {
-		if evalMetric != nil && evalMetric.MetricName == metric.MetricName {
-			return fmt.Errorf("metric %s.%s.%s already exists", appName, evalSetID, metric.MetricName)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	evalSets, ok := m.metrics[appName]
+	if !ok {
+		evalSets = make(map[string][]*metric.EvalMetric)
+		m.metrics[appName] = evalSets
+	}
+	metrics := evalSets[evalSetID]
+	for _, evalMetric := range metrics {
+		if evalMetric != nil && evalMetric.MetricName == metricInput.MetricName {
+			return fmt.Errorf("metric %s.%s.%s already exists", appName, evalSetID, metricInput.MetricName)
 		}
 	}
-	m.metrics[appName][evalSetID] = append(m.metrics[appName][evalSetID], metric)
+	cloned, err := clone.Clone(metricInput)
+	if err != nil {
+		return fmt.Errorf("clone metric: %w", err)
+	}
+	evalSets[evalSetID] = append(metrics, cloned)
 	return nil
 }
 
 // Delete deletes the metric from EvalSet identified by evalSetID and metricName.
-func (m *manager) Delete(ctx context.Context, appName, evalSetID, metricName string) error {
+func (m *manager) Delete(_ context.Context, appName, evalSetID, metricName string) error {
 	if appName == "" {
 		return errors.New("empty app name")
 	}
@@ -114,11 +142,19 @@ func (m *manager) Delete(ctx context.Context, appName, evalSetID, metricName str
 	if metricName == "" {
 		return errors.New("metric name is empty")
 	}
-	m.ensureEvalSetExist(appName, evalSetID)
-	metrics := m.metrics[appName][evalSetID]
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	evalSets, ok := m.metrics[appName]
+	if !ok {
+		return fmt.Errorf("metric %s.%s.%s not found: %w", appName, evalSetID, metricName, os.ErrNotExist)
+	}
+	metrics, ok := evalSets[evalSetID]
+	if !ok {
+		return fmt.Errorf("metric %s.%s.%s not found: %w", appName, evalSetID, metricName, os.ErrNotExist)
+	}
 	for i, evalMetric := range metrics {
 		if evalMetric != nil && evalMetric.MetricName == metricName {
-			m.metrics[appName][evalSetID] = append(metrics[:i], metrics[i+1:]...)
+			evalSets[evalSetID] = append(metrics[:i], metrics[i+1:]...)
 			return nil
 		}
 	}
@@ -126,34 +162,38 @@ func (m *manager) Delete(ctx context.Context, appName, evalSetID, metricName str
 }
 
 // Update updates the metric identified by evalSetID and metric.MetricName.
-func (m *manager) Update(ctx context.Context, appName, evalSetID string, metric *metric.EvalMetric) error {
+func (m *manager) Update(_ context.Context, appName, evalSetID string, metricInput *metric.EvalMetric) error {
 	if appName == "" {
 		return errors.New("empty app name")
 	}
 	if evalSetID == "" {
 		return errors.New("empty eval set id")
 	}
-	if metric == nil {
+	if metricInput == nil {
 		return errors.New("metric is nil")
 	}
-	if metric.MetricName == "" {
+	if metricInput.MetricName == "" {
 		return errors.New("metric name is empty")
 	}
-	m.ensureEvalSetExist(appName, evalSetID)
-	for i, evalMetric := range m.metrics[appName][evalSetID] {
-		if evalMetric != nil && evalMetric.MetricName == metric.MetricName {
-			m.metrics[appName][evalSetID][i] = metric
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	evalSets, ok := m.metrics[appName]
+	if !ok {
+		return fmt.Errorf("metric %s.%s.%s not found: %w", appName, evalSetID, metricInput.MetricName, os.ErrNotExist)
+	}
+	metrics, ok := evalSets[evalSetID]
+	if !ok {
+		return fmt.Errorf("metric %s.%s.%s not found: %w", appName, evalSetID, metricInput.MetricName, os.ErrNotExist)
+	}
+	for i, evalMetric := range metrics {
+		if evalMetric != nil && evalMetric.MetricName == metricInput.MetricName {
+			cloned, err := clone.Clone(metricInput)
+			if err != nil {
+				return fmt.Errorf("clone metric: %w", err)
+			}
+			m.metrics[appName][evalSetID][i] = cloned
 			return nil
 		}
 	}
-	return fmt.Errorf("metric %s.%s.%s not found: %w", appName, evalSetID, metric.MetricName, os.ErrNotExist)
-}
-
-func (m *manager) ensureEvalSetExist(appName, evalSetID string) {
-	if _, ok := m.metrics[appName]; !ok {
-		m.metrics[appName] = make(map[string][]*metric.EvalMetric)
-	}
-	if _, ok := m.metrics[appName][evalSetID]; !ok {
-		m.metrics[appName][evalSetID] = []*metric.EvalMetric{}
-	}
+	return fmt.Errorf("metric %s.%s.%s not found: %w", appName, evalSetID, metricInput.MetricName, os.ErrNotExist)
 }

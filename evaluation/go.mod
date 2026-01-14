@@ -13,6 +13,7 @@ replace (
 require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-multierror v1.1.1
+	github.com/panjf2000/ants/v2 v2.10.0
 	github.com/stretchr/testify v1.11.1
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
 	trpc.group/trpc-go/trpc-agent-go/model/provider v0.8.0
@@ -37,7 +38,6 @@ require (
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/ollama/ollama v0.13.1 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
-	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
