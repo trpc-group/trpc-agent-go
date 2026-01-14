@@ -425,7 +425,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 示例：[examples/agui](examples/agui)
 
 - 通过 AG-UI（Agent-User Interaction）协议对外暴露 Runner。
-- 默认提供 Server-Sent Events（SSE）服务端实现，并提供客户端示例（例如 CopilotKit）。
+- 默认提供 Server-Sent Events（SSE）服务端实现，并提供客户端示例（例如 CopilotKit、TDesign Chat）。
 
 ### 10. 评测（Evaluation）
 

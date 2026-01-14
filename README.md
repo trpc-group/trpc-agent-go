@@ -435,7 +435,7 @@ Example: [examples/agui](examples/agui)
 
 - Exposes a Runner through the AG-UI (Agent-User Interaction) protocol.
 - Built-in Server-Sent Events (SSE) server, plus client samples (for example,
-  CopilotKit).
+  CopilotKit and TDesign Chat).
 
 ### 10. Evaluation
 
