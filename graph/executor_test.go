@@ -260,6 +260,38 @@ func TestHandleInterrupt_EmitsEvent_WithCanceledContext(t *testing.T) {
 	}
 }
 
+func TestExecutor_EvaluateRetryDecision_SetsTaskIDOnInterrupt(t *testing.T) {
+	t.Parallel()
+
+	const (
+		nodeID  = "node_1"
+		prompt  = "ask"
+		stepNum = 7
+	)
+
+	exec := &Executor{}
+	task := &Task{NodeID: nodeID}
+	intr := NewInterruptError(prompt)
+	retryCtx := &retryContext{err: intr}
+
+	shouldRetry, err := exec.evaluateRetryDecision(
+		context.Background(),
+		nil,
+		nil,
+		task,
+		stepNum,
+		nil,
+		retryCtx,
+	)
+
+	require.False(t, shouldRetry)
+	require.Same(t, intr, err)
+	require.Equal(t, nodeID, intr.NodeID)
+	require.Equal(t, nodeID, intr.TaskID)
+	require.Equal(t, stepNum, intr.Step)
+	require.Equal(t, prompt, intr.Value)
+}
+
 // Cover empty WithDefaultRetryPolicy branch ensuring no defaults are set.
 func TestExecutor_WithDefaultRetryPolicy_EmptyCoversNoop(t *testing.T) {
 	sg := NewStateGraph(NewStateSchema())
