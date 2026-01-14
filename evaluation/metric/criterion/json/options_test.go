@@ -36,7 +36,7 @@ func TestWithIgnoreTreeAndCompare(t *testing.T) {
 	called := false
 	opts := newOptions(
 		WithIgnoreTree(map[string]any{"k": true}),
-		WithCompare(func(actual, expected map[string]any) (bool, error) {
+		WithCompare(func(actual, expected any) (bool, error) {
 			called = true
 			return true, nil
 		}),
