@@ -14,7 +14,15 @@ This folder collects runnable demos that showcase how to integrate the `tRPC-Age
 go run ./server/default
 ```
 
-2. In another terminal start the CopilotKit client:
+2. In another terminal start the TDesign chat client::
+
+```bash
+cd ./client/tdesign-chat
+pnpm install
+pnpm dev
+```
+
+Or start the CopilotKit client:
 
 ```bash
 cd ./client/copilotkit
