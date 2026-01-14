@@ -2194,3 +2194,43 @@ func TestNewToolsNodeFunc_RefreshToolSetsOnRun(t *testing.T) {
 
 	require.Equal(t, 2, ts.calls)
 }
+
+func TestStateGraph_StaticInterruptNodes_SetFlags(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("a", func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+	sg.AddNode("b", func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+
+	sg.WithInterruptBeforeNodes("a")
+	sg.WithInterruptAfterNodes("b")
+
+	sg.SetEntryPoint("a")
+	sg.AddEdge("a", "b")
+	sg.SetFinishPoint("b")
+
+	_, err := sg.Compile()
+	require.NoError(t, err)
+
+	a := sg.graph.nodes["a"]
+	b := sg.graph.nodes["b"]
+	require.NotNil(t, a)
+	require.NotNil(t, b)
+	require.True(t, a.interruptBefore)
+	require.True(t, b.interruptAfter)
+}
+
+func TestStateGraph_StaticInterruptNodes_UnknownNodeBuildError(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("a", func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+
+	sg.WithInterruptBeforeNodes("missing_before")
+	sg.WithInterruptAfterNodes("missing_after")
+
+	_, err := sg.Compile()
+	require.Error(t, err)
+}

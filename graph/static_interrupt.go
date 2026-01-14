@@ -11,18 +11,24 @@ package graph
 
 import "sort"
 
+// StaticInterruptKeyPrefixBefore/After are interrupt key prefixes used by
+// static interrupts (debug breakpoints).
 const (
 	StaticInterruptKeyPrefixBefore = "static_interrupt_before:"
 	StaticInterruptKeyPrefixAfter  = "static_interrupt_after:"
 )
 
+// StaticInterruptPhase indicates when a static interrupt is triggered.
 type StaticInterruptPhase string
 
+// Supported static interrupt phases.
 const (
 	StaticInterruptPhaseBefore StaticInterruptPhase = "before"
 	StaticInterruptPhaseAfter  StaticInterruptPhase = "after"
 )
 
+// StaticInterruptPayload is stored in InterruptError.Value for static
+// interrupts, providing structured information for debugging UIs.
 type StaticInterruptPayload struct {
 	Phase       StaticInterruptPhase `json:"phase"`
 	Nodes       []string             `json:"nodes"`
