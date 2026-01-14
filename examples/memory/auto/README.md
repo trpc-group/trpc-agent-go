@@ -12,7 +12,7 @@ Auto memory mode uses an LLM-based extractor to analyze conversations and automa
 | ------------------- | ------------------------------------------------- | --------------------------------------- |
 | **Memory Creation** | Agent explicitly calls `memory_add`               | System extracts automatically           |
 | **User Experience** | Visible tool calls in conversation                | Transparent, no tool call interruptions |
-| **Available Tools** | All 6 tools (add/update/delete/clear/search/load) | Only `memory_search`                    |
+| **Available Tools** | 6 tools (4 default, 2 configurable)              | Only `memory_search`                    |
 | **Processing**      | Synchronous during response                       | Asynchronous after response             |
 | **Control**         | Agent decides what to remember                    | Extractor analyzes and decides          |
 
