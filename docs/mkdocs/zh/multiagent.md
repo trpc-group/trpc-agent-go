@@ -225,9 +225,11 @@ cycleAgent := cycleagent.New(
 )
 ```
 
-#### 升级函数（WithEscalationFunc）
+#### 退出函数（WithEscalationFunc）
 
-在 `CycleAgent` 里，Escalation 的含义很简单：**现在就停止循环**。
+你可以把 `WithEscalationFunc` 理解为“退出函数”：当回调返回 `true`，
+`CycleAgent` 就会退出循环。代码里叫 `EscalationFunc`，这里的
+Escalation 只是指控制流上抛 / 中止循环，并不是“版本升级”。
 
 `CycleAgent` 会按顺序运行 SubAgent，然后重复整套流程。它会在以下任一
 情况发生时停止：
