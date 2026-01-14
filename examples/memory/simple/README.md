@@ -89,13 +89,13 @@ runner := runner.NewRunner(
 | `PG_HOST`                 | PostgreSQL host              | `localhost`              |
 | `PG_PORT`                 | PostgreSQL port              | `5432`                   |
 | `PG_USER`                 | PostgreSQL user              | `postgres`               |
-| `PG_PASSWORD`             | PostgreSQL password          | `my-secret-pw`           |
-| `PG_DATABASE`             | PostgreSQL database name     | `postgres`               |
+| `PG_PASSWORD`             | PostgreSQL password          | ``                       |
+| `PG_DATABASE`             | PostgreSQL database name     | `trpc-agent-go-pgmemory` |
 | `PGVECTOR_HOST`           | pgvector PostgreSQL host     | `localhost`              |
 | `PGVECTOR_PORT`           | pgvector PostgreSQL port     | `5432`                   |
 | `PGVECTOR_USER`           | pgvector PostgreSQL user     | `postgres`               |
-| `PGVECTOR_PASSWORD`       | pgvector PostgreSQL password | `my-secret-pw`           |
-| `PGVECTOR_DATABASE`       | pgvector PostgreSQL database | `trpc_agent`             |
+| `PGVECTOR_PASSWORD`       | pgvector PostgreSQL password | ``                       |
+| `PGVECTOR_DATABASE`       | pgvector PostgreSQL database | `trpc-agent-go-pgvector` |
 | `PGVECTOR_EMBEDDER_MODEL` | pgvector embedder model      | `text-embedding-3-small` |
 | `MYSQL_HOST`              | MySQL host                   | `localhost`              |
 | `MYSQL_PORT`              | MySQL port                   | `3306`                   |
@@ -175,16 +175,16 @@ go run main.go -memory mysql
 export PG_HOST=localhost
 export PG_PORT=5432
 export PG_USER=postgres
-export PG_PASSWORD=my-secret-pw
-export PG_DATABASE=trpc_agent_go
+export PG_PASSWORD=""
+export PG_DATABASE=trpc-agent-go-pgmemory
 go run main.go -memory postgres
 
 # pgvector memory service (using environment variables)
 export PGVECTOR_HOST=localhost
 export PGVECTOR_PORT=5432
 export PGVECTOR_USER=postgres
-export PGVECTOR_PASSWORD=my-secret-pw
-export PGVECTOR_DATABASE=trpc_agent
+export PGVECTOR_PASSWORD=""
+export PGVECTOR_DATABASE=trpc-agent-go-pgvector
 export PGVECTOR_EMBEDDER_MODEL=text-embedding-3-small
 go run main.go -memory pgvector
 ```

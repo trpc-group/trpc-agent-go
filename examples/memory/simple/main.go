@@ -27,22 +27,22 @@
 //		export MYSQL_HOST="localhost"
 //		export MYSQL_PORT="3306"
 //		export MYSQL_USER="root"
-//		export MYSQL_PASSWORD="password"
-//		export MYSQL_DATABASE="trpc_agent"
+//		export MYSQL_PASSWORD=""
+//		export MYSQL_DATABASE="trpc_agent_go"
 //
 //	postgres:
 //		export PG_HOST="localhost"
 //		export PG_PORT="5432"
 //		export PG_USER="postgres"
-//		export PG_PASSWORD="password"
-//		export PG_DATABASE="trpc_agent"
+//		export PG_PASSWORD=""
+//		export PG_DATABASE="trpc-agent-go-pgmemory"
 //
 //	pgvector:
 //		export PGVECTOR_HOST="localhost"
 //		export PGVECTOR_PORT="5432"
 //		export PGVECTOR_USER="postgres"
-//		export PGVECTOR_PASSWORD="password"
-//		export PGVECTOR_DATABASE="trpc_agent"
+//		export PGVECTOR_PASSWORD=""
+//		export PGVECTOR_DATABASE="trpc-agent-go-pgvector"
 //		export PGVECTOR_EMBEDDER_MODEL="text-embedding-3-small"
 package main
 

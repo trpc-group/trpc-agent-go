@@ -644,8 +644,8 @@ go run main.go -streaming=false
 ### 交互演示
 
 ```bash
-$ go run .
-🧠 Multi Turn Chat with Memory
+$ go run main.go
+🧠 Simple Memory Chat
 Model: deepseek-chat
 Memory Service: inmemory
 In-memory
@@ -811,7 +811,7 @@ func createMemoryService(memType string, softDelete bool) (
             memorypostgres.WithPort(getEnvInt("PG_PORT", 5432)),
             memorypostgres.WithUser(getEnv("PG_USER", "postgres")),
             memorypostgres.WithPassword(getEnv("PG_PASSWORD", "")),
-            memorypostgres.WithDatabase(getEnv("PG_DATABASE", "postgres")),
+            memorypostgres.WithDatabase(getEnv("PG_DATABASE", "trpc-agent-go-pgmemory")),
             memorypostgres.WithSoftDelete(softDelete),
             memorypostgres.WithToolEnabled(memory.DeleteToolName, false),
         )
@@ -1176,7 +1176,7 @@ memory.AddMemory(ctx, userKey, "用户喜欢编程", []string{"爱好"})
 
 **限制**（非 pgvector 后端）：
 
-- 这些后端均在**应用层**过滤和排序（O(n) 复杂度）
+- 这些后端均在**应用层**过滤和排序（\[O(n)\] 复杂度）
 - 数据量大时性能受影响
 - 不支持语义相似度搜索
 

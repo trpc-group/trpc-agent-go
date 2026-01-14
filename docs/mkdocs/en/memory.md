@@ -556,8 +556,8 @@ go run main.go -streaming=false
 ### Interactive Demo
 
 ```bash
-$ go run .
-🧠 Multi Turn Chat with Memory
+$ go run main.go
+🧠 Simple Memory Chat
 Model: deepseek-chat
 Memory Service: inmemory
 In-memory
@@ -1127,7 +1127,7 @@ Search: "写代码" ❌ No match (different words)
 
 **Limitations** (non-pgvector backends):
 
-- These backends perform filtering and sorting in **application layer** (O(n) complexity)
+- These backends perform filtering and sorting in **application layer** (\[O(n)\] complexity)
 - Performance affected by data volume
 - Not semantic similarity search
 
