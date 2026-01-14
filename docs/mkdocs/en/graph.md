@@ -1169,7 +1169,8 @@ See the runnable example: `examples/graph/placeholder`.
 
 Injecting retrieval output and user input
 
-- Upstream nodes can place ephemeral values into the session's `temp:` namespace so the LLM instruction can read them with placeholders.
+- Upstream nodes can place temporary values into the session's `temp:`
+  namespace so the LLM instruction can read them with placeholders.
 - Pattern:
 
 ```go
@@ -1196,7 +1197,10 @@ Example: `examples/graph/retrieval_placeholder`.
 
 Best practices for placeholders and session state
 
-- Ephemeral vs persistent: write per‑turn values to `temp:*` on session state (recommended via `sess.SetState`). Persistent configuration should go through `SessionService` with `user:*`/`app:*`.
+- Session-scoped vs persistent: write temporary values used to build
+  prompts to `temp:*` on session state (often overwritten each turn via
+  `sess.SetState`). Persistent configuration should go through
+  `SessionService` with `user:*`/`app:*`.
 - Why `SetState` is recommended: LLM nodes expand placeholders from the session object present in graph state; using `sess.SetState` avoids unsafe concurrent map access.
 - Service guardrails: the in‑memory service intentionally disallows writing `temp:*` (and `app:*` via user updater); see [session/inmemory/service.go](https://github.com/trpc-group/trpc-agent-go/blob/main/session/inmemory/service.go).
 - Concurrency: when multiple branches run in parallel, avoid multiple nodes mutating the same `session.State` keys. Prefer composing in a single node before the LLM, or store intermediate values in graph state then write once to `temp:*`.
