@@ -39,6 +39,11 @@ type VectorStore interface {
 	// DeleteByFilter deletes documents by filter.
 	DeleteByFilter(ctx context.Context, opts ...DeleteOption) error
 
+	// UpdateByFilter updates documents matching the filter with the specified field values.
+	// Supported fields: name, content, embedding, metadata.* (e.g., metadata.category, metadata.status)
+	// Note: id, created_at cannot be updated via this method.
+	UpdateByFilter(ctx context.Context, opts ...UpdateByFilterOption) (int64, error)
+
 	// Count counts documents in the vector store.
 	Count(ctx context.Context, opts ...CountOption) (int, error)
 
@@ -134,6 +139,53 @@ func WithGetMetadataOffset(offset int) GetMetadataOption {
 	}
 }
 
+// UpdateByFilterOption represents a functional option for UpdateByFilter.
+type UpdateByFilterOption func(*UpdateByFilterConfig)
+
+// UpdateByFilterConfig holds the configuration for update by filter operations.
+type UpdateByFilterConfig struct {
+	// DocumentIDs filters documents by IDs.
+	DocumentIDs []string
+	// FilterCondition filters documents by universal filter conditions.
+	FilterCondition *searchfilter.UniversalFilterCondition
+	// Updates contains the field-value pairs to update.
+	// Supported fields:
+	//   - name: update document name
+	//   - content: update document content
+	//   - embedding: update document embedding vector (value must be []float64)
+	//   - metadata.{key}: update specific metadata field (e.g., metadata.category, metadata.status)
+	// Note: id, created_at fields cannot be updated.
+	Updates map[string]any
+}
+
+// WithUpdateByFilterDocumentIDs sets the document IDs to filter.
+func WithUpdateByFilterDocumentIDs(ids []string) UpdateByFilterOption {
+	return func(c *UpdateByFilterConfig) {
+		c.DocumentIDs = ids
+	}
+}
+
+// WithUpdateByFilterCondition sets the filter condition for update operations.
+func WithUpdateByFilterCondition(cond *searchfilter.UniversalFilterCondition) UpdateByFilterOption {
+	return func(c *UpdateByFilterConfig) {
+		c.FilterCondition = cond
+	}
+}
+
+// WithUpdateByFilterUpdates sets the field-value pairs to update.
+// Supported fields:
+//   - name: update document name
+//   - content: update document content
+//   - embedding: update document embedding vector (value must be []float64)
+//   - metadata.{key}: update specific metadata field (e.g., metadata.category, metadata.status)
+//
+// Note: id, created_at fields cannot be updated.
+func WithUpdateByFilterUpdates(updates map[string]any) UpdateByFilterOption {
+	return func(c *UpdateByFilterConfig) {
+		c.Updates = updates
+	}
+}
+
 // ApplyDeleteOptions parses delete options and returns a DeleteConfig.
 func ApplyDeleteOptions(opts ...DeleteOption) *DeleteConfig {
 	config := &DeleteConfig{}
@@ -150,6 +202,26 @@ func ApplyCountOptions(opts ...CountOption) *CountConfig {
 		opt(config)
 	}
 	return config
+}
+
+// ApplyUpdateByFilterOptions parses update by filter options and returns an UpdateByFilterConfig.
+func ApplyUpdateByFilterOptions(opts ...UpdateByFilterOption) (*UpdateByFilterConfig, error) {
+	config := &UpdateByFilterConfig{}
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	// Validate: must have filter conditions
+	if len(config.DocumentIDs) == 0 && config.FilterCondition == nil {
+		return nil, fmt.Errorf("update by filter: no filter conditions specified (document IDs or filter condition required)")
+	}
+
+	// Validate: must have updates
+	if len(config.Updates) == 0 {
+		return nil, fmt.Errorf("update by filter: no updates specified")
+	}
+
+	return config, nil
 }
 
 // ApplyGetMetadataOptions parses get metadata options and returns a GetMetadataConfig.

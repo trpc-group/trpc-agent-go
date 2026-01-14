@@ -538,6 +538,12 @@ func (vs *VectorStore) DeleteByFilter(ctx context.Context, opts ...vectorstore.D
 	return vs.deleteByFilter(ctx, config)
 }
 
+// UpdateByFilter updates documents matching the filter with the specified field values.
+// Note: This method is not supported in milvus implementation.
+func (vs *VectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
+	return 0, errors.New("milvus: UpdateByFilter is not supported")
+}
+
 func (vs *VectorStore) validateDeleteConfig(config *vectorstore.DeleteConfig) error {
 	if config.DeleteAll && (len(config.DocumentIDs) > 0 || len(config.Filter) > 0) {
 		return fmt.Errorf("milvus delete all documents, but document ids or filter are provided")

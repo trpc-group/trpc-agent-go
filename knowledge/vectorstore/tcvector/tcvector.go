@@ -849,6 +849,12 @@ func (vs *VectorStore) deleteByFilter(ctx context.Context, options *vectorstore.
 	return nil
 }
 
+// UpdateByFilter updates documents matching the filter with the specified field values.
+// Note: This method is not supported in tcvector implementation.
+func (vs *VectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
+	return 0, errors.New("tcvectordb: UpdateByFilter is not supported")
+}
+
 // Count counts the number of documents in the vector store.
 func (vs *VectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
 	options := vectorstore.ApplyCountOptions(opts...)

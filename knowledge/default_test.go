@@ -185,6 +185,9 @@ func (*stubVectorStore) Count(ctx context.Context, opts ...vectorstore.CountOpti
 func (*stubVectorStore) Search(ctx context.Context, q *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	return nil, nil
 }
+func (*stubVectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
+	return 0, nil
+}
 func (*stubVectorStore) Close() error { return nil }
 
 // TestConversationMessageTypes verifies that knowledge and retriever use the same type.
@@ -789,6 +792,10 @@ func (t *trackingVectorStore) GetMetadata(ctx context.Context, opts ...vectorsto
 	return nil, nil
 }
 
+func (t *trackingVectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
+	return 0, nil
+}
+
 func (t *trackingVectorStore) Close() error {
 	return nil
 }
@@ -875,6 +882,10 @@ func (e *errorVectorStore) GetMetadata(ctx context.Context, opts ...vectorstore.
 }
 
 func (e *errorVectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
+	return 0, fmt.Errorf("vector store error")
+}
+
+func (e *errorVectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
 	return 0, fmt.Errorf("vector store error")
 }
 
@@ -1001,6 +1012,10 @@ func (s *syncMockVectorStore) Count(ctx context.Context, opts ...vectorstore.Cou
 
 func (s *syncMockVectorStore) Search(ctx context.Context, q *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	return nil, nil
+}
+
+func (s *syncMockVectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
+	return 0, nil
 }
 
 func (s *syncMockVectorStore) Close() error {
