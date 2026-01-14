@@ -212,17 +212,17 @@ llmAgent := llmagent.New(
 
 For complete code examples, please refer to [examples/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/react).
 
-## RalphLoop Planner (Hard Ralph)
+## RalphLoop Planner
 
 Ralph Loop is an "outer loop" idea: instead of trusting a Large Language Model
 (LLM) to decide when it is done, the framework keeps iterating until a
 machine-checkable completion condition is met.
 
-The RalphLoop Planner is a "hard" implementation that runs inside `LLMAgent`
-(Large Language Model Agent). When the model tries to stop (it sets
-`model.Response.Done = true`), the planner can override that decision by
-changing `Done` back to `false` when completion conditions are not met. This
-forces the internal LLM flow loop to make another model call.
+The RalphLoop Planner runs inside `LLMAgent` (Large Language Model Agent). When
+the model tries to stop (it sets `model.Response.Done = true`), the planner can
+override that decision by changing `Done` back to `false` when completion
+conditions are not met. This forces the internal LLM flow loop to make another
+model call.
 
 Limitations:
 

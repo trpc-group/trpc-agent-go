@@ -13,89 +13,79 @@ package main
 import (
 	"context"
 	"fmt"
-	"strings"
-	"sync/atomic"
+	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/planner/ralphloop"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 const (
-	agentName    = "demo-agent"
-	modelName    = "fake-model"
+	appName = "ralph-demo"
+
+	agentName = "demo-agent"
+
+	deepSeekModelName = "deepseek-chat"
+	deepSeekAPIKeyEnv = "DEEPSEEK_API_KEY"
+
 	promiseValue = "DONE"
+
+	maxIterations = 5
+	maxLLMCalls   = 10
 )
 
-type fakeModel struct {
-	calls int32
-}
+const agentInstruction = `This is a demo of Ralph Loop.
 
-func (m *fakeModel) GenerateContent(
-	ctx context.Context,
-	req *model.Request,
-) (<-chan *model.Response, error) {
-	_ = req
+Rules:
+1) On your first assistant response, do NOT output <promise>DONE</promise>.
+   Reply with: Iteration 1: still working.
+2) On your second assistant response, reply with: Iteration 2: done.
+   Then output: <promise>DONE</promise> on its own line.
+`
 
-	ch := make(chan *model.Response, 1)
-	go func() {
-		defer close(ch)
-
-		call := int(atomic.AddInt32(&m.calls, 1))
-		content := fmt.Sprintf("Iteration %d: still working.\n", call)
-		if call >= 2 {
-			content = strings.Join([]string{
-				"All done.",
-				"<promise>" + promiseValue + "</promise>",
-				"",
-			}, "\n")
-		}
-
-		ch <- &model.Response{
-			Done: true,
-			Choices: []model.Choice{{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: content,
-				},
-			}},
-		}
-	}()
-	return ch, nil
-}
-
-func (m *fakeModel) Info() model.Info {
-	return model.Info{Name: modelName}
-}
+const userPrompt = "Follow your instructions."
 
 func main() {
-	p, err := ralphloop.New(ralphloop.Config{
-		MaxIterations:     5,
+	if os.Getenv(deepSeekAPIKeyEnv) == "" {
+		fmt.Printf("Set %s to run this example.\n", deepSeekAPIKeyEnv)
+		return
+	}
+
+	llm := openai.New(
+		deepSeekModelName,
+		openai.WithVariant(openai.VariantDeepSeek),
+	)
+
+	rl, err := ralphloop.New(ralphloop.Config{
+		MaxIterations:     maxIterations,
 		CompletionPromise: promiseValue,
 	})
 	if err != nil {
 		panic(err)
 	}
 
+	maxTokens := 512
+	temperature := 0.2
 	a := llmagent.New(
 		agentName,
-		llmagent.WithModel(&fakeModel{}),
-		llmagent.WithPlanner(p),
-		llmagent.WithMaxLLMCalls(10),
+		llmagent.WithModel(llm),
+		llmagent.WithPlanner(rl),
+		llmagent.WithInstruction(agentInstruction),
+		llmagent.WithGenerationConfig(model.GenerationConfig{
+			Stream:      false,
+			MaxTokens:   &maxTokens,
+			Temperature: &temperature,
+		}),
+		llmagent.WithMaxLLMCalls(maxLLMCalls),
 	)
 
-	r := runner.NewRunner(
-		"ralph-demo",
-		a,
-	)
+	r := runner.NewRunner(appName, a)
 	defer r.Close()
 
 	ctx := context.Background()
-	msg := model.NewUserMessage(
-		"Keep working until you output <promise>DONE</promise>.",
-	)
+	msg := model.NewUserMessage(userPrompt)
 
 	events, err := r.Run(ctx, "user", "session", msg)
 	if err != nil {

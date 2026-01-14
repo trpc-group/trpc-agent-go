@@ -8,16 +8,15 @@
 //
 //
 
-// Package ralphloop implements a "Hard Ralph" planner.
+// Package ralphloop implements a Ralph Loop planner.
 //
 // Ralph Loop is an "outer loop" idea: instead of trusting a Large Language
 // Model (LLM) to decide when it is done, the framework keeps iterating until
 // an external, machine-checkable completion condition is met.
 //
-// This implementation is "hard" because it lives inside LLMAgent's flow:
-// when the model tries to stop (Response.Done == true), the planner can
-// override that decision by setting Done back to false so the internal
-// llmflow loop continues with another LLM call.
+// This planner runs inside LLMAgent's flow. When the model tries to stop
+// (Response.Done == true), it can override that decision by setting Done back
+// to false so the internal llmflow loop continues with another LLM call.
 package ralphloop
 
 import (

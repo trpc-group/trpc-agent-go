@@ -210,16 +210,16 @@ llmAgent := llmagent.New(
 
 完整代码示例可参考 [examples/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/react)
 
-## RalphLoop Planner（硬 Ralph）
+## RalphLoop Planner
 
 Ralph Loop 是一种“外部循环（outer loop）”的思路：不依赖 Large Language Model
 (LLM，大语言模型) 主观判断“我已经完成了”，而是用可验证的完成条件来决定是否
 继续迭代执行。
 
-RalphLoop Planner 是一种“硬”实现：它运行在 `LLMAgent`（Large Language Model
-Agent，大语言模型智能体）的内部流程里。当模型尝试停止（它设置
-`model.Response.Done = true`）时，如果完成条件尚未满足，Planner 可以把 `Done`
-改回 `false`，从而强行让内部的 LLM 流程循环再发起一次模型调用。
+RalphLoop Planner 运行在 `LLMAgent`（Large Language Model Agent，大语言模型
+智能体）的内部流程里。当模型尝试停止（它设置 `model.Response.Done = true`）时，
+如果完成条件尚未满足，Planner 可以把 `Done` 改回 `false`，从而让内部的 LLM 流程
+循环再发起一次模型调用。
 
 限制：
 
