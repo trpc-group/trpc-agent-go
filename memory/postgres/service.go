@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
@@ -41,7 +40,6 @@ type Service struct {
 	db        storage.Client
 	tableName string
 
-	mu               sync.Mutex
 	cachedTools      map[string]tool.Tool
 	precomputedTools []tool.Tool
 	autoMemoryWorker *imemory.AutoMemoryWorker
