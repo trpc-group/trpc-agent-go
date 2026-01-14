@@ -487,6 +487,12 @@ func (vs *VectorStore) DeleteByFilter(ctx context.Context, opts ...vectorstore.D
 	return vs.deleteByFilter(ctx, config)
 }
 
+// UpdateByFilter updates documents matching the filter with the specified field values.
+// Note: This method is not supported in elasticsearch implementation.
+func (vs *VectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
+	return 0, errors.New("elasticsearch: UpdateByFilter is not supported")
+}
+
 // GetMetadata retrieves metadata from the vector store.
 func (vs *VectorStore) GetMetadata(ctx context.Context, opts ...vectorstore.GetMetadataOption) (map[string]vectorstore.DocumentMetadata, error) {
 	config, err := vectorstore.ApplyGetMetadataOptions(opts...)
