@@ -11,27 +11,23 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"net/http"
 	"time"
 
-	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	_ "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 	_ "trpc.group/trpc-go/trpc-agent-go/session/redis"
 )
 
 var (
-	modelName            = flag.String("model", "deepseek-chat", "Model to use")
+	modelName            = flag.String("model", "deepseek-reasoner", "Model to use")
 	isStream             = flag.Bool("stream", true, "Whether to stream the response")
 	address              = flag.String("address", "127.0.0.1:8080", "Listen address")
 	path                 = flag.String("path", "/agui", "HTTP path")
@@ -66,18 +62,6 @@ func main() {
 			aguirunner.WithFlushInterval(1*time.Second),
 			aguirunner.WithAggregatorFactory(newAggregator),
 			aguirunner.WithTranslatorFactory(newTranslator),
-			aguirunner.WithTranslateCallbacks(translator.NewCallbacks().RegisterBeforeTranslate(
-				func(ctx context.Context, event *event.Event) (*event.Event, error) {
-					data, _ := json.Marshal(event)
-					log.Infof("before event: %s", string(data))
-					return nil, nil
-				},
-			).RegisterAfterTranslate(func(ctx context.Context, event events.Event) (events.Event, error) {
-				data, _ := json.Marshal(event)
-				log.Infof("after event: %s", string(data))
-				return nil, nil
-			}),
-			),
 		),
 	)
 	if err != nil {

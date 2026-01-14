@@ -66,7 +66,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		runner:                            r,
 		appName:                           opts.AppName,
 		translatorFactory:                 opts.TranslatorFactory,
-		graphNodeStartActivityEnabled:     opts.GraphNodeStartActivityEnabled,
+		graphNodeLifecycleActivityEnabled: opts.GraphNodeLifecycleActivityEnabled,
 		graphNodeInterruptActivityEnabled: opts.GraphNodeInterruptActivityEnabled,
 		userIDResolver:                    opts.UserIDResolver,
 		translateCallbacks:                opts.TranslateCallbacks,
@@ -86,7 +86,7 @@ type runner struct {
 	appName                           string
 	runner                            trunner.Runner
 	translatorFactory                 TranslatorFactory
-	graphNodeStartActivityEnabled     bool
+	graphNodeLifecycleActivityEnabled bool
 	graphNodeInterruptActivityEnabled bool
 	userIDResolver                    UserIDResolver
 	translateCallbacks                *translator.Callbacks
@@ -173,7 +173,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	trans, err := r.translatorFactory(
 		ctx,
 		runAgentInput,
-		translator.WithGraphNodeStartActivityEnabled(r.graphNodeStartActivityEnabled),
+		translator.WithGraphNodeLifecycleActivityEnabled(r.graphNodeLifecycleActivityEnabled),
 		translator.WithGraphNodeInterruptActivityEnabled(r.graphNodeInterruptActivityEnabled),
 	)
 	if err != nil {

@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -73,11 +74,17 @@ func main() {
 		llmagent.WithInstruction(reportInstruction),
 	)
 
-	runner := runner.NewRunner(agent.Info().Name, agent)
+	sessionService := inmemory.NewSessionService()
+	runner := runner.NewRunner(agent.Info().Name, agent, runner.WithSessionService(sessionService))
 	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0).
 	defer runner.Close()
 
-	server, err := agui.New(runner, agui.WithPath(*path))
+	server, err := agui.New(runner,
+		agui.WithPath(*path),
+		agui.WithSessionService(sessionService),
+		agui.WithAppName(agent.Info().Name),
+		agui.WithMessagesSnapshotEnabled(true),
+	)
 	if err != nil {
 		log.Fatalf("failed to create AG-UI server: %v", err)
 	}

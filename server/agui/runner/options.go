@@ -24,7 +24,7 @@ import (
 
 const (
 	defaultTimeout                           = time.Hour
-	defaultGraphNodeStartActivityEnabled     = false
+	defaultGraphNodeLifecycleActivityEnabled = false
 	defaultGraphNodeInterruptActivityEnabled = false
 )
 
@@ -43,7 +43,7 @@ type Options struct {
 	FlushInterval                     time.Duration         // FlushInterval controls how often buffered AG-UI events are flushed for a session.
 	StartSpan                         StartSpan             // StartSpan starts a span for an AG-UI run.
 	Timeout                           time.Duration         // Timeout controls how long a run is allowed to execute.
-	GraphNodeStartActivityEnabled     bool                  // GraphNodeStartActivityEnabled enables graph node start activity events.
+	GraphNodeLifecycleActivityEnabled bool                  // GraphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
 	GraphNodeInterruptActivityEnabled bool                  // GraphNodeInterruptActivityEnabled enables graph interrupt activity events.
 }
 
@@ -59,7 +59,7 @@ func NewOptions(opt ...Option) *Options {
 		FlushInterval:                     track.DefaultFlushInterval,
 		StartSpan:                         defaultStartSpan,
 		Timeout:                           defaultTimeout,
-		GraphNodeStartActivityEnabled:     defaultGraphNodeStartActivityEnabled,
+		GraphNodeLifecycleActivityEnabled: defaultGraphNodeLifecycleActivityEnabled,
 		GraphNodeInterruptActivityEnabled: defaultGraphNodeInterruptActivityEnabled,
 	}
 	for _, o := range opt {
@@ -181,10 +181,10 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
-// WithGraphNodeStartActivityEnabled enables emitting graph node start activity events.
-func WithGraphNodeStartActivityEnabled(enabled bool) Option {
+// WithGraphNodeLifecycleActivityEnabled enables emitting graph node lifecycle activity events.
+func WithGraphNodeLifecycleActivityEnabled(enabled bool) Option {
 	return func(o *Options) {
-		o.GraphNodeStartActivityEnabled = enabled
+		o.GraphNodeLifecycleActivityEnabled = enabled
 	}
 }
 

@@ -684,33 +684,36 @@ if err != nil {
 
 ### GraphAgent 节点活动事件
 
-在 `GraphAgent` 场景下，一个 run 通常会按图执行多个节点。为了让前端能持续展示“当前正在执行哪个节点”，并在 Human-in-the-Loop 场景中渲染中断提示，框架支持额外发送两类 `ACTIVITY_DELTA` 事件。该能力默认关闭，可在创建 AG-UI Server 时按需开启。
+在 `GraphAgent` 场景下，一个 run 通常会按图执行多个节点。为了让前端能持续展示“当前正在执行哪个节点”，并在 Human-in-the-Loop 场景中渲染中断提示，框架支持额外发送节点生命周期与中断相关的 `ACTIVITY_DELTA` 事件。该能力默认关闭，可在创建 AG-UI Server 时按需开启。
 
 `ACTIVITY_DELTA` 事件格式可参考 [AG-UI 官方文档](https://docs.ag-ui.com/concepts/events#activitydelta)
 
-#### 节点开始（`graph.node.start`）
+#### 节点生命周期（`graph.node.lifecycle`）
 
-该事件默认关闭，可在创建 AG-UI Server 时通过 `agui.WithGraphNodeStartActivityEnabled(true)` 开启。
+该事件默认关闭，可在创建 AG-UI Server 时通过 `agui.WithGraphNodeLifecycleActivityEnabled(true)` 开启。
 
 ```go
 server, err := agui.New(
 	runner,
-	agui.WithGraphNodeStartActivityEnabled(true),
+	agui.WithGraphNodeLifecycleActivityEnabled(true),
 )
 ```
 
-`activityType` 为 `graph.node.start`，在节点执行前发出，并通过 `add /node` 写入当前节点信息：
+启用后，节点在 `start` / `complete` / `error` 三个阶段都会发送 `ACTIVITY_DELTA`，且 `activityType` 均为 `graph.node.lifecycle`，通过 `/node.phase` 区分具体阶段。
+
+节点开始阶段（`phase=start`）在节点执行前发出，并通过 `add /node` 写入当前节点信息：
 
 ```json
 {
   "type": "ACTIVITY_DELTA",
-  "activityType": "graph.node.start",
+  "activityType": "graph.node.lifecycle",
   "patch": [
     {
       "op": "add",
       "path": "/node",
       "value": {
-        "nodeId": "plan_llm_node"
+        "nodeId": "plan_llm_node",
+        "phase": "start"
       }
     }
   ]
@@ -718,6 +721,45 @@ server, err := agui.New(
 ```
 
 该事件用于前端展示进度。前端可将 `/node.nodeId` 作为当前正在执行的节点，用于高亮或展示节点执行过程。
+
+节点成功结束阶段（`phase=complete`）在节点执行结束后发出，并通过 `add /node` 写入本次结束的节点信息：
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "complete"
+      }
+    }
+  ]
+}
+```
+
+节点失败结束阶段（`phase=error`）会在 `/node` 中携带错误信息：
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "error",
+        "error": "node execution failed"
+      }
+    }
+  ]
+}
+```
 
 #### 中断提示（`graph.node.interrupt`）
 
@@ -756,7 +798,7 @@ server, err := agui.New(
 
 #### 恢复回执（`graph.node.interrupt`）
 
-当新的 run 携带 resume 输入发起恢复时，AG-UI Server 会在该 run 的事件流开始处额外发送一条 `ACTIVITY_DELTA`，并且会先于任何 `graph.node.start` 事件发送。该事件同样使用 `activityType: graph.node.interrupt`，先将 `/interrupt` 置为 `null`，再通过 `add /resume` 写入本次恢复输入。`/resume` 包含 `resumeMap` 或 `resume`，并可包含 `checkpointId` 与 `lineageId`：
+当新的 run 携带 resume 输入发起恢复时，AG-UI Server 会在该 run 的事件流开始处额外发送一条 `ACTIVITY_DELTA`，并且会先于任何 `graph.node.lifecycle` 事件发送。该事件同样使用 `activityType: graph.node.interrupt`，先将 `/interrupt` 置为 `null`，再通过 `add /resume` 写入本次恢复输入。`/resume` 包含 `resumeMap` 或 `resume`，并可包含 `checkpointId` 与 `lineageId`：
 
 ```json
 {
