@@ -11,6 +11,7 @@ package evaluation
 
 import (
 	"context"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,6 +34,10 @@ func (stubService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (
 	return nil, nil
 }
 
+func (stubService) Close() error {
+	return nil
+}
+
 func TestNewOptionsDefaults(t *testing.T) {
 	opts := newOptions()
 
@@ -42,6 +47,8 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, opts.metricManager)
 	assert.NotNil(t, opts.registry)
 	assert.Nil(t, opts.evalService)
+	assert.Equal(t, runtime.GOMAXPROCS(0), opts.evalCaseParallelism)
+	assert.False(t, opts.evalCaseParallelInferenceEnabled)
 }
 
 func TestWithEvalSetManager(t *testing.T) {
@@ -82,4 +89,14 @@ func TestWithEvaluationService(t *testing.T) {
 func TestWithNumRuns(t *testing.T) {
 	opts := newOptions(WithNumRuns(5))
 	assert.Equal(t, 5, opts.numRuns)
+}
+
+func TestWithEvalCaseParallelism(t *testing.T) {
+	opts := newOptions(WithEvalCaseParallelism(8))
+	assert.Equal(t, 8, opts.evalCaseParallelism)
+}
+
+func TestWithEvalCaseParallelInferenceEnabled(t *testing.T) {
+	opts := newOptions(WithEvalCaseParallelInferenceEnabled(true))
+	assert.True(t, opts.evalCaseParallelInferenceEnabled)
 }

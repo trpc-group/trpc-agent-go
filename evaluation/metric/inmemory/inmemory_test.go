@@ -12,7 +12,9 @@ package inmemory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -116,4 +118,57 @@ func TestManagerDuplicateAndMissing(t *testing.T) {
 	err = mgr.Delete(ctx, "app", "set", "missing")
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, os.ErrNotExist))
+}
+
+func TestManagerConcurrentAddAndList(t *testing.T) {
+	ctx := context.Background()
+	mgr := New().(*manager)
+
+	const (
+		writers   = 20
+		readers   = 20
+		listLoops = 100
+	)
+
+	start := make(chan struct{})
+	errCh := make(chan error, writers+readers)
+	var wg sync.WaitGroup
+
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < listLoops; j++ {
+				_, err := mgr.List(ctx, "app", "set")
+				if err != nil {
+					errCh <- err
+					return
+				}
+			}
+		}()
+	}
+
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			err := mgr.Add(ctx, "app", "set", &metric.EvalMetric{
+				MetricName: fmt.Sprintf("metric-%d", i),
+				Threshold:  0.8,
+			})
+			if err != nil {
+				errCh <- err
+			}
+		}(i)
+	}
+
+	close(start)
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		assert.NoError(t, err)
+	}
 }

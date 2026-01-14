@@ -11,6 +11,7 @@ package service
 
 import (
 	"context"
+	"runtime"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -22,10 +23,12 @@ import (
 
 // Options holds the options for the evaluation service.
 type Options struct {
-	EvalSetManager    evalset.Manager                  // EvalSetManager is used to store and retrieve eval set.
-	EvalResultManager evalresult.Manager               // EvalResultManager is used to store and retrieve eval results.
-	Registry          registry.Registry                // Registry is used to store and retrieve evaluator.
-	SessionIDSupplier func(ctx context.Context) string // SessionIDSupplier is used to generate session IDs.
+	EvalSetManager                   evalset.Manager                  // EvalSetManager is used to store and retrieve eval set.
+	EvalResultManager                evalresult.Manager               // EvalResultManager is used to store and retrieve eval results.
+	Registry                         registry.Registry                // Registry is used to store and retrieve evaluator.
+	SessionIDSupplier                func(ctx context.Context) string // SessionIDSupplier is used to generate session IDs.
+	EvalCaseParallelism              int                              // EvalCaseParallelism controls concurrent inference across eval cases.
+	EvalCaseParallelInferenceEnabled bool                             // EvalCaseParallelInferenceEnabled toggles parallel inference across eval cases.
 }
 
 // Option defines a function type for configuring the evaluation service.
@@ -40,6 +43,8 @@ func NewOptions(opt ...Option) *Options {
 		SessionIDSupplier: func(ctx context.Context) string {
 			return uuid.New().String()
 		},
+		EvalCaseParallelism:              runtime.GOMAXPROCS(0),
+		EvalCaseParallelInferenceEnabled: false,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -76,5 +81,19 @@ func WithRegistry(r registry.Registry) Option {
 func WithSessionIDSupplier(s func(ctx context.Context) string) Option {
 	return func(o *Options) {
 		o.SessionIDSupplier = s
+	}
+}
+
+// WithEvalCaseParallelism sets the maximum number of eval cases inferred in parallel.
+func WithEvalCaseParallelism(parallelism int) Option {
+	return func(o *Options) {
+		o.EvalCaseParallelism = parallelism
+	}
+}
+
+// WithEvalCaseParallelInferenceEnabled enables or disables parallel inference across eval cases.
+func WithEvalCaseParallelInferenceEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.EvalCaseParallelInferenceEnabled = enabled
 	}
 }

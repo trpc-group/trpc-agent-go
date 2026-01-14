@@ -12,6 +12,8 @@ package evaluation
 import (
 	"context"
 	"errors"
+	"os"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,6 +46,7 @@ type fakeService struct {
 	evaluateResults  []*evalresult.EvalSetResult
 	inferenceErr     error
 	evaluateErr      error
+	closeErr         error
 
 	inferenceRequests []*service.InferenceRequest
 	evaluateRequests  []*service.EvaluateRequest
@@ -74,6 +77,30 @@ func (f *fakeService) Evaluate(ctx context.Context, req *service.EvaluateRequest
 		EvalSetID:       req.EvalSetID,
 		EvalCaseResults: []*evalresult.EvalCaseResult{},
 	}, nil
+}
+
+func (f *fakeService) Close() error {
+	return f.closeErr
+}
+
+type countingService struct {
+	closed int32
+}
+
+func (c *countingService) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
+	return []*service.InferenceResult{}, nil
+}
+
+func (c *countingService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*evalresult.EvalSetResult, error) {
+	return &evalresult.EvalSetResult{
+		EvalSetID:       req.EvalSetID,
+		EvalCaseResults: []*evalresult.EvalCaseResult{},
+	}, nil
+}
+
+func (c *countingService) Close() error {
+	atomic.AddInt32(&c.closed, 1)
+	return nil
 }
 
 type fakeMetricManager struct {
@@ -170,11 +197,20 @@ func TestNewAgentEvaluatorValidation(t *testing.T) {
 	_, err = New("app", stubRunner{}, WithNumRuns(0))
 	assert.Error(t, err)
 
+	_, err = New(
+		"app",
+		stubRunner{},
+		WithEvalCaseParallelInferenceEnabled(true),
+		WithEvalCaseParallelism(0),
+	)
+	assert.Error(t, err)
+
 	ae, err := New("app", stubRunner{})
 	assert.NoError(t, err)
 	impl, ok := ae.(*agentEvaluator)
 	assert.True(t, ok)
 	assert.NotNil(t, impl.evalService)
+	assert.NoError(t, ae.Close())
 }
 
 func TestNewAgentEvaluatorWithCustomService(t *testing.T) {
@@ -186,6 +222,140 @@ func TestNewAgentEvaluatorWithCustomService(t *testing.T) {
 	assert.Equal(t, customSvc, impl.evalService)
 }
 
+func TestAgentEvaluatorCloseLifecycle(t *testing.T) {
+	customSvc := &countingService{}
+	ae := &agentEvaluator{
+		evalService:       customSvc,
+		evalResultManager: evalresultinmemory.New(),
+		evalSetManager:    evalsetinmemory.New(),
+		metricManager:     metricinmemory.New(),
+		registry:          registry.New(),
+	}
+	assert.NoError(t, ae.Close())
+	assert.Equal(t, int32(1), atomic.LoadInt32(&customSvc.closed))
+}
+
+func TestAgentEvaluatorCloseWrapsEvalServiceError(t *testing.T) {
+	wantErr := errors.New("close failed")
+	ae := &agentEvaluator{
+		evalService: &fakeService{closeErr: wantErr},
+	}
+	err := ae.Close()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "close eval service")
+	assert.ErrorIs(t, err, wantErr)
+}
+
+func TestAgentEvaluatorCollectCaseResultsGetEvalSetError(t *testing.T) {
+	ctx := context.Background()
+	ae := &agentEvaluator{
+		appName:        "app",
+		evalSetManager: evalsetinmemory.New(),
+		numRuns:        1,
+	}
+	_, err := ae.collectCaseResults(ctx, "set")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "get eval set")
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestAgentEvaluatorCollectCaseResultsSortByEvalSetOrder(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, evalSetMgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{EvalID: "B"}))
+	assert.NoError(t, evalSetMgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{EvalID: "A"}))
+
+	svc := &fakeService{
+		evaluateResults: []*evalresult.EvalSetResult{{
+			EvalSetID: evalSetID,
+			EvalCaseResults: []*evalresult.EvalCaseResult{
+				makeEvalCaseResult(evalSetID, "A", "m", 1, 0, status.EvalStatusPassed),
+				makeEvalCaseResult(evalSetID, "B", "m", 1, 0, status.EvalStatusPassed),
+			},
+		}},
+	}
+
+	ae := &agentEvaluator{
+		appName:        appName,
+		evalSetManager: evalSetMgr,
+		evalService:    svc,
+		metricManager:  &fakeMetricManager{metrics: map[string]*metric.EvalMetric{}},
+		numRuns:        1,
+	}
+	results, err := ae.collectCaseResults(ctx, evalSetID)
+	assert.NoError(t, err)
+	assert.Len(t, results, 2)
+	assert.Equal(t, "B", results[0].EvalCaseID)
+	assert.Equal(t, "A", results[1].EvalCaseID)
+}
+
+func TestAgentEvaluatorCollectCaseResultsSortKnownCaseFirst(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, evalSetMgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{EvalID: "A"}))
+
+	svc := &fakeService{
+		evaluateResults: []*evalresult.EvalSetResult{{
+			EvalSetID: evalSetID,
+			EvalCaseResults: []*evalresult.EvalCaseResult{
+				makeEvalCaseResult(evalSetID, "B", "m", 1, 0, status.EvalStatusPassed),
+				makeEvalCaseResult(evalSetID, "A", "m", 1, 0, status.EvalStatusPassed),
+			},
+		}},
+	}
+
+	ae := &agentEvaluator{
+		appName:        appName,
+		evalSetManager: evalSetMgr,
+		evalService:    svc,
+		metricManager:  &fakeMetricManager{metrics: map[string]*metric.EvalMetric{}},
+		numRuns:        1,
+	}
+	results, err := ae.collectCaseResults(ctx, evalSetID)
+	assert.NoError(t, err)
+	assert.Len(t, results, 2)
+	assert.Equal(t, "A", results[0].EvalCaseID)
+	assert.Equal(t, "B", results[1].EvalCaseID)
+}
+
+func TestAgentEvaluatorCollectCaseResultsSortLexicographically(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	svc := &fakeService{
+		evaluateResults: []*evalresult.EvalSetResult{{
+			EvalSetID: evalSetID,
+			EvalCaseResults: []*evalresult.EvalCaseResult{
+				makeEvalCaseResult(evalSetID, "b", "m", 1, 0, status.EvalStatusPassed),
+				makeEvalCaseResult(evalSetID, "a", "m", 1, 0, status.EvalStatusPassed),
+			},
+		}},
+	}
+
+	ae := &agentEvaluator{
+		appName:       appName,
+		evalService:   svc,
+		metricManager: &fakeMetricManager{metrics: map[string]*metric.EvalMetric{}},
+		numRuns:       1,
+	}
+	results, err := ae.collectCaseResults(ctx, evalSetID)
+	assert.NoError(t, err)
+	assert.Len(t, results, 2)
+	assert.Equal(t, "a", results[0].EvalCaseID)
+	assert.Equal(t, "b", results[1].EvalCaseID)
+}
+
 func TestAgentEvaluatorEvaluateSuccess(t *testing.T) {
 	ctx := context.Background()
 	appName := "app"
@@ -195,6 +365,10 @@ func TestAgentEvaluatorEvaluateSuccess(t *testing.T) {
 
 	metricMgr := metricinmemory.New()
 	err := metricMgr.Add(ctx, appName, evalSetID, &metric.EvalMetric{MetricName: metricName, Threshold: 1})
+	assert.NoError(t, err)
+
+	evalSetMgr := evalsetinmemory.New()
+	_, err = evalSetMgr.Create(ctx, appName, evalSetID)
 	assert.NoError(t, err)
 
 	svc := &fakeService{
@@ -238,7 +412,7 @@ func TestAgentEvaluatorEvaluateSuccess(t *testing.T) {
 		appName,
 		stubRunner{},
 		WithMetricManager(metricMgr),
-		WithEvalSetManager(evalsetinmemory.New()),
+		WithEvalSetManager(evalSetMgr),
 		WithRegistry(registry.New()),
 		WithEvaluationService(svc),
 		WithNumRuns(2),

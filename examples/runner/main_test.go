@@ -78,6 +78,9 @@ func TestTool(t *testing.T) {
 				evaluation.WithEvalResultManager(localEvalResultManager),
 			)
 			assert.NoError(t, err)
+			t.Cleanup(func() {
+				assert.NoError(t, evaluator.Close())
+			})
 			result, err := evaluator.Evaluate(ctx, tt.evalSetID)
 			assert.NoError(t, err)
 			assert.NotNil(t, result)
@@ -111,6 +114,9 @@ func TestRubric_CompoundInterest_FinalAnswerPresent(t *testing.T) {
 		evaluation.WithEvalResultManager(localEvalResultManager),
 	)
 	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, evaluator.Close())
+	})
 	result, err := evaluator.Evaluate(ctx, "compound_interest_rubric")
 	assert.NoError(t, err)
 	assert.NotNil(t, result)

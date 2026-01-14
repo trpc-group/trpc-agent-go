@@ -47,6 +47,7 @@ agentEvaluator, err := evaluation.New(
 if err != nil {
 	log.Fatalf("create evaluator: %v", err)
 }
+defer agentEvaluator.Close()
 // Perform Evaluation.
 result, err := agentEvaluator.Evaluate(context.Background(), evalSetID)
 if err != nil {
@@ -311,6 +312,7 @@ agentEvaluator, err := evaluation.New(
 if err != nil {
 	log.Fatalf("create evaluator: %v", err)
 }
+defer agentEvaluator.Close()
 // Perform Evaluation.
 result, err := agentEvaluator.Evaluate(ctx, evalSetID)
 if err != nil {
@@ -881,6 +883,8 @@ Description:
 type AgentEvaluator interface {
 	// Evaluate evaluates the specified evaluation set.
 	Evaluate(ctx context.Context, evalSetID string) (*EvaluationResult, error)
+	// Close closes the evaluator and releases owned resources.
+	Close() error
 }
 ```
 
@@ -922,6 +926,10 @@ An `AgentEvaluator` instance can be created using `evaluation.New`. By default, 
 import "trpc.group/trpc-go/trpc-agent-go/evaluation"
 
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithNumRuns(numRuns))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 Because the Agent's execution process may be uncertain, `evaluation.WithNumRuns` provides a mechanism for multiple evaluation runs to reduce the randomness of a single run.
@@ -929,6 +937,21 @@ Because the Agent's execution process may be uncertain, `evaluation.WithNumRuns`
 - The default number of runs is 1;
 - By specifying `evaluation.WithNumRuns(n)`, each evaluation case can be run multiple times;
 - The final result is based on the combined statistical results of multiple runs. The default statistical method is the average of the evaluation scores of multiple runs.
+
+To accelerate the inference phase for large evaluation sets, parallel inference across evaluation cases can be enabled.
+
+- `evaluation.WithEvalCaseParallelInferenceEnabled(true)` enables parallel inference across eval cases. It is disabled by default.
+- `evaluation.WithEvalCaseParallelism(n)` sets the maximum number of eval cases inferred in parallel. The default value is `runtime.GOMAXPROCS(0)`.
+
+```go
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalCaseParallelInferenceEnabled(true),
+	evaluation.WithEvalCaseParallelism(runtime.GOMAXPROCS(0)),
+)
+defer agentEvaluator.Close()
+```
 
 ## Usage Guide
 
@@ -954,6 +977,10 @@ import (
 
 evalSetManager := evalsetlocal.New(evalset.WithBaseDir("<BaseDir>"))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalSetManager(evalSetManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 In addition, if the default path structure does not meet your requirements, you can customize the file path rules by implementing the `Locator` interface. The interface definition is as follows:
@@ -979,6 +1006,10 @@ import (
 
 evalSetManager := evalsetlocal.New(evalset.WithLocator(&customLocator{}))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalSetManager(evalSetManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 
 type customLocator struct {
 }
@@ -1028,6 +1059,10 @@ import (
 
 metricManager := metriclocal.New(metric.WithBaseDir("<BaseDir>"))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithMetricManager(metricManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 In addition, if the default path structure does not meet your requirements, you can customize the file path rules by implementing the `Locator` interface. The interface definition is as follows:
@@ -1051,6 +1086,10 @@ import (
 
 metricManager := metriclocal.New(metric.WithLocator(&customLocator{}))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithMetricManager(metricManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 
 type customLocator struct {
 }
@@ -1076,6 +1115,10 @@ import (
 
 evalResultManager := evalresultlocal.New(evalresult.WithBaseDir("<BaseDir>"))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalResultManager(evalResultManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 In addition, if the default path structure does not meet your requirements, you can customize the file path rules by implementing the `Locator` interface. The interface definition is as follows:
@@ -1101,6 +1144,10 @@ import (
 
 evalResultManager := evalresultlocal.New(evalresult.WithLocator(&customLocator{}))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalResultManager(evalResultManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 
 type customLocator struct {
 }
