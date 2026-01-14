@@ -903,6 +903,7 @@ graphAgent, err := graphagent.New(
 		"initial_data": "初始数据",
 	}),
 	graphagent.WithChannelBufferSize(1024),            // 调整事件通道缓冲区
+	graphagent.WithMaxConcurrency(8),                  // 限制并行任务数
 	graphagent.WithCheckpointSaver(memorySaver),       // 使用持久化检查点
 	graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
 	graphagent.WithAddSessionSummary(true),            // 将会话摘要注入 system 消息
@@ -2577,6 +2578,7 @@ flowchart TB
 exec, err := graph.NewExecutor(g,
     graph.WithChannelBufferSize(1024),              // 事件通道缓冲
     graph.WithMaxSteps(50),                          // 最大步数
+    graph.WithMaxConcurrency(8),                     // 并行任务数
     graph.WithStepTimeout(5*time.Minute),            // 步骤超时
     graph.WithNodeTimeout(2*time.Minute),            // 节点超时
     graph.WithCheckpointSaver(saver),                // 开启检查点（如 sqlite/inmemory）
@@ -3158,7 +3160,7 @@ _ = cm.DeleteLineage(ctx, lineageID)
 
 - 默认值（Executor）
 
-  - `ChannelBufferSize = 256`、`MaxSteps = 100`、`CheckpointSaveTimeout = 10s`
+  - `ChannelBufferSize = 256`、`MaxSteps = 100`、`MaxConcurrency = GOMAXPROCS(0)`、`CheckpointSaveTimeout = 10s`
   - 步/节点超时可通过 `Executor` 的 `WithStepTimeout` / `WithNodeTimeout` 配置（目前 GraphAgent 选项未直接暴露）
 
 - 会话
@@ -3171,7 +3173,8 @@ _ = cm.DeleteLineage(ctx, lineageID)
 
 - 事件与背压
 
-  - 调整 `WithChannelBufferSize`；按 `author`/`object` 过滤事件降低噪音
+  - 调整 `WithChannelBufferSize`；用 `WithMaxConcurrency` 限制并行任务数
+  - 按 `author`/`object` 过滤事件降低噪音
 
 - 命名与键
 
