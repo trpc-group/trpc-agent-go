@@ -3105,6 +3105,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: "ckpt-123",
     }),
 )
@@ -3121,6 +3122,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: "ckpt-123",
     }),
 )
@@ -3229,6 +3231,7 @@ sg.AddNode(nodeReview, func(ctx context.Context, s graph.State) (any, error) {
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: checkpointID,
         graph.StateKeyResumeMap: map[string]any{
             "review_key": "approved",
@@ -3276,6 +3279,7 @@ cmd := graph.NewResumeCommand().
 events, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: latest.Checkpoint.ID,
         graph.StateKeyCommand:    cmd,
     }),
@@ -3592,7 +3596,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 
 **Q6: 从检查点恢复未按预期继续**
 
-- 通过 `agent.WithRuntimeState(map[string]any{ graph.CfgKeyCheckpointID: "..." })` 传入；
+- 通过 `agent.WithRuntimeState(map[string]any{ graph.CfgKeyLineageID: "...", graph.CfgKeyCheckpointID: "..." })` 传入；
 - HITL 恢复时提供 `ResumeMap`；纯 "resume" 文本不会注入到 `graph.StateKeyUserInput`。
 
 **Q7: 并行下状态冲突**
