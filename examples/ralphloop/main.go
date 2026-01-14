@@ -39,10 +39,11 @@ const (
 const agentInstruction = `This is a demo of Ralph Loop.
 
 Rules:
-1) On your first assistant response, do NOT output <promise>DONE</promise>.
+1) On your first assistant response, do NOT output the completion promise.
    Reply with: Iteration 1: still working.
 2) On your second assistant response, reply with: Iteration 2: done.
-   Then output: <promise>DONE</promise> on its own line.
+   Then output the completion promise exactly as shown in the system
+   instructions, on its own line.
 `
 
 const userPrompt = "Follow your instructions."
