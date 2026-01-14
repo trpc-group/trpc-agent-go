@@ -827,6 +827,180 @@ func TestSubgraph_NestedInterruptResume(t *testing.T) {
 	require.Equal(t, resumeValue, got)
 }
 
+func TestSubgraph_NestedInterruptResume_PreservesResumeMapKeys(t *testing.T) {
+	const (
+		lineageID          = "ln-subgraph-interrupt-preserve"
+		namespace          = "ns-subgraph-interrupt-preserve"
+		childAgentID       = "child_preserve"
+		childNodeID        = "child_node"
+		childInterruptKey  = "child_key"
+		parentNodeID       = "parent_node"
+		parentInterruptKey = "parent_key"
+		stateKeyChildOut   = "child_answer"
+		stateKeyParentOut  = "parent_answer"
+		childPrompt        = "child_prompt"
+		parentPrompt       = "parent_prompt"
+		childResumeValue   = "child_ok"
+		parentResumeValue  = "parent_ok"
+		resumeInvID        = "inv-resume-preserve"
+	)
+
+	ctx := context.Background()
+
+	schema := NewStateSchema()
+	schema.AddField(
+		stateKeyChildOut,
+		StateField{Type: reflect.TypeOf(testEmptyString)},
+	)
+	schema.AddField(
+		stateKeyParentOut,
+		StateField{Type: reflect.TypeOf(testEmptyString)},
+	)
+
+	saver := newSubgraphTestSaver()
+
+	childGraph, err := NewStateGraph(schema).
+		AddNode(childNodeID, func(ctx context.Context, s State) (any, error) {
+			value, err := Interrupt(
+				ctx,
+				s,
+				childInterruptKey,
+				childPrompt,
+			)
+			if err != nil {
+				return nil, err
+			}
+			v, _ := value.(string)
+			return State{stateKeyChildOut: v}, nil
+		}).
+		SetEntryPoint(childNodeID).
+		SetFinishPoint(childNodeID).
+		Compile()
+	require.NoError(t, err)
+
+	childExec, err := NewExecutor(childGraph, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+	childAgent := &checkpointGraphAgent{
+		name: childAgentID,
+		exec: childExec,
+	}
+
+	parent := &parentWithSubAgent{a: childAgent}
+	parentGraph, err := NewStateGraph(schema).
+		AddAgentNode(
+			childAgentID,
+			WithSubgraphOutputMapper(func(_ State, r SubgraphResult) State {
+				value, ok := GetStateValue[string](
+					r.FinalState,
+					stateKeyChildOut,
+				)
+				if !ok {
+					return nil
+				}
+				return State{stateKeyChildOut: value}
+			}),
+		).
+		AddNode(parentNodeID, func(ctx context.Context, s State) (any, error) {
+			value, err := Interrupt(
+				ctx,
+				s,
+				parentInterruptKey,
+				parentPrompt,
+			)
+			if err != nil {
+				return nil, err
+			}
+			v, _ := value.(string)
+			return State{stateKeyParentOut: v}, nil
+		}).
+		AddEdge(childAgentID, parentNodeID).
+		SetEntryPoint(childAgentID).
+		SetFinishPoint(parentNodeID).
+		Compile()
+	require.NoError(t, err)
+
+	parentExec, err := NewExecutor(parentGraph, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	initial := State{
+		StateKeyParentAgent: parent,
+		CfgKeyLineageID:     lineageID,
+		CfgKeyCheckpointNS:  namespace,
+	}
+	ch, err := parentExec.Execute(
+		ctx,
+		initial,
+		agent.NewInvocation(agent.WithInvocationID(testInvocationID)),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	cm := parentExec.CheckpointManager()
+	require.NotNil(t, cm)
+
+	parentTuples, err := cm.ListCheckpoints(
+		ctx,
+		CreateCheckpointConfig(lineageID, "", namespace),
+		nil,
+	)
+	require.NoError(t, err)
+
+	var parentInterrupt *CheckpointTuple
+	for _, tuple := range parentTuples {
+		if tuple == nil || tuple.Checkpoint == nil {
+			continue
+		}
+		if tuple.Checkpoint.InterruptState == nil {
+			continue
+		}
+		if tuple.Checkpoint.InterruptState.NodeID == childAgentID {
+			parentInterrupt = tuple
+			break
+		}
+	}
+	require.NotNil(t, parentInterrupt)
+
+	resume := State{
+		StateKeyParentAgent: parent,
+		CfgKeyLineageID:     lineageID,
+		CfgKeyCheckpointNS:  namespace,
+		CfgKeyCheckpointID:  parentInterrupt.Checkpoint.ID,
+		StateKeyCommand: &Command{
+			ResumeMap: map[string]any{
+				childInterruptKey:  childResumeValue,
+				parentInterruptKey: parentResumeValue,
+			},
+		},
+	}
+	ch2, err := parentExec.Execute(
+		ctx,
+		resume,
+		agent.NewInvocation(agent.WithInvocationID(resumeInvID)),
+	)
+	require.NoError(t, err)
+
+	var done *event.Event
+	for ev := range ch2 {
+		if ev != nil && ev.Done && ev.Object == ObjectTypeGraphExecution {
+			done = ev
+		}
+	}
+	require.NotNil(t, done)
+
+	var gotChild string
+	raw, ok := done.StateDelta[stateKeyChildOut]
+	require.True(t, ok)
+	require.NoError(t, json.Unmarshal(raw, &gotChild))
+	require.Equal(t, childResumeValue, gotChild)
+
+	var gotParent string
+	raw, ok = done.StateDelta[stateKeyParentOut]
+	require.True(t, ok)
+	require.NoError(t, json.Unmarshal(raw, &gotParent))
+	require.Equal(t, parentResumeValue, gotParent)
+}
+
 func TestSubgraph_MultiLevelNestedInterruptResume(t *testing.T) {
 	const (
 		lineageID         = "ln-subgraph-interrupt-multi"

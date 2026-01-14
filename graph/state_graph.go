@@ -1854,9 +1854,23 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 					info.childTaskID,
 				); cmd != nil {
 					childState[StateKeyCommand] = cmd
-					delete(state, ResumeChannel)
-					delete(state, StateKeyResumeMap)
-					delete(childState, ResumeChannel)
+					if cmd.Resume != nil {
+						delete(state, ResumeChannel)
+						delete(childState, ResumeChannel)
+					}
+					if cmd.ResumeMap != nil &&
+						info.childTaskID != "" {
+						if resumeMap, ok :=
+							state[StateKeyResumeMap].(map[string]any); ok {
+							delete(resumeMap, info.childTaskID)
+							if len(resumeMap) == 0 {
+								delete(
+									state,
+									StateKeyResumeMap,
+								)
+							}
+						}
+					}
 					delete(childState, StateKeyResumeMap)
 				}
 				delete(state, StateKeySubgraphInterrupt)
