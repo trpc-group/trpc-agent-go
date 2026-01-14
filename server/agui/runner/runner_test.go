@@ -79,7 +79,7 @@ func TestRunEmitsGraphNodeStartActivityWhenEnabled(t *testing.T) {
 		},
 	}
 
-	r := New(underlying, WithGraphNodeStartActivityEnabled(true))
+	r := New(underlying, WithGraphNodeLifecycleActivityEnabled(true))
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
@@ -92,7 +92,7 @@ func TestRunEmitsGraphNodeStartActivityWhenEnabled(t *testing.T) {
 	var found bool
 	for _, evt := range evts {
 		if delta, ok := evt.(*aguievents.ActivityDeltaEvent); ok {
-			assert.Equal(t, "graph.node.start", delta.ActivityType)
+			assert.Equal(t, "graph.node.lifecycle", delta.ActivityType)
 			found = true
 		}
 	}
