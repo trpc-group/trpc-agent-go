@@ -106,6 +106,10 @@ type Usage struct {
 type PromptTokensDetails struct {
 	// CachedTokens is the number of cached tokens in the prompt.
 	CachedTokens int `json:"cached_tokens"`
+	// CacheCreationTokens is the number of tokens used to create the cache (Anthropic).
+	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+	// CacheReadTokens is the number of tokens read from cache (Anthropic).
+	CacheReadTokens int `json:"cache_read_tokens,omitempty"`
 }
 
 // Response is the response from the model.
