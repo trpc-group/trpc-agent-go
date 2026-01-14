@@ -41,15 +41,15 @@ func newKnowledgeSearcher(m model.Model, systemPrompt string, toolKnowledge *Too
 	}
 }
 
-func (s *knowledgeSearcher) Search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) (context.Context, []string, error) {
-	ctx, query, usage, err := s.rewriteQuery(ctx, query)
+func (s *knowledgeSearcher) Search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) (newCtx context.Context, selectedTools []string, err error) {
+	newCtx, query, usage, err := s.rewriteQuery(ctx, query)
 	if err != nil {
 		return ctx, nil, err
 	}
 	defer func() {
-		ctx = SetToolSearchUsage(ctx, usage)
+		newCtx = SetToolSearchUsage(ctx, usage)
 	}()
-	upsertUsage, err := s.toolKnowledge.upsert(ctx, candidates)
+	upsertUsage, err := s.toolKnowledge.upsert(newCtx, candidates)
 	if err != nil {
 		return ctx, nil, err
 	}
@@ -57,14 +57,14 @@ func (s *knowledgeSearcher) Search(ctx context.Context, candidates map[string]to
 	usage.PromptTokens += upsertUsage.PromptTokens
 	usage.TotalTokens += upsertUsage.TotalTokens
 
-	ctx, selectedTools, searchUsage, err := s.toolKnowledge.search(ctx, candidates, query, topK)
+	newCtx, selectedTools, searchUsage, err := s.toolKnowledge.search(newCtx, candidates, query, topK)
 	if err != nil {
-		return ctx, nil, err
+		return newCtx, nil, err
 	}
 	usage.CompletionTokens += searchUsage.CompletionTokens
 	usage.PromptTokens += searchUsage.PromptTokens
 	usage.TotalTokens += searchUsage.TotalTokens
-	return ctx, selectedTools, err
+	return newCtx, selectedTools, err
 }
 
 func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (context.Context, string, *model.Usage, error) {
