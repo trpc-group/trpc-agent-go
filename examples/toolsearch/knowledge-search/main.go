@@ -7,7 +7,7 @@
 //
 //
 
-// Package main demonstrates baseline case with llm tool search.
+// Package main demonstrates baseline case with knowledge tool search.
 package main
 
 import (
@@ -25,6 +25,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/middleware/toolsearch"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/examples/toolsearch/toollibrary/small"
+	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -46,7 +48,7 @@ func main() {
 		inputFile: *inputFile,
 	}
 
-	fmt.Printf("🚀 Tool Search Test: LLM Search\n")
+	fmt.Printf("🚀 Tool Search Test: Knowledge Search\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Printf("Tools: %d (all tools provided to LLM)\n", len(small.GetTools()))
@@ -128,7 +130,12 @@ func (c *baselineChat) setup(_ context.Context) error {
 	var SearchToolTurnNumberMutex sync.Mutex
 
 	modelCallbacks := model.NewCallbacks()
-	if tc, err := toolsearch.New(modelInstance, toolsearch.WithMaxTools(maxTools)); err != nil {
+	toolKnowledge, err := toolsearch.NewToolKnowledge(openaiembedder.New(openaiembedder.WithModel(openaiembedder.ModelTextEmbedding3Small)),
+		toolsearch.WithVectorStore(vectorinmemory.New()))
+	if err != nil {
+		return fmt.Errorf("failed to create tool knowledge: %w", err)
+	}
+	if tc, err := toolsearch.New(modelInstance, toolsearch.WithMaxTools(maxTools), toolsearch.WithToolKnowledge(toolKnowledge)); err != nil {
 		return fmt.Errorf("failed to create tool selector: %w", err)
 	} else {
 		modelCallbacks.RegisterBeforeModel(tc.Callback()).RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (res *model.BeforeModelResult, err error) {
@@ -173,7 +180,7 @@ func (c *baselineChat) setup(_ context.Context) error {
 		UsageHistory: make([]TurnUsage, 0),
 	}
 
-	fmt.Printf("✅ LLM Search chat ready! Session: %s\n", c.sessionID)
+	fmt.Printf("✅ Knowledge Search chat ready! Session: %s\n", c.sessionID)
 	fmt.Printf("⚠️  Note: only %d of 10 tools are provided to LLM without any search\n\n", maxTools)
 
 	return nil

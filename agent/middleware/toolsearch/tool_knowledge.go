@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -58,10 +59,21 @@ func NewToolKnowledge(e embedder.Embedder, opts ...ToolKnowledgeOption) (*ToolKn
 	return k, nil
 }
 
-func (k *ToolKnowledge) search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) (context.Context, []string, error) {
-	embedding, err := k.e.GetEmbedding(ctx, query)
+func (k *ToolKnowledge) search(ctx context.Context, candidates map[string]tool.Tool, query string, topK int) (context.Context, []string, *model.Usage, error) {
+	embedding, u, err := k.e.GetEmbeddingWithUsage(ctx, query)
 	if err != nil {
-		return ctx, nil, err
+		return ctx, nil, nil, err
+	}
+	usage := &model.Usage{}
+	if promptTokens, ok := u["prompt_tokens"]; ok {
+		if t, ok := promptTokens.(int64); ok {
+			usage.PromptTokens += int(t)
+		}
+	}
+	if totalTokens, ok := u["total_tokens"]; ok {
+		if t, ok := totalTokens.(int64); ok {
+			usage.TotalTokens += int(t)
+		}
 	}
 	names := make([]string, 0, len(candidates))
 	for name := range candidates {
@@ -76,33 +88,43 @@ func (k *ToolKnowledge) search(ctx context.Context, candidates map[string]tool.T
 		},
 	})
 	if err != nil {
-		return ctx, nil, err
+		return ctx, nil, usage, err
 	}
 	tools := make([]string, 0, len(results.Results))
 	for _, result := range results.Results {
 		tools = append(tools, result.Document.ID)
 	}
-	return ctx, tools, nil
+	return ctx, tools, usage, nil
 }
 
-func (k *ToolKnowledge) upsert(ctx context.Context, ts map[string]tool.Tool) error {
+func (k *ToolKnowledge) upsert(ctx context.Context, ts map[string]tool.Tool) (*model.Usage, error) {
+	usage := &model.Usage{}
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	for name, t := range ts {
 		if _, ok := k.tools[name]; ok {
 			continue
 		}
-		embedding, err := k.e.GetEmbedding(ctx, toolToText(t))
+		embedding, u, err := k.e.GetEmbeddingWithUsage(ctx, toolToText(t))
 		if err != nil {
-			return err
+			return nil, err
 		}
-
+		if promptTokens, ok := u["prompt_tokens"]; ok {
+			if t, ok := promptTokens.(int64); ok {
+				usage.PromptTokens += int(t)
+			}
+		}
+		if totalTokens, ok := u["total_tokens"]; ok {
+			if t, ok := totalTokens.(int64); ok {
+				usage.TotalTokens += int(t)
+			}
+		}
 		if err := k.s.Add(ctx, &document.Document{ID: name}, embedding); err != nil {
-			return err
+			return nil, err
 		}
 		k.tools[name] = t
 	}
-	return nil
+	return usage, nil
 }
 
 func toolToText(t tool.Tool) string {
