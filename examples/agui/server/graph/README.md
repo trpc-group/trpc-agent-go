@@ -7,7 +7,7 @@ The graph includes function/LLM/tools/agent nodes to exercise different `GraphAg
 The AG-UI server emits `ACTIVITY_DELTA` events that the frontend can use to track graph progress and Human-in-the-Loop interrupts:
 
 - `activityType`: `graph.node.lifecycle` writes the node lifecycle state to `/node` (`nodeId`, `phase=start|complete|error`, `error?`).
-- `activityType`: `graph.node.interrupt` writes the interrupt payload to `/interrupt` and sets `/node` to `phase=interrupt`. The interrupt payload includes `nodeId`, `key`, `prompt`, `checkpointId`, and `lineageId`. `key` and `prompt` are the 3rd and 4th arguments passed to `graph.Interrupt(ctx, state, key, prompt)`.
+- `activityType`: `graph.node.interrupt` writes the interrupt payload to `/interrupt`. The interrupt payload includes `nodeId`, `key`, `prompt`, `checkpointId`, and `lineageId`. `key` and `prompt` are the 3rd and 4th arguments passed to `graph.Interrupt(ctx, state, key, prompt)`.
 - Resume ack: on resume runs, the server emits an extra `graph.node.interrupt` event at the beginning of the run. It clears `/interrupt` to `null` and writes the resume input to `/resume`.
 
 These graph activity events are disabled by default. This example enables them via `agui.WithGraphNodeLifecycleActivityEnabled(true)` and `agui.WithGraphNodeInterruptActivityEnabled(true)`.
@@ -132,7 +132,7 @@ This event is emitted after the node finishes. It updates `/node` with `phase=co
 
 Interrupt:
 
-This event is emitted when a node calls `graph.Interrupt(...)` and there is no available resume input. It writes the interrupt payload to `/interrupt` and updates `/node` with `phase=interrupt`, including `key`/`prompt` and the `checkpointId`/`lineageId` needed for resuming.
+This event is emitted when a node calls `graph.Interrupt(...)` and there is no available resume input. It writes the interrupt payload to `/interrupt`, including `key`/`prompt` and the `checkpointId`/`lineageId` needed for resuming.
 
 ```json
 {
@@ -150,14 +150,6 @@ This event is emitted when a node calls `graph.Interrupt(...)` and there is no a
         "prompt": "Confirm continuing after the recipe amounts are calculated.",
         "checkpointId": "8780b21e-7f38-4224-a5ea-cbb43e6f71bc",
         "lineageId": "demo-lineage"
-      }
-    },
-    {
-      "op": "add",
-      "path": "/node",
-      "value": {
-        "nodeId": "confirm",
-        "phase": "interrupt"
       }
     }
   ]

@@ -223,14 +223,6 @@ func (t *translator) graphNodeInterruptActivityEvents(evt *agentevent.Event) []a
 				LineageID:    meta.LineageID,
 			},
 		},
-		{
-			Op:   "add",
-			Path: graphNodePatchPath,
-			Value: graphNodePatchValue{
-				NodeID: meta.NodeID,
-				Phase:  "interrupt",
-			},
-		},
 	}
 
 	return []aguievents.Event{

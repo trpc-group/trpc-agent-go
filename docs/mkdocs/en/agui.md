@@ -784,14 +784,6 @@ server, err := agui.New(
         "checkpointId": "checkpoint-xxx",
         "lineageId": "lineage-xxx"
       }
-    },
-    {
-      "op": "add",
-      "path": "/node",
-      "value": {
-        "nodeId": "confirm",
-        "phase": "interrupt"
-      }
     }
   ]
 }

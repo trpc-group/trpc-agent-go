@@ -1411,13 +1411,10 @@ func TestGraphNodeInterruptEmitsActivityDelta(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotEmpty(t, delta.MessageID)
 	assert.Equal(t, graphNodeInterruptActivityType, delta.ActivityType)
-	assert.Len(t, delta.Patch, 2)
+	assert.Len(t, delta.Patch, 1)
 	assert.Equal(t, "add", delta.Patch[0].Op)
 	assert.Equal(t, graphNodeInterruptPatchPath, delta.Patch[0].Path)
 	assert.Equal(t, graphNodeInterruptPatchValue{NodeID: "nodeX", Prompt: "ask"}, delta.Patch[0].Value)
-	assert.Equal(t, "add", delta.Patch[1].Op)
-	assert.Equal(t, graphNodePatchPath, delta.Patch[1].Path)
-	assert.Equal(t, graphNodePatchValue{NodeID: "nodeX", Phase: "interrupt"}, delta.Patch[1].Value)
 }
 
 func TestGraphNodeInterruptUnmarshalErrorEmitsRunError(t *testing.T) {
@@ -1497,13 +1494,10 @@ func TestGraphNodeInterruptAllowsNilPrompt(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotEmpty(t, delta.MessageID)
 	assert.Equal(t, graphNodeInterruptActivityType, delta.ActivityType)
-	assert.Len(t, delta.Patch, 2)
+	assert.Len(t, delta.Patch, 1)
 	assert.Equal(t, "add", delta.Patch[0].Op)
 	assert.Equal(t, graphNodeInterruptPatchPath, delta.Patch[0].Path)
 	assert.Equal(t, graphNodeInterruptPatchValue{NodeID: "nodeX"}, delta.Patch[0].Value)
-	assert.Equal(t, "add", delta.Patch[1].Op)
-	assert.Equal(t, graphNodePatchPath, delta.Patch[1].Path)
-	assert.Equal(t, graphNodePatchValue{NodeID: "nodeX", Phase: "interrupt"}, delta.Patch[1].Value)
 }
 
 func TestGraphNodeInterruptIncludesKeyAndCheckpointFields(t *testing.T) {
@@ -1538,7 +1532,7 @@ func TestGraphNodeInterruptIncludesKeyAndCheckpointFields(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotEmpty(t, delta.MessageID)
 	assert.Equal(t, graphNodeInterruptActivityType, delta.ActivityType)
-	assert.Len(t, delta.Patch, 2)
+	assert.Len(t, delta.Patch, 1)
 	assert.Equal(t, "add", delta.Patch[0].Op)
 	assert.Equal(t, graphNodeInterruptPatchPath, delta.Patch[0].Path)
 	assert.Equal(t, graphNodeInterruptPatchValue{
@@ -1548,9 +1542,6 @@ func TestGraphNodeInterruptIncludesKeyAndCheckpointFields(t *testing.T) {
 		CheckpointID: "ckpt-uuid-xxx",
 		LineageID:    "thread-123",
 	}, delta.Patch[0].Value)
-	assert.Equal(t, "add", delta.Patch[1].Op)
-	assert.Equal(t, graphNodePatchPath, delta.Patch[1].Path)
-	assert.Equal(t, graphNodePatchValue{NodeID: "nodeX", Phase: "interrupt"}, delta.Patch[1].Value)
 }
 
 func TestGraphNodeStartEmitsActivityDeltaForAgentNode(t *testing.T) {
