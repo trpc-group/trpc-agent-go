@@ -17,9 +17,11 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
+	memorypgvector "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
 	memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
 	memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -36,6 +38,7 @@ const (
 	MemoryInMemory MemoryType = "inmemory"
 	MemoryRedis    MemoryType = "redis"
 	MemoryPostgres MemoryType = "postgres"
+	MemoryPGVector MemoryType = "pgvector"
 	MemoryMySQL    MemoryType = "mysql"
 )
 
@@ -71,13 +74,14 @@ func DefaultRunnerConfig() RunnerConfig {
 // NewMemoryServiceByType creates a memory service based on the specified type.
 //
 // Parameters:
-//   - memoryType: one of inmemory, redis, postgres, mysql
+//   - memoryType: one of inmemory, redis, postgres, pgvector, mysql
 //   - cfg: memory service configuration (softDelete)
 //
 // Environment variables by memory type:
 //
 //	redis:      REDIS_ADDR (default: localhost:6379)
 //	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
+//	pgvector:   PGVECTOR_HOST, PGVECTOR_PORT, PGVECTOR_USER, PGVECTOR_PASSWORD, PGVECTOR_DATABASE
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (memory.Service, error) {
 	switch memoryType {
@@ -85,6 +89,8 @@ func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (mem
 		return newRedisMemoryService(cfg)
 	case MemoryPostgres:
 		return newPostgresMemoryService(cfg)
+	case MemoryPGVector:
+		return newPGVectorMemoryService(cfg)
 	case MemoryMySQL:
 		return newMySQLMemoryService(cfg)
 	case MemoryInMemory:
@@ -154,6 +160,48 @@ func newPostgresMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 		// memorypostgres.WithToolEnabled(memory.DeleteToolName, true) - enable delete tool
 		// memorypostgres.WithToolEnabled(memory.ClearToolName, true) - enable clear tool
 		// memorypostgres.WithCustomTool(memory.ClearToolName, customTool) - use custom tool
+	)
+}
+
+// newPGVectorMemoryService creates a pgvector memory service.
+// Environment variables:
+//   - PGVECTOR_HOST: PostgreSQL host (default: localhost)
+//   - PGVECTOR_PORT: PostgreSQL port (default: 5432)
+//   - PGVECTOR_USER: PostgreSQL user (default: postgres)
+//   - PGVECTOR_PASSWORD: PostgreSQL password (default: empty)
+//   - PGVECTOR_DATABASE: PostgreSQL database (default: trpc-agent-go-pgvector)
+//   - PGVECTOR_EMBEDDER_MODEL: Embedder model name (default: text-embedding-3-small)
+func newPGVectorMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
+	host := GetEnvOrDefault("PGVECTOR_HOST", "localhost")
+	portStr := GetEnvOrDefault("PGVECTOR_PORT", "5432")
+	port := 5432
+	if portStr != "" {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			port = p
+		}
+	}
+	user := GetEnvOrDefault("PGVECTOR_USER", "postgres")
+	password := GetEnvOrDefault("PGVECTOR_PASSWORD", "")
+	database := GetEnvOrDefault("PGVECTOR_DATABASE", "trpc-agent-go-pgvector")
+	embedderModel := GetEnvOrDefault("PGVECTOR_EMBEDDER_MODEL", "text-embedding-3-small")
+
+	// Create embedder - for simplicity, we'll use OpenAI embedder
+	embedder := openaiembedder.New(openaiembedder.WithModel(embedderModel))
+
+	return memorypgvector.NewService(
+		memorypgvector.WithHost(host),
+		memorypgvector.WithPort(port),
+		memorypgvector.WithUser(user),
+		memorypgvector.WithPassword(password),
+		memorypgvector.WithDatabase(database),
+		memorypgvector.WithEmbedder(embedder),
+		memorypgvector.WithSoftDelete(cfg.SoftDelete),
+		// Additional options can be added:
+		// memorypgvector.WithIndexDimension(1536) - set vector dimension
+		// memorypgvector.WithMaxResults(10) - set max search results
+		// memorypgvector.WithToolEnabled(memory.DeleteToolName, true) - enable delete tool
+		// memorypgvector.WithToolEnabled(memory.ClearToolName, true) - enable clear tool
+		// memorypgvector.WithCustomTool(memory.ClearToolName, customTool) - use custom tool
 	)
 }
 
@@ -240,6 +288,14 @@ func PrintMemoryInfo(memoryType MemoryType, softDelete bool) {
 		port := GetEnvOrDefault("PG_PORT", "5432")
 		database := GetEnvOrDefault("PG_DATABASE", "trpc-agent-go-pgmemory")
 		fmt.Printf("PostgreSQL: %s:%s/%s\n", host, port, database)
+		fmt.Printf("Soft delete: %t\n", softDelete)
+	case MemoryPGVector:
+		host := GetEnvOrDefault("PGVECTOR_HOST", "localhost")
+		port := GetEnvOrDefault("PGVECTOR_PORT", "5432")
+		database := GetEnvOrDefault("PGVECTOR_DATABASE", "trpc-agent-go-pgvector")
+		embedderModel := GetEnvOrDefault("PGVECTOR_EMBEDDER_MODEL", "text-embedding-3-small")
+		fmt.Printf("pgvector: %s:%s/%s\n", host, port, database)
+		fmt.Printf("Embedder model: %s\n", embedderModel)
 		fmt.Printf("Soft delete: %t\n", softDelete)
 	case MemoryMySQL:
 		host := GetEnvOrDefault("MYSQL_HOST", "localhost")
