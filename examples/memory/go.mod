@@ -12,10 +12,10 @@ replace (
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v0.6.0
-	trpc.group/trpc-go/trpc-agent-go/memory/mysql v0.8.0
-	trpc.group/trpc-go/trpc-agent-go/memory/postgres v0.8.0
-	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.8.0
+	trpc.group/trpc-go/trpc-agent-go v1.1.1
+	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.1.1
+	trpc.group/trpc-go/trpc-agent-go/memory/postgres v1.1.1
+	trpc.group/trpc-go/trpc-agent-go/memory/redis v1.1.1
 )
 
 require (
