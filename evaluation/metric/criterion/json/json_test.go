@@ -11,6 +11,7 @@ package json
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,7 +20,12 @@ import (
 func TestMapCriterionCompareOverride(t *testing.T) {
 	called := false
 	criterion := &JSONCriterion{
-		Compare: func(actual, expected map[string]any) (bool, error) {
+		Compare: func(actual, expected any) (bool, error) {
+			_, actualIsMap := actual.(map[string]any)
+			_, expectedIsMap := expected.(map[string]any)
+			if !actualIsMap || !expectedIsMap {
+				return false, nil
+			}
 			called = true
 			return true, nil
 		},
@@ -48,7 +54,7 @@ func TestJSONCriterionIgnoreSkipsCompare(t *testing.T) {
 	called := false
 	criterion := &JSONCriterion{
 		Ignore: true,
-		Compare: func(actual, expected map[string]any) (bool, error) {
+		Compare: func(actual, expected any) (bool, error) {
 			called = true
 			return false, nil
 		},
@@ -345,6 +351,174 @@ func TestToFloatCoversNumericTypes(t *testing.T) {
 			assert.False(t, ok, tc.name)
 		}
 	}
+}
+
+func TestJSONCriterionMatchArrayNumberTolerance(t *testing.T) {
+	criterion := &JSONCriterion{}
+	ok, err := criterion.Match([]any{0.3000005}, []any{0.3})
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestJSONCriterionMatchArrayMismatch(t *testing.T) {
+	criterion := &JSONCriterion{}
+	ok, err := criterion.Match([]any{float64(1)}, []any{float64(2)})
+	assert.False(t, ok)
+	assert.Error(t, err)
+}
+
+func TestJSONCriterionMatchScalarSuccess(t *testing.T) {
+	criterion := &JSONCriterion{}
+	ok, err := criterion.Match("ok", "ok")
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestJSONCriterionMatchNilValues(t *testing.T) {
+	criterion := &JSONCriterion{}
+
+	ok, err := criterion.Match(nil, nil)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+
+	ok, err = criterion.Match(nil, "x")
+	assert.False(t, ok)
+	assert.Error(t, err)
+
+	ok, err = criterion.Match("x", nil)
+	assert.False(t, ok)
+	assert.Error(t, err)
+}
+
+func TestJSONCriterionMatchMapTypeMismatch(t *testing.T) {
+	criterion := &JSONCriterion{}
+
+	ok, err := criterion.Match(map[string]any{"k": "v"}, "x")
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "is a map")
+
+	ok, err = criterion.Match("x", map[string]any{"k": "v"})
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "is a map")
+}
+
+func TestJSONCriterionMatchArrayTypeMismatch(t *testing.T) {
+	criterion := &JSONCriterion{}
+
+	ok, err := criterion.Match([]any{float64(1)}, "x")
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "is an array")
+
+	ok, err = criterion.Match("x", []any{float64(1)})
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "is an array")
+}
+
+func TestJSONCriterionMatchArrayLengthMismatch(t *testing.T) {
+	criterion := &JSONCriterion{}
+
+	ok, err := criterion.Match([]any{float64(1)}, []any{float64(1), float64(2)})
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "array length mismatch")
+}
+
+func TestJSONCriterionCompareOverrideScalar(t *testing.T) {
+	called := false
+	criterion := &JSONCriterion{
+		Compare: func(actual, expected any) (bool, error) {
+			called = true
+			return actual == expected, nil
+		},
+	}
+
+	ok, err := criterion.Match("a", "a")
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.True(t, called)
+}
+
+func TestJSONCriterionCompareOverrideErrorPropagation(t *testing.T) {
+	criterion := &JSONCriterion{
+		Compare: func(actual, expected any) (bool, error) {
+			return false, errors.New("boom")
+		},
+	}
+
+	ok, err := criterion.Match("a", "a")
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "boom")
+}
+
+func TestJSONCriterionIgnoreTreeSkipsMissingKeysBothDirections(t *testing.T) {
+	criterion := &JSONCriterion{
+		IgnoreTree: map[string]any{
+			"skipActual":   true,
+			"skipExpected": true,
+		},
+	}
+
+	actual := map[string]any{
+		"keep":       "v",
+		"skipActual": "x",
+	}
+	expected := map[string]any{
+		"keep":         "v",
+		"skipExpected": "y",
+	}
+
+	ok, err := criterion.Match(actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestJSONCriterionIgnoreTreeNonBoolDoesNotIgnore(t *testing.T) {
+	criterion := &JSONCriterion{
+		IgnoreTree: map[string]any{
+			"skip": "true",
+		},
+	}
+
+	ok, err := criterion.Match(map[string]any{"skip": "x"}, map[string]any{})
+	assert.False(t, ok)
+	assert.Error(t, err)
+}
+
+func TestJSONCriterionIgnoreTreeChildNonBoolDoesNotIgnoreNested(t *testing.T) {
+	criterion := &JSONCriterion{
+		IgnoreTree: map[string]any{
+			"meta": "true",
+		},
+	}
+	actual := map[string]any{
+		"meta": map[string]any{
+			"id":   "1",
+			"time": "12:00",
+		},
+	}
+	expected := map[string]any{
+		"meta": map[string]any{
+			"id":   "1",
+			"time": "ignored",
+		},
+	}
+	ok, err := criterion.Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+}
+
+func TestJSONCriterionExpectedKeyMissingInActual(t *testing.T) {
+	criterion := &JSONCriterion{}
+
+	ok, err := criterion.Match(map[string]any{"a": float64(1)}, map[string]any{"a": float64(1), "b": float64(2)})
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "key b in expected but not in actual")
 }
 
 func floatPtr(v float64) *float64 {

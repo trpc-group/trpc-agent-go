@@ -328,6 +328,23 @@ func TestToolTrajectoryStrategyMatchBranches(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "arguments mismatch")
 
+	// Arguments array mismatch.
+	ok, err = strategy.Match(
+		&evalset.Tool{Name: "a", Arguments: []any{float64(1)}},
+		&evalset.Tool{Name: "a", Arguments: []any{float64(2)}},
+	)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "arguments mismatch")
+
+	// Arguments array match.
+	ok, err = strategy.Match(
+		&evalset.Tool{Name: "a", Arguments: []any{float64(1), float64(2)}},
+		&evalset.Tool{Name: "a", Arguments: []any{float64(1), float64(2)}},
+	)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+
 	// Result mismatch.
 	strategy = &ToolTrajectoryStrategy{
 		Result: &criterionjson.JSONCriterion{},
@@ -339,6 +356,23 @@ func TestToolTrajectoryStrategyMatchBranches(t *testing.T) {
 	assert.False(t, ok)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "result mismatch")
+
+	// Result array mismatch.
+	ok, err = strategy.Match(
+		&evalset.Tool{Name: "a", Result: []any{float64(1)}},
+		&evalset.Tool{Name: "a", Result: []any{float64(2)}},
+	)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "result mismatch")
+
+	// Result array match.
+	ok, err = strategy.Match(
+		&evalset.Tool{Name: "a", Result: []any{float64(1), float64(2)}},
+		&evalset.Tool{Name: "a", Result: []any{float64(1), float64(2)}},
+	)
+	assert.True(t, ok)
+	assert.NoError(t, err)
 
 	// Success path.
 	strategy = &ToolTrajectoryStrategy{}
