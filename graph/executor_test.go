@@ -2709,6 +2709,109 @@ func TestExecutor_WithMaxConcurrency(t *testing.T) {
 	require.LessOrEqual(t, maxActive.Load(), int64(maxConcurrency))
 }
 
+func TestNewExecutor_MaxConcurrency_DefaultOnNonPositive(t *testing.T) {
+	const nodeID = "n"
+
+	stateGraph := NewStateGraph(NewStateSchema())
+	stateGraph.AddNode(
+		nodeID,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+
+	g, err := stateGraph.
+		SetEntryPoint(nodeID).
+		SetFinishPoint(nodeID).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g, WithMaxConcurrency(0))
+	require.NoError(t, err)
+
+	expected := defaultMaxConcurrency
+	if expected <= 0 {
+		expected = 1
+	}
+
+	require.Equal(t, expected, exec.maxConcurrency)
+}
+
+func TestExecutor_workerCount_CoversBranches(t *testing.T) {
+	exec := &Executor{maxConcurrency: 4}
+	require.Equal(t, 0, exec.workerCount(0))
+
+	exec.maxConcurrency = 0
+	require.Equal(t, 5, exec.workerCount(5))
+
+	exec.maxConcurrency = 10
+	require.Equal(t, 5, exec.workerCount(5))
+
+	exec.maxConcurrency = 3
+	require.Equal(t, 3, exec.workerCount(10))
+}
+
+func TestExecutor_taskInvocationContext_CoversBranches(t *testing.T) {
+	type ctxKey string
+
+	const (
+		testKey      ctxKey = "k"
+		testValue           = "v"
+		invocationID        = "inv"
+		parentBranch        = "parent"
+		nodeID              = "child"
+	)
+
+	ctx := context.WithValue(context.Background(), testKey, testValue)
+	exec := &Executor{}
+	task := &Task{NodeID: nodeID}
+
+	gotInv, gotCtx := exec.taskInvocationContext(ctx, nil, task)
+	require.Nil(t, gotInv)
+	require.Same(t, ctx, gotCtx)
+
+	inv := &agent.Invocation{InvocationID: invocationID}
+	gotInv, gotCtx = exec.taskInvocationContext(ctx, inv, nil)
+	require.Same(t, inv, gotInv)
+	require.Same(t, ctx, gotCtx)
+
+	gotInv, gotCtx = exec.taskInvocationContext(ctx, inv, task)
+	require.NotNil(t, gotInv)
+	require.NotNil(t, gotCtx)
+	require.Equal(t, nodeID, gotInv.Branch)
+
+	inv.Branch = parentBranch
+	gotInv, gotCtx = exec.taskInvocationContext(ctx, inv, task)
+	require.NotNil(t, gotInv)
+	require.NotNil(t, gotCtx)
+	require.Equal(
+		t,
+		parentBranch+agent.BranchDelimiter+nodeID,
+		gotInv.Branch,
+	)
+}
+
+func TestExecutor_executeStepTask_RecoversFromPanic(t *testing.T) {
+	const (
+		invocationID = "inv"
+		nodeID       = "n"
+		step         = 1
+	)
+
+	exec := &Executor{}
+	task := &Task{NodeID: nodeID}
+
+	err := exec.executeStepTask(
+		context.Background(),
+		&agent.Invocation{InvocationID: invocationID},
+		nil,
+		task,
+		step,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "task panic")
+}
+
 func updateMaxInt64(max *atomic.Int64, value int64) {
 	for {
 		current := max.Load()
