@@ -2139,7 +2139,11 @@
 <p>Note: If <code>WithPath</code> is not specified, the AG-UI server mounts at <code>/</code> by default.</p>
 <p>A complete version of this example lives in <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default">examples/agui/server/default</a>.</p>
 <p>For an in-depth guide to Runners, refer to the <a href="../runner/">runner</a> documentation.</p>
-<p>On the client side you can pair the server with frameworks that understand the AG-UI protocol, such as <a href="https://github.com/CopilotKit/CopilotKit">CopilotKit</a>. It provides React/Next.js components with built-in SSE subscriptions. The sample at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit">examples/agui/client/copilotkit</a> builds a web UI that communicates with the agent through AG-UI, as shown below.</p>
+<p>On the client side you can pair the server with frameworks that understand the AG-UI protocol, such as <a href="https://github.com/CopilotKit/CopilotKit">CopilotKit</a>. It provides React/Next.js components with built-in SSE subscriptions. This repository ships with two runnable web UI samples:</p>
+<ul>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat">examples/agui/client/tdesign-chat</a>: a Vite + React client built with TDesign that demonstrates custom events, graph interrupt approvals (human-in-the-loop), message snapshot loading, and report side panels.</li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit">examples/agui/client/copilotkit</a>: a Next.js client built with CopilotKit.</li>
+</ul>
 <p><img alt="copilotkit" src="../assets/img/agui/copilotkit.png" /></p>
 <h2 id="core-concepts">Core Concepts</h2>
 <h3 id="runagentinput">RunAgentInput</h3>
@@ -3327,7 +3331,7 @@
 </span><span id="__span-22-23"><a id="__codelineno-22-23" name="__codelineno-22-23"></a><span class="w">  </span><span class="p">]</span>
 </span><span id="__span-22-24"><a id="__codelineno-22-24" name="__codelineno-22-24"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>For a complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph">examples/agui/server/graph</a>.</p>
+<p>For a complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph">examples/agui/server/graph</a>. For a client implementation, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat">examples/agui/client/tdesign-chat</a>.</p>
 <h2 id="best-practices">Best Practices</h2>
 <h3 id="generating-documents">Generating Documents</h3>
 <p>If a long-form document is inserted directly into the main conversation, it can easily “flood” the dialogue, making it hard for users to distinguish between conversation content and document content. To solve this, it’s recommended to use a <strong>document panel</strong> to carry long documents. By defining a workflow in the AG-UI event stream — “open document panel → write document content → close document panel” — you can pull long documents out of the main conversation and avoid disturbing normal interactions. A sample approach is as follows.</p>
@@ -3385,7 +3389,7 @@
 </li>
 </ol>
 <p>The effect is shown below. For a full example, refer to
-<a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report">examples/agui/server/report</a>.</p>
+<a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report">examples/agui/server/report</a>. The corresponding client implementation lives in <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat">examples/agui/client/tdesign-chat</a>.</p>
 <p><img alt="report" src="../assets/gif/agui/report.gif" /></p>
 
 
@@ -3409,7 +3413,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 14, 2026 03:47:02 UTC">2026-01-14 03:47:02</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 14, 2026 05:09:25 UTC">2026-01-14 05:09:25</span>
   </span>
 
     
