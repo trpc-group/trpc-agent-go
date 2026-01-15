@@ -21,10 +21,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-	"trpc.group/trpc-go/trpc-agent-go/agent/middleware/toolsearch"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
-	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -42,7 +39,7 @@ type MultiToolChatAgent struct {
 }
 
 // NewMultiToolChatAgent creates a new multi-tool chat agent.
-func NewMultiToolChatAgent(agentName, modelName string) (*MultiToolChatAgent, error) {
+func NewMultiToolChatAgent(agentName, modelName string) *MultiToolChatAgent {
 	a := &MultiToolChatAgent{modelName: modelName}
 	// Create OpenAI model
 	modelInstance := openai.New(a.modelName)
@@ -56,30 +53,11 @@ func NewMultiToolChatAgent(agentName, modelName string) (*MultiToolChatAgent, er
 		duckduckgo.NewTool(), // Original DuckDuckGo search tool
 	}
 
-	modelCallbacks := model.NewCallbacks()
-	// if toolSelector, err := toolsearch.New(modelInstance, toolsearch.WithMaxTools(2)); err != nil {
-	// 	return nil, fmt.Errorf("failed to create tool selector: %w", err)
-	// } else {
-	// 	modelCallbacks.RegisterBeforeModel(toolSelector.Callback())
-	// }
-
-	toolKnowledge, err := toolsearch.NewToolKnowledge(openaiembedder.New(openaiembedder.WithModel(openaiembedder.ModelTextEmbedding3Small)),
-		toolsearch.WithVectorStore(vectorinmemory.New()))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create tool knowledge: %w", err)
-	}
-
-	if toolSelector, err := toolsearch.New(modelInstance, toolsearch.WithMaxTools(2), toolsearch.WithToolKnowledge(toolKnowledge)); err != nil {
-		return nil, fmt.Errorf("failed to create tool selector: %w", err)
-	} else {
-		modelCallbacks.RegisterBeforeModel(toolSelector.Callback())
-	}
-
 	// Create LLM agent
 	genConfig := model.GenerationConfig{
-		// MaxTokens:   intPtr(2000),
-		// Temperature: floatPtr(0.7),
-		Stream: true, // Enable streaming response
+		MaxTokens:   intPtr(2000),
+		Temperature: floatPtr(0.7),
+		Stream:      true, // Enable streaming response
 	}
 	llmAgent := llmagent.New(
 		agentName,
@@ -95,7 +73,6 @@ func NewMultiToolChatAgent(agentName, modelName string) (*MultiToolChatAgent, er
 		//Please select the appropriate tool based on user needs and provide helpful assistance.`),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools(tools),
-		llmagent.WithModelCallbacks(modelCallbacks),
 	)
 
 	// Create runner
@@ -110,7 +87,7 @@ func NewMultiToolChatAgent(agentName, modelName string) (*MultiToolChatAgent, er
 	a.sessionID = fmt.Sprintf("multi-tool-session-%d", time.Now().Unix())
 
 	fmt.Printf("✅ Multi-tool intelligent assistant is ready! Session ID: %s\n\n", a.sessionID)
-	return a, nil
+	return a
 }
 
 // Close closes the agent and releases owned resources.

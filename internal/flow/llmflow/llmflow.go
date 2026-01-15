@@ -245,7 +245,6 @@ func (f *Flow) runOneStep(
 	if invocation.Model != nil {
 		modelName = invocation.Model.Info().Name
 	}
-
 	_, span = trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
 	defer span.End()
 
