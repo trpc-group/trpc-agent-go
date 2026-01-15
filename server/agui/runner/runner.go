@@ -302,13 +302,16 @@ func parseResumeInfo(opt []agent.RunOption) *resumeInfo {
 	if cmd != nil && cmd.ResumeMap != nil && len(cmd.ResumeMap) > 0 {
 		resumeMap = cmd.ResumeMap
 	}
+	cmdBindsResumeMap := cmd != nil && cmd.ResumeMap != nil
 	if resumeMap == nil &&
 		resumeCmd != nil &&
 		resumeCmd.ResumeMap != nil &&
 		len(resumeCmd.ResumeMap) > 0 {
 		resumeMap = resumeCmd.ResumeMap
 	}
-	if resumeMap == nil {
+	cmdBindsResumeMap = cmdBindsResumeMap ||
+		(resumeCmd != nil && resumeCmd.ResumeMap != nil)
+	if resumeMap == nil && !cmdBindsResumeMap {
 		switch v := state[graph.StateKeyResumeMap].(type) {
 		case map[string]any:
 			if len(v) > 0 {
