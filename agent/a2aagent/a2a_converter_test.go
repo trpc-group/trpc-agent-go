@@ -65,6 +65,33 @@ func TestDefaultA2AEventConverter_ConvertToEvent(t *testing.T) {
 			},
 		},
 		{
+			name: "message with role user is filtered",
+			result: protocol.MessageResult{
+				Result: &protocol.Message{
+					Role: protocol.MessageRoleUser,
+					Parts: []protocol.Part{
+						&protocol.TextPart{Text: "echo user message"},
+					},
+				},
+			},
+			agentName: "test-agent",
+			invocation: &agent.Invocation{
+				InvocationID: "test-id",
+			},
+			setupFunc: func(tc *testCase) {},
+			validateFunc: func(t *testing.T, event *event.Event, err error) {
+				if err != nil {
+					t.Errorf("expected no error, got %v", err)
+				}
+				// The user message should be skipped, but ConvertToEvents adds choice on nil result which is not the case here
+				// Actually ConvertToEvents returns events if buildRespEvent returns non-nil.
+				// If buildRespEvent returns nil, events remains empty.
+				if event != nil {
+					t.Errorf("expected nil event, got %v", event)
+				}
+			},
+		},
+		{
 			name: "message result",
 			result: protocol.MessageResult{
 				Result: &protocol.Message{
@@ -204,6 +231,35 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvents(t *testing.T) {
 				}
 				if evt.InvocationID != "test-id" {
 					t.Errorf("expected invocation ID 'test-id', got %s", evt.InvocationID)
+				}
+			},
+		},
+		{
+			name: "streaming task status update with user role is filtered",
+			result: protocol.StreamingMessageEvent{
+				Result: &protocol.TaskStatusUpdateEvent{
+					TaskID:    "task-stream-user",
+					ContextID: "ctx-stream-user",
+					Status: protocol.TaskStatus{
+						Message: &protocol.Message{
+							Role:  protocol.MessageRoleUser,
+							Parts: []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "echo user"}},
+						},
+					},
+				},
+			},
+			agentName: "test-agent",
+			invocation: &agent.Invocation{
+				InvocationID: "test-id",
+			},
+			setupFunc: func(tc *testCase) {},
+			validateFunc: func(t *testing.T, events []*event.Event, err error) {
+				if err != nil {
+					t.Errorf("expected no error, got %v", err)
+				}
+				// The user message in status update should be filtered out by buildRespEvent
+				if len(events) != 0 {
+					t.Errorf("expected 0 events, got %d", len(events))
 				}
 			},
 		},
@@ -704,7 +760,7 @@ func TestConvertTaskStatusToMessage(t *testing.T) {
 
 	tests := []testCase{
 		{
-			name: "status with message",
+			name: "status with message containing DataPart",
 			event: &protocol.TaskStatusUpdateEvent{
 				TaskID:    "task-1",
 				ContextID: "ctx-1",
@@ -713,7 +769,7 @@ func TestConvertTaskStatusToMessage(t *testing.T) {
 						Kind:      protocol.KindMessage,
 						MessageID: "status-1",
 						Role:      protocol.MessageRoleAgent,
-						Parts:     []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "status message"}},
+						Parts:     []protocol.Part{&protocol.DataPart{Kind: protocol.KindData, Data: map[string]any{"key": "value"}}},
 					},
 				},
 			},
@@ -734,6 +790,45 @@ func TestConvertTaskStatusToMessage(t *testing.T) {
 				if msg.ContextID == nil || *msg.ContextID != "ctx-1" {
 					t.Errorf("expected context ID 'ctx-1', got %v", msg.ContextID)
 				}
+				// DataPart should be preserved
+				if len(msg.Parts) != 1 {
+					t.Errorf("expected 1 part, got %d", len(msg.Parts))
+				}
+				if dataPart, ok := msg.Parts[0].(*protocol.DataPart); ok {
+					data, ok := dataPart.Data.(map[string]any)
+					if !ok {
+						t.Errorf("expected data to be map[string]any, got %T", dataPart.Data)
+					} else if data["key"] != "value" {
+						t.Errorf("expected data key 'value', got %v", data["key"])
+					}
+				} else {
+					t.Error("expected DataPart")
+				}
+			},
+		},
+		{
+			name: "status with message containing TextPart is NOT filtered",
+			event: &protocol.TaskStatusUpdateEvent{
+				TaskID:    "task-1b",
+				ContextID: "ctx-1b",
+				Status: protocol.TaskStatus{
+					Message: &protocol.Message{
+						Kind:      protocol.KindMessage,
+						MessageID: "status-1b",
+						Role:      protocol.MessageRoleAgent,
+						Parts:     []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "status message"}},
+					},
+				},
+			},
+			setupFunc: func(tc *testCase) {},
+			validateFunc: func(t *testing.T, msg *protocol.Message) {
+				if msg.Role != protocol.MessageRoleAgent {
+					t.Errorf("expected role Agent, got %s", msg.Role)
+				}
+				if msg.MessageID != "status-1b" {
+					t.Errorf("expected message ID 'status-1b', got %s", msg.MessageID)
+				}
+				// TextPart should NOT be filtered out anymore to support streaming
 				if len(msg.Parts) != 1 {
 					t.Errorf("expected 1 part, got %d", len(msg.Parts))
 				}
@@ -774,6 +869,28 @@ func TestConvertTaskStatusToMessage(t *testing.T) {
 				}
 				if len(msg.Parts) != 0 {
 					t.Errorf("expected 0 parts, got %d", len(msg.Parts))
+				}
+			},
+		},
+		{
+			name: "status with message containing user role",
+			event: &protocol.TaskStatusUpdateEvent{
+				TaskID:    "task-user",
+				ContextID: "ctx-user",
+				Status: protocol.TaskStatus{
+					Message: &protocol.Message{
+						Role:  protocol.MessageRoleUser,
+						Parts: []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "user input echo"}},
+					},
+				},
+			},
+			setupFunc: func(tc *testCase) {},
+			validateFunc: func(t *testing.T, msg *protocol.Message) {
+				if msg.Role != protocol.MessageRoleUser {
+					t.Errorf("expected role User, got %s", msg.Role)
+				}
+				if len(msg.Parts) != 1 {
+					t.Errorf("expected 1 part, got %d", len(msg.Parts))
 				}
 			},
 		},
@@ -837,33 +954,51 @@ func TestConvertTaskArtifactToMessage(t *testing.T) {
 			},
 		},
 		{
-			name: "artifact without parts",
+			name: "final non-incremental artifact filters text content",
 			event: &protocol.TaskArtifactUpdateEvent{
-				TaskID:    "task-2",
-				ContextID: "ctx-2",
+				TaskID:    "task-3",
+				ContextID: "ctx-3",
 				Artifact: protocol.Artifact{
-					ArtifactID: "artifact-2",
+					ArtifactID: "artifact-3",
+					Parts: []protocol.Part{
+						&protocol.TextPart{Kind: protocol.KindText, Text: "cumulative full content"},
+						&protocol.DataPart{Kind: protocol.KindData, Data: map[string]any{"final": "data"}},
+					},
 				},
+				LastChunk: boolPtr(true),
+				Append:    boolPtr(false),
 			},
 			setupFunc: func(tc *testCase) {},
 			validateFunc: func(t *testing.T, msg *protocol.Message) {
-				if msg.Role != protocol.MessageRoleAgent {
-					t.Errorf("expected role Agent, got %s", msg.Role)
+				// TextPart should be filtered out because it's final and not incremental
+				if len(msg.Parts) != 1 {
+					t.Errorf("expected 1 part (TextPart filtered), got %d", len(msg.Parts))
 				}
-				if msg.Kind != protocol.KindMessage {
-					t.Errorf("expected kind %s, got %s", protocol.KindMessage, msg.Kind)
+				if msg.Parts[0].GetKind() != protocol.KindData {
+					t.Errorf("expected DataPart, got %s", msg.Parts[0].GetKind())
 				}
-				if msg.MessageID != "artifact-2" {
-					t.Errorf("expected message ID 'artifact-2', got %s", msg.MessageID)
+			},
+		},
+		{
+			name: "final incremental artifact preserves text content",
+			event: &protocol.TaskArtifactUpdateEvent{
+				TaskID:    "task-4",
+				ContextID: "ctx-4",
+				Artifact: protocol.Artifact{
+					ArtifactID: "artifact-4",
+					Parts:      []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "incremental final content"}},
+				},
+				LastChunk: boolPtr(true),
+				Append:    boolPtr(true),
+			},
+			setupFunc: func(tc *testCase) {},
+			validateFunc: func(t *testing.T, msg *protocol.Message) {
+				// TextPart should be preserved because it's marked as incremental (Append=true)
+				if len(msg.Parts) != 1 {
+					t.Errorf("expected 1 part, got %d", len(msg.Parts))
 				}
-				if msg.TaskID == nil || *msg.TaskID != "task-2" {
-					t.Errorf("expected task ID 'task-2', got %v", msg.TaskID)
-				}
-				if msg.ContextID == nil || *msg.ContextID != "ctx-2" {
-					t.Errorf("expected context ID 'ctx-2', got %v", msg.ContextID)
-				}
-				if len(msg.Parts) != 0 {
-					t.Errorf("expected 0 parts, got %d", len(msg.Parts))
+				if msg.Parts[0].GetKind() != protocol.KindText {
+					t.Errorf("expected TextPart, got %s", msg.Parts[0].GetKind())
 				}
 			},
 		},
@@ -1090,15 +1225,16 @@ func TestProcessFunctionResponse(t *testing.T) {
 			},
 		},
 		{
-			name: "non-string response",
+			name: "non-string response serialized to JSON",
 			dataPart: &protocol.DataPart{
 				Data: map[string]any{
 					"response": 12345,
 				},
 			},
 			validateFunc: func(t *testing.T, content, id, name string) {
-				if content != "" {
-					t.Errorf("expected empty content for non-string response, got %s", content)
+				// Non-string response should be serialized as JSON
+				if content != "12345" {
+					t.Errorf("expected JSON serialized content '12345', got %s", content)
 				}
 			},
 		},

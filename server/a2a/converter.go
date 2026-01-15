@@ -405,6 +405,8 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 			},
 			false,
 		)
+		appendFlag := true
+		taskArtifact.Append = &appendFlag
 		taskArtifact.Metadata = map[string]any{
 			ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
 			ia2a.MessageMetadataTagKey:        event.Tag,
@@ -553,8 +555,10 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AStreamingMessage(
 			ArtifactID: event.Response.ID,
 			Parts:      msg.Parts,
 		},
-		false, // append=false for tool calls (complete events, not incremental)
+		false,
 	)
+	appendFlag := true
+	taskArtifact.Append = &appendFlag
 	taskArtifact.Metadata = map[string]any{
 		ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
 		ia2a.MessageMetadataTagKey:        event.Tag,
@@ -588,8 +592,10 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AStreamingMessage(
 			ArtifactID: evt.Response.ID,
 			Parts:      msg.Parts,
 		},
-		false, // append=false for code execution (complete events, not incremental)
+		false,
 	)
+	appendFlag := true
+	taskArtifact.Append = &appendFlag
 	taskArtifact.Metadata = map[string]any{
 		ia2a.MessageMetadataObjectTypeKey: evt.Response.Object,
 		ia2a.MessageMetadataTagKey:        evt.Tag,

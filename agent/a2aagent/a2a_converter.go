@@ -11,6 +11,7 @@ package a2aagent
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -222,6 +223,11 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 	msg *protocol.Message,
 	agentName string,
 	invocation *agent.Invocation) *event.Event {
+	// Skip messages with role = user to avoid mirroring back the user's own messages.
+	// Some A2A server implementations might include the user's message in the history or as an echo.
+	if msg.Role == protocol.MessageRoleUser {
+		return nil
+	}
 
 	// Parse A2A message parts to extract content and tool information
 	parseResult := parseA2AMessageParts(msg)
@@ -413,12 +419,15 @@ func processFunctionResponse(d *protocol.DataPart) (content string, id string, n
 		name = toolName
 	}
 
-	// Extract response content - server sends it as raw string
 	if response, ok := data[ia2a.ToolCallFieldResponse]; ok {
-		if responseStr, ok := response.(string); ok {
-			content = responseStr
-		} else {
-			log.Debugf("Tool response is not a string: %T, skip", response)
+		switch v := response.(type) {
+		case string:
+			content = v
+		default:
+			// For map or other types, serialize as JSON
+			if jsonBytes, err := json.Marshal(v); err == nil {
+				content = string(jsonBytes)
+			}
 		}
 	}
 
@@ -683,18 +692,23 @@ func convertTaskToMessage(task *protocol.Task) *protocol.Message {
 	}
 }
 
-// convertTaskStatusToMessage converts a TaskStatusUpdateEvent to a Message
+// convertTaskStatusToMessage converts a TaskStatusUpdateEvent to a Message.
 func convertTaskStatusToMessage(event *protocol.TaskStatusUpdateEvent) *protocol.Message {
+	role := protocol.MessageRoleAgent
+	if event.Status.Message != nil && event.Status.Message.Role != "" {
+		role = event.Status.Message.Role
+	}
+
 	msg := &protocol.Message{
-		Role:      protocol.MessageRoleAgent,
+		Role:      role,
 		Kind:      protocol.KindMessage,
 		TaskID:    &event.TaskID,
 		ContextID: &event.ContextID,
 		Metadata:  event.Metadata,
 	}
 	if event.Status.Message != nil {
-		msg.Parts = event.Status.Message.Parts
 		msg.MessageID = event.Status.Message.MessageID
+		msg.Parts = event.Status.Message.Parts
 	}
 	return msg
 }
@@ -705,10 +719,29 @@ func convertTaskArtifactToMessage(event *protocol.TaskArtifactUpdateEvent) *prot
 		Role:      protocol.MessageRoleAgent,
 		Kind:      protocol.KindMessage,
 		MessageID: event.Artifact.ArtifactID,
-		Parts:     event.Artifact.Parts,
 		TaskID:    &event.TaskID,
 		ContextID: &event.ContextID,
 		Metadata:  event.Metadata,
 	}
+
+	parts := event.Artifact.Parts
+	// For A2A servers (third party frameworks) that send cumulative content, the final ArtifactUpdate
+	// often contains the full text already sent via StatusUpdate or incremental ArtifactUpdates.
+	// If this is a final chunk and not explicitely marked as incremental (Append=true),
+	// we filter out TextParts to avoid content duplication, but keep DataParts (e.g. final tool calls).
+	isFinal := event.LastChunk != nil && *event.LastChunk
+	isIncremental := event.Append != nil && *event.Append
+
+	if isFinal && !isIncremental {
+		var filteredParts []protocol.Part
+		for _, part := range parts {
+			if part.GetKind() != protocol.KindText {
+				filteredParts = append(filteredParts, part)
+			}
+		}
+		parts = filteredParts
+	}
+
+	msg.Parts = parts
 	return msg
 }
