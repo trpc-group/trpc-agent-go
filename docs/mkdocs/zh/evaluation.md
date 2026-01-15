@@ -421,7 +421,7 @@ metricManager.Add(ctx, appName, evalSetID, evalMetric)
 - 评估器 Evaluator 负责对比实际会话结果与预期会话结果，计算具体得分，并依据评估指标阈值判断评估状态。
 - 评估器注册中心 Registry 维护评估指标名称与对应评估器的映射关系，支持动态注册与查找评估器。
 - 评估服务 Service 作为核心组件，整合了待评估的 Agent、评估集 EvalSet、评估指标 Metric、评估器注册中心 Registry 以及评估结果 EvalResult Registry。评估流程分为两个阶段：
-  - 推理阶段 Inference：从评估集提取用户输入，调用 Agent 执行推理，将 Agent 的实际输出与预期输出组合形成推理结果。
+  - 推理阶段 Inference：默认模式下从评估集提取用户输入并调用 Agent 执行推理，将 Agent 的实际输出与预期输出组合形成推理结果；trace 模式下直接将评估集 `conversation` 作为实际 trace 输出，跳过 Runner 推理。
   - 结果评估阶段 Evaluate：根据评估指标名称 Metric Name 从注册中心获取相应的评估器，并使用多个评估器对推理结果进行多维度评估，最终生成评估结果  EvalResult。
 - Agent Evaluator 为降低 Agent 输出的偶然性，评估服务会被调用 NumRuns 次，并聚合多次结果，以获得更稳定的评估结果。
 
@@ -431,17 +431,30 @@ EvalSet 是一组 EvalCase 的集合，通过唯一的 EvalSetID 进行标识，
 
 而 EvalCase 表示同一 Session 下的一组评估用例，包含唯一标识符 EvalID、对话内容以及 Session 初始化信息。
 
-对话数据包括三类内容：
+对话数据包括四类内容：
 
 - 用户输入
 - Agent 最终响应
 - 工具调用与结果
 - 中间响应信息
 
+EvalCase 支持通过 `evalMode` 配置评估模式：
+
+- 默认模式（`evalMode` 省略或空字符串）：`conversation` 作为预期输出，评估过程会调用 Runner/Agent 生成实际输出。
+- trace 模式（`evalMode` 为 `"trace"`）：`conversation` 作为实际输出 trace，评估过程不会调用 Runner/Agent 执行推理。
+
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+// EvalMode 表示评估模式类型
+type EvalMode string
+
+const (
+	EvalModeDefault EvalMode = ""      // EvalModeDefault 表示默认模式
+	EvalModeTrace   EvalMode = "trace" // EvalModeTrace 表示 Trace 评估模式
 )
 
 // EvalSet 表示一个评估集
@@ -456,6 +469,7 @@ type EvalSet struct {
 // EvalCase 表示单个评估用例
 type EvalCase struct {
 	EvalID            string               // 用例唯一标识
+	EvalMode          EvalMode             // 评估模式
 	Conversation      []*Invocation        // 对话序列
 	SessionInput      *SessionInput        // Session 初始化数据
 	CreationTimestamp *epochtime.EpochTime // 创建时间
@@ -1118,6 +1132,62 @@ func (l *customLocator) List(baseDir, appName string) ([]string, error) {
 	return results, nil
 }
 ```
+
+### Trace 评估模式
+
+Trace 评估模式用于评估离线采集到的 Trace 执行轨迹，评估过程中不会调用 Runner 执行推理。
+
+在 EvalSet 的 evalCase 中设置 `evalMode: "trace"`，并将 `conversation` 填写为实际输出的 invocation 序列，例如 `userContent`、`finalResponse`、`tools`、`intermediateResponses`。由于 trace 模式不提供预期输出，建议选择不依赖预期输出的 Metric，例如 `llm_rubric_response`。
+
+```json
+{
+  "evalSetId": "trace-basic",
+  "name": "trace-basic",
+  "evalCases": [
+    {
+      "evalId": "trace_calc_add",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "trace_calc_add-1",
+          "userContent": {
+            "role": "user",
+            "content": "calc add 123 456"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "calc result: 579"
+          },
+          "tools": [
+            {
+              "id": "call_00_example",
+              "name": "calculator",
+              "arguments": {
+                "a": 123,
+                "b": 456,
+                "operation": "add"
+              },
+              "result": {
+                "a": 123,
+                "b": 456,
+                "operation": "add",
+                "result": 579
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "trace-eval-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}
+```
+
+
+完整示例参见 [examples/evaluation/trace][trace-eval-example]。
 
 ### 评估准则
 

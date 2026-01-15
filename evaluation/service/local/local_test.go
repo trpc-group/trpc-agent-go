@@ -64,6 +64,9 @@ type fakeEvaluator struct {
 	name   string
 	result *evaluator.EvaluateResult
 	err    error
+
+	receivedActuals   []*evalset.Invocation
+	receivedExpecteds []*evalset.Invocation
 }
 
 func (f *fakeEvaluator) Name() string {
@@ -78,6 +81,8 @@ func (f *fakeEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*eval
 	if f.err != nil {
 		return nil, f.err
 	}
+	f.receivedActuals = actuals
+	f.receivedExpecteds = expecteds
 	return f.result, nil
 }
 
@@ -415,8 +420,8 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 				assert.NoError(t, err)
 				invalid := &evalset.EvalCase{
 					EvalID:       "invalid",
-					Conversation: []*evalset.Invocation{makeInvocation("invalid-1", "prompt")},
-					SessionInput: nil,
+					Conversation: []*evalset.Invocation{},
+					SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
 				}
 				assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, invalid))
 				actual := makeActualInvocation("actual-1", "prompt", "answer")
@@ -530,4 +535,108 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLocalInferenceTraceModeSkipsRunner(t *testing.T) {
+	ctx := context.Background()
+	appName := "trace-app"
+	evalSetID := "trace-set"
+	caseID := "case-trace"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	traceCase := &evalset.EvalCase{
+		EvalID:   caseID,
+		EvalMode: evalset.EvalModeTrace,
+		Conversation: []*evalset.Invocation{
+			makeActualInvocation("trace-inv-1", "prompt", "answer"),
+		},
+		SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
+	}
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, traceCase))
+
+	runnerStub := &fakeRunner{err: errors.New("runner should not be called in trace mode")}
+	reg := registry.New()
+	resMgr := evalresultinmemory.New()
+	svc := newLocalService(t, runnerStub, mgr, resMgr, reg, "session-trace")
+
+	req := &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID}
+	results, err := svc.Inference(ctx, req)
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, caseID, results[0].EvalCaseID)
+	assert.Equal(t, "session-trace", results[0].SessionID)
+	assert.Len(t, results[0].Inferences, 1)
+	assert.NotNil(t, results[0].Inferences[0].FinalResponse)
+	assert.Equal(t, "answer", results[0].Inferences[0].FinalResponse.Content)
+
+	runnerStub.mu.Lock()
+	callCount := len(runnerStub.calls)
+	runnerStub.mu.Unlock()
+	assert.Zero(t, callCount)
+}
+
+func TestLocalEvaluateTraceModeUsesUserContentAsExpected(t *testing.T) {
+	ctx := context.Background()
+	appName := "trace-app"
+	evalSetID := "trace-set"
+	caseID := "case-trace"
+	metricName := "trace_metric"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{
+		EvalID:   caseID,
+		EvalMode: evalset.EvalModeTrace,
+		Conversation: []*evalset.Invocation{
+			makeActualInvocation("trace-inv-1", "prompt", "answer"),
+		},
+		SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
+	}))
+
+	reg := registry.New()
+	fakeEval := &fakeEvaluator{
+		name: metricName,
+		result: &evaluator.EvaluateResult{
+			OverallScore:  1,
+			OverallStatus: status.EvalStatusPassed,
+			PerInvocationResults: []*evaluator.PerInvocationResult{
+				{Score: 1, Status: status.EvalStatusPassed},
+			},
+		},
+	}
+	assert.NoError(t, reg.Register(metricName, fakeEval))
+
+	resMgr := evalresultinmemory.New()
+	runnerStub := &fakeRunner{err: errors.New("runner should not be called in trace mode")}
+	svc := newLocalService(t, runnerStub, mgr, resMgr, reg, "session-trace")
+
+	inferenceResults, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
+	assert.NoError(t, err)
+	assert.Len(t, inferenceResults, 1)
+
+	evalReq := &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: inferenceResults,
+		EvaluateConfig: &service.EvaluateConfig{
+			EvalMetrics: []*metric.EvalMetric{{MetricName: metricName, Threshold: 0.5}},
+		},
+	}
+	result, err := svc.Evaluate(ctx, evalReq)
+	assert.NoError(t, err)
+	assert.Len(t, fakeEval.receivedActuals, 1)
+	assert.Len(t, fakeEval.receivedExpecteds, 1)
+	assert.NotNil(t, fakeEval.receivedExpecteds[0])
+	assert.NotNil(t, fakeEval.receivedExpecteds[0].UserContent)
+	assert.Equal(t, "prompt", fakeEval.receivedExpecteds[0].UserContent.Content)
+	assert.Nil(t, fakeEval.receivedExpecteds[0].FinalResponse)
+	assert.Nil(t, fakeEval.receivedExpecteds[0].Tools)
+	assert.Len(t, result.EvalCaseResults, 1)
+	assert.Len(t, result.EvalCaseResults[0].EvalMetricResultPerInvocation, 1)
+	assert.NotNil(t, result.EvalCaseResults[0].EvalMetricResultPerInvocation[0].ActualInvocation)
+	assert.Nil(t, result.EvalCaseResults[0].EvalMetricResultPerInvocation[0].ExpectedInvocation)
 }

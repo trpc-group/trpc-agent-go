@@ -14,10 +14,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+// EvalMode determines how an eval case conversation should be interpreted during evaluation.
+type EvalMode string
+
+const (
+	// EvalModeDefault indicates the eval case uses the default evaluation mode.
+	EvalModeDefault EvalMode = ""
+	// EvalModeTrace indicates the eval case conversation already contains the actual trace output.
+	EvalModeTrace EvalMode = "trace"
+)
+
 // EvalCase represents a single evaluation case.
 type EvalCase struct {
 	// EvalID uniquely identifies this evaluation case.
 	EvalID string `json:"evalId,omitempty"`
+	// EvalMode controls how the eval case conversation is interpreted.
+	EvalMode EvalMode `json:"evalMode,omitempty"`
 	// Conversation contains the sequence of invocations.
 	Conversation []*Invocation `json:"conversation,omitempty"`
 	// SessionInput contains initialization data for the session.
