@@ -32,25 +32,30 @@ type Translator interface {
 }
 
 // New creates a new event translator.
-func New(ctx context.Context, threadID, runID string) Translator {
+func New(ctx context.Context, threadID, runID string, opts ...Option) (Translator, error) {
+	options := newOptions(opts...)
 	return &translator{
-		threadID:         threadID,
-		runID:            runID,
-		lastMessageID:    "",
-		receivingMessage: false,
-		seenResponseIDs:  make(map[string]struct{}),
-		seenToolCallIDs:  make(map[string]struct{}),
-	}
+		threadID:                          threadID,
+		runID:                             runID,
+		lastMessageID:                     "",
+		receivingMessage:                  false,
+		seenResponseIDs:                   make(map[string]struct{}),
+		seenToolCallIDs:                   make(map[string]struct{}),
+		graphNodeLifecycleActivityEnabled: options.graphNodeLifecycleActivityEnabled,
+		graphNodeInterruptActivityEnabled: options.graphNodeInterruptActivityEnabled,
+	}, nil
 }
 
 // translator is the default implementation of the Translator.
 type translator struct {
-	threadID         string
-	runID            string
-	lastMessageID    string
-	receivingMessage bool
-	seenResponseIDs  map[string]struct{}
-	seenToolCallIDs  map[string]struct{}
+	threadID                          string
+	runID                             string
+	lastMessageID                     string
+	receivingMessage                  bool
+	seenResponseIDs                   map[string]struct{}
+	seenToolCallIDs                   map[string]struct{}
+	graphNodeLifecycleActivityEnabled bool
+	graphNodeInterruptActivityEnabled bool
 }
 
 // Translate translates one trpc-agent-go event into zero or more AG-UI events.
@@ -64,10 +69,16 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 		(len(event.StateDelta[graph.MetadataKeyModel]) > 0 ||
 			len(event.StateDelta[graph.MetadataKeyTool]) > 0 ||
 			len(event.StateDelta[graph.MetadataKeyNodeCustom]) > 0 ||
-			len(event.StateDelta[graph.MetadataKeyNode]) > 0)
+			len(event.StateDelta[graph.MetadataKeyNode]) > 0 ||
+			len(event.StateDelta[graph.MetadataKeyPregel]) > 0)
 
 	// GraphAgent emits model/tool metadata via StateDelta instead of raw tool_calls.
-	events = append(events, t.graphNodeStartActivityEvents(event)...)
+	if t.graphNodeLifecycleActivityEnabled {
+		events = append(events, t.graphNodeActivityEvents(event)...)
+	}
+	if t.graphNodeInterruptActivityEnabled {
+		events = append(events, t.graphNodeInterruptActivityEvents(event)...)
+	}
 	events = append(events, t.graphModelEvents(event)...)
 	events = append(events, t.graphToolEvents(event)...)
 	// Handle node custom events (progress, text, custom).
@@ -116,15 +127,27 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 }
 
 const (
-	graphNodeStartActivityType = "graph.node.start"
-	graphNodeStartPatchPath    = "/node"
+	graphNodeLifecycleActivityType = "graph.node.lifecycle"
+	graphNodePatchPath             = "/node"
+	graphNodeInterruptActivityType = "graph.node.interrupt"
+	graphNodeInterruptPatchPath    = "/interrupt"
 )
 
-type graphNodeStartPatchValue struct {
+type graphNodePatchValue struct {
 	NodeID string `json:"nodeId"`
+	Phase  string `json:"phase"`
+	Error  string `json:"error,omitempty"`
 }
 
-func (t *translator) graphNodeStartActivityEvents(evt *agentevent.Event) []aguievents.Event {
+type graphNodeInterruptPatchValue struct {
+	NodeID       string `json:"nodeId"`
+	Key          string `json:"key,omitempty"`
+	Prompt       any    `json:"prompt"`
+	CheckpointID string `json:"checkpointId,omitempty"`
+	LineageID    string `json:"lineageId,omitempty"`
+}
+
+func (t *translator) graphNodeActivityEvents(evt *agentevent.Event) []aguievents.Event {
 	if evt == nil || evt.StateDelta == nil {
 		return nil
 	}
@@ -139,7 +162,7 @@ func (t *translator) graphNodeStartActivityEvents(evt *agentevent.Event) []aguie
 			aguievents.WithRunID(t.runID),
 		)}
 	}
-	if meta.Phase != graph.ExecutionPhaseStart || meta.NodeID == "" {
+	if meta.NodeID == "" {
 		return nil
 	}
 	// Agent nodes emit an additional start event without attempt metadata; ignore it to avoid duplicates.
@@ -147,12 +170,63 @@ func (t *translator) graphNodeStartActivityEvents(evt *agentevent.Event) []aguie
 		return nil
 	}
 
+	value := graphNodePatchValue{NodeID: meta.NodeID, Phase: string(meta.Phase)}
+	switch meta.Phase {
+	case graph.ExecutionPhaseStart, graph.ExecutionPhaseComplete:
+	case graph.ExecutionPhaseError:
+		value.Error = meta.Error
+	default:
+		return nil
+	}
+
 	patch := []aguievents.JSONPatchOperation{
-		{Op: "add", Path: graphNodeStartPatchPath, Value: graphNodeStartPatchValue{NodeID: meta.NodeID}},
+		{
+			Op:    "add",
+			Path:  graphNodePatchPath,
+			Value: value,
+		},
 	}
 
 	return []aguievents.Event{
-		aguievents.NewActivityDeltaEvent(uuid.NewString(), graphNodeStartActivityType, patch),
+		aguievents.NewActivityDeltaEvent(uuid.NewString(), graphNodeLifecycleActivityType, patch),
+	}
+}
+
+func (t *translator) graphNodeInterruptActivityEvents(evt *agentevent.Event) []aguievents.Event {
+	if evt == nil || evt.StateDelta == nil {
+		return nil
+	}
+	raw, ok := evt.StateDelta[graph.MetadataKeyPregel]
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	var meta graph.PregelStepMetadata
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return []aguievents.Event{aguievents.NewRunErrorEvent(
+			fmt.Sprintf("invalid graph pregel metadata: %v", err),
+			aguievents.WithRunID(t.runID),
+		)}
+	}
+	if meta.NodeID == "" {
+		return nil
+	}
+
+	patch := []aguievents.JSONPatchOperation{
+		{
+			Op:   "add",
+			Path: graphNodeInterruptPatchPath,
+			Value: graphNodeInterruptPatchValue{
+				NodeID:       meta.NodeID,
+				Key:          meta.InterruptKey,
+				Prompt:       meta.InterruptValue,
+				CheckpointID: meta.CheckpointID,
+				LineageID:    meta.LineageID,
+			},
+		},
+	}
+
+	return []aguievents.Event{
+		aguievents.NewActivityDeltaEvent(uuid.NewString(), graphNodeInterruptActivityType, patch),
 	}
 }
 

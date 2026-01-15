@@ -170,7 +170,7 @@ func TestVectorStore_Get(t *testing.T) {
 			name:  "document_not_found",
 			docID: "non_existent",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"})
+				rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"})
 				mock.ExpectQuery("SELECT (.+) FROM documents WHERE id").
 					WithArgs("non_existent").
 					WillReturnRows(rows)
@@ -622,7 +622,7 @@ func TestVectorStore_GetMetadata(t *testing.T) {
 		vs, tc := newTestVectorStore(t)
 		defer tc.Close()
 
-		rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"})
+		rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"})
 		tc.mock.ExpectQuery("SELECT .+ FROM documents .+ LIMIT .+ OFFSET").
 			WillReturnRows(rows)
 
@@ -801,8 +801,8 @@ func TestVectorStore_ExecuteSearch_ParseError(t *testing.T) {
 
 	// Mock query that returns invalid data causing parse error
 	tc.mock.ExpectQuery("SELECT (.+) FROM documents").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"}).
-			AddRow("test_001", "Test", "Content", "invalid_json", "{}", 1000000, 2000000, 0.9))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"}).
+			AddRow("test_001", "Test", "Content", "invalid_json", "{}", 1000000, 2000000, 0.9, 0.0, 0.9))
 
 	query := "SELECT * FROM documents"
 	result, err := vs.executeSearch(context.Background(), query, []any{}, vectorstore.SearchModeVector)
@@ -876,6 +876,224 @@ func TestVectorStore_DeleteByFilter_RowsAffectedError(t *testing.T) {
 	assert.Contains(t, err.Error(), "get rows affected")
 }
 
+// TestVectorStore_UpdateByFilter tests UpdateByFilter functionality
+func TestVectorStore_UpdateByFilter(t *testing.T) {
+	t.Run("update_name_by_ids", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		tc.mock.ExpectExec("UPDATE documents SET").
+			WillReturnResult(sqlmock.NewResult(0, 2))
+
+		rowsAffected, err := vs.UpdateByFilter(context.Background(),
+			vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1", "doc2"}),
+			vectorstore.WithUpdateByFilterUpdates(map[string]any{
+				"name": "new_name",
+			}),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), rowsAffected)
+		tc.AssertExpectations(t)
+	})
+
+	t.Run("update_content_by_filter", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		tc.mock.ExpectExec("UPDATE documents SET").
+			WillReturnResult(sqlmock.NewResult(0, 5))
+
+		rowsAffected, err := vs.UpdateByFilter(context.Background(),
+			vectorstore.WithUpdateByFilterCondition(&searchfilter.UniversalFilterCondition{
+				Field:    "category",
+				Operator: searchfilter.OperatorEqual,
+				Value:    "test",
+			}),
+			vectorstore.WithUpdateByFilterUpdates(map[string]any{
+				"content": "new content",
+			}),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, int64(5), rowsAffected)
+		tc.AssertExpectations(t)
+	})
+
+	t.Run("update_metadata_field", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		tc.mock.ExpectExec("UPDATE documents SET").
+			WillReturnResult(sqlmock.NewResult(0, 3))
+
+		rowsAffected, err := vs.UpdateByFilter(context.Background(),
+			vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1"}),
+			vectorstore.WithUpdateByFilterUpdates(map[string]any{
+				"metadata.status": "archived",
+			}),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), rowsAffected)
+		tc.AssertExpectations(t)
+	})
+
+	t.Run("update_multiple_fields", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		tc.mock.ExpectExec("UPDATE documents SET").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+
+		rowsAffected, err := vs.UpdateByFilter(context.Background(),
+			vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1"}),
+			vectorstore.WithUpdateByFilterUpdates(map[string]any{
+				"name":              "updated_name",
+				"content":           "updated_content",
+				"metadata.category": "new_category",
+			}),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), rowsAffected)
+		tc.AssertExpectations(t)
+	})
+
+	t.Run("error_no_filter", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		_, err := vs.UpdateByFilter(context.Background(),
+			vectorstore.WithUpdateByFilterUpdates(map[string]any{
+				"name": "new_name",
+			}),
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no filter conditions")
+	})
+
+	t.Run("error_no_updates", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		_, err := vs.UpdateByFilter(context.Background(),
+			vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1"}),
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no updates specified")
+	})
+
+	t.Run("error_forbidden_field_id", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		_, err := vs.UpdateByFilter(context.Background(),
+			vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1"}),
+			vectorstore.WithUpdateByFilterUpdates(map[string]any{
+				"id": "new_id",
+			}),
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot be updated")
+	})
+
+	t.Run("update_embedding", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		tc.mock.ExpectExec("UPDATE documents SET").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+
+		rowsAffected, err := vs.UpdateByFilter(context.Background(),
+			vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1"}),
+			vectorstore.WithUpdateByFilterUpdates(map[string]any{
+				"embedding": []float64{0.1, 0.2, 0.3},
+			}),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), rowsAffected)
+		tc.AssertExpectations(t)
+	})
+
+	t.Run("error_embedding_invalid_type", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		_, err := vs.UpdateByFilter(context.Background(),
+			vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1"}),
+			vectorstore.WithUpdateByFilterUpdates(map[string]any{
+				"embedding": "invalid",
+			}),
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must be []float64")
+	})
+
+	t.Run("error_unsupported_field", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		_, err := vs.UpdateByFilter(context.Background(),
+			vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1"}),
+			vectorstore.WithUpdateByFilterUpdates(map[string]any{
+				"unknown_field": "value",
+			}),
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported update field")
+	})
+
+	t.Run("error_exec_failed", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		tc.mock.ExpectExec("UPDATE documents SET").
+			WillReturnError(errors.New("exec error"))
+
+		_, err := vs.UpdateByFilter(context.Background(),
+			vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1"}),
+			vectorstore.WithUpdateByFilterUpdates(map[string]any{
+				"name": "new_name",
+			}),
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "update by filter")
+	})
+
+	t.Run("error_rows_affected_failed", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		tc.mock.ExpectExec("UPDATE documents SET").
+			WillReturnResult(sqlmock.NewErrorResult(errors.New("rows affected error")))
+
+		_, err := vs.UpdateByFilter(context.Background(),
+			vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1"}),
+			vectorstore.WithUpdateByFilterUpdates(map[string]any{
+				"name": "new_name",
+			}),
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "get rows affected")
+	})
+
+	t.Run("update_with_custom_metadata_prefix", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		tc.mock.ExpectExec("UPDATE documents SET").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+
+		// Use custom metadata field name prefix (default is "metadata")
+		rowsAffected, err := vs.UpdateByFilter(context.Background(),
+			vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1"}),
+			vectorstore.WithUpdateByFilterUpdates(map[string]any{
+				"metadata.custom_field": "custom_value",
+			}),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), rowsAffected)
+		tc.AssertExpectations(t)
+	})
+}
+
 // TestVectorStore_Count_FilterError tests Count with filter error
 func TestVectorStore_Count_FilterError(t *testing.T) {
 	vs, tc := newTestVectorStore(t)
@@ -927,9 +1145,9 @@ func TestVectorStore_GetAllMetadata_BatchError(t *testing.T) {
 
 	// Create enough rows to trigger a second batch (metadataBatchSize = 5000)
 	// We'll mock the first batch with exactly 5000 rows to trigger continuation
-	rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"})
+	rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"})
 	for i := 0; i < 5000; i++ {
-		rows.AddRow(fmt.Sprintf("test_%d", i), "Test", "Content", "[1.0,0.5,0.2]", `{"key":"value"}`, 1000000, 2000000, 0.0)
+		rows.AddRow(fmt.Sprintf("test_%d", i), "Test", "Content", "[1.0,0.5,0.2]", `{"key":"value"}`, 1000000, 2000000, 0.0, 0.0, 0.0)
 	}
 	tc.mock.ExpectQuery("SELECT (.+) FROM documents").
 		WillReturnRows(rows)
@@ -970,8 +1188,8 @@ func TestVectorStore_QueryMetadataBatch_BuildError(t *testing.T) {
 
 	// Mock query that returns invalid embedding data causing parse error
 	tc.mock.ExpectQuery("SELECT (.+) FROM documents").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"}).
-			AddRow("test_001", "Test", "Content", "invalid_vector", "{}", 1000000, 2000000, 0.0))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "vector_score", "text_score", "score"}).
+			AddRow("test_001", "Test", "Content", "invalid_vector", "{}", 1000000, 2000000, 0.0, 0.0, 0.0))
 
 	result, err := vs.queryMetadataBatch(context.Background(), 10, 0, nil, nil)
 	require.Error(t, err)

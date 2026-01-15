@@ -788,7 +788,8 @@ stateGraph.AddLLMNode(
 
 将检索结果与用户输入注入指令
 
-- 在进入 LLM 节点前的任意节点，将临时值写入会话的 `temp:` 命名空间，LLM 指令即可用占位符读取。
+- 在进入 LLM 节点前的任意节点，将临时值写入会话的 `temp:`
+  命名空间，LLM 指令即可用占位符读取。
 - 示例模式：
 
 ```go
@@ -815,7 +816,10 @@ stateGraph.AddLLMNode("answer", mdl,
 
 占位符与会话状态的最佳实践
 
-- 短期 vs 持久：只用于本轮提示词组装的数据写到 `temp:*`（建议通过 `sess.SetState` 写入）；需要跨轮/跨会话保留的配置，请通过 SessionService（会话服务）更新 `user:*`/`app:*`。
+- 会话内临时 vs 持久：通常用于提示词组装的临时数据写到 `temp:*`
+  （常见做法是每轮覆盖，建议通过 `sess.SetState` 写入）；需要跨轮/
+  跨会话保留的配置，请通过 SessionService（会话服务）更新
+  `user:*`/`app:*`。
 - 为什么推荐用 SetState：LLM 节点从图状态里的会话对象读取并展开占位符，使用 `sess.SetState` 可避免不安全的并发 map 访问。
 - 服务侧护栏：内存实现禁止通过“更新用户态”的接口写 `temp:*`（以及 `app:*` via user updater），见 [session/inmemory/service.go](https://github.com/trpc-group/trpc-agent-go/blob/main/session/inmemory/service.go)。
 - 并发建议：并行分支不要同时改同一批 `session.State` 键；建议汇总到单节点合并后一次写入，或先放图状态再一次写到 `temp:*`。
@@ -1056,6 +1060,24 @@ stateGraph.AddAgentNode("assistant",
 
 - 第二次模型请求与第一次几乎一致（prompt 里看不到工具返回）。
 - 子 Agent 会重复第一轮工具调用，或进入循环，因为它永远“看不到”工具结果。
+
+#### Agent 节点：检查点与嵌套中断
+
+当子 Agent 本身也是 GraphAgent（基于图的 Agent），并且开启了检查点（checkpoint）时，
+子图需要使用自己的检查点命名空间（checkpoint namespace）。否则子图可能会误用父图的
+检查点进行恢复，导致执行位置与图结构不一致。
+
+对于“Agent 节点调用 GraphAgent”的默认行为：
+
+- 子 GraphAgent 会使用子 Agent 的名称作为检查点命名空间，即使运行时状态是从父态克隆来的。
+- 父图的检查点标识（ID）不会自动透传到子图；如果你需要指定，请通过子图输入映射显式设置。
+
+嵌套的人机协作（Human-in-the-Loop (HITL)）中断/恢复：
+
+- 当子 GraphAgent 调用 `graph.Interrupt` 时，父图也会中断并生成父检查点。
+- 恢复时只需要恢复父检查点；当 Agent 节点再次执行时，会自动恢复子检查点。
+
+可运行示例：`examples/graph/nested_interrupt`。
 
 ### 4. 条件路由
 
@@ -3015,7 +3037,7 @@ stateGraph.
 - 执行
   - `graphagent.New(name, compiledGraph, ...opts)` → `runner.NewRunner(app, agent)` → `Run(...)`
 
-更多端到端用法见 `examples/graph`（基础/并行/多轮/中断/工具/占位符）。
+更多端到端用法见 `examples/graph`（基础/并行/多轮/中断与嵌套中断/工具/占位符）。
 
 ## 可视化导出（DOT/图片）
 
@@ -3087,6 +3109,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: "ckpt-123",
     }),
 )
@@ -3103,6 +3126,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: "ckpt-123",
     }),
 )
@@ -3211,6 +3235,7 @@ sg.AddNode(nodeReview, func(ctx context.Context, s graph.State) (any, error) {
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: checkpointID,
         graph.StateKeyResumeMap: map[string]any{
             "review_key": "approved",
@@ -3218,6 +3243,54 @@ eventCh, err := r.Run(ctx, userID, sessionID,
     }),
 )
 ```
+
+#### 嵌套图（子 GraphAgent 中断）
+
+如果父图通过 Agent 节点调用子 GraphAgent（`AddAgentNode` / `AddSubgraphNode`），
+子图同样可以通过 `graph.Interrupt` 触发中断，并且父图会一起中断。
+
+恢复时仍然只需要恢复父图的检查点；当 Agent 节点再次执行时，会自动恢复子图的检查点。
+
+可运行示例：`examples/graph/nested_interrupt`。
+
+该示例支持通过 `-depth` 参数模拟多级嵌套。
+
+关键点：`graph.Interrupt(ctx, state, key, prompt)` 里的 `key` 会作为 `ResumeMap`
+的路由 key。也就是说，恢复时 `ResumeMap` 的 map key 必须与这里的 `key` 一致。
+
+你会看到两个不同的标识：
+
+- 节点标识（Node Identifier (Node ID)）：当前这张图暂停的位置（在嵌套图里，
+  通常是父图的 Agent 节点）。
+- 任务标识（Task Identifier (Task ID)）：用于 `ResumeMap` 路由的中断 key。
+  对 `graph.Interrupt` 而言，Task ID 等于传入的 `key` 参数。
+
+如果你不想在代码里写死中断 key，可以从“中断检查点”里取出 Task ID，并用它作为
+`ResumeMap` 的 key：
+
+```go
+// cm 是 graph.CheckpointManager。如果你使用 GraphAgent，可以通过
+// ga.Executor().CheckpointManager() 获取。
+latest, err := cm.Latest(ctx, lineageID, namespace)
+if err != nil || latest == nil || latest.Checkpoint == nil {
+    // handle error
+}
+taskID := latest.Checkpoint.InterruptState.TaskID
+
+cmd := graph.NewResumeCommand().
+    AddResumeValue(taskID, "approved")
+
+events, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
+        graph.CfgKeyCheckpointID: latest.Checkpoint.ID,
+        graph.StateKeyCommand:    cmd,
+    }),
+)
+```
+
+多级嵌套的语义是一样的：只需要恢复父图检查点，框架会自动逐层恢复每一层子图。
 
 恢复辅助函数：
 
@@ -3527,7 +3600,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 
 **Q6: 从检查点恢复未按预期继续**
 
-- 通过 `agent.WithRuntimeState(map[string]any{ graph.CfgKeyCheckpointID: "..." })` 传入；
+- 通过 `agent.WithRuntimeState(map[string]any{ graph.CfgKeyLineageID: "...", graph.CfgKeyCheckpointID: "..." })` 传入；
 - HITL 恢复时提供 `ResumeMap`；纯 "resume" 文本不会注入到 `graph.StateKeyUserInput`。
 
 **Q7: 并行下状态冲突**
@@ -3669,5 +3742,5 @@ func buildApprovalWorkflow() (*graph.Graph, error) {
   - I/O 约定：`io_conventions`、`io_conventions_tools`
   - 并行 / 扇出：`parallel`、`fanout`、`diamond`
   - 占位符：`placeholder`
-  - 检查点 / 中断：`checkpoint`、`interrupt`
+  - 检查点 / 中断：`checkpoint`、`interrupt`、`nested_interrupt`
 - 进一步阅读：`graph/state_graph.go`、`graph/executor.go`、`agent/graphagent`

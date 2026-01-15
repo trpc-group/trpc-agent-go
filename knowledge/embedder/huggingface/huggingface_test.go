@@ -22,6 +22,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 )
 
+func strPtr(s string) *string { return &s }
+func intPtr(i int) *int       { return &i }
+
 // TestEmbedderInterface verifies that our Embedder implements the interface.
 func TestEmbedderInterface(t *testing.T) {
 	var _ embedder.Embedder = (*Embedder)(nil)
@@ -56,6 +59,8 @@ func TestNew(t *testing.T) {
 				truncationDirection: TruncateRight,
 				embedRoute:          EmbedDefault,
 				client:              http.DefaultClient,
+				serverAddress:       strPtr("localhost"),
+				serverPort:          intPtr(8080),
 			},
 		},
 		{
@@ -67,6 +72,8 @@ func TestNew(t *testing.T) {
 				truncationDirection: TruncateRight,
 				embedRoute:          EmbedDefault,
 				client:              http.DefaultClient,
+				serverAddress:       strPtr("test.com"),
+				serverPort:          intPtr(80),
 			},
 		},
 		{
@@ -90,6 +97,8 @@ func TestNew(t *testing.T) {
 				truncationDirection: TruncateLeft,
 				embedRoute:          testEmbed,
 				client:              testClient,
+				serverAddress:       strPtr("test.com"),
+				serverPort:          intPtr(80),
 			},
 		},
 		{
@@ -104,6 +113,8 @@ func TestNew(t *testing.T) {
 				truncationDirection: TruncateLeft,
 				embedRoute:          EmbedDefault,
 				client:              http.DefaultClient,
+				serverAddress:       strPtr("localhost"),
+				serverPort:          intPtr(8080),
 			},
 		},
 	}
@@ -114,21 +125,6 @@ func TestNew(t *testing.T) {
 
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("New() = %+v\nwant %+v", got, tt.want)
-
-				valGot := reflect.ValueOf(got).Elem()
-				valWant := reflect.ValueOf(tt.want).Elem()
-				typeGot := valGot.Type()
-
-				for i := 0; i < valGot.NumField(); i++ {
-					fieldName := typeGot.Field(i).Name
-					gotField := valGot.Field(i).Interface()
-					wantField := valWant.Field(i).Interface()
-
-					if !reflect.DeepEqual(gotField, wantField) {
-						t.Errorf("Field %s mismatch: got %v, want %v",
-							fieldName, gotField, wantField)
-					}
-				}
 			}
 		})
 	}

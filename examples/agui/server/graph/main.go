@@ -15,8 +15,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"net/http"
-	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	aguiadapter "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -86,13 +87,21 @@ func main() {
 		log.Fatalf("create graph agent failed: %v", err)
 	}
 
-	r := runner.NewRunner(ga.Info().Name, ga)
+	sessionService := sessioninmemory.NewSessionService()
+	r := runner.NewRunner(ga.Info().Name, ga, runner.WithSessionService(sessionService))
 	defer r.Close()
 
 	server, err := agui.New(
 		r,
 		agui.WithPath(*path),
-		agui.WithAGUIRunnerOptions(aguirunner.WithRunOptionResolver(resolveRunOptions)),
+		agui.WithGraphNodeLifecycleActivityEnabled(true),
+		agui.WithGraphNodeInterruptActivityEnabled(true),
+		agui.WithAGUIRunnerOptions(
+			aguirunner.WithStateResolver(resolveRuntimeState),
+		),
+		agui.WithMessagesSnapshotEnabled(true),
+		agui.WithSessionService(sessionService),
+		agui.WithAppName(ga.Info().Name),
 	)
 	if err != nil {
 		log.Fatalf("create AG-UI server failed: %v", err)
@@ -156,7 +165,7 @@ Include:
 
 	sg.SetEntryPoint(nodePrepare)
 	sg.AddEdge(nodePrepare, nodeRecipeCalcLLM)
-	sg.AddEdge(nodeRecipeCalcLLM, nodeExecuteTools)
+	sg.AddToolsConditionalEdges(nodeRecipeCalcLLM, nodeExecuteTools, nodeConfirm)
 	sg.AddEdge(nodeExecuteTools, nodeConfirm)
 	sg.AddEdge(nodeConfirm, nodeDraftMessageLLM)
 	sg.AddEdge(nodeDraftMessageLLM, nodePolishMessageAgent)
@@ -179,10 +188,21 @@ func confirmNode(ctx context.Context, state graph.State) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if confirmed, ok := v.(bool); ok && confirmed {
+	confirmed, ok := v.(bool)
+	if !ok {
+		return nil, fmt.Errorf("invalid confirmation value: %T", v)
+	}
+	if confirmed {
 		return nil, nil
 	}
-	return nil, errors.New("continuation not confirmed")
+	return &graph.Command{
+		Update: graph.State{
+			graph.StateKeyMetadata: map[string]any{
+				"finish": "canceled",
+			},
+		},
+		GoTo: graph.End,
+	}, nil
 }
 
 func finishNode(ctx context.Context, state graph.State) (any, error) {
@@ -220,54 +240,28 @@ func calculator(ctx context.Context, args calculatorArgs) (calculatorResult, err
 	}
 }
 
-func resolveRunOptions(ctx context.Context, input *aguiadapter.RunAgentInput) ([]agent.RunOption, error) {
+func resolveRuntimeState(_ context.Context, input *aguiadapter.RunAgentInput) (map[string]any, error) {
 	if input == nil {
-		return nil, errors.New("run input is nil")
+		return nil, nil
+	}
+	state, _ := input.State.(map[string]any)
+	if state == nil {
+		return nil, nil
 	}
 
-	forwardedProps, ok := input.ForwardedProps.(map[string]any)
-	if !ok || forwardedProps == nil {
-		return nil, errors.New("forwardedProps must be an object")
+	runtimeState := make(map[string]any)
+	if lineageID, ok := state[graph.CfgKeyLineageID].(string); ok {
+		runtimeState[graph.CfgKeyLineageID] = lineageID
 	}
-	rawLineageID, exists := forwardedProps[graph.CfgKeyLineageID]
-	if !exists {
-		return nil, fmt.Errorf("missing forwardedProps.%s", graph.CfgKeyLineageID)
-	}
-	lineageID, ok := rawLineageID.(string)
-	if !ok {
-		return nil, fmt.Errorf("forwardedProps.%s must be a string", graph.CfgKeyLineageID)
-	}
-	lineageID = strings.TrimSpace(lineageID)
-	if lineageID == "" {
-		return nil, fmt.Errorf("forwardedProps.%s cannot be empty", graph.CfgKeyLineageID)
-	}
-	runtimeState := map[string]any{
-		graph.CfgKeyLineageID: lineageID,
-	}
-
-	if rawCheckpointID, exists := forwardedProps[graph.CfgKeyCheckpointID]; exists {
-		checkpointID, ok := rawCheckpointID.(string)
-		if !ok {
-			return nil, fmt.Errorf("forwardedProps.%s must be a string", graph.CfgKeyCheckpointID)
-		}
+	if checkpointID, ok := state[graph.CfgKeyCheckpointID].(string); ok {
 		runtimeState[graph.CfgKeyCheckpointID] = checkpointID
 	}
-
-	if rawResumeMap, exists := forwardedProps[graph.CfgKeyResumeMap]; exists {
-		resumeMap, ok := rawResumeMap.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("forwardedProps.%s must be an object", graph.CfgKeyResumeMap)
-		}
-		if len(resumeMap) == 0 {
-			return nil, fmt.Errorf("forwardedProps.%s cannot be empty", graph.CfgKeyResumeMap)
-		}
-		if _, hasCheckpointID := runtimeState[graph.CfgKeyCheckpointID]; !hasCheckpointID {
-			return nil, fmt.Errorf("forwardedProps.%s is required when forwardedProps.%s is set", graph.CfgKeyCheckpointID, graph.CfgKeyResumeMap)
-		}
-		runtimeState[graph.StateKeyCommand] = &graph.Command{ResumeMap: resumeMap}
+	if resumeMap, ok := state[graph.CfgKeyResumeMap].(map[string]any); ok && len(resumeMap) > 0 {
+		copied := make(map[string]any)
+		maps.Copy(copied, resumeMap)
+		runtimeState[graph.StateKeyCommand] = &graph.Command{ResumeMap: copied}
 	}
-
-	return []agent.RunOption{agent.WithRuntimeState(runtimeState)}, nil
+	return runtimeState, nil
 }
 
 func intPtr(i int) *int { return &i }

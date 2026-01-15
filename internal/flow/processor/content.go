@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -94,6 +95,11 @@ type ContentRequestProcessor struct {
 	// conversations. Default is ReasoningContentModeDiscardPreviousTurns, which is
 	// recommended for DeepSeek thinking mode.
 	ReasoningContentMode string
+	// PreloadMemory sets the number of memories to preload into system prompt.
+	// When > 0, the specified number of most recent memories are loaded.
+	// When 0, no memories are preloaded (use tools instead).
+	// When < 0 (default), all memories are loaded.
+	PreloadMemory int
 	// SummaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
 	SummaryFormatter func(summary string) string
@@ -170,6 +176,19 @@ func WithReasoningContentMode(mode string) ContentOption {
 	}
 }
 
+// WithPreloadMemory sets the number of memories to preload into system prompt.
+//   - Set to 0 (default) to disable preloading (use tools instead).
+//   - Set to N (N > 0) to load the most recent N memories.
+//   - Set to -1 to load all memories.
+//     WARNING: Loading all memories may significantly increase token usage
+//     and API costs, especially for users with many stored memories.
+//     Consider using a positive limit (e.g., 10-50) for production use.
+func WithPreloadMemory(limit int) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.PreloadMemory = limit
+	}
+}
+
 // WithSummaryFormatter sets a custom formatter for session summary content.
 func WithSummaryFormatter(formatter func(summary string) string) ContentOption {
 	return func(p *ContentRequestProcessor) {
@@ -194,6 +213,8 @@ func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor 
 		PreserveSameBranch: false,
 		// Default to append history message.
 		TimelineFilterMode: TimelineFilterAll,
+		// Default to disable memory preloading (use tools instead).
+		PreloadMemory: 0,
 	}
 
 	// Apply options.
@@ -238,6 +259,8 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 	skipHistory := includeMode == "none"
 
+	p.injectInjectedContextMessages(invocation, req)
+
 	// Append per-filter messages from session events when allowed.
 	needToAddInvocationMessage := true
 	if invocation.Session != nil {
@@ -262,6 +285,22 @@ func (p *ContentRequestProcessor) ProcessRequest(
 				summaryUpdatedAt = updatedAt
 			}
 		}
+
+		// Preload memories into system prompt if configured.
+		// PreloadMemory: 0 = disabled, -1 = all, N > 0 = most recent N.
+		if p.PreloadMemory != 0 && invocation.MemoryService != nil {
+			if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
+				// Insert memory as a system message after the first system message.
+				systemMsgIndex := findSystemMessageIndex(req.Messages)
+				if systemMsgIndex >= 0 {
+					req.Messages = append(req.Messages[:systemMsgIndex+1],
+						append([]model.Message{*memMsg}, req.Messages[systemMsgIndex+1:]...)...)
+				} else {
+					req.Messages = append([]model.Message{*memMsg}, req.Messages...)
+				}
+			}
+		}
+
 		if skipHistory {
 			// When include_contents=none, only get events from current invocation
 			// to preserve tool call history within the current ReAct loop.
@@ -291,6 +330,19 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingContent),
 	))
+}
+
+// injectInjectedContextMessages inserts per-run context messages into the request
+// before session-derived history is appended.
+func (p *ContentRequestProcessor) injectInjectedContextMessages(invocation *agent.Invocation, req *model.Request) {
+	if invocation == nil || req == nil {
+		return
+	}
+	messages := invocation.RunOptions.InjectedContextMessages
+	if len(messages) == 0 {
+		return
+	}
+	req.Messages = append(req.Messages, messages...)
 }
 
 // getSessionSummaryMessage returns the current-branch session summary as a
@@ -945,4 +997,58 @@ func toMap(ids []string) map[string]bool {
 		m[id] = true
 	}
 	return m
+}
+
+// getPreloadMemoryMessage returns preloaded memories as a system message if available.
+func (p *ContentRequestProcessor) getPreloadMemoryMessage(
+	ctx context.Context,
+	inv *agent.Invocation,
+) *model.Message {
+	if inv.MemoryService == nil || inv.Session == nil {
+		return nil
+	}
+	userKey := memory.UserKey{
+		AppName: inv.Session.AppName,
+		UserID:  inv.Session.UserID,
+	}
+	// Validate user key.
+	if userKey.AppName == "" || userKey.UserID == "" {
+		return nil
+	}
+	// Handle PreloadMemory: 0 = disabled, -1 = all, N > 0 = most recent N.
+	if p.PreloadMemory == 0 {
+		// PreloadMemory = 0 means disabled, return nil.
+		return nil
+	}
+	// PreloadMemory = -1 means all memories, use 0 for ReadMemories (no limit).
+	// PreloadMemory = N > 0 means most recent N memories.
+	// Here we use max to handle the case when PreloadMemory is negative.
+	limit := max(p.PreloadMemory, 0)
+	memories, err := inv.MemoryService.ReadMemories(ctx, userKey, limit)
+	if err != nil {
+		log.WarnfContext(ctx, "Failed to preload memories: %v", err)
+		return nil
+	}
+	if len(memories) == 0 {
+		return nil
+	}
+	return &model.Message{
+		Role:    model.RoleSystem,
+		Content: formatMemoryContent(memories),
+	}
+}
+
+// formatMemoryContent formats memories for system prompt injection.
+func formatMemoryContent(memories []*memory.Entry) string {
+	var sb strings.Builder
+	sb.WriteString("## User Memories\n\n")
+	sb.WriteString("The following are memories about the user:\n\n")
+	for _, mem := range memories {
+		if mem == nil || mem.Memory == nil {
+			continue
+		}
+		fmt.Fprintf(&sb, "ID: %s\n", mem.ID)
+		fmt.Fprintf(&sb, "Memory: %s\n\n", mem.Memory.Memory)
+	}
+	return sb.String()
 }

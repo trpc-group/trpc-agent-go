@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -30,6 +31,7 @@ func Inference(
 	invocations []*evalset.Invocation,
 	initialSession *evalset.SessionInput,
 	sessionID string,
+	contextMessages []*model.Message,
 ) ([]*evalset.Invocation, error) {
 	if len(invocations) == 0 {
 		return nil, errors.New("invocations are empty")
@@ -37,10 +39,14 @@ func Inference(
 	if initialSession == nil {
 		return nil, errors.New("session input is nil")
 	}
+	seedMessages, err := buildSeedMessages(contextMessages)
+	if err != nil {
+		return nil, err
+	}
 	// Accumulate each invocation response.
 	responseInvocations := make([]*evalset.Invocation, 0, len(invocations))
 	for _, invocation := range invocations {
-		responseInvocation, err := inferenceInvocation(ctx, runner, sessionID, initialSession, invocation)
+		responseInvocation, err := inferenceInvocation(ctx, runner, sessionID, initialSession, invocation, seedMessages)
 		if err != nil {
 			return nil, err
 		}
@@ -56,11 +62,19 @@ func inferenceInvocation(
 	sessionID string,
 	initialSession *evalset.SessionInput,
 	invocation *evalset.Invocation,
+	contextMessages []model.Message,
 ) (*evalset.Invocation, error) {
 	if invocation.UserContent == nil {
 		return nil, fmt.Errorf("invocation user content is nil for eval case invocation %q", invocation.InvocationID)
 	}
-	events, err := r.Run(ctx, initialSession.UserID, sessionID, *invocation.UserContent, agent.WithRuntimeState(initialSession.State))
+	events, err := r.Run(
+		ctx,
+		initialSession.UserID,
+		sessionID,
+		*invocation.UserContent,
+		agent.WithRuntimeState(initialSession.State),
+		agent.WithInjectedContextMessages(contextMessages),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
 	}
@@ -120,15 +134,10 @@ func convertTools(event *event.Event) ([]*evalset.Tool, error) {
 	tools := []*evalset.Tool{}
 	for _, choice := range event.Response.Choices {
 		for _, toolCall := range choice.Message.ToolCalls {
-			args := map[string]any{}
-			if err := json.Unmarshal(toolCall.Function.Arguments, &args); err != nil {
-				return nil, fmt.Errorf("unmarshal tool call arguments %s for tool %s: %w",
-					string(toolCall.Function.Arguments), toolCall.ID, err)
-			}
 			tool := &evalset.Tool{
 				ID:        toolCall.ID,
 				Name:      toolCall.Function.Name,
-				Arguments: args,
+				Arguments: parseToolCallArguments(toolCall.Function.Arguments),
 			}
 			tools = append(tools, tool)
 		}
@@ -136,19 +145,49 @@ func convertTools(event *event.Event) ([]*evalset.Tool, error) {
 	return tools, nil
 }
 
+func parseToolCallArguments(arguments []byte) any {
+	trimmed := strings.TrimSpace(string(arguments))
+	if trimmed == "" {
+		return map[string]any{}
+	}
+	var value any
+	if err := json.Unmarshal([]byte(trimmed), &value); err == nil {
+		return value
+	}
+	return string(arguments)
+}
+
 // mergeToolResultResponse merges the tool result response into the tools.
 func mergeToolResultResponse(event *event.Event, toolIDIdx map[string]int, tools []*evalset.Tool) error {
 	for _, choice := range event.Response.Choices {
-		idx, ok := toolIDIdx[choice.Message.ToolID]
+		toolID := choice.Message.ToolID
+		idx, ok := toolIDIdx[toolID]
 		if !ok {
-			return fmt.Errorf("tool ID %s not found in tool ID index for tool result response", choice.Message.ToolID)
+			return fmt.Errorf("tool ID %s not found in tool ID index for tool result response", toolID)
 		}
-		result := map[string]any{}
-		if err := json.Unmarshal([]byte(choice.Message.Content), &result); err != nil {
-			return fmt.Errorf("unmarshal tool result response %s for tool %s: %w",
-				choice.Message.Content, choice.Message.ToolID, err)
-		}
-		tools[idx].Result = result
+		tools[idx].Result = parseToolResultContent(choice.Message.Content)
 	}
 	return nil
+}
+
+func parseToolResultContent(content string) any {
+	var value any
+	if err := json.Unmarshal([]byte(content), &value); err == nil {
+		return value
+	}
+	return content
+}
+
+func buildSeedMessages(messages []*model.Message) ([]model.Message, error) {
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	seed := make([]model.Message, 0, len(messages))
+	for idx, message := range messages {
+		if message == nil {
+			return nil, fmt.Errorf("context message is nil at index %d", idx)
+		}
+		seed = append(seed, *message)
+	}
+	return seed, nil
 }

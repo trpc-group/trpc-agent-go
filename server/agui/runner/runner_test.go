@@ -11,6 +11,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
@@ -36,15 +38,348 @@ func TestNew(t *testing.T) {
 	assert.True(t, ok)
 
 	assert.NotNil(t, runner.runAgentInputHook)
-	trans := runner.translatorFactory(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	assert.NotNil(t, runner.stateResolver)
+	trans, err := runner.translatorFactory(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	assert.NoError(t, err)
 	assert.NotNil(t, trans)
-	assert.IsType(t, translator.New(context.Background(), "", ""), trans)
+	expected, err := translator.New(context.Background(), "", "")
+	assert.NoError(t, err)
+	assert.IsType(t, expected, trans)
 	assert.NotNil(t, runner.runOptionResolver)
 
 	userID, err := runner.userIDResolver(context.Background(),
 		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
 	assert.NoError(t, err)
 	assert.Equal(t, "user", userID)
+}
+
+func TestRunEmitsGraphNodeStartActivityWhenEnabled(t *testing.T) {
+	meta := graph.NodeExecutionMetadata{
+		NodeID:   "node-1",
+		NodeType: graph.NodeTypeFunction,
+		Phase:    graph.ExecutionPhaseStart,
+		Attempt:  1,
+	}
+	raw, err := json.Marshal(meta)
+	require.NoError(t, err)
+
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- &agentevent.Event{
+		ID: "node-start-1",
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNode: raw,
+		},
+	}
+	close(agentEvents)
+
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+
+	r := New(underlying, WithGraphNodeLifecycleActivityEnabled(true))
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+
+	evts := collectEvents(t, eventsCh)
+	var found bool
+	for _, evt := range evts {
+		if delta, ok := evt.(*aguievents.ActivityDeltaEvent); ok {
+			assert.Equal(t, "graph.node.lifecycle", delta.ActivityType)
+			found = true
+		}
+	}
+	assert.True(t, found)
+}
+
+func TestRunEmitsGraphNodeInterruptActivityWhenEnabled(t *testing.T) {
+	meta := graph.PregelStepMetadata{
+		StepNumber:     3,
+		NodeID:         "confirm",
+		InterruptValue: "ask",
+	}
+	raw, err := json.Marshal(meta)
+	require.NoError(t, err)
+
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- &agentevent.Event{
+		ID: "pregel-interrupt-1",
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyPregel: raw,
+		},
+	}
+	close(agentEvents)
+
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+
+	r := New(underlying, WithGraphNodeInterruptActivityEnabled(true))
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+
+	evts := collectEvents(t, eventsCh)
+	var found bool
+	for _, evt := range evts {
+		if delta, ok := evt.(*aguievents.ActivityDeltaEvent); ok {
+			assert.Equal(t, "graph.node.interrupt", delta.ActivityType)
+			found = true
+		}
+	}
+	assert.True(t, found)
+}
+
+func TestRunEmitsGraphNodeInterruptResumeAckWhenResuming(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event)
+			close(agentEvents)
+			return agentEvents, nil
+		},
+	}
+
+	r := New(
+		underlying,
+		WithGraphNodeInterruptActivityEnabled(true),
+		WithRunOptionResolver(func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			runtimeState := map[string]any{
+				graph.CfgKeyLineageID:    "demo-lineage",
+				graph.CfgKeyCheckpointID: "ckpt-uuid-xxx",
+				graph.StateKeyCommand: &graph.Command{
+					ResumeMap: map[string]any{
+						"confirm": true,
+					},
+				},
+			}
+			return []agent.RunOption{agent.WithRuntimeState(runtimeState)}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+
+	delta, ok := evts[1].(*aguievents.ActivityDeltaEvent)
+	require.True(t, ok)
+	assert.Equal(t, "graph.node.interrupt", delta.ActivityType)
+	require.Len(t, delta.Patch, 2)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, "/interrupt", delta.Patch[0].Path)
+	assert.Equal(t, json.RawMessage("null"), delta.Patch[0].Value)
+	assert.Equal(t, "add", delta.Patch[1].Op)
+	assert.Equal(t, "/resume", delta.Patch[1].Path)
+	assert.Equal(t, map[string]any{
+		"checkpointId": "ckpt-uuid-xxx",
+		"lineageId":    "demo-lineage",
+		"resumeMap": map[string]any{
+			"confirm": true,
+		},
+	}, delta.Patch[1].Value)
+}
+
+func TestRunEmitsGraphNodeInterruptResumeAckWhenResumingViaStateKeyResumeMap(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event)
+			close(agentEvents)
+			return agentEvents, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithGraphNodeInterruptActivityEnabled(true),
+		WithRunOptionResolver(func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			runtimeState := map[string]any{
+				graph.CfgKeyLineageID:    "demo-lineage",
+				graph.CfgKeyCheckpointID: "ckpt-uuid-xxx",
+				graph.StateKeyResumeMap: map[string]any{
+					"confirm": true,
+				},
+			}
+			return []agent.RunOption{agent.WithRuntimeState(runtimeState)}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	delta, ok := evts[1].(*aguievents.ActivityDeltaEvent)
+	require.True(t, ok)
+	assert.Equal(t, "graph.node.interrupt", delta.ActivityType)
+	require.Len(t, delta.Patch, 2)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, "/interrupt", delta.Patch[0].Path)
+	assert.Equal(t, json.RawMessage("null"), delta.Patch[0].Value)
+	assert.Equal(t, "add", delta.Patch[1].Op)
+	assert.Equal(t, "/resume", delta.Patch[1].Path)
+	assert.Equal(t, map[string]any{
+		"checkpointId": "ckpt-uuid-xxx",
+		"lineageId":    "demo-lineage",
+		"resumeMap": map[string]any{
+			"confirm": true,
+		},
+	}, delta.Patch[1].Value)
+}
+
+func TestRunEmitsGraphNodeInterruptResumeAckWhenResumingViaResumeChannel(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event)
+			close(agentEvents)
+			return agentEvents, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithGraphNodeInterruptActivityEnabled(true),
+		WithRunOptionResolver(func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			runtimeState := map[string]any{
+				graph.CfgKeyLineageID:    "demo-lineage",
+				graph.CfgKeyCheckpointID: "ckpt-uuid-xxx",
+				graph.ResumeChannel:      "approved",
+			}
+			return []agent.RunOption{agent.WithRuntimeState(runtimeState)}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	delta, ok := evts[1].(*aguievents.ActivityDeltaEvent)
+	require.True(t, ok)
+	assert.Equal(t, "graph.node.interrupt", delta.ActivityType)
+	require.Len(t, delta.Patch, 2)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, "/interrupt", delta.Patch[0].Path)
+	assert.Equal(t, json.RawMessage("null"), delta.Patch[0].Value)
+	assert.Equal(t, "add", delta.Patch[1].Op)
+	assert.Equal(t, "/resume", delta.Patch[1].Path)
+	assert.Equal(t, map[string]any{
+		"checkpointId": "ckpt-uuid-xxx",
+		"lineageId":    "demo-lineage",
+		"resume":       "approved",
+	}, delta.Patch[1].Value)
+}
+
+func TestRunEmitsGraphNodeInterruptResumeAckWhenResumingViaResumeChannelNull(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event)
+			close(agentEvents)
+			return agentEvents, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithGraphNodeInterruptActivityEnabled(true),
+		WithRunOptionResolver(func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			runtimeState := map[string]any{
+				graph.CfgKeyLineageID:    "demo-lineage",
+				graph.CfgKeyCheckpointID: "ckpt-uuid-xxx",
+				graph.ResumeChannel:      nil,
+			}
+			return []agent.RunOption{agent.WithRuntimeState(runtimeState)}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	delta, ok := evts[1].(*aguievents.ActivityDeltaEvent)
+	require.True(t, ok)
+	assert.Equal(t, "graph.node.interrupt", delta.ActivityType)
+	require.Len(t, delta.Patch, 2)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, "/interrupt", delta.Patch[0].Path)
+	assert.Equal(t, json.RawMessage("null"), delta.Patch[0].Value)
+	assert.Equal(t, "add", delta.Patch[1].Op)
+	assert.Equal(t, "/resume", delta.Patch[1].Path)
+	assert.Equal(t, map[string]any{
+		"checkpointId": "ckpt-uuid-xxx",
+		"lineageId":    "demo-lineage",
+		"resume":       nil,
+	}, delta.Patch[1].Value)
+}
+
+func TestRunDoesNotEmitGraphNodeInterruptResumeAckWhenCommandBindsEmptyResumeMap(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event)
+			close(agentEvents)
+			return agentEvents, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithGraphNodeInterruptActivityEnabled(true),
+		WithRunOptionResolver(func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			runtimeState := map[string]any{
+				graph.StateKeyCommand: &graph.Command{
+					ResumeMap: map[string]any{},
+				},
+				graph.StateKeyResumeMap: map[string]any{
+					"confirm": true,
+				},
+			}
+			return []agent.RunOption{agent.WithRuntimeState(runtimeState)}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 1)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
 }
 
 func TestRunValidatesInput(t *testing.T) {
@@ -77,6 +412,7 @@ func TestRunIgnoresRequestCancelButRespectsBackendTimeout(t *testing.T) {
 		runner:            underlying,
 		translatorFactory: defaultTranslatorFactory,
 		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		startSpan:         defaultStartSpan,
 		timeout:           200 * time.Millisecond,
@@ -133,6 +469,7 @@ func TestRunTimeoutUsesMinRequestDeadlineAndBackendTimeout(t *testing.T) {
 		runner:            underlying,
 		translatorFactory: defaultTranslatorFactory,
 		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		startSpan:         defaultStartSpan,
 		timeout:           500 * time.Millisecond,
@@ -185,9 +522,12 @@ func TestRunNoMessages(t *testing.T) {
 	underlying := &fakeRunner{}
 	fakeTrans := &fakeTranslator{}
 	r := &runner{
-		runner:            underlying,
-		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator { return fakeTrans },
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
 		userIDResolver:    NewOptions().UserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 	}
 
@@ -202,11 +542,14 @@ func TestRunUserIDResolverError(t *testing.T) {
 	underlying := &fakeRunner{}
 	fakeTrans := &fakeTranslator{}
 	r := &runner{
-		runner:            underlying,
-		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator { return fakeTrans },
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
 		userIDResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
 			return "", errors.New("boom")
 		},
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 	}
 
@@ -226,8 +569,10 @@ func TestRunLastMessageNotUser(t *testing.T) {
 	underlying := &fakeRunner{}
 	fakeTrans := &fakeTranslator{}
 	r := &runner{
-		runner:            underlying,
-		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator { return fakeTrans },
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
 		userIDResolver:    NewOptions().UserIDResolver,
 		runOptionResolver: defaultRunOptionResolver,
 	}
@@ -251,9 +596,12 @@ func TestRunUnderlyingRunnerError(t *testing.T) {
 	}
 	fakeTrans := &fakeTranslator{}
 	r := &runner{
-		runner:            underlying,
-		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator { return fakeTrans },
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
 		userIDResolver:    NewOptions().UserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		startSpan:         defaultStartSpan,
 	}
@@ -282,9 +630,12 @@ func TestRunRunOptionResolverError(t *testing.T) {
 		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 	}
 	r := &runner{
-		runner:            underlying,
-		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator { return fakeTrans },
-		userIDResolver:    NewOptions().UserIDResolver,
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
+		userIDResolver: NewOptions().UserIDResolver,
+		stateResolver:  defaultStateResolver,
 		runOptionResolver: func(ctx context.Context, in *adapter.RunAgentInput) ([]agent.RunOption, error) {
 			assert.Same(t, input, in)
 			return nil, wantErr
@@ -308,10 +659,11 @@ func TestRunStartSpanError(t *testing.T) {
 	}
 	r := &runner{
 		runner: underlying,
-		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator {
-			return &fakeTranslator{}
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return &fakeTranslator{}, nil
 		},
 		userIDResolver: defaultUserIDResolver,
+		stateResolver:  defaultStateResolver,
 		runOptionResolver: func(ctx context.Context, in *adapter.RunAgentInput) ([]agent.RunOption, error) {
 			assert.Same(t, input, in)
 			return nil, nil
@@ -342,9 +694,12 @@ func TestRunLastMessageContentNotString(t *testing.T) {
 	startSpanCalled := false
 	var span *spySpan
 	r := &runner{
-		runner:            underlying,
-		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator { return fakeTrans },
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
 		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		startSpan: func(ctx context.Context, in *adapter.RunAgentInput) (context.Context, trace.Span, error) {
 			assert.Same(t, input, in)
@@ -377,6 +732,7 @@ func TestRunFlushesTracker(t *testing.T) {
 		runner:            underlying,
 		translatorFactory: defaultTranslatorFactory,
 		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		tracker:           recorder,
 		startSpan:         defaultStartSpan,
@@ -479,11 +835,14 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
 	}
 	r := &runner{
-		runner:            underlying,
-		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator { return fakeTrans },
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
 		userIDResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
 			return "user-123", nil
 		},
+		stateResolver: defaultStateResolver,
 		runOptionResolver: func(ctx context.Context, in *adapter.RunAgentInput) ([]agent.RunOption, error) {
 			assert.Same(t, input, in)
 			resolverCalled = true
@@ -499,6 +858,75 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 	assert.True(t, resolverCalled)
 	assert.True(t, optionsApplied)
 	assert.Equal(t, 1, underlying.calls)
+}
+
+func TestRunStateResolverOverridesRuntimeState(t *testing.T) {
+	var runOpts agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			for _, opt := range opts {
+				opt(&runOpts)
+			}
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithStateResolver(func(context.Context, *adapter.RunAgentInput) (map[string]any, error) {
+			return map[string]any{
+				"k1":                  "v1",
+				graph.CfgKeyLineageID: "from-state",
+			}, nil
+		}),
+		WithRunOptionResolver(func(context.Context, *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			return []agent.RunOption{
+				agent.WithRuntimeState(map[string]any{
+					graph.CfgKeyLineageID: "from-runopt",
+					"k2":                  "v2",
+				}),
+			}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	_ = collectEvents(t, eventsCh)
+
+	require.NotNil(t, runOpts.RuntimeState)
+	assert.Equal(t, "v1", runOpts.RuntimeState["k1"])
+	assert.Equal(t, "from-state", runOpts.RuntimeState[graph.CfgKeyLineageID])
+	_, ok := runOpts.RuntimeState["k2"]
+	assert.False(t, ok)
+}
+
+func TestRunStateResolverError(t *testing.T) {
+	underlying := &fakeRunner{}
+	wantErr := errors.New("state resolver failed")
+	r := New(
+		underlying,
+		WithStateResolver(func(context.Context, *adapter.RunAgentInput) (map[string]any, error) {
+			return nil, wantErr
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.Nil(t, eventsCh)
+	assert.ErrorContains(t, err, "resolve state")
+	assert.ErrorIs(t, err, wantErr)
+	assert.Equal(t, 0, underlying.calls)
 }
 
 func TestRunTranslateError(t *testing.T) {
@@ -517,10 +945,11 @@ func TestRunTranslateError(t *testing.T) {
 
 	r := &runner{
 		runner: underlying,
-		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator {
-			return fakeTrans
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
 		},
 		userIDResolver:    NewOptions().UserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		startSpan:         defaultStartSpan,
 	}
@@ -557,11 +986,14 @@ func TestRunNormal(t *testing.T) {
 		return ch, nil
 	}
 	r := &runner{
-		runner:            underlying,
-		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput) translator.Translator { return fakeTrans },
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
 		userIDResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
 			return "user-123", nil
 		},
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		startSpan:         defaultStartSpan,
 	}
@@ -611,13 +1043,14 @@ func TestRunAgentInputHook(t *testing.T) {
 		}
 		r := &runner{
 			runner: underlying,
-			translatorFactory: func(ctx context.Context, _ *adapter.RunAgentInput) translator.Translator {
-				return &fakeTranslator{}
+			translatorFactory: func(ctx context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+				return &fakeTranslator{}, nil
 			},
 			userIDResolver: func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
 				assert.Equal(t, replaced, input)
 				return "user-123", nil
 			},
+			stateResolver: defaultStateResolver,
 			runAgentInputHook: func(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
 				assert.Equal(t, baseInput, input)
 				return replaced, nil
@@ -652,14 +1085,15 @@ func TestRunAgentInputHook(t *testing.T) {
 		}
 		r := &runner{
 			runner: underlying,
-			translatorFactory: func(ctx context.Context, in *adapter.RunAgentInput) translator.Translator {
+			translatorFactory: func(ctx context.Context, in *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
 				assert.Same(t, originalInput, in)
-				return &fakeTranslator{}
+				return &fakeTranslator{}, nil
 			},
 			userIDResolver: func(ctx context.Context, in *adapter.RunAgentInput) (string, error) {
 				assert.Same(t, originalInput, in)
 				return "user", nil
 			},
+			stateResolver: defaultStateResolver,
 			runAgentInputHook: func(ctx context.Context, in *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
 				return nil, nil
 			},
@@ -950,10 +1384,11 @@ func TestRunnerAfterTranslateCallbackOverridesEmission(t *testing.T) {
 
 	r := &runner{
 		runner: underlying,
-		translatorFactory: func(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
-			return fakeTrans
+		translatorFactory: func(ctx context.Context, input *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
 		},
 		userIDResolver:     NewOptions().UserIDResolver,
+		stateResolver:      defaultStateResolver,
 		translateCallbacks: callbacks,
 		runOptionResolver:  defaultRunOptionResolver,
 		startSpan:          defaultStartSpan,
@@ -1077,6 +1512,7 @@ func TestRunTrackingErrorsAreIgnored(t *testing.T) {
 		runner:            underlying,
 		translatorFactory: defaultTranslatorFactory,
 		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		tracker: &errorTracker{
 			appendErr: appendErr,
@@ -1138,6 +1574,7 @@ func TestTranslateCallbackError(t *testing.T) {
 			translateCallbacks: callbacks,
 			translatorFactory:  defaultTranslatorFactory,
 			userIDResolver:     defaultUserIDResolver,
+			stateResolver:      defaultStateResolver,
 			runOptionResolver:  defaultRunOptionResolver,
 			startSpan:          defaultStartSpan,
 		}
@@ -1171,6 +1608,7 @@ func TestTranslateCallbackError(t *testing.T) {
 			translateCallbacks: callbacks,
 			translatorFactory:  defaultTranslatorFactory,
 			userIDResolver:     defaultUserIDResolver,
+			stateResolver:      defaultStateResolver,
 			runOptionResolver:  defaultRunOptionResolver,
 			startSpan:          defaultStartSpan,
 		}

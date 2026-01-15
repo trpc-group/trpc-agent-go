@@ -17,11 +17,13 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/pgvector/pgvector-go"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/storage/postgres"
@@ -75,7 +77,7 @@ const (
 			%s = EXCLUDED.%s,
 			%s = EXCLUDED.%s`
 
-	sqlSelectDocument = `SELECT *, 0.0 as score FROM %s WHERE %s = $1 LIMIT 1`
+	sqlSelectDocument = `SELECT *, 0.0 as vector_score, 0.0 as text_score, 0.0 as score FROM %s WHERE %s = $1 LIMIT 1`
 
 	sqlDeleteDocument = `DELETE FROM %s WHERE %s = $1`
 
@@ -519,14 +521,20 @@ func (vs *VectorStore) executeSearch(ctx context.Context, query string, args []a
 			}
 			var score float64
 			var id string
+			var vectorScore, textScore any
+
 			if scoredDoc != nil && scoredDoc.Document != nil {
 				score = scoredDoc.Score
 				id = scoredDoc.Document.ID
+
+				// Extract raw scores from metadata for logging
+				vectorScore = scoredDoc.Document.Metadata[source.MetadataDenseScore]
+				textScore = scoredDoc.Document.Metadata[source.MetadataSparseScore]
 				result.Results = append(result.Results, scoredDoc)
 			}
 			log.DebugfContext(ctx,
-				"pgvector search result: score: %v id: %v searchMode: %v, query: %v",
-				score, id, searchMode, query)
+				"pgvector search result: score: %v (dense: %v, sparse: %v) id: %v searchMode: %v, query: %v",
+				score, vectorScore, textScore, id, searchMode, query)
 		}
 		return nil
 	}, query, args...)
@@ -598,6 +606,101 @@ func (vs *VectorStore) deleteByFilter(ctx context.Context, config *vectorstore.D
 	}
 	log.InfofContext(ctx, "pgvector deleted %d documents by filter", rowsAffected)
 	return nil
+}
+
+// UpdateByFilter updates documents matching the filter with the specified field values.
+// Supported update fields:
+//   - name: update document name
+//   - content: update document content
+//   - embedding: update document embedding vector (value must be []float64)
+//   - metadata.{key}: update specific metadata field (e.g., metadata.category, metadata.status)
+//
+// Note: id, created_at, updated_at fields cannot be updated via this method.
+// The updated_at field is automatically set to the current timestamp.
+// Returns the number of rows affected.
+func (vs *VectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
+	config, err := vectorstore.ApplyUpdateByFilterOptions(opts...)
+	if err != nil {
+		return 0, fmt.Errorf("pgvector update by filter: %w", err)
+	}
+
+	// Build update query
+	ub := newUpdateByFilterBuilder(vs.option)
+
+	// Add filter conditions
+	if err := vs.buildQueryFilter(ub, &vectorstore.SearchFilter{
+		IDs:             config.DocumentIDs,
+		FilterCondition: config.FilterCondition,
+	}); err != nil {
+		return 0, fmt.Errorf("pgvector update by filter: %w", err)
+	}
+
+	// Process updates
+	for field, value := range config.Updates {
+		if err := vs.addUpdateField(ub, field, value); err != nil {
+			return 0, fmt.Errorf("pgvector update by filter: %w", err)
+		}
+	}
+
+	// Build and execute
+	updateSQL, args := ub.build()
+	result, err := vs.client.ExecContext(ctx, updateSQL, args...)
+	if err != nil {
+		return 0, fmt.Errorf("pgvector update by filter: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("pgvector get rows affected: %w", err)
+	}
+
+	log.DebugfContext(ctx, "pgvector updated %d documents by filter", rowsAffected)
+	return rowsAffected, nil
+}
+
+// addUpdateField adds a field to the update builder.
+// It validates the field name and handles metadata fields specially.
+func (vs *VectorStore) addUpdateField(ub *updateByFilterBuilder, field string, value any) error {
+	// Fields that cannot be updated
+	forbiddenFields := map[string]bool{
+		vs.option.idFieldName:        true,
+		vs.option.createdAtFieldName: true,
+		vs.option.updatedAtFieldName: true, // auto-updated
+	}
+
+	if forbiddenFields[field] {
+		return fmt.Errorf("field %q cannot be updated", field)
+	}
+
+	// Handle embedding field
+	if field == vs.option.embeddingFieldName {
+		embedding, ok := value.([]float64)
+		if !ok {
+			return fmt.Errorf("embedding field value must be []float64, got %T", value)
+		}
+		ub.addEmbeddingField(embedding)
+		return nil
+	}
+
+	// Handle metadata.* fields
+	metadataPrefix := vs.option.metadataFieldName + "."
+	if strings.HasPrefix(field, metadataPrefix) {
+		metadataKey := field[len(metadataPrefix):]
+		if metadataKey == "" {
+			return fmt.Errorf("invalid metadata field: %q", field)
+		}
+		return ub.addMetadataField(metadataKey, value)
+	}
+
+	// Handle regular fields (name, content)
+	if field == vs.option.nameFieldName || field == vs.option.contentFieldName {
+		ub.addField(field, value)
+		return nil
+	}
+
+	return fmt.Errorf("unsupported update field: %q (supported fields: %s, %s, %s, %s.{key})",
+		field, vs.option.nameFieldName, vs.option.contentFieldName,
+		vs.option.embeddingFieldName, vs.option.metadataFieldName)
 }
 
 // Count counts the number of documents in the vector store.

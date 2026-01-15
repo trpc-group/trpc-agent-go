@@ -30,6 +30,8 @@ type EvalCase struct {
 	EvalID string `json:"evalId,omitempty"`
 	// EvalMode controls how the eval case conversation is interpreted.
 	EvalMode EvalMode `json:"evalMode,omitempty"`
+	// ContextMessages contains per-case context messages injected into each inference run.
+	ContextMessages []*model.Message `json:"contextMessages,omitempty"`
 	// Conversation contains the sequence of invocations.
 	Conversation []*Invocation `json:"conversation,omitempty"`
 	// SessionInput contains initialization data for the session.
@@ -56,10 +58,10 @@ type Invocation struct {
 
 // Tool represents a single tool invocation and its execution result.
 type Tool struct {
-	ID        string         `json:"id,omitempty"`        // Tool call ID.
-	Name      string         `json:"name,omitempty"`      // Tool name.
-	Arguments map[string]any `json:"arguments,omitempty"` // Tool call parameters.
-	Result    map[string]any `json:"result,omitempty"`    // Tool execution result.
+	ID        string `json:"id,omitempty"`        // Tool call ID.
+	Name      string `json:"name,omitempty"`      // Tool name.
+	Arguments any    `json:"arguments,omitempty"` // Tool call parameters.
+	Result    any    `json:"result,omitempty"`    // Tool execution result.
 }
 
 // SessionInput represents values that help initialize a session.

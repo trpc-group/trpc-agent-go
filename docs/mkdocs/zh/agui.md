@@ -37,7 +37,10 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 
 Runner 全面的使用方法参见 [runner](./runner.md)。
 
-在前端侧，可以配合 [CopilotKit](https://github.com/CopilotKit/CopilotKit) 等支持 AG-UI 协议的客户端框架，它提供 React/Next.js 组件并内置 SSE 订阅能力。[examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit) 使用 CopilotKit 搭建了 Web UI 界面，通过 AG-UI 协议与 Agent 通信，效果如下图所示。
+在前端侧，可以配合 [CopilotKit](https://github.com/CopilotKit/CopilotKit) 和 [TDesign Chat](https://tdesign.tencent.com/react-chat/overview) 等支持 AG-UI 协议的客户端框架，它提供 React/Next.js 组件并内置 SSE 订阅能力。仓库内提供两个可运行的 Web UI 示例：
+
+- [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)：基于 Vite + React + TDesign 的客户端，演示自定义事件、Graph interrupt 审批、消息快照加载以及报告侧边栏等能力。
+- [examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit)：基于 CopilotKit 搭建的 Next.js 客户端。
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
@@ -203,6 +206,7 @@ server, _ := agui.New(runner, agui.WithServiceFactory(NewWSService))
 ```go
 import (
     aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+    "trpc.group/trpc-go/trpc-agent-go/event"
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
     "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
@@ -214,29 +218,33 @@ type customTranslator struct {
     inner translator.Translator
 }
 
-func (t *customTranslator) Translate(ctx context.Context, event *event.Event) ([]aguievents.Event, error) {
-    out, err := t.inner.Translate(event)
+func (t *customTranslator) Translate(ctx context.Context, evt *event.Event) ([]aguievents.Event, error) {
+    out, err := t.inner.Translate(ctx, evt)
     if err != nil {
         return nil, err
     }
-    if payload := buildCustomPayload(event); payload != nil {
+    if payload := buildCustomPayload(evt); payload != nil {
         out = append(out, aguievents.NewCustomEvent("trace.metadata", aguievents.WithValue(payload)))
     }
     return out, nil
 }
 
-func buildCustomPayload(event *event.Event) map[string]any {
-    if event == nil || event.Response == nil {
+func buildCustomPayload(evt *event.Event) map[string]any {
+    if evt == nil || evt.Response == nil {
         return nil
     }
     return map[string]any{
-        "object":    event.Response.Object,
-        "timestamp": event.Response.Timestamp,
+        "object":    evt.Response.Object,
+        "timestamp": evt.Response.Timestamp,
     }
 }
 
-factory := func(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
-    return &customTranslator{inner: translator.New(input.ThreadID, input.RunID)}
+factory := func(ctx context.Context, input *adapter.RunAgentInput, opts ...translator.Option) (translator.Translator, error) {
+    inner, err := translator.New(ctx, input.ThreadID, input.RunID, opts...)
+    if err != nil {
+        return nil, fmt.Errorf("create inner translator: %w", err)
+    }
+    return &customTranslator{inner: inner}, nil
 }
 
 runner := runner.NewRunner(agent.Info().Name, agent)
@@ -317,6 +325,34 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 `RunOptionResolver` 会在每次 `RunAgentInput` 被处理时执行，返回的 `RunOption` 列表会依次传入底层 `runner.Run`。
 
 若返回错误，则会发送 `RunError` 事件；返回 `nil` 则表示不追加任何 `RunOption`。
+
+### 自定义 `StateResolver`
+
+默认情况下，AG-UI Runner 不会读取 `RunAgentInput.State` 并写入 `RunOptions.RuntimeState`。
+
+如果希望基于 `State` 构造 RuntimeState，可以实现 `StateResolver` 并通过 `aguirunner.WithStateResolver` 注入。返回的 map 会在调用底层 `runner.Run` 前写入 `RunOptions.RuntimeState`，并覆盖此前通过 `RunOptionResolver` 等设置的 `RuntimeState`。
+
+注意：若返回 `nil` 则表示不设置 `RuntimeState`；若返回空 map 则会将 `RuntimeState` 置为空。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
+stateResolver := func(_ context.Context, input *adapter.RunAgentInput) (map[string]any, error) {
+	state, ok := input.State.(map[string]any)
+	if !ok || state == nil {
+		return nil, nil
+	}
+	return map[string]any{
+		"custom_key": state["custom_key"],
+	}, nil
+}
+
+server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithStateResolver(stateResolver)))
+```
 
 ### 可观测平台上报
 
@@ -649,6 +685,153 @@ if err != nil {
 
 此时实时对话路由为 `/agui/chat`，取消路由为 `/agui/cancel`，消息快照路由为 `/agui/history`。
 
+### GraphAgent 节点活动事件
+
+在 `GraphAgent` 场景下，一个 run 通常会按图执行多个节点。为了让前端能持续展示“当前正在执行哪个节点”，并在 Human-in-the-Loop 场景中渲染中断提示，框架支持额外发送节点生命周期与中断相关的 `ACTIVITY_DELTA` 事件。该能力默认关闭，可在创建 AG-UI Server 时按需开启。
+
+`ACTIVITY_DELTA` 事件格式可参考 [AG-UI 官方文档](https://docs.ag-ui.com/concepts/events#activitydelta)
+
+#### 节点生命周期（`graph.node.lifecycle`）
+
+该事件默认关闭，可在创建 AG-UI Server 时通过 `agui.WithGraphNodeLifecycleActivityEnabled(true)` 开启。
+
+```go
+server, err := agui.New(
+	runner,
+	agui.WithGraphNodeLifecycleActivityEnabled(true),
+)
+```
+
+启用后，节点在 `start` / `complete` / `error` 三个阶段都会发送 `ACTIVITY_DELTA`，且 `activityType` 均为 `graph.node.lifecycle`，通过 `/node.phase` 区分具体阶段。
+
+节点开始阶段（`phase=start`）在节点执行前发出，并通过 `add /node` 写入当前节点信息：
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "start"
+      }
+    }
+  ]
+}
+```
+
+该事件用于前端展示进度。前端可将 `/node.nodeId` 作为当前正在执行的节点，用于高亮或展示节点执行过程。
+
+节点成功结束阶段（`phase=complete`）在节点执行结束后发出，并通过 `add /node` 写入本次结束的节点信息：
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "complete"
+      }
+    }
+  ]
+}
+```
+
+节点失败结束阶段（`phase=error`）会在 `/node` 中携带错误信息：
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "error",
+        "error": "node execution failed"
+      }
+    }
+  ]
+}
+```
+
+#### 中断提示（`graph.node.interrupt`）
+
+该事件默认关闭，可在创建 AG-UI Server 时通过 `agui.WithGraphNodeInterruptActivityEnabled(true)` 开启。
+
+```go
+server, err := agui.New(
+	runner,
+	agui.WithGraphNodeInterruptActivityEnabled(true),
+)
+```
+
+`activityType` 为 `graph.node.interrupt`，在节点调用 `graph.Interrupt(ctx, state, key, prompt)` 且当前没有可用的 resume 输入时发出。`patch` 会通过 `add /interrupt` 写入中断信息到 `/interrupt`，包含 `nodeId`、`key`、`prompt`、`checkpointId` 与 `lineageId`：
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.interrupt",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/interrupt",
+      "value": {
+        "nodeId": "confirm",
+        "key": "confirm",
+        "prompt": "Confirm continuing after the recipe amounts are calculated.",
+        "checkpointId": "checkpoint-xxx",
+        "lineageId": "lineage-xxx"
+      }
+    }
+  ]
+}
+```
+
+该事件表示执行在该节点暂停。前端可使用 `/interrupt.prompt` 渲染中断提示，并用 `/interrupt.key` 选择需要提供的恢复值。`checkpointId` 与 `lineageId` 可用于定位需要恢复的 checkpoint 并关联多次 run。
+
+#### 恢复回执（`graph.node.interrupt`）
+
+当新的 run 携带 resume 输入发起恢复时，AG-UI Server 会在该 run 的事件流开始处额外发送一条 `ACTIVITY_DELTA`，并且会先于任何 `graph.node.lifecycle` 事件发送。该事件同样使用 `activityType: graph.node.interrupt`，先将 `/interrupt` 置为 `null`，再通过 `add /resume` 写入本次恢复输入。`/resume` 包含 `resumeMap` 或 `resume`，并可包含 `checkpointId` 与 `lineageId`：
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "timestamp": 1767950998788,
+  "messageId": "293cec35-9689-4628-82d3-475cc91dab20",
+  "activityType": "graph.node.interrupt",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/interrupt",
+      "value": null
+    },
+    {
+      "op": "add",
+      "path": "/resume",
+      "value": {
+        "checkpointId": "checkpoint-xxx",
+        "lineageId": "lineage-xxx",
+        "resumeMap": {
+          "confirm": true
+        }
+      }
+    }
+  ]
+}
+```
+
+完整示例可参考 [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph)，前端渲染与审批交互可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
+
 ## 最佳实践
 
 ### 生成文档
@@ -692,34 +875,6 @@ if err != nil {
    - 当捕捉到 `open_report_document` 工具事件时：创建文档面板，并将其后的文本消息内容写入该文档面板；
    - 当捕捉到 `close_report_document` 工具事件时：关闭文档面板（或将其标记为生成完成）。
 
-实际效果如下图所示，完整示例可参考 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report)。
+实际效果如下图所示，完整示例可参考 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 
 ![report](../assets/gif/agui/report.gif)
-
-### GraphAgent 节点执行进度
-
-在 `GraphAgent` 场景下，一个 run 通常会按图执行多个节点。为了让前端能直观展示“当前正在执行哪个节点”，框架在每个节点开始执行前发送一条 `ACTIVITY_DELTA` 事件。
-
-该事件会在节点真正执行前发出，包括从中断恢复时也会在恢复前先发出对应节点的事件，因此适合做统一的进度跟踪。
-
-`ACTIVITY_DELTA` 事件示例，其中 `patch` 遵从 [JSON PATCH](https://jsonpatch.com/) 格式。
-
-```json
-{
-  "type": "ACTIVITY_DELTA",
-  "activityType": "graph.node.start",
-  "patch": [
-    {
-      "op": "add",
-      "path": "/node",
-      "value": {
-        "nodeId": "plan_llm_node"
-      }
-    }
-  ]
-}
-```
-
-前端处理建议：监听 `ACTIVITY_DELTA` 且 `activityType == "graph.node.start"` 的事件，读取 patch 中的 `nodeId`，并在 UI 上定位对应的节点。
-
-完整示例可参考 [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph)。

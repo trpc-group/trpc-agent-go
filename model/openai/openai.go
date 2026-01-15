@@ -21,6 +21,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
@@ -233,6 +234,7 @@ type Model struct {
 	maxInputTokensRatio    float64
 
 	accumulateChunkUsage AccumulateChunkUsage
+	optimizeForCache     bool // Optimize message structure for prompt caching
 }
 
 // New creates a new OpenAI-like model.
@@ -299,6 +301,7 @@ func New(name string, opts ...Option) *Model {
 		safetyMarginRatio:          o.TokenTailoringConfig.SafetyMarginRatio,
 		maxInputTokensRatio:        o.TokenTailoringConfig.MaxInputTokensRatio,
 		accumulateChunkUsage:       o.accumulateChunkUsage,
+		optimizeForCache:           o.OptimizeForCache,
 	}
 }
 
@@ -316,6 +319,11 @@ func (m *Model) GenerateContent(
 ) (<-chan *model.Response, error) {
 	if request == nil {
 		return nil, errors.New("request cannot be nil")
+	}
+
+	// Optimize message structure for cache if enabled
+	if m.optimizeForCache {
+		request.Messages = m.optimizeMessagesForCache(request.Messages)
 	}
 
 	// Apply token tailoring if configured.
@@ -340,6 +348,32 @@ func (m *Model) GenerateContent(
 	}()
 
 	return responseChan, nil
+}
+
+// optimizeMessagesForCache reorders messages to improve cache hit rates.
+// System messages are moved to the front as they are most likely to be cached.
+func (m *Model) optimizeMessagesForCache(messages []model.Message) []model.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	var systemMsgs, otherMsgs []model.Message
+
+	for _, msg := range messages {
+		if msg.Role == model.RoleSystem {
+			systemMsgs = append(systemMsgs, msg)
+		} else {
+			otherMsgs = append(otherMsgs, msg)
+		}
+	}
+
+	// If no reordering needed, return original
+	if len(systemMsgs) == 0 {
+		return messages
+	}
+
+	// System messages first, then other messages
+	return append(systemMsgs, otherMsgs...)
 }
 
 // applyTokenTailoring performs best-effort token tailoring if configured.
@@ -780,8 +814,17 @@ func (m *Model) convertToolCalls(toolCalls []model.ToolCall) []openai.ChatComple
 }
 
 func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletionToolParam {
+	// Extract and sort tool names for stable ordering to improve cache hit rate
+	toolNames := make([]string, 0, len(tools))
+	for name := range tools {
+		toolNames = append(toolNames, name)
+	}
+	sort.Strings(toolNames)
+
+	// Build tools in sorted order
 	var result []openai.ChatCompletionToolParam
-	for _, tool := range tools {
+	for _, name := range toolNames {
+		tool := tools[name]
 		declaration := tool.Declaration()
 		// Convert the InputSchema to JSON to correctly map to OpenAI's expected format
 		schemaBytes, err := json.Marshal(declaration.InputSchema)

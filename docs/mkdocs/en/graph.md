@@ -993,6 +993,29 @@ Symptoms of the misconfiguration:
 - The agent repeats the first tool call or loops because it never “sees” the
   tool output.
 
+#### Agent nodes: checkpoints and nested interrupts
+
+If a sub-agent is a GraphAgent (a graph-based agent) and checkpointing is
+enabled (via a `CheckpointSaver`), the child graph also needs its own checkpoint
+namespace. Otherwise, the child graph can accidentally resume from a checkpoint
+that belongs to the parent graph.
+
+Default behavior for agent nodes that invoke a GraphAgent:
+
+- The child GraphAgent runs under the child checkpoint namespace (the sub-agent
+  name), even though the runtime state is cloned from the parent.
+- The parent checkpoint identifier (ID) is not forwarded to the child unless
+  you explicitly set it via a subgraph input mapper.
+
+Nested Human-in-the-Loop (HITL) interrupt/resume:
+
+- If the child GraphAgent calls `graph.Interrupt`, the parent graph also
+  interrupts and checkpoints.
+- Resume from the parent checkpoint as usual; the agent node resumes the child
+  checkpoint automatically.
+
+Runnable example: `examples/graph/nested_interrupt`.
+
 ### 4. Conditional Routing
 
 ```go
@@ -1169,7 +1192,8 @@ See the runnable example: `examples/graph/placeholder`.
 
 Injecting retrieval output and user input
 
-- Upstream nodes can place ephemeral values into the session's `temp:` namespace so the LLM instruction can read them with placeholders.
+- Upstream nodes can place temporary values into the session's `temp:`
+  namespace so the LLM instruction can read them with placeholders.
 - Pattern:
 
 ```go
@@ -1196,7 +1220,10 @@ Example: `examples/graph/retrieval_placeholder`.
 
 Best practices for placeholders and session state
 
-- Ephemeral vs persistent: write per‑turn values to `temp:*` on session state (recommended via `sess.SetState`). Persistent configuration should go through `SessionService` with `user:*`/`app:*`.
+- Session-scoped vs persistent: write temporary values used to build
+  prompts to `temp:*` on session state (often overwritten each turn via
+  `sess.SetState`). Persistent configuration should go through
+  `SessionService` with `user:*`/`app:*`.
 - Why `SetState` is recommended: LLM nodes expand placeholders from the session object present in graph state; using `sess.SetState` avoids unsafe concurrent map access.
 - Service guardrails: the in‑memory service intentionally disallows writing `temp:*` (and `app:*` via user updater); see [session/inmemory/service.go](https://github.com/trpc-group/trpc-agent-go/blob/main/session/inmemory/service.go).
 - Concurrency: when multiple branches run in parallel, avoid multiple nodes mutating the same `session.State` keys. Prefer composing in a single node before the LLM, or store intermediate values in graph state then write once to `temp:*`.
@@ -3056,7 +3083,7 @@ Good practice:
 - Execution
   - `graphagent.New(name, compiledGraph, ...opts)` → `runner.NewRunner(app, agent)` → `Run(...)`
 
-See examples under `examples/graph` for end‑to‑end patterns (basic/parallel/multi‑turn/interrupts/tools/placeholder).
+See examples under `examples/graph` for end‑to‑end patterns (basic/parallel/multi‑turn/interrupts, nested interrupts/tools/placeholder).
 
 ## Visualization (DOT/Image)
 
@@ -3128,6 +3155,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: "ckpt-123",
     }),
 )
@@ -3144,6 +3172,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: "ckpt-123",
     }),
 )
@@ -3226,6 +3255,7 @@ sg.AddNode(nodeReview, func(ctx context.Context, s graph.State) (any, error) {
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: checkpointID,
         graph.StateKeyResumeMap: map[string]any{
             "review_key": "approved",
@@ -3233,6 +3263,58 @@ eventCh, err := r.Run(ctx, userID, sessionID,
     }),
 )
 ```
+
+#### Nested graphs (child GraphAgent interrupts)
+
+If your parent graph delegates to a child GraphAgent via an agent node
+(`AddAgentNode` / `AddSubgraphNode`), the child graph can interrupt with
+`graph.Interrupt` and the parent graph will also interrupt.
+
+Resume from the parent checkpoint the same way as a non-nested interrupt.
+When the agent node runs again, it will resume the child checkpoint
+automatically.
+
+Runnable example: `examples/graph/nested_interrupt`.
+
+It supports multi-level nesting via the `-depth` flag.
+
+Key idea: `graph.Interrupt(ctx, state, key, prompt)` uses `key` as the routing
+key for `ResumeMap`. When you resume, the map key must match that `key`.
+
+You will see two different identifiers:
+
+- Node Identifier (Node ID): where the current graph paused (in nested graphs,
+  this is often the parent agent node).
+- Task Identifier (Task ID): the interrupt key used for `ResumeMap` routing.
+  For `graph.Interrupt`, Task ID equals the `key` argument.
+
+To resume without hard-coding the key, read the Task ID from the interrupted
+checkpoint and use it as the `ResumeMap` key:
+
+```go
+// cm is a graph.CheckpointManager. If you're using GraphAgent, you can get it
+// from ga.Executor().CheckpointManager().
+latest, err := cm.Latest(ctx, lineageID, namespace)
+if err != nil || latest == nil || latest.Checkpoint == nil {
+    // handle error
+}
+taskID := latest.Checkpoint.InterruptState.TaskID
+
+cmd := graph.NewResumeCommand().
+    AddResumeValue(taskID, "approved")
+
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
+        graph.CfgKeyCheckpointID: latest.Checkpoint.ID,
+        graph.StateKeyCommand:    cmd,
+    }),
+)
+```
+
+This works the same for multi-level nesting: resume from the parent checkpoint
+and the framework will resume each child checkpoint automatically.
 
 Helpers:
 
@@ -3527,7 +3609,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 
 **Q6: Resume did not continue where expected**
 
-- Pass `agent.WithRuntimeState(map[string]any{ graph.CfgKeyCheckpointID: "..." })`.
+- Pass `agent.WithRuntimeState(map[string]any{ graph.CfgKeyLineageID: "...", graph.CfgKeyCheckpointID: "..." })`.
 - Provide `ResumeMap` for HITL continuation when needed. A plain "resume" message is not added to `graph.StateKeyUserInput`.
 
 **Q7: State conflicts in parallel**
@@ -3669,5 +3751,5 @@ This guide introduced the core usage of the `graph` package and GraphAgent: decl
   - I/O conventions: `io_conventions`, `io_conventions_tools`
   - Parallel/fan‑out: `parallel`, `fanout`, `diamond`
   - Placeholders: `placeholder`
-  - Checkpoints/interrupts: `checkpoint`, `interrupt`
+  - Checkpoints/interrupts: `checkpoint`, `interrupt`, `nested_interrupt`
 - Further reading: `graph/state_graph.go`, `graph/executor.go`, `agent/graphagent`

@@ -12,15 +12,14 @@ package inmemory
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -29,7 +28,7 @@ var _ memory.Service = (*MemoryService)(nil)
 // appMemories represents memories for a specific app.
 type appMemories struct {
 	mu       sync.RWMutex
-	memories map[string]map[string]*memory.Entry // userID -> memoryID -> MemoryEntry
+	memories map[string]map[string]*memory.Entry // userID -> memoryID -> MemoryEntry.
 }
 
 // newAppMemories creates a new app memories instance.
@@ -49,6 +48,10 @@ type MemoryService struct {
 	opts serviceOpts
 	// cachedTools caches created tools to avoid recreating them.
 	cachedTools map[string]tool.Tool
+	// precomputedTools is the pre-computed tool list for Tools() method.
+	precomputedTools []tool.Tool
+	// autoMemoryWorker handles async memory extraction.
+	autoMemoryWorker *imemory.AutoMemoryWorker
 }
 
 // NewMemoryService creates a new in-memory memory service.
@@ -59,11 +62,39 @@ func NewMemoryService(options ...ServiceOpt) *MemoryService {
 		option(&opts)
 	}
 
-	return &MemoryService{
+	// Apply auto mode defaults after all options are applied.
+	// User settings via WithToolEnabled take precedence regardless of option order.
+	if opts.extractor != nil {
+		imemory.ApplyAutoModeDefaults(opts.enabledTools, opts.userExplicitlySet)
+	}
+
+	svc := &MemoryService{
 		apps:        make(map[string]*appMemories),
 		opts:        opts,
 		cachedTools: make(map[string]tool.Tool),
 	}
+
+	// Pre-compute tools list to avoid lock contention in Tools() method.
+	svc.precomputedTools = imemory.BuildToolsList(
+		opts.extractor,
+		opts.toolCreators,
+		opts.enabledTools,
+		svc.cachedTools,
+	)
+
+	// Initialize auto memory worker if extractor is configured.
+	if opts.extractor != nil {
+		config := imemory.AutoMemoryConfig{
+			Extractor:        opts.extractor,
+			AsyncMemoryNum:   opts.asyncMemoryNum,
+			MemoryQueueSize:  opts.memoryQueueSize,
+			MemoryJobTimeout: opts.memoryJobTimeout,
+		}
+		svc.autoMemoryWorker = imemory.NewAutoMemoryWorker(config, svc)
+		svc.autoMemoryWorker.Start()
+	}
+
+	return svc
 }
 
 // getAppMemories gets or creates app memories for the given app name.
@@ -87,19 +118,6 @@ func (s *MemoryService) getAppMemories(appName string) *appMemories {
 	return app
 }
 
-// generateMemoryID generates a unique ID for memory based on content.
-func generateMemoryID(memory *memory.Memory) string {
-	// Create a consistent string representation for ID generation.
-	content := fmt.Sprintf("memory:%s", memory.Memory)
-	if len(memory.Topics) > 0 {
-		content += fmt.Sprintf("|topics:%s", strings.Join(memory.Topics, ","))
-	}
-
-	// Generate SHA256 hash.
-	hash := sha256.Sum256([]byte(content))
-	return fmt.Sprintf("%x", hash)
-}
-
 // createMemoryEntry creates a new MemoryEntry from memory data.
 func createMemoryEntry(appName, userID, memoryStr string, topics []string) *memory.Entry {
 	now := time.Now()
@@ -112,7 +130,7 @@ func createMemoryEntry(appName, userID, memoryStr string, topics []string) *memo
 	}
 
 	return &memory.Entry{
-		ID:        generateMemoryID(memoryObj), // Generate ID.
+		ID:        imemory.GenerateMemoryID(memoryObj, appName, userID), // Generate ID.
 		AppName:   appName,
 		UserID:    userID,
 		Memory:    memoryObj,
@@ -121,7 +139,7 @@ func createMemoryEntry(appName, userID, memoryStr string, topics []string) *memo
 	}
 }
 
-// AddMemory adds a new memory for a user.
+// AddMemory adds or updates a memory for a user (idempotent).
 func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
@@ -294,26 +312,28 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 }
 
 // Tools returns the list of available memory tools.
+// In auto memory mode (extractor is set), only front-end tools are returned.
+// By default, only Search is enabled; Load can be enabled explicitly.
+// In agentic mode, all enabled tools are returned.
+// The tools list is pre-computed at service creation time.
 func (s *MemoryService) Tools() []tool.Tool {
-	// Ensure concurrency-safety and stable ordering.
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.precomputedTools
+}
 
-	// Collect enabled tool names and sort for stable order.
-	var names []string
-	for toolName := range s.opts.toolCreators {
-		if s.opts.enabledTools[toolName] {
-			names = append(names, toolName)
-		}
+// EnqueueAutoMemoryJob enqueues an auto memory extraction job for async
+// processing. The session contains the full transcript and state for
+// incremental extraction.
+func (s *MemoryService) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error {
+	if s.autoMemoryWorker == nil {
+		return nil
 	}
-	sort.Strings(names)
+	return s.autoMemoryWorker.EnqueueJob(ctx, sess)
+}
 
-	tools := make([]tool.Tool, 0, len(names))
-	for _, name := range names {
-		if _, exists := s.cachedTools[name]; !exists {
-			s.cachedTools[name] = s.opts.toolCreators[name]()
-		}
-		tools = append(tools, s.cachedTools[name])
+// Close stops the async memory workers and cleans up resources.
+func (s *MemoryService) Close() error {
+	if s.autoMemoryWorker != nil {
+		s.autoMemoryWorker.Stop()
 	}
-	return tools
+	return nil
 }

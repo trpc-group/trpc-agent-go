@@ -767,3 +767,16 @@ func TestInvocation_IncToolIteration_WithLimitAndOverflow(t *testing.T) {
 	require.True(t, exceeded, "expected true when tool iteration limit is exceeded")
 	require.Equal(t, 3, inv.toolIterationCount)
 }
+
+func TestWithInjectedContextMessages(t *testing.T) {
+	opts := &RunOptions{}
+	WithInjectedContextMessages([]model.Message{
+		{Role: model.RoleUser, Content: "Hello"},
+		{Role: model.RoleAssistant, Content: "Hello"},
+	})(opts)
+
+	require.Equal(t, []model.Message{
+		{Role: model.RoleUser, Content: "Hello"},
+		{Role: model.RoleAssistant, Content: "Hello"},
+	}, opts.InjectedContextMessages)
+}
