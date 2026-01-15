@@ -1069,6 +1069,65 @@ sg.AddEdge(nodeA, nodeB)
 - 如果你需要消费“指定节点”的输出（而不是最近一次），可以通过前置回调从
   `node_responses[targetNodeID]` 取值并写入 `user_input`。
 
+#### Agent 节点：拼接原始输入与上游输出
+
+有时下游 Agent 需要同时拿到：
+
+- 上游 Agent 的结果（常见是 `state[graph.StateKeyLastResponse]`），以及
+- 本次 Run 的“原始用户请求”。
+
+由于 `user_input` 是一次性输入，会在 LLM/Agent 节点成功执行后被清空，你需要把原始输入
+**持久化**到一个自定义 state key（例如 `original_user_input`），再显式拼接并写回
+下游的 `user_input`。
+
+最简单的写法是增加两个 function 节点：
+
+1. 在入口处只保存一次初始 `user_input`；
+2. 在下游 Agent 前把 `original_user_input + last_response` 写回 `user_input`。
+
+```go
+const (
+    keyOriginalUserInput = "original_user_input"
+
+    nodeSaveInput = "save_input"
+    nodeA         = "a"
+    nodeCompose   = "compose_input"
+    nodeB         = "b"
+)
+
+func saveOriginalInput(_ context.Context, s graph.State) (any, error) {
+    input, _ := s[graph.StateKeyUserInput].(string)
+    if input == "" {
+        return graph.State{}, nil
+    }
+    return graph.State{keyOriginalUserInput: input}, nil
+}
+
+func composeNextInput(_ context.Context, s graph.State) (any, error) {
+    orig, _ := s[keyOriginalUserInput].(string)
+    last, _ := s[graph.StateKeyLastResponse].(string)
+
+    // This becomes nodeB's Invocation.Message.Content.
+    combined := orig + "\n\n" + last
+    return graph.State{graph.StateKeyUserInput: combined}, nil
+}
+
+sg.AddNode(nodeSaveInput, saveOriginalInput)
+sg.AddAgentNode(nodeA)
+sg.AddNode(nodeCompose, composeNextInput)
+sg.AddAgentNode(nodeB)
+
+sg.AddEdge(nodeSaveInput, nodeA)
+sg.AddEdge(nodeA, nodeCompose)
+sg.AddEdge(nodeCompose, nodeB)
+```
+
+重要：
+
+- 把 function 节点入参里的 `graph.State` 当作只读。
+- 返回一个**增量**更新（一个小 `graph.State`），不要返回或原地修改“完整 state”。
+  否则可能会覆盖内部 key（执行上下文、回调、session 等）导致工作流异常。
+
 #### Agent 节点：输入/输出映射（进阶）
 
 Agent 节点支持两个映射器，用于控制父图/子代理之间到底传什么：
@@ -3714,6 +3773,15 @@ graphAgent, _ := graphagent.New("workflow", g,
   )
   ```
   如果你需要消费“指定节点”的输出，可从 `node_responses[targetNodeID]` 取值并写入 `user_input`。
+
+**Q11: 下游 Agent 既要原始输入也要上游输出**
+
+- **问题现象**：你使用 `WithSubgraphInputFromLastResponse()` 让下游 Agent 把
+  `last_response` 当作当前输入，但你还希望它同时拿到本次 Run 的原始用户请求。
+- **解决方案**：把原始 `user_input` 持久化到自定义 state key（例如
+  `original_user_input`），并在下游 Agent 节点执行前用 function 节点把
+  `original + upstream` 显式拼接写回 `user_input`。
+  见“Agent 节点：拼接原始输入与上游输出”。
 
 ## 实际案例
 

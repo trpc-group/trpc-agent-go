@@ -1005,6 +1005,66 @@ Notes:
   pre‑node callback and read from `node_responses[targetNodeID]`, then write it
   into `user_input`.
 
+#### Agent nodes: combining original input with upstream output
+
+Sometimes the downstream agent needs **both**:
+
+- The upstream agent result (often `state[graph.StateKeyLastResponse]`), and
+- The original user request for this run.
+
+Because `user_input` is one‑shot and is cleared after LLM/Agent nodes, you
+should **persist** the original user input under your own state key, then
+compose the downstream `user_input` explicitly.
+
+The simplest pattern is to add two function nodes:
+
+1. Capture the initial `user_input` once.
+2. Build the next `user_input` from `original_user_input + last_response`.
+
+```go
+const (
+    keyOriginalUserInput = "original_user_input"
+
+    nodeSaveInput = "save_input"
+    nodeA         = "a"
+    nodeCompose   = "compose_input"
+    nodeB         = "b"
+)
+
+func saveOriginalInput(_ context.Context, s graph.State) (any, error) {
+    input, _ := s[graph.StateKeyUserInput].(string)
+    if input == "" {
+        return graph.State{}, nil
+    }
+    return graph.State{keyOriginalUserInput: input}, nil
+}
+
+func composeNextInput(_ context.Context, s graph.State) (any, error) {
+    orig, _ := s[keyOriginalUserInput].(string)
+    last, _ := s[graph.StateKeyLastResponse].(string)
+
+    // This becomes nodeB's Invocation.Message.Content.
+    combined := orig + "\n\n" + last
+    return graph.State{graph.StateKeyUserInput: combined}, nil
+}
+
+sg.AddNode(nodeSaveInput, saveOriginalInput)
+sg.AddAgentNode(nodeA)
+sg.AddNode(nodeCompose, composeNextInput)
+sg.AddAgentNode(nodeB)
+
+sg.AddEdge(nodeSaveInput, nodeA)
+sg.AddEdge(nodeA, nodeCompose)
+sg.AddEdge(nodeCompose, nodeB)
+```
+
+Important:
+
+- Treat `graph.State` passed into function nodes as read‑only.
+- Return a **delta** state update (a small `graph.State`) instead of returning
+  or mutating the full state. Returning full state can accidentally overwrite
+  internal keys (execution context, callbacks, session) and break the workflow.
+
 #### Agent nodes: state mappers (advanced)
 
 Agent nodes support two mappers to control what data crosses the parent/child
@@ -3736,6 +3796,16 @@ graphAgent, _ := graphagent.New("workflow", g,
   ```
   If you need a specific node's output, read it from
   `node_responses[targetNodeID]` and write that into `user_input`.
+
+**Q11: Downstream Agent needs both original input and upstream output**
+
+- **Symptom**: `WithSubgraphInputFromLastResponse()` makes the downstream agent
+  consume `last_response` as its current input, but you also need the original
+  user request for this run.
+- **Solution**: Persist the original `user_input` into your own state key (for
+  example, `original_user_input`) and use a function node to compose the next
+  `user_input` as `original + upstream` before the downstream agent runs.
+  See "Agent nodes: combining original input with upstream output".
 
 ## Real‑World Example
 
