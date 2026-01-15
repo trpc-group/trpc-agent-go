@@ -1481,6 +1481,7 @@ func TestBuildAgentInvocationWithStateAndScope_PreservesRequestID(
 		runtime,
 		&messageEchoAgent{name: "child"},
 		"",
+		"",
 	)
 	require.Equal(t, requestID, childInv.RunOptions.RequestID)
 	require.Equal(t, "model-x", childInv.RunOptions.ModelName)

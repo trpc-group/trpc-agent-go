@@ -1066,23 +1066,31 @@ func (r *llmRunner) executeModel(
 	if r.refreshToolSetsOnRun && len(r.toolSets) > 0 {
 		tools = mergeToolsWithToolSets(ctx, tools, r.toolSets)
 	}
+	nodeID := r.nodeID
+	if v, ok := state[StateKeyCurrentNodeID].(string); ok && v != "" {
+		nodeID = v
+	}
 	request := &model.Request{
 		Messages:         messages,
 		Tools:            tools,
 		GenerationConfig: r.generationConfig,
 	}
-	if inv, ok := agent.InvocationFromContext(ctx); ok &&
-		inv != nil && inv.RunOptions.Stream != nil {
-		request.GenerationConfig.Stream = *inv.RunOptions.Stream
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+		if opts := graphCallOptionsFromConfigs(
+			inv.RunOptions.CustomAgentConfigs,
+		); opts != nil {
+			patch := generationPatchForNode(opts, nodeID)
+			request.GenerationConfig = model.ApplyGenerationConfigPatch(
+				request.GenerationConfig,
+				patch,
+			)
+		}
+		if inv.RunOptions.Stream != nil {
+			request.GenerationConfig.Stream = *inv.RunOptions.Stream
+		}
 	}
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
-	var nodeID string
-	if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
-		if id, ok := nodeIDData.(string); ok {
-			nodeID = id
-		}
-	}
 	// Build model input metadata from the original state and instruction
 	// so events accurately reflect both instruction and user input.
 	modelInput := extractModelInput(state, instructionUsed)
@@ -1893,7 +1901,14 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		}
 
 		// Build invocation for the target agent with custom runtime state and scope.
-		invocation := buildAgentInvocationWithStateAndScope(ctx, parentForInput, childState, targetAgent, scope)
+		invocation := buildAgentInvocationWithStateAndScope(
+			ctx,
+			parentForInput,
+			childState,
+			targetAgent,
+			nodeID,
+			scope,
+		)
 
 		itelemetry.TraceBeforeInvokeAgent(
 			span,
@@ -2142,6 +2157,7 @@ func buildAgentInvocationWithStateAndScope(
 	parentState State,
 	runtime State,
 	targetAgent agent.Agent,
+	nodeID string,
 	scope string,
 ) *agent.Invocation {
 	// Extract user input from parent state.
@@ -2164,6 +2180,10 @@ func buildAgentInvocationWithStateAndScope(
 		parentInvocation != nil {
 		runOptions := parentInvocation.RunOptions
 		runOptions.RuntimeState = runtime
+		runOptions.CustomAgentConfigs = withScopedGraphCallOptions(
+			runOptions.CustomAgentConfigs,
+			nodeID,
+		)
 
 		base := util.If(scope != "", scope, targetAgent.Info().Name)
 		parentKey := parentInvocation.GetEventFilterKey()
@@ -3005,7 +3025,14 @@ func MessagesStateSchema() *StateSchema {
 // buildAgentInvocation builds an invocation for the target agent.
 func buildAgentInvocation(ctx context.Context, state State, targetAgent agent.Agent) *agent.Invocation {
 	// Delegate to the unified builder with default runtime state and empty scope.
-	return buildAgentInvocationWithStateAndScope(ctx, state, state, targetAgent, "")
+	return buildAgentInvocationWithStateAndScope(
+		ctx,
+		state,
+		state,
+		targetAgent,
+		"",
+		"",
+	)
 }
 
 // emitAgentStartEvent emits an agent execution start event.

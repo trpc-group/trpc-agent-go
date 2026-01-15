@@ -277,6 +277,41 @@ func TestContentPartWithFile(t *testing.T) {
 	}
 }
 
+func TestApplyGenerationConfigPatch(t *testing.T) {
+	base := GenerationConfig{
+		MaxTokens:   IntPtr(10),
+		Temperature: Float64Ptr(0.2),
+		Stream:      true,
+		Stop:        []string{"STOP"},
+	}
+	patch := GenerationConfigPatch{
+		Temperature: Float64Ptr(0.7),
+		Stream:      BoolPtr(false),
+		Stop:        []string{"X"},
+	}
+	got := ApplyGenerationConfigPatch(base, patch)
+	require.NotNil(t, got.MaxTokens)
+	require.Equal(t, 10, *got.MaxTokens)
+	require.NotNil(t, got.Temperature)
+	require.Equal(t, 0.7, *got.Temperature)
+	require.False(t, got.Stream)
+	require.Equal(t, []string{"X"}, got.Stop)
+
+	patch.Stop[0] = "Y"
+	require.Equal(t, []string{"X"}, got.Stop)
+
+	patch2 := GenerationConfigPatch{Stop: []string{}}
+	got2 := ApplyGenerationConfigPatch(base, patch2)
+	require.Equal(t, []string{}, got2.Stop)
+}
+
+func TestPtrHelpers(t *testing.T) {
+	require.Equal(t, 1, *IntPtr(1))
+	require.Equal(t, 1.5, *Float64Ptr(1.5))
+	require.True(t, *BoolPtr(true))
+	require.Equal(t, "x", *StringPtr("x"))
+}
+
 func TestMessage_WithReasoningContent(t *testing.T) {
 	// Test message with ReasoningContent field
 	msg := Message{
