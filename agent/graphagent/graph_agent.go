@@ -284,6 +284,16 @@ func (ga *GraphAgent) setupInvocation(invocation *agent.Invocation) {
 // Tools returns the list of tools available to this agent.
 func (ga *GraphAgent) Tools() []tool.Tool { return nil }
 
+// TimeTravel exposes checkpoint-based time travel helpers for this GraphAgent.
+//
+// It requires a checkpoint saver configured via graphagent.WithCheckpointSaver.
+func (ga *GraphAgent) TimeTravel() (*graph.TimeTravel, error) {
+	if ga == nil || ga.executor == nil {
+		return nil, fmt.Errorf("graph executor is not configured")
+	}
+	return ga.executor.TimeTravel()
+}
+
 // Info returns the basic information about this agent.
 func (ga *GraphAgent) Info() agent.Info {
 	return agent.Info{

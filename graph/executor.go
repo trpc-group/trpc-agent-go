@@ -491,6 +491,16 @@ func (e *Executor) processResumeCommand(execState, initialState State) State {
 			execState[StateKeyResumeMap] = cmd.ResumeMap
 		}
 		delete(execState, StateKeyCommand)
+		return execState
+	}
+	if cmd, ok := initialState[StateKeyCommand].(*ResumeCommand); ok {
+		if cmd.Resume != nil {
+			execState[ResumeChannel] = cmd.Resume
+		}
+		if cmd.ResumeMap != nil {
+			execState[StateKeyResumeMap] = cmd.ResumeMap
+		}
+		delete(execState, StateKeyCommand)
 	}
 	return execState
 }
