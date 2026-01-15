@@ -144,7 +144,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 	for i, actual := range inputs.actuals {
 		perInvocation[i] = &evalresult.EvalMetricResultPerInvocation{
 			ActualInvocation:   actual,
-			ExpectedInvocation: inputs.expectedInvocationsForResult[i],
+			ExpectedInvocation: inputs.expecteds[i],
 			EvalMetricResults:  make([]*evalresult.EvalMetricResult, 0, len(evaluateConfig.EvalMetrics)),
 		}
 	}
@@ -225,10 +225,9 @@ func (s *local) evaluateMetric(ctx context.Context, evalMetric *metric.EvalMetri
 }
 
 type caseEvaluationInputs struct {
-	actuals                      []*evalset.Invocation
-	expecteds                    []*evalset.Invocation
-	expectedInvocationsForResult []*evalset.Invocation
-	userID                       string
+	actuals   []*evalset.Invocation
+	expecteds []*evalset.Invocation
+	userID    string
 }
 
 func prepareCaseEvaluationInputs(inferenceResult *service.InferenceResult, evalCase *evalset.EvalCase) (*caseEvaluationInputs, error) {
@@ -241,20 +240,17 @@ func prepareCaseEvaluationInputs(inferenceResult *service.InferenceResult, evalC
 	evalMode := evalCase.EvalMode
 	actuals := inferenceResult.Inferences
 	expecteds := evalCase.Conversation
-	expectedInvocationsForResult := evalCase.Conversation
 	if evalMode == evalset.EvalModeTrace {
 		expecteds = traceExpectedsForEval(evalCase.Conversation)
-		expectedInvocationsForResult = make([]*evalset.Invocation, len(evalCase.Conversation))
 	}
 	if len(actuals) != len(expecteds) {
 		return nil, fmt.Errorf("inference count %d does not match expected conversation length %d",
 			len(actuals), len(expecteds))
 	}
 	return &caseEvaluationInputs{
-		actuals:                      actuals,
-		expecteds:                    expecteds,
-		expectedInvocationsForResult: expectedInvocationsForResult,
-		userID:                       evalCase.SessionInput.UserID,
+		actuals:   actuals,
+		expecteds: expecteds,
+		userID:    evalCase.SessionInput.UserID,
 	}, nil
 }
 

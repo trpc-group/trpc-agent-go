@@ -490,10 +490,10 @@ type Invocation struct {
 
 // Tool 表示一次工具调用和工具执行结果
 type Tool struct {
-	ID        string         // 工具调用 ID
-	Name      string         // 工具名
-	Arguments map[string]any // 工具调用输入参数
-	Result    map[string]any // 工具执行结果
+	ID        string // 工具调用 ID
+	Name      string // 工具名
+	Arguments any    // 工具调用输入参数
+	Result    any    // 工具执行结果
 }
 
 // SessionInput 表示 Session 初始化输入

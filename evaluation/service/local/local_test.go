@@ -996,6 +996,13 @@ func TestLocalEvaluateTraceModeUsesUserContentAsExpected(t *testing.T) {
 	assert.Nil(t, fakeEval.receivedExpecteds[0].Tools)
 	assert.Len(t, result.EvalCaseResults, 1)
 	assert.Len(t, result.EvalCaseResults[0].EvalMetricResultPerInvocation, 1)
-	assert.NotNil(t, result.EvalCaseResults[0].EvalMetricResultPerInvocation[0].ActualInvocation)
-	assert.Nil(t, result.EvalCaseResults[0].EvalMetricResultPerInvocation[0].ExpectedInvocation)
+	perInvocation := result.EvalCaseResults[0].EvalMetricResultPerInvocation[0]
+	assert.NotNil(t, perInvocation.ActualInvocation)
+	assert.NotNil(t, perInvocation.ExpectedInvocation)
+	assert.Equal(t, "trace-inv-1", perInvocation.ExpectedInvocation.InvocationID)
+	assert.NotNil(t, perInvocation.ExpectedInvocation.UserContent)
+	assert.Equal(t, "prompt", perInvocation.ExpectedInvocation.UserContent.Content)
+	assert.Nil(t, perInvocation.ExpectedInvocation.FinalResponse)
+	assert.Nil(t, perInvocation.ExpectedInvocation.Tools)
+	assert.Nil(t, perInvocation.ExpectedInvocation.IntermediateResponses)
 }

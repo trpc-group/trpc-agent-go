@@ -490,10 +490,10 @@ type Invocation struct {
 
 // Tool represents a single tool invocation and its execution result.
 type Tool struct {
-	ID        string         // Tool invocation ID.
-	Name      string         // Tool name.
-	Arguments map[string]any // Tool invocation parameters.
-	Result    map[string]any // Tool execution result.
+	ID        string // Tool invocation ID.
+	Name      string // Tool name.
+	Arguments any    // Tool invocation parameters.
+	Result    any    // Tool execution result.
 }
 
 // SessionInput represents session initialization input.
