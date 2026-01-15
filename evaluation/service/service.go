@@ -50,6 +50,8 @@ type InferenceResult struct {
 	EvalSetID string `json:"evalSetId,omitempty"`
 	// EvalCaseID is the ID of the eval case.
 	EvalCaseID string `json:"evalCaseId,omitempty"`
+	// EvalMode is the evaluation mode for this case.
+	EvalMode evalset.EvalMode `json:"evalMode,omitempty"`
 	// Inferences are the inference results.
 	Inferences []*evalset.Invocation `json:"inferences,omitempty"`
 	// SessionID is the ID of the inference session.

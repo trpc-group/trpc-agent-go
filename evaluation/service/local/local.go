@@ -134,29 +134,23 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 	if err != nil {
 		return nil, fmt.Errorf("get eval case: %w", err)
 	}
-	if evalCase == nil || len(evalCase.Conversation) == 0 || evalCase.SessionInput == nil {
-		return nil, errors.New("invalid eval case")
-	}
-	// If the inference count does not match the expected conversation length, return an error.
-	if len(inferenceResult.Inferences) != len(evalCase.Conversation) {
-		return nil, fmt.Errorf("inference count %d does not match expected conversation length %d",
-			len(inferenceResult.Inferences), len(evalCase.Conversation))
+	inputs, err := prepareCaseEvaluationInputs(inferenceResult, evalCase)
+	if err != nil {
+		return nil, err
 	}
 	// overallMetricResults collects the metric results for the entire eval case.
 	overallMetricResults := make([]*evalresult.EvalMetricResult, 0, len(evaluateConfig.EvalMetrics))
-	// perInvocation collects the metric results for each invocation.
-	perInvocation := make([]*evalresult.EvalMetricResultPerInvocation, 0, len(inferenceResult.Inferences))
-	// Prepare a per-invocation container to hold metric results for each step of the conversation.
-	for i := range len(inferenceResult.Inferences) {
-		perInvocation = append(perInvocation, &evalresult.EvalMetricResultPerInvocation{
-			ActualInvocation:   inferenceResult.Inferences[i],
-			ExpectedInvocation: evalCase.Conversation[i],
+	perInvocation := make([]*evalresult.EvalMetricResultPerInvocation, len(inputs.actuals))
+	for i, actual := range inputs.actuals {
+		perInvocation[i] = &evalresult.EvalMetricResultPerInvocation{
+			ActualInvocation:   actual,
+			ExpectedInvocation: inputs.expecteds[i],
 			EvalMetricResults:  make([]*evalresult.EvalMetricResult, 0, len(evaluateConfig.EvalMetrics)),
-		})
+		}
 	}
 	// Iterate through every configured metric and run the evaluation.
 	for _, evalMetric := range evaluateConfig.EvalMetrics {
-		result, err := s.evaluateMetric(ctx, evalMetric, inferenceResult.Inferences, evalCase.Conversation)
+		result, err := s.evaluateMetric(ctx, evalMetric, inputs.actuals, inputs.expecteds)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				// Skip metrics whose evaluator or artifacts are intentionally absent.
@@ -215,17 +209,60 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		OverallEvalMetricResults:      overallMetricResults,
 		EvalMetricResultPerInvocation: perInvocation,
 		SessionID:                     inferenceResult.SessionID,
-		UserID:                        evalCase.SessionInput.UserID,
+		UserID:                        inputs.userID,
 	}, nil
 }
 
 // evaluateMetric locates the evaluator registered for the metric and runs the evaluation.
 func (s *local) evaluateMetric(ctx context.Context, evalMetric *metric.EvalMetric,
-	actualInvocations, expectedInvocations []*evalset.Invocation) (*evaluator.EvaluateResult, error) {
+	actuals, expecteds []*evalset.Invocation) (*evaluator.EvaluateResult, error) {
 	metricEvaluator, err := s.registry.Get(evalMetric.MetricName)
 	if err != nil {
 		return nil, fmt.Errorf("get evaluator for metric %s: %w", evalMetric.MetricName, err)
 	}
 	// Run the evaluation on the actual and expected invocations and return the evaluation result.
-	return metricEvaluator.Evaluate(ctx, actualInvocations, expectedInvocations, evalMetric)
+	return metricEvaluator.Evaluate(ctx, actuals, expecteds, evalMetric)
+}
+
+type caseEvaluationInputs struct {
+	actuals   []*evalset.Invocation
+	expecteds []*evalset.Invocation
+	userID    string
+}
+
+func prepareCaseEvaluationInputs(inferenceResult *service.InferenceResult, evalCase *evalset.EvalCase) (*caseEvaluationInputs, error) {
+	if len(evalCase.Conversation) == 0 {
+		return nil, errors.New("invalid eval case")
+	}
+	if evalCase.SessionInput == nil {
+		return nil, errors.New("session input is nil")
+	}
+	evalMode := evalCase.EvalMode
+	actuals := inferenceResult.Inferences
+	expecteds := evalCase.Conversation
+	if evalMode == evalset.EvalModeTrace {
+		expecteds = traceExpectedsForEval(evalCase.Conversation)
+	}
+	if len(actuals) != len(expecteds) {
+		return nil, fmt.Errorf("inference count %d does not match expected conversation length %d",
+			len(actuals), len(expecteds))
+	}
+	return &caseEvaluationInputs{
+		actuals:   actuals,
+		expecteds: expecteds,
+		userID:    evalCase.SessionInput.UserID,
+	}, nil
+}
+
+// traceExpectedsForEval builds placeholder expected invocations that only preserve user inputs.
+// This whitelist prevents trace outputs from being treated as reference answers and stays correct when Invocation gains new fields.
+func traceExpectedsForEval(conversation []*evalset.Invocation) []*evalset.Invocation {
+	expecteds := make([]*evalset.Invocation, len(conversation))
+	for i, invocation := range conversation {
+		expecteds[i] = &evalset.Invocation{
+			InvocationID: invocation.InvocationID,
+			UserContent:  invocation.UserContent,
+		}
+	}
+	return expecteds
 }
