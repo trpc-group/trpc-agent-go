@@ -710,7 +710,25 @@ func convertTaskStatusToMessage(event *protocol.TaskStatusUpdateEvent) *protocol
 	}
 	if event.Status.Message != nil {
 		msg.MessageID = event.Status.Message.MessageID
-		msg.Parts = event.Status.Message.Parts
+
+		parts := event.Status.Message.Parts
+		// For A2A servers (e.g., ADK) that send cumulative status updates, check the adk_partial metadata.
+		// If adk_partial is "False", this StatusUpdate contains the full cumulative content that duplicates
+		// all previous incremental updates. Filter out TextParts to avoid duplicate content delivery.
+		// Keep DataParts (e.g., tool calls) as they represent distinct events.
+		if event.Metadata != nil {
+			if partial, ok := event.Metadata[ia2a.GetADKMetadataKey(ia2a.MetadataKeyPartial)].(string); ok && strings.EqualFold(partial, ia2a.MessageMetadataADKPartialValueFalse) {
+				var filteredParts []protocol.Part
+				for _, part := range parts {
+					if part.GetKind() != protocol.KindText {
+						filteredParts = append(filteredParts, part)
+					}
+				}
+				parts = filteredParts
+			}
+		}
+
+		msg.Parts = parts
 	}
 	return msg
 }

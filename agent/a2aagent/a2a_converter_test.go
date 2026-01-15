@@ -894,6 +894,63 @@ func TestConvertTaskStatusToMessage(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "status with adk_partial=False filters text",
+			event: &protocol.TaskStatusUpdateEvent{
+				TaskID:    "task-partial-false",
+				ContextID: "ctx-partial-false",
+				Status: protocol.TaskStatus{
+					Message: &protocol.Message{
+						Role: protocol.MessageRoleAgent,
+						Parts: []protocol.Part{
+							&protocol.TextPart{Kind: protocol.KindText, Text: "cumulative content"},
+							&protocol.DataPart{Kind: protocol.KindData, Data: map[string]any{"key": "value"}},
+						},
+					},
+				},
+				Metadata: map[string]any{
+					"adk_partial": "False",
+				},
+			},
+			setupFunc: func(tc *testCase) {},
+			validateFunc: func(t *testing.T, msg *protocol.Message) {
+				// TextPart should be filtered, DataPart preserved
+				if len(msg.Parts) != 1 {
+					t.Errorf("expected 1 part (DataPart only), got %d", len(msg.Parts))
+				}
+				if msg.Parts[0].GetKind() != protocol.KindData {
+					t.Errorf("expected DataPart, got %s", msg.Parts[0].GetKind())
+				}
+			},
+		},
+		{
+			name: "status with adk_partial=True preserves text",
+			event: &protocol.TaskStatusUpdateEvent{
+				TaskID:    "task-partial-true",
+				ContextID: "ctx-partial-true",
+				Status: protocol.TaskStatus{
+					Message: &protocol.Message{
+						Role: protocol.MessageRoleAgent,
+						Parts: []protocol.Part{
+							&protocol.TextPart{Kind: protocol.KindText, Text: "incremental content"},
+						},
+					},
+				},
+				Metadata: map[string]any{
+					"adk_partial": "True",
+				},
+			},
+			setupFunc: func(tc *testCase) {},
+			validateFunc: func(t *testing.T, msg *protocol.Message) {
+				// TextPart should be preserved
+				if len(msg.Parts) != 1 {
+					t.Errorf("expected 1 part, got %d", len(msg.Parts))
+				}
+				if msg.Parts[0].GetKind() != protocol.KindText {
+					t.Errorf("expected TextPart, got %s", msg.Parts[0].GetKind())
+				}
+			},
+		},
 	}
 
 	for _, tc := range tests {
