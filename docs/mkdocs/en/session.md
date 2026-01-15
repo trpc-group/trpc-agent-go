@@ -1703,7 +1703,7 @@ summarizer := summary.NewSummarizer(
 Configure async summary processing in session services:
 
 - **`WithSummarizer(s summary.SessionSummarizer)`**: Inject the summarizer into the session service.
-- **`WithAsyncSummaryNum(num int)`**: Set the number of async worker goroutines for summary processing. Default is 2. More workers allow higher concurrency but consume more resources.
+- **`WithAsyncSummaryNum(num int)`**: Set the number of async worker goroutines for summary processing. Default is 3. More workers allow higher concurrency but consume more resources.
 - **`WithSummaryQueueSize(size int)`**: Set the size of the summary job queue. Default is 100. Larger queues allow more pending jobs but consume more memory.
 - **`WithSummaryJobTimeout(timeout time.Duration)`**: Set the timeout for processing a single summary job. Default is 60 seconds.
 
