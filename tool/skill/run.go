@@ -185,6 +185,7 @@ type runOutput struct {
 	Duration      int64               `json:"duration_ms"`
 	OutputFiles   []codeexecutor.File `json:"output_files"`
 	ArtifactFiles []artifactRef       `json:"artifact_files,omitempty"`
+	Warnings      []string            `json:"warnings,omitempty"`
 }
 
 type artifactRef struct {
@@ -210,10 +211,13 @@ func (t *RunTool) Declaration() *tool.Declaration {
 				"output_files": {Type: "array",
 					Items:       &tool.Schema{Type: "string"},
 					Description: "Glob patterns to collect"},
-				"timeout":             {Type: "integer", Description: "Seconds"},
-				"save_as_artifacts":   {Type: "boolean"},
-				"omit_inline_content": {Type: "boolean"},
-				"artifact_prefix":     {Type: "string"},
+				"timeout": {Type: "integer", Description: "Seconds"},
+				"save_as_artifacts": {Type: "boolean", Description: "" +
+					"Persist collected files via Artifact service"},
+				"omit_inline_content": {Type: "boolean", Description: "" +
+					"With save_as_artifacts, omit output_files content"},
+				"artifact_prefix": {Type: "string", Description: "" +
+					"With save_as_artifacts, prefix artifact names"},
 			},
 		},
 		OutputSchema: &tool.Schema{Type: "object",
@@ -697,6 +701,13 @@ func (t *RunTool) attachArtifactsIfRequested(
 	}
 	// Only act when caller requests artifact persistence.
 	if save {
+		reason := artifactSaveSkipReason(ctx)
+		if reason != "" {
+			// Best-effort behavior: keep output_files content since
+			// artifacts were not persisted anywhere.
+			appendWarning(out, reason)
+			return nil
+		}
 		refs, err := t.saveArtifacts(ctx, files, prefix)
 		if err != nil {
 			return err
@@ -709,6 +720,44 @@ func (t *RunTool) attachArtifactsIfRequested(
 		}
 	}
 	return nil
+}
+
+const warnSaveArtifactsSkippedTmpl = "save_as_artifacts requested but " +
+	"%s; returning inline output_files"
+
+const (
+	reasonNoInvocation = "invocation is missing from context"
+	reasonNoService    = "artifact service is not configured"
+	reasonNoSession    = "session is missing from invocation"
+	reasonNoSessionIDs = "session app/user/session IDs are missing"
+)
+
+func artifactSaveSkipReason(ctx context.Context) string {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil {
+		return reasonNoInvocation
+	}
+	if inv.ArtifactService == nil {
+		return reasonNoService
+	}
+	if inv.Session == nil {
+		return reasonNoSession
+	}
+	if inv.Session.AppName == "" || inv.Session.UserID == "" ||
+		inv.Session.ID == "" {
+		return reasonNoSessionIDs
+	}
+	return ""
+}
+
+func appendWarning(out *runOutput, reason string) {
+	if out == nil || reason == "" {
+		return
+	}
+	out.Warnings = append(
+		out.Warnings,
+		fmt.Sprintf(warnSaveArtifactsSkippedTmpl, reason),
+	)
 }
 
 // mergeManifestArtifactRefs appends artifact refs derived from a

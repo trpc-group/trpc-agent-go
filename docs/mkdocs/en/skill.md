@@ -252,6 +252,8 @@ Input:
 - `omit_inline_content` (optional): with `save_as_artifacts`, omit
   `output_files[*].content` and return metadata only
 - `artifact_prefix` (optional): prefix for the legacy artifact path
+  - If the Artifact service is not configured, `skill_run` keeps
+    returning inline `output_files` and reports a `warnings` entry.
 
 Optional safety restriction (allowlist):
 - Env var `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`:
@@ -275,6 +277,8 @@ Optional safety restriction (denylist):
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
 - `output_files` with `name`, `content`, `mime_type`
+- `warnings` (optional): non-fatal notes (for example, when artifact
+  saving is skipped)
 - `artifact_files` with `name`, `version` appears in two cases:
   - Legacy path: when `save_as_artifacts` is set
   - Manifest path: when `outputs.save=true` (executor persists files)

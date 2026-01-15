@@ -255,6 +255,8 @@ https://github.com/anthropics/skills
 - `omit_inline_content`（可选）：与 `save_as_artifacts` 配合，
   为 true 时不返回文件内容，仅保留文件名/MIME 信息。
 - `artifact_prefix`（可选）：与 `save_as_artifacts` 配合的前缀。
+  - 若未配置制品服务（Artifact service），`skill_run` 会继续
+    返回内联的 `output_files`，并在 `warnings` 中给出提示。
 
 可选的安全限制（白名单）：
 - 环境变量 `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`：
@@ -276,6 +278,7 @@ https://github.com/anthropics/skills
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`
 - `output_files`：文件列表（`name`、`content`、`mime_type`）
+- `warnings`（可选）：非致命提示（例如制品保存被跳过）
 - `artifact_files`：制品引用（`name`、`version`）。两种途径：
   - 传统路径：设置了 `save_as_artifacts` 时由工具保存并返回
   - 清单路径：`outputs.save=true` 时由执行器保存并附加到结果

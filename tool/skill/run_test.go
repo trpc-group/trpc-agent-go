@@ -141,6 +141,49 @@ func TestRunTool_SaveAsArtifacts_AndOmitInline(t *testing.T) {
 	require.Equal(t, "", out.OutputFiles[0].Content)
 }
 
+func TestRunTool_SaveAsArtifacts_NoArtifactService(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		OutputFiles:   []string{outGlobTxt},
+		Timeout:       timeoutSecSmall,
+		SaveArtifacts: true,
+		OmitInline:    true,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	// Invocation exists, but ArtifactService is nil.
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "s1",
+			State: session.StateMap{},
+		}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Empty(t, out.ArtifactFiles)
+	require.Len(t, out.Warnings, 1)
+	require.Contains(t, out.Warnings[0], "artifact service")
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
 // errArtifactService always fails on save to cover error path.
 type errArtifactService struct{}
 
