@@ -168,40 +168,92 @@ type Request struct {
     // 工具列表
     Tools map[string]tool.Tool `json:"-"`
 }
-
-// GenerationConfig 包含生成参数配置
-type GenerationConfig struct {
-    // 是否使用流式响应
-    Stream bool `json:"stream"`
-
-    // 温度参数 (0.0-2.0)
-    Temperature *float64 `json:"temperature,omitempty"`
-
-    // 最大生成令牌数
-    MaxTokens *int `json:"max_tokens,omitempty"`
-
-    // Top-P 采样参数
-    TopP *float64 `json:"top_p,omitempty"`
-
-    // 停止生成的标记
-    Stop []string `json:"stop,omitempty"`
-
-    // 频率惩罚
-    FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
-
-    // 存在惩罚
-    PresencePenalty *float64 `json:"presence_penalty,omitempty"`
-
-    // 推理努力程度 ("low", "medium", "high")
-    ReasoningEffort *string `json:"reasoning_effort,omitempty"`
-
-    // 是否启用思考模式
-    ThinkingEnabled *bool `json:"-"`
-
-    // 思考模式的最大令牌数
-    ThinkingTokens *int `json:"-"`
-}
 ```
+
+### GenerationConfig 详解
+
+`GenerationConfig` 控制模型生成文本的行为参数，包括随机性、长度限制、停止条件等。
+
+#### 参数列表
+
+| 参数 | 类型 | 说明 | 默认值 |
+| --- | --- | --- |
+| `MaxCompletionTokens` | `*int` | 完成 Token 的上限，包含可见输出和推理 Token。 |
+| `MaxTokens` | `*int` | 最大生成 Token 数（已废弃）。 |
+| `Temperature` | `*float64` | 采样温度，范围 \(0.0-2.0\)。 |
+| `TopP` | `*float64` | 核采样参数，范围 \(0.0-1.0\)。 |
+| `Stream` | `bool` | 是否使用流式响应。 |
+| `Stop` | `[]string` | 最多 4 个停止序列。 |
+| `PresencePenalty` | `*float64` | 存在惩罚，范围 \(-2.0-2.0\)。 |
+| `FrequencyPenalty` | `*float64` | 频率惩罚，范围 \(-2.0-2.0\)。 |
+| `ReasoningEffort` | `*string` | 推理努力程度："low"、"medium"、"high"。 |
+| `ThinkingEnabled` | `*bool` | 是否启用思考模式（Claude/Gemini）。 |
+| `ThinkingTokens` | `*int` | 思考 Token 最大长度。 |
+
+#### 关键参数说明
+
+**MaxCompletionTokens**
+
+- **作用**：设置模型单次完成中可生成的 Token 上限，包括可见输出 Token 和推理 Token。
+- **适用场景**：特别是对 OpenAI o 系列推理模型，该字段是控制输出长度的推荐方式。
+- **注意**：该字段在 OpenAI Chat Completions API 中对应 `max_completion_tokens` 参数。
+
+**MaxTokens（已废弃）**
+
+- **作用**：设置模型单次完成中可生成的最大 Token 数。
+- **废弃原因**：OpenAI 已将 `max_tokens` 标记为废弃字段，不支持 o 系列推理模型。
+- **兼容性**：旧模型和非推理模型仍然支持此字段，但建议迁移到 `MaxCompletionTokens`。
+- **映射关系**：
+  - 框架内部：`MaxTokens` → OpenAI API 的 `max_tokens`。
+  - 优先级：若 `MaxCompletionTokens` 和 `MaxTokens` 同时设置，优先使用 `MaxCompletionTokens`。
+
+**Temperature**
+
+- **作用**：控制模型输出的随机性。
+- **范围**：\(0.0\) 到 \(2.0\)。
+- **推荐值**：
+  - \(0.2\)：输出更确定、聚焦。
+  - \(0.7\)：平衡随机性与一致性（推荐）。
+  - \(1.0\)：输出更随机、有创意。
+- **注意**：建议与 `TopP` 只调整其中一个，不要同时调整。
+
+**TopP**
+
+- **作用**：核采样，替代 Temperature 的另一种采样方式。
+- **范围**：\(0.0\) 到 \(1.0\)。
+- **工作原理**：模型只考虑概率质量前 `top_p` 的 Token。
+- **示例**：设为 \(0.1\) 表示只考虑概率质量前 \(10\%\) 的 Token。
+- **注意**：建议与 `Temperature` 只调整其中一个。
+
+**Stop**
+
+- **作用**：设置最多 4 个停止序列，当模型生成遇到这些序列时会停止。
+- **特性**：返回的文本不会包含停止序列。
+- **示例**：`["\n", "###", "---"]`。
+
+**PresencePenalty**
+
+- **作用**：根据新 Token 是否出现在已有文本中对其进行惩罚。
+- **范围**：\(-2.0\) 到 \(2.0\)。
+- **效果**：正值（如 \(0.5\)）增加模型谈论新话题的可能性。
+
+**FrequencyPenalty**
+
+- **作用**：根据新 Token 在已有文本中的出现频率对其进行惩罚。
+- **范围**：\(-2.0\) 到 \(2.0\)。
+- **效果**：正值（如 \(0.5\)）降低模型逐字重复相同行的可能性。
+
+**ReasoningEffort**
+
+- **作用**：限制推理模型的推理努力程度。
+- **支持值**：`"low"`、`"medium"`、`"high"`。
+- **适用范围**：仅对 OpenAI o 系列模型有效。
+
+**ThinkingEnabled / ThinkingTokens**
+
+- **作用**：通过 OpenAI API 为 Claude 和 Gemini 模型启用思考模式。
+- **ThinkingEnabled**：是否启用思考模式（`bool` 类型）。
+- **ThinkingTokens**：控制思考的最大 Token 长度（`int` 类型）。
 
 ### Response 结构
 

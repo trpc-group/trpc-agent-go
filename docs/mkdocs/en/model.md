@@ -168,40 +168,92 @@ type Request struct {
     // Tool list.
     Tools map[string]tool.Tool `json:"-"`
 }
-
-// GenerationConfig contains generation parameter configuration.
-type GenerationConfig struct {
-    // Whether to use streaming response.
-    Stream bool `json:"stream"`
-
-    // Temperature parameter (0.0-2.0).
-    Temperature *float64 `json:"temperature,omitempty"`
-
-    // Maximum generation token count.
-    MaxTokens *int `json:"max_tokens,omitempty"`
-
-    // Top-P sampling parameter.
-    TopP *float64 `json:"top_p,omitempty"`
-
-    // Stop generation markers.
-    Stop []string `json:"stop,omitempty"`
-
-    // Frequency penalty.
-    FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
-
-    // Presence penalty.
-    PresencePenalty *float64 `json:"presence_penalty,omitempty"`
-
-    // Reasoning effort level ("low", "medium", "high").
-    ReasoningEffort *string `json:"reasoning_effort,omitempty"`
-
-    // Whether to enable thinking mode.
-    ThinkingEnabled *bool `json:"-"`
-
-    // Maximum token count for thinking mode.
-    ThinkingTokens *int `json:"-"`
-}
 ```
+
+### GenerationConfig Details
+
+`GenerationConfig` controls the behavior parameters for model text generation, including randomness, length limits, stop conditions, etc.
+
+#### Parameter List
+
+| Parameter | Type | Description | Default |
+| --- | --- | --- |
+| `MaxCompletionTokens` | `*int` | Upper bound for completion tokens, including visible output and reasoning tokens. |
+| `MaxTokens` | `*int` | Maximum number of tokens that can be generated (deprecated). |
+| `Temperature` | `*float64` | Sampling temperature, range \(0.0-2.0\). |
+| `TopP` | `*float64` | Nucleus sampling parameter, range \(0.0-1.0\). |
+| `Stream` | `bool` | Whether to use streaming response. |
+| `Stop` | `[]string` | Up to 4 stop sequences. |
+| `PresencePenalty` | `*float64` | Presence penalty, range \(-2.0-2.0\). |
+| `FrequencyPenalty` | `*float64` | Frequency penalty, range \(-2.0-2.0\). |
+| `ReasoningEffort` | `*string` | Reasoning effort level: "low", "medium", "high". |
+| `ThinkingEnabled` | `*bool` | Whether to enable thinking mode (Claude/Gemini). |
+| `ThinkingTokens` | `*int` | Maximum token length for thinking. |
+
+#### Key Parameters
+
+**MaxCompletionTokens**
+
+- **Purpose**: Sets the upper bound for the number of tokens that can be generated in a completion, including visible output tokens and reasoning tokens.
+- **Use Cases**: Particularly for OpenAI o-series reasoning models, this field is the recommended way to control output length.
+- **Note**: In OpenAI Chat Completions API, this field maps to the `max_completion_tokens` parameter.
+
+**MaxTokens (Deprecated)**
+
+- **Purpose**: Sets the maximum number of tokens that can be generated in a completion.
+- **Deprecation Reason**: OpenAI has marked `max_tokens` as deprecated and does not support it for o-series reasoning models.
+- **Compatibility**: Older models and non-reasoning models still support this field, but migration to `MaxCompletionTokens` is recommended.
+- **Mapping Relationship**:
+  - Internal framework: `MaxTokens` → OpenAI API's `max_tokens`.
+  - Priority: If both `MaxCompletionTokens` and `MaxTokens` are set, `MaxCompletionTokens` takes precedence.
+
+**Temperature**
+
+- **Purpose**: Controls the randomness of model output.
+- **Range**: \(0.0\) to \(2.0\).
+- **Recommended Values**:
+  - \(0.2\): More deterministic, focused output.
+  - \(0.7\): Balanced randomness and consistency (recommended).
+  - \(1.0\): More random, creative output.
+- **Note**: Generally recommend altering this or `TopP` but not both.
+
+**TopP**
+
+- **Purpose**: Nucleus sampling, an alternative to sampling with temperature.
+- **Range**: \(0.0\) to \(1.0\).
+- **How It Works**: The model considers results of the tokens with top_p probability mass.
+- **Example**: Setting to \(0.1\) means only the tokens comprising the top \(10\%\) probability mass are considered.
+- **Note**: Generally recommend altering this or `Temperature` but not both.
+
+**Stop**
+
+- **Purpose**: Sets up to 4 sequences where the API will stop generating further tokens.
+- **Feature**: The returned text will not contain the stop sequence.
+- **Example**: `["\n", "###", "---"]`.
+
+**PresencePenalty**
+
+- **Purpose**: Penalizes new tokens based on whether they appear in the text so far.
+- **Range**: \(-2.0\) to \(2.0\).
+- **Effect**: Positive values (e.g., \(0.5\)) increase the model's likelihood to talk about new topics.
+
+**FrequencyPenalty**
+
+- **Purpose**: Penalizes new tokens based on their existing frequency in the text so far.
+- **Range**: \(-2.0\) to \(2.0\).
+- **Effect**: Positive values (e.g., \(0.5\)) decrease the model's likelihood to repeat the same line verbatim.
+
+**ReasoningEffort**
+
+- **Purpose**: Limits the reasoning effort for reasoning models.
+- **Supported Values**: `"low"`, `"medium"`, `"high"`.
+- **Scope**: Only effective for OpenAI o-series models.
+
+**ThinkingEnabled / ThinkingTokens**
+
+- **Purpose**: Enables thinking mode for Claude and Gemini models via OpenAI API.
+- **ThinkingEnabled**: Whether to enable thinking mode (`bool` type).
+- **ThinkingTokens**: Controls the maximum token length for thinking (`int` type).
 
 ### Response Structure
 
