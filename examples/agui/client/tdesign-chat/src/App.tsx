@@ -21,6 +21,7 @@ const AGUI_GRAPH_APPROVAL_EVENT = "agui-graph-approval";
 const REPORT_OPEN_TOOL_NAME = "open_report_sidebar";
 const GRAPH_APPROVAL_TOOL_NAME = "graph_interrupt_approval";
 const DEFAULT_INPUT_MESSAGE = "计算123+456";
+const EXTERNAL_TOOL_NAME = "external_search";
 
 function createThreadId(): string {
   if (typeof crypto !== "undefined") {
@@ -494,6 +495,24 @@ function groupChatItems(messages: UiMessage[]): RenderedChatItem[] {
   return items;
 }
 
+function defaultExternalToolContent(toolCallName: string, args?: string): string {
+  if (toolCallName !== EXTERNAL_TOOL_NAME) {
+    return "";
+  }
+  const rawArgs = (args || "").trim();
+  if (!rawArgs) {
+    return `${toolCallName} result`;
+  }
+  try {
+    const parsed = JSON.parse(rawArgs);
+    const query = typeof parsed?.query === "string" ? parsed.query.trim() : "";
+    if (query) {
+      return `${toolCallName} result for query: ${query}`;
+    }
+  } catch {}
+  return `${toolCallName} result: ${rawArgs}`;
+}
+
 export default function App() {
   const [serverAddress, setServerAddress] = useState<string>("127.0.0.1:8080");
   const [serverAddressDraft, setServerAddressDraft] = useState<string>("127.0.0.1:8080");
@@ -503,14 +522,27 @@ export default function App() {
   const [historyHint, setHistoryHint] = useState<string>("");
   const [userId, setUserId] = useState<string>("demo-user");
   const initialThreadId = useMemo(() => createThreadId(), []);
+  const initialLineageId = useMemo(() => createThreadId(), []);
   const [threadId, setThreadId] = useState<string>(initialThreadId);
   const [threadIdDraft, setThreadIdDraft] = useState<string>(initialThreadId);
+  const [lineageId, setLineageId] = useState<string>(initialLineageId);
+  const [lineageIdDraft, setLineageIdDraft] = useState<string>(initialLineageId);
   const [input, setInput] = useState<string>(DEFAULT_INPUT_MESSAGE);
   const [isComposing, setIsComposing] = useState(false);
   const [errorDrawerOpen, setErrorDrawerOpen] = useState(false);
   const [dismissedError, setDismissedError] = useState<string | null>(null);
+  const [externalToolDrafts, setExternalToolDrafts] = useState<Record<string, string>>({});
 
-  const forwardedProps = useMemo(() => ({ userId }), [userId]);
+  const forwardedProps = useMemo(() => {
+    const props: Record<string, unknown> = {};
+    if (userId.trim()) {
+      props.userId = userId.trim();
+    }
+    if (lineageId.trim()) {
+      props.lineage_id = lineageId.trim();
+    }
+    return props;
+  }, [lineageId, userId]);
   const endpoint = useMemo(() => buildHttpUrl(serverAddress, endpointPath), [endpointPath, serverAddress]);
 
   const chat = useAguiChat({
@@ -638,11 +670,13 @@ export default function App() {
     }
     chat.reset();
     setInput(DEFAULT_INPUT_MESSAGE);
+    setExternalToolDrafts({});
 
     const nextServerAddress = serverAddressDraft.trim() || "127.0.0.1:8080";
     const nextEndpointPath = endpointPathDraft.trim() || "/agui";
     const nextHistoryPath = historyPathDraft.trim() || "/history";
     const nextThreadId = threadIdDraft.trim() || createThreadId();
+    const nextLineageId = lineageIdDraft.trim() || createThreadId();
 
     setServerAddress(nextServerAddress);
     setServerAddressDraft(nextServerAddress);
@@ -651,12 +685,22 @@ export default function App() {
     setHistoryPathDraft(nextHistoryPath);
     setThreadId(nextThreadId);
     setThreadIdDraft(nextThreadId);
+    setLineageId(nextLineageId);
+    setLineageIdDraft(nextLineageId);
+
+    const nextForwardedProps: Record<string, unknown> = {};
+    if (userId.trim()) {
+      nextForwardedProps.userId = userId.trim();
+    }
+    if (nextLineageId.trim()) {
+      nextForwardedProps.lineage_id = nextLineageId.trim();
+    }
 
     setHistoryHint("正在载入历史...");
     const result = await chat.loadHistory({
       endpoint: buildHttpUrl(nextServerAddress, nextHistoryPath),
       threadId: nextThreadId,
-      forwardedProps,
+      forwardedProps: nextForwardedProps,
     });
     if (result.ok) {
       setHistoryHint(result.count > 0 ? "" : "暂无历史记录");
@@ -801,6 +845,21 @@ export default function App() {
                   />
 
                   <Input
+                    label="Lineage"
+                    value={lineageIdDraft}
+                    onChange={(v) => {
+                      const next = String(v);
+                      setLineageIdDraft(next);
+                      if (next.trim()) {
+                        setLineageId(next);
+                      }
+                    }}
+                    className="header-field"
+                    style={{ width: "100%" }}
+                    placeholder="externaltool 需要 lineage_id"
+                  />
+
+                  <Input
                     label="User"
                     value={userId}
                     onChange={(v) => setUserId(String(v))}
@@ -835,9 +894,13 @@ export default function App() {
                     icon={<RefreshIcon />}
                     onClick={() => {
                       chat.reset();
+                      setExternalToolDrafts({});
                       const nextThreadId = createThreadId();
+                      const nextLineageId = createThreadId();
                       setThreadId(nextThreadId);
                       setThreadIdDraft(nextThreadId);
+                      setLineageId(nextLineageId);
+                      setLineageIdDraft(nextLineageId);
                       setHistoryHint("");
                       setInput(DEFAULT_INPUT_MESSAGE);
                     }}
@@ -901,11 +964,75 @@ export default function App() {
                           args: message.toolCall.args,
                           result: message.toolCall.result,
                         };
+                        const isExternalTool = toolCall.toolCallName === EXTERNAL_TOOL_NAME;
+                        const lineageReady = Boolean(lineageId.trim());
+                        const toolResult = externalToolDrafts[toolCall.toolCallId] ?? defaultExternalToolContent(
+                          toolCall.toolCallName,
+                          toolCall.args,
+                        );
+                        const canResume = isExternalTool
+                          && !toolCall.result
+                          && !chat.inProgress
+                          && lineageReady
+                          && Boolean(toolResult.trim());
                         const index = blocks.length;
                         blocks.push({ type: "toolcall", data: toolCall });
                         toolSlots.push(
                           <div key={toolCall.toolCallId} slot={`toolcall-${index}`} className="toolcall__slot">
                             <ToolCallRenderer toolCall={toolCall} />
+                            {isExternalTool && !toolCall.result ? (
+                              <div style={{ marginTop: 10 }}>
+                                {!lineageReady ? (
+                                  <Alert
+                                    theme="warning"
+                                    title="externaltool 需要 lineage_id"
+                                    message="请在顶部填写 Lineage（会写入 forwardedProps.lineage_id），并保持两次请求一致。"
+                                    style={{ marginBottom: 10 }}
+                                  />
+                                ) : null}
+                                <Textarea
+                                  value={toolResult}
+                                  onChange={(v) => {
+                                    const next = String(v);
+                                    setExternalToolDrafts((prev) => ({ ...prev, [toolCall.toolCallId]: next }));
+                                  }}
+                                  placeholder="填写外部工具执行结果..."
+                                  autosize={{ minRows: 2, maxRows: 6 }}
+                                  disabled={chat.inProgress}
+                                />
+                                <Space size="small" style={{ marginTop: 8 }}>
+                                  <Button
+                                    size="small"
+                                    theme="primary"
+                                    disabled={!canResume}
+                                    onClick={() => {
+                                      void chat.sendToolResult({
+                                        toolCallId: toolCall.toolCallId,
+                                        toolCallName: toolCall.toolCallName,
+                                        content: toolResult,
+                                        messageId: `tool-result-${toolCall.toolCallId}`,
+                                      });
+                                    }}
+                                  >
+                                    发送工具结果并继续
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    variant="outline"
+                                    disabled={chat.inProgress}
+                                    onClick={() => {
+                                      setExternalToolDrafts((prev) => {
+                                        const next = { ...prev };
+                                        delete next[toolCall.toolCallId];
+                                        return next;
+                                      });
+                                    }}
+                                  >
+                                    重置结果
+                                  </Button>
+                                </Space>
+                              </div>
+                            ) : null}
                           </div>,
                         );
                         continue;

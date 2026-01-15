@@ -1452,6 +1452,39 @@ export function useAguiChat(config: AguiChatConfig) {
     [addMessage, config.forwardedProps, config.threadId, run],
   );
 
+  const sendToolResult = useCallback(
+    async (args: { toolCallId: string; toolCallName: string; content: string; messageId?: string }) => {
+      if (inProgress) {
+        return;
+      }
+
+      const toolCallId = (args.toolCallId || "").trim();
+      const toolCallName = (args.toolCallName || "").trim();
+      const content = (args.content || "").trim();
+      if (!toolCallId || !content) {
+        return;
+      }
+
+      const payload: Record<string, any> = {
+        threadId: config.threadId,
+        runId: randomId("run"),
+        messages: [{
+          id: (args.messageId || `tool-result-${toolCallId}`).trim(),
+          role: "tool",
+          toolCallId,
+          name: toolCallName || "tool",
+          content,
+        }],
+      };
+      if (config.forwardedProps && Object.keys(config.forwardedProps).length > 0) {
+        payload.forwardedProps = config.forwardedProps;
+      }
+
+      await run(payload);
+    },
+    [config.forwardedProps, config.threadId, inProgress, run],
+  );
+
   const approveGraphInterrupt = useCallback(async () => {
     if (!graphInterrupt) {
       return;
@@ -1626,6 +1659,7 @@ export function useAguiChat(config: AguiChatConfig) {
     reset,
     approveGraphInterrupt,
     dismissGraphInterrupt,
+    sendToolResult,
     clearRawEvents,
   };
 }
