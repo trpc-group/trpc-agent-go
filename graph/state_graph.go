@@ -1953,7 +1953,7 @@ func setSubgraphInterruptState(
 	childState State,
 	invocation *agent.Invocation,
 	childTaskID string,
-) string {
+) {
 	fallbackLineageID := ""
 	if invocation != nil {
 		fallbackLineageID = invocation.InvocationID
@@ -1974,7 +1974,6 @@ func setSubgraphInterruptState(
 		subgraphInterruptKeyChildLineageID:    childLineageID,
 		subgraphInterruptKeyChildTaskID:       childTaskID,
 	}
-	return childCheckpointID
 }
 
 func finalizeAgentNodeOutput(
