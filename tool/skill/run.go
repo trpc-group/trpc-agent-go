@@ -697,6 +697,14 @@ func (t *RunTool) attachArtifactsIfRequested(
 	}
 	// Only act when caller requests artifact persistence.
 	if save {
+		// Check if artifact service is available first
+		if !t.isArtifactServiceAvailable(ctx) {
+			log.Warnf(
+				"skill_run: save_as_artifacts requested but artifact service is not available, " +
+					"skipping artifact save and returning inline content",
+			)
+			return nil
+		}
 		refs, err := t.saveArtifacts(ctx, files, prefix)
 		if err != nil {
 			return err
@@ -739,6 +747,16 @@ func (t *RunTool) collectFiles(
 		return nil, nil
 	}
 	return eng.FS().Collect(ctx, ws, patterns)
+}
+
+// isArtifactServiceAvailable checks if artifact service is configured
+// in the invocation context.
+func (t *RunTool) isArtifactServiceAvailable(ctx context.Context) bool {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil {
+		return false
+	}
+	return inv.ArtifactService != nil
 }
 
 func (t *RunTool) saveArtifacts(
