@@ -55,7 +55,14 @@ func (s *local) loadInferenceEvalCases(ctx context.Context, req *service.Inferen
 		return nil, fmt.Errorf("get eval set: %w", err)
 	}
 	if len(req.EvalCaseIDs) == 0 {
-		return evalSet.EvalCases, nil
+		filtered := make([]*evalset.EvalCase, 0, len(evalSet.EvalCases))
+		for _, evalCase := range evalSet.EvalCases {
+			if evalCase == nil {
+				continue
+			}
+			filtered = append(filtered, evalCase)
+		}
+		return filtered, nil
 	}
 	wanted := make(map[string]struct{}, len(req.EvalCaseIDs))
 	for _, id := range req.EvalCaseIDs {
@@ -123,6 +130,23 @@ func (s *local) inferEvalCasesParallel(ctx context.Context, evalSetID string, ev
 }
 
 func (s *local) inferenceEvalCase(ctx context.Context, evalSetID string, evalCase *evalset.EvalCase) (*service.InferenceResult, error) {
+	if evalCase.SessionInput == nil {
+		return nil, errors.New("session input is nil")
+	}
+	if len(evalCase.Conversation) == 0 {
+		return nil, errors.New("invocations are empty")
+	}
+	if evalCase.EvalMode == evalset.EvalModeTrace {
+		return &service.InferenceResult{
+			AppName:    evalCase.SessionInput.AppName,
+			EvalSetID:  evalSetID,
+			EvalCaseID: evalCase.EvalID,
+			EvalMode:   evalset.EvalModeTrace,
+			Inferences: evalCase.Conversation,
+			SessionID:  s.sessionIDSupplier(ctx),
+			Status:     status.EvalStatusPassed,
+		}, nil
+	}
 	sessionID := s.sessionIDSupplier(ctx)
 	inferences, err := inference.Inference(
 		ctx,
@@ -139,6 +163,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, evalSetID string, evalCas
 		AppName:    evalCase.SessionInput.AppName,
 		EvalSetID:  evalSetID,
 		EvalCaseID: evalCase.EvalID,
+		EvalMode:   evalset.EvalModeDefault,
 		SessionID:  sessionID,
 		Status:     status.EvalStatusPassed,
 		Inferences: inferences,
