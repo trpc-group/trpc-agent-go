@@ -878,3 +878,76 @@ server, err := agui.New(
 实际效果如下图所示，完整示例可参考 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 
 ![report](../assets/gif/agui/report.gif)
+
+### 外部工具
+
+在一些场景下，工具的执行方并不在 Agent 运行环境中，例如：工具需要在浏览器侧访问用户本地能力，或需要由业务前端统一调用内部服务并回传结果。此时可以使用“外部工具”模式：后端只负责生成工具调用（tool call）并在工具节点中断；前端执行工具后，再把结果以 `role=tool` 的消息回传，后端从中断点恢复继续执行。
+
+基本流程如下：
+
+1. **第一次请求（`role=user`）**：LLM 生成工具调用，事件流中包含 `TOOL_CALL_START/TOOL_CALL_ARGS/TOOL_CALL_END`，随后在图的工具节点触发中断并结束本次 SSE。
+2. **前端执行外部工具**：从第一次 SSE 中提取 `toolCallId` 和参数（`TOOL_CALL_ARGS`），执行外部工具得到结果字符串。
+3. **第二次请求（`role=tool`）**：把工具结果以 tool message 回传（包含 `toolCallId` 与 `content`），后端会先发送 `TOOL_CALL_RESULT`，再恢复图执行并继续生成最终回复。
+
+两次请求需要满足：
+
+- `threadId` 保持一致，用于定位同一会话线程。
+- `forwardedProps.lineage_id` 保持一致，用于从同一 lineage 的最新 checkpoint 恢复。
+- 当前框架仅处理 `messages` 的最后一条消息，且只支持 `role=user` 或 `role=tool`；`content` 仅支持字符串。
+
+请求示例（省略无关字段）：
+
+第一次请求：
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-1",
+  "forwardedProps": {
+    "lineage_id": "demo-lineage"
+  },
+  "messages": [
+    {"role": "user", "content": "Search and answer my question."}
+  ]
+}
+```
+
+第二次请求：
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-2",
+  "forwardedProps": {
+    "lineage_id": "demo-lineage"
+  },
+  "messages": [
+    {
+      "id": "tool-result-<toolCallId>",
+      "role": "tool",
+      "toolCallId": "<toolCallId>",
+      "name": "external_search",
+      "content": "external tool output as string"
+    }
+  ]
+}
+```
+
+事件流示意：
+
+```text
+第一次请求（role=user）
+  → RUN_STARTED
+  → TOOL_CALL_START
+  → TOOL_CALL_ARGS
+  → TOOL_CALL_END
+  → RUN_FINISHED（在工具节点中断后结束）
+
+第二次请求（role=tool）
+  → RUN_STARTED
+  → TOOL_CALL_RESULT（由输入的 tool message 生成）
+  → TEXT_MESSAGE_*（恢复后继续生成）
+  → RUN_FINISHED
+```
+
+完整示例可参考 [examples/agui/server/externaltool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool)，其中 `run.sh` 展示了如何用两次 `curl` 自动捕获 `toolCallId` 并回传 `content`。
