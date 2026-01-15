@@ -111,11 +111,8 @@ func (s *local) inferEvalCasesParallel(ctx context.Context, appName, evalSetID s
 		param.wg = &wg
 		if err := s.evalCaseInferencePool.Invoke(param); err != nil {
 			wg.Done()
-			userID := ""
-			if evalCase.SessionInput != nil {
-				userID = evalCase.SessionInput.UserID
-			}
-			results[idx] = newFailedInferenceResult(appName, evalSetID, evalCase.EvalID, s.sessionIDSupplier(ctx), userID, evalCase.EvalMode, err)
+			sessionID := s.sessionIDSupplier(ctx)
+			results[idx] = newFailedInferenceResult(newInferenceResult(appName, evalSetID, sessionID, evalCase), err)
 			param.reset()
 			evalCaseInferenceParamPool.Put(param)
 		}
@@ -126,29 +123,17 @@ func (s *local) inferEvalCasesParallel(ctx context.Context, appName, evalSetID s
 
 func (s *local) inferenceEvalCase(ctx context.Context, appName, evalSetID string, evalCase *evalset.EvalCase) *service.InferenceResult {
 	sessionID := s.sessionIDSupplier(ctx)
-	userID := ""
-	if evalCase.SessionInput != nil {
-		userID = evalCase.SessionInput.UserID
-	}
+	result := newInferenceResult(appName, evalSetID, sessionID, evalCase)
 	if evalCase.SessionInput == nil {
-		return newFailedInferenceResult(appName, evalSetID, evalCase.EvalID, sessionID, userID, evalCase.EvalMode,
-			errors.New("session input is nil"))
+		return newFailedInferenceResult(result, errors.New("session input is nil"))
 	}
 	if len(evalCase.Conversation) == 0 {
-		return newFailedInferenceResult(appName, evalSetID, evalCase.EvalID, sessionID, userID, evalCase.EvalMode,
-			errors.New("invocations are empty"))
+		return newFailedInferenceResult(result, errors.New("invocations are empty"))
 	}
 	if evalCase.EvalMode == evalset.EvalModeTrace {
-		return &service.InferenceResult{
-			AppName:    appName,
-			EvalSetID:  evalSetID,
-			EvalCaseID: evalCase.EvalID,
-			EvalMode:   evalset.EvalModeTrace,
-			Inferences: evalCase.Conversation,
-			SessionID:  sessionID,
-			UserID:     userID,
-			Status:     status.EvalStatusPassed,
-		}
+		result.Inferences = evalCase.Conversation
+		result.Status = status.EvalStatusPassed
+		return result
 	}
 	inferences, err := inference.Inference(
 		ctx,
@@ -159,31 +144,31 @@ func (s *local) inferenceEvalCase(ctx context.Context, appName, evalSetID string
 		evalCase.ContextMessages,
 	)
 	if err != nil {
-		return newFailedInferenceResult(appName, evalSetID, evalCase.EvalID, sessionID, userID, evalset.EvalModeDefault, err)
+		return newFailedInferenceResult(result, err)
+	}
+	result.Inferences = inferences
+	result.Status = status.EvalStatusPassed
+	return result
+}
+
+func newInferenceResult(appName, evalSetID, sessionID string, evalCase *evalset.EvalCase) *service.InferenceResult {
+	userID := ""
+	if evalCase.SessionInput != nil {
+		userID = evalCase.SessionInput.UserID
 	}
 	return &service.InferenceResult{
 		AppName:    appName,
 		EvalSetID:  evalSetID,
 		EvalCaseID: evalCase.EvalID,
-		EvalMode:   evalset.EvalModeDefault,
+		EvalMode:   evalCase.EvalMode,
 		SessionID:  sessionID,
 		UserID:     userID,
-		Status:     status.EvalStatusPassed,
-		Inferences: inferences,
 	}
 }
 
-func newFailedInferenceResult(appName, evalSetID, evalCaseID, sessionID, userID string, evalMode evalset.EvalMode,
-	err error) *service.InferenceResult {
-	return &service.InferenceResult{
-		AppName:      appName,
-		EvalSetID:    evalSetID,
-		EvalCaseID:   evalCaseID,
-		EvalMode:     evalMode,
-		SessionID:    sessionID,
-		UserID:       userID,
-		Status:       status.EvalStatusFailed,
-		ErrorMessage: err.Error(),
-		Inferences:   nil,
-	}
+func newFailedInferenceResult(result *service.InferenceResult, err error) *service.InferenceResult {
+	result.Status = status.EvalStatusFailed
+	result.ErrorMessage = err.Error()
+	result.Inferences = nil
+	return result
 }
