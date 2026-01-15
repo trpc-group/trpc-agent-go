@@ -254,7 +254,12 @@ Recommended patterns
 - Parallel branches: avoid writing `one_shot_messages` from multiple branches.
   Prefer `one_shot_messages_by_node` so each LLM node consumes only its own
   one‑shot input.
-- To consume an upstream node's text, read `last_response` immediately downstream or fetch from `node_responses[that_node_id]` later.
+- To consume an upstream node's text, read `last_response` immediately
+  downstream or fetch from `node_responses[that_node_id]` later.
+- If the downstream node is an Agent node and you want it to consume an
+  upstream node's output as its input message, you must write it back into
+  `user_input` (for example, use `WithSubgraphInputFromLastResponse()` or a
+  pre‑node callback).
 
 One-shot messages scoped by node ID:
 
@@ -965,6 +970,62 @@ stateGraph.AddAgentNode("assistant",
 
 > The agent node uses its ID for the lookup, so keep `AddAgentNode("assistant")`
 > aligned with `subAgent.Info().Name == "assistant"`.
+
+#### Agent nodes: passing data to the next agent
+
+An agent node does not automatically "pipe" its output into the next agent
+node. Edges only control execution order; data flows through graph state.
+
+By default, an agent node builds the child invocation message from
+`state[graph.StateKeyUserInput]`. But `user_input` is **one‑shot**:
+LLM/Agent nodes clear it after a successful run to avoid reusing the same input.
+This is why a chain like `A (agent) → B (agent)` often looks like "A produced
+output, but B got an empty input".
+
+To make downstream agent nodes consume upstream outputs, explicitly map a state
+field into `user_input` before the downstream agent runs:
+
+```go
+const (
+    nodeA = "a"
+    nodeB = "b"
+)
+
+sg.AddAgentNode(nodeA)
+sg.AddAgentNode(nodeB, graph.WithSubgraphInputFromLastResponse())
+sg.AddEdge(nodeA, nodeB)
+```
+
+Notes:
+
+- `WithSubgraphInputFromLastResponse()` maps the **current** `last_response`
+  into this agent node's `user_input` for this run, so `nodeB` consumes `nodeA`
+  as input.
+- If you need to pass a *specific* node's output (not the most recent), use a
+  pre‑node callback and read from `node_responses[targetNodeID]`, then write it
+  into `user_input`.
+
+#### Agent nodes: state mappers (advanced)
+
+Agent nodes support two mappers to control what data crosses the parent/child
+boundary:
+
+- `WithSubgraphInputMapper`: project parent state → child runtime state
+  (`Invocation.RunOptions.RuntimeState`).
+- `WithSubgraphOutputMapper`: project child results → parent state updates.
+
+Use cases:
+
+- **Let the child read structured data from state** (without stuffing it into
+  prompts): pass only selected keys to the child via `WithSubgraphInputMapper`.
+  Runnable example: `examples/graph/subagent_runtime_state`.
+- **Copy structured outputs back to the parent graph**: when the child is a
+  GraphAgent, `SubgraphResult.FinalState` contains the child's final state
+  snapshot and can be mapped into parent keys. Runnable example:
+  `examples/graph/agent_state_handoff`.
+- **Store the child LLM's final text under your own keys**: `SubgraphResult`
+  always includes `LastResponse`, so output mappers work for both GraphAgent and
+  non-graph agents.
 
 #### Agent nodes: isolation vs multi‑turn tool calls
 
@@ -3651,6 +3712,30 @@ graphAgent, _ := graphagent.New("workflow", g,
   }
   ```
 - **Note**: `WithSubgraphIsolatedMessages(true)` only works for `AddSubgraphNode`, not for `AddLLMNode`.
+
+**Q10: Downstream Agent node receives an empty input**
+
+- **Symptom**: In a chain like `A (agent) → B (agent)`, the downstream agent
+  runs but `Invocation.Message.Content` is empty (or it behaves as if it didn't
+  get A's output).
+- **Root cause**: Agent nodes consume `user_input` as their input message and
+  clear it after a successful run. Edges do not automatically pipe outputs.
+- **Solution**: Explicitly write the desired upstream value into `user_input`
+  before the downstream agent runs:
+  ```go
+  sg.AddAgentNode("B", graph.WithSubgraphInputFromLastResponse())
+  // or:
+  sg.AddAgentNode("B",
+      graph.WithPreNodeCallback(func(ctx context.Context, cb *graph.NodeCallbackContext, s graph.State) (any, error) {
+          if v, ok := s[graph.StateKeyLastResponse].(string); ok {
+              s[graph.StateKeyUserInput] = v
+          }
+          return nil, nil
+      }),
+  )
+  ```
+  If you need a specific node's output, read it from
+  `node_responses[targetNodeID]` and write that into `user_input`.
 
 ## Real‑World Example
 
