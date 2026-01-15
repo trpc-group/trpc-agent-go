@@ -208,6 +208,49 @@ func TestRunTool_SaveAsArtifacts_SaveError(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestRunTool_SaveAsArtifacts_NoService tests graceful degradation
+// when save_as_artifacts is requested but artifact service is not available.
+// In this case, the tool should:
+// 1. Log a warning
+// 2. Skip artifact save
+// 3. Return inline content (ignoring omit_inline_content flag)
+func TestRunTool_SaveAsArtifacts_NoService(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		OutputFiles:   []string{outGlobTxt},
+		Timeout:       timeoutSecSmall,
+		SaveArtifacts: true, // Request artifact save
+		OmitInline:    true, // Request omit inline content
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	// No artifact service configured - should gracefully skip save
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	// No artifacts saved
+	require.Len(t, out.ArtifactFiles, 0)
+	// Inline content should still be present despite OmitInline=true
+	// because artifact save was skipped
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, outATxt, out.OutputFiles[0].Name)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
 func TestRunTool_ErrorOnMissingSkill(t *testing.T) {
 	root := t.TempDir()
 	// No skill written.
