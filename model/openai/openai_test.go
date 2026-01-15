@@ -129,7 +129,7 @@ func TestModel_GenContent_ValidReq(t *testing.T) {
 	defer cancel()
 
 	temperature := 0.7
-	maxTokens := 50
+	maxCompletionTokens := 50
 
 	request := &model.Request{
 		Messages: []model.Message{
@@ -137,9 +137,9 @@ func TestModel_GenContent_ValidReq(t *testing.T) {
 			model.NewUserMessage("Say hello in exactly 3 words."),
 		},
 		GenerationConfig: model.GenerationConfig{
-			Temperature: &temperature,
-			MaxTokens:   &maxTokens,
-			Stream:      false,
+			Temperature:         &temperature,
+			MaxCompletionTokens: &maxCompletionTokens,
+			Stream:              false,
 		},
 	}
 
@@ -2943,29 +2943,81 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 
 	t.Run("with all generation config options", func(t *testing.T) {
 		temperature := 0.8
-		maxTokens := 1000
+		maxCompletionTokens := 1000
 		topP := 0.9
 		frequencyPenalty := 0.5
 		presencePenalty := 0.3
+		stop := []string{"a", "b", "c", "d", "e"}
 
 		req := &model.Request{
 			Messages: []model.Message{
 				model.NewUserMessage("test"),
 			},
 			GenerationConfig: model.GenerationConfig{
-				Temperature:      &temperature,
-				MaxTokens:        &maxTokens,
-				TopP:             &topP,
-				FrequencyPenalty: &frequencyPenalty,
-				PresencePenalty:  &presencePenalty,
-				Stream:           true,
+				Temperature:         &temperature,
+				MaxCompletionTokens: &maxCompletionTokens,
+				TopP:                &topP,
+				FrequencyPenalty:    &frequencyPenalty,
+				PresencePenalty:     &presencePenalty,
+				Stop:                stop,
+				Stream:              true,
 			},
 		}
 
 		chatReq, _ := m.buildChatRequest(req)
 		assert.Equal(t, "gpt-3.5-turbo", chatReq.Model, "expected model to be gpt-3.5-turbo")
-		// Verify at least one parameter is set
 		assert.NotEmpty(t, chatReq.Messages, "expected messages to be set")
+
+		data, err := json.Marshal(chatReq)
+		require.NoError(t, err, "marshal chat request: %v", err)
+
+		var payload map[string]any
+		err = json.Unmarshal(data, &payload)
+		require.NoError(t, err, "unmarshal payload: %v", err)
+
+		_, hasMaxTokens := payload["max_tokens"]
+		assert.False(t, hasMaxTokens, "expected max_tokens to be omitted")
+		assert.Equal(
+			t,
+			float64(maxCompletionTokens),
+			payload["max_completion_tokens"],
+			"expected max_completion_tokens to be set",
+		)
+
+		gotStop, ok := payload["stop"].([]any)
+		require.True(t, ok, "expected stop to be an array")
+		require.Len(t, gotStop, 4, "expected stop to be truncated to 4 sequences")
+		assert.Equal(t, "a", gotStop[0])
+		assert.Equal(t, "b", gotStop[1])
+		assert.Equal(t, "c", gotStop[2])
+		assert.Equal(t, "d", gotStop[3])
+	})
+
+	t.Run("with legacy max_tokens", func(t *testing.T) {
+		maxTokens := 123
+		req := &model.Request{
+			Messages: []model.Message{model.NewUserMessage("test")},
+			GenerationConfig: model.GenerationConfig{
+				MaxTokens: &maxTokens,
+			},
+		}
+
+		chatReq, _ := m.buildChatRequest(req)
+		data, err := json.Marshal(chatReq)
+		require.NoError(t, err, "marshal chat request: %v", err)
+
+		var payload map[string]any
+		err = json.Unmarshal(data, &payload)
+		require.NoError(t, err, "unmarshal payload: %v", err)
+
+		_, hasMaxCompletionTokens := payload["max_completion_tokens"]
+		assert.False(t, hasMaxCompletionTokens, "expected max_completion_tokens to be omitted")
+		assert.Equal(
+			t,
+			float64(maxTokens),
+			payload["max_tokens"],
+			"expected max_tokens to be set",
+		)
 	})
 
 	t.Run("with tools", func(t *testing.T) {

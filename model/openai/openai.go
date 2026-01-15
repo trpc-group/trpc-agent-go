@@ -439,7 +439,8 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 
 	// Set max output tokens only if user hasn't specified it.
 	// This respects user's explicit configuration while providing a safe default.
-	if request.GenerationConfig.MaxTokens == nil {
+	if request.GenerationConfig.MaxTokens == nil &&
+		request.GenerationConfig.MaxCompletionTokens == nil {
 		contextWindow := imodel.ResolveContextWindow(m.name)
 		var maxOutputTokens int
 		if m.protocolOverheadTokens > 0 || m.outputTokensFloor > 0 {
@@ -456,7 +457,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			maxOutputTokens = imodel.CalculateMaxOutputTokens(contextWindow, usedTokens)
 		}
 		if maxOutputTokens > 0 {
-			request.GenerationConfig.MaxTokens = &maxOutputTokens
+			request.GenerationConfig.MaxCompletionTokens = &maxOutputTokens
 			log.DebugfContext(
 				ctx,
 				"token tailoring: contextWindow=%d, usedTokens=%d, "+
@@ -494,10 +495,12 @@ func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionN
 		}
 	}
 
-	// MaxTokens is deprecated and not compatible with o-series models.
-	// Use MaxCompletionTokens instead.
-	if request.MaxTokens != nil {
-		chatRequest.MaxCompletionTokens = openai.Int(int64(*request.MaxTokens))
+	// Prefer MaxCompletionTokens when set.
+	// MaxTokens is deprecated in OpenAI's Chat Completions API.
+	if request.MaxCompletionTokens != nil {
+		chatRequest.MaxCompletionTokens = openai.Int(int64(*request.MaxCompletionTokens))
+	} else if request.MaxTokens != nil {
+		chatRequest.MaxTokens = openai.Int(int64(*request.MaxTokens))
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = openai.Float(*request.Temperature)
@@ -506,9 +509,13 @@ func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionN
 		chatRequest.TopP = openai.Float(*request.TopP)
 	}
 	if len(request.Stop) > 0 {
-		// Use the first stop string for simplicity.
+		const maxStopSequences = 4
+		stop := request.Stop
+		if len(stop) > maxStopSequences {
+			stop = stop[:maxStopSequences]
+		}
 		chatRequest.Stop = openai.ChatCompletionNewParamsStopUnion{
-			OfString: openai.String(request.Stop[0]),
+			OfStringArray: stop,
 		}
 	}
 	if request.PresencePenalty != nil {

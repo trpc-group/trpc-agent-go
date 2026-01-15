@@ -305,25 +305,43 @@ func NewAssistantMessage(content string) Message {
 
 // GenerationConfig contains configuration for text generation.
 type GenerationConfig struct {
-	// MaxTokens is the maximum number of tokens to generate.
+	// MaxCompletionTokens is an upper bound for the number of tokens that can be generated
+	// for a completion, including visible output tokens and reasoning tokens.
+	MaxCompletionTokens *int `json:"max_completion_tokens,omitempty"`
+
+	// MaxTokens is the maximum number of tokens that can be generated in the completion.
+	//
+	// Deprecated: This field is deprecated in favor of MaxCompletionTokens and is
+	// not compatible with OpenAI o-series models.
 	MaxTokens *int `json:"max_tokens,omitempty"`
 
-	// Temperature controls randomness (0.0 to 2.0).
+	// Temperature is what sampling temperature to use, between 0 and 2.
+	// Higher values like 0.8 will make the output more random, while lower values
+	// like 0.2 will make it more focused and deterministic.
+	// We generally recommend altering this or TopP but not both.
 	Temperature *float64 `json:"temperature,omitempty"`
 
-	// TopP controls nucleus sampling (0.0 to 1.0).
+	// TopP is an alternative to sampling with temperature, called nucleus sampling.
+	// The model considers the results of the tokens with top_p probability mass.
+	// So 0.1 means only the tokens comprising the top 10% probability mass are considered.
+	// We generally recommend altering this or Temperature but not both.
 	TopP *float64 `json:"top_p,omitempty"`
 
 	// Stream indicates whether to stream the response.
 	Stream bool `json:"stream"`
 
-	// Stop sequences where the API will stop generating further tokens.
+	// Stop is up to 4 sequences where the API will stop generating further tokens.
+	// The returned text will not contain the stop sequence.
 	Stop []string `json:"stop,omitempty"`
 
-	// PresencePenalty penalizes new tokens based on their existing frequency.
+	// PresencePenalty is a number between -2.0 and 2.0.
+	// Positive values penalize new tokens based on whether they appear in the text
+	// so far, increasing the model's likelihood to talk about new topics.
 	PresencePenalty *float64 `json:"presence_penalty,omitempty"`
 
-	// FrequencyPenalty penalizes new tokens based on their frequency in the text so far.
+	// FrequencyPenalty is a number between -2.0 and 2.0.
+	// Positive values penalize new tokens based on their existing frequency in the
+	// text so far, decreasing the model's likelihood to repeat the same line verbatim.
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
 
 	// ReasoningEffort limits the reasoning effort for reasoning models.
