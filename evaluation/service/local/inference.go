@@ -123,6 +123,26 @@ func (s *local) inferEvalCasesParallel(ctx context.Context, evalSetID string, ev
 }
 
 func (s *local) inferenceEvalCase(ctx context.Context, evalSetID string, evalCase *evalset.EvalCase) (*service.InferenceResult, error) {
+	if evalCase == nil {
+		return nil, errors.New("eval case is nil")
+	}
+	if evalCase.SessionInput == nil {
+		return nil, errors.New("session input is nil")
+	}
+	if len(evalCase.Conversation) == 0 {
+		return nil, errors.New("invocations are empty")
+	}
+	if evalCase.EvalMode == evalset.EvalModeTrace {
+		return &service.InferenceResult{
+			AppName:    evalCase.SessionInput.AppName,
+			EvalSetID:  evalSetID,
+			EvalCaseID: evalCase.EvalID,
+			EvalMode:   evalset.EvalModeTrace,
+			Inferences: evalCase.Conversation,
+			SessionID:  s.sessionIDSupplier(ctx),
+			Status:     status.EvalStatusPassed,
+		}, nil
+	}
 	sessionID := s.sessionIDSupplier(ctx)
 	inferences, err := inference.Inference(
 		ctx,
@@ -139,6 +159,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, evalSetID string, evalCas
 		AppName:    evalCase.SessionInput.AppName,
 		EvalSetID:  evalSetID,
 		EvalCaseID: evalCase.EvalID,
+		EvalMode:   evalset.EvalModeDefault,
 		SessionID:  sessionID,
 		Status:     status.EvalStatusPassed,
 		Inferences: inferences,
