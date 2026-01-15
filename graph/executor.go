@@ -41,11 +41,18 @@ const (
 var (
 	defaultChannelBufferSize     = 256
 	defaultMaxSteps              = 100
-	defaultMaxConcurrency        = runtime.GOMAXPROCS(0)
 	defaultStepTimeout           = time.Duration(0) // No timeout by default, users can set if needed.
 	defaultCheckpointSaveTimeout = 10 * time.Second // Default timeout for checkpoint save operations.
 	defaultBarrierWaitTimeout    = 5 * time.Second  // Default timeout for barrier completion waits.
 )
+
+func defaultMaxConcurrency() int {
+	maxConcurrency := runtime.GOMAXPROCS(0)
+	if maxConcurrency <= 0 {
+		return 1
+	}
+	return maxConcurrency
+}
 
 // Executor executes a graph with the given initial state using Pregel-style BSP execution.
 //
@@ -168,7 +175,7 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	options := ExecutorOptions{
 		ChannelBufferSize:     defaultChannelBufferSize,
 		MaxSteps:              defaultMaxSteps,
-		MaxConcurrency:        defaultMaxConcurrency,
+		MaxConcurrency:        defaultMaxConcurrency(),
 		StepTimeout:           defaultStepTimeout,
 		CheckpointSaveTimeout: defaultCheckpointSaveTimeout,
 	}
@@ -178,10 +185,7 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	}
 	maxConcurrency := options.MaxConcurrency
 	if maxConcurrency <= 0 {
-		maxConcurrency = defaultMaxConcurrency
-	}
-	if maxConcurrency <= 0 {
-		maxConcurrency = 1
+		maxConcurrency = defaultMaxConcurrency()
 	}
 	// Calculate node timeout: use provided value or derive from step timeout if step timeout is set.
 	nodeTimeout := options.NodeTimeout

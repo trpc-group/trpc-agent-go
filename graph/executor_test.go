@@ -2729,12 +2729,7 @@ func TestNewExecutor_MaxConcurrency_DefaultOnNonPositive(t *testing.T) {
 	exec, err := NewExecutor(g, WithMaxConcurrency(0))
 	require.NoError(t, err)
 
-	expected := defaultMaxConcurrency
-	if expected <= 0 {
-		expected = 1
-	}
-
-	require.Equal(t, expected, exec.maxConcurrency)
+	require.Equal(t, defaultMaxConcurrency(), exec.maxConcurrency)
 }
 
 func TestExecutor_workerCount_CoversBranches(t *testing.T) {
