@@ -90,6 +90,7 @@ func main() {
 		agui.WithAGUIRunnerOptions(
 			aguirunner.WithRunOptionResolver(resolveRunOptions),
 		),
+		agui.WithMessagesSnapshotEnabled(true),
 	)
 	if err != nil {
 		log.Fatalf("create AG-UI server failed: %v", err)
@@ -132,7 +133,7 @@ func buildGraph(modelInstance model.Model, generationConfig model.GenerationConf
 	)
 
 	sg.SetEntryPoint(nodeCallToolLLM)
-	sg.AddEdge(nodeCallToolLLM, nodeExternalTool)
+	sg.AddToolsConditionalEdges(nodeCallToolLLM, nodeExternalTool, graph.End)
 	sg.AddEdge(nodeExternalTool, nodeAnswerLLM)
 	sg.SetFinishPoint(nodeAnswerLLM)
 
