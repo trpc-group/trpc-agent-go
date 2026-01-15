@@ -12,6 +12,8 @@ package local
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,6 +26,7 @@ import (
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
+	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
@@ -261,6 +264,59 @@ func TestLocalInferenceFiltersCases(t *testing.T) {
 	runnerStub.mu.Unlock()
 	assert.Equal(t, 1, callCount)
 	assert.Equal(t, "calc add 1 2", prompt)
+}
+
+func TestLocalInferenceSkipsNilEvalCases(t *testing.T) {
+	ctx := context.Background()
+	appName := "trace-app"
+	evalSetID := "trace-set"
+	baseDir := t.TempDir()
+
+	path := filepath.Join(baseDir, appName, evalSetID+".evalset.json")
+	assert.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	assert.NoError(t, os.WriteFile(path, []byte(`{
+  "evalSetId": "trace-set",
+  "name": "trace-set",
+  "evalCases": [
+    null,
+    {
+      "evalId": "trace-case",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "trace-case-1",
+          "userContent": {
+            "role": "user",
+            "content": "hello"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "world"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "trace-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}`), 0o644))
+
+	mgr := evalsetlocal.New(evalset.WithBaseDir(baseDir))
+	reg := registry.New()
+	resMgr := evalresultinmemory.New()
+	svc := newLocalService(t, &fakeRunner{err: errors.New("runner should not be called")}, mgr, resMgr, reg, "session-trace")
+
+	results, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, "trace-case", results[0].EvalCaseID)
+	assert.Equal(t, evalset.EvalModeTrace, results[0].EvalMode)
+	assert.Equal(t, "session-trace", results[0].SessionID)
+	assert.Len(t, results[0].Inferences, 1)
+	assert.NotNil(t, results[0].Inferences[0].FinalResponse)
+	assert.Equal(t, "world", results[0].Inferences[0].FinalResponse.Content)
 }
 
 func TestLocalInferenceEvalSetError(t *testing.T) {
@@ -710,6 +766,25 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 				assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, invalid))
 				actual := makeActualInvocation("actual-1", "prompt", "answer")
 				inference := makeInferenceResult(appName, evalSetID, "invalid", "session", []*evalset.Invocation{actual})
+				config := &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}}
+				return svc, inference, config
+			},
+		},
+		{
+			name:      "nil session input",
+			expectErr: true,
+			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
+				svc, mgr, _ := prepare(t)
+				_, err := mgr.Create(ctx, appName, evalSetID)
+				assert.NoError(t, err)
+				invalid := &evalset.EvalCase{
+					EvalID:       "nil-session",
+					Conversation: []*evalset.Invocation{makeInvocation("expected-1", "prompt")},
+					SessionInput: nil,
+				}
+				assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, invalid))
+				actual := makeActualInvocation("actual-1", "prompt", "answer")
+				inference := makeInferenceResult(appName, evalSetID, "nil-session", "session", []*evalset.Invocation{actual})
 				config := &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}}
 				return svc, inference, config
 			},

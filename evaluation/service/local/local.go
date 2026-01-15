@@ -235,6 +235,9 @@ func prepareCaseEvaluationInputs(inferenceResult *service.InferenceResult, evalC
 	if len(evalCase.Conversation) == 0 {
 		return nil, errors.New("invalid eval case")
 	}
+	if evalCase.SessionInput == nil {
+		return nil, errors.New("session input is nil")
+	}
 	evalMode := evalCase.EvalMode
 	actuals := inferenceResult.Inferences
 	expecteds := evalCase.Conversation

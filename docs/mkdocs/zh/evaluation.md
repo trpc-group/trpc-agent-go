@@ -1235,7 +1235,7 @@ Trace 评估模式用于评估离线采集到的 Trace 执行轨迹，评估过�
 ```
 
 
-完整示例参见 [examples/evaluation/trace][trace-eval-example]。
+完整示例参见 [examples/evaluation/trace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trace)。
 
 ### 评估准则
 
