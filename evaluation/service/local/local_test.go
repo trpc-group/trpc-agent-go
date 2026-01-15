@@ -250,6 +250,7 @@ func TestLocalInferenceFiltersCases(t *testing.T) {
 	assert.Len(t, results, 1)
 	assert.Equal(t, "case-add", results[0].EvalCaseID)
 	assert.Equal(t, "session-123", results[0].SessionID)
+	assert.Equal(t, "demo-user", results[0].UserID)
 	assert.Equal(t, status.EvalStatusPassed, results[0].Status)
 	assert.Len(t, results[0].Inferences, 1)
 	assert.NotNil(t, results[0].Inferences[0].FinalResponse)
@@ -377,9 +378,12 @@ func TestLocalInferenceRunnerError(t *testing.T) {
 
 	req := &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID}
 	results, err := svc.Inference(ctx, req)
-	assert.Error(t, err)
-	assert.Nil(t, results)
-	assert.Contains(t, err.Error(), "run failed")
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, "case", results[0].EvalCaseID)
+	assert.Equal(t, status.EvalStatusFailed, results[0].Status)
+	assert.Equal(t, "demo-user", results[0].UserID)
+	assert.Contains(t, results[0].ErrorMessage, "run failed")
 }
 
 func TestLocalInferenceInvalidSessionInput(t *testing.T) {
@@ -413,9 +417,12 @@ func TestLocalInferenceInvalidSessionInput(t *testing.T) {
 	}()
 
 	results, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
-	assert.Error(t, err)
-	assert.Nil(t, results)
-	assert.Contains(t, err.Error(), "session input is nil")
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, "case", results[0].EvalCaseID)
+	assert.Equal(t, status.EvalStatusFailed, results[0].Status)
+	assert.Empty(t, results[0].UserID)
+	assert.Contains(t, results[0].ErrorMessage, "session input is nil")
 }
 
 func TestLocalInferenceParallelOrder(t *testing.T) {
@@ -704,6 +711,49 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	stored, err := resMgr.Get(ctx, appName, result.EvalSetResultID)
 	assert.NoError(t, err)
 	assert.Equal(t, result.EvalSetResultID, stored.EvalSetResultID)
+}
+
+func TestLocalEvaluateInferenceFailurePersistsErrorMessage(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, caseID, "prompt")))
+
+	reg := registry.New()
+	resMgr := evalresultinmemory.New()
+	svc := newLocalService(t, &fakeRunner{}, mgr, resMgr, reg, "session-xyz")
+
+	inference := &service.InferenceResult{
+		AppName:      appName,
+		EvalSetID:    evalSetID,
+		EvalCaseID:   caseID,
+		SessionID:    "session-xyz",
+		UserID:       "demo-user",
+		Status:       status.EvalStatusFailed,
+		ErrorMessage: "run failed",
+	}
+	req := &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{inference},
+		EvaluateConfig:   &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}},
+	}
+
+	result, err := svc.Evaluate(ctx, req)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Len(t, result.EvalCaseResults, 1)
+	assert.Equal(t, status.EvalStatusFailed, result.EvalCaseResults[0].FinalEvalStatus)
+	assert.Equal(t, "run failed", result.EvalCaseResults[0].ErrorMessage)
+
+	stored, err := resMgr.Get(ctx, appName, result.EvalSetResultID)
+	assert.NoError(t, err)
+	assert.Len(t, stored.EvalCaseResults, 1)
+	assert.Equal(t, "run failed", stored.EvalCaseResults[0].ErrorMessage)
 }
 
 func TestLocalEvaluatePerCaseErrors(t *testing.T) {
