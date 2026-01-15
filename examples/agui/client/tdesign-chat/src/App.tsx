@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FC } from "react";
+import { useEffect, useMemo, useRef, useState, type FC, type PointerEvent as ReactPointerEvent } from "react";
 import { ChatMarkdown, ChatMessage, ToolCallRenderer, agentToolcallRegistry, type ToolCall } from "@tdesign-react/chat";
 import {
   Alert,
@@ -108,6 +108,46 @@ function buildHttpUrl(base: string, pathOrUrl: string): string {
   const baseTrimmed = base.trim() || "127.0.0.1:8080";
   const baseUrl = isHttpUrl(baseTrimmed) ? baseTrimmed : `http://${baseTrimmed}`;
   return new URL(normalizePath(trimmed), baseUrl).toString();
+}
+
+const SIDER_WIDTH_STORAGE_KEY = "agui-tdesign-chat:sider-width";
+const DEFAULT_SIDER_WIDTH = 600;
+const MIN_SIDER_WIDTH = 320;
+const MAX_SIDER_WIDTH = 960;
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, value));
+}
+
+function loadSiderWidth(): number {
+  if (typeof window === "undefined") {
+    return DEFAULT_SIDER_WIDTH;
+  }
+  try {
+    const raw = window.localStorage.getItem(SIDER_WIDTH_STORAGE_KEY);
+    if (!raw) {
+      return DEFAULT_SIDER_WIDTH;
+    }
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      return DEFAULT_SIDER_WIDTH;
+    }
+    return clampNumber(parsed, MIN_SIDER_WIDTH, MAX_SIDER_WIDTH);
+  } catch {
+    return DEFAULT_SIDER_WIDTH;
+  }
+}
+
+function persistSiderWidth(width: number): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(SIDER_WIDTH_STORAGE_KEY, String(width));
+  } catch {}
 }
 
 type ToolcallStatus = "idle" | "executing" | "complete" | "error";
@@ -395,6 +435,20 @@ agentToolcallRegistry.register({
 });
 
 function summarizeRawEvent(event: RawAguiEvent): string {
+  if (event.kind === "request") {
+    const payload = event.payload as any;
+    const endpoint = typeof payload?.endpoint === "string" ? payload.endpoint : "";
+    const body = payload?.payload as any;
+    const threadId = typeof body?.threadId === "string" ? body.threadId : "";
+    const runId = typeof body?.runId === "string" ? body.runId : "";
+    const role = typeof body?.messages?.[0]?.role === "string" ? body.messages[0].role : "";
+    return [
+      endpoint ? `endpoint=${endpoint}` : "",
+      threadId ? `threadId=${threadId}` : "",
+      runId ? `runId=${runId}` : "",
+      role ? `role=${role}` : "",
+    ].filter(Boolean).join(" ");
+  }
   const payload = event.payload as any;
   if (event.type === "CUSTOM") {
     const name = typeof payload?.name === "string" ? payload.name : "";
@@ -514,6 +568,9 @@ function defaultExternalToolContent(toolCallName: string, args?: string): string
 }
 
 export default function App() {
+  const [siderWidth, setSiderWidth] = useState<number>(() => loadSiderWidth());
+  const [isResizingSider, setIsResizingSider] = useState(false);
+  const siderResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [serverAddress, setServerAddress] = useState<string>("127.0.0.1:8080");
   const [serverAddressDraft, setServerAddressDraft] = useState<string>("127.0.0.1:8080");
   const [endpointPath, setEndpointPath] = useState<string>("/agui");
@@ -526,12 +583,64 @@ export default function App() {
   const [threadId, setThreadId] = useState<string>(initialThreadId);
   const [threadIdDraft, setThreadIdDraft] = useState<string>(initialThreadId);
   const [lineageId, setLineageId] = useState<string>(initialLineageId);
-  const [lineageIdDraft, setLineageIdDraft] = useState<string>(initialLineageId);
   const [input, setInput] = useState<string>(DEFAULT_INPUT_MESSAGE);
   const [isComposing, setIsComposing] = useState(false);
   const [errorDrawerOpen, setErrorDrawerOpen] = useState(false);
   const [dismissedError, setDismissedError] = useState<string | null>(null);
   const [externalToolDrafts, setExternalToolDrafts] = useState<Record<string, string>>({});
+  const [externalToolLineageDrafts, setExternalToolLineageDrafts] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    persistSiderWidth(siderWidth);
+  }, [siderWidth]);
+
+  useEffect(() => {
+    if (!isResizingSider) {
+      return;
+    }
+    const body = document.body;
+    const prevCursor = body.style.cursor;
+    const prevUserSelect = body.style.userSelect;
+    body.style.cursor = "col-resize";
+    body.style.userSelect = "none";
+    return () => {
+      body.style.cursor = prevCursor;
+      body.style.userSelect = prevUserSelect;
+    };
+  }, [isResizingSider]);
+
+  const handleSiderResizeStart = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (typeof e.button === "number" && e.button !== 0) {
+      return;
+    }
+    e.preventDefault();
+    siderResizeRef.current = { startX: e.clientX, startWidth: siderWidth };
+    setIsResizingSider(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handleSiderResizeMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const current = siderResizeRef.current;
+    if (!current) {
+      return;
+    }
+    const delta = e.clientX - current.startX;
+    const viewportWidth = typeof window !== "undefined" ? window.innerWidth : MAX_SIDER_WIDTH;
+    const maxWidth = Math.max(MIN_SIDER_WIDTH, Math.min(MAX_SIDER_WIDTH, viewportWidth - 320));
+    const nextWidth = clampNumber(current.startWidth + delta, MIN_SIDER_WIDTH, maxWidth);
+    setSiderWidth(nextWidth);
+  };
+
+  const handleSiderResizeEnd = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!siderResizeRef.current) {
+      return;
+    }
+    siderResizeRef.current = null;
+    setIsResizingSider(false);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {}
+  };
 
   const forwardedProps = useMemo(() => {
     const props: Record<string, unknown> = {};
@@ -550,6 +659,30 @@ export default function App() {
     threadId,
     forwardedProps,
   });
+
+  useEffect(() => {
+    const nextLineageId = (chat.graphInterrupt?.lineageId || "").trim();
+    const prompt = (chat.graphInterrupt?.prompt || "").trim();
+    if (!nextLineageId || !prompt) {
+      return;
+    }
+    const toolCallId = prompt;
+    const toolCallMessage = chat.messages.find((msg) => {
+      return msg.kind === "tool-call"
+        && msg.toolCall?.toolCallId === toolCallId
+        && msg.toolCall.toolCallName === EXTERNAL_TOOL_NAME;
+    });
+    if (!toolCallMessage) {
+      return;
+    }
+    setExternalToolLineageDrafts((prev) => {
+      const existing = (prev[toolCallId] || "").trim();
+      if (existing) {
+        return prev;
+      }
+      return { ...prev, [toolCallId]: nextLineageId };
+    });
+  }, [chat.graphInterrupt, chat.messages]);
 
   const activeReport = useMemo(() => {
     if (!chat.activeReportId) {
@@ -600,7 +733,9 @@ export default function App() {
       return;
     }
     setInput("");
-    await chat.send(text);
+    const nextLineageId = createThreadId();
+    setLineageId(nextLineageId);
+    await chat.send(text, { forwardedProps: { lineage_id: nextLineageId } });
   };
 
   const canSend = !chat.inProgress;
@@ -671,12 +806,13 @@ export default function App() {
     chat.reset();
     setInput(DEFAULT_INPUT_MESSAGE);
     setExternalToolDrafts({});
+    setExternalToolLineageDrafts({});
 
     const nextServerAddress = serverAddressDraft.trim() || "127.0.0.1:8080";
     const nextEndpointPath = endpointPathDraft.trim() || "/agui";
     const nextHistoryPath = historyPathDraft.trim() || "/history";
     const nextThreadId = threadIdDraft.trim() || createThreadId();
-    const nextLineageId = lineageIdDraft.trim() || createThreadId();
+    const nextLineageId = createThreadId();
 
     setServerAddress(nextServerAddress);
     setServerAddressDraft(nextServerAddress);
@@ -686,7 +822,6 @@ export default function App() {
     setThreadId(nextThreadId);
     setThreadIdDraft(nextThreadId);
     setLineageId(nextLineageId);
-    setLineageIdDraft(nextLineageId);
 
     const nextForwardedProps: Record<string, unknown> = {};
     if (userId.trim()) {
@@ -733,7 +868,7 @@ export default function App() {
   return (
     <Layout className="app">
       <Layout.Content className="app__content">
-        <div className="app__body">
+        <div className="app__body" style={{ ["--sider-width" as any]: `${siderWidth}px` }}>
           <aside className="app__sider">
             <div className="app__sider-header">
               <Space size="small" align="center">
@@ -746,37 +881,51 @@ export default function App() {
                 </Button>
               </Space>
             </div>
-            <div
-              className="app__sider-content"
-              ref={rawRef}
-              onScroll={() => {
+	            <div
+	              className="app__sider-content"
+	              ref={rawRef}
+	              onScroll={() => {
                 const el = rawRef.current;
                 if (!el) {
                   return;
                 }
-                const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-                setRawShouldAutoScroll(distance < 80);
-              }}
-            >
-              {chat.rawEvents.length === 0 ? (
-                <div className="raw-events__empty">等待事件...</div>
-              ) : (
-                <div className="raw-events">
-                  {chat.rawEvents.map((event) => (
-                    <details key={event.id} className="raw-event">
+	                const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+	                setRawShouldAutoScroll(distance < 80);
+	              }}
+	            >
+	              {chat.rawEvents.length === 0 ? (
+	                <div className="raw-events__empty">等待事件...</div>
+	              ) : (
+	                <div className="raw-events">
+	                  {chat.rawEvents.map((event) => (
+                    <details
+                      key={event.id}
+                      className={event.kind === "request" ? "raw-event raw-event--request" : "raw-event"}
+                    >
                       <summary className="raw-event__summary">
                         <span className="raw-event__time">{formatTimestamp(event.timestamp)}</span>
-                        <Tag theme="default" variant="outline">{event.type}</Tag>
+                        <Tag theme={event.kind === "request" ? "primary" : "default"} variant="outline">{event.type}</Tag>
                         <span className="raw-event__extra">{summarizeRawEvent(event)}</span>
                       </summary>
                       <pre className="raw-event__body">
                         {JSON.stringify(event.payload, null, 2)}
                       </pre>
                     </details>
-                  ))}
-                </div>
-              )}
+	                  ))}
+	                </div>
+                  )}
             </div>
+            <div
+              className={isResizingSider ? "app__sider-resizer app__sider-resizer--active" : "app__sider-resizer"}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize sidebar"
+              title="拖拽调整侧边栏宽度"
+              onPointerDown={handleSiderResizeStart}
+              onPointerMove={handleSiderResizeMove}
+              onPointerUp={handleSiderResizeEnd}
+              onPointerCancel={handleSiderResizeEnd}
+            />
           </aside>
 
           <div className="app__chat-area">
@@ -845,21 +994,6 @@ export default function App() {
                   />
 
                   <Input
-                    label="Lineage"
-                    value={lineageIdDraft}
-                    onChange={(v) => {
-                      const next = String(v);
-                      setLineageIdDraft(next);
-                      if (next.trim()) {
-                        setLineageId(next);
-                      }
-                    }}
-                    className="header-field"
-                    style={{ width: "100%" }}
-                    placeholder="externaltool 需要 lineage_id"
-                  />
-
-                  <Input
                     label="User"
                     value={userId}
                     onChange={(v) => setUserId(String(v))}
@@ -895,12 +1029,12 @@ export default function App() {
                     onClick={() => {
                       chat.reset();
                       setExternalToolDrafts({});
+                      setExternalToolLineageDrafts({});
                       const nextThreadId = createThreadId();
                       const nextLineageId = createThreadId();
                       setThreadId(nextThreadId);
                       setThreadIdDraft(nextThreadId);
                       setLineageId(nextLineageId);
-                      setLineageIdDraft(nextLineageId);
                       setHistoryHint("");
                       setInput(DEFAULT_INPUT_MESSAGE);
                     }}
@@ -965,7 +1099,10 @@ export default function App() {
                           result: message.toolCall.result,
                         };
                         const isExternalTool = toolCall.toolCallName === EXTERNAL_TOOL_NAME;
-                        const lineageReady = Boolean(lineageId.trim());
+                        const defaultLineageId = lineageId.trim();
+                        const toolLineageDraft = externalToolLineageDrafts[toolCall.toolCallId];
+                        const toolLineageId = (typeof toolLineageDraft === "string" ? toolLineageDraft : defaultLineageId).trim();
+                        const lineageReady = Boolean(toolLineageId);
                         const toolResult = externalToolDrafts[toolCall.toolCallId] ?? defaultExternalToolContent(
                           toolCall.toolCallName,
                           toolCall.args,
@@ -981,56 +1118,97 @@ export default function App() {
                           <div key={toolCall.toolCallId} slot={`toolcall-${index}`} className="toolcall__slot">
                             <ToolCallRenderer toolCall={toolCall} />
                             {isExternalTool && !toolCall.result ? (
-                              <div style={{ marginTop: 10 }}>
+                              <div className="external-tool">
+                                <div className="external-tool__header">
+                                  <Space size="small" align="center" breakLine>
+                                    <Tag theme="primary" variant="outline">External tool</Tag>
+                                    <Tag theme="default" variant="outline">toolCallId: {toolCall.toolCallId}</Tag>
+                                    {toolLineageId ? (
+                                      <Tag theme="default" variant="outline">lineage_id: {toolLineageId}</Tag>
+                                    ) : null}
+                                  </Space>
+                                </div>
+
                                 {!lineageReady ? (
                                   <Alert
+                                    className="external-tool__alert"
                                     theme="warning"
                                     title="externaltool 需要 lineage_id"
-                                    message="请在顶部填写 Lineage（会写入 forwardedProps.lineage_id），并保持两次请求一致。"
-                                    style={{ marginBottom: 10 }}
+                                    message="请在下方高级配置中填写 forwardedProps.lineage_id，并保持两次请求一致。"
                                   />
                                 ) : null}
-                                <Textarea
-                                  value={toolResult}
-                                  onChange={(v) => {
-                                    const next = String(v);
-                                    setExternalToolDrafts((prev) => ({ ...prev, [toolCall.toolCallId]: next }));
-                                  }}
-                                  placeholder="填写外部工具执行结果..."
-                                  autosize={{ minRows: 2, maxRows: 6 }}
-                                  disabled={chat.inProgress}
-                                />
-                                <Space size="small" style={{ marginTop: 8 }}>
-                                  <Button
-                                    size="small"
-                                    theme="primary"
-                                    disabled={!canResume}
-                                    onClick={() => {
-                                      void chat.sendToolResult({
-                                        toolCallId: toolCall.toolCallId,
-                                        toolCallName: toolCall.toolCallName,
-                                        content: toolResult,
-                                        messageId: `tool-result-${toolCall.toolCallId}`,
-                                      });
+
+                                <details className="external-tool__advanced">
+                                  <summary className="external-tool__advanced-summary">高级配置</summary>
+                                  <div className="external-tool__advanced-body">
+                                    <Input
+                                      label="lineage_id"
+                                      value={typeof toolLineageDraft === "string" ? toolLineageDraft : defaultLineageId}
+                                      onChange={(v) => {
+                                        const next = String(v);
+                                        setExternalToolLineageDrafts((prev) => ({ ...prev, [toolCall.toolCallId]: next }));
+                                      }}
+                                      className="header-field"
+                                      style={{ width: "100%" }}
+                                      placeholder="会写入 forwardedProps.lineage_id"
+                                      disabled={chat.inProgress}
+                                    />
+                                  </div>
+                                </details>
+
+                                <div className="external-tool__label">工具执行结果（role=tool）</div>
+                                <div className="external-tool__textarea">
+                                  <Textarea
+                                    value={toolResult}
+                                    onChange={(v) => {
+                                      const next = String(v);
+                                      setExternalToolDrafts((prev) => ({ ...prev, [toolCall.toolCallId]: next }));
                                     }}
-                                  >
-                                    发送工具结果并继续
-                                  </Button>
-                                  <Button
-                                    size="small"
-                                    variant="outline"
+                                    placeholder="填写外部工具执行结果..."
+                                    autosize={{ minRows: 2, maxRows: 8 }}
                                     disabled={chat.inProgress}
-                                    onClick={() => {
-                                      setExternalToolDrafts((prev) => {
-                                        const next = { ...prev };
-                                        delete next[toolCall.toolCallId];
-                                        return next;
-                                      });
-                                    }}
-                                  >
-                                    重置结果
-                                  </Button>
-                                </Space>
+                                  />
+                                </div>
+
+                                <div className="external-tool__actions">
+                                  <Space size="small">
+                                    <Button
+                                      size="small"
+                                      theme="primary"
+                                      disabled={!canResume}
+                                      onClick={() => {
+                                        void chat.sendToolResult({
+                                          toolCallId: toolCall.toolCallId,
+                                          toolCallName: toolCall.toolCallName,
+                                          content: toolResult,
+                                          messageId: `tool-result-${toolCall.toolCallId}`,
+                                          forwardedProps: { lineage_id: toolLineageId },
+                                        });
+                                      }}
+                                    >
+                                      发送工具结果并继续
+                                    </Button>
+                                    <Button
+                                      size="small"
+                                      variant="outline"
+                                      disabled={chat.inProgress}
+                                      onClick={() => {
+                                        setExternalToolDrafts((prev) => {
+                                          const next = { ...prev };
+                                          delete next[toolCall.toolCallId];
+                                          return next;
+                                        });
+                                        setExternalToolLineageDrafts((prev) => {
+                                          const next = { ...prev };
+                                          delete next[toolCall.toolCallId];
+                                          return next;
+                                        });
+                                      }}
+                                    >
+                                      重置结果
+                                    </Button>
+                                  </Space>
+                                </div>
                               </div>
                             ) : null}
                           </div>,
