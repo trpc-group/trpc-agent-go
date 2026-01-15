@@ -788,8 +788,7 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 
 		if choice.Message.Content != "" {
 			if p.AddContextPrefix {
-				text := fmt.Sprintf("[%s] said: %s", evt.Author, choice.Message.Content)
-				contents = append(contents, text)
+				contents = append(contents, fmt.Sprintf("[%s] said: %s", evt.Author, choice.Message.Content))
 			} else {
 				// When prefix is disabled, pass the content directly.
 				contents = append(contents, choice.Message.Content)
