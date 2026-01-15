@@ -427,6 +427,8 @@ func processFunctionResponse(d *protocol.DataPart) (content string, id string, n
 			// For map or other types, serialize as JSON
 			if jsonBytes, err := json.Marshal(v); err == nil {
 				content = string(jsonBytes)
+			} else {
+				log.Errorf("failed to marshal tool response content: %v", err)
 			}
 		}
 	}
@@ -727,7 +729,7 @@ func convertTaskArtifactToMessage(event *protocol.TaskArtifactUpdateEvent) *prot
 	parts := event.Artifact.Parts
 	// For A2A servers (third party frameworks) that send cumulative content, the final ArtifactUpdate
 	// often contains the full text already sent via StatusUpdate or incremental ArtifactUpdates.
-	// If this is a final chunk and not explicitely marked as incremental (Append=true),
+	// If this is a final chunk and not explicitly marked as incremental (Append=true),
 	// we filter out TextParts to avoid content duplication, but keep DataParts (e.g. final tool calls).
 	isFinal := event.LastChunk != nil && *event.LastChunk
 	isIncremental := event.Append != nil && *event.Append
