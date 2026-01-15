@@ -159,9 +159,9 @@ func (c *outputKeyStateChainChat) setup(_ context.Context) error {
 
 	// Create generation config.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(maxTokens),
-		Temperature: floatPtr(temperature),
-		Stream:      true,
+		MaxCompletionTokens: intPtr(maxTokens),
+		Temperature:         floatPtr(temperature),
+		Stream:              true,
 	}
 
 	// Create Research Agent that finds and stores key information.

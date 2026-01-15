@@ -88,9 +88,9 @@ func (c *emailChat) setup(_ context.Context) error {
 
 	// Create LLM agent with email tool.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      c.streaming, // Enable streaming
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              c.streaming, // Enable streaming
 	}
 
 	agentName := "email-assistant"

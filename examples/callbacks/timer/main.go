@@ -111,9 +111,9 @@ func (e *toolTimerExample) setup(_ context.Context) error {
 
 	// Create LLM agent with tools and callbacks.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(1000),
-		Temperature: floatPtr(0.7),
-		Stream:      *streaming,
+		MaxCompletionTokens: intPtr(1000),
+		Temperature:         floatPtr(0.7),
+		Stream:              *streaming,
 	}
 	llmAgent := llmagent.New(
 		"tool-timer-assistant",

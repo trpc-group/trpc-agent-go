@@ -29,9 +29,9 @@ func (c *transferChat) createTimeAgent(modelInstance model.Model) agent.Agent {
 	)
 
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(1500),
-		Temperature: floatPtr(0.4), // Moderate precision for time calculations.
-		Stream:      true,
+		MaxCompletionTokens: intPtr(1500),
+		Temperature:         floatPtr(0.4), // Moderate precision for time calculations.
+		Stream:              true,
 	}
 
 	return llmagent.New(

@@ -67,9 +67,9 @@ func run() error {
 
 	// Minimal generation config.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(800),
-		Temperature: floatPtr(0.3),
-		Stream:      *streaming,
+		MaxCompletionTokens: intPtr(800),
+		Temperature:         floatPtr(0.3),
+		Stream:              *streaming,
 	}
 
 	// Build agent with structured output using a typed struct; schema auto-generated.

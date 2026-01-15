@@ -31,9 +31,9 @@ func (c *transferChat) createResearchAgent(modelInstance model.Model) agent.Agen
 	)
 
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(3000),
-		Temperature: floatPtr(0.7),
-		Stream:      true,
+		MaxCompletionTokens: intPtr(3000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true,
 	}
 
 	return llmagent.New(

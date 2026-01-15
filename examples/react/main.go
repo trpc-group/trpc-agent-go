@@ -105,9 +105,9 @@ func (c *reactPlanningChat) setup(_ context.Context) error {
 
 	// Create LLM agent with React planner and tools.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(3000),
-		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming
+		MaxCompletionTokens: intPtr(3000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true, // Enable streaming
 	}
 
 	agentName := "react-research-agent"

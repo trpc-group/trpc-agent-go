@@ -46,25 +46,25 @@ type MemoryServiceConfig struct {
 
 // RunnerConfig holds configuration for creating a runner.
 type RunnerConfig struct {
-	AppName     string
-	AgentName   string
-	ModelName   string
-	Instruction string
-	MaxTokens   int
-	Temperature float64
-	Streaming   bool
+	AppName             string
+	AgentName           string
+	ModelName           string
+	Instruction         string
+	MaxCompletionTokens int
+	Temperature         float64
+	Streaming           bool
 }
 
 // DefaultRunnerConfig returns a default runner configuration.
 func DefaultRunnerConfig() RunnerConfig {
 	return RunnerConfig{
-		AppName:     "memory-chat",
-		AgentName:   "memory-assistant",
-		ModelName:   GetEnvOrDefault("MODEL_NAME", "deepseek-chat"),
-		Instruction: "You are a helpful AI assistant with memory capabilities.",
-		MaxTokens:   2000,
-		Temperature: 0.7,
-		Streaming:   true,
+		AppName:             "memory-chat",
+		AgentName:           "memory-assistant",
+		ModelName:           GetEnvOrDefault("MODEL_NAME", "deepseek-chat"),
+		Instruction:         "You are a helpful AI assistant with memory capabilities.",
+		MaxCompletionTokens: 2000,
+		Temperature:         0.7,
+		Streaming:           true,
 	}
 }
 
@@ -189,9 +189,9 @@ func NewRunner(memoryService memory.Service, cfg RunnerConfig) runner.Runner {
 	modelInstance := openai.New(cfg.ModelName)
 
 	genConfig := model.GenerationConfig{
-		MaxTokens:   IntPtr(cfg.MaxTokens),
-		Temperature: FloatPtr(cfg.Temperature),
-		Stream:      cfg.Streaming,
+		MaxCompletionTokens: IntPtr(cfg.MaxCompletionTokens),
+		Temperature:         FloatPtr(cfg.Temperature),
+		Stream:              cfg.Streaming,
 	}
 
 	agentOpts := []llmagent.Option{

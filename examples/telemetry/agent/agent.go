@@ -55,9 +55,9 @@ func NewMultiToolChatAgent(agentName, modelName string) *MultiToolChatAgent {
 
 	// Create LLM agent
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming response
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true, // Enable streaming response
 	}
 	llmAgent := llmagent.New(
 		agentName,

@@ -29,9 +29,9 @@ func (c *transferChat) createMathAgent(modelInstance model.Model) agent.Agent {
 	)
 
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.3), // Lower temperature for more precise calculations.
-		Stream:      true,
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.3), // Lower temperature for more precise calculations.
+		Stream:              true,
 	}
 
 	return llmagent.New(

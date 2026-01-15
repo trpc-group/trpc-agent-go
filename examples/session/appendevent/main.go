@@ -92,9 +92,9 @@ func (c *appendEventChat) setup(_ context.Context) error {
 	c.sessionSvc = sessioninmemory.NewSessionService()
 
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      c.streaming,
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              c.streaming,
 	}
 
 	llmAgent := llmagent.New(

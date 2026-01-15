@@ -237,8 +237,8 @@ func (w *customerSupportWorkflow) buildRemoteAgent() agent.Agent {
 	}
 	// Create LLM agent with tools for technical support.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(1500),
-		Temperature: floatPtr(0.3),
+		MaxCompletionTokens: intPtr(1500),
+		Temperature:         floatPtr(0.3),
 		// Enable streaming so A2A can forward live deltas
 		Stream: true,
 	}

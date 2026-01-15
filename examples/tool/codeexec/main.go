@@ -122,9 +122,9 @@ func (c *codeExecChat) setup(_ context.Context) error {
 
 	// Create LLM agent
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      true,
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true,
 	}
 
 	agentName := "code-exec-assistant"

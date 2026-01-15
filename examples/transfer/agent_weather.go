@@ -30,9 +30,9 @@ func (c *transferChat) createWeatherAgent(modelInstance model.Model) agent.Agent
 	)
 
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(1500),
-		Temperature: floatPtr(0.5),
-		Stream:      true,
+		MaxCompletionTokens: intPtr(1500),
+		Temperature:         floatPtr(0.5),
+		Stream:              true,
 	}
 
 	return llmagent.New(

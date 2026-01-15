@@ -40,9 +40,9 @@ func main() {
 
 	// Create generation config.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(1000),
-		Temperature: floatPtr(0.7),
-		Stream:      true,
+		MaxCompletionTokens: intPtr(1000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true,
 	}
 
 	name := "data_science_agent"

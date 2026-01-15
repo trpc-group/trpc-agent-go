@@ -89,9 +89,9 @@ func newLogQueryAgent(appName, agentName, modelName string) *logQueryAgent {
 
 	// Create LLM agent
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming response
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true, // Enable streaming response
 	}
 	llmAgent := llmagent.New(
 		agentName,

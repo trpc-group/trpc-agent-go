@@ -50,8 +50,8 @@ const (
 
 	defaultTimeout = 5 * time.Minute
 
-	defaultMaxTokens   = 2000
-	defaultTemperature = 0.7
+	defaultMaxCompletionTokens = 2000
+	defaultTemperature         = 0.7
 
 	sessionPrefix = "demo-"
 	demoUserID    = "demo-user"
@@ -163,9 +163,9 @@ func buildRunner(
 	)
 
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(defaultMaxTokens),
-		Temperature: floatPtr(defaultTemperature),
-		Stream:      streaming,
+		MaxCompletionTokens: intPtr(defaultMaxCompletionTokens),
+		Temperature:         floatPtr(defaultTemperature),
+		Stream:              streaming,
 	}
 
 	requirementsAnalyst := llmagent.New(

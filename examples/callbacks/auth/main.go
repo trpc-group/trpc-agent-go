@@ -95,8 +95,8 @@ func (e *userContextExample) setup(_ context.Context) error {
 
 	// Create LLM agent.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(1000),
-		Temperature: floatPtr(0.7),
+		MaxCompletionTokens: intPtr(1000),
+		Temperature:         floatPtr(0.7),
 	}
 	llmAgent := llmagent.New(
 		"file-assistant",

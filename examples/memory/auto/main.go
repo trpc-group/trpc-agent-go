@@ -139,9 +139,9 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 	// Create LLM agent with memory tools.
 	// Only search tool is available since extractor is set.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      c.streaming,
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              c.streaming,
 	}
 
 	const (

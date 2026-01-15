@@ -89,9 +89,9 @@ func (c *debugChat) setup(_ context.Context) error {
 	}
 	// Create LLM agent with file operation tools.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.2),
-		Stream:      true, // Enable streaming
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.2),
+		Stream:              true, // Enable streaming
 	}
 	agentName := "debug agent"
 	// Execution-first instruction: allow direct bash or write+run script; never write without running

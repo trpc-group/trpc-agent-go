@@ -246,9 +246,9 @@ func buildAgent(agentName, desc string, extraOptions ...llmagent.Option) agent.A
 
 	// Create LLM agent.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      *streaming,
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              *streaming,
 	}
 	options := []llmagent.Option{
 		llmagent.WithModel(modelInstance),

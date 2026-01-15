@@ -29,9 +29,9 @@ func newQAAgent(modelName string, stream bool) agent.Agent {
 		function.WithDescription("Perform arithmetic operations including add, subtract, multiply, divide, power."),
 	)
 	genCfg := model.GenerationConfig{
-		MaxTokens:   intPtr(512),
-		Temperature: floatPtr(0.2),
-		Stream:      stream,
+		MaxCompletionTokens: intPtr(512),
+		Temperature:         floatPtr(0.2),
+		Stream:              stream,
 	}
 	return llmagent.New(
 		"rubric-response-agent",

@@ -108,9 +108,9 @@ func (c *cycleChat) setup(_ context.Context) error {
 
 	// Create generation config.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(maxTokens),
-		Temperature: floatPtr(temperature),
-		Stream:      true,
+		MaxCompletionTokens: intPtr(maxTokens),
+		Temperature:         floatPtr(temperature),
+		Stream:              true,
 	}
 
 	// Create Generate Agent - creates content based on user prompts.

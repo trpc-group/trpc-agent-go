@@ -90,9 +90,9 @@ func (c *llmAgentChat) setup(_ context.Context) error {
 
 	// Create generation config.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(1000),
-		Temperature: floatPtr(0.7),
-		Stream:      true,
+		MaxCompletionTokens: intPtr(1000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true,
 	}
 
 	loader, err := openapi.NewFileLoader(c.openAPISpec)

@@ -155,9 +155,9 @@ func userIDResolver(ctx context.Context, input *adapter.RunAgentInput) (string, 
 func newAgent() agent.Agent {
 	modelInstance := openai.New(*modelName)
 	generationConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(512),
-		Temperature: floatPtr(0.7),
-		Stream:      *isStream,
+		MaxCompletionTokens: intPtr(512),
+		Temperature:         floatPtr(0.7),
+		Stream:              *isStream,
 	}
 	calculatorTool := function.NewFunctionTool(
 		calculator,

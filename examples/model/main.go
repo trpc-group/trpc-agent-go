@@ -73,9 +73,9 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 			model.NewUserMessage("Tell me a short joke about programming."),
 		},
 		GenerationConfig: model.GenerationConfig{
-			Temperature: &temperature,
-			MaxTokens:   &maxTokens,
-			Stream:      false,
+			Temperature:         &temperature,
+			MaxCompletionTokens: &maxTokens,
+			Stream:              false,
 		},
 	}
 
@@ -126,9 +126,9 @@ func streamingExample(ctx context.Context, llm *openai.Model) error {
 			model.NewUserMessage("Write a short story about a robot learning to paint."),
 		},
 		GenerationConfig: model.GenerationConfig{
-			Temperature: &temperature,
-			MaxTokens:   &maxTokens,
-			Stream:      true,
+			Temperature:         &temperature,
+			MaxCompletionTokens: &maxTokens,
+			Stream:              true,
 		},
 	}
 
@@ -180,10 +180,10 @@ func advancedExample(ctx context.Context, llm *openai.Model) error {
 			model.NewUserMessage("Explain the benefits of using channels in Go for concurrency."),
 		},
 		GenerationConfig: model.GenerationConfig{
-			Temperature: &temperature,
-			MaxTokens:   &maxTokens,
-			TopP:        &topP,
-			Stream:      false,
+			Temperature:         &temperature,
+			MaxCompletionTokens: &maxTokens,
+			TopP:                &topP,
+			Stream:              false,
 		},
 	}
 
@@ -275,10 +275,10 @@ func parameterTestingExample(ctx context.Context, llm *openai.Model) error {
 				model.NewUserMessage("Write a haiku about technology."),
 			},
 			GenerationConfig: model.GenerationConfig{
-				Temperature: test.temperature,
-				MaxTokens:   test.maxTokens,
-				TopP:        test.topP,
-				Stream:      false,
+				Temperature:         test.temperature,
+				MaxCompletionTokens: test.maxTokens,
+				TopP:                test.topP,
+				Stream:              false,
 			},
 		}
 

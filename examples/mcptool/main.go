@@ -166,9 +166,9 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true, // Enable streaming
 	}
 
 	agentName := "chat-assistant"

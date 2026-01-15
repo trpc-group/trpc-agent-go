@@ -67,9 +67,9 @@ If the manager approves, you will call reimburse() to reimburse the amount to th
 If the manager rejects, you will inform the employee of the rejection.
 `),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
-			MaxTokens:   intPtr(2000),
-			Temperature: floatPtr(0.7),
-			Stream:      streaming, // Enable or disable streaming.
+			MaxCompletionTokens: intPtr(2000),
+			Temperature:         floatPtr(0.7),
+			Stream:              streaming, // Enable or disable streaming.
 		}),
 		llmagent.WithTools([]tool.Tool{
 			function.NewFunctionTool(

@@ -111,9 +111,9 @@ func (c *agentToolChat) setup(_ context.Context) error {
 			"use your calculator tool to compute the result, then provide a clear, natural language response "+
 			"explaining the calculation and result. Always explain what you calculated and present the answer clearly."),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
-			MaxTokens:   intPtr(1000),
-			Temperature: floatPtr(0.3),
-			Stream:      true,
+			MaxCompletionTokens: intPtr(1000),
+			Temperature:         floatPtr(0.3),
+			Stream:              true,
 		}),
 		llmagent.WithTools([]tool.Tool{calculatorTool}),
 		llmagent.WithInputSchema(map[string]any{
@@ -144,9 +144,9 @@ func (c *agentToolChat) setup(_ context.Context) error {
 
 	// Create LLM agent with tools including the agent tool.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true, // Enable streaming
 	}
 
 	c.agentName = "chat-assistant"

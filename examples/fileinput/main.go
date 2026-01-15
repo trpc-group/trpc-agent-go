@@ -146,9 +146,9 @@ func (p *fileProcessor) setup(_ context.Context) error {
 
 	// Create LLM agent for file processing.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      p.streaming,
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              p.streaming,
 	}
 
 	agentName := "file-processor"

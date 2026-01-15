@@ -85,9 +85,9 @@ func (c *webFetchChat) setup(ctx context.Context) error {
 
 	// Create LLM agent with web fetch tool.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true, // Enable streaming
 	}
 
 	agentName := "web-fetch-assistant"

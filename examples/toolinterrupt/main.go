@@ -116,9 +116,9 @@ func (d *toolInterruptDemo) setup(_ context.Context) error {
 	sessionService := inmemory.NewSessionService()
 
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(maxTokens),
-		Temperature: floatPtr(temperature),
-		Stream:      d.streaming,
+		MaxCompletionTokens: intPtr(maxTokens),
+		Temperature:         floatPtr(temperature),
+		Stream:              d.streaming,
 	}
 
 	toolDef := function.NewFunctionTool(

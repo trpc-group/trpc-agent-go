@@ -106,9 +106,9 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 	)
 
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      c.streaming,
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              c.streaming,
 	}
 
 	llmAgent := llmagent.New(

@@ -18,9 +18,9 @@ import (
 
 func newContextMessageAgent(modelName string, stream bool) agent.Agent {
 	genCfg := model.GenerationConfig{
-		MaxTokens:   intPtr(512),
-		Temperature: floatPtr(0.0),
-		Stream:      stream,
+		MaxCompletionTokens: intPtr(512),
+		Temperature:         floatPtr(0.0),
+		Stream:              stream,
 	}
 	return llmagent.New(
 		"contextmessage-agent",

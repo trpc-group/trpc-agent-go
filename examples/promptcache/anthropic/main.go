@@ -375,8 +375,8 @@ func main() {
 		llmagent.WithDescription("An AI assistant demonstrating auto-optimal prompt caching"),
 		llmagent.WithTools(tools),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
-			Stream:    false, // Disable streaming to ensure usage info is available
-			MaxTokens: &maxTokens,
+			Stream:              false, // Disable streaming to ensure usage info is available
+			MaxCompletionTokens: &maxTokens,
 		}),
 	)
 

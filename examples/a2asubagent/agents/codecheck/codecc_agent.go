@@ -77,9 +77,9 @@ func main() {
 func buildCodeCheckAgent(modelName string) agent.Agent {
 	modelInstance := openai.New(modelName)
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      true,
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true,
 	}
 	readSpecTool := function.NewFunctionTool(
 		readSpecFile,

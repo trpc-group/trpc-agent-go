@@ -75,9 +75,9 @@ func buildNumberAgent(modelName string, desc string) agent.Agent {
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true, // Enable streaming
 	}
 	llmAgent := llmagent.New(
 		"calculator",

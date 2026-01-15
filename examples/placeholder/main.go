@@ -73,9 +73,9 @@ func (d *placeholderDemo) initialize(ctx context.Context) error {
 
 	// Configure generation parameters.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(maxTokens),
-		Temperature: floatPtr(temperature),
-		Stream:      true,
+		MaxCompletionTokens: intPtr(maxTokens),
+		Temperature:         floatPtr(temperature),
+		Stream:              true,
 	}
 
 	// Setup session identifiers.

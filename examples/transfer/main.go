@@ -127,9 +127,9 @@ func (c *transferChat) setup(_ context.Context) error {
 // createCoordinatorAgent creates the main coordinator agent with sub-agents.
 func (c *transferChat) createCoordinatorAgent(modelInstance model.Model, subAgents []agent.Agent) agent.Agent {
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.6),
-		Stream:      true,
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.6),
+		Stream:              true,
 	}
 
 	return llmagent.New(

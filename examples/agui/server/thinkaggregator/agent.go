@@ -25,9 +25,9 @@ import (
 func newAgent() agent.Agent {
 	modelInstance := openai.New(*modelName)
 	generationConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(512),
-		Temperature: floatPtr(1.0),
-		Stream:      *isStream,
+		MaxCompletionTokens: intPtr(512),
+		Temperature:         floatPtr(1.0),
+		Stream:              *isStream,
 	}
 	calculatorTool := function.NewFunctionTool(
 		calculator,

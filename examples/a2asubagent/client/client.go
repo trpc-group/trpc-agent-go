@@ -71,9 +71,9 @@ func buildCoordinatorAgent(subAgents []agent.Agent) agent.Agent {
 
 	// Create LLM agent with sub-agents.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      true,
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true,
 	}
 	return llmagent.New(
 		"agent_coordinator",

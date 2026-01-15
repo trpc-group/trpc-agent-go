@@ -120,9 +120,9 @@ func advancedRetryExample(ctx context.Context, llm *openai.Model) error {
 			model.NewUserMessage("Explain quantum computing in simple terms."),
 		},
 		GenerationConfig: model.GenerationConfig{
-			MaxTokens:   &maxTokens,
-			Temperature: &temperature,
-			Stream:      false,
+			MaxCompletionTokens: &maxTokens,
+			Temperature:         &temperature,
+			Stream:              false,
 		},
 	}
 

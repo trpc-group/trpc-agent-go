@@ -189,9 +189,9 @@ func (c *skillChat) setup(_ context.Context) error {
 
 	// Agent with skills enabled; skill_load + skill_run get registered.
 	gen := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.4),
-		Stream:      c.stream,
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.4),
+		Stream:              c.stream,
 	}
 
 	llm := llmagent.New(

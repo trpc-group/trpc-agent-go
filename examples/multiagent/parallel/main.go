@@ -86,9 +86,9 @@ func (c *parallelChat) setup(_ context.Context) error {
 	// Create generation config.
 	// Note: Streaming disabled for parallel agents to avoid character-level interleaving
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(maxTokens),
-		Temperature: floatPtr(temperature),
-		Stream:      false,
+		MaxCompletionTokens: intPtr(maxTokens),
+		Temperature:         floatPtr(temperature),
+		Stream:              false,
 	}
 
 	// Market Analysis Agent - Focuses on market dynamics, trends, competition.

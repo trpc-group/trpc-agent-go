@@ -121,7 +121,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 	ag := llmagent.New(
 		"summary-demo-agent",
 		llmagent.WithModel(llm),
-		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: *streaming, MaxTokens: intPtr(4000)}),
+		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: *streaming, MaxCompletionTokens: intPtr(4000)}),
 		llmagent.WithAddSessionSummary(*flagAddSum),
 		llmagent.WithMaxHistoryRuns(*flagMaxHist),
 	)

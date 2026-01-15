@@ -97,9 +97,9 @@ func (c *wikiChat) setup(_ context.Context) error {
 
 	// Create generation config
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      true,
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true,
 	}
 
 	// Create LLM agent

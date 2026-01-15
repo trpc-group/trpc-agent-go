@@ -114,9 +114,9 @@ func (c *tokenTrackerChat) setup(_ context.Context) error {
 
 	// Create LLM agent without tools for simplicity.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(1000),
-		Temperature: floatPtr(0.7),
-		Stream:      c.streaming,
+		MaxCompletionTokens: intPtr(1000),
+		Temperature:         floatPtr(0.7),
+		Stream:              c.streaming,
 	}
 
 	agentName := "token-tracker-assistant"

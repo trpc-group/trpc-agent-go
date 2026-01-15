@@ -124,9 +124,9 @@ func (c *memoryChat) setup(_ context.Context) error {
 	c.sessionID = fmt.Sprintf("memory-session-%d", time.Now().Unix())
 
 	genConfig := model.GenerationConfig{
-		MaxTokens:   util.IntPtr(2000),
-		Temperature: util.FloatPtr(0.7),
-		Stream:      c.streaming,
+		MaxCompletionTokens: util.IntPtr(2000),
+		Temperature:         util.FloatPtr(0.7),
+		Stream:              c.streaming,
 	}
 
 	appName := "memory-chat"

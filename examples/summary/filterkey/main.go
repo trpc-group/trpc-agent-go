@@ -115,8 +115,8 @@ func (c *filterKeyChat) setup(_ context.Context) error {
 		llmagent.WithInstruction("Use the calculator tool for math; use the time tool " +
 			"for time queries. After the tool returns, give the final answer in one sentence."),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
-			Stream:    *streaming,
-			MaxTokens: intPtr(4000),
+			Stream:              *streaming,
+			MaxCompletionTokens: intPtr(4000),
 		}),
 		llmagent.WithTools(tools),
 		llmagent.WithAddSessionSummary(true),

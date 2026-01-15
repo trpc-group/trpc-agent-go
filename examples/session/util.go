@@ -193,26 +193,26 @@ func newClickHouseSessionService(cfg SessionServiceConfig) (session.Service, err
 
 // RunnerConfig holds configuration for creating a runner.
 type RunnerConfig struct {
-	AppName     string
-	AgentName   string
-	ModelName   string
-	Instruction string
-	Tools       []tool.Tool
-	MaxTokens   int
-	Temperature float64
-	Streaming   bool
+	AppName             string
+	AgentName           string
+	ModelName           string
+	Instruction         string
+	Tools               []tool.Tool
+	MaxCompletionTokens int
+	Temperature         float64
+	Streaming           bool
 }
 
 // DefaultRunnerConfig returns a default runner configuration.
 func DefaultRunnerConfig() RunnerConfig {
 	return RunnerConfig{
-		AppName:     "session-demo",
-		AgentName:   "demo-assistant",
-		ModelName:   GetEnvOrDefault("MODEL_NAME", "deepseek-chat"),
-		Instruction: "You are a helpful assistant.",
-		MaxTokens:   100,
-		Temperature: 0.1,
-		Streaming:   false,
+		AppName:             "session-demo",
+		AgentName:           "demo-assistant",
+		ModelName:           GetEnvOrDefault("MODEL_NAME", "deepseek-chat"),
+		Instruction:         "You are a helpful assistant.",
+		MaxCompletionTokens: 100,
+		Temperature:         0.1,
+		Streaming:           false,
 	}
 }
 
@@ -221,9 +221,9 @@ func NewRunner(sessionService session.Service, cfg RunnerConfig) runner.Runner {
 	modelInstance := openai.New(cfg.ModelName, openai.WithVariant(openai.VariantOpenAI))
 
 	genConfig := model.GenerationConfig{
-		MaxTokens:   IntPtr(cfg.MaxTokens),
-		Temperature: FloatPtr(cfg.Temperature),
-		Stream:      cfg.Streaming,
+		MaxCompletionTokens: IntPtr(cfg.MaxCompletionTokens),
+		Temperature:         FloatPtr(cfg.Temperature),
+		Stream:              cfg.Streaming,
 	}
 
 	agentOpts := []llmagent.Option{

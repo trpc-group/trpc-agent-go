@@ -96,9 +96,9 @@ func (c *multiToolChat) setup(_ context.Context) error {
 
 	// Create LLM agent
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming response
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              true, // Enable streaming response
 	}
 
 	agentName := "multi-tool-assistant"

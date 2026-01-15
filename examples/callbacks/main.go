@@ -97,9 +97,9 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 
 	// Create LLM agent with tools and callbacks.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      c.streaming,
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              c.streaming,
 	}
 	llmAgent := llmagent.New(
 		"chat-assistant",

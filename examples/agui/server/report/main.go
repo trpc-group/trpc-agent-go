@@ -50,9 +50,9 @@ func main() {
 	flag.Parse()
 	modelInstance := openai.New(*modelName)
 	generationConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(800),
-		Temperature: floatPtr(0.4),
-		Stream:      *isStream,
+		MaxCompletionTokens: intPtr(800),
+		Temperature:         floatPtr(0.4),
+		Stream:              *isStream,
 	}
 
 	openTool := function.NewFunctionTool(

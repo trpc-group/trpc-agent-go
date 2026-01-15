@@ -130,9 +130,9 @@ func (c *providerChat) setup(_ context.Context) error {
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(3000),
-		Temperature: floatPtr(0.7),
-		Stream:      c.streaming,
+		MaxCompletionTokens: intPtr(3000),
+		Temperature:         floatPtr(0.7),
+		Stream:              c.streaming,
 	}
 
 	agentName := "provider-agent"

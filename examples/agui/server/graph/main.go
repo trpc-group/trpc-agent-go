@@ -57,9 +57,9 @@ func main() {
 
 	modelInstance := openai.New(*modelName)
 	generationConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(512),
-		Temperature: floatPtr(0.2),
-		Stream:      *isStream,
+		MaxCompletionTokens: intPtr(512),
+		Temperature:         floatPtr(0.2),
+		Stream:              *isStream,
 	}
 
 	g, err := buildGraph(modelInstance, generationConfig)

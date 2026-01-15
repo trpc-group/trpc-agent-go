@@ -46,9 +46,9 @@ func main() {
 
 	// Create generation config
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      *streaming,
+		MaxCompletionTokens: intPtr(2000),
+		Temperature:         floatPtr(0.7),
+		Stream:              *streaming,
 	}
 
 	// Create LLM agent with code execution capability

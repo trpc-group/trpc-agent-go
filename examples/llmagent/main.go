@@ -81,9 +81,9 @@ func (c *llmAgentChat) setup(_ context.Context) error {
 
 	// Create generation config.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(1000),
-		Temperature: floatPtr(0.7),
-		Stream:      c.streaming,
+		MaxCompletionTokens: intPtr(1000),
+		Temperature:         floatPtr(0.7),
+		Stream:              c.streaming,
 	}
 
 	// Create an LLMAgent with configuration.
