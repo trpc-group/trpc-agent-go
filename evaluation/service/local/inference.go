@@ -112,7 +112,10 @@ func (s *local) inferEvalCasesParallel(ctx context.Context, appName, evalSetID s
 		if err := s.evalCaseInferencePool.Invoke(param); err != nil {
 			wg.Done()
 			sessionID := s.sessionIDSupplier(ctx)
-			results[idx] = newFailedInferenceResult(newInferenceResult(appName, evalSetID, sessionID, evalCase), err)
+			results[idx] = newFailedInferenceResult(
+				newInferenceResult(appName, evalSetID, sessionID, evalCase),
+				fmt.Errorf("submit inference task for eval case %s: %w", evalCase.EvalID, err),
+			)
 			param.reset()
 			evalCaseInferenceParamPool.Put(param)
 		}
