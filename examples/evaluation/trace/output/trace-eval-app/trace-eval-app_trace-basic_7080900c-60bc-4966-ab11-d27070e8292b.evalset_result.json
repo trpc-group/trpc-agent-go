@@ -1,0 +1,161 @@
+{
+  "evalSetResultId": "trace-eval-app_trace-basic_7080900c-60bc-4966-ab11-d27070e8292b",
+  "evalSetResultName": "trace-eval-app_trace-basic_7080900c-60bc-4966-ab11-d27070e8292b",
+  "evalSetId": "trace-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "trace-basic",
+      "evalId": "trace_calc_add",
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "llm_rubric_response",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 0.9,
+          "criterion": {
+            "llmJudge": {
+              "rubrics": [
+                {
+                  "id": "1",
+                  "content": {
+                    "text": "Evaluate the correctness of the final answer. A final answer can be considered correct if it directly addresses the user's question, provides the requested information, and is free of errors or contradictions. Correctness is determined by the extent to which the provided information matches the user's requirements and is logically consistent."
+                  },
+                  "description": "The final answer is correct.",
+                  "type": "FINAL_RESPONSE_QUALITY"
+                },
+                {
+                  "id": "2",
+                  "content": {
+                    "text": "Evaluate the relevance of the context. A context can be considered relevant if it enhances or clarifies the response, adding value to the user's comprehension of the topic in question. Relevance is determined by the extent to which the provided information addresses the specific question asked, staying focused on the subject without straying into unrelated areas or providing extraneous details."
+                  },
+                  "description": "The final answer is relevant to the user's prompt.",
+                  "type": "CONTEXT_RELEVANCE"
+                }
+              ],
+              "judgeModel": {
+                "providerName": "openai",
+                "modelName": "deepseek-chat",
+                "baseURL": "https://api.deepseek.com/v1",
+                "numSamples": 3,
+                "generationConfig": {
+                  "max_tokens": 512,
+                  "temperature": 1,
+                  "stream": false
+                }
+              }
+            }
+          },
+          "details": {
+            "reason": "The user's prompt requests the addition of 123 and 456. The final answer provides the correct sum, 579, which directly addresses the user's question, provides the requested information, and is free of errors or contradictions.\nThe rubric item asks to evaluate the relevance of the context. The final answer provides only the result of the calculation. There is no additional context provided in the final answer to evaluate (e.g., no explanation, no extra details). Therefore, the condition for the rubric item (evaluating the relevance of context) is not applicable, as there is no context to evaluate.",
+            "score": 1,
+            "rubricScores": [
+              {
+                "id": "1",
+                "reason": "The user's prompt requests the addition of 123 and 456. The final answer provides the correct sum, 579, which directly addresses the user's question, provides the requested information, and is free of errors or contradictions.",
+                "score": 1
+              },
+              {
+                "id": "2",
+                "reason": "The rubric item asks to evaluate the relevance of the context. The final answer provides only the result of the calculation. There is no additional context provided in the final answer to evaluate (e.g., no explanation, no extra details). Therefore, the condition for the rubric item (evaluating the relevance of context) is not applicable, as there is no context to evaluate.",
+                "score": 1
+              }
+            ]
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "trace_calc_add-1",
+            "userContent": {
+              "role": "user",
+              "content": "calc add 123 456"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "calc result: 579"
+            },
+            "tools": [
+              {
+                "id": "call_00_example",
+                "name": "calculator",
+                "arguments": {
+                  "a": 123,
+                  "b": 456,
+                  "operation": "add"
+                },
+                "result": {
+                  "a": 123,
+                  "b": 456,
+                  "operation": "add",
+                  "result": 579
+                }
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "llm_rubric_response",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 0.9,
+              "criterion": {
+                "llmJudge": {
+                  "rubrics": [
+                    {
+                      "id": "1",
+                      "content": {
+                        "text": "Evaluate the correctness of the final answer. A final answer can be considered correct if it directly addresses the user's question, provides the requested information, and is free of errors or contradictions. Correctness is determined by the extent to which the provided information matches the user's requirements and is logically consistent."
+                      },
+                      "description": "The final answer is correct.",
+                      "type": "FINAL_RESPONSE_QUALITY"
+                    },
+                    {
+                      "id": "2",
+                      "content": {
+                        "text": "Evaluate the relevance of the context. A context can be considered relevant if it enhances or clarifies the response, adding value to the user's comprehension of the topic in question. Relevance is determined by the extent to which the provided information addresses the specific question asked, staying focused on the subject without straying into unrelated areas or providing extraneous details."
+                      },
+                      "description": "The final answer is relevant to the user's prompt.",
+                      "type": "CONTEXT_RELEVANCE"
+                    }
+                  ],
+                  "judgeModel": {
+                    "providerName": "openai",
+                    "modelName": "deepseek-chat",
+                    "baseURL": "https://api.deepseek.com/v1",
+                    "numSamples": 3,
+                    "generationConfig": {
+                      "max_tokens": 512,
+                      "temperature": 1,
+                      "stream": false
+                    }
+                  }
+                }
+              },
+              "details": {
+                "reason": "The user's prompt requests the addition of 123 and 456. The final answer provides the correct sum, 579, which directly addresses the user's question, provides the requested information, and is free of errors or contradictions.\nThe rubric item asks to evaluate the relevance of the context. The final answer provides only the result of the calculation. There is no additional context provided in the final answer to evaluate (e.g., no explanation, no extra details). Therefore, the condition for the rubric item (evaluating the relevance of context) is not applicable, as there is no context to evaluate.",
+                "score": 1,
+                "rubricScores": [
+                  {
+                    "id": "1",
+                    "reason": "The user's prompt requests the addition of 123 and 456. The final answer provides the correct sum, 579, which directly addresses the user's question, provides the requested information, and is free of errors or contradictions.",
+                    "score": 1
+                  },
+                  {
+                    "id": "2",
+                    "reason": "The rubric item asks to evaluate the relevance of the context. The final answer provides only the result of the calculation. There is no additional context provided in the final answer to evaluate (e.g., no explanation, no extra details). Therefore, the condition for the rubric item (evaluating the relevance of context) is not applicable, as there is no context to evaluate.",
+                    "score": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "19882c25-ae29-4235-b04f-cbb708add79e",
+      "userId": "demo-user"
+    }
+  ],
+  "creationTimestamp": 1768440188.7704895
+}

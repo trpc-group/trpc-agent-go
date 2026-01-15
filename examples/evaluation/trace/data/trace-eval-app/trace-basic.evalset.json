@@ -1,0 +1,44 @@
+{
+  "evalSetId": "trace-basic",
+  "name": "trace-basic",
+  "evalCases": [
+    {
+      "evalId": "trace_calc_add",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "trace_calc_add-1",
+          "userContent": {
+            "role": "user",
+            "content": "calc add 123 456"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "calc result: 579"
+          },
+          "tools": [
+            {
+              "id": "call_00_example",
+              "name": "calculator",
+              "arguments": {
+                "a": 123,
+                "b": 456,
+                "operation": "add"
+              },
+              "result": {
+                "a": 123,
+                "b": 456,
+                "operation": "add",
+                "result": 579
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "trace-eval-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}
