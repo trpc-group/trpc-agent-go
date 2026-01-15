@@ -184,6 +184,122 @@ func TestRunTool_SaveAsArtifacts_NoArtifactService(t *testing.T) {
 	require.Contains(t, out.OutputFiles[0].Content, contentHi)
 }
 
+func TestRunTool_SaveAsArtifacts_NoInvocation(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		OutputFiles:   []string{outGlobTxt},
+		Timeout:       timeoutSecSmall,
+		SaveArtifacts: true,
+		OmitInline:    true,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Empty(t, out.ArtifactFiles)
+	require.Len(t, out.Warnings, 1)
+	require.Contains(t, out.Warnings[0], reasonNoInvocation)
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
+func TestRunTool_SaveAsArtifacts_NoSession(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		OutputFiles:   []string{outGlobTxt},
+		Timeout:       timeoutSecSmall,
+		SaveArtifacts: true,
+		OmitInline:    true,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationArtifactService(inmemory.NewService()),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Empty(t, out.ArtifactFiles)
+	require.Len(t, out.Warnings, 1)
+	require.Contains(t, out.Warnings[0], reasonNoSession)
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
+func TestRunTool_SaveAsArtifacts_SessionMissingIDs(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		OutputFiles:   []string{outGlobTxt},
+		Timeout:       timeoutSecSmall,
+		SaveArtifacts: true,
+		OmitInline:    true,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "",
+			State: session.StateMap{},
+		}),
+		agent.WithInvocationArtifactService(inmemory.NewService()),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Empty(t, out.ArtifactFiles)
+	require.Len(t, out.Warnings, 1)
+	require.Contains(t, out.Warnings[0], reasonNoSessionIDs)
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
 // errArtifactService always fails on save to cover error path.
 type errArtifactService struct{}
 
