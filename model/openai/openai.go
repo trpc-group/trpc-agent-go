@@ -970,13 +970,14 @@ func sanitizeChunkForAccumulator(chunk openai.ChatCompletionChunk) openai.ChatCo
 	return sanitized
 }
 
-// fixToolCallIndices fixes tool call indices for providers that return all
-// indices as 0 when making parallel tool calls. The OpenAI SDK accumulator
-// uses the index field to distinguish different tool calls, so if all tool
-// calls have index 0, their names and arguments get concatenated together.
-//
-// This function detects new tool calls by their ID and assigns them correct
-// sequential indices. It modifies the chunk in place and returns it.
+// fixToolCallIndices normalizes tool call indices in streaming chunks.
+// Some providers incorrectly set ToolCalls[].Index to 0 for every tool call.
+// The upstream openai-go accumulator uses ToolCalls[].Index as the slice position.
+// When indices are wrong, different tool calls get merged by concatenating Name and Arguments.
+// This function uses ToolCalls[].ID as the stable identity and rewrites indices to be consistent.
+// This function also handles the case where a single chunk contains multiple tool calls sharing the same index.
+// The idToIndexMap stores the canonical index for each tool call ID.
+// The nextIndex points to the next available canonical index and is advanced monotonically.
 func fixToolCallIndices(
 	chunk openai.ChatCompletionChunk,
 	idToIndexMap map[string]int,
@@ -993,23 +994,44 @@ func fixToolCallIndices(
 
 	// Check if we need to fix indices. We need to create a copy of the chunk
 	// to avoid modifying the original.
+	// The needsFix flag avoids copying the chunk when no correction is necessary.
 	needsFix := false
+	// The indexToID map tracks which tool call ID claims a given index within this chunk.
+	// It is used to detect collisions like two different IDs both reporting index 0 in the same chunk.
+	indexToID := make(map[int64]string, len(delta.ToolCalls))
 	for _, tc := range delta.ToolCalls {
-		// If this tool call has an ID we haven't seen before, and its index
-		// is 0, it might need fixing.
-		if tc.ID != "" {
-			if _, exists := idToIndexMap[tc.ID]; !exists {
-				// New tool call ID. Check if index is 0 and we already have
-				// other tool calls (which would indicate incorrect indices).
-				if tc.Index == 0 && *nextIndex > 0 {
-					needsFix = true
-					break
-				}
+		if tc.ID == "" {
+			// Tool call deltas without IDs cannot be safely reindexed, so they are left unchanged.
+			continue
+		}
+		if existingIndex, exists := idToIndexMap[tc.ID]; exists {
+			// A previously seen ID must keep using its canonical index across all future chunks.
+			// A mismatch indicates the provider is sending inconsistent indices for the same tool call.
+			if tc.Index != int64(existingIndex) {
+				needsFix = true
+				break
 			}
+			indexToID[tc.Index] = tc.ID
+			continue
+		}
+		if existingID, exists := indexToID[tc.Index]; exists && existingID != tc.ID {
+			// Different IDs reporting the same index within the same chunk will be merged by the accumulator.
+			// This is an unrecoverable corruption unless we rewrite indices before accumulation.
+			needsFix = true
+			break
+		}
+		indexToID[tc.Index] = tc.ID
+		// A new tool call using index 0 after prior tool calls indicates incorrect indices for parallel tool calls.
+		if tc.Index == 0 && *nextIndex > 0 {
+			needsFix = true
+			break
 		}
 	}
 
 	if !needsFix {
+		// When no fix is needed, we still learn the ID -> index mapping from first-seen tool calls.
+		// This allows later chunks for the same ID to be stabilized even if the provider becomes inconsistent.
+		// The nextIndex pointer is also kept ahead of any observed indices to avoid future collisions.
 		// Update nextIndex based on the indices we see.
 		for _, tc := range delta.ToolCalls {
 			if tc.ID != "" {
@@ -1047,11 +1069,17 @@ func fixToolCallIndices(
 		if existingIndex, exists := idToIndexMap[tc.ID]; exists {
 			// Use the existing index for this ID.
 			tc.Index = int64(existingIndex)
-		} else {
-			// New tool call ID with index 0, assign next available index.
+			continue
+		}
+		// New tool call ID with index 0 indicates incorrect indices for parallel tool calls.
+		// If the provider already supplies a non-zero index, we keep it to preserve stable ordering.
+		if tc.Index == 0 && *nextIndex > 0 {
 			tc.Index = int64(*nextIndex)
-			idToIndexMap[tc.ID] = *nextIndex
-			*nextIndex++
+		}
+		// Record the canonical index for this ID and advance nextIndex beyond it.
+		idToIndexMap[tc.ID] = int(tc.Index)
+		if int(tc.Index) >= *nextIndex {
+			*nextIndex = int(tc.Index) + 1
 		}
 	}
 
