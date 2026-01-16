@@ -2087,8 +2087,14 @@ func (e *Executor) executeNodeFunction(
 		tmp[StateKeyCurrentNodeID] = nodeID
 		input = tmp
 	}
-	input[StateKeyToolCallbacks] = node.toolCallbacks
-	input[StateKeyModelCallbacks] = node.modelCallbacks
+	// Only inject node-level callbacks if configured to avoid overwriting
+	// state-level callbacks with nil.
+	if node.toolCallbacks != nil {
+		input[StateKeyToolCallbacks] = node.toolCallbacks
+	}
+	if node.modelCallbacks != nil {
+		input[StateKeyModelCallbacks] = node.modelCallbacks
+	}
 
 	return node.Function(ctx, input)
 }
