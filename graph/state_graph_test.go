@@ -1945,6 +1945,64 @@ func TestExecuteSingleToolCallPropagatesResponseID(t *testing.T) {
 	}
 }
 
+func TestExecuteSingleToolCall_InterruptWithCustomResultEmitsOutput(t *testing.T) {
+	ctx, span := trace.Tracer.Start(context.Background(), "tool")
+	defer span.End()
+
+	ch := make(chan *event.Event, 2)
+
+	callbacks := tool.NewCallbacks()
+	customResult := map[string]any{"reason": "need_user_confirm"}
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{CustomResult: customResult}, NewInterruptError("pause")
+	})
+
+	_, err := executeSingleToolCall(ctx, singleToolCallConfig{
+		ToolCall: model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "echo",
+				Arguments: []byte(`{"x":1}`),
+			},
+		},
+		Tools: map[string]tool.Tool{
+			"echo": &blockingTool{name: "echo", result: map[string]int{"x": 1}},
+		},
+		InvocationID:  "inv-1",
+		EventChan:     ch,
+		Span:          span,
+		ToolCallbacks: callbacks,
+		State:         State{StateKeyCurrentNodeID: "node-1"},
+	})
+	require.Error(t, err)
+	var interruptErr *InterruptError
+	require.ErrorAs(t, err, &interruptErr)
+
+	events := []*event.Event{<-ch, <-ch}
+
+	seenPhases := map[ToolExecutionPhase]bool{}
+	var complete ToolExecutionMetadata
+	for _, evt := range events {
+		raw := evt.StateDelta[MetadataKeyTool]
+		require.NotEmpty(t, raw)
+
+		var meta ToolExecutionMetadata
+		require.NoError(t, json.Unmarshal(raw, &meta))
+		seenPhases[meta.Phase] = true
+		if meta.Phase == ToolExecutionPhaseComplete {
+			complete = meta
+		}
+	}
+
+	require.True(t, seenPhases[ToolExecutionPhaseStart])
+	require.True(t, seenPhases[ToolExecutionPhaseComplete])
+	require.Empty(t, complete.Error)
+	require.JSONEq(t, `{"reason":"need_user_confirm"}`, complete.Output)
+}
+
 func TestExtractResponseIDNonResponse(t *testing.T) {
 	require.Equal(t, "", extractResponseID(struct{}{}))
 	require.Equal(t, "", extractResponseID(nil))
