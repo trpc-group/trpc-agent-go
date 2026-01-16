@@ -16,6 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -412,6 +413,8 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 					},
 					isLastChunk,
 				)
+				appendFlag := true
+				taskEvent.Append = &appendFlag
 				return &taskEvent
 			}(),
 			wantErr: false,
@@ -490,6 +493,8 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 					},
 					false,
 				)
+				appendFlag := true
+				taskEvent.Append = &appendFlag
 				return &taskEvent
 			}(),
 			wantErr: false,
@@ -503,6 +508,44 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 			},
 			expected: nil,
 			wantErr:  false,
+		},
+		{
+			name: "streaming event with code execution",
+			event: &event.Event{
+				Response: &model.Response{
+					ID:     "resp-ce1",
+					Object: model.ObjectTypePostprocessingCodeExecution,
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Content: "print('hello')",
+							},
+						},
+					},
+				},
+				Tag: event.CodeExecutionTag,
+			},
+			expected: func() protocol.StreamingMessageResult {
+				dataPart := protocol.NewDataPart(map[string]any{
+					ia2a.CodeExecutionFieldContent: "print('hello')",
+				})
+				dataPart.Metadata = map[string]any{
+					"type": ia2a.DataPartMetadataTypeExecutableCode,
+				}
+				taskEvent := protocol.NewTaskArtifactUpdateEvent(
+					"test-task-id",
+					"test-ctx-id",
+					protocol.Artifact{
+						ArtifactID: "resp-ce1",
+						Parts:      []protocol.Part{&dataPart},
+					},
+					false,
+				)
+				appendFlag := true
+				taskEvent.Append = &appendFlag
+				return &taskEvent
+			}(),
+			wantErr: false,
 		},
 		{
 			name: "streaming event with nil response",
@@ -797,6 +840,19 @@ func compareTaskArtifactUpdateEvents(a, b *protocol.TaskArtifactUpdateEvent) boo
 		bLastChunk = *b.LastChunk
 	}
 	if aLastChunk != bLastChunk {
+		return false
+	}
+
+	// Compare Append flag
+	aAppend := false
+	if a.Append != nil {
+		aAppend = *a.Append
+	}
+	bAppend := false
+	if b.Append != nil {
+		bAppend = *b.Append
+	}
+	if aAppend != bAppend {
 		return false
 	}
 

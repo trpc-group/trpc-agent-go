@@ -332,10 +332,9 @@ func (r *A2AAgent) aggregateEventContent(
 		return responseID, false
 	}
 
-	if evt.Response.ID != "" {
-		responseID = evt.Response.ID
-	}
-
+	// Only update responseID when there's actual content.
+	// This prevents empty status events from overriding valid IDs from content events.
+	hasContent := false
 	if r.streamingRespHandler != nil {
 		content, err := r.streamingRespHandler(evt.Response)
 		if err != nil {
@@ -344,10 +343,18 @@ func (r *A2AAgent) aggregateEventContent(
 		}
 		if content != "" {
 			contentBuilder.WriteString(content)
+			hasContent = true
 		}
 	} else if evt.Response.Choices[0].Delta.Content != "" {
 		contentBuilder.WriteString(evt.Response.Choices[0].Delta.Content)
+		hasContent = true
 	}
+
+	// Update responseID only when we have content or this is the first event with ID
+	if evt.Response.ID != "" && (hasContent || responseID == "") {
+		responseID = evt.Response.ID
+	}
+
 	return responseID, false
 }
 

@@ -11,6 +11,7 @@ package a2aagent
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -222,12 +223,20 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 	msg *protocol.Message,
 	agentName string,
 	invocation *agent.Invocation) *event.Event {
+	// Skip messages with role = user to avoid mirroring back the user's own messages.
+	// Some A2A server implementations might include the user's message in the history or as an echo.
+	if msg.Role == protocol.MessageRoleUser {
+		return nil
+	}
 
 	// Parse A2A message parts to extract content and tool information
 	parseResult := parseA2AMessageParts(msg)
 
+	// Extract ADK chunk ID from message metadata if present
+	adkChunkID := extractADKChunkID(msg.Metadata)
+
 	// Create event with appropriate response structure
-	return buildEventResponse(isStreaming, msg.MessageID, parseResult, invocation, agentName)
+	return buildEventResponse(isStreaming, msg.MessageID, adkChunkID, parseResult, invocation, agentName)
 }
 
 // parseResult holds the parsed information from A2A message parts
@@ -413,12 +422,17 @@ func processFunctionResponse(d *protocol.DataPart) (content string, id string, n
 		name = toolName
 	}
 
-	// Extract response content - server sends it as raw string
 	if response, ok := data[ia2a.ToolCallFieldResponse]; ok {
-		if responseStr, ok := response.(string); ok {
-			content = responseStr
-		} else {
-			log.Debugf("Tool response is not a string: %T, skip", response)
+		switch v := response.(type) {
+		case string:
+			content = v
+		default:
+			// For map or other types, serialize as JSON
+			if jsonBytes, err := json.Marshal(v); err == nil {
+				content = string(jsonBytes)
+			} else {
+				log.Errorf("failed to marshal tool response content: %v", err)
+			}
 		}
 	}
 
@@ -454,10 +468,13 @@ func processCodeExecutionResult(d *protocol.DataPart) string {
 	return extractStringField(data, ia2a.CodeExecutionFieldOutput, ia2a.CodeExecutionFieldContent)
 }
 
-// buildEventResponse creates an event with the appropriate response structure
+// buildEventResponse creates an event with the appropriate response structure.
+// Uses messageID as the Response.ID. If adkChunkID is provided (from adk_custom_metadata.chunk.id),
+// it takes precedence as it represents the actual LLM response chunk ID.
 func buildEventResponse(
 	isStreaming bool,
 	messageID string,
+	adkChunkID string,
 	result *parseResult,
 	invocation *agent.Invocation,
 	agentName string,
@@ -470,10 +487,16 @@ func buildEventResponse(
 
 	evt := event.New(invocation.InvocationID, agentName, opts...)
 
+	// Priority: adk_invocation_id > MessageID
+	responseID := messageID
+	if adkChunkID != "" {
+		responseID = adkChunkID
+	}
+
 	if isStreaming {
-		evt.Response = buildStreamingResponse(messageID, result)
+		evt.Response = buildStreamingResponse(responseID, result)
 	} else {
-		evt.Response = buildNonStreamingResponse(messageID, result)
+		evt.Response = buildNonStreamingResponse(responseID, result)
 	}
 
 	return evt
@@ -683,18 +706,47 @@ func convertTaskToMessage(task *protocol.Task) *protocol.Message {
 	}
 }
 
-// convertTaskStatusToMessage converts a TaskStatusUpdateEvent to a Message
+// convertTaskStatusToMessage converts a TaskStatusUpdateEvent to a Message.
 func convertTaskStatusToMessage(event *protocol.TaskStatusUpdateEvent) *protocol.Message {
+	role := protocol.MessageRoleAgent
+	if event.Status.Message != nil && event.Status.Message.Role != "" {
+		role = event.Status.Message.Role
+	}
+
 	msg := &protocol.Message{
-		Role:      protocol.MessageRoleAgent,
+		Role:      role,
 		Kind:      protocol.KindMessage,
 		TaskID:    &event.TaskID,
 		ContextID: &event.ContextID,
 		Metadata:  event.Metadata,
 	}
 	if event.Status.Message != nil {
-		msg.Parts = event.Status.Message.Parts
 		msg.MessageID = event.Status.Message.MessageID
+
+		// Try to extract adk_invocation_id as a more stable MessageID.
+		// This is useful for ADK servers that include LLM response info in metadata.
+		if chunkID := extractADKChunkID(event.Metadata); chunkID != "" {
+			msg.MessageID = chunkID
+		}
+
+		parts := event.Status.Message.Parts
+		// For A2A servers (e.g., ADK) that send cumulative status updates, check the adk_partial metadata.
+		// If adk_partial is "False", this StatusUpdate contains the full cumulative content that duplicates
+		// all previous incremental updates. Filter out TextParts to avoid duplicate content delivery.
+		// Keep DataParts (e.g., tool calls) as they represent distinct events.
+		if event.Metadata != nil {
+			if partial, ok := event.Metadata[ia2a.GetADKMetadataKey(ia2a.MetadataKeyPartial)].(string); ok && strings.EqualFold(partial, ia2a.MessageMetadataADKPartialValueFalse) {
+				var filteredParts []protocol.Part
+				for _, part := range parts {
+					if part.GetKind() != protocol.KindText {
+						filteredParts = append(filteredParts, part)
+					}
+				}
+				parts = filteredParts
+			}
+		}
+
+		msg.Parts = parts
 	}
 	return msg
 }
@@ -705,10 +757,44 @@ func convertTaskArtifactToMessage(event *protocol.TaskArtifactUpdateEvent) *prot
 		Role:      protocol.MessageRoleAgent,
 		Kind:      protocol.KindMessage,
 		MessageID: event.Artifact.ArtifactID,
-		Parts:     event.Artifact.Parts,
 		TaskID:    &event.TaskID,
 		ContextID: &event.ContextID,
 		Metadata:  event.Metadata,
 	}
+
+	parts := event.Artifact.Parts
+	// For A2A servers (third party frameworks) that send cumulative content, the final ArtifactUpdate
+	// often contains the full text already sent via StatusUpdate or incremental ArtifactUpdates.
+	// If this is a final chunk and not explicitly marked as incremental (Append=true),
+	// we filter out TextParts to avoid content duplication, but keep DataParts (e.g. final tool calls).
+	isFinal := event.LastChunk != nil && *event.LastChunk
+	isIncremental := event.Append != nil && *event.Append
+
+	if isFinal && !isIncremental {
+		var filteredParts []protocol.Part
+		for _, part := range parts {
+			if part.GetKind() != protocol.KindText {
+				filteredParts = append(filteredParts, part)
+			}
+		}
+		parts = filteredParts
+	}
+
+	msg.Parts = parts
 	return msg
+}
+
+// extractADKChunkID extracts a stable ID from ADK metadata for streaming response identification.
+// Uses adk_invocation_id which is simpler and top-level.
+// This ID is more stable than MessageID for identifying streaming chunks from the same LLM response.
+func extractADKChunkID(metadata map[string]any) string {
+	if metadata == nil {
+		return ""
+	}
+
+	if invocationID, ok := metadata[ia2a.GetADKMetadataKey(ia2a.MetadataKeyInvocationID)].(string); ok && invocationID != "" {
+		return invocationID
+	}
+
+	return ""
 }
