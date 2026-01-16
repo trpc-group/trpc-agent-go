@@ -595,7 +595,7 @@ func TestRunToolMessageMissingToolCallID(t *testing.T) {
 	underlying := &fakeRunner{}
 	fakeTrans := &fakeTranslator{}
 	r := &runner{
-		runner:            underlying,
+		runner: underlying,
 		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
 			return fakeTrans, nil
 		},
