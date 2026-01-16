@@ -129,7 +129,7 @@ func TestDefaultA2AEventConverter_ConvertToEvent(t *testing.T) {
 					t.Errorf("expected 1 choice, got %d", len(event.Response.Choices))
 				}
 				if event.Response.ID != "msg-123" {
-					t.Errorf("expected response ID 'msg-123', got %s", event.Response.ID)
+					t.Errorf("expected response ID 'msg-123' (MessageID), got %s", event.Response.ID)
 				}
 				if event.Response.Object != model.ObjectTypeChatCompletion {
 					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletion, event.Response.Object)
@@ -172,7 +172,7 @@ func TestDefaultA2AEventConverter_ConvertToEvent(t *testing.T) {
 					t.Errorf("expected 1 choice, got %d", len(event.Response.Choices))
 				}
 				if event.Response.ID != "artifact-1" {
-					t.Errorf("expected response ID 'artifact-1', got %s", event.Response.ID)
+					t.Errorf("expected response ID 'artifact-1' (ArtifactID), got %s", event.Response.ID)
 				}
 				if event.Response.Object != model.ObjectTypeChatCompletion {
 					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletion, event.Response.Object)
@@ -299,7 +299,7 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvents(t *testing.T) {
 					t.Errorf("expected 1 choice, got %d", len(evt.Response.Choices))
 				}
 				if evt.Response.ID != "stream-1" {
-					t.Errorf("expected response ID 'stream-1', got %s", evt.Response.ID)
+					t.Errorf("expected response ID 'stream-1' (MessageID), got %s", evt.Response.ID)
 				}
 				if evt.Response.Object != model.ObjectTypeChatCompletionChunk {
 					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, evt.Response.Object)
@@ -337,7 +337,7 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvents(t *testing.T) {
 					t.Fatal("expected response, got nil")
 				}
 				if evt.Response.ID != "artifact-1" {
-					t.Errorf("expected response ID 'artifact-1', got %s", evt.Response.ID)
+					t.Errorf("expected response ID 'artifact-1' (ArtifactID), got %s", evt.Response.ID)
 				}
 				if evt.Response.Object != model.ObjectTypeChatCompletionChunk {
 					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, evt.Response.Object)
@@ -378,7 +378,7 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvents(t *testing.T) {
 					t.Fatal("expected response, got nil")
 				}
 				if evt.Response.ID != "status-1" {
-					t.Errorf("expected response ID 'status-1', got %s", evt.Response.ID)
+					t.Errorf("expected response ID 'status-1' (MessageID), got %s", evt.Response.ID)
 				}
 				if evt.Response.Object != model.ObjectTypeChatCompletionChunk {
 					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, evt.Response.Object)
@@ -414,7 +414,7 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvents(t *testing.T) {
 					t.Fatal("expected response, got nil")
 				}
 				if evt.Response.ID != "artifact-99" {
-					t.Errorf("expected response ID 'artifact-99', got %s", evt.Response.ID)
+					t.Errorf("expected response ID 'artifact-99' (ArtifactID), got %s", evt.Response.ID)
 				}
 				if evt.Response.Object != model.ObjectTypeChatCompletionChunk {
 					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, evt.Response.Object)
@@ -725,6 +725,7 @@ func TestConvertTaskToMessage(t *testing.T) {
 				if msg.Kind != protocol.KindMessage {
 					t.Errorf("expected kind %s, got %s", protocol.KindMessage, msg.Kind)
 				}
+				// MessageID should be empty (fallback is handled in buildEventResponse)
 				if msg.MessageID != "" {
 					t.Errorf("expected empty message ID, got %s", msg.MessageID)
 				}
@@ -858,6 +859,7 @@ func TestConvertTaskStatusToMessage(t *testing.T) {
 				if msg.Kind != protocol.KindMessage {
 					t.Errorf("expected kind %s, got %s", protocol.KindMessage, msg.Kind)
 				}
+				// MessageID should be empty when Message is nil (no content to merge)
 				if msg.MessageID != "" {
 					t.Errorf("expected empty message ID, got %s", msg.MessageID)
 				}
@@ -948,6 +950,32 @@ func TestConvertTaskStatusToMessage(t *testing.T) {
 				}
 				if msg.Parts[0].GetKind() != protocol.KindText {
 					t.Errorf("expected TextPart, got %s", msg.Parts[0].GetKind())
+				}
+			},
+		},
+		{
+			name: "status with message but empty MessageID",
+			event: &protocol.TaskStatusUpdateEvent{
+				TaskID:    "task-fallback",
+				ContextID: "ctx-fallback",
+				Status: protocol.TaskStatus{
+					Message: &protocol.Message{
+						Role:      protocol.MessageRoleAgent,
+						MessageID: "", // Empty MessageID
+						Parts: []protocol.Part{
+							&protocol.TextPart{Kind: protocol.KindText, Text: "streaming content"},
+						},
+					},
+				},
+			},
+			setupFunc: func(tc *testCase) {},
+			validateFunc: func(t *testing.T, msg *protocol.Message) {
+				// MessageID should remain empty (fallback is handled in buildEventResponse)
+				if msg.MessageID != "" {
+					t.Errorf("expected empty message ID, got %s", msg.MessageID)
+				}
+				if len(msg.Parts) != 1 {
+					t.Errorf("expected 1 part, got %d", len(msg.Parts))
 				}
 			},
 		},
@@ -2184,7 +2212,7 @@ func TestBuildEventResponse_WithTag(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			evt := buildEventResponse(tt.isStreaming, "msg-id", tt.result, invocation, "test-agent")
+			evt := buildEventResponse(tt.isStreaming, "msg-id", "", tt.result, invocation, "test-agent")
 
 			if evt == nil {
 				t.Fatal("expected event, got nil")
@@ -2638,5 +2666,62 @@ func TestBuildNonStreamingResponse_WithReasoningContent(t *testing.T) {
 	}
 	if msg.ReasoningContent != "Thinking..." {
 		t.Errorf("expected reasoningContent %q, got %q", "Thinking...", msg.ReasoningContent)
+	}
+}
+
+// TestExtractADKChunkID tests extraction of stable ID from ADK metadata
+func TestExtractADKChunkID(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata map[string]any
+		expected string
+	}{
+		{
+			name:     "nil metadata",
+			metadata: nil,
+			expected: "",
+		},
+		{
+			name:     "empty metadata",
+			metadata: map[string]any{},
+			expected: "",
+		},
+		{
+			name: "no adk metadata",
+			metadata: map[string]any{
+				"other_key": "other_value",
+			},
+			expected: "",
+		},
+		{
+			name: "adk_invocation_id (preferred)",
+			metadata: map[string]any{
+				"adk_invocation_id": "e-ec8af5ca-0892-492b-89d1-619544dbed78",
+			},
+			expected: "e-ec8af5ca-0892-492b-89d1-619544dbed78",
+		},
+		{
+			name: "empty adk_invocation_id returns empty",
+			metadata: map[string]any{
+				"adk_invocation_id": "",
+			},
+			expected: "",
+		},
+		{
+			name: "adk_invocation_id is not a string",
+			metadata: map[string]any{
+				"adk_invocation_id": 12345,
+			},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractADKChunkID(tt.metadata)
+			if got != tt.expected {
+				t.Errorf("extractADKChunkID() = %q, want %q", got, tt.expected)
+			}
+		})
 	}
 }

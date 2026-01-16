@@ -232,8 +232,11 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 	// Parse A2A message parts to extract content and tool information
 	parseResult := parseA2AMessageParts(msg)
 
+	// Extract ADK chunk ID from message metadata if present
+	adkChunkID := extractADKChunkID(msg.Metadata)
+
 	// Create event with appropriate response structure
-	return buildEventResponse(isStreaming, msg.MessageID, parseResult, invocation, agentName)
+	return buildEventResponse(isStreaming, msg.MessageID, adkChunkID, parseResult, invocation, agentName)
 }
 
 // parseResult holds the parsed information from A2A message parts
@@ -465,10 +468,13 @@ func processCodeExecutionResult(d *protocol.DataPart) string {
 	return extractStringField(data, ia2a.CodeExecutionFieldOutput, ia2a.CodeExecutionFieldContent)
 }
 
-// buildEventResponse creates an event with the appropriate response structure
+// buildEventResponse creates an event with the appropriate response structure.
+// Uses messageID as the Response.ID. If adkChunkID is provided (from adk_custom_metadata.chunk.id),
+// it takes precedence as it represents the actual LLM response chunk ID.
 func buildEventResponse(
 	isStreaming bool,
 	messageID string,
+	adkChunkID string,
 	result *parseResult,
 	invocation *agent.Invocation,
 	agentName string,
@@ -481,10 +487,16 @@ func buildEventResponse(
 
 	evt := event.New(invocation.InvocationID, agentName, opts...)
 
+	// Priority: adk_invocation_id > MessageID
+	responseID := messageID
+	if adkChunkID != "" {
+		responseID = adkChunkID
+	}
+
 	if isStreaming {
-		evt.Response = buildStreamingResponse(messageID, result)
+		evt.Response = buildStreamingResponse(responseID, result)
 	} else {
-		evt.Response = buildNonStreamingResponse(messageID, result)
+		evt.Response = buildNonStreamingResponse(responseID, result)
 	}
 
 	return evt
@@ -711,6 +723,12 @@ func convertTaskStatusToMessage(event *protocol.TaskStatusUpdateEvent) *protocol
 	if event.Status.Message != nil {
 		msg.MessageID = event.Status.Message.MessageID
 
+		// Try to extract adk_invocation_id as a more stable MessageID.
+		// This is useful for ADK servers that include LLM response info in metadata.
+		if chunkID := extractADKChunkID(event.Metadata); chunkID != "" {
+			msg.MessageID = chunkID
+		}
+
 		parts := event.Status.Message.Parts
 		// For A2A servers (e.g., ADK) that send cumulative status updates, check the adk_partial metadata.
 		// If adk_partial is "False", this StatusUpdate contains the full cumulative content that duplicates
@@ -764,4 +782,19 @@ func convertTaskArtifactToMessage(event *protocol.TaskArtifactUpdateEvent) *prot
 
 	msg.Parts = parts
 	return msg
+}
+
+// extractADKChunkID extracts a stable ID from ADK metadata for streaming response identification.
+// Uses adk_invocation_id which is simpler and top-level.
+// This ID is more stable than MessageID for identifying streaming chunks from the same LLM response.
+func extractADKChunkID(metadata map[string]any) string {
+	if metadata == nil {
+		return ""
+	}
+
+	if invocationID, ok := metadata[ia2a.GetADKMetadataKey(ia2a.MetadataKeyInvocationID)].(string); ok && invocationID != "" {
+		return invocationID
+	}
+
+	return ""
 }

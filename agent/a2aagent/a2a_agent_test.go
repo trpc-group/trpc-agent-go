@@ -1573,8 +1573,9 @@ func TestA2AAgentRunStreamingPreservesResponseID(t *testing.T) {
 		if finalResponse == nil {
 			t.Fatal("expected final response event, got nil")
 		}
+		// Response.ID should be the MessageID from the first content-bearing event
 		if finalResponse.ID != "resp-1" {
-			t.Fatalf("expected final response ID 'resp-1', got %q", finalResponse.ID)
+			t.Fatalf("expected final response ID 'resp-1' (MessageID), got %q", finalResponse.ID)
 		}
 		if finalResponse.Object != model.ObjectTypeChatCompletion {
 			t.Fatalf("expected final response object %s, got %s", model.ObjectTypeChatCompletion, finalResponse.Object)

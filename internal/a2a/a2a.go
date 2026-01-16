@@ -89,6 +89,10 @@ const (
 	// MetadataKeyPartial is the base metadata key for partial flag.
 	MetadataKeyPartial = "partial"
 
+	// MetadataKeyInvocationID is the base metadata key for invocation ID.
+	// ADK uses "adk_invocation_id" to identify streaming chunks from the same LLM response.
+	MetadataKeyInvocationID = "invocation_id"
+
 	// MessageMetadataADKPartialValueFalse is the value indicating a complete/cumulative message.
 	MessageMetadataADKPartialValueFalse = "False"
 
