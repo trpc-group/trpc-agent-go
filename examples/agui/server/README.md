@@ -4,6 +4,7 @@ This directory shows AG-UI servers that can talk to the AG-UI client examples.
 
 ## Available Servers
 
+- [`a2a/`](a2a/) – AG-UI server that proxies a remote A2A agent through AG-UI protocol.
 - [`default/`](default/) – Minimal AG-UI server that wires the `tRPC-Agent-Go` runner.
 - [`event_emitter/`](event_emitter/) – Demonstrates Node EventEmitter for emitting custom events, progress updates, and streaming text from NodeFunc.
 - [`finishresult/`](finishresult/) – Demonstrates populating `RUN_FINISHED.result` by wrapping the default translator.
