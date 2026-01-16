@@ -996,9 +996,12 @@ func fixToolCallIndices(
 	// to avoid modifying the original.
 	// The needsFix flag avoids copying the chunk when no correction is necessary.
 	needsFix := false
-	// The indexToID map tracks which tool call ID claims a given index within this chunk.
-	// It is used to detect collisions like two different IDs both reporting index 0 in the same chunk.
-	indexToID := make(map[int64]string, len(delta.ToolCalls))
+	// The indexToID map tracks which tool call ID claims a given index.
+	// It is seeded with the canonical mapping to detect collisions across chunks and within the current chunk.
+	indexToID := make(map[int64]string, len(delta.ToolCalls)+len(idToIndexMap))
+	for id, idx := range idToIndexMap {
+		indexToID[int64(idx)] = id
+	}
 	for _, tc := range delta.ToolCalls {
 		if tc.ID == "" {
 			// Tool call deltas without IDs cannot be safely reindexed, so they are left unchanged.
@@ -1021,11 +1024,6 @@ func fixToolCallIndices(
 			break
 		}
 		indexToID[tc.Index] = tc.ID
-		// A new tool call using index 0 after prior tool calls indicates incorrect indices for parallel tool calls.
-		if tc.Index == 0 && *nextIndex > 0 {
-			needsFix = true
-			break
-		}
 	}
 
 	if !needsFix {
@@ -1060,6 +1058,11 @@ func fixToolCallIndices(
 	copy(fixedChunk.Choices[0].Delta.ToolCalls, delta.ToolCalls)
 
 	// Fix indices for tool calls.
+	// The usedIndices set prevents assigning the same index to multiple tool calls.
+	usedIndices := make(map[int64]struct{}, len(idToIndexMap)+len(delta.ToolCalls))
+	for _, idx := range idToIndexMap {
+		usedIndices[int64(idx)] = struct{}{}
+	}
 	for i := range fixedChunk.Choices[0].Delta.ToolCalls {
 		tc := &fixedChunk.Choices[0].Delta.ToolCalls[i]
 		if tc.ID == "" {
@@ -1071,13 +1074,20 @@ func fixToolCallIndices(
 			tc.Index = int64(existingIndex)
 			continue
 		}
-		// New tool call ID with index 0 indicates incorrect indices for parallel tool calls.
-		// If the provider already supplies a non-zero index, we keep it to preserve stable ordering.
-		if tc.Index == 0 && *nextIndex > 0 {
-			tc.Index = int64(*nextIndex)
+		// New tool call IDs must be assigned unique indices to prevent accumulator merging.
+		if _, used := usedIndices[tc.Index]; used {
+			candidate := int64(*nextIndex)
+			for {
+				if _, used := usedIndices[candidate]; !used {
+					break
+				}
+				candidate++
+			}
+			tc.Index = candidate
 		}
 		// Record the canonical index for this ID and advance nextIndex beyond it.
 		idToIndexMap[tc.ID] = int(tc.Index)
+		usedIndices[tc.Index] = struct{}{}
 		if int(tc.Index) >= *nextIndex {
 			*nextIndex = int(tc.Index) + 1
 		}
