@@ -579,10 +579,8 @@ export default function App() {
   const [historyHint, setHistoryHint] = useState<string>("");
   const [userId, setUserId] = useState<string>("demo-user");
   const initialThreadId = useMemo(() => createThreadId(), []);
-  const initialLineageId = useMemo(() => createThreadId(), []);
   const [threadId, setThreadId] = useState<string>(initialThreadId);
   const [threadIdDraft, setThreadIdDraft] = useState<string>(initialThreadId);
-  const [lineageId, setLineageId] = useState<string>(initialLineageId);
   const [input, setInput] = useState<string>(DEFAULT_INPUT_MESSAGE);
   const [isComposing, setIsComposing] = useState(false);
   const [errorDrawerOpen, setErrorDrawerOpen] = useState(false);
@@ -647,11 +645,8 @@ export default function App() {
     if (userId.trim()) {
       props.userId = userId.trim();
     }
-    if (lineageId.trim()) {
-      props.lineage_id = lineageId.trim();
-    }
     return props;
-  }, [lineageId, userId]);
+  }, [userId]);
   const endpoint = useMemo(() => buildHttpUrl(serverAddress, endpointPath), [endpointPath, serverAddress]);
 
   const chat = useAguiChat({
@@ -733,9 +728,7 @@ export default function App() {
       return;
     }
     setInput("");
-    const nextLineageId = createThreadId();
-    setLineageId(nextLineageId);
-    await chat.send(text, { forwardedProps: { lineage_id: nextLineageId } });
+    await chat.send(text);
   };
 
   const canSend = !chat.inProgress;
@@ -760,6 +753,17 @@ export default function App() {
   }, [chat.rawEvents, rawShouldAutoScroll]);
 
   const visibleMessages = useMemo(() => chat.messages.filter(isVisibleMainMessage), [chat.messages]);
+  const suppressGraphApproval = useMemo(() => {
+    const key = (chat.graphInterrupt?.key ?? "").trim();
+    if (key === "external_tool") {
+      return true;
+    }
+    const prompt = (chat.graphInterrupt?.prompt ?? "").trim();
+    if (!prompt) {
+      return false;
+    }
+    return /^call_[a-zA-Z0-9_-]+$/.test(prompt);
+  }, [chat.graphInterrupt]);
 
   useEffect(() => {
     if (!shouldAutoScroll) {
@@ -812,7 +816,6 @@ export default function App() {
     const nextEndpointPath = endpointPathDraft.trim() || "/agui";
     const nextHistoryPath = historyPathDraft.trim() || "/history";
     const nextThreadId = threadIdDraft.trim() || createThreadId();
-    const nextLineageId = createThreadId();
 
     setServerAddress(nextServerAddress);
     setServerAddressDraft(nextServerAddress);
@@ -821,14 +824,10 @@ export default function App() {
     setHistoryPathDraft(nextHistoryPath);
     setThreadId(nextThreadId);
     setThreadIdDraft(nextThreadId);
-    setLineageId(nextLineageId);
 
     const nextForwardedProps: Record<string, unknown> = {};
     if (userId.trim()) {
       nextForwardedProps.userId = userId.trim();
-    }
-    if (nextLineageId.trim()) {
-      nextForwardedProps.lineage_id = nextLineageId.trim();
     }
 
     setHistoryHint("正在载入历史...");
@@ -1031,10 +1030,8 @@ export default function App() {
                       setExternalToolDrafts({});
                       setExternalToolLineageDrafts({});
                       const nextThreadId = createThreadId();
-                      const nextLineageId = createThreadId();
                       setThreadId(nextThreadId);
                       setThreadIdDraft(nextThreadId);
-                      setLineageId(nextLineageId);
                       setHistoryHint("");
                       setInput(DEFAULT_INPUT_MESSAGE);
                     }}
@@ -1091,6 +1088,9 @@ export default function App() {
                       }
 
                       if (message.kind === "tool-call" && message.toolCall) {
+                        if (suppressGraphApproval && message.toolCall.toolCallName === GRAPH_APPROVAL_TOOL_NAME) {
+                          continue;
+                        }
                         const toolCall: ToolCall = {
                           toolCallId: message.toolCall.toolCallId,
                           toolCallName: message.toolCall.toolCallName,
@@ -1099,9 +1099,8 @@ export default function App() {
                           result: message.toolCall.result,
                         };
                         const isExternalTool = toolCall.toolCallName === EXTERNAL_TOOL_NAME;
-                        const defaultLineageId = lineageId.trim();
                         const toolLineageDraft = externalToolLineageDrafts[toolCall.toolCallId];
-                        const toolLineageId = (typeof toolLineageDraft === "string" ? toolLineageDraft : defaultLineageId).trim();
+                        const toolLineageId = (typeof toolLineageDraft === "string" ? toolLineageDraft : "").trim();
                         const lineageReady = Boolean(toolLineageId);
                         const toolResult = externalToolDrafts[toolCall.toolCallId] ?? defaultExternalToolContent(
                           toolCall.toolCallName,
@@ -1134,7 +1133,7 @@ export default function App() {
                                     className="external-tool__alert"
                                     theme="warning"
                                     title="externaltool 需要 lineage_id"
-                                    message="请在下方高级配置中填写 forwardedProps.lineage_id，并保持两次请求一致。"
+                                    message="等待服务端在 graph.node.interrupt 事件中返回 lineageId；如未返回可在下方高级配置手动填写 forwardedProps.lineage_id。"
                                   />
                                 ) : null}
 
@@ -1143,7 +1142,7 @@ export default function App() {
                                   <div className="external-tool__advanced-body">
                                     <Input
                                       label="lineage_id"
-                                      value={typeof toolLineageDraft === "string" ? toolLineageDraft : defaultLineageId}
+                                      value={typeof toolLineageDraft === "string" ? toolLineageDraft : ""}
                                       onChange={(v) => {
                                         const next = String(v);
                                         setExternalToolLineageDrafts((prev) => ({ ...prev, [toolCall.toolCallId]: next }));

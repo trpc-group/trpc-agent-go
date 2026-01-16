@@ -2,10 +2,12 @@
 
 This example exposes an AG-UI SSE endpoint backed by a `GraphAgent` that demonstrates an external tool workflow.
 
-The workflow is intentionally split into two requests:
+The workflow can be split into two requests:
 
-- Call 1 (`role=user`): the LLM emits `TOOL_CALL_*` events, then the graph interrupts (checkpoints) at the tool node.
+- Call 1 (`role=user`): the LLM may emit `TOOL_CALL_*` events. If it calls the tool, the graph interrupts (checkpoints) at the tool node.
 - Call 2 (`role=tool`): the caller executes the tool externally and sends the tool result back, then the server resumes and completes the answer.
+
+If the LLM does not call any tool, call 1 finishes normally and call 2 is not needed.
 
 The graph node order is:
 
@@ -26,13 +28,13 @@ go run ./server/externaltool \
   -path /agui
 ```
 
-## Verify With curl
+## Verify
 
-This example requires `forwardedProps.lineage_id` so the server can resume the latest checkpoint within the same lineage.
+Call 1 does not require `forwardedProps.lineage_id`. When a tool call happens, call 1 will include the generated `lineageId` in a `graph.node.interrupt` activity event. Call 2 must send this value back via `forwardedProps.lineage_id` to resume from the checkpoint.
 
-### Run end-to-end
+### Option 1: `run.sh` (curl)
 
-Run the helper script. It performs both requests, auto-captures `toolCallId`, and writes the raw SSE outputs to:
+Run the helper script. It performs both requests (when a tool call happens), auto-captures `toolCallId` and `lineageId`, and writes the raw SSE outputs to:
 
 - `run1.log` (call 1).
 - `run2.log` (call 2).
@@ -43,17 +45,16 @@ From the repo root:
 bash ./examples/agui/server/externaltool/run.sh
 ```
 
-Alternatively, use the Go client example:
+### Option 2: TDesign chat client
 
-```bash
-cd examples/agui
-go run ./client/externaltool -question "What is trpc-agent-go?"
-```
+Use the [TDesign chat client](../../client/tdesign-chat) for an interactive UI.
 
-Notes:
+### Request / response notes
 
+- Call 1 request: `messages[-1]` is `{role:"user", content:"..."}` (string).
+- Call 1 response (when tool called): streams `TOOL_CALL_START` / `TOOL_CALL_ARGS` / `TOOL_CALL_END`, then emits `ACTIVITY_DELTA(activityType="graph.node.interrupt")` (includes `lineageId`) and ends with `RUN_FINISHED` after the graph interrupts at `external_tool`.
+- Call 2 request: `forwardedProps.lineage_id` must be the `lineageId` from call 1, and `messages[-1]` is `{role:"tool", name:"external_search", toolCallId:"<from call 1>", content:"..."}` (string).
+- Call 2 response: emits `TOOL_CALL_RESULT` immediately after `RUN_STARTED`, then streams the resumed answer and ends with `RUN_FINISHED`.
 - `toolCallId` must match the ID emitted in call 1, otherwise the server rejects the tool result.
 - `messages[0].id` (call 2) is used as the `messageId` for `TOOL_CALL_RESULT` (defaults to `toolCallId` if empty).
-- `content` must be a string.
-- Call 2 emits `TOOL_CALL_RESULT` immediately after `RUN_STARTED`.
 - The checkpoint saver is in-memory; do not restart the server between call 1 and call 2.

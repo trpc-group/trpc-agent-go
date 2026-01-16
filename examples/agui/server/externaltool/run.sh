@@ -21,7 +21,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 ENDPOINT="${ENDPOINT:-http://127.0.0.1:8080/agui}"
 THREAD_ID="${THREAD_ID:-demo-thread}"
-LINEAGE_ID="${LINEAGE_ID:-demo-lineage}"
 RUN_ID_1="${RUN_ID_1:-demo-run-1}"
 RUN_ID_2="${RUN_ID_2:-demo-run-2}"
 QUESTION="${QUESTION:-What is trpc-agent-go?}"
@@ -48,16 +47,25 @@ rm -f "$RUN1_LOG" "$RUN2_LOG"
 jq -n \
   --arg threadId "$THREAD_ID" \
   --arg runId "$RUN_ID_1" \
-  --arg lineageId "$LINEAGE_ID" \
   --arg q "$QUESTION" \
-  '{threadId:$threadId, runId:$runId, forwardedProps:{lineage_id:$lineageId}, messages:[{role:"user", content:$q}] }' \
+  '{threadId:$threadId, runId:$runId, messages:[{role:"user", content:$q}] }' \
   | sse_post "$RUN1_LOG"
 
 # Extract toolCallId from the SSE payload.
 TOOL_CALL_ID="$(data_json_lines "$RUN1_LOG" | jq -r --arg toolName "$TOOL_NAME" \
   'select(.type=="TOOL_CALL_START" and .toolCallName==$toolName) | .toolCallId' | head -n1)"
 if [ -z "$TOOL_CALL_ID" ] || [ "$TOOL_CALL_ID" = "null" ]; then
-  die "Failed to extract toolCallId from $RUN1_LOG."
+  echo "No tool call found in call 1; skipping call 2."
+  exit 0
+fi
+
+# Extract lineageId from the graph interrupt activity.
+LINEAGE_ID="$(data_json_lines "$RUN1_LOG" | jq -r \
+  'select(.type=="ACTIVITY_DELTA" and .activityType=="graph.node.interrupt")
+   | (.patch[]? | select(.path=="/interrupt") | .value.lineageId) // empty' \
+  | head -n1)"
+if [ -z "$LINEAGE_ID" ] || [ "$LINEAGE_ID" = "null" ]; then
+  die "Failed to extract lineageId from $RUN1_LOG."
 fi
 
 # Extract tool args (JSON string) from TOOL_CALL_ARGS.delta chunks.
@@ -74,6 +82,7 @@ DEFAULT_TOOL_CONTENT="external_search result for query: ${QUERY}"
 TOOL_CONTENT="${TOOL_CONTENT:-$DEFAULT_TOOL_CONTENT}"
 
 echo "toolCallId=${TOOL_CALL_ID}"
+echo "lineageId=${LINEAGE_ID}"
 echo "toolArgs=${TOOL_ARGS}"
 
 TOOL_MESSAGE_ID="${TOOL_MESSAGE_ID:-tool-result-${TOOL_CALL_ID}}"

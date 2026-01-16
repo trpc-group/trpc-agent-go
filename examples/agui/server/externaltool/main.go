@@ -90,6 +90,7 @@ func main() {
 		agui.WithAGUIRunnerOptions(
 			aguirunner.WithRunOptionResolver(resolveRunOptions),
 		),
+		agui.WithGraphNodeInterruptActivityEnabled(true),
 		agui.WithMessagesSnapshotEnabled(true),
 	)
 	if err != nil {
@@ -245,27 +246,38 @@ func resolveRunOptions(ctx context.Context, input *aguiadapter.RunAgentInput) ([
 		return nil, errors.New("last message role must be user or tool")
 	}
 
-	forwardedProps, ok := input.ForwardedProps.(map[string]any)
-	if !ok || forwardedProps == nil {
-		return nil, errors.New("forwardedProps must be an object")
-	}
-	rawLineageID, exists := forwardedProps[graph.CfgKeyLineageID]
-	if !exists {
-		return nil, fmt.Errorf("missing forwardedProps.%s", graph.CfgKeyLineageID)
-	}
-	lineageID, ok := rawLineageID.(string)
-	if !ok {
-		return nil, fmt.Errorf("forwardedProps.%s must be a string", graph.CfgKeyLineageID)
-	}
-	lineageID = strings.TrimSpace(lineageID)
-	if lineageID == "" {
-		return nil, fmt.Errorf("forwardedProps.%s cannot be empty", graph.CfgKeyLineageID)
+	var forwardedProps map[string]any
+	if input.ForwardedProps != nil {
+		props, ok := input.ForwardedProps.(map[string]any)
+		if !ok || props == nil {
+			return nil, errors.New("forwardedProps must be an object")
+		}
+		forwardedProps = props
 	}
 
-	runtimeState := map[string]any{
-		graph.CfgKeyLineageID: lineageID,
+	var lineageID string
+	if forwardedProps != nil {
+		rawLineageID, exists := forwardedProps[graph.CfgKeyLineageID]
+		if exists {
+			id, ok := rawLineageID.(string)
+			if !ok {
+				return nil, fmt.Errorf("forwardedProps.%s must be a string", graph.CfgKeyLineageID)
+			}
+			lineageID = strings.TrimSpace(id)
+			if lineageID == "" {
+				return nil, fmt.Errorf("forwardedProps.%s cannot be empty", graph.CfgKeyLineageID)
+			}
+		}
+	}
+
+	runtimeState := make(map[string]any)
+	if lineageID != "" {
+		runtimeState[graph.CfgKeyLineageID] = lineageID
 	}
 	if last.Role == types.RoleTool {
+		if lineageID == "" {
+			return nil, fmt.Errorf("missing forwardedProps.%s", graph.CfgKeyLineageID)
+		}
 		runtimeState[graph.StateKeyCommand] = &graph.Command{
 			ResumeMap: map[string]any{
 				nodeExternalTool: true,
@@ -273,6 +285,9 @@ func resolveRunOptions(ctx context.Context, input *aguiadapter.RunAgentInput) ([
 		}
 	}
 
+	if len(runtimeState) == 0 {
+		return nil, nil
+	}
 	return []agent.RunOption{
 		agent.WithRuntimeState(runtimeState),
 	}, nil

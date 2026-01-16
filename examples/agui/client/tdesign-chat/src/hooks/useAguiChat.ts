@@ -81,6 +81,28 @@ function graphInterruptIdentity(interrupt: GraphInterrupt): string {
   return [interrupt.checkpointId ?? "", interrupt.lineageId ?? "", interrupt.key ?? ""].filter(Boolean).join("|");
 }
 
+function looksLikeToolCallId(prompt: string): boolean {
+  const normalized = prompt.trim();
+  if (!normalized) {
+    return false;
+  }
+  return /^call_[a-zA-Z0-9_-]+$/.test(normalized);
+}
+
+function shouldSuppressGraphApproval(interrupt: GraphInterrupt, toolCallNameById: Map<string, string>): boolean {
+  if (interrupt.key === "external_tool") {
+    return true;
+  }
+  const normalized = interrupt.prompt.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (toolCallNameById.has(normalized)) {
+    return true;
+  }
+  return looksLikeToolCallId(normalized);
+}
+
 function isSessionNotFoundError(message: string): boolean {
   return /session not found/i.test(message);
 }
@@ -477,6 +499,10 @@ function restoreFromMessagesSnapshot(evt: AguiSseEvent): {
               checkpointId: typeof interrupt.checkpointId === "string" ? interrupt.checkpointId : undefined,
               lineageId: typeof interrupt.lineageId === "string" ? interrupt.lineageId : undefined,
             };
+
+            if (shouldSuppressGraphApproval(graphInterrupt, toolCallNameById)) {
+              continue;
+            }
 
             const identity = graphInterruptIdentity(graphInterrupt);
             const messageId = identity ? `graph_interrupt_${sanitizeIdPart(identity) || "interrupt"}` : randomId("graph_interrupt");
@@ -951,6 +977,13 @@ export function useAguiChat(config: AguiChatConfig) {
             lineageId: typeof interrupt.lineageId === "string" ? interrupt.lineageId : undefined,
           };
           setGraphInterrupt(nextInterrupt);
+
+          if (shouldSuppressGraphApproval(nextInterrupt, toolCallNameByIdRef.current)) {
+            graphInterruptIdentityRef.current = null;
+            graphApprovalMessageIdRef.current = null;
+            delete root.resume;
+            return;
+          }
 
           const identity = graphInterruptIdentity(nextInterrupt);
           if (identity && graphInterruptIdentityRef.current !== identity) {

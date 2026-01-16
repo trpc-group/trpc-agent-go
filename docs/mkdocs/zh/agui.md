@@ -881,21 +881,19 @@ server, err := agui.New(
 
 ### 外部工具
 
-在一些场景下，工具的执行方并不在 Agent 运行环境中，例如：工具需要在浏览器侧访问用户本地能力，或需要由业务前端统一调用内部服务并回传结果。此时可以使用“外部工具”模式：后端只负责生成工具调用（tool call）并在工具节点中断；前端执行工具后，再把结果以 `role=tool` 的消息回传，后端从中断点恢复继续执行。
+当工具必须在客户端或业务侧执行时，可以采用外部工具模式。后端只生成工具调用并在工具节点触发中断，前端执行工具并回传结果，后端从中断点恢复继续运行。该模式要求工具结果进入 LLM 上下文，并写入会话历史，便于后续通过消息快照回放完整对话。
 
-基本流程如下：
+建议在服务端开启 `agui.WithGraphNodeInterruptActivityEnabled(true)`，用于在 `graph.node.interrupt` 事件中携带 `lineageId` 与 `checkpointId`，以便前端定位恢复点并发起下一次请求。
 
-1. **第一次请求（`role=user`）**：LLM 生成工具调用，事件流中包含 `TOOL_CALL_START/TOOL_CALL_ARGS/TOOL_CALL_END`，随后在图的工具节点触发中断并结束本次 SSE。
-2. **前端执行外部工具**：从第一次 SSE 中提取 `toolCallId` 和参数（`TOOL_CALL_ARGS`），执行外部工具得到结果字符串。
-3. **第二次请求（`role=tool`）**：把工具结果以 tool message 回传（包含 `toolCallId` 与 `content`），后端会先发送 `TOOL_CALL_RESULT`，再恢复图执行并继续生成最终回复。
+一次外部工具调用对应两次请求。第一次请求使用 `role=user`，当 LLM 触发工具调用时，事件流会输出 `TOOL_CALL_START`、`TOOL_CALL_ARGS`、`TOOL_CALL_END`，随后在工具节点输出 `ACTIVITY_DELTA graph.node.interrupt` 并结束本次 SSE。前端在事件流中获取 `toolCallId` 与参数，并从中断事件获取 `lineageId`。
 
-两次请求需要满足：
+第二次请求使用 `role=tool`，把工具执行结果回传给后端。`toolCallId` 必须与第一次请求一致，`content` 为工具输出字符串，同时在 `forwardedProps.lineage_id` 填入第一次中断事件返回的 `lineageId`。服务端会先把该 tool message 翻译为 `TOOL_CALL_RESULT` 并写入会话，再从对应 checkpoint 恢复继续生成最终回复。
 
-- `threadId` 保持一致，用于定位同一会话线程。
-- `forwardedProps.lineage_id` 保持一致，用于从同一 lineage 的最新 checkpoint 恢复。
-- 当前框架仅处理 `messages` 的最后一条消息，且只支持 `role=user` 或 `role=tool`；`content` 仅支持字符串。
+如果第一次请求中 LLM 未触发任何工具调用，则不会出现中断事件，也不需要发起第二次请求。
 
-请求示例（省略无关字段）：
+两次请求需要保持 `threadId` 一致，每次请求使用新的 `runId`。当前框架仅处理 `messages` 的最后一条消息，且只支持 `role=user` 或 `role=tool`，`content` 仅支持字符串。
+
+请求示例如下：
 
 第一次请求：
 
@@ -903,11 +901,11 @@ server, err := agui.New(
 {
   "threadId": "demo-thread",
   "runId": "demo-run-1",
-  "forwardedProps": {
-    "lineage_id": "demo-lineage"
-  },
   "messages": [
-    {"role": "user", "content": "Search and answer my question."}
+    {
+      "role": "user",
+      "content": "Search and answer my question."
+    }
   ]
 }
 ```
@@ -919,7 +917,7 @@ server, err := agui.New(
   "threadId": "demo-thread",
   "runId": "demo-run-2",
   "forwardedProps": {
-    "lineage_id": "demo-lineage"
+    "lineage_id": "lineage-from-graph-node-interrupt"
   },
   "messages": [
     {
@@ -933,21 +931,22 @@ server, err := agui.New(
 }
 ```
 
-事件流示意：
+事件流示例如下：
 
 ```text
-第一次请求（role=user）
+第一次请求 role=user
   → RUN_STARTED
   → TOOL_CALL_START
   → TOOL_CALL_ARGS
   → TOOL_CALL_END
-  → RUN_FINISHED（在工具节点中断后结束）
+  → ACTIVITY_DELTA graph.node.interrupt
+  → RUN_FINISHED
 
-第二次请求（role=tool）
+第二次请求 role=tool
   → RUN_STARTED
-  → TOOL_CALL_RESULT（由输入的 tool message 生成）
-  → TEXT_MESSAGE_*（恢复后继续生成）
+  → TOOL_CALL_RESULT 由输入的 tool message 生成
+  → TEXT_MESSAGE_* 恢复后继续生成
   → RUN_FINISHED
 ```
 
-完整示例可参考 [examples/agui/server/externaltool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool)，其中 `run.sh` 展示了如何用两次 `curl` 自动捕获 `toolCallId` 并回传 `content`。
+完整示例可参考 [examples/agui/server/externaltool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
