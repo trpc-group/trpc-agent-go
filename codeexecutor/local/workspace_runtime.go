@@ -422,6 +422,14 @@ func (r *Runtime) Collect(
 				continue
 			}
 			seen[name] = true
+			st, statErr := os.Stat(realp)
+			if statErr != nil {
+				span.SetStatus(codes.Error, statErr.Error())
+				return nil, statErr
+			}
+			if st.IsDir() {
+				continue
+			}
 			content, mime, err := readLimited(realp)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
@@ -581,6 +589,13 @@ func (r *Runtime) CollectOutputs(
 			if !strings.HasPrefix(
 				mAbs, ws.Path+string(os.PathSeparator),
 			) && mAbs != ws.Path {
+				continue
+			}
+			st, statErr := os.Stat(mAbs)
+			if statErr != nil {
+				return codeexecutor.OutputManifest{}, statErr
+			}
+			if st.IsDir() {
 				continue
 			}
 			name := strings.TrimPrefix(

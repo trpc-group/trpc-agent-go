@@ -475,6 +475,28 @@ func TestRuntime_Collect_EnvPrefixes(t *testing.T) {
 		files[0].Name)
 }
 
+func TestRuntime_Collect_SkipsDirectories(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-collect-skip-dir", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	outDir := filepath.Join(ws.Path, codeexecutor.DirOut)
+	require.NoError(t, os.MkdirAll(outDir, 0o755))
+	target := filepath.Join(outDir, "a.txt")
+	require.NoError(t, os.WriteFile(target, []byte("ok"), 0o644))
+
+	glob := filepath.ToSlash(filepath.Join(codeexecutor.DirOut, "**"))
+	files, err := rt.Collect(ctx, ws, []string{glob})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "out/a.txt", files[0].Name)
+	require.Equal(t, "ok", files[0].Content)
+}
+
 func TestRuntime_PutFiles_EmptyPathError(t *testing.T) {
 	rt := local.NewRuntime("")
 	ctx := context.Background()
@@ -721,6 +743,31 @@ func TestRuntime_CollectOutputs_EnvPrefixes(t *testing.T) {
 			Inline: true,
 		},
 	)
+	require.NoError(t, err)
+	require.Len(t, mf.Files, 1)
+	require.Equal(t, "out/x.txt", mf.Files[0].Name)
+	require.Equal(t, "ok", mf.Files[0].Content)
+}
+
+func TestRuntime_CollectOutputs_SkipsDirectories(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-collect-out-dirs", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	outDir := filepath.Join(ws.Path, codeexecutor.DirOut)
+	require.NoError(t, os.MkdirAll(outDir, 0o755))
+	target := filepath.Join(outDir, "x.txt")
+	require.NoError(t, os.WriteFile(target, []byte("ok"), 0o644))
+
+	glob := filepath.ToSlash(filepath.Join(codeexecutor.DirOut, "**"))
+	mf, err := rt.CollectOutputs(ctx, ws, codeexecutor.OutputSpec{
+		Globs:  []string{glob},
+		Inline: true,
+	})
 	require.NoError(t, err)
 	require.Len(t, mf.Files, 1)
 	require.Equal(t, "out/x.txt", mf.Files[0].Name)

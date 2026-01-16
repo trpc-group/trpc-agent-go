@@ -196,21 +196,23 @@ type artifactRef struct {
 // Declaration implements tool.Tool.
 func (t *RunTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name:        "skill_run",
-		Description: "Run a command inside a skill workspace",
+		Name: "skill_run",
+		Description: "Run a command inside a skill workspace. " +
+			"Returns stdout/stderr and collected output files.",
 		InputSchema: &tool.Schema{
 			Type:        "object",
 			Description: "Run command input",
 			Required:    []string{"skill", "command"},
 			Properties: map[string]*tool.Schema{
-				"skill":   {Type: "string", Description: "Skill name"},
+				"skill":   skillNameSchema(t.repo, "Skill name"),
 				"command": {Type: "string", Description: "Shell command"},
 				"cwd":     {Type: "string", Description: "Working dir"},
 				"env": {Type: "object", Description: "Env vars",
 					AdditionalProperties: &tool.Schema{Type: "string"}},
 				"output_files": {Type: "array",
-					Items:       &tool.Schema{Type: "string"},
-					Description: "Glob patterns to collect"},
+					Items: &tool.Schema{Type: "string"},
+					Description: "Workspace-relative globs to collect " +
+						"(returned in output_files)"},
 				"timeout": {Type: "integer", Description: "Seconds"},
 				"save_as_artifacts": {Type: "boolean", Description: "" +
 					"Persist collected files via Artifact service"},
