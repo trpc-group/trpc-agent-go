@@ -941,7 +941,7 @@ graphAgent, err := graphagent.New(
 >
 > **回调优先级**：当同时存在节点级和状态级回调时：
 > - 节点配置的回调（通过 `WithModelCallbacks`/`WithToolCallbacks`）优先级更高。
-> - 状态级回调（通过 `StateKeyModelCallbacks`/`StateKeyToolCallbacks`）作为 fallback。
+> - 状态级回调（通过 `StateKeyModelCallbacks`/`StateKeyToolCallbacks`）作为兜底回调使用。
 > 这允许图级配置在需要时覆盖运行时状态。
 
 使用会话摘要的注意事项：
