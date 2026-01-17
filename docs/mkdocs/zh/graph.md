@@ -1634,6 +1634,44 @@ func main() {
 
 上面的例子展示了如何声明节点、连边并运行。接下来先介绍执行方式与会话管理，然后进入核心概念与常见用法。
 
+### 2. 静态中断（调试断点）
+
+静态中断可以理解为“断点”：让图在某些节点执行**前**或执行**后**
+暂停。它主要用于调试和逐步观察状态变化，不需要你在节点函数里手动
+调用 `graph.Interrupt(...)`。
+
+与 HITL 中断的区别：
+
+- **HITL 中断**：节点内部调用 `graph.Interrupt(ctx, state, key, prompt)`，
+  恢复时需要为该 `key` 提供 resume 输入。
+- **静态中断**：在声明节点时附加中断 option。恢复只需要 checkpoint
+  坐标（`lineage_id` + `checkpoint_id`）。
+
+启用静态中断：
+
+```go
+sg.AddNode("my_node", fn, graph.WithInterruptBefore())
+sg.AddNode("my_node", fn, graph.WithInterruptAfter())
+
+// 也可以在节点都声明完后，按 nodeID 批量开启：
+sg.WithInterruptBeforeNodes("my_node")
+sg.WithInterruptAfterNodes("my_node")
+```
+
+当触发静态中断时，执行器会抛出 `*graph.InterruptError`，并且：
+
+- `Key` 以 `graph.StaticInterruptKeyPrefixBefore` 或
+  `graph.StaticInterruptKeyPrefixAfter` 为前缀
+- `Value` 为 `graph.StaticInterruptPayload`（包含 `phase`、`nodes`、
+  `activeNodes`）
+
+恢复方式：
+
+- 用相同的 `lineage_id` 和中断事件返回的 `checkpoint_id` 重新运行。
+- 因为节点没有调用 `graph.Interrupt(...)`，所以不需要 resume 输入。
+
+可参考 `examples/graph/static_interrupt` 的完整可运行示例。
+
 ### 执行方式
 
 - 用 `graphagent.New` 包装成通用 `agent.Agent`，交给 `runner.Runner` 管理会话与事件流。
@@ -3214,7 +3252,7 @@ stateGraph.
 - 执行
   - `graphagent.New(name, compiledGraph, ...opts)` → `runner.NewRunner(app, agent)` → `Run(...)`
 
-更多端到端用法见 `examples/graph`（基础/并行/多轮/中断与嵌套中断/工具/占位符）。
+更多端到端用法见 `examples/graph`（基础/并行/多轮/中断/嵌套中断/静态中断/工具/占位符）。
 
 ## 可视化导出（DOT/图片）
 
@@ -3950,5 +3988,5 @@ func buildApprovalWorkflow() (*graph.Graph, error) {
   - I/O 约定：`io_conventions`、`io_conventions_tools`
   - 并行 / 扇出：`parallel`、`fanout`、`diamond`
   - 占位符：`placeholder`
-  - 检查点 / 中断：`checkpoint`、`interrupt`、`nested_interrupt`
+  - 检查点 / 中断：`checkpoint`、`interrupt`、`nested_interrupt`、`static_interrupt`
 - 进一步阅读：`graph/state_graph.go`、`graph/executor.go`、`agent/graphagent`
