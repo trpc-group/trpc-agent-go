@@ -362,6 +362,326 @@ func TestExecutor_HandleInterrupt_EmitsCheckpointInterruptWhenEnabled(
 	require.Greater(t, counts[ObjectTypeGraphCheckpointInterrupt], 0)
 }
 
+func latestInterruptTuple(
+	t *testing.T,
+	saver *mockSaver,
+	lineageID string,
+) *CheckpointTuple {
+	t.Helper()
+
+	var latest *CheckpointTuple
+	var latestTime time.Time
+
+	for key, tuple := range saver.byID {
+		if !strings.HasPrefix(key, lineageID+":") {
+			continue
+		}
+		if tuple == nil || tuple.Metadata == nil || tuple.Checkpoint == nil {
+			continue
+		}
+		if tuple.Metadata.Source != CheckpointSourceInterrupt {
+			continue
+		}
+		if latest == nil || tuple.Checkpoint.Timestamp.After(latestTime) {
+			latest = tuple
+			latestTime = tuple.Checkpoint.Timestamp
+		}
+	}
+
+	require.NotNil(t, latest)
+	return latest
+}
+
+func TestExecutor_StaticInterruptBefore_ResumeRunsNodeOnce(t *testing.T) {
+	const lineageID = "ln-static-before"
+
+	var aRuns int
+	var bRuns int
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			aRuns++
+			return nil, nil
+		}).
+		AddNode(
+			"b",
+			func(ctx context.Context, state State) (any, error) {
+				bRuns++
+				return nil, nil
+			},
+			WithInterruptBefore(),
+		).
+		SetEntryPoint("a").
+		AddEdge("a", "b").
+		SetFinishPoint("b").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	run1 := State{CfgKeyLineageID: lineageID}
+	ch, err := exec.Execute(
+		context.Background(),
+		run1,
+		&agent.Invocation{InvocationID: "inv-static-before-1"},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.Equal(t, 1, aRuns)
+	require.Equal(t, 0, bRuns)
+
+	intTuple := latestInterruptTuple(t, saver, lineageID)
+	require.Equal(t, "b", intTuple.Checkpoint.InterruptState.NodeID)
+	require.Equal(t, []string{"b"}, intTuple.Checkpoint.NextNodes)
+
+	raw, ok := intTuple.Checkpoint.ChannelValues[StateKeyStaticInterruptSkips]
+	require.True(t, ok)
+	skips, ok := raw.(map[string]any)
+	require.True(t, ok)
+	_, ok = skips["b"]
+	require.True(t, ok)
+
+	run2 := State{
+		CfgKeyLineageID:    lineageID,
+		CfgKeyCheckpointID: intTuple.Checkpoint.ID,
+	}
+	ch, err = exec.Execute(
+		context.Background(),
+		run2,
+		&agent.Invocation{InvocationID: "inv-static-before-2"},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.Equal(t, 1, aRuns)
+	require.Equal(t, 1, bRuns)
+}
+
+func TestExecutor_StaticInterruptAfter_ResumeSkipsRerun(t *testing.T) {
+	const lineageID = "ln-static-after"
+
+	var aRuns int
+	var bRuns int
+	var cRuns int
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			aRuns++
+			return nil, nil
+		}).
+		AddNode("b", func(ctx context.Context, state State) (any, error) {
+			bRuns++
+			return nil, nil
+		}, WithInterruptAfter()).
+		AddNode("c", func(ctx context.Context, state State) (any, error) {
+			cRuns++
+			return nil, nil
+		}).
+		SetEntryPoint("a").
+		AddEdge("a", "b").
+		AddEdge("b", "c").
+		SetFinishPoint("c").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	run1 := State{CfgKeyLineageID: lineageID}
+	ch, err := exec.Execute(
+		context.Background(),
+		run1,
+		&agent.Invocation{InvocationID: "inv-static-after-1"},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.Equal(t, 1, aRuns)
+	require.Equal(t, 1, bRuns)
+	require.Equal(t, 0, cRuns)
+
+	intTuple := latestInterruptTuple(t, saver, lineageID)
+	require.Equal(t, "b", intTuple.Checkpoint.InterruptState.NodeID)
+	require.Equal(t, []string{"c"}, intTuple.Checkpoint.NextNodes)
+
+	run2 := State{
+		CfgKeyLineageID:    lineageID,
+		CfgKeyCheckpointID: intTuple.Checkpoint.ID,
+	}
+	ch, err = exec.Execute(
+		context.Background(),
+		run2,
+		&agent.Invocation{InvocationID: "inv-static-after-2"},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.Equal(t, 1, aRuns)
+	require.Equal(t, 1, bRuns)
+	require.Equal(t, 1, cRuns)
+}
+
+func TestExecutor_StaticInterruptAfterThenBefore_Chains(t *testing.T) {
+	const lineageID = "ln-static-chain"
+
+	var aRuns int
+	var bRuns int
+	var cRuns int
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			aRuns++
+			return nil, nil
+		}).
+		AddNode("b", func(ctx context.Context, state State) (any, error) {
+			bRuns++
+			return nil, nil
+		}, WithInterruptAfter()).
+		AddNode("c", func(ctx context.Context, state State) (any, error) {
+			cRuns++
+			return nil, nil
+		}, WithInterruptBefore()).
+		SetEntryPoint("a").
+		AddEdge("a", "b").
+		AddEdge("b", "c").
+		SetFinishPoint("c").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	run1 := State{CfgKeyLineageID: lineageID}
+	ch, err := exec.Execute(
+		context.Background(),
+		run1,
+		&agent.Invocation{InvocationID: "inv-static-chain-1"},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.Equal(t, 1, aRuns)
+	require.Equal(t, 1, bRuns)
+	require.Equal(t, 0, cRuns)
+
+	int1 := latestInterruptTuple(t, saver, lineageID)
+	require.Equal(t, "b", int1.Checkpoint.InterruptState.NodeID)
+
+	run2 := State{
+		CfgKeyLineageID:    lineageID,
+		CfgKeyCheckpointID: int1.Checkpoint.ID,
+	}
+	ch, err = exec.Execute(
+		context.Background(),
+		run2,
+		&agent.Invocation{InvocationID: "inv-static-chain-2"},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.Equal(t, 1, aRuns)
+	require.Equal(t, 1, bRuns)
+	require.Equal(t, 0, cRuns)
+
+	int2 := latestInterruptTuple(t, saver, lineageID)
+	require.Equal(t, "c", int2.Checkpoint.InterruptState.NodeID)
+
+	run3 := State{
+		CfgKeyLineageID:    lineageID,
+		CfgKeyCheckpointID: int2.Checkpoint.ID,
+	}
+	ch, err = exec.Execute(
+		context.Background(),
+		run3,
+		&agent.Invocation{InvocationID: "inv-static-chain-3"},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.Equal(t, 1, aRuns)
+	require.Equal(t, 1, bRuns)
+	require.Equal(t, 1, cRuns)
+}
+
+func TestExecutor_StaticInterruptBefore_ParallelStep(t *testing.T) {
+	const lineageID = "ln-static-parallel"
+
+	var rootRuns int
+	var bRuns int
+	var cRuns int
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("root", func(ctx context.Context, state State) (any, error) {
+			rootRuns++
+			return nil, nil
+		}).
+		AddNode("b", func(ctx context.Context, state State) (any, error) {
+			bRuns++
+			return nil, nil
+		}, WithInterruptBefore()).
+		AddNode("c", func(ctx context.Context, state State) (any, error) {
+			cRuns++
+			return nil, nil
+		}, WithInterruptBefore()).
+		SetEntryPoint("root").
+		AddEdge("root", "b").
+		AddEdge("root", "c").
+		SetFinishPoint("b").
+		SetFinishPoint("c").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	run1 := State{CfgKeyLineageID: lineageID}
+	ch, err := exec.Execute(
+		context.Background(),
+		run1,
+		&agent.Invocation{InvocationID: "inv-static-parallel-1"},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.Equal(t, 1, rootRuns)
+	require.Equal(t, 0, bRuns)
+	require.Equal(t, 0, cRuns)
+
+	int1 := latestInterruptTuple(t, saver, lineageID)
+	require.ElementsMatch(t, []string{"b", "c"}, int1.Checkpoint.NextNodes)
+
+	run2 := State{
+		CfgKeyLineageID:    lineageID,
+		CfgKeyCheckpointID: int1.Checkpoint.ID,
+	}
+	ch, err = exec.Execute(
+		context.Background(),
+		run2,
+		&agent.Invocation{InvocationID: "inv-static-parallel-2"},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.Equal(t, 1, rootRuns)
+	require.Equal(t, 1, bRuns)
+	require.Equal(t, 1, cRuns)
+}
+
 func TestExecutor_VersionBasedPlanning(t *testing.T) {
 	g, err := NewStateGraph(NewStateSchema()).
 		AddNode("a", func(ctx context.Context, state State) (any, error) { return nil, nil }).

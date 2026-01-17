@@ -29,6 +29,9 @@ const (
 	StateKeyResumeMap      = "__resume_map__"
 	StateKeyNextNodes      = "__next_nodes__"
 	StateKeyUsedInterrupts = "__used_interrupts__"
+
+	StateKeyStaticInterruptSkips = "__static_interrupt_skips__"
+
 	// StateKeySubgraphInterrupt stores metadata needed to resume a child
 	// GraphAgent (subgraph) after it interrupts within an agent node.
 	StateKeySubgraphInterrupt = "__subgraph_interrupt__"
