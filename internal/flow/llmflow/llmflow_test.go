@@ -347,6 +347,68 @@ func TestModelCallbacks_BeforeError(t *testing.T) {
 	require.Equal(t, "before error", events[1].Error.Message)
 }
 
+func TestModelCallbacks_BeforeSetsContext_AfterSeesValue(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	const want = "ctx-from-before"
+	afterSawCh := make(chan string, 1)
+
+	modelCallbacks := model.NewCallbacks().
+		RegisterBeforeModel(func(
+			ctx context.Context,
+			args *model.BeforeModelArgs,
+		) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				Context: context.WithValue(ctx, testCtxKey{}, want),
+			}, nil
+		}).
+		RegisterAfterModel(func(
+			ctx context.Context,
+			args *model.AfterModelArgs,
+		) (*model.AfterModelResult, error) {
+			if v, ok := ctx.Value(testCtxKey{}).(string); ok {
+				select {
+				case afterSawCh <- v:
+				default:
+				}
+			}
+			return nil, nil
+		})
+
+	llmFlow := New(nil, nil, Options{ModelCallbacks: modelCallbacks})
+	invocation := agent.NewInvocation(
+		agent.WithInvocationModel(&mockModel{
+			responses: []*model.Response{
+				{
+					Done: true,
+					Choices: []model.Choice{
+						{Message: model.NewAssistantMessage("ok")},
+					},
+				},
+			},
+		}),
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+	)
+
+	eventChan, err := llmFlow.Run(ctx, invocation)
+	require.NoError(t, err)
+
+	for evt := range eventChan {
+		if evt.RequiresCompletion {
+			key := agent.AppendEventNoticeKeyPrefix + evt.ID
+			invocation.NotifyCompletion(ctx, key)
+		}
+	}
+
+	select {
+	case got := <-afterSawCh:
+		require.Equal(t, want, got)
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for after callback to observe context value")
+	}
+}
+
 func TestModelCBs_AfterOverride(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -653,7 +715,7 @@ func TestFlow_CallLLM_PluginBeforeModelCanShortCircuit(t *testing.T) {
 		Plugins:   pm,
 	}
 
-	ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
+	_, ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
 	require.NoError(t, err)
 	for range ch {
 	}
@@ -697,7 +759,7 @@ func TestFlow_CallLLM_PluginBeforeModelError(t *testing.T) {
 		Plugins:   pm,
 	}
 
-	ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
+	_, ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
 	require.Error(t, err)
 	require.Nil(t, ch)
 	require.True(t, plugCalled)
@@ -742,12 +804,13 @@ func TestFlow_CallLLM_PluginBeforeModelContextPropagates(t *testing.T) {
 		Plugins:   pm,
 	}
 
-	ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
+	_, ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
 	require.NoError(t, err)
 	for range ch {
 	}
 	require.True(t, plugCalled)
 	require.Equal(t, "v", localSaw)
+
 }
 
 func TestFlow_AfterModelPluginOverridesLocal(t *testing.T) {
@@ -909,7 +972,7 @@ func TestFlow_callLLM_NoModel(t *testing.T) {
 	inv := agent.NewInvocation()
 	req := &model.Request{}
 
-	ch, err := f.callLLM(context.Background(), inv, req)
+	_, ch, err := f.callLLM(context.Background(), inv, req)
 	require.Error(t, err)
 	require.Nil(t, ch)
 }
@@ -921,7 +984,7 @@ func TestFlow_callLLM_ModelError(t *testing.T) {
 	)
 	req := &model.Request{}
 
-	ch, err := f.callLLM(context.Background(), inv, req)
+	_, ch, err := f.callLLM(context.Background(), inv, req)
 	require.Error(t, err)
 	require.Nil(t, ch)
 }
