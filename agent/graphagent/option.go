@@ -80,6 +80,9 @@ type Options struct {
 	InitialState graph.State
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
 	ChannelBufferSize int
+	// MaxConcurrency is the maximum number of graph tasks executed in
+	// parallel. When <= 0, GraphAgent uses the Executor default.
+	MaxConcurrency int
 	// CheckpointSaver is the checkpoint saver for the executor.
 	CheckpointSaver graph.CheckpointSaver
 
@@ -135,6 +138,16 @@ func WithChannelBufferSize(size int) Option {
 			size = defaultChannelBufferSize
 		}
 		opts.ChannelBufferSize = size
+	}
+}
+
+// WithMaxConcurrency sets the maximum number of graph tasks executed in
+// parallel.
+//
+// When max <= 0, GraphAgent uses the Executor default.
+func WithMaxConcurrency(max int) Option {
+	return func(opts *Options) {
+		opts.MaxConcurrency = max
 	}
 }
 

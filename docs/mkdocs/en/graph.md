@@ -839,6 +839,7 @@ graphAgent, err := graphagent.New(
         "initial_data": "Initial data",
     }),
     graphagent.WithChannelBufferSize(1024),            // Tune event buffer size
+    graphagent.WithMaxConcurrency(8),                 // Cap parallel tasks
     graphagent.WithCheckpointSaver(memorySaver),       // Persist checkpoints if needed
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // Register sub-agents by name
     graphagent.WithAddSessionSummary(true),            // Inject session summary as system message
@@ -2718,6 +2719,7 @@ This design enables per‑step observability and safe interruption/recovery.
 exec, err := graph.NewExecutor(g,
     graph.WithChannelBufferSize(1024),              // event channel buffer
     graph.WithMaxSteps(50),                          // max steps
+    graph.WithMaxConcurrency(8),                     // task concurrency
     graph.WithStepTimeout(5*time.Minute),            // step timeout
     graph.WithNodeTimeout(2*time.Minute),            // node timeout
     graph.WithCheckpointSaver(saver),                // enable checkpoints (sqlite/inmemory)
@@ -2729,7 +2731,7 @@ exec, err := graph.NewExecutor(g,
 
 - Defaults (Executor)
 
-  - `ChannelBufferSize = 256`, `MaxSteps = 100`, `CheckpointSaveTimeout = 10s`
+  - `ChannelBufferSize = 256`, `MaxSteps = 100`, `MaxConcurrency = GOMAXPROCS(0)`, `CheckpointSaveTimeout = 10s`
   - Per‑step/node timeouts are available on `Executor` via `WithStepTimeout` / `WithNodeTimeout` (not exposed by `GraphAgent` options yet)
 
 - Sessions
@@ -2742,7 +2744,8 @@ exec, err := graph.NewExecutor(g,
 
 - Events/backpressure
 
-  - Tune `WithChannelBufferSize`; filter events by `author`/`object` to reduce noise
+  - Tune `WithChannelBufferSize`; cap task parallelism via `WithMaxConcurrency`
+  - Filter events by `author`/`object` to reduce noise
 
 - Naming and keys
 
