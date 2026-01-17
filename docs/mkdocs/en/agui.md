@@ -874,3 +874,75 @@ The effect is shown below. For a full example, refer to
 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report). The corresponding client implementation lives in [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
 
 ![report](../assets/gif/agui/report.gif)
+
+### External Tools
+
+When a tool must be executed on the client side or within business services, you can use the external tool pattern. The backend only generates the tool call and interrupts execution at the tool node. The frontend runs the tool and sends the result back. The backend then resumes from the interrupt point and continues the run. This pattern requires the tool result to be included in the LLM context and persisted to session history so that a Message Snapshot can replay a complete conversation later.
+
+It is recommended to enable `agui.WithGraphNodeInterruptActivityEnabled(true)` on the server. This allows `lineageId` and `checkpointId` to be carried in the `graph.node.interrupt` event so the client can locate the resume point and initiate the next request.
+
+A single external tool invocation corresponds to two requests. The first request uses `role=user`. When the LLM triggers a tool call, the event stream emits `TOOL_CALL_START`, `TOOL_CALL_ARGS`, and `TOOL_CALL_END`, then emits `ACTIVITY_DELTA graph.node.interrupt` at the tool node and closes the SSE stream. The client reads `toolCallId` and the tool arguments from the tool call events, and reads `lineageId` from the interrupt event.
+
+The second request uses `role=tool` to send the tool result back to the server. The `toolCallId` must match the first request, `content` is the tool output string, and `forwardedProps.lineage_id` must be set to the `lineageId` returned by the interrupt event. The server first translates this tool message into a `TOOL_CALL_RESULT` event and persists it to the session, then resumes from the corresponding checkpoint and continues generating the final answer.
+
+If the LLM does not trigger any tool call in the first request, no interrupt event will be emitted and a second request is not required.
+
+Both requests must use the same `threadId`, and each request should use a new `runId`. The framework only processes the last message in `messages`. Only `role=user` and `role=tool` are supported, and `content` must be a string.
+
+Request examples:
+
+First request:
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Search and answer my question."
+    }
+  ]
+}
+```
+
+Second request:
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-2",
+  "forwardedProps": {
+    "lineage_id": "lineage-from-graph-node-interrupt"
+  },
+  "messages": [
+    {
+      "id": "tool-result-<toolCallId>",
+      "role": "tool",
+      "toolCallId": "<toolCallId>",
+      "name": "external_search",
+      "content": "external tool output as string"
+    }
+  ]
+}
+```
+
+Example event stream:
+
+```text
+First request role=user
+  → RUN_STARTED
+  → TOOL_CALL_START
+  → TOOL_CALL_ARGS
+  → TOOL_CALL_END
+  → ACTIVITY_DELTA graph.node.interrupt
+  → RUN_FINISHED
+
+Second request role=tool
+  → RUN_STARTED
+  → TOOL_CALL_RESULT generated from the tool message input
+  → TEXT_MESSAGE_* generated after resuming
+  → RUN_FINISHED
+```
+
+For a complete example, see [examples/agui/server/externaltool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool). For a frontend implementation, see [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).

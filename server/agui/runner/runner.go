@@ -106,16 +106,17 @@ type sessionContext struct {
 }
 
 type runInput struct {
-	key         session.Key
-	threadID    string
-	runID       string
-	userID      string
-	userMessage model.Message
-	runOption   []agent.RunOption
-	translator  translator.Translator
-	enableTrack bool
-	span        trace.Span
-	resume      *resumeInfo
+	key            session.Key
+	threadID       string
+	runID          string
+	userID         string
+	inputMessage   *model.Message
+	inputMessageID string
+	runOption      []agent.RunOption
+	translator     translator.Translator
+	enableTrack    bool
+	span           trace.Span
+	resume         *resumeInfo
 }
 
 type resumeInfo struct {
@@ -124,6 +125,32 @@ type resumeInfo struct {
 	resumeMap    map[string]any
 	resumeSet    bool
 	resumeValue  any
+}
+
+func inputMessageFromRunAgentInput(input *adapter.RunAgentInput) (*model.Message, string, error) {
+	if len(input.Messages) == 0 {
+		return nil, "", errors.New("no messages provided")
+	}
+	lastMessage := input.Messages[len(input.Messages)-1]
+	if lastMessage.Role != types.RoleUser && lastMessage.Role != types.RoleTool {
+		return nil, "", errors.New("last message role must be user or tool")
+	}
+	if lastMessage.Role == types.RoleTool && lastMessage.ToolCallID == "" {
+		return nil, "", errors.New("tool message missing tool call id")
+	}
+	content, ok := lastMessage.ContentString()
+	if !ok {
+		return nil, "", errors.New("last message content is not a string")
+	}
+	inputMessage := model.Message{Content: content}
+	if lastMessage.Role == types.RoleTool {
+		inputMessage.Role = model.RoleTool
+		inputMessage.ToolID = lastMessage.ToolCallID
+		inputMessage.ToolName = lastMessage.Name
+	} else {
+		inputMessage.Role = model.RoleUser
+	}
+	return &inputMessage, lastMessage.ID, nil
 }
 
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
@@ -140,11 +167,9 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	}
 	threadID := runAgentInput.ThreadID
 	runID := runAgentInput.RunID
-	if len(runAgentInput.Messages) == 0 {
-		return nil, errors.New("no messages provided")
-	}
-	if runAgentInput.Messages[len(runAgentInput.Messages)-1].Role != types.RoleUser {
-		return nil, errors.New("last message is not a user message")
+	inputMessage, inputMessageID, err := inputMessageFromRunAgentInput(runAgentInput)
+	if err != nil {
+		return nil, fmt.Errorf("build input message: %w", err)
 	}
 	userID, err := r.userIDResolver(ctx, runAgentInput)
 	if err != nil {
@@ -165,11 +190,6 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if err != nil {
 		return nil, fmt.Errorf("start span: %w", err)
 	}
-	content, ok := runAgentInput.Messages[len(runAgentInput.Messages)-1].ContentString()
-	if !ok {
-		span.End()
-		return nil, errors.New("last message content is not a string")
-	}
 	trans, err := r.translatorFactory(
 		ctx,
 		runAgentInput,
@@ -186,18 +206,16 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 			UserID:    userID,
 			SessionID: runAgentInput.ThreadID,
 		},
-		threadID: threadID,
-		runID:    runID,
-		userID:   userID,
-		userMessage: model.Message{
-			Role:    model.RoleUser,
-			Content: content,
-		},
-		runOption:   runOption,
-		translator:  trans,
-		enableTrack: r.tracker != nil,
-		span:        span,
-		resume:      parseResumeInfo(runOption),
+		threadID:       threadID,
+		runID:          runID,
+		userID:         userID,
+		inputMessage:   inputMessage,
+		inputMessageID: inputMessageID,
+		runOption:      runOption,
+		translator:     trans,
+		enableTrack:    r.tracker != nil,
+		span:           span,
+		resume:         parseResumeInfo(runOption),
 	}
 	events := make(chan aguievents.Event)
 	ctx, cancel := r.newExecutionContext(ctx, r.timeout)
@@ -230,26 +248,33 @@ func (r *runner) run(ctx context.Context, cancel context.CancelFunc, key session
 				)
 			}
 		}()
-		if err := r.recordUserMessage(ctx, input.key, &input.userMessage); err != nil {
-			log.WarnfContext(
-				ctx,
-				"agui run: threadID: %s, runID: %s, record user "+
-					"message failed, disable tracking: %v",
-				threadID,
-				runID,
-				err,
-			)
+		if input.inputMessage.Role == model.RoleUser {
+			if err := r.recordUserMessage(ctx, input.key, input.inputMessage); err != nil {
+				log.WarnfContext(
+					ctx,
+					"agui run: threadID: %s, runID: %s, record input "+
+						"message failed, disable tracking: %v",
+					threadID,
+					runID,
+					err,
+				)
+			}
 		}
 	}
 	if !r.emitEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input) {
 		return
+	}
+	if input.inputMessage.Role == model.RoleTool {
+		if !r.emitToolResultEvent(ctx, events, input) {
+			return
+		}
 	}
 	if input.resume != nil && r.graphNodeInterruptActivityEnabled {
 		if !r.emitEvent(ctx, events, newGraphInterruptResumeEvent(input.resume), input) {
 			return
 		}
 	}
-	ch, err := r.runner.Run(ctx, input.userID, threadID, input.userMessage, input.runOption...)
+	ch, err := r.runner.Run(ctx, input.userID, threadID, *input.inputMessage, input.runOption...)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,
@@ -366,6 +391,21 @@ func newGraphInterruptResumeEvent(info *resumeInfo) *aguievents.ActivityDeltaEve
 	return aguievents.NewActivityDeltaEvent(uuid.NewString(), "graph.node.interrupt", patch)
 }
 
+func (r *runner) emitToolResultEvent(ctx context.Context, events chan<- aguievents.Event, input *runInput) bool {
+	msg := input.inputMessage
+	if msg.ToolID == "" {
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("tool message missing tool id",
+			aguievents.WithRunID(input.runID)), input)
+		return false
+	}
+	messageID := input.inputMessageID
+	if messageID == "" {
+		messageID = msg.ToolID
+	}
+	toolResultEvent := aguievents.NewToolCallResultEvent(messageID, msg.ToolID, msg.Content)
+	return r.emitEvent(ctx, events, toolResultEvent, input)
+}
+
 func (r *runner) handleAgentEvent(ctx context.Context, events chan<- aguievents.Event, input *runInput, event *event.Event) bool {
 	threadID := input.threadID
 	runID := input.runID
@@ -426,7 +466,7 @@ func (r *runner) handleBeforeTranslate(ctx context.Context, event *event.Event) 
 	}
 	customEvent, err := r.translateCallbacks.RunBeforeTranslate(ctx, event)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("translate callbacks before translate: %w", err)
 	}
 	if customEvent != nil {
 		return customEvent, nil
@@ -440,7 +480,7 @@ func (r *runner) handleAfterTranslate(ctx context.Context, event aguievents.Even
 	}
 	customEvent, err := r.translateCallbacks.RunAfterTranslate(ctx, event)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("translate callbacks after translate: %w", err)
 	}
 	if customEvent != nil {
 		return customEvent, nil
