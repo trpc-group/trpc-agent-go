@@ -57,6 +57,10 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 	var executorOpts []graph.ExecutorOption
 	executorOpts = append(executorOpts,
 		graph.WithChannelBufferSize(options.ChannelBufferSize))
+	if options.MaxConcurrency != 0 {
+		executorOpts = append(executorOpts,
+			graph.WithMaxConcurrency(options.MaxConcurrency))
+	}
 	if options.CheckpointSaver != nil {
 		executorOpts = append(executorOpts,
 			graph.WithCheckpointSaver(options.CheckpointSaver))
