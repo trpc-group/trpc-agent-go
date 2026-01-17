@@ -2392,6 +2392,65 @@ func TestNewToolsNodeFunc_RefreshToolSetsOnRun(t *testing.T) {
 	require.Equal(t, 2, ts.calls)
 }
 
+func TestStateGraph_StaticInterruptNodes_SetFlags(t *testing.T) {
+	const (
+		nodeA = "a"
+		nodeB = "b"
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+	sg.AddNode(nodeB, func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+
+	sg.WithInterruptBeforeNodes(nodeA)
+	sg.WithInterruptAfterNodes(nodeB)
+
+	sg.SetEntryPoint(nodeA)
+	sg.AddEdge(nodeA, nodeB)
+	sg.SetFinishPoint(nodeB)
+
+	_, err := sg.Compile()
+	require.NoError(t, err)
+
+	a := sg.graph.nodes[nodeA]
+	b := sg.graph.nodes[nodeB]
+	require.NotNil(t, a)
+	require.NotNil(t, b)
+	require.True(t, a.interruptBefore)
+	require.True(t, b.interruptAfter)
+}
+
+func TestStateGraph_StaticInterruptNodes_UnknownNodeBuildError(t *testing.T) {
+	const (
+		nodeA         = "a"
+		nodeB         = "b"
+		missingBefore = "missing_before"
+		missingAfter  = "missing_after"
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+	sg.AddNode(nodeB, func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+
+	sg.WithInterruptBeforeNodes(missingBefore)
+	sg.WithInterruptAfterNodes(missingAfter)
+
+	sg.SetEntryPoint(nodeA)
+	sg.AddEdge(nodeA, nodeB)
+	sg.SetFinishPoint(nodeB)
+
+	_, err := sg.Compile()
+	require.Error(t, err)
+}
+
 type latestCheckpointAgent struct {
 	name string
 	exec *Executor

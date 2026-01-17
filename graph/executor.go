@@ -674,6 +674,17 @@ func (e *Executor) runBspLoop(
 			stepCancel()
 			break
 		}
+		if interrupt := e.maybeStaticInterruptBefore(execCtx, tasks, step); interrupt != nil {
+			stepCancel()
+			return stepsExecuted, e.handleInterrupt(
+				stepCtx,
+				invocation,
+				execCtx,
+				interrupt,
+				step,
+				*checkpointConfig,
+			)
+		}
 		if err := e.executeStep(stepCtx, invocation, execCtx, tasks, step); err != nil {
 			if interrupt, ok := GetInterruptError(err); ok {
 				stepCancel()
@@ -685,6 +696,17 @@ func (e *Executor) runBspLoop(
 		if err := e.updateChannels(stepCtx, invocation, execCtx, step); err != nil {
 			stepCancel()
 			return stepsExecuted, fmt.Errorf("update failed at step %d: %w", step, err)
+		}
+		if interrupt := e.maybeStaticInterruptAfter(tasks, step); interrupt != nil {
+			stepCancel()
+			return stepsExecuted, e.handleInterrupt(
+				stepCtx,
+				invocation,
+				execCtx,
+				interrupt,
+				step,
+				*checkpointConfig,
+			)
 		}
 		if e.checkpointSaver != nil && *checkpointConfig != nil {
 			log.DebugfContext(
@@ -2775,21 +2797,30 @@ func (e *Executor) handleInterrupt(
 		metadata.IsResuming = false
 
 		// Set next nodes for recovery
-		// IMPORTANT: For internal interrupts (from graph.Interrupt within a node),
-		// the interrupted node needs to be re-executed to complete its work.
-		// We must include it in NextNodes.
-		nextNodes := e.getNextNodes(execCtx)
-
-		// Ensure the interrupted node is included
-		hasNode := false
-		for _, nodeID := range nextNodes {
-			if nodeID == interrupt.NodeID {
-				hasNode = true
-				break
-			}
+		// IMPORTANT:
+		// - For internal interrupts (from graph.Interrupt within a node), the
+		//   interrupted node needs to be re-executed to complete its work, so we
+		//   include it in NextNodes.
+		// - For static interrupts before a step executes, channel-based frontier
+		//   discovery is unavailable; callers may provide NextNodes explicitly.
+		var nextNodes []string
+		if len(interrupt.NextNodes) > 0 {
+			nextNodes = append([]string(nil), interrupt.NextNodes...)
+		} else {
+			nextNodes = e.getNextNodes(execCtx)
 		}
-		if !hasNode && interrupt.NodeID != "" {
-			nextNodes = append([]string{interrupt.NodeID}, nextNodes...)
+
+		if !interrupt.SkipRerun {
+			hasNode := false
+			for _, nodeID := range nextNodes {
+				if nodeID == interrupt.NodeID {
+					hasNode = true
+					break
+				}
+			}
+			if !hasNode && interrupt.NodeID != "" {
+				nextNodes = append([]string{interrupt.NodeID}, nextNodes...)
+			}
 		}
 		checkpoint.NextNodes = nextNodes
 		checkpoint.NextChannels = e.getNextChannels(execCtx)
