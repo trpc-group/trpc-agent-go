@@ -27,6 +27,7 @@ import (
 	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+	evalstatus "trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -47,9 +48,24 @@ type local struct {
 // New returns a new local evaluation service.
 // If no service.Option is provided, the service will use the default options.
 func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
+	if runner == nil {
+		return nil, errors.New("runner is nil")
+	}
 	opts := service.NewOptions(opt...)
 	if opts.EvalCaseParallelInferenceEnabled && opts.EvalCaseParallelism <= 0 {
 		return nil, errors.New("eval case parallelism must be greater than 0")
+	}
+	if opts.EvalSetManager == nil {
+		return nil, errors.New("eval set manager is nil")
+	}
+	if opts.EvalResultManager == nil {
+		return nil, errors.New("eval result manager is nil")
+	}
+	if opts.Registry == nil {
+		return nil, errors.New("registry is nil")
+	}
+	if opts.SessionIDSupplier == nil {
+		return nil, errors.New("session id supplier is nil")
 	}
 	service := &local{
 		runner:                           runner,
@@ -97,9 +113,14 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*ev
 		if inferenceResult == nil {
 			return nil, errors.New("inference result is nil")
 		}
+		if inferenceResult.Status != evalstatus.EvalStatusPassed {
+			evalCaseResults = append(evalCaseResults, s.failedEvalCaseResult(req.EvalSetID, inferenceResult, inferenceResult.ErrorMessage))
+			continue
+		}
 		result, err := s.evaluatePerCase(ctx, inferenceResult, req.EvaluateConfig)
 		if err != nil {
-			return nil, fmt.Errorf("evaluate inference result for eval case %s: %w", inferenceResult.EvalCaseID, err)
+			evalCaseResults = append(evalCaseResults, s.failedEvalCaseResult(req.EvalSetID, inferenceResult, err.Error()))
+			continue
 		}
 		evalCaseResults = append(evalCaseResults, result)
 	}
@@ -115,6 +136,17 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*ev
 	evalSetResult.EvalSetResultID = evalSetResultID
 	evalSetResult.EvalSetResultName = evalSetResultID
 	return evalSetResult, nil
+}
+
+func (s *local) failedEvalCaseResult(evalSetID string, inferenceResult *service.InferenceResult, errorMessage string) *evalresult.EvalCaseResult {
+	return &evalresult.EvalCaseResult{
+		EvalSetID:       evalSetID,
+		EvalID:          inferenceResult.EvalCaseID,
+		FinalEvalStatus: evalstatus.EvalStatusFailed,
+		ErrorMessage:    errorMessage,
+		SessionID:       inferenceResult.SessionID,
+		UserID:          inferenceResult.UserID,
+	}
 }
 
 // evaluatePerCase runs the evaluation on the inference result and returns the case evaluation result.
