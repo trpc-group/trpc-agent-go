@@ -566,6 +566,22 @@ func TestAggregateCaseRunsNotEvaluated(t *testing.T) {
 	assert.Len(t, result.EvalCaseResults, 1)
 }
 
+func TestAggregateCaseRunsHardFailureWithoutMetrics(t *testing.T) {
+	runs := []*evalresult.EvalCaseResult{
+		{
+			EvalSetID:       "set",
+			EvalID:          "case",
+			FinalEvalStatus: status.EvalStatusFailed,
+			ErrorMessage:    "inference failed",
+		},
+	}
+	result, err := aggregateCaseRuns("case", runs)
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusFailed, result.OverallStatus)
+	assert.Empty(t, result.MetricResults)
+	assert.Len(t, result.EvalCaseResults, 1)
+}
+
 func TestSummarizeOverallStatus(t *testing.T) {
 	statuses := []*EvaluationCaseResult{
 		{OverallStatus: status.EvalStatusPassed},
