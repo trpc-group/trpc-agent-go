@@ -251,7 +251,13 @@ func (e *CodeExecutor) ensureWS() *Runtime {
 			)
 		}
 		opts = append(opts, WithAutoInputs(e.autoInputs))
-		e.ws = NewRuntimeWithOptions("", opts...)
+		workRoot := strings.TrimSpace(e.WorkDir)
+		if workRoot != "" && !filepath.IsAbs(workRoot) {
+			if abs, err := filepath.Abs(workRoot); err == nil {
+				workRoot = abs
+			}
+		}
+		e.ws = NewRuntimeWithOptions(workRoot, opts...)
 	}
 	return e.ws
 }

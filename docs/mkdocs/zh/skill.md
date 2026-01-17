@@ -220,7 +220,7 @@ https://github.com/anthropics/skills
 
 输入：
 - `skill`（必填）：技能名
-- `command`（必填）：Shell 命令（默认通过 `bash -lc` 执行）
+- `command`（必填）：Shell 命令（默认通过 `bash -c` 执行）
 - `cwd`（可选）：相对技能根目录的工作路径
 - `env`（可选）：环境变量映射
 - `output_files`（可选，传统收集方式）：通配符列表
@@ -293,6 +293,9 @@ https://github.com/anthropics/skills
 运行环境与工作目录：
 - 未提供 `cwd` 时，默认在技能根目录运行：`/skills/<name>`
 - 相对 `cwd` 会被解析为技能根目录下的子路径
+- `cwd` 也可以以 `$WORK_DIR`、`$OUTPUT_DIR`、`$SKILLS_DIR`、
+  `$WORKSPACE_DIR`、`$RUN_DIR`（或 `${...}`）开头，
+  工具会将其规范化为工作区内的相对目录
 - 运行时注入环境变量：
   - `WORKSPACE_DIR`、`SKILLS_DIR`、`WORK_DIR`、`OUTPUT_DIR`、
     `RUN_DIR`（由执行器注入）
@@ -318,6 +321,7 @@ https://github.com/anthropics/skills
 安全与资源：
 - 本地/容器均限制读取与写入在工作区内
 - 可通过超时、脚本权限（如只读挂载技能树）降低风险
+- `stdout`/`stderr` 可能会被截断（见 `warnings`）
 - 输出文件读取大小有限制，避免过大文件影响
 
 ## 事件与追踪

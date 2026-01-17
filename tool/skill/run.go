@@ -64,11 +64,13 @@ func NewRunTool(
 const envAllowedCommands = "TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS"
 const envDeniedCommands = "TRPC_AGENT_SKILL_RUN_DENIED_COMMANDS"
 
+const defaultSkillRunTimeout = 5 * time.Minute
+
 // WithAllowedCommands restricts skill_run to a single program execution
 // whose command name is in the allowlist.
 //
 // When enabled, shell features (pipes, redirects, separators) are
-// rejected and the command is executed without "bash -lc".
+// rejected and the command is executed without a shell.
 func WithAllowedCommands(cmds ...string) func(*RunTool) {
 	return func(t *RunTool) {
 		t.setAllowedCommands(cmds)
@@ -79,7 +81,7 @@ func WithAllowedCommands(cmds ...string) func(*RunTool) {
 // matches the denylist.
 //
 // When enabled, shell features (pipes, redirects, separators) are rejected
-// and the command is executed without "bash -lc".
+// and the command is executed without a shell.
 func WithDeniedCommands(cmds ...string) func(*RunTool) {
 	return func(t *RunTool) {
 		t.setDeniedCommands(cmds)
@@ -178,12 +180,12 @@ type runInput struct {
 
 // runOutput is the structured result returned by skill_run.
 type runOutput struct {
+	OutputFiles   []codeexecutor.File `json:"output_files"`
 	Stdout        string              `json:"stdout"`
 	Stderr        string              `json:"stderr"`
 	ExitCode      int                 `json:"exit_code"`
 	TimedOut      bool                `json:"timed_out"`
 	Duration      int64               `json:"duration_ms"`
-	OutputFiles   []codeexecutor.File `json:"output_files"`
 	ArtifactFiles []artifactRef       `json:"artifact_files,omitempty"`
 	Warnings      []string            `json:"warnings,omitempty"`
 }
@@ -198,7 +200,9 @@ func (t *RunTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "skill_run",
 		Description: "Run a command inside a skill workspace. " +
-			"Returns stdout/stderr and collected output files.",
+			"Returns stdout/stderr and collected output files " +
+			"(inline). Prefer output_files content; do not " +
+			"use read_document or file tools for those paths.",
 		InputSchema: &tool.Schema{
 			Type:        "object",
 			Description: "Run command input",
@@ -212,7 +216,9 @@ func (t *RunTool) Declaration() *tool.Declaration {
 				"output_files": {Type: "array",
 					Items: &tool.Schema{Type: "string"},
 					Description: "Workspace-relative globs to collect " +
-						"(returned in output_files)"},
+						"and inline (returned in output_files); " +
+						"do not read them via read_document or " +
+						"file tools"},
 				"timeout": {Type: "integer", Description: "Seconds"},
 				"save_as_artifacts": {Type: "boolean", Description: "" +
 					"Persist collected files via Artifact service"},
@@ -268,6 +274,10 @@ func (t *RunTool) Call(
 		return nil, err
 	}
 	out := buildRunOutput(rr, files)
+	if len(files) > 0 && !in.SaveArtifacts {
+		out.Warnings = append(out.Warnings,
+			warnOutputFilesWorkspaceOnly)
+	}
 	if err := t.attachArtifactsIfRequested(
 		ctx, &out, files, in.ArtifactPrefix, in.SaveArtifacts,
 		in.OmitInline,
@@ -467,16 +477,71 @@ func shellQuote(s string) string {
 	return "'" + q + "'"
 }
 
+const (
+	envVarPrefix = "$"
+	envVarLBrace = "${"
+	envVarRBrace = "}"
+)
+
+func hasEnvPrefix(s string, name string) bool {
+	if strings.HasPrefix(s, envVarPrefix+name) {
+		tail := s[len(envVarPrefix+name):]
+		return tail == "" || strings.HasPrefix(tail, "/") ||
+			strings.HasPrefix(tail, "\\")
+	}
+	prefix := envVarLBrace + name + envVarRBrace
+	if strings.HasPrefix(s, prefix) {
+		tail := s[len(prefix):]
+		return tail == "" || strings.HasPrefix(tail, "/") ||
+			strings.HasPrefix(tail, "\\")
+	}
+	return false
+}
+
+func isWorkspaceEnvPath(s string) bool {
+	return hasEnvPrefix(s, codeexecutor.WorkspaceEnvDirKey) ||
+		hasEnvPrefix(s, codeexecutor.EnvSkillsDir) ||
+		hasEnvPrefix(s, codeexecutor.EnvWorkDir) ||
+		hasEnvPrefix(s, codeexecutor.EnvOutputDir) ||
+		hasEnvPrefix(s, codeexecutor.EnvRunDir)
+}
+
 func resolveCWD(cwd string, name string) string {
 	// Default: run at the skill root. Relative cwd resolves under the
-	// skill root. Absolute cwd is respected as-is.
+	// skill root. "$WORK_DIR" style paths resolve to workspace-relative
+	// roots. Absolute paths are treated as workspace-absolute and must
+	// start with known workspace dirs like "/skills" or "/work".
 	base := path.Join(codeexecutor.DirSkills, name)
 	s := strings.TrimSpace(cwd)
 	if s == "" {
 		return base
 	}
+	if isWorkspaceEnvPath(s) {
+		if out := codeexecutor.NormalizeGlobs([]string{s}); len(out) > 0 {
+			return out[0]
+		}
+	}
 	if strings.HasPrefix(s, "/") {
-		return s
+		cleaned := path.Clean(s)
+		rel := strings.TrimPrefix(cleaned, "/")
+		switch {
+		case rel == "" || rel == ".":
+			return "."
+		case rel == codeexecutor.DirSkills ||
+			strings.HasPrefix(rel, codeexecutor.DirSkills+"/"):
+			return rel
+		case rel == codeexecutor.DirWork ||
+			strings.HasPrefix(rel, codeexecutor.DirWork+"/"):
+			return rel
+		case rel == codeexecutor.DirOut ||
+			strings.HasPrefix(rel, codeexecutor.DirOut+"/"):
+			return rel
+		case rel == codeexecutor.DirRuns ||
+			strings.HasPrefix(rel, codeexecutor.DirRuns+"/"):
+			return rel
+		default:
+			return base
+		}
 	}
 	return path.Join(base, s)
 }
@@ -499,6 +564,9 @@ func (t *RunTool) runProgram(
 	in runInput,
 ) (codeexecutor.RunResult, error) {
 	timeout := time.Duration(in.Timeout) * time.Second
+	if in.Timeout <= 0 {
+		timeout = defaultSkillRunTimeout
+	}
 	env := in.Env
 	if env == nil {
 		env = map[string]string{}
@@ -537,7 +605,7 @@ func (t *RunTool) runProgram(
 	return eng.Runner().RunProgram(
 		ctx, ws, codeexecutor.RunProgramSpec{
 			Cmd:     "bash",
-			Args:    []string{"-lc", in.Command},
+			Args:    []string{"-c", in.Command},
 			Env:     env,
 			Cwd:     cwd,
 			Timeout: timeout,
@@ -678,14 +746,40 @@ func (t *RunTool) prepareOutputs(
 func buildRunOutput(
 	rr codeexecutor.RunResult, files []codeexecutor.File,
 ) runOutput {
+	stdout, stdoutTrunc := truncateOutput(rr.Stdout)
+	stderr, stderrTrunc := truncateOutput(rr.Stderr)
+	var warnings []string
+	if stdoutTrunc {
+		warnings = append(warnings, warnStdoutTruncated)
+	}
+	if stderrTrunc {
+		warnings = append(warnings, warnStderrTruncated)
+	}
 	return runOutput{
-		Stdout:      rr.Stdout,
-		Stderr:      rr.Stderr,
+		OutputFiles: files,
+		Stdout:      stdout,
+		Stderr:      stderr,
 		ExitCode:    rr.ExitCode,
 		TimedOut:    rr.TimedOut,
 		Duration:    rr.Duration.Milliseconds(),
-		OutputFiles: files,
+		Warnings:    warnings,
 	}
+}
+
+const (
+	maxOutputChars = 16 * 1024
+)
+
+const (
+	warnStdoutTruncated = "stdout truncated"
+	warnStderrTruncated = "stderr truncated"
+)
+
+func truncateOutput(s string) (string, bool) {
+	if len(s) <= maxOutputChars {
+		return s, false
+	}
+	return s[:maxOutputChars], true
 }
 
 // attachArtifactsIfRequested saves files as artifacts when requested
@@ -726,6 +820,10 @@ func (t *RunTool) attachArtifactsIfRequested(
 
 const warnSaveArtifactsSkippedTmpl = "save_as_artifacts requested but " +
 	"%s; returning inline output_files"
+
+const warnOutputFilesWorkspaceOnly = "output_files are workspace-" +
+	"relative; use output_files content or re-run skill_run " +
+	"(do not use read_document or file tools)"
 
 const (
 	reasonNoInvocation = "invocation is missing from context"

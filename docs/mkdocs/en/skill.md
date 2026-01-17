@@ -219,7 +219,7 @@ Declaration: [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blo
 
 Input:
 - `skill` (required)
-- `command` (required; by default runs via `bash -lc`)
+- `command` (required; by default runs via `bash -c`)
 - `cwd`, `env` (optional)
 - `output_files` (optional, legacy collection): glob patterns (e.g.,
   `out/*.txt`). Patterns are workspace‑relative; env‑style prefixes
@@ -293,6 +293,9 @@ Typical flow:
 Environment and CWD:
 - When `cwd` is omitted, runs at the skill root: `/skills/<name>`
 - A relative `cwd` is resolved under the skill root
+- `cwd` may start with `$WORK_DIR`, `$OUTPUT_DIR`, `$SKILLS_DIR`,
+  `$WORKSPACE_DIR`, `$RUN_DIR` (or `${...}`) and will be normalized to
+  workspace‑relative directories
 - Runtime injects env vars: `WORKSPACE_DIR`, `SKILLS_DIR`, `WORK_DIR`,
   `OUTPUT_DIR`, `RUN_DIR`; the tool injects `SKILL_NAME`
 - Convenience symlinks are created under the skill root: `out/`,
@@ -316,6 +319,7 @@ Container notes:
 Security & limits:
 - Reads/writes confined to the workspace
 - Timeouts and read‑only skill trees reduce risk
+- `stdout`/`stderr` may be truncated (see `warnings`)
 - Output file read size is capped to prevent oversized payloads
 
 ## Events and Tracing

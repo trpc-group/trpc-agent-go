@@ -96,6 +96,41 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.Contains(t, out.OutputFiles[0].Content, contentHi)
 }
 
+func TestRunTool_DoesNotUseLoginShell(t *testing.T) {
+	// A login shell would source ~/.bash_profile and set this variable.
+	home := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(home, ".bash_profile"),
+		[]byte("export TRPC_AGENT_TEST_LOGIN=1\n"),
+		0o644,
+	))
+	t.Setenv("HOME", home)
+
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "echo $TRPC_AGENT_TEST_LOGIN",
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Equal(t, "\n", out.Stdout)
+}
+
 func TestRunTool_SaveAsArtifacts_AndOmitInline(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -1079,10 +1114,19 @@ func TestRunTool_stageSkill_CreatesInputsDir(t *testing.T) {
 }
 
 func TestResolveCWD_AbsolutePath(t *testing.T) {
-	// Absolute cwd should be returned unchanged.
-	abs := "/"
-	got := resolveCWD(abs, testSkillName)
-	require.Equal(t, abs, got)
+	base := path.Join(codeexecutor.DirSkills, testSkillName)
+
+	// "/" means workspace root.
+	got := resolveCWD("/", testSkillName)
+	require.Equal(t, ".", got)
+
+	// Workspace-absolute paths are normalized to workspace-relative.
+	got = resolveCWD("/skills/other", testSkillName)
+	require.Equal(t, "skills/other", got)
+
+	// Host-absolute paths are rejected and fall back to skill root.
+	got = resolveCWD("/Users/example", testSkillName)
+	require.Equal(t, base, got)
 }
 
 func TestResolveCWD_DefaultAndRelative(t *testing.T) {
