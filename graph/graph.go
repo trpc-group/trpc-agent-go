@@ -160,6 +160,11 @@ type Node struct {
 	// If set, AddLLMNode forwards it to the underlying LLM runner.
 	llmGenerationConfig *model.GenerationConfig
 
+	// interruptBefore pauses execution before this node runs.
+	interruptBefore bool
+	// interruptAfter pauses execution after this node runs.
+	interruptAfter bool
+
 	// Subgraph (agent node) options
 	agentInputMapper      SubgraphInputMapper
 	agentOutputMapper     SubgraphOutputMapper
