@@ -2223,19 +2223,23 @@ func runBeforeToolPluginCallbacks(
 		Arguments:   toolCall.Function.Arguments,
 	}
 	result, err := callbacks.RunBeforeTool(ctx, args)
-	if err != nil {
-		return ctx, toolCall, nil,
-			fmt.Errorf(errCallbackBeforeTool, err)
-	}
 
 	if result != nil && result.Context != nil {
 		ctx = result.Context
 	}
-	if result != nil && result.CustomResult != nil {
-		return ctx, toolCall, result.CustomResult, nil
-	}
 	if result != nil && result.ModifiedArguments != nil {
 		toolCall.Function.Arguments = result.ModifiedArguments
+	}
+	if result != nil && result.CustomResult != nil {
+		if err != nil {
+			return ctx, toolCall, result.CustomResult,
+				fmt.Errorf(errCallbackBeforeTool, err)
+		}
+		return ctx, toolCall, result.CustomResult, nil
+	}
+	if err != nil {
+		return ctx, toolCall, nil,
+			fmt.Errorf(errCallbackBeforeTool, err)
 	}
 	return ctx, toolCall, nil, nil
 }
@@ -2257,19 +2261,23 @@ func runBeforeToolCallbacks(
 		Arguments:   toolCall.Function.Arguments,
 	}
 	result, err := toolCallbacks.RunBeforeTool(ctx, args)
-	if err != nil {
-		return ctx, toolCall, nil,
-			fmt.Errorf(errCallbackBeforeTool, err)
-	}
-
 	if result != nil && result.Context != nil {
 		ctx = result.Context
 	}
-	if result != nil && result.CustomResult != nil {
-		return ctx, toolCall, result.CustomResult, nil
-	}
 	if result != nil && result.ModifiedArguments != nil {
 		toolCall.Function.Arguments = result.ModifiedArguments
+	}
+	if result != nil && result.CustomResult != nil {
+		if err != nil {
+			return ctx, toolCall, result.CustomResult,
+				fmt.Errorf(errCallbackBeforeTool, err)
+		}
+		return ctx, toolCall, result.CustomResult, nil
+	}
+
+	if err != nil {
+		return ctx, toolCall, nil,
+			fmt.Errorf(errCallbackBeforeTool, err)
 	}
 	return ctx, toolCall, nil, nil
 }
@@ -2311,15 +2319,18 @@ func runAfterToolPluginCallbacks(
 		Error:       runErr,
 	}
 	afterResult, err := callbacks.RunAfterTool(ctx, args)
-	if err != nil {
-		return ctx, nil, fmt.Errorf(errCallbackAfterTool, err)
-	}
-
 	if afterResult != nil && afterResult.Context != nil {
 		ctx = afterResult.Context
 	}
 	if afterResult != nil && afterResult.CustomResult != nil {
+		if err != nil {
+			return ctx, afterResult.CustomResult,
+				fmt.Errorf(errCallbackAfterTool, err)
+		}
 		return ctx, afterResult.CustomResult, nil
+	}
+	if err != nil {
+		return ctx, nil, fmt.Errorf(errCallbackAfterTool, err)
 	}
 	return ctx, nil, nil
 }
@@ -2345,15 +2356,18 @@ func runAfterToolCallbacks(
 		Error:       runErr,
 	}
 	afterResult, err := toolCallbacks.RunAfterTool(ctx, args)
-	if err != nil {
-		return ctx, nil, fmt.Errorf(errCallbackAfterTool, err)
-	}
-
 	if afterResult != nil && afterResult.Context != nil {
 		ctx = afterResult.Context
 	}
 	if afterResult != nil && afterResult.CustomResult != nil {
+		if err != nil {
+			return ctx, afterResult.CustomResult,
+				fmt.Errorf(errCallbackAfterTool, err)
+		}
 		return ctx, afterResult.CustomResult, nil
+	}
+	if err != nil {
+		return ctx, nil, fmt.Errorf(errCallbackAfterTool, err)
 	}
 	return ctx, nil, nil
 }
@@ -2386,7 +2400,7 @@ func runTool(
 		decl,
 	)
 	if err != nil {
-		return ctx, nil, toolCall.Function.Arguments, err
+		return ctx, customResult, toolCall.Function.Arguments, err
 	}
 	if customResult != nil {
 		return ctx, customResult, toolCall.Function.Arguments, nil
@@ -2399,7 +2413,7 @@ func runTool(
 		toolCallbacks,
 	)
 	if err != nil {
-		return ctx, nil, toolCall.Function.Arguments, err
+		return ctx, customResult, toolCall.Function.Arguments, err
 	}
 	if customResult != nil {
 		return ctx, customResult, toolCall.Function.Arguments, nil
@@ -2420,6 +2434,13 @@ func runTool(
 		toolErr,
 	)
 	if err != nil {
+		if customResult != nil {
+			return ctx, customResult, toolCall.Function.Arguments, err
+		}
+		var interruptErr *InterruptError
+		if errors.As(err, &interruptErr) {
+			return ctx, result, toolCall.Function.Arguments, err
+		}
 		return ctx, nil, toolCall.Function.Arguments, err
 	}
 	if customResult != nil {
@@ -2435,6 +2456,13 @@ func runTool(
 		toolCallbacks,
 	)
 	if err != nil {
+		if customResult != nil {
+			return ctx, customResult, toolCall.Function.Arguments, err
+		}
+		var interruptErr *InterruptError
+		if errors.As(err, &interruptErr) {
+			return ctx, result, toolCall.Function.Arguments, err
+		}
 		return ctx, nil, toolCall.Function.Arguments, err
 	}
 	if customResult != nil {
@@ -2442,11 +2470,12 @@ func runTool(
 	}
 
 	if toolErr != nil {
-		return ctx, nil, toolCall.Function.Arguments, fmt.Errorf(
-			"tool %s call failed: %w",
-			toolCall.Function.Name,
-			toolErr,
-		)
+		var interruptErr *InterruptError
+		if errors.As(toolErr, &interruptErr) {
+			return ctx, result, toolCall.Function.Arguments, toolErr
+		}
+		return ctx, nil, toolCall.Function.Arguments,
+			fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, toolErr)
 	}
 	return ctx, result, toolCall.Function.Arguments, nil
 }
