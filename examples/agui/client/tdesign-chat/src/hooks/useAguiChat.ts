@@ -31,9 +31,10 @@ export type UiMessage = {
 
 export type RawAguiEvent = {
   id: string;
+  kind: "event" | "request";
   type: string;
   timestamp: number;
-  payload: AguiSseEvent;
+  payload: unknown;
 };
 
 type GraphInterrupt = {
@@ -78,6 +79,28 @@ function sanitizeIdPart(value: string, maxLength = 96): string {
 
 function graphInterruptIdentity(interrupt: GraphInterrupt): string {
   return [interrupt.checkpointId ?? "", interrupt.lineageId ?? "", interrupt.key ?? ""].filter(Boolean).join("|");
+}
+
+function looksLikeToolCallId(prompt: string): boolean {
+  const normalized = prompt.trim();
+  if (!normalized) {
+    return false;
+  }
+  return /^call_[a-zA-Z0-9_-]+$/.test(normalized);
+}
+
+function shouldSuppressGraphApproval(interrupt: GraphInterrupt, toolCallNameById: Map<string, string>): boolean {
+  if (interrupt.key === "external_tool") {
+    return true;
+  }
+  const normalized = interrupt.prompt.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (toolCallNameById.has(normalized)) {
+    return true;
+  }
+  return looksLikeToolCallId(normalized);
 }
 
 function isSessionNotFoundError(message: string): boolean {
@@ -477,6 +500,10 @@ function restoreFromMessagesSnapshot(evt: AguiSseEvent): {
               lineageId: typeof interrupt.lineageId === "string" ? interrupt.lineageId : undefined,
             };
 
+            if (shouldSuppressGraphApproval(graphInterrupt, toolCallNameById)) {
+              continue;
+            }
+
             const identity = graphInterruptIdentity(graphInterrupt);
             const messageId = identity ? `graph_interrupt_${sanitizeIdPart(identity) || "interrupt"}` : randomId("graph_interrupt");
             upsertUiMessage(messageId, (prev) => {
@@ -772,9 +799,29 @@ export function useAguiChat(config: AguiChatConfig) {
       const type = typeof evt.type === "string" ? evt.type : "UNKNOWN";
       const next: RawAguiEvent = {
         id: randomId("raw"),
+        kind: "event",
         type,
         timestamp,
         payload: evt,
+      };
+      const limit = 800;
+      const prev = rawEventsRef.current;
+      rawEventsRef.current = prev.length >= limit ? [...prev.slice(prev.length - limit + 1), next] : [...prev, next];
+      if (rawEventsFlushRef.current === null) {
+        rawEventsFlushRef.current = window.requestAnimationFrame(flushRawEvents);
+      }
+    },
+    [flushRawEvents],
+  );
+
+  const appendRequest = useCallback(
+    (request: { endpoint: string; payload: Record<string, any> }) => {
+      const next: RawAguiEvent = {
+        id: randomId("raw_request"),
+        kind: "request",
+        type: "RunAgentInput",
+        timestamp: Date.now(),
+        payload: request,
       };
       const limit = 800;
       const prev = rawEventsRef.current;
@@ -930,6 +977,13 @@ export function useAguiChat(config: AguiChatConfig) {
             lineageId: typeof interrupt.lineageId === "string" ? interrupt.lineageId : undefined,
           };
           setGraphInterrupt(nextInterrupt);
+
+          if (shouldSuppressGraphApproval(nextInterrupt, toolCallNameByIdRef.current)) {
+            graphInterruptIdentityRef.current = null;
+            graphApprovalMessageIdRef.current = null;
+            delete root.resume;
+            return;
+          }
 
           const identity = graphInterruptIdentity(nextInterrupt);
           if (identity && graphInterruptIdentityRef.current !== identity) {
@@ -1317,6 +1371,7 @@ export function useAguiChat(config: AguiChatConfig) {
       const controller = new AbortController();
       abortRef.current = controller;
       setInProgress(true);
+      appendRequest({ endpoint: config.endpoint, payload });
 
       try {
         await streamAguiSse(config.endpoint, payload, {
@@ -1332,7 +1387,7 @@ export function useAguiChat(config: AguiChatConfig) {
         setLastError(String(error?.message ?? error));
       }
     },
-    [abortActiveRun, config.endpoint, handleEvent],
+    [abortActiveRun, appendRequest, config.endpoint, handleEvent],
   );
 
   const loadHistory = useCallback(
@@ -1364,6 +1419,7 @@ export function useAguiChat(config: AguiChatConfig) {
       if (forwardedProps && Object.keys(forwardedProps).length > 0) {
         payload.forwardedProps = forwardedProps;
       }
+      appendRequest({ endpoint: historyEndpoint, payload });
 
       try {
         await streamAguiSse(historyEndpoint, payload, {
@@ -1423,7 +1479,7 @@ export function useAguiChat(config: AguiChatConfig) {
   );
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, options?: { forwardedProps?: Record<string, unknown> }) => {
       const trimmed = text.trim();
       if (!trimmed) {
         return;
@@ -1443,13 +1499,60 @@ export function useAguiChat(config: AguiChatConfig) {
         runId: randomId("run"),
         messages: [{ role: "user", content: trimmed }],
       };
-      if (config.forwardedProps && Object.keys(config.forwardedProps).length > 0) {
-        payload.forwardedProps = config.forwardedProps;
+      const mergedForwardedProps = {
+        ...(config.forwardedProps && Object.keys(config.forwardedProps).length > 0 ? config.forwardedProps : {}),
+        ...(options?.forwardedProps && Object.keys(options.forwardedProps).length > 0 ? options.forwardedProps : {}),
+      };
+      if (Object.keys(mergedForwardedProps).length > 0) {
+        payload.forwardedProps = mergedForwardedProps;
       }
 
       await run(payload);
     },
     [addMessage, config.forwardedProps, config.threadId, run],
+  );
+
+  const sendToolResult = useCallback(
+    async (args: {
+      toolCallId: string;
+      toolCallName: string;
+      content: string;
+      messageId?: string;
+      forwardedProps?: Record<string, unknown>;
+    }) => {
+      if (inProgress) {
+        return;
+      }
+
+      const toolCallId = (args.toolCallId || "").trim();
+      const toolCallName = (args.toolCallName || "").trim();
+      const content = (args.content || "").trim();
+      if (!toolCallId || !content) {
+        return;
+      }
+
+      const payload: Record<string, any> = {
+        threadId: config.threadId,
+        runId: randomId("run"),
+        messages: [{
+          id: (args.messageId || `tool-result-${toolCallId}`).trim(),
+          role: "tool",
+          toolCallId,
+          name: toolCallName || "tool",
+          content,
+        }],
+      };
+      const mergedForwardedProps = {
+        ...(config.forwardedProps && Object.keys(config.forwardedProps).length > 0 ? config.forwardedProps : {}),
+        ...(args.forwardedProps && Object.keys(args.forwardedProps).length > 0 ? args.forwardedProps : {}),
+      };
+      if (Object.keys(mergedForwardedProps).length > 0) {
+        payload.forwardedProps = mergedForwardedProps;
+      }
+
+      await run(payload);
+    },
+    [config.forwardedProps, config.threadId, inProgress, run],
   );
 
   const approveGraphInterrupt = useCallback(async () => {
@@ -1505,8 +1608,12 @@ export function useAguiChat(config: AguiChatConfig) {
       state,
       messages: [{ role: "user", content: "" }],
     };
-    if (config.forwardedProps && Object.keys(config.forwardedProps).length > 0) {
-      payload.forwardedProps = config.forwardedProps;
+    const mergedForwardedProps = {
+      ...(config.forwardedProps && Object.keys(config.forwardedProps).length > 0 ? config.forwardedProps : {}),
+      ...(graphInterrupt.lineageId ? { lineage_id: graphInterrupt.lineageId } : {}),
+    };
+    if (Object.keys(mergedForwardedProps).length > 0) {
+      payload.forwardedProps = mergedForwardedProps;
     }
 
     setGraphInterrupt(null);
@@ -1572,8 +1679,12 @@ export function useAguiChat(config: AguiChatConfig) {
       state,
       messages: [{ role: "user", content: "" }],
     };
-    if (config.forwardedProps && Object.keys(config.forwardedProps).length > 0) {
-      payload.forwardedProps = config.forwardedProps;
+    const mergedForwardedProps = {
+      ...(config.forwardedProps && Object.keys(config.forwardedProps).length > 0 ? config.forwardedProps : {}),
+      ...(graphInterrupt?.lineageId ? { lineage_id: graphInterrupt.lineageId } : {}),
+    };
+    if (Object.keys(mergedForwardedProps).length > 0) {
+      payload.forwardedProps = mergedForwardedProps;
     }
 
     setGraphInterrupt(null);
@@ -1626,6 +1737,7 @@ export function useAguiChat(config: AguiChatConfig) {
     reset,
     approveGraphInterrupt,
     dismissGraphInterrupt,
+    sendToolResult,
     clearRawEvents,
   };
 }
