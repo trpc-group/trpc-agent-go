@@ -2962,6 +2962,71 @@ Graph 的状态底层是 `map[string]any`，通过 `StateSchema` 提供运行时
   `graph.WithRefreshToolSetsOnRun`（在每次运行时从 ToolSet 重新构造工具列表，适合 MCP 等动态工具源）
 - Agent 节点可用 `graph.WithAgentNodeEventCallback`
 
+#### 调用级 Call Options（按本次 Run 覆盖）
+
+`graph.WithGenerationConfig(...)` 是**构图期**配置：你在构建图时设置它。
+但在真实业务里，经常需要**运行时**控制：同一张图，不同请求用不同的采样
+策略（比如 temperature / max_tokens），并且还能精确打到某个节点或子图里。
+
+Graph 通过 **call options** 支持这件事：它们会被挂到
+`Invocation.RunOptions` 上，并且在 GraphAgent 调用子 GraphAgent（Agent 节点）
+时自动向下传递。
+
+典型场景：
+
+- 请求 A 希望更保守（低 temperature），请求 B 希望更发散（高 temperature）。
+- 同一张图里有多个 LLM 节点，需要不同节点使用不同参数。
+- 父图通过 Agent 节点调用子图，希望覆盖只在子图内部生效。
+
+API：
+
+- `graph.WithCallOptions(...)`：把 call options 绑定到本次运行。
+- `graph.WithCallGenerationConfigPatch(...)`：在当前图作用域内，对 LLM 节点的
+  `model.GenerationConfig` 做“按字段覆盖”。
+- `graph.DesignateNode(nodeID, ...)`：把覆盖精确打到当前图中的某个节点。
+  - 对 LLM 节点：影响该节点的模型调用。
+  - 对 Agent 节点（子图）：影响子 Invocation，因此会成为子图的默认覆盖。
+- `graph.DesignateNodeWithPath(graph.NodePath{...}, ...)`：把覆盖打到嵌套子图
+  内部的某个节点（path 的每一段都是节点 ID）。
+
+Patch 说明：
+
+- 使用 `model.GenerationConfigPatch`，只设置你想覆盖的字段即可。
+- 指针字段用 `nil` 表示“不覆盖”，一般用 `model.Float64Ptr`、`model.IntPtr`
+  等辅助函数来创建指针。
+- `Stop`：`nil` 表示“不覆盖”；空 slice 表示清空 stop sequences。
+
+示例：
+
+```go
+runOpts := graph.WithCallOptions(
+    // 本次运行的全局覆盖（影响当前图内所有 LLM 节点）。
+    graph.WithCallGenerationConfigPatch(model.GenerationConfigPatch{
+        Temperature: model.Float64Ptr(0.2),
+    }),
+
+    // 只覆盖当前图里的某个 LLM 节点。
+    graph.DesignateNode("final_answer",
+        graph.WithCallGenerationConfigPatch(model.GenerationConfigPatch{
+            MaxTokens: model.IntPtr(256),
+        }),
+    ),
+
+    // 覆盖嵌套子图里的某个节点：
+    // 节点 "child_agent"（Agent 节点）-> 节点 "llm"（子图内部节点）。
+    graph.DesignateNodeWithPath(
+        graph.NodePath{"child_agent", "llm"},
+        graph.WithCallGenerationConfigPatch(model.GenerationConfigPatch{
+            Temperature: model.Float64Ptr(0),
+        }),
+    ),
+)
+
+ch, err := r.Run(ctx, userID, sessionID, msg, runOpts)
+```
+
+可直接运行示例：`examples/graph/call_options_generation_config`。
+
 #### Graph 中的 ToolSet 与 Agent 的区别
 
 `graph.WithToolSets` 是**节点级、构图期**配置：在构建图时，把一个或多个 `tool.ToolSet` 绑定到特定的 LLM 节点，例如：
