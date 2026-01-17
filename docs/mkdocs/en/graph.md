@@ -3019,6 +3019,76 @@ Per‑node options (see `graph/state_graph.go`):
   `graph.WithRefreshToolSetsOnRun` (rebuild tools from ToolSets on each run for dynamic sources such as MCP)
 - Agent nodes: `graph.WithAgentNodeEventCallback`
 
+#### Invocation‑level Call Options (per‑run overrides)
+
+`graph.WithGenerationConfig(...)` is a **compile‑time** configuration: you set
+it when building the graph. In real services you often want **runtime** control:
+use the same graph, but override sampling parameters for this request.
+
+Graph supports this with **call options**, which are attached to
+`Invocation.RunOptions` and automatically propagated into nested GraphAgent
+subgraphs.
+
+Common use cases:
+
+- One request needs higher `temperature`, another needs lower.
+- The same graph has multiple LLM nodes, and you want different parameters per
+  node.
+- A parent graph calls a subgraph (Agent node), and you want overrides only
+  inside that subgraph.
+
+API:
+
+- `graph.WithCallOptions(...)` attaches call options to this run.
+- `graph.WithCallGenerationConfigPatch(...)` overrides `model.GenerationConfig`
+  fields for LLM nodes in the current graph scope.
+- `graph.DesignateNode(nodeID, ...)` targets a specific node in the current
+  graph.
+  - For LLM nodes: affects that node's model call.
+  - For Agent nodes (subgraphs): affects the child invocation, so it becomes the
+    default for the nested graph.
+- `graph.DesignateNodeWithPath(graph.NodePath{...}, ...)` targets a node inside
+  nested subgraphs (path segments are node IDs).
+
+Patch format:
+
+- Use `model.GenerationConfigPatch` and set only the fields you want to
+  override.
+- Pointer fields use `nil` for "do not override", so you typically create
+  pointers using helpers like `model.Float64Ptr`, `model.IntPtr`, etc.
+- `Stop`: `nil` means "do not override"; an empty slice clears stop sequences.
+
+Example:
+
+```go
+runOpts := graph.WithCallOptions(
+    // Global override for this run (affects all LLM nodes in this graph).
+    graph.WithCallGenerationConfigPatch(model.GenerationConfigPatch{
+        Temperature: model.Float64Ptr(0.2),
+    }),
+
+    // Override a single LLM node in the current graph.
+    graph.DesignateNode("final_answer",
+        graph.WithCallGenerationConfigPatch(model.GenerationConfigPatch{
+            MaxTokens: model.IntPtr(256),
+        }),
+    ),
+
+    // Override a node inside a nested subgraph:
+    // node "child_agent" (Agent node) -> node "llm" (inside the child graph).
+    graph.DesignateNodeWithPath(
+        graph.NodePath{"child_agent", "llm"},
+        graph.WithCallGenerationConfigPatch(model.GenerationConfigPatch{
+            Temperature: model.Float64Ptr(0),
+        }),
+    ),
+)
+
+ch, err := r.Run(ctx, userID, sessionID, msg, runOpts)
+```
+
+See `examples/graph/call_options_generation_config` for a runnable demo.
+
 #### ToolSets in Graphs vs Agents
 
 `graph.WithToolSets` is a **per‑node, compile‑time** configuration. It attaches one or more `tool.ToolSet` instances to a specific LLM node when you build the graph:

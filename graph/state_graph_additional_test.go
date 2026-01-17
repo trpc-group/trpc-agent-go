@@ -389,6 +389,7 @@ func TestBuildAgentInvocationWithStateAndScope_ParentAndScope(t *testing.T) {
 		State{},
 		State{},
 		target,
+		"",
 		"scope",
 	)
 
@@ -413,6 +414,7 @@ func TestBuildAgentInvocationWithStateAndScope_ParentNoScope(t *testing.T) {
 		State{},
 		target,
 		"",
+		"",
 	)
 
 	key := inv.GetEventFilterKey()
@@ -434,6 +436,7 @@ func TestBuildAgentInvocationWithStateAndScope_NoParentKey(t *testing.T) {
 		State{},
 		State{},
 		target,
+		"",
 		"scope",
 	)
 
