@@ -2638,3 +2638,203 @@ func TestExecutor_JoinEdge_WaitsForAll(t *testing.T) {
 	require.Greater(t, iJoin, iB)
 	require.Greater(t, iJoin, iC)
 }
+
+func TestExecutor_WithMaxConcurrency(t *testing.T) {
+	const (
+		nodeRoot       = "root"
+		nodeCount      = 12
+		maxConcurrency = 3
+		waitTimeout    = 2 * time.Second
+	)
+
+	stateGraph := NewStateGraph(NewStateSchema())
+	stateGraph.AddNode(nodeRoot, func(context.Context, State) (any, error) {
+		return nil, nil
+	})
+	stateGraph.SetEntryPoint(nodeRoot)
+
+	var active atomic.Int64
+	var maxActive atomic.Int64
+	started := make(chan struct{}, nodeCount)
+	unblock := make(chan struct{})
+
+	worker := func(ctx context.Context, state State) (any, error) {
+		cur := active.Add(1)
+		updateMaxInt64(&maxActive, cur)
+		started <- struct{}{}
+		<-unblock
+		active.Add(-1)
+		return nil, nil
+	}
+
+	for i := 0; i < nodeCount; i++ {
+		nodeID := fmt.Sprintf("w%d", i)
+		stateGraph.AddNode(nodeID, worker)
+		stateGraph.AddEdge(nodeRoot, nodeID)
+	}
+
+	g, err := stateGraph.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g, WithMaxConcurrency(maxConcurrency))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{InvocationID: "inv-max-concurrency"}
+	events, err := exec.Execute(context.Background(), State{}, inv)
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		for range events {
+		}
+		close(done)
+	}()
+
+	waitForNSignals(t, started, maxConcurrency, waitTimeout)
+
+	select {
+	case <-started:
+		t.Fatalf("expected at most %d tasks to start", maxConcurrency)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(unblock)
+
+	select {
+	case <-done:
+	case <-time.After(waitTimeout):
+		t.Fatal("timeout waiting for executor to complete")
+	}
+
+	require.LessOrEqual(t, maxActive.Load(), int64(maxConcurrency))
+}
+
+func TestNewExecutor_MaxConcurrency_DefaultOnNonPositive(t *testing.T) {
+	const nodeID = "n"
+
+	stateGraph := NewStateGraph(NewStateSchema())
+	stateGraph.AddNode(
+		nodeID,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+
+	g, err := stateGraph.
+		SetEntryPoint(nodeID).
+		SetFinishPoint(nodeID).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g, WithMaxConcurrency(0))
+	require.NoError(t, err)
+
+	require.Equal(t, defaultMaxConcurrency(), exec.maxConcurrency)
+}
+
+func TestExecutor_workerCount_CoversBranches(t *testing.T) {
+	exec := &Executor{maxConcurrency: 4}
+	require.Equal(t, 0, exec.workerCount(0))
+
+	exec.maxConcurrency = 0
+	require.Equal(t, 5, exec.workerCount(5))
+
+	exec.maxConcurrency = 10
+	require.Equal(t, 5, exec.workerCount(5))
+
+	exec.maxConcurrency = 3
+	require.Equal(t, 3, exec.workerCount(10))
+}
+
+func TestExecutor_taskInvocationContext_CoversBranches(t *testing.T) {
+	type ctxKey string
+
+	const (
+		testKey      ctxKey = "k"
+		testValue           = "v"
+		invocationID        = "inv"
+		parentBranch        = "parent"
+		nodeID              = "child"
+	)
+
+	ctx := context.WithValue(context.Background(), testKey, testValue)
+	exec := &Executor{}
+	task := &Task{NodeID: nodeID}
+
+	gotInv, gotCtx := exec.taskInvocationContext(ctx, nil, task)
+	require.Nil(t, gotInv)
+	require.Same(t, ctx, gotCtx)
+
+	inv := &agent.Invocation{InvocationID: invocationID}
+	gotInv, gotCtx = exec.taskInvocationContext(ctx, inv, nil)
+	require.Same(t, inv, gotInv)
+	require.Same(t, ctx, gotCtx)
+
+	gotInv, gotCtx = exec.taskInvocationContext(ctx, inv, task)
+	require.NotNil(t, gotInv)
+	require.NotNil(t, gotCtx)
+	require.Equal(t, nodeID, gotInv.Branch)
+
+	inv.Branch = parentBranch
+	gotInv, gotCtx = exec.taskInvocationContext(ctx, inv, task)
+	require.NotNil(t, gotInv)
+	require.NotNil(t, gotCtx)
+	require.Equal(
+		t,
+		parentBranch+agent.BranchDelimiter+nodeID,
+		gotInv.Branch,
+	)
+}
+
+func TestExecutor_executeStepTask_RecoversFromPanic(t *testing.T) {
+	const (
+		invocationID = "inv"
+		nodeID       = "n"
+		step         = 1
+	)
+
+	exec := &Executor{}
+	task := &Task{NodeID: nodeID}
+
+	err := exec.executeStepTask(
+		context.Background(),
+		&agent.Invocation{InvocationID: invocationID},
+		nil,
+		task,
+		step,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "task panic")
+}
+
+func updateMaxInt64(max *atomic.Int64, value int64) {
+	for {
+		current := max.Load()
+		if value <= current {
+			return
+		}
+		if max.CompareAndSwap(current, value) {
+			return
+		}
+	}
+}
+
+func waitForNSignals(
+	t *testing.T,
+	ch <-chan struct{},
+	n int,
+	timeout time.Duration,
+) {
+	t.Helper()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	for i := 0; i < n; i++ {
+		select {
+		case <-ch:
+		case <-timer.C:
+			t.Fatalf("timeout waiting for %d signals", n)
+		}
+	}
+}
