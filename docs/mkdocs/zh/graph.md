@@ -252,7 +252,10 @@ schema.AddField("counter", graph.StateField{
   （例如加入包含解析信息的 system message）。
 - 并行分支：如果多个分支需要为不同的 LLM 节点准备不同的一次性输入，
   不要同时写 `one_shot_messages`，优先使用 `one_shot_messages_by_node`。
-- 需要消费上游文本结果时：紧邻下游读取 `last_response`，或在任意后续节点读取 `node_responses[节点ID]`。
+- 需要消费上游文本结果时：紧邻下游读取 `last_response`，或在任意后续节点读取
+  `node_responses[节点ID]`。
+- 如果下游是 Agent 节点，并希望它把上游输出当作自己的输入消息，需要显式把目标值写回
+  `user_input`（例如使用 `WithSubgraphInputFromLastResponse()` 或前置回调）。
 
 按节点 ID 定向的一次性消息覆盖示例：
 
@@ -1036,6 +1039,113 @@ stateGraph.AddAgentNode("assistant",
 
 > Agent 节点会以节点 ID 作为查找键，因此需确保 `AddAgentNode("assistant")`
 > 与 `subAgent.Info().Name == "assistant"` 一致。
+
+#### Agent 节点：把上游输出传给下游 Agent
+
+Agent 节点不会自动把“上游输出”作为“下游输入”。边只负责控制执行顺序；数据必须通过 State
+在节点之间显式传递。
+
+默认情况下，Agent 节点会从 `state[graph.StateKeyUserInput]` 构造子代理的输入消息。
+但 `user_input` 是**一次性**输入：LLM/Agent 节点成功执行后会清空它以避免重复消费。
+因此当你写出 `A (agent) → B (agent)` 这种链路时，很容易出现“ A 有输出，但 B 看起来没拿到输入”的现象。
+
+要让下游 Agent 消费上游结果，需要在下游 Agent 节点执行前，把目标字段写回 `user_input`：
+
+```go
+const (
+    nodeA = "a"
+    nodeB = "b"
+)
+
+sg.AddAgentNode(nodeA)
+sg.AddAgentNode(nodeB, graph.WithSubgraphInputFromLastResponse())
+sg.AddEdge(nodeA, nodeB)
+```
+
+说明：
+
+- `WithSubgraphInputFromLastResponse()` 会把当前的 `last_response` 映射到该 Agent 节点的
+  `user_input`，因此 `nodeB` 会把 `nodeA` 的输出当作输入。
+- 如果你需要消费“指定节点”的输出（而不是最近一次），可以通过前置回调从
+  `node_responses[targetNodeID]` 取值并写入 `user_input`。
+
+#### Agent 节点：拼接原始输入与上游输出
+
+有时下游 Agent 需要同时拿到：
+
+- 上游 Agent 的结果（常见是 `state[graph.StateKeyLastResponse]`），以及
+- 本次 Run 的“原始用户请求”。
+
+由于 `user_input` 是一次性输入，会在 LLM/Agent 节点成功执行后被清空，你需要把原始输入
+**持久化**到一个自定义 state key（例如 `original_user_input`），再显式拼接并写回
+下游的 `user_input`。
+
+最简单的写法是增加两个 function 节点：
+
+1. 在入口处只保存一次初始 `user_input`；
+2. 在下游 Agent 前把 `original_user_input + last_response` 写回 `user_input`。
+
+```go
+const (
+    keyOriginalUserInput = "original_user_input"
+
+    nodeSaveInput = "save_input"
+    nodeA         = "a"
+    nodeCompose   = "compose_input"
+    nodeB         = "b"
+)
+
+func saveOriginalInput(_ context.Context, s graph.State) (any, error) {
+    input, _ := s[graph.StateKeyUserInput].(string)
+    if input == "" {
+        return graph.State{}, nil
+    }
+    return graph.State{keyOriginalUserInput: input}, nil
+}
+
+func composeNextInput(_ context.Context, s graph.State) (any, error) {
+    orig, _ := s[keyOriginalUserInput].(string)
+    last, _ := s[graph.StateKeyLastResponse].(string)
+
+    // This becomes nodeB's Invocation.Message.Content.
+    combined := orig + "\n\n" + last
+    return graph.State{graph.StateKeyUserInput: combined}, nil
+}
+
+sg.AddNode(nodeSaveInput, saveOriginalInput)
+sg.AddAgentNode(nodeA)
+sg.AddNode(nodeCompose, composeNextInput)
+sg.AddAgentNode(nodeB)
+
+sg.AddEdge(nodeSaveInput, nodeA)
+sg.AddEdge(nodeA, nodeCompose)
+sg.AddEdge(nodeCompose, nodeB)
+```
+
+重要：
+
+- 把 function 节点入参里的 `graph.State` 当作只读。
+- 返回一个**增量**更新（一个小 `graph.State`），不要返回或原地修改“完整 state”。
+  否则可能会覆盖内部 key（执行上下文、回调、session 等）导致工作流异常。
+
+#### Agent 节点：输入/输出映射（进阶）
+
+Agent 节点支持两个映射器，用于控制父图/子代理之间到底传什么：
+
+- `WithSubgraphInputMapper`：父 State → 子 RuntimeState（`Invocation.RunOptions.RuntimeState`）
+- `WithSubgraphOutputMapper`：子执行结果 → 父 State 更新
+
+常见用途：
+
+- **让子代理读取结构化状态**（避免把结构化数据硬塞进 prompt）：通过
+  `WithSubgraphInputMapper` 只传递必要键。可运行示例：
+  `examples/graph/subagent_runtime_state`。
+- **把子图的结构化输出带回父图**：当子代理是 GraphAgent 时，
+  `SubgraphResult.FinalState` 会携带子图最终状态快照，可通过
+  `WithSubgraphOutputMapper` 拷贝到父 State。可运行示例：
+  `examples/graph/agent_state_handoff`。
+- **把子代理最终文本写入自定义键**：`SubgraphResult` 总会包含 `LastResponse`，
+  因此输出映射对 GraphAgent 与非图 Agent 都可用。
 
 #### Agent 节点：隔离与工具多轮
 
@@ -3642,6 +3752,36 @@ graphAgent, _ := graphagent.New("workflow", g,
   }
   ```
 - **注意**：`WithSubgraphIsolatedMessages(true)` 只对 `AddSubgraphNode` 有效，对 `AddLLMNode` 无效。
+
+**Q10: 下游 Agent 节点拿到的输入是空的**
+
+- **问题现象**：`A (agent) → B (agent)` 串联时，B 能执行但看起来没拿到 A 的输出
+  （`Invocation.Message.Content` 为空，或行为像“没输入”）。
+- **根本原因**：Agent 节点把 `user_input` 当作输入消息，并在成功执行后清空它；
+  边不会自动把上游输出“管道式”传下去。
+- **解决方案**：在下游 Agent 执行前显式把目标值写入 `user_input`：
+  ```go
+  sg.AddAgentNode("B", graph.WithSubgraphInputFromLastResponse())
+  // 或：
+  sg.AddAgentNode("B",
+      graph.WithPreNodeCallback(func(ctx context.Context, cb *graph.NodeCallbackContext, s graph.State) (any, error) {
+          if v, ok := s[graph.StateKeyLastResponse].(string); ok {
+              s[graph.StateKeyUserInput] = v
+          }
+          return nil, nil
+      }),
+  )
+  ```
+  如果你需要消费“指定节点”的输出，可从 `node_responses[targetNodeID]` 取值并写入 `user_input`。
+
+**Q11: 下游 Agent 既要原始输入也要上游输出**
+
+- **问题现象**：你使用 `WithSubgraphInputFromLastResponse()` 让下游 Agent 把
+  `last_response` 当作当前输入，但你还希望它同时拿到本次 Run 的原始用户请求。
+- **解决方案**：把原始 `user_input` 持久化到自定义 state key（例如
+  `original_user_input`），并在下游 Agent 节点执行前用 function 节点把
+  `original + upstream` 显式拼接写回 `user_input`。
+  见“Agent 节点：拼接原始输入与上游输出”。
 
 ## 实际案例
 
