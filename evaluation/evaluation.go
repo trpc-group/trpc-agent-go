@@ -237,9 +237,16 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 		threshold float64
 		criterion *criterion.Criterion
 	}
+	hasRunError := false
 	// Group metrics results by metric name.
 	aggregatedMetrics := make(map[string]*aggregatedMetric)
 	for _, run := range runs {
+		if run == nil {
+			continue
+		}
+		if run.ErrorMessage != "" {
+			hasRunError = true
+		}
 		for _, metric := range run.OverallEvalMetricResults {
 			// Skip metrics that did not run to avoid diluting averaged scores.
 			if metric.EvalStatus == status.EvalStatusNotEvaluated {
@@ -269,13 +276,16 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 			Criterion:  aggregatedMetric.criterion,
 		})
 	}
-	status, err := istatus.SummarizeMetricsStatus(metricResults)
+	overallStatus, err := istatus.SummarizeMetricsStatus(metricResults)
 	if err != nil {
 		return nil, fmt.Errorf("summarize metrics status: %w", err)
 	}
+	if overallStatus == status.EvalStatusNotEvaluated && hasRunError {
+		overallStatus = status.EvalStatusFailed
+	}
 	return &EvaluationCaseResult{
 		EvalCaseID:      caseID,
-		OverallStatus:   status,
+		OverallStatus:   overallStatus,
 		EvalCaseResults: runs,
 		MetricResults:   metricResults,
 	}, nil
