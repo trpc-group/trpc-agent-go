@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -107,6 +108,117 @@ func TestGraphAgentWithOptions(t *testing.T) {
 	info := graphAgent.Info()
 	if info.Description != "Test agent description" {
 		t.Errorf("Expected description to be set")
+	}
+}
+
+func TestGraphAgent_WithMaxConcurrency(t *testing.T) {
+	const (
+		nodeRoot       = "root"
+		nodeCount      = 12
+		maxConcurrency = 3
+		waitTimeout    = 2 * time.Second
+	)
+
+	stateGraph := graph.NewStateGraph(graph.NewStateSchema())
+	stateGraph.AddNode(nodeRoot, func(context.Context, graph.State) (any, error) {
+		return nil, nil
+	})
+	stateGraph.SetEntryPoint(nodeRoot)
+
+	var active atomic.Int64
+	var maxActive atomic.Int64
+	started := make(chan struct{}, nodeCount)
+	unblock := make(chan struct{})
+
+	worker := func(ctx context.Context, state graph.State) (any, error) {
+		cur := active.Add(1)
+		updateMaxInt64(&maxActive, cur)
+		started <- struct{}{}
+		<-unblock
+		active.Add(-1)
+		return nil, nil
+	}
+
+	for i := 0; i < nodeCount; i++ {
+		nodeID := fmt.Sprintf("w%d", i)
+		stateGraph.AddNode(nodeID, worker)
+		stateGraph.AddEdge(nodeRoot, nodeID)
+	}
+
+	g, err := stateGraph.Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New(
+		"test-agent",
+		g,
+		WithMaxConcurrency(maxConcurrency),
+	)
+	require.NoError(t, err)
+
+	invocation := &agent.Invocation{
+		Agent:        graphAgent,
+		AgentName:    "test-agent",
+		InvocationID: "inv-max-concurrency",
+	}
+
+	events, err := graphAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		for range events {
+		}
+		close(done)
+	}()
+
+	waitForNSignals(t, started, maxConcurrency, waitTimeout)
+
+	select {
+	case <-started:
+		t.Fatalf("expected at most %d tasks to start", maxConcurrency)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(unblock)
+
+	select {
+	case <-done:
+	case <-time.After(waitTimeout):
+		t.Fatal("timeout waiting for graphagent to complete")
+	}
+
+	require.LessOrEqual(t, maxActive.Load(), int64(maxConcurrency))
+}
+
+func updateMaxInt64(max *atomic.Int64, value int64) {
+	for {
+		current := max.Load()
+		if value <= current {
+			return
+		}
+		if max.CompareAndSwap(current, value) {
+			return
+		}
+	}
+}
+
+func waitForNSignals(
+	t *testing.T,
+	ch <-chan struct{},
+	n int,
+	timeout time.Duration,
+) {
+	t.Helper()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	for i := 0; i < n; i++ {
+		select {
+		case <-ch:
+		case <-timer.C:
+			t.Fatalf("timeout waiting for %d signals", n)
+		}
 	}
 }
 
