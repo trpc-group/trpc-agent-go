@@ -164,18 +164,17 @@ func (p *Planner) isIntentDescription(content string) bool {
 		return false
 	}
 
-	// Common patterns that indicate intent to take action
+	// Common patterns that indicate intent to take action.
+	// Keep these relatively specific to avoid matching benign phrases
+	// in otherwise valid final answers.
 	intentPatterns := []string{
 		"I will ",
 		"I'll ",
 		"I am going to ",
-		"Let me ",
-		"I need to ",
-		"I should ",
 		"I'm going to ",
-		ActionTag,      // /*ACTION*/ tag without actual tool call
-		PlanningTag,    // /*PLANNING*/ tag indicates still planning
-		ReplanningTag,  // /*REPLANNING*/ tag indicates replanning
+		ActionTag,     // /*ACTION*/ tag without actual tool call
+		PlanningTag,   // /*PLANNING*/ tag indicates still planning
+		ReplanningTag, // /*REPLANNING*/ tag indicates replanning
 	}
 
 	for _, pattern := range intentPatterns {
