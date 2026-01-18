@@ -27,7 +27,7 @@ const (
 
 	defaultAsyncSummaryNum   = 3
 	defaultSummaryQueueSize  = 100
-	defaultSummaryJobTimeout = 30 * time.Second
+	defaultSummaryJobTimeout = 60 * time.Second
 )
 
 // ServiceOpts is the options for the MySQL session service.
