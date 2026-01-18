@@ -22,8 +22,9 @@ const (
 	defaultChanBufferSize      = 100
 	defaultAsyncPersisterNum   = 10
 
-	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 100
+	defaultAsyncSummaryNum   = 3
+	defaultSummaryQueueSize  = 100
+	defaultSummaryJobTimeout = 60 * time.Second
 )
 
 // ServiceOpts is the options for the redis session service.
@@ -63,7 +64,7 @@ var (
 		enableAsyncPersist: false,
 		asyncSummaryNum:    defaultAsyncSummaryNum,
 		summaryQueueSize:   defaultSummaryQueueSize,
-		summaryJobTimeout:  30 * time.Second,
+		summaryJobTimeout:  defaultSummaryJobTimeout,
 	}
 )
 

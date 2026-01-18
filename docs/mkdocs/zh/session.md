@@ -415,7 +415,7 @@ tRPC-Agent-Go 提供五种会话存储后端，满足不同场景需求：
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
 
 ### 基础配置示例
 
@@ -466,7 +466,7 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithSummarizer(summarizer),
     inmemory.WithAsyncSummaryNum(2),
     inmemory.WithSummaryQueueSize(100),
-    inmemory.WithSummaryJobTimeout(30*time.Second),
+    inmemory.WithSummaryJobTimeout(60*time.Second),
 )
 ```
 
@@ -487,7 +487,7 @@ sessionService := inmemory.NewSessionService(
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
 - **`WithExtraOptions(extraOptions ...interface{})`**：为 Redis 客户端设置额外选项。
 
 ### 基础配置示例
@@ -620,7 +620,7 @@ summary:{appName}:{userID}:{sessionID}:{filterKey} -> String (JSON)
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
 
 **Schema 和表配置：**
 
@@ -811,7 +811,7 @@ sessionService, err := postgres.NewService(
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
 
 **表配置：**
 
@@ -1481,7 +1481,7 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithSummarizer(summarizer),
     inmemory.WithAsyncSummaryNum(2),                // 2 个异步 worker
     inmemory.WithSummaryQueueSize(100),             // 队列大小 100
-    inmemory.WithSummaryJobTimeout(30*time.Second), // 单个任务超时 30 秒
+    inmemory.WithSummaryJobTimeout(60*time.Second), // 单个任务超时 60 秒
 )
 
 // Redis 存储（生产环境）
@@ -1806,9 +1806,9 @@ summarizer := summary.NewSummarizer(
 在会话服务中配置异步摘要处理：
 
 - **`WithSummarizer(s summary.SessionSummarizer)`**：将摘要器注入到会话服务中。
-- **`WithAsyncSummaryNum(num int)`**：设置用于摘要处理的异步 worker goroutine 数量。默认为 2。更多 worker 允许更高并发但消耗更多资源。
+- **`WithAsyncSummaryNum(num int)`**：设置用于摘要处理的异步 worker goroutine 数量。默认为 3。更多 worker 允许更高并发但消耗更多资源。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列的大小。默认为 100。更大的队列允许更多待处理任务但消耗更多内存。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置处理单个摘要任务的超时时间。默认为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置处理单个摘要任务的超时时间。默认为 60 秒。
 
 ### 手动触发摘要
 
@@ -2016,7 +2016,7 @@ func main() {
         inmemory.WithSummarizer(summarizer),
         inmemory.WithAsyncSummaryNum(2),
         inmemory.WithSummaryQueueSize(100),
-        inmemory.WithSummaryJobTimeout(30*time.Second),
+        inmemory.WithSummaryJobTimeout(60*time.Second),
     )
 
     // 创建启用摘要注入的 agent
