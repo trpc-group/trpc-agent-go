@@ -25,8 +25,9 @@ const (
 	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
 	defaultAsyncPersistTimeout   = 5 * time.Second
 
-	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 100
+	defaultAsyncSummaryNum   = 3
+	defaultSummaryQueueSize  = 100
+	defaultSummaryJobTimeout = 60 * time.Second
 
 	defaultHost     = "localhost"
 	defaultPort     = 5432
@@ -103,7 +104,7 @@ var (
 		enableAsyncPersist: false,
 		asyncSummaryNum:    defaultAsyncSummaryNum,
 		summaryQueueSize:   defaultSummaryQueueSize,
-		summaryJobTimeout:  30 * time.Second,
+		summaryJobTimeout:  defaultSummaryJobTimeout,
 		softDelete:         true, // Enable soft delete by default
 		cleanupInterval:    0,
 	}
