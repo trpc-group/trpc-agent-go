@@ -294,19 +294,23 @@ func (f *Flow) processStreamingResponses(
 			response = customResp
 		}
 
-		// 4. Create and send LLM response using the clean constructor.
+		// 4. Postprocess response BEFORE creating and sending the event.
+		// This allows processors (like CodeExecutionResponseProcessor) to modify the response
+		// before it's sent to the event channel. This is critical for:
+		// - Code execution: processor can clear Done flag so the response isn't treated as final
+		// - Any other processor that needs to modify the response before it's consumed
+		f.postprocess(ctx, invocation, llmRequest, response, eventChan)
+		if err := agent.CheckContextCancelled(ctx); err != nil {
+			return lastEvent, err
+		}
+
+		// 5. Create and send LLM response using the clean constructor.
 		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
 		agent.EmitEvent(ctx, invocation, eventChan, llmResponseEvent)
 		lastEvent = llmResponseEvent
 		tracker.SetLastEvent(lastEvent)
-		// 5. Check context cancellation.
+		// 6. Check context cancellation.
 		if err = agent.CheckContextCancelled(ctx); err != nil {
-			return lastEvent, err
-		}
-
-		// 6. Postprocess response.
-		f.postprocess(ctx, invocation, llmRequest, response, eventChan)
-		if err := agent.CheckContextCancelled(ctx); err != nil {
 			return lastEvent, err
 		}
 

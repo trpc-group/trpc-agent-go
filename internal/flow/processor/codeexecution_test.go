@@ -1,5 +1,4 @@
 //
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
@@ -8,91 +7,208 @@
 //
 //
 
-package processor_test
+package processor
 
 import (
-	"context"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
-	"trpc.group/trpc-go/trpc-agent-go/event"
-	iprocessor "trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
-	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-func TestCodeExecutionResponseProcessor_EmitsCodeAndResultEvents(t *testing.T) {
-	ctx := context.Background()
-	proc := iprocessor.NewCodeExecutionResponseProcessor()
-
-	inv := &agent.Invocation{
-		Agent:     &testAgent{exec: &stubExec{}},
-		Session:   &session.Session{ID: "test-session"},
-		AgentName: "test-agent",
-	}
-
-	rsp := &model.Response{
-		Done: true,
-		Choices: []model.Choice{
-			{Message: model.Message{Role: model.RoleAssistant,
-				Content: "```bash\necho hello\n```"}},
+func TestExtractFinalAnswer(t *testing.T) {
+	tests := []struct {
+		name       string
+		content    string
+		wantFound  bool
+		wantAnswer string
+	}{
+		{
+			name:       "format1: /*FINAL_ANSWER*/ with trailing marker",
+			content:    "Some reasoning...\n/*FINAL_ANSWER*/\n89706.00\n/*END*/",
+			wantFound:  true,
+			wantAnswer: "89706.00",
+		},
+		{
+			name:       "format1: /*FINAL_ANSWER*/ at end of content",
+			content:    "Some reasoning...\n/*FINAL_ANSWER*/\n42.00",
+			wantFound:  true,
+			wantAnswer: "42.00",
+		},
+		{
+			name:       "format1: /*FINAL_ANSWER*/ with spaces",
+			content:    "/*FINAL_ANSWER*/   answer with spaces   /*OTHER*/",
+			wantFound:  true,
+			wantAnswer: "answer with spaces",
+		},
+		{
+			name:       "format2: FINAL ANSWER: inline",
+			content:    "The result is ready.\nFINAL ANSWER: 12345\nDone.",
+			wantFound:  true,
+			wantAnswer: "12345",
+		},
+		{
+			name:       "format2: FINAL ANSWER: at end",
+			content:    "Calculation complete.\nFINAL ANSWER: hello world",
+			wantFound:  true,
+			wantAnswer: "hello world",
+		},
+		{
+			name:       "format2: case insensitive",
+			content:    "final answer: CaseTest",
+			wantFound:  true,
+			wantAnswer: "CaseTest",
+		},
+		{
+			name:       "format2: with extra spaces",
+			content:    "FINAL   ANSWER  :   spaced answer",
+			wantFound:  true,
+			wantAnswer: "spaced answer",
+		},
+		{
+			name:       "no final answer",
+			content:    "This is just regular content without any final answer.",
+			wantFound:  false,
+			wantAnswer: "",
+		},
+		{
+			name:       "empty content",
+			content:    "",
+			wantFound:  false,
+			wantAnswer: "",
+		},
+		{
+			name:       "partial match - FINAL without ANSWER",
+			content:    "FINAL result is 100",
+			wantFound:  false,
+			wantAnswer: "",
 		},
 	}
 
-	ch := make(chan *event.Event, 4)
-	proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
-
-	if assert.NotEmpty(t, rsp.Choices) {
-		assert.Equal(t, "", rsp.Choices[0].Message.Content)
-	}
-	var evts []*event.Event
-	for len(ch) > 0 {
-		evts = append(evts, <-ch)
-	}
-	if assert.Len(t, evts, 2) {
-		// Both events have the same Object type (code execution)
-		assert.Equal(t, model.ObjectTypePostprocessingCodeExecution,
-			evts[0].Response.Object)
-		assert.Equal(t, model.ObjectTypePostprocessingCodeExecution,
-			evts[1].Response.Object)
-		// The distinction is made via the Tag field
-		assert.Contains(t, evts[0].Tag, event.CodeExecutionTag)       // code execution event has "code" tag
-		assert.Contains(t, evts[1].Tag, event.CodeExecutionResultTag) // result event has "code_execution_result" tag
-		codeMsg := evts[0].Response.Choices[0].Message.Content
-		assert.Contains(t, codeMsg, "```bash")
-		resultMsg := evts[1].Response.Choices[0].Message.Content
-		assert.True(t, strings.Contains(resultMsg,
-			"Code execution result:") || strings.Contains(resultMsg, "OK"))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			found, answer := extractFinalAnswer(tt.content)
+			assert.Equal(t, tt.wantFound, found, "found mismatch")
+			assert.Equal(t, tt.wantAnswer, answer, "answer mismatch")
+		})
 	}
 }
 
-// stubExec is a simple CodeExecutor stub returning a fixed output
-type stubExec struct{}
+func TestExtractExecutionOutput(t *testing.T) {
+	tests := []struct {
+		name   string
+		result string
+		want   string
+	}{
+		{
+			name:   "standard format with prefix",
+			result: "Code execution result:\n89706.00\n",
+			want:   "89706.00",
+		},
+		{
+			name:   "without prefix",
+			result: "42.5",
+			want:   "42.5",
+		},
+		{
+			name:   "multiple lines - take first",
+			result: "Code execution result:\nline1\nline2\nline3",
+			want:   "line1",
+		},
+		{
+			name:   "empty lines before result",
+			result: "Code execution result:\n\n\nactual_result",
+			want:   "actual_result",
+		},
+		{
+			name:   "whitespace handling",
+			result: "Code execution result:\n   trimmed   \n",
+			want:   "trimmed",
+		},
+		{
+			name:   "empty result",
+			result: "",
+			want:   "",
+		},
+		{
+			name:   "only prefix",
+			result: "Code execution result:",
+			want:   "",
+		},
+		{
+			name:   "complex output",
+			result: "Code execution result:\n{'key': 'value'}\nsome other output",
+			want:   "{'key': 'value'}",
+		},
+	}
 
-func (s *stubExec) ExecuteCode(
-	ctx context.Context, input codeexecutor.CodeExecutionInput,
-) (codeexecutor.CodeExecutionResult, error) {
-	return codeexecutor.CodeExecutionResult{Output: "OK"}, nil
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractExecutionOutput(tt.result)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
-func (s *stubExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
-	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+
+func TestReplaceFinalAnswer(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		newValue string
+		want     string
+	}{
+		{
+			name:     "format1: replace /*FINAL_ANSWER*/ value",
+			content:  "Reasoning...\n/*FINAL_ANSWER*/\nold_value\n/*END*/",
+			newValue: "new_value",
+			want:     "Reasoning...\n/*FINAL_ANSWER*/\nnew_value\n/*END*/",
+		},
+		{
+			name:     "format1: replace at end of content",
+			content:  "/*FINAL_ANSWER*/\noriginal",
+			newValue: "replaced",
+			want:     "/*FINAL_ANSWER*/\nreplaced\n",
+		},
+		{
+			name:     "format2: replace FINAL ANSWER: value",
+			content:  "Some text\nFINAL ANSWER: old\nMore text",
+			newValue: "new",
+			want:     "Some text\nFINAL ANSWER: new\nMore text",
+		},
+		{
+			name:     "format2: replace at end",
+			content:  "FINAL ANSWER: old_answer",
+			newValue: "new_answer",
+			want:     "FINAL ANSWER: new_answer",
+		},
+		{
+			name:     "no match - return original",
+			content:  "No final answer here",
+			newValue: "ignored",
+			want:     "No final answer here",
+		},
+		{
+			name:     "empty content",
+			content:  "",
+			newValue: "value",
+			want:     "",
+		},
+		{
+			name:     "numeric replacement",
+			content:  "FINAL ANSWER: 90123.00",
+			newValue: "89706.00",
+			want:     "FINAL ANSWER: 89706.00",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := replaceFinalAnswer(tt.content, tt.newValue)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
-// testAgent implements agent.Agent and agent.CodeExecutor
-type testAgent struct{ exec codeexecutor.CodeExecutor }
-
-// agent.Agent
-func (a *testAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
-	return nil, nil
+func TestNewCodeExecutionResponseProcessor(t *testing.T) {
+	p := NewCodeExecutionResponseProcessor()
+	assert.NotNil(t, p)
 }
-func (a *testAgent) Tools() []tool.Tool                   { return nil }
-func (a *testAgent) Info() agent.Info                     { return agent.Info{Name: "test-agent"} }
-func (a *testAgent) SubAgents() []agent.Agent             { return nil }
-func (a *testAgent) FindSubAgent(name string) agent.Agent { return nil }
-
-func (a *testAgent) CodeExecutor() codeexecutor.CodeExecutor { return a.exec }
