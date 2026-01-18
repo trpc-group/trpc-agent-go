@@ -20,8 +20,9 @@ const (
 	defaultSessionEventLimit     = 1000
 	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
 
-	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 100
+	defaultAsyncSummaryNum   = 3
+	defaultSummaryQueueSize  = 100
+	defaultSummaryJobTimeout = 60 * time.Second
 )
 
 // serviceOpts is the options for session service.
@@ -60,7 +61,7 @@ var (
 		cleanupInterval:   0,
 		asyncSummaryNum:   defaultAsyncSummaryNum,
 		summaryQueueSize:  defaultSummaryQueueSize,
-		summaryJobTimeout: 30 * time.Second,
+		summaryJobTimeout: defaultSummaryJobTimeout,
 	}
 )
 
