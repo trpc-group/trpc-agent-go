@@ -87,10 +87,10 @@ func (p *Planner) BuildPlanningInstruction(
 // tool calls to ensure only valid function calls are preserved.
 //
 // This method:
-// - Filters out tool calls with empty function names
-// - Detects intent descriptions (e.g., "I will...") without actual tool calls
-//   and marks them as non-final to prevent premature termination
-// - Preserves all other response content unchanged
+//   - Filters out tool calls with empty function names
+//   - Detects intent descriptions (e.g., "I will...") without actual tool calls
+//     and marks them as non-final to prevent premature termination
+//   - Preserves all other response content unchanged
 func (p *Planner) ProcessPlanningResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
