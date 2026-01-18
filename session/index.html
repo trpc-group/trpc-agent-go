@@ -3806,7 +3806,7 @@
 <li><strong><code>WithSummarizer(s summary.SessionSummarizer)</code></strong>: Inject session summarizer.</li>
 <li><strong><code>WithAsyncSummaryNum(num int)</code></strong>: Set number of summary processing workers. Default is 3.</li>
 <li><strong><code>WithSummaryQueueSize(size int)</code></strong>: Set summary task queue size. Default is 100.</li>
-<li><strong><code>WithSummaryJobTimeout(timeout time.Duration)</code></strong>: Set timeout for single summary task. Default is 30 seconds.</li>
+<li><strong><code>WithSummaryJobTimeout(timeout time.Duration)</code></strong>: Set timeout for single summary task. Default is 60 seconds.</li>
 </ul>
 <h3 id="basic-configuration-example">Basic Configuration Example</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1"> 1</a></span>
@@ -3893,7 +3893,7 @@
 </span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummarizer</span><span class="p">(</span><span class="nx">summarizer</span><span class="p">),</span>
 </span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithAsyncSummaryNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
 </span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryQueueSize</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span>
-</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryJobTimeout</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span>
+</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryJobTimeout</span><span class="p">(</span><span class="mi">60</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span>
 </span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="redis-storage">Redis Storage</h2>
@@ -4080,7 +4080,7 @@
 <li><strong><code>WithSummarizer(s summary.SessionSummarizer)</code></strong>: Inject session summarizer.</li>
 <li><strong><code>WithAsyncSummaryNum(num int)</code></strong>: Number of summary processing workers. Default is 3.</li>
 <li><strong><code>WithSummaryQueueSize(size int)</code></strong>: Summary task queue size. Default is 100.</li>
-<li><strong><code>WithSummaryJobTimeout(timeout time.Duration)</code></strong>: Set timeout for single summary task. Default is 30 seconds.</li>
+<li><strong><code>WithSummaryJobTimeout(timeout time.Duration)</code></strong>: Set timeout for single summary task. Default is 60 seconds.</li>
 </ul>
 <p><strong>Schema and Table Configuration:</strong></p>
 <ul>
@@ -4407,7 +4407,7 @@
 <li><strong><code>WithSummarizer(s summary.SessionSummarizer)</code></strong>: Inject session summarizer.</li>
 <li><strong><code>WithAsyncSummaryNum(num int)</code></strong>: Number of summary processing workers. Default is 3.</li>
 <li><strong><code>WithSummaryQueueSize(size int)</code></strong>: Summary task queue size. Default is 100.</li>
-<li><strong><code>WithSummaryJobTimeout(timeout time.Duration)</code></strong>: Set timeout for single summary task. Default is 30 seconds.</li>
+<li><strong><code>WithSummaryJobTimeout(timeout time.Duration)</code></strong>: Set timeout for single summary task. Default is 60 seconds.</li>
 </ul>
 <p><strong>Table Configuration:</strong></p>
 <ul>
@@ -5446,7 +5446,7 @@
 </span><span id="__span-37-10"><a id="__codelineno-37-10" name="__codelineno-37-10"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummarizer</span><span class="p">(</span><span class="nx">summarizer</span><span class="p">),</span>
 </span><span id="__span-37-11"><a id="__codelineno-37-11" name="__codelineno-37-11"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithAsyncSummaryNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="w">                </span><span class="c1">// 2 async workers.</span>
 </span><span id="__span-37-12"><a id="__codelineno-37-12" name="__codelineno-37-12"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryQueueSize</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span><span class="w">             </span><span class="c1">// Queue size 100.</span>
-</span><span id="__span-37-13"><a id="__codelineno-37-13" name="__codelineno-37-13"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryJobTimeout</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span><span class="w"> </span><span class="c1">// 30s timeout per job.</span>
+</span><span id="__span-37-13"><a id="__codelineno-37-13" name="__codelineno-37-13"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryJobTimeout</span><span class="p">(</span><span class="mi">60</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span><span class="w"> </span><span class="c1">// 60s timeout per job.</span>
 </span><span id="__span-37-14"><a id="__codelineno-37-14" name="__codelineno-37-14"></a><span class="p">)</span>
 </span><span id="__span-37-15"><a id="__codelineno-37-15" name="__codelineno-37-15"></a>
 </span><span id="__span-37-16"><a id="__codelineno-37-16" name="__codelineno-37-16"></a><span class="c1">// Option 2: Redis session service with summarizer.</span>
@@ -5737,9 +5737,9 @@
 <p>Configure async summary processing in session services:</p>
 <ul>
 <li><strong><code>WithSummarizer(s summary.SessionSummarizer)</code></strong>: Inject the summarizer into the session service.</li>
-<li><strong><code>WithAsyncSummaryNum(num int)</code></strong>: Set the number of async worker goroutines for summary processing. Default is 2. More workers allow higher concurrency but consume more resources.</li>
+<li><strong><code>WithAsyncSummaryNum(num int)</code></strong>: Set the number of async worker goroutines for summary processing. Default is 3. More workers allow higher concurrency but consume more resources.</li>
 <li><strong><code>WithSummaryQueueSize(size int)</code></strong>: Set the size of the summary job queue. Default is 100. Larger queues allow more pending jobs but consume more memory.</li>
-<li><strong><code>WithSummaryJobTimeout(timeout time.Duration)</code></strong>: Set the timeout for processing a single summary job. Default is 30 seconds.</li>
+<li><strong><code>WithSummaryJobTimeout(timeout time.Duration)</code></strong>: Set the timeout for processing a single summary job. Default is 60 seconds.</li>
 </ul>
 <h3 id="manual-summarization">Manual Summarization</h3>
 <p>You can manually trigger summarization using the session service APIs:</p>
@@ -6138,7 +6138,7 @@
 </span><span id="__span-48-34"><a id="__codelineno-48-34" name="__codelineno-48-34"></a><span class="w">        </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummarizer</span><span class="p">(</span><span class="nx">summarizer</span><span class="p">),</span>
 </span><span id="__span-48-35"><a id="__codelineno-48-35" name="__codelineno-48-35"></a><span class="w">        </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithAsyncSummaryNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
 </span><span id="__span-48-36"><a id="__codelineno-48-36" name="__codelineno-48-36"></a><span class="w">        </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryQueueSize</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span>
-</span><span id="__span-48-37"><a id="__codelineno-48-37" name="__codelineno-48-37"></a><span class="w">        </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryJobTimeout</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span>
+</span><span id="__span-48-37"><a id="__codelineno-48-37" name="__codelineno-48-37"></a><span class="w">        </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryJobTimeout</span><span class="p">(</span><span class="mi">60</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span>
 </span><span id="__span-48-38"><a id="__codelineno-48-38" name="__codelineno-48-38"></a><span class="w">    </span><span class="p">)</span>
 </span><span id="__span-48-39"><a id="__codelineno-48-39" name="__codelineno-48-39"></a>
 </span><span id="__span-48-40"><a id="__codelineno-48-40" name="__codelineno-48-40"></a><span class="w">    </span><span class="c1">// Create agent with summary injection enabled.</span>
@@ -6191,7 +6191,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 07:45:32 UTC">2026-01-08 07:45:32</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 18, 2026 03:42:19 UTC">2026-01-18 03:42:19</span>
   </span>
 
     
