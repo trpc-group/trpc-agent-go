@@ -203,6 +203,20 @@ func WithRetryPolicy(policies ...RetryPolicy) Option {
 	}
 }
 
+// WithInterruptBefore pauses execution before this node runs.
+func WithInterruptBefore() Option {
+	return func(node *Node) {
+		node.interruptBefore = true
+	}
+}
+
+// WithInterruptAfter pauses execution after this node runs.
+func WithInterruptAfter() Option {
+	return func(node *Node) {
+		node.interruptAfter = true
+	}
+}
+
 // WithGenerationConfig sets the generation config for an LLM node.
 // Effective only for nodes added via AddLLMNode.
 func WithGenerationConfig(cfg model.GenerationConfig) Option {
@@ -511,6 +525,54 @@ func (sg *StateGraph) AddAgentNode(
 // AddSubgraphNode is a sugar alias of AddAgentNode to emphasize subgraph semantics.
 func (sg *StateGraph) AddSubgraphNode(id string, opts ...Option) *StateGraph {
 	return sg.AddAgentNode(id, opts...)
+}
+
+// WithInterruptBeforeNodes enables static interrupts before the given nodes.
+func (sg *StateGraph) WithInterruptBeforeNodes(
+	nodeIDs ...string,
+) *StateGraph {
+	sg.setStaticInterruptNodes(nodeIDs, true)
+	return sg
+}
+
+// WithInterruptAfterNodes enables static interrupts after the given nodes.
+func (sg *StateGraph) WithInterruptAfterNodes(
+	nodeIDs ...string,
+) *StateGraph {
+	sg.setStaticInterruptNodes(nodeIDs, false)
+	return sg
+}
+
+func (sg *StateGraph) setStaticInterruptNodes(
+	nodeIDs []string,
+	before bool,
+) {
+	for _, nodeID := range nodeIDs {
+		sg.graph.mu.Lock()
+		node, ok := sg.graph.nodes[nodeID]
+		if ok && node != nil {
+			if before {
+				node.interruptBefore = true
+			} else {
+				node.interruptAfter = true
+			}
+		}
+		sg.graph.mu.Unlock()
+
+		if !ok || node == nil {
+			if before {
+				sg.addBuildError(fmt.Errorf(
+					"WithInterruptBeforeNodes(%q): node not found",
+					nodeID,
+				))
+				continue
+			}
+			sg.addBuildError(fmt.Errorf(
+				"WithInterruptAfterNodes(%q): node not found",
+				nodeID,
+			))
+		}
+	}
 }
 
 // channelUpdateMarker value for marking channel updates.
@@ -1066,23 +1128,31 @@ func (r *llmRunner) executeModel(
 	if r.refreshToolSetsOnRun && len(r.toolSets) > 0 {
 		tools = mergeToolsWithToolSets(ctx, tools, r.toolSets)
 	}
+	nodeID := r.nodeID
+	if v, ok := state[StateKeyCurrentNodeID].(string); ok && v != "" {
+		nodeID = v
+	}
 	request := &model.Request{
 		Messages:         messages,
 		Tools:            tools,
 		GenerationConfig: r.generationConfig,
 	}
-	if inv, ok := agent.InvocationFromContext(ctx); ok &&
-		inv != nil && inv.RunOptions.Stream != nil {
-		request.GenerationConfig.Stream = *inv.RunOptions.Stream
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+		if opts := graphCallOptionsFromConfigs(
+			inv.RunOptions.CustomAgentConfigs,
+		); opts != nil {
+			patch := generationPatchForNode(opts, nodeID)
+			request.GenerationConfig = model.ApplyGenerationConfigPatch(
+				request.GenerationConfig,
+				patch,
+			)
+		}
+		if inv.RunOptions.Stream != nil {
+			request.GenerationConfig.Stream = *inv.RunOptions.Stream
+		}
 	}
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
-	var nodeID string
-	if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
-		if id, ok := nodeIDData.(string); ok {
-			nodeID = id
-		}
-	}
 	// Build model input metadata from the original state and instruction
 	// so events accurately reflect both instruction and user input.
 	modelInput := extractModelInput(state, instructionUsed)
@@ -2036,6 +2106,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			parentForInput,
 			childState,
 			targetAgent,
+			nodeID,
 			cfg.scope,
 		)
 
@@ -2262,6 +2333,7 @@ func buildAgentInvocationWithStateAndScope(
 	parentState State,
 	runtime State,
 	targetAgent agent.Agent,
+	nodeID string,
 	scope string,
 ) *agent.Invocation {
 	// Extract user input from parent state.
@@ -2284,6 +2356,10 @@ func buildAgentInvocationWithStateAndScope(
 		parentInvocation != nil {
 		runOptions := parentInvocation.RunOptions
 		runOptions.RuntimeState = runtime
+		runOptions.CustomAgentConfigs = withScopedGraphCallOptions(
+			runOptions.CustomAgentConfigs,
+			nodeID,
+		)
 
 		base := util.If(scope != "", scope, targetAgent.Info().Name)
 		parentKey := parentInvocation.GetEventFilterKey()
@@ -2343,19 +2419,23 @@ func runBeforeToolPluginCallbacks(
 		Arguments:   toolCall.Function.Arguments,
 	}
 	result, err := callbacks.RunBeforeTool(ctx, args)
-	if err != nil {
-		return ctx, toolCall, nil,
-			fmt.Errorf(errCallbackBeforeTool, err)
-	}
 
 	if result != nil && result.Context != nil {
 		ctx = result.Context
 	}
-	if result != nil && result.CustomResult != nil {
-		return ctx, toolCall, result.CustomResult, nil
-	}
 	if result != nil && result.ModifiedArguments != nil {
 		toolCall.Function.Arguments = result.ModifiedArguments
+	}
+	if result != nil && result.CustomResult != nil {
+		if err != nil {
+			return ctx, toolCall, result.CustomResult,
+				fmt.Errorf(errCallbackBeforeTool, err)
+		}
+		return ctx, toolCall, result.CustomResult, nil
+	}
+	if err != nil {
+		return ctx, toolCall, nil,
+			fmt.Errorf(errCallbackBeforeTool, err)
 	}
 	return ctx, toolCall, nil, nil
 }
@@ -2377,19 +2457,23 @@ func runBeforeToolCallbacks(
 		Arguments:   toolCall.Function.Arguments,
 	}
 	result, err := toolCallbacks.RunBeforeTool(ctx, args)
-	if err != nil {
-		return ctx, toolCall, nil,
-			fmt.Errorf(errCallbackBeforeTool, err)
-	}
-
 	if result != nil && result.Context != nil {
 		ctx = result.Context
 	}
-	if result != nil && result.CustomResult != nil {
-		return ctx, toolCall, result.CustomResult, nil
-	}
 	if result != nil && result.ModifiedArguments != nil {
 		toolCall.Function.Arguments = result.ModifiedArguments
+	}
+	if result != nil && result.CustomResult != nil {
+		if err != nil {
+			return ctx, toolCall, result.CustomResult,
+				fmt.Errorf(errCallbackBeforeTool, err)
+		}
+		return ctx, toolCall, result.CustomResult, nil
+	}
+
+	if err != nil {
+		return ctx, toolCall, nil,
+			fmt.Errorf(errCallbackBeforeTool, err)
 	}
 	return ctx, toolCall, nil, nil
 }
@@ -2431,15 +2515,18 @@ func runAfterToolPluginCallbacks(
 		Error:       runErr,
 	}
 	afterResult, err := callbacks.RunAfterTool(ctx, args)
-	if err != nil {
-		return ctx, nil, fmt.Errorf(errCallbackAfterTool, err)
-	}
-
 	if afterResult != nil && afterResult.Context != nil {
 		ctx = afterResult.Context
 	}
 	if afterResult != nil && afterResult.CustomResult != nil {
+		if err != nil {
+			return ctx, afterResult.CustomResult,
+				fmt.Errorf(errCallbackAfterTool, err)
+		}
 		return ctx, afterResult.CustomResult, nil
+	}
+	if err != nil {
+		return ctx, nil, fmt.Errorf(errCallbackAfterTool, err)
 	}
 	return ctx, nil, nil
 }
@@ -2465,15 +2552,18 @@ func runAfterToolCallbacks(
 		Error:       runErr,
 	}
 	afterResult, err := toolCallbacks.RunAfterTool(ctx, args)
-	if err != nil {
-		return ctx, nil, fmt.Errorf(errCallbackAfterTool, err)
-	}
-
 	if afterResult != nil && afterResult.Context != nil {
 		ctx = afterResult.Context
 	}
 	if afterResult != nil && afterResult.CustomResult != nil {
+		if err != nil {
+			return ctx, afterResult.CustomResult,
+				fmt.Errorf(errCallbackAfterTool, err)
+		}
 		return ctx, afterResult.CustomResult, nil
+	}
+	if err != nil {
+		return ctx, nil, fmt.Errorf(errCallbackAfterTool, err)
 	}
 	return ctx, nil, nil
 }
@@ -2506,7 +2596,7 @@ func runTool(
 		decl,
 	)
 	if err != nil {
-		return ctx, nil, toolCall.Function.Arguments, err
+		return ctx, customResult, toolCall.Function.Arguments, err
 	}
 	if customResult != nil {
 		return ctx, customResult, toolCall.Function.Arguments, nil
@@ -2519,7 +2609,7 @@ func runTool(
 		toolCallbacks,
 	)
 	if err != nil {
-		return ctx, nil, toolCall.Function.Arguments, err
+		return ctx, customResult, toolCall.Function.Arguments, err
 	}
 	if customResult != nil {
 		return ctx, customResult, toolCall.Function.Arguments, nil
@@ -2540,6 +2630,13 @@ func runTool(
 		toolErr,
 	)
 	if err != nil {
+		if customResult != nil {
+			return ctx, customResult, toolCall.Function.Arguments, err
+		}
+		var interruptErr *InterruptError
+		if errors.As(err, &interruptErr) {
+			return ctx, result, toolCall.Function.Arguments, err
+		}
 		return ctx, nil, toolCall.Function.Arguments, err
 	}
 	if customResult != nil {
@@ -2555,6 +2652,13 @@ func runTool(
 		toolCallbacks,
 	)
 	if err != nil {
+		if customResult != nil {
+			return ctx, customResult, toolCall.Function.Arguments, err
+		}
+		var interruptErr *InterruptError
+		if errors.As(err, &interruptErr) {
+			return ctx, result, toolCall.Function.Arguments, err
+		}
 		return ctx, nil, toolCall.Function.Arguments, err
 	}
 	if customResult != nil {
@@ -2562,11 +2666,12 @@ func runTool(
 	}
 
 	if toolErr != nil {
-		return ctx, nil, toolCall.Function.Arguments, fmt.Errorf(
-			"tool %s call failed: %w",
-			toolCall.Function.Name,
-			toolErr,
-		)
+		var interruptErr *InterruptError
+		if errors.As(toolErr, &interruptErr) {
+			return ctx, result, toolCall.Function.Arguments, toolErr
+		}
+		return ctx, nil, toolCall.Function.Arguments,
+			fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, toolErr)
 	}
 	return ctx, result, toolCall.Function.Arguments, nil
 }
@@ -3125,7 +3230,14 @@ func MessagesStateSchema() *StateSchema {
 // buildAgentInvocation builds an invocation for the target agent.
 func buildAgentInvocation(ctx context.Context, state State, targetAgent agent.Agent) *agent.Invocation {
 	// Delegate to the unified builder with default runtime state and empty scope.
-	return buildAgentInvocationWithStateAndScope(ctx, state, state, targetAgent, "")
+	return buildAgentInvocationWithStateAndScope(
+		ctx,
+		state,
+		state,
+		targetAgent,
+		"",
+		"",
+	)
 }
 
 // emitAgentStartEvent emits an agent execution start event.

@@ -85,6 +85,13 @@ func TestRegisterBeforeTool(t *testing.T) {
 	require.Equal(t, 1, len(callbacks.BeforeTool))
 }
 
+func TestRegisterBeforeTool_UnsupportedTypePanics(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	require.Panics(t, func() {
+		callbacks.RegisterBeforeTool(123)
+	})
+}
+
 func TestRunBeforeTool_ModifyArgsViaPointer(t *testing.T) {
 	callbacks := tool.NewCallbacks()
 
@@ -134,6 +141,13 @@ func TestRegisterAfterTool(t *testing.T) {
 	callbacks.RegisterAfterTool(callback)
 
 	require.Equal(t, 1, len(callbacks.AfterTool))
+}
+
+func TestRegisterAfterTool_UnsupportedTypePanics(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	require.Panics(t, func() {
+		callbacks.RegisterAfterTool(123)
+	})
 }
 
 func TestRunBeforeTool_Empty(t *testing.T) {
@@ -273,6 +287,60 @@ func TestRunBeforeTool_Error(t *testing.T) {
 	require.EqualError(t, err, expectedErr)
 	require.Nil(t, result)
 
+}
+
+func TestRunBeforeTool_CustomResultWithError(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+
+	expectedErr := "interrupt"
+	expectedResult := map[string]string{"result": "custom"}
+
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		_ string,
+		_ *tool.Declaration,
+		_ *[]byte,
+	) (any, error) {
+		return expectedResult, NewError(expectedErr)
+	})
+
+	beforeArgs := &tool.BeforeToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+	}
+	result, err := callbacks.RunBeforeTool(context.Background(), beforeArgs)
+
+	require.Error(t, err)
+	require.EqualError(t, err, expectedErr)
+	require.NotNil(t, result)
+	require.Equal(t, expectedResult, result.CustomResult)
+}
+
+func TestToolCallbacks_Structured_Before_CustomResultWithError(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+
+	expectedErr := "interrupt"
+	expectedResult := map[string]string{"result": "custom"}
+
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{CustomResult: expectedResult}, NewError(expectedErr)
+	})
+
+	beforeArgs := &tool.BeforeToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+	}
+	result, err := callbacks.RunBeforeTool(context.Background(), beforeArgs)
+
+	require.Error(t, err)
+	require.EqualError(t, err, expectedErr)
+	require.NotNil(t, result)
+	require.Equal(t, expectedResult, result.CustomResult)
 }
 
 func TestRunBeforeTool_Multiple(t *testing.T) {
@@ -448,6 +516,64 @@ func TestRunAfterTool_WithError(t *testing.T) {
 	customResult, ok := result.CustomResult.(map[string]string)
 	require.True(t, ok)
 	require.Equal(t, "handled", customResult["error"])
+}
+
+func TestRunAfterTool_CustomResultWithError(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+
+	expectedErr := "interrupt"
+	expectedResult := map[string]string{"result": "custom"}
+
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ string,
+		_ *tool.Declaration,
+		_ []byte,
+		_ any,
+		_ error,
+	) (any, error) {
+		return expectedResult, NewError(expectedErr)
+	})
+
+	afterArgs := &tool.AfterToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+		Result:      map[string]string{"original": "result"},
+	}
+	result, err := callbacks.RunAfterTool(context.Background(), afterArgs)
+
+	require.Error(t, err)
+	require.EqualError(t, err, expectedErr)
+	require.NotNil(t, result)
+	require.Equal(t, expectedResult, result.CustomResult)
+}
+
+func TestToolCallbacks_Structured_After_CustomResultWithError(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+
+	expectedErr := "interrupt"
+	expectedResult := map[string]string{"result": "custom"}
+
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{CustomResult: expectedResult}, NewError(expectedErr)
+	})
+
+	afterArgs := &tool.AfterToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+		Result:      map[string]string{"original": "result"},
+	}
+	result, err := callbacks.RunAfterTool(context.Background(), afterArgs)
+
+	require.Error(t, err)
+	require.EqualError(t, err, expectedErr)
+	require.NotNil(t, result)
+	require.Equal(t, expectedResult, result.CustomResult)
 }
 
 // =========================
@@ -924,6 +1050,32 @@ func TestToolCallbacks_ContinueOnError_ContinuesExecution(t *testing.T) {
 	require.Equal(t, []int{1, 2, 3}, executed)
 }
 
+func TestToolCallbacks_ContinueOnError_StopOnResponseReturnsFirstError(t *testing.T) {
+	callbacks := tool.NewCallbacks(
+		tool.WithContinueOnError(true),
+	)
+
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{
+			CustomResult: map[string]string{"result": "ok"},
+		}, nil
+	})
+
+	args := &tool.BeforeToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+	}
+	result, err := callbacks.RunBeforeTool(context.Background(), args)
+	require.Error(t, err)
+	require.Equal(t, "error 1", err.Error())
+	require.NotNil(t, result)
+	require.Equal(t, map[string]string{"result": "ok"}, result.CustomResult)
+}
+
 func TestToolCallbacks_ContinueOnResponse_ContinuesExecution(t *testing.T) {
 	callbacks := tool.NewCallbacks(
 		tool.WithContinueOnResponse(true),
@@ -994,6 +1146,34 @@ func TestToolCallbacks_BothOptions_ContinuesExecution(t *testing.T) {
 	require.NotNil(t, result)
 	require.Equal(t, map[string]string{"result": "2"}, result.CustomResult)
 	require.Equal(t, []int{1, 2, 3}, executed)
+}
+
+func TestToolCallbacks_After_ContinueOnError_StopOnResponseReturnsFirstError(t *testing.T) {
+	callbacks := tool.NewCallbacks(
+		tool.WithContinueOnError(true),
+	)
+
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult: map[string]string{"result": "ok"},
+		}, nil
+	})
+
+	args := &tool.AfterToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+		Result:      map[string]string{"original": "result"},
+		Error:       nil,
+	}
+	result, err := callbacks.RunAfterTool(context.Background(), args)
+	require.Error(t, err)
+	require.Equal(t, "error 1", err.Error())
+	require.NotNil(t, result)
+	require.Equal(t, map[string]string{"result": "ok"}, result.CustomResult)
 }
 
 func TestToolCallbacks_Before_ToolCallID(t *testing.T) {

@@ -50,10 +50,14 @@ type InferenceResult struct {
 	EvalSetID string `json:"evalSetId,omitempty"`
 	// EvalCaseID is the ID of the eval case.
 	EvalCaseID string `json:"evalCaseId,omitempty"`
+	// EvalMode is the evaluation mode for this case.
+	EvalMode evalset.EvalMode `json:"evalMode,omitempty"`
 	// Inferences are the inference results.
 	Inferences []*evalset.Invocation `json:"inferences,omitempty"`
 	// SessionID is the ID of the inference session.
 	SessionID string `json:"sessionId,omitempty"`
+	// UserID is the user id used during inferencing stage of the eval.
+	UserID string `json:"userId,omitempty"`
 	// Status is the status of the inference.
 	Status status.EvalStatus `json:"status,omitempty"`
 	// ErrorMessage contains the error message if inference failed.

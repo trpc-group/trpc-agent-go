@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"runtime"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -45,6 +46,14 @@ var (
 	defaultBarrierWaitTimeout    = 5 * time.Second  // Default timeout for barrier completion waits.
 )
 
+func defaultMaxConcurrency() int {
+	maxConcurrency := runtime.GOMAXPROCS(0)
+	if maxConcurrency <= 0 {
+		return 1
+	}
+	return maxConcurrency
+}
+
 // Executor executes a graph with the given initial state using Pregel-style BSP execution.
 //
 // Runtime isolation principle:
@@ -59,6 +68,7 @@ type Executor struct {
 	graph                 *Graph
 	channelBufferSize     int
 	maxSteps              int
+	maxConcurrency        int
 	stepTimeout           time.Duration
 	nodeTimeout           time.Duration
 	checkpointSaveTimeout time.Duration
@@ -78,6 +88,10 @@ type ExecutorOptions struct {
 	ChannelBufferSize int
 	// MaxSteps is the maximum number of steps for graph execution.
 	MaxSteps int
+	// MaxConcurrency is the maximum number of tasks executed in parallel.
+	//
+	// When <= 0, it defaults to runtime.GOMAXPROCS(0).
+	MaxConcurrency int
 	// StepTimeout is the timeout for each step (default: 0 = no timeout).
 	StepTimeout time.Duration
 	// NodeTimeout is the timeout for individual node execution
@@ -102,6 +116,15 @@ func WithChannelBufferSize(size int) ExecutorOption {
 func WithMaxSteps(maxSteps int) ExecutorOption {
 	return func(opts *ExecutorOptions) {
 		opts.MaxSteps = maxSteps
+	}
+}
+
+// WithMaxConcurrency sets the maximum number of tasks executed in parallel.
+//
+// When max <= 0, it uses the default value (runtime.GOMAXPROCS(0)).
+func WithMaxConcurrency(max int) ExecutorOption {
+	return func(opts *ExecutorOptions) {
+		opts.MaxConcurrency = max
 	}
 }
 
@@ -152,12 +175,17 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	options := ExecutorOptions{
 		ChannelBufferSize:     defaultChannelBufferSize,
 		MaxSteps:              defaultMaxSteps,
+		MaxConcurrency:        defaultMaxConcurrency(),
 		StepTimeout:           defaultStepTimeout,
 		CheckpointSaveTimeout: defaultCheckpointSaveTimeout,
 	}
 	// Apply function options.
 	for _, opt := range opts {
 		opt(&options)
+	}
+	maxConcurrency := options.MaxConcurrency
+	if maxConcurrency <= 0 {
+		maxConcurrency = defaultMaxConcurrency()
 	}
 	// Calculate node timeout: use provided value or derive from step timeout if step timeout is set.
 	nodeTimeout := options.NodeTimeout
@@ -170,6 +198,7 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 		graph:                 graph,
 		channelBufferSize:     options.ChannelBufferSize,
 		maxSteps:              options.MaxSteps,
+		maxConcurrency:        maxConcurrency,
 		stepTimeout:           options.StepTimeout,
 		nodeTimeout:           nodeTimeout,
 		checkpointSaveTimeout: options.CheckpointSaveTimeout,
@@ -645,6 +674,17 @@ func (e *Executor) runBspLoop(
 			stepCancel()
 			break
 		}
+		if interrupt := e.maybeStaticInterruptBefore(execCtx, tasks, step); interrupt != nil {
+			stepCancel()
+			return stepsExecuted, e.handleInterrupt(
+				stepCtx,
+				invocation,
+				execCtx,
+				interrupt,
+				step,
+				*checkpointConfig,
+			)
+		}
 		if err := e.executeStep(stepCtx, invocation, execCtx, tasks, step); err != nil {
 			if interrupt, ok := GetInterruptError(err); ok {
 				stepCancel()
@@ -656,6 +696,17 @@ func (e *Executor) runBspLoop(
 		if err := e.updateChannels(stepCtx, invocation, execCtx, step); err != nil {
 			stepCancel()
 			return stepsExecuted, fmt.Errorf("update failed at step %d: %w", step, err)
+		}
+		if interrupt := e.maybeStaticInterruptAfter(tasks, step); interrupt != nil {
+			stepCancel()
+			return stepsExecuted, e.handleInterrupt(
+				stepCtx,
+				invocation,
+				execCtx,
+				interrupt,
+				step,
+				*checkpointConfig,
+			)
 		}
 		if e.checkpointSaver != nil && *checkpointConfig != nil {
 			log.DebugfContext(
@@ -1213,60 +1264,111 @@ func (e *Executor) executeStep(
 ) error {
 	// Emit execution step event.
 	e.emitExecutionStepEvent(ctx, invocation, execCtx, tasks, step)
-	// Execute tasks concurrently.
-	var wg sync.WaitGroup
+	workerCount := e.workerCount(len(tasks))
+	tasksCh := make(chan *Task, workerCount)
 	results := make(chan error, len(tasks))
 
-	for _, t := range tasks {
-		runCtx := agent.CloneContext(ctx)
+	var wg sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
-		go func(ctx context.Context, t *Task) {
+		go func() {
 			defer wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					log.ErrorfContext(
-						ctx,
-						"panic executing task %s: %v\n%s",
-						t.NodeID,
-						r,
-						string(debug.Stack()),
-					)
-					results <- fmt.Errorf("task panic: %v", r)
-				}
-			}()
-			// create a new invocation for each task, if parent invocation is not nil.
-			taskInvocation, taskCtx := invocation, ctx
-			if invocation != nil {
-				branch := t.NodeID
-				if invocation.Branch != "" {
-					branch = invocation.Branch + agent.BranchDelimiter + t.NodeID
-				}
-				taskInvocation = invocation.Clone(
-					agent.WithInvocationAgent(invocation.Agent),
-					agent.WithInvocationBranch(branch),
+			for t := range tasksCh {
+				err := e.executeStepTask(
+					ctx,
+					invocation,
+					execCtx,
+					t,
+					step,
 				)
-				// set new context for each task.
-				taskCtx = agent.NewInvocationContext(ctx, taskInvocation)
+				if err != nil {
+					results <- err
+				}
 			}
-
-			if err := e.executeSingleTask(taskCtx, taskInvocation, execCtx, t, step); err != nil {
-				results <- err
-			}
-		}(runCtx, t)
+		}()
 	}
 
-	// Wait for all tasks to complete.
+	e.dispatchTasks(tasksCh, tasks)
+	close(tasksCh)
+
 	wg.Wait()
 	close(results)
 
-	// Check for errors.
 	for err := range results {
 		if err != nil {
 			return err
 		}
 	}
-
 	return nil
+}
+
+func (e *Executor) workerCount(taskCount int) int {
+	if taskCount <= 0 {
+		return 0
+	}
+	if e.maxConcurrency <= 0 {
+		return taskCount
+	}
+	if taskCount < e.maxConcurrency {
+		return taskCount
+	}
+	return e.maxConcurrency
+}
+
+func (e *Executor) dispatchTasks(tasksCh chan<- *Task, tasks []*Task) {
+	for _, t := range tasks {
+		tasksCh <- t
+	}
+}
+
+func (e *Executor) executeStepTask(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	t *Task,
+	step int,
+) (err error) {
+	runCtx := agent.CloneContext(ctx)
+	defer func() {
+		if r := recover(); r != nil {
+			log.ErrorfContext(
+				runCtx,
+				"panic executing task %s: %v\n%s",
+				t.NodeID,
+				r,
+				string(debug.Stack()),
+			)
+			err = fmt.Errorf("task panic: %v", r)
+		}
+	}()
+
+	taskInvocation, taskCtx := e.taskInvocationContext(
+		runCtx,
+		invocation,
+		t,
+	)
+	return e.executeSingleTask(taskCtx, taskInvocation, execCtx, t, step)
+}
+
+func (e *Executor) taskInvocationContext(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	t *Task,
+) (*agent.Invocation, context.Context) {
+	if invocation == nil || t == nil {
+		return invocation, ctx
+	}
+
+	branch := t.NodeID
+	if invocation.Branch != "" {
+		branch = invocation.Branch + agent.BranchDelimiter + t.NodeID
+	}
+	taskInvocation := invocation.Clone(
+		agent.WithInvocationAgent(invocation.Agent),
+		agent.WithInvocationBranch(branch),
+	)
+	taskCtx := agent.NewInvocationContext(ctx, taskInvocation)
+	return taskInvocation, taskCtx
 }
 
 // emitExecutionStepEvent emits the execution step event.
@@ -2695,21 +2797,30 @@ func (e *Executor) handleInterrupt(
 		metadata.IsResuming = false
 
 		// Set next nodes for recovery
-		// IMPORTANT: For internal interrupts (from graph.Interrupt within a node),
-		// the interrupted node needs to be re-executed to complete its work.
-		// We must include it in NextNodes.
-		nextNodes := e.getNextNodes(execCtx)
-
-		// Ensure the interrupted node is included
-		hasNode := false
-		for _, nodeID := range nextNodes {
-			if nodeID == interrupt.NodeID {
-				hasNode = true
-				break
-			}
+		// IMPORTANT:
+		// - For internal interrupts (from graph.Interrupt within a node), the
+		//   interrupted node needs to be re-executed to complete its work, so we
+		//   include it in NextNodes.
+		// - For static interrupts before a step executes, channel-based frontier
+		//   discovery is unavailable; callers may provide NextNodes explicitly.
+		var nextNodes []string
+		if len(interrupt.NextNodes) > 0 {
+			nextNodes = append([]string(nil), interrupt.NextNodes...)
+		} else {
+			nextNodes = e.getNextNodes(execCtx)
 		}
-		if !hasNode && interrupt.NodeID != "" {
-			nextNodes = append([]string{interrupt.NodeID}, nextNodes...)
+
+		if !interrupt.SkipRerun {
+			hasNode := false
+			for _, nodeID := range nextNodes {
+				if nodeID == interrupt.NodeID {
+					hasNode = true
+					break
+				}
+			}
+			if !hasNode && interrupt.NodeID != "" {
+				nextNodes = append([]string{interrupt.NodeID}, nextNodes...)
+			}
 		}
 		checkpoint.NextNodes = nextNodes
 		checkpoint.NextChannels = e.getNextChannels(execCtx)

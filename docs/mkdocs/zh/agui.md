@@ -878,3 +878,75 @@ server, err := agui.New(
 实际效果如下图所示，完整示例可参考 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 
 ![report](../assets/gif/agui/report.gif)
+
+### 外部工具
+
+当工具必须在客户端或业务侧执行时，可以采用外部工具模式。后端只生成工具调用并在工具节点触发中断，前端执行工具并回传结果，后端从中断点恢复继续运行。该模式要求工具结果进入 LLM 上下文，并写入会话历史，便于后续通过消息快照回放完整对话。
+
+建议在服务端开启 `agui.WithGraphNodeInterruptActivityEnabled(true)`，用于在 `graph.node.interrupt` 事件中携带 `lineageId` 与 `checkpointId`，以便前端定位恢复点并发起下一次请求。
+
+一次外部工具调用对应两次请求。第一次请求使用 `role=user`，当 LLM 触发工具调用时，事件流会输出 `TOOL_CALL_START`、`TOOL_CALL_ARGS`、`TOOL_CALL_END`，随后在工具节点输出 `ACTIVITY_DELTA graph.node.interrupt` 并结束本次 SSE。前端在事件流中获取 `toolCallId` 与参数，并从中断事件获取 `lineageId`。
+
+第二次请求使用 `role=tool`，把工具执行结果回传给后端。`toolCallId` 必须与第一次请求一致，`content` 为工具输出字符串，同时在 `forwardedProps.lineage_id` 填入第一次中断事件返回的 `lineageId`。服务端会先把该 tool message 翻译为 `TOOL_CALL_RESULT` 并写入会话，再从对应 checkpoint 恢复继续生成最终回复。
+
+如果第一次请求中 LLM 未触发任何工具调用，则不会出现中断事件，也不需要发起第二次请求。
+
+两次请求需要保持 `threadId` 一致，每次请求使用新的 `runId`。当前框架仅处理 `messages` 的最后一条消息，且只支持 `role=user` 或 `role=tool`，`content` 仅支持字符串。
+
+请求示例如下：
+
+第一次请求：
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Search and answer my question."
+    }
+  ]
+}
+```
+
+第二次请求：
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-2",
+  "forwardedProps": {
+    "lineage_id": "lineage-from-graph-node-interrupt"
+  },
+  "messages": [
+    {
+      "id": "tool-result-<toolCallId>",
+      "role": "tool",
+      "toolCallId": "<toolCallId>",
+      "name": "external_search",
+      "content": "external tool output as string"
+    }
+  ]
+}
+```
+
+事件流示例如下：
+
+```text
+第一次请求 role=user
+  → RUN_STARTED
+  → TOOL_CALL_START
+  → TOOL_CALL_ARGS
+  → TOOL_CALL_END
+  → ACTIVITY_DELTA graph.node.interrupt
+  → RUN_FINISHED
+
+第二次请求 role=tool
+  → RUN_STARTED
+  → TOOL_CALL_RESULT 由输入的 tool message 生成
+  → TEXT_MESSAGE_* 恢复后继续生成
+  → RUN_FINISHED
+```
+
+完整示例可参考 [examples/agui/server/externaltool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
