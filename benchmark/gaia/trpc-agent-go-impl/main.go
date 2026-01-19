@@ -1587,7 +1587,7 @@ func runSingleTask(r runner.Runner, task GAIATask) BenchmarkResult {
 					for i, tc := range choice.Message.ToolCalls {
 						log.Printf("    [%d] %s", i+1, tc.Function.Name)
 						// Format JSON arguments for readability
-						var args map[string]interface{}
+						var args map[string]any
 						if err := json.Unmarshal(tc.Function.Arguments, &args); err == nil {
 							if argsJSON, err := json.MarshalIndent(args, "        ", "  "); err == nil {
 								log.Printf("        Args: %s", string(argsJSON))
