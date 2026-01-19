@@ -364,7 +364,7 @@ sessionService := inmemory.NewSessionService(
 
 **问题场景：** 当用户发送消息后，历史记录了 user message，但在模型回复前用户断开连接，导致历史中只有 user message 没有 assistant message。当用户再次对话时，会出现两个连续的 user message，某些 LLM API（如 OpenAI、Anthropic）会拒绝这种格式并报错。
 
-**解决方案：** 框架提供了 `OnDuplicateUserMessage` 回调机制，在检测到连续的 user message 时自动调用处理函数。
+**解决方案：** 框架提供了 `OnConsecutiveUserMessage` 回调机制，在检测到连续的 user message 时自动调用处理函数。
 
 #### 工作机制
 
@@ -422,7 +422,7 @@ sess := session.NewSession(
     "my-app",
     "user123",
     "session456",
-    session.WithOnDuplicateUserMessage(insertPlaceholderHandler),
+    session.WithOnConsecutiveUserMessage(insertPlaceholderHandler),
 )
 
 // 2. 删除前一个 user message
@@ -440,7 +440,7 @@ sess := session.NewSession(
     "my-app",
     "user123",
     "session456",
-    session.WithOnDuplicateUserMessage(removePreviousHandler),
+    session.WithOnConsecutiveUserMessage(removePreviousHandler),
 )
 
 // 3. 跳过当前 user message
@@ -455,7 +455,7 @@ sess := session.NewSession(
     "my-app",
     "user123",
     "session456",
-    session.WithOnDuplicateUserMessage(skipCurrentHandler),
+    session.WithOnConsecutiveUserMessage(skipCurrentHandler),
 )
 ```
 
@@ -487,7 +487,7 @@ sess := session.NewSession(
     "my-app",
     "user123",
     "session456",
-    session.WithOnDuplicateUserMessage(mergeHandler),
+    session.WithOnConsecutiveUserMessage(mergeHandler),
 )
 ```
 
@@ -560,7 +560,7 @@ func main() {
         "my-app",
         "user123",
         "session456",
-        session.WithOnDuplicateUserMessage(insertPlaceholderHandler),
+        session.WithOnConsecutiveUserMessage(insertPlaceholderHandler),
     )
     
     // 用户正常使用 AppendEvent

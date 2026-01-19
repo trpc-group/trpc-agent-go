@@ -40,7 +40,7 @@ var (
 // the full-session summary with no filtering applied.
 const SummaryFilterKeyAllContents = ""
 
-// OnDuplicateUserMessageFunc is called when consecutive user messages are
+// OnConsecutiveUserMessageFunc is called when consecutive user messages are
 // detected in UpdateUserSession. User can modify sess.Events directly to fix
 // the issue (insert, remove, merge events, etc.).
 //
@@ -56,7 +56,7 @@ const SummaryFilterKeyAllContents = ""
 // IMPORTANT: This handler is called while EventMu is held. Do NOT call any
 // Session methods that acquire EventMu (e.g., GetEvents, Clone) inside the
 // handler, as this will cause a deadlock. Only manipulate sess.Events directly.
-type OnDuplicateUserMessageFunc func(
+type OnConsecutiveUserMessageFunc func(
 	sess *Session,
 	previousUserEvent *event.Event,
 	currentUserEvent *event.Event,
@@ -86,10 +86,10 @@ type Session struct {
 
 	stateMu sync.RWMutex `json:"-"` // stateMu is the read-write mutex for State.
 
-	// onDuplicateUserMsg is called when consecutive user messages are detected.
+	// onConsecutiveUserMsg is called when consecutive user messages are detected.
 	// If nil, no fixing is performed (default behavior).
-	onDuplicateUserMsg OnDuplicateUserMessageFunc `json:"-"`
-	handlerMu          sync.RWMutex               `json:"-"`
+	onConsecutiveUserMsg OnConsecutiveUserMessageFunc `json:"-"`
+	handlerMu            sync.RWMutex                 `json:"-"`
 }
 
 // Clone returns a copy of the session.
@@ -216,18 +216,18 @@ func WithSessionUpdatedAt(updatedAt time.Time) SessionOptions {
 	}
 }
 
-// WithOnDuplicateUserMessage sets the handler for consecutive user messages.
+// WithOnConsecutiveUserMessage sets the handler for consecutive user messages.
 // This handler is called by UpdateUserSession (which is automatically invoked
 // by the framework in appendEventInternal) when it detects that the event to
 // be appended is a user message and the last event in history is also a user
 // message.
-func WithOnDuplicateUserMessage(
-	handler OnDuplicateUserMessageFunc,
+func WithOnConsecutiveUserMessage(
+	handler OnConsecutiveUserMessageFunc,
 ) SessionOptions {
 	return func(sess *Session) {
 		sess.handlerMu.Lock()
 		defer sess.handlerMu.Unlock()
-		sess.onDuplicateUserMsg = handler
+		sess.onConsecutiveUserMsg = handler
 	}
 }
 
@@ -440,7 +440,7 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 			if lastEvent.Response != nil && lastEvent.Response.IsUserMessage() {
 				// Consecutive user messages detected.
 				sess.handlerMu.RLock()
-				handler := sess.onDuplicateUserMsg
+				handler := sess.onConsecutiveUserMsg
 				sess.handlerMu.RUnlock()
 
 				if handler != nil {

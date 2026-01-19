@@ -60,9 +60,9 @@ func createAssistantEvent(content string) *event.Event {
 	)
 }
 
-// TestOnDuplicateUserMessage_InsertPlaceholder tests the
+// TestOnConsecutiveUserMessage_InsertPlaceholder tests the
 // InsertPlaceholderHandler.
-func TestOnDuplicateUserMessage_InsertPlaceholder(t *testing.T) {
+func TestOnConsecutiveUserMessage_InsertPlaceholder(t *testing.T) {
 	insertPlaceholderHandler := func(sess *Session, prev, curr *event.Event) bool {
 		finishReason := "error"
 		placeholder := event.Event{
@@ -101,7 +101,7 @@ func TestOnDuplicateUserMessage_InsertPlaceholder(t *testing.T) {
 		"test-app",
 		"user1",
 		"session1",
-		WithOnDuplicateUserMessage(insertPlaceholderHandler),
+		WithOnConsecutiveUserMessage(insertPlaceholderHandler),
 	)
 
 	// Append first user message.
@@ -131,8 +131,8 @@ func TestOnDuplicateUserMessage_InsertPlaceholder(t *testing.T) {
 	)
 }
 
-// TestOnDuplicateUserMessage_RemovePrevious tests the RemovePreviousHandler.
-func TestOnDuplicateUserMessage_RemovePrevious(t *testing.T) {
+// TestOnConsecutiveUserMessage_RemovePrevious tests the RemovePreviousHandler.
+func TestOnConsecutiveUserMessage_RemovePrevious(t *testing.T) {
 	removePreviousHandler := func(sess *Session, prev, curr *event.Event) bool {
 		if len(sess.Events) > 0 {
 			sess.Events = sess.Events[:len(sess.Events)-1]
@@ -144,7 +144,7 @@ func TestOnDuplicateUserMessage_RemovePrevious(t *testing.T) {
 		"test-app",
 		"user1",
 		"session1",
-		WithOnDuplicateUserMessage(removePreviousHandler),
+		WithOnConsecutiveUserMessage(removePreviousHandler),
 	)
 
 	userEvent1 := createUserEvent("hello")
@@ -163,8 +163,8 @@ func TestOnDuplicateUserMessage_RemovePrevious(t *testing.T) {
 	)
 }
 
-// TestOnDuplicateUserMessage_SkipCurrent tests the SkipCurrentHandler.
-func TestOnDuplicateUserMessage_SkipCurrent(t *testing.T) {
+// TestOnConsecutiveUserMessage_SkipCurrent tests the SkipCurrentHandler.
+func TestOnConsecutiveUserMessage_SkipCurrent(t *testing.T) {
 	skipCurrentHandler := func(sess *Session, prev, curr *event.Event) bool {
 		return false
 	}
@@ -173,7 +173,7 @@ func TestOnDuplicateUserMessage_SkipCurrent(t *testing.T) {
 		"test-app",
 		"user1",
 		"session1",
-		WithOnDuplicateUserMessage(skipCurrentHandler),
+		WithOnConsecutiveUserMessage(skipCurrentHandler),
 	)
 
 	userEvent1 := createUserEvent("hello")
@@ -188,9 +188,9 @@ func TestOnDuplicateUserMessage_SkipCurrent(t *testing.T) {
 	assert.Equal(t, "hello", sess.Events[0].Response.Choices[0].Message.Content)
 }
 
-// TestOnDuplicateUserMessage_Custom tests a custom handler that merges
+// TestOnConsecutiveUserMessage_Custom tests a custom handler that merges
 // messages.
-func TestOnDuplicateUserMessage_Custom(t *testing.T) {
+func TestOnConsecutiveUserMessage_Custom(t *testing.T) {
 	customHandler := func(
 		sess *Session, prev, curr *event.Event,
 	) bool {
@@ -211,7 +211,7 @@ func TestOnDuplicateUserMessage_Custom(t *testing.T) {
 		"test-app",
 		"user1",
 		"session1",
-		WithOnDuplicateUserMessage(customHandler),
+		WithOnConsecutiveUserMessage(customHandler),
 	)
 
 	userEvent1 := createUserEvent("hello")
@@ -238,8 +238,8 @@ func TestOnDuplicateUserMessage_Custom(t *testing.T) {
 	)
 }
 
-// TestOnDuplicateUserMessage_NoHandler tests the behavior without a handler.
-func TestOnDuplicateUserMessage_NoHandler(t *testing.T) {
+// TestOnConsecutiveUserMessage_NoHandler tests the behavior without a handler.
+func TestOnConsecutiveUserMessage_NoHandler(t *testing.T) {
 	// No handler configured (default behavior).
 	sess := NewSession("test-app", "user1", "session1")
 
@@ -257,9 +257,9 @@ func TestOnDuplicateUserMessage_NoHandler(t *testing.T) {
 	// handler configuration.
 }
 
-// TestOnDuplicateUserMessage_WithNormalFlow tests that the handler is not
+// TestOnConsecutiveUserMessage_WithNormalFlow tests that the handler is not
 // triggered when messages alternate normally.
-func TestOnDuplicateUserMessage_WithNormalFlow(t *testing.T) {
+func TestOnConsecutiveUserMessage_WithNormalFlow(t *testing.T) {
 	insertPlaceholderHandler := func(sess *Session, prev, curr *event.Event) bool {
 		finishReason := "error"
 		placeholder := event.Event{
@@ -298,7 +298,7 @@ func TestOnDuplicateUserMessage_WithNormalFlow(t *testing.T) {
 		"test-app",
 		"user1",
 		"session1",
-		WithOnDuplicateUserMessage(insertPlaceholderHandler),
+		WithOnConsecutiveUserMessage(insertPlaceholderHandler),
 	)
 
 	userEvent1 := createUserEvent("hello")
@@ -330,9 +330,9 @@ func TestOnDuplicateUserMessage_WithNormalFlow(t *testing.T) {
 	)
 }
 
-// TestOnDuplicateUserMessage_MultipleConsecutive tests handling of
+// TestOnConsecutiveUserMessage_MultipleConsecutive tests handling of
 // multiple consecutive user messages.
-func TestOnDuplicateUserMessage_MultipleConsecutive(t *testing.T) {
+func TestOnConsecutiveUserMessage_MultipleConsecutive(t *testing.T) {
 	insertPlaceholderHandler := func(sess *Session, prev, curr *event.Event) bool {
 		finishReason := "error"
 		placeholder := event.Event{
@@ -371,7 +371,7 @@ func TestOnDuplicateUserMessage_MultipleConsecutive(t *testing.T) {
 		"test-app",
 		"user1",
 		"session1",
-		WithOnDuplicateUserMessage(insertPlaceholderHandler),
+		WithOnConsecutiveUserMessage(insertPlaceholderHandler),
 	)
 
 	userEvent1 := createUserEvent("first")
@@ -402,9 +402,9 @@ func TestOnDuplicateUserMessage_MultipleConsecutive(t *testing.T) {
 	assert.True(t, sess.Events[4].Response.IsUserMessage())
 }
 
-// TestOnDuplicateUserMessage_ThreadSafety tests concurrent access to the
+// TestOnConsecutiveUserMessage_ThreadSafety tests concurrent access to the
 // handler.
-func TestOnDuplicateUserMessage_ThreadSafety(t *testing.T) {
+func TestOnConsecutiveUserMessage_ThreadSafety(t *testing.T) {
 	insertPlaceholderHandler := func(sess *Session, prev, curr *event.Event) bool {
 		finishReason := "error"
 		placeholder := event.Event{
@@ -443,7 +443,7 @@ func TestOnDuplicateUserMessage_ThreadSafety(t *testing.T) {
 		"test-app",
 		"user1",
 		"session1",
-		WithOnDuplicateUserMessage(insertPlaceholderHandler),
+		WithOnConsecutiveUserMessage(insertPlaceholderHandler),
 	)
 
 	// Append initial user message.

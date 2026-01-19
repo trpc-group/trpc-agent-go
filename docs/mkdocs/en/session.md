@@ -357,7 +357,7 @@ sessionService := inmemory.NewSessionService(
 
 **Problem Scenario:** When a user sends a message, the framework records the user message in history. If the user disconnects before the model responds (or system error occurs), the history will only contain the user message without a corresponding assistant message. When the user reconnects and sends another message, the history will have two consecutive user messages, which some LLM APIs (like OpenAI, Anthropic) will reject and return an error.
 
-**Solution:** The framework provides an `OnDuplicateUserMessage` callback mechanism that automatically calls a handler function when consecutive user messages are detected.
+**Solution:** The framework provides an `OnConsecutiveUserMessage` callback mechanism that automatically calls a handler function when consecutive user messages are detected.
 
 #### How It Works
 
@@ -415,7 +415,7 @@ sess := session.NewSession(
     "my-app",
     "user123",
     "session456",
-    session.WithOnDuplicateUserMessage(insertPlaceholderHandler),
+    session.WithOnConsecutiveUserMessage(insertPlaceholderHandler),
 )
 
 // 2. Remove the previous user message
@@ -433,7 +433,7 @@ sess := session.NewSession(
     "my-app",
     "user123",
     "session456",
-    session.WithOnDuplicateUserMessage(removePreviousHandler),
+    session.WithOnConsecutiveUserMessage(removePreviousHandler),
 )
 
 // 3. Skip the current user message
@@ -448,7 +448,7 @@ sess := session.NewSession(
     "my-app",
     "user123",
     "session456",
-    session.WithOnDuplicateUserMessage(skipCurrentHandler),
+    session.WithOnConsecutiveUserMessage(skipCurrentHandler),
 )
 ```
 
@@ -480,7 +480,7 @@ sess := session.NewSession(
     "my-app",
     "user123",
     "session456",
-    session.WithOnDuplicateUserMessage(mergeHandler),
+    session.WithOnConsecutiveUserMessage(mergeHandler),
 )
 ```
 
@@ -553,7 +553,7 @@ func main() {
         "my-app",
         "user123",
         "session456",
-        session.WithOnDuplicateUserMessage(insertPlaceholderHandler),
+        session.WithOnConsecutiveUserMessage(insertPlaceholderHandler),
     )
     
     // User normally uses AppendEvent

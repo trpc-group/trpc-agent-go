@@ -1,6 +1,6 @@
-# OnDuplicateUserMessage Handler Demo
+# OnConsecutiveUserMessage Handler Demo
 
-This example demonstrates how to handle consecutive user messages using `OnDuplicateUserMessageFunc` handlers.
+This example demonstrates how to handle consecutive user messages using `OnConsecutiveUserMessageFunc` handlers.
 
 ## What it demonstrates
 
@@ -21,7 +21,7 @@ When network issues, retries, or race conditions cause two consecutive user mess
 ## Quick start
 
 ```bash
-cd examples/session/onduplicateuser
+cd examples/session/onconsecutiveuser
 export OPENAI_API_KEY="your-key"
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 
@@ -95,7 +95,7 @@ go run . -handler=skip -session=inmemory
 ## Files of interest
 
 - `handlers.go`: Implementation of the three handler strategies.
-- `main.go`: Demonstrates each handler with a simulated duplicate user message scenario.
+- `main.go`: Demonstrates each handler with a simulated consecutive user message scenario.
 
 ## Sample output (placeholder handler)
 
@@ -111,7 +111,7 @@ Assistant: Hello Alice! How can I assist you today?
 [0] user: Hello, my name is Alice
 [1] assistant: Hello Alice! How can I assist you today?
 
-=== Step 2: Simulate duplicate user message (no assistant response) ===
+=== Step 2: Simulate consecutive user message (no assistant response) ===
 [Using InsertPlaceholderHandler]
 Appending first user message: How are you?
 Appending second user message: Are you there?

@@ -22,7 +22,7 @@ import (
 //
 // Note: This handler runs while EventMu is held. Do not call Session methods
 // that acquire EventMu inside the handler.
-func InsertPlaceholderHandler() session.OnDuplicateUserMessageFunc {
+func InsertPlaceholderHandler() session.OnConsecutiveUserMessageFunc {
 	return func(sess *session.Session, prev, curr *event.Event) bool {
 		finishReason := "error"
 		placeholder := event.Event{
@@ -63,7 +63,7 @@ func InsertPlaceholderHandler() session.OnDuplicateUserMessageFunc {
 //
 // Note: This handler runs while EventMu is held. Do not call Session methods
 // that acquire EventMu inside the handler.
-func RemovePreviousHandler() session.OnDuplicateUserMessageFunc {
+func RemovePreviousHandler() session.OnConsecutiveUserMessageFunc {
 	return func(sess *session.Session, prev, curr *event.Event) bool {
 		if len(sess.Events) > 0 {
 			sess.Events = sess.Events[:len(sess.Events)-1]
@@ -77,7 +77,7 @@ func RemovePreviousHandler() session.OnDuplicateUserMessageFunc {
 //
 // Note: This handler runs while EventMu is held. Do not call Session methods
 // that acquire EventMu inside the handler.
-func SkipCurrentHandler() session.OnDuplicateUserMessageFunc {
+func SkipCurrentHandler() session.OnConsecutiveUserMessageFunc {
 	return func(sess *session.Session, prev, curr *event.Event) bool {
 		return false
 	}

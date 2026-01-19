@@ -154,7 +154,7 @@ func simulateDuplicateUserMessage(svc session.Service, userID, sessionID, handle
 	ctx := context.Background()
 
 	// Select handler based on type.
-	var handler session.OnDuplicateUserMessageFunc
+	var handler session.OnConsecutiveUserMessageFunc
 	switch handlerType {
 	case "placeholder":
 		handler = InsertPlaceholderHandler()
@@ -174,7 +174,7 @@ func simulateDuplicateUserMessage(svc session.Service, userID, sessionID, handle
 		appName,
 		userID,
 		sessionID,
-		session.WithOnDuplicateUserMessage(handler),
+		session.WithOnConsecutiveUserMessage(handler),
 	)
 
 	// Simulate sending consecutive user messages (connection interrupted).
