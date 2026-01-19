@@ -109,7 +109,17 @@ and create a Hugging Face access token.
 The script checks `HF_TOKEN`, `HUGGINGFACE_TOKEN`, and
 `HUGGINGFACE_HUB_TOKEN`.
 
-From `examples/skill`:
+The downloader uses only the Python standard library (no extra pip
+packages needed).
+
+From the repo root:
+
+```bash
+export HF_TOKEN="hf_..."
+python3 examples/skill/scripts/download_gaia_2023_level1_validation.py
+```
+
+Or from `examples/skill`:
 
 ```bash
 cd examples/skill
