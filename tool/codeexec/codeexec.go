@@ -12,6 +12,7 @@ package codeexec
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -165,11 +166,11 @@ func (t *executeCodeTool) Call(ctx context.Context, args []byte) (any, error) {
 	// Best-effort validation. We return it as structured tool output (instead of Go error)
 	// so the model can correct itself.
 	if len(input.CodeBlocks) == 0 {
-		return codeexecutor.CodeExecutionResult{Output: "missing code_blocks"}, nil
+		return codeexecutor.CodeExecutionResult{Output: "Error: missing code_blocks"}, nil
 	}
-	for _, b := range input.CodeBlocks {
+	for i, b := range input.CodeBlocks {
 		if b.Language == "" || !t.isSupportedLanguage(b.Language) {
-			return codeexecutor.CodeExecutionResult{Output: "unsupported language"}, nil
+			return codeexecutor.CodeExecutionResult{Output: fmt.Sprintf("Error: unsupported language: %d: %s", i, b.Language)}, nil
 		}
 	}
 

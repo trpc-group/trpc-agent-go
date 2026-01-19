@@ -184,7 +184,7 @@ func TestExecuteCodeTool_Call(t *testing.T) {
 
 		output, ok := result.(codeexecutor.CodeExecutionResult)
 		require.True(t, ok)
-		assert.Equal(t, "unsupported language", output.Output)
+		assert.Equal(t, "Error: unsupported language: 0: javascript", output.Output)
 	})
 
 	t.Run("bash execution", func(t *testing.T) {
@@ -223,7 +223,7 @@ func TestExecuteCodeTool_Call(t *testing.T) {
 
 		output, ok := result.(codeexecutor.CodeExecutionResult)
 		require.True(t, ok)
-		assert.Equal(t, "missing code_blocks", output.Output)
+		assert.Equal(t, "Error: missing code_blocks", output.Output)
 	})
 }
 
