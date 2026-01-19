@@ -125,6 +125,12 @@ go run . -executor local
 go run . -executor container
 ```
 
+GAIA 基准示例（技能 + 文件工具）：
+[examples/skill/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skill/README.md)
+
+该示例包含数据集下载脚本，以及 `whisper`（音频）/`ocr`（图片）等
+技能的 Python 依赖准备说明。
+
 示例技能（节选）：
 [examples/skillrun/skills/python_math/SKILL.md]
 (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)
@@ -220,7 +226,7 @@ https://github.com/anthropics/skills
 
 输入：
 - `skill`（必填）：技能名
-- `command`（必填）：Shell 命令（默认通过 `bash -lc` 执行）
+- `command`（必填）：Shell 命令（默认通过 `bash -c` 执行）
 - `cwd`（可选）：相对技能根目录的工作路径
 - `env`（可选）：环境变量映射
 - `output_files`（可选，传统收集方式）：通配符列表
@@ -255,6 +261,8 @@ https://github.com/anthropics/skills
 - `omit_inline_content`（可选）：与 `save_as_artifacts` 配合，
   为 true 时不返回文件内容，仅保留文件名/MIME 信息。
 - `artifact_prefix`（可选）：与 `save_as_artifacts` 配合的前缀。
+  - 若未配置制品服务（Artifact service），`skill_run` 会继续
+    返回内联的 `output_files`，并在 `warnings` 中给出提示。
 
 可选的安全限制（白名单）：
 - 环境变量 `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`：
@@ -275,7 +283,12 @@ https://github.com/anthropics/skills
 
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`
-- `output_files`：文件列表（`name`、`content`、`mime_type`）
+- `primary_output`（可选）：包含 `name`、`ref`、`content`、`mime_type`
+  - 便捷字段：指向“最合适的”小型文本输出文件（若存在）。当只有一个主要输出时
+    优先使用它。
+- `output_files`：文件列表（`name`、`ref`、`content`、`mime_type`）
+  - `ref` 是稳定的 `workspace://<name>` 引用，可传给其它工具使用
+- `warnings`（可选）：非致命提示（例如制品保存被跳过）
 - `artifact_files`：制品引用（`name`、`version`）。两种途径：
   - 传统路径：设置了 `save_as_artifacts` 时由工具保存并返回
   - 清单路径：`outputs.save=true` 时由执行器保存并附加到结果
@@ -290,6 +303,9 @@ https://github.com/anthropics/skills
 运行环境与工作目录：
 - 未提供 `cwd` 时，默认在技能根目录运行：`/skills/<name>`
 - 相对 `cwd` 会被解析为技能根目录下的子路径
+- `cwd` 也可以以 `$WORK_DIR`、`$OUTPUT_DIR`、`$SKILLS_DIR`、
+  `$WORKSPACE_DIR`、`$RUN_DIR`（或 `${...}`）开头，
+  工具会将其规范化为工作区内的相对目录
 - 运行时注入环境变量：
   - `WORKSPACE_DIR`、`SKILLS_DIR`、`WORK_DIR`、`OUTPUT_DIR`、
     `RUN_DIR`（由执行器注入）
@@ -315,6 +331,7 @@ https://github.com/anthropics/skills
 安全与资源：
 - 本地/容器均限制读取与写入在工作区内
 - 可通过超时、脚本权限（如只读挂载技能树）降低风险
+- `stdout`/`stderr` 可能会被截断（见 `warnings`）
 - 输出文件读取大小有限制，避免过大文件影响
 
 ## 事件与追踪

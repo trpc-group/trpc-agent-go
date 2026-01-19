@@ -122,6 +122,12 @@ export OPENAI_API_KEY="your-api-key"
 go run . -executor local     # or: -executor container
 ```
 
+GAIA benchmark demo (skills + file tools):
+[examples/skill/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skill/README.md)
+
+It includes a dataset downloader script and notes on Python dependencies
+for skills like `whisper` (audio) and `ocr` (images).
+
 Sample skill (excerpt):
 [examples/skillrun/skills/python_math/SKILL.md]
 (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)
@@ -219,7 +225,7 @@ Declaration: [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blo
 
 Input:
 - `skill` (required)
-- `command` (required; by default runs via `bash -lc`)
+- `command` (required; by default runs via `bash -c`)
 - `cwd`, `env` (optional)
 - `output_files` (optional, legacy collection): glob patterns (e.g.,
   `out/*.txt`). Patterns are workspace‑relative; env‑style prefixes
@@ -252,6 +258,8 @@ Input:
 - `omit_inline_content` (optional): with `save_as_artifacts`, omit
   `output_files[*].content` and return metadata only
 - `artifact_prefix` (optional): prefix for the legacy artifact path
+  - If the Artifact service is not configured, `skill_run` keeps
+    returning inline `output_files` and reports a `warnings` entry.
 
 Optional safety restriction (allowlist):
 - Env var `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`:
@@ -274,7 +282,14 @@ Optional safety restriction (denylist):
 
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
-- `output_files` with `name`, `content`, `mime_type`
+- `primary_output` (optional) with `name`, `ref`, `content`, `mime_type`
+  - Convenience pointer to the "best" small text output file (when one
+    exists). Prefer this when there is a single main output.
+- `output_files` with `name`, `ref`, `content`, `mime_type`
+  - `ref` is a stable `workspace://<name>` reference that can be passed
+    to other tools
+- `warnings` (optional): non-fatal notes (for example, when artifact
+  saving is skipped)
 - `artifact_files` with `name`, `version` appears in two cases:
   - Legacy path: when `save_as_artifacts` is set
   - Manifest path: when `outputs.save=true` (executor persists files)
@@ -289,6 +304,9 @@ Typical flow:
 Environment and CWD:
 - When `cwd` is omitted, runs at the skill root: `/skills/<name>`
 - A relative `cwd` is resolved under the skill root
+- `cwd` may start with `$WORK_DIR`, `$OUTPUT_DIR`, `$SKILLS_DIR`,
+  `$WORKSPACE_DIR`, `$RUN_DIR` (or `${...}`) and will be normalized to
+  workspace‑relative directories
 - Runtime injects env vars: `WORKSPACE_DIR`, `SKILLS_DIR`, `WORK_DIR`,
   `OUTPUT_DIR`, `RUN_DIR`; the tool injects `SKILL_NAME`
 - Convenience symlinks are created under the skill root: `out/`,
@@ -312,6 +330,7 @@ Container notes:
 Security & limits:
 - Reads/writes confined to the workspace
 - Timeouts and read‑only skill trees reduce risk
+- `stdout`/`stderr` may be truncated (see `warnings`)
 - Output file read size is capped to prevent oversized payloads
 
 ## Events and Tracing

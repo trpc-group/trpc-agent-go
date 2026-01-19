@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -62,6 +63,46 @@ func TestRuntime_RunProgram_Basic(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Contains(t, res.Stdout, "hello runtime")
+}
+
+func TestRuntime_CreateWorkspace_TrustedLocal_ReusesRoot(t *testing.T) {
+	root := t.TempDir()
+	rt := local.NewRuntimeWithOptions(
+		root,
+		local.WithRuntimeWorkspaceMode(
+			local.WorkspaceModeTrustedLocal,
+		),
+	)
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx,
+		"rt-trusted",
+		codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, root, ws.Path)
+
+	require.DirExists(t, filepath.Join(root, codeexecutor.DirOut))
+	require.DirExists(t, filepath.Join(root, codeexecutor.DirWork))
+
+	require.NoError(t, rt.Cleanup(ctx, ws))
+	_, err = os.Stat(root)
+	require.NoError(t, err)
+}
+
+func TestRuntime_CreateWorkspace_TrustedLocal_RequiresRoot(t *testing.T) {
+	rt := local.NewRuntimeWithOptions(
+		"",
+		local.WithRuntimeWorkspaceMode(
+			local.WorkspaceModeTrustedLocal,
+		),
+	)
+	_, err := rt.CreateWorkspace(
+		context.Background(),
+		"rt-trusted-empty",
+		codeexecutor.WorkspacePolicy{},
+	)
+	require.Error(t, err)
 }
 
 func TestRuntime_ExecuteInline_PythonOrSkip(t *testing.T) {
@@ -475,6 +516,28 @@ func TestRuntime_Collect_EnvPrefixes(t *testing.T) {
 		files[0].Name)
 }
 
+func TestRuntime_Collect_SkipsDirectories(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-collect-skip-dir", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	outDir := filepath.Join(ws.Path, codeexecutor.DirOut)
+	require.NoError(t, os.MkdirAll(outDir, 0o755))
+	target := filepath.Join(outDir, "a.txt")
+	require.NoError(t, os.WriteFile(target, []byte("ok"), 0o644))
+
+	glob := filepath.ToSlash(filepath.Join(codeexecutor.DirOut, "**"))
+	files, err := rt.Collect(ctx, ws, []string{glob})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "out/a.txt", files[0].Name)
+	require.Equal(t, "ok", files[0].Content)
+}
+
 func TestRuntime_PutFiles_EmptyPathError(t *testing.T) {
 	rt := local.NewRuntime("")
 	ctx := context.Background()
@@ -721,6 +784,31 @@ func TestRuntime_CollectOutputs_EnvPrefixes(t *testing.T) {
 			Inline: true,
 		},
 	)
+	require.NoError(t, err)
+	require.Len(t, mf.Files, 1)
+	require.Equal(t, "out/x.txt", mf.Files[0].Name)
+	require.Equal(t, "ok", mf.Files[0].Content)
+}
+
+func TestRuntime_CollectOutputs_SkipsDirectories(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-collect-out-dirs", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	outDir := filepath.Join(ws.Path, codeexecutor.DirOut)
+	require.NoError(t, os.MkdirAll(outDir, 0o755))
+	target := filepath.Join(outDir, "x.txt")
+	require.NoError(t, os.WriteFile(target, []byte("ok"), 0o644))
+
+	glob := filepath.ToSlash(filepath.Join(codeexecutor.DirOut, "**"))
+	mf, err := rt.CollectOutputs(ctx, ws, codeexecutor.OutputSpec{
+		Globs:  []string{glob},
+		Inline: true,
+	})
 	require.NoError(t, err)
 	require.Len(t, mf.Files, 1)
 	require.Equal(t, "out/x.txt", mf.Files[0].Name)
