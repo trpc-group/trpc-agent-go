@@ -166,12 +166,12 @@ func (p *Planner) getResponseContent(response *model.Response) string {
 //
 // To avoid false positives (e.g., "Let me know if you have questions" in a valid
 // final answer), this function uses a conservative heuristic:
-// 1. Action-related tags (/*ACTION*/, /*PLANNING*/, /*REPLANNING*/) are always
-//    considered intent descriptions since they explicitly indicate ongoing planning.
-// 2. Natural language intent patterns ("I will", "I'll", etc.) are only considered
-//    intent descriptions if they appear at the start of content or a line,
-//    suggesting the agent is declaring its next action rather than using these
-//    phrases incidentally.
+//  1. Action-related tags (/*ACTION*/, /*PLANNING*/, /*REPLANNING*/) are always
+//     considered intent descriptions since they explicitly indicate ongoing planning.
+//  2. Natural language intent patterns ("I will", "I'll", etc.) are only considered
+//     intent descriptions if they appear at the start of content or a line,
+//     suggesting the agent is declaring its next action rather than using these
+//     phrases incidentally.
 func (p *Planner) isIntentDescription(content string) bool {
 	if content == "" {
 		return false
