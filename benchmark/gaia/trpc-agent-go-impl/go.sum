@@ -404,6 +404,8 @@ honnef.co/go/tools v0.0.0-20190523083050-ea95bdfd59fc/go.mod h1:rf3lG4BRIbNafJWh
 honnef.co/go/tools v0.0.1-2019.2.3/go.mod h1:a3bituU0lyd329TUQxRnasdCoJDkEUEAqEt0JzvZhAg=
 trpc.group/trpc-go/trpc-a2a-go v0.2.5 h1:X3pAlWD128LaS9TtXsUDZoJWPVuPZDkZKUecKRxmWn4=
 trpc.group/trpc-go/trpc-a2a-go v0.2.5/go.mod h1:Gtytau9Uoc3oPo/dpHvKit+tQn9Qlk5XFG1RiZTGqfk=
+trpc.group/trpc-go/trpc-agent-go v1.2.0 h1:mc5v8W6r0qL1AEjlowSxmHYz2yiIaKoPNPFAlL5YLgk=
+trpc.group/trpc-go/trpc-agent-go v1.2.0/go.mod h1:cD2yua1x0WYYuq8VGpzc60liTfy+QfPn//MHzDP63Xk=
 trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.8.1-0.20251227062801-17f5b0e8bbfd h1:EmpwOXMkd7ssbPvY7zyAkt0j8QtuzW6JzVPxALthqqU=
 trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.8.1-0.20251227062801-17f5b0e8bbfd/go.mod h1:WUXXCNYGuyjLGHyopnruwEVHVTYbF95X2nrHWa5w+1I=
 trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch v1.1.1 h1:rarfzxOHXBP39LmHKqB3Wy95vfTiE8G3rXsymy3FZcw=

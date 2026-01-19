@@ -14,8 +14,6 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/tool/wikipedia v0.0.0-20260113110153-06eda6b5e595
 )
 
-replace trpc.group/trpc-go/trpc-agent-go => /root/go/src/github.com/trpc-agent-go
-
 require (
 	git.code.oa.com/trpc-go/trpc-go v0.19.3 // indirect
 	git.code.oa.com/trpc-go/trpc-metrics-runtime v0.5.22 // indirect
