@@ -26,11 +26,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
-	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+
+	util "trpc.group/trpc-go/trpc-agent-go/examples/memory"
 )
 
 var (
@@ -38,6 +39,7 @@ var (
 	extModel  = flag.String("ext-model", "", "Model for memory extraction (defaults to chat model)")
 	streaming = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	debug     = flag.Bool("debug", false, "Enable debug mode to print messages sent to model")
+	memType   = flag.String("memory", "inmemory", "Memory service type: inmemory, redis, postgres, pgvector, mysql")
 )
 
 func main() {
@@ -50,6 +52,8 @@ func main() {
 		extractorModel = *modelName
 	}
 	fmt.Printf("Extractor Model: %s\n", extractorModel)
+	memoryType := util.MemoryType(*memType)
+	fmt.Printf("Memory Service: %s\n", memoryType)
 	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Println(strings.Repeat("=", 50))
 	fmt.Println()
@@ -61,6 +65,8 @@ func main() {
 	chat := &autoMemoryChat{
 		modelName:      *modelName,
 		extractorModel: extractorModel,
+		memoryType:     memoryType,
+		appName:        appName,
 		streaming:      *streaming,
 		debug:          *debug,
 	}
@@ -74,6 +80,8 @@ func main() {
 type autoMemoryChat struct {
 	modelName      string
 	extractorModel string
+	memoryType     util.MemoryType
+	appName        string
 	streaming      bool
 	debug          bool
 	runner         runner.Runner
@@ -94,6 +102,11 @@ func (c *autoMemoryChat) run() error {
 
 	return c.startChat(ctx)
 }
+
+const (
+	appName   = "memory-chat"
+	agentName = "memory-assistant"
+)
 
 // setup creates the runner with LLM agent and auto memory extraction.
 func (c *autoMemoryChat) setup(_ context.Context) error {
@@ -124,13 +137,16 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 	// Create memory service with auto extraction enabled.
 	// When extractor is set, write tools (add/update/delete) are hidden, but
 	// search and clear tools remain available. Load tool is also hidden in auto mode.
-	c.memoryService = memoryinmemory.NewMemoryService(
-		memoryinmemory.WithExtractor(memExtractor),
-		// Optional: configure async worker settings.
-		memoryinmemory.WithAsyncMemoryNum(3),
-		memoryinmemory.WithMemoryQueueSize(100),
-		memoryinmemory.WithMemoryJobTimeout(30*time.Second),
-	)
+	var err error
+	c.memoryService, err = util.NewMemoryServiceByType(c.memoryType, util.MemoryServiceConfig{
+		Extractor:        memExtractor,
+		AsyncMemoryNum:   3,
+		MemoryQueueSize:  100,
+		MemoryJobTimeout: 30 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create memory service: %w", err)
+	}
 
 	// Setup identifiers.
 	c.userID = "user"
@@ -143,11 +159,6 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 		Temperature: floatPtr(0.7),
 		Stream:      c.streaming,
 	}
-
-	const (
-		appName   = "auto-memory-chat"
-		agentName = "auto-memory-assistant"
-	)
 
 	// Create model callbacks for debug mode.
 	var modelCallbacks *model.Callbacks
@@ -187,6 +198,7 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 		runner.WithMemoryService(c.memoryService),
 	)
 
+	util.PrintMemoryInfo(c.memoryType, false)
 	fmt.Printf("✅ Auto memory chat ready! Session: %s\n\n", c.sessionID)
 	return nil
 }
@@ -241,7 +253,7 @@ func (c *autoMemoryChat) startChat(ctx context.Context) error {
 func (c *autoMemoryChat) showMemories(ctx context.Context) {
 	const memoryLimit = 100
 	userKey := memory.UserKey{
-		AppName: "auto-memory-chat",
+		AppName: c.appName,
 		UserID:  c.userID,
 	}
 
