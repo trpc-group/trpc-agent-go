@@ -340,6 +340,91 @@ if evt.Response != nil && evt.Object == model.ObjectTypeToolResponse && len(evt.
 
 提示：自定义事件时，优先使用 `event.New(...)` 搭配 `WithResponse`、`WithBranch` 等，以保证 ID 和时间戳等元数据一致。
 
+### GraphAgent 节点自定义事件（非 LLM 输出）
+
+在 GraphAgent 工作流里，Function/Tool/Agent 等非 LLM 节点经常会计算出一些
+“中间结果”（例如 `processed`）。
+
+把结果写进 `graph.State{...}` 只会更新图内部状态，供后续节点使用；它不会
+自动变成助手文本出现在事件流里。
+
+如果你希望把这些中间结果实时发送给用户，可以在 NodeFunc 里主动发出节点自定义
+事件（`graph.node.custom`），并在消费事件流时解析出来。
+
+#### 在 NodeFunc 中发出事件
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+const (
+    stateKeyInput  = "input"
+    stateKeyOutput = "output"
+
+    eventTypeProcessed = "process.processed"
+)
+
+func processNode(ctx context.Context, state graph.State) (any, error) {
+    input, _ := state[stateKeyInput].(string)
+    processed := transform(input)
+
+    emitter := graph.GetEventEmitterWithContext(ctx, state)
+    if err := emitter.EmitCustom(eventTypeProcessed, processed); err != nil {
+        // Optional: log and keep going.
+    }
+
+    return graph.State{stateKeyOutput: processed}, nil
+}
+```
+
+#### 在事件循环中读取
+
+事件 payload 会以 JSON 的形式存放在
+`Event.StateDelta[graph.MetadataKeyNodeCustom]` 中。
+payload 需要能被 JSON 序列化（string/map/struct 等）。
+
+```go
+import (
+    "encoding/json"
+
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func handleEvents(eventChan <-chan *event.Event) {
+    for evt := range eventChan {
+        if evt == nil || evt.Response == nil {
+            continue
+        }
+        if evt.Object != graph.ObjectTypeGraphNodeCustom {
+            continue
+        }
+
+        b, ok := evt.StateDelta[graph.MetadataKeyNodeCustom]
+        if !ok {
+            continue
+        }
+
+        var meta graph.NodeCustomEventMetadata
+        if err := json.Unmarshal(b, &meta); err != nil {
+            continue
+        }
+
+        switch meta.Category {
+        case graph.NodeCustomEventCategoryCustom:
+            // Your payload is in meta.Payload.
+        case graph.NodeCustomEventCategoryProgress:
+            // Progress is meta.Progress (0-100), text is meta.Message.
+        case graph.NodeCustomEventCategoryText:
+            // Streamed text is meta.Message.
+        }
+    }
+}
+```
+
 ### 标签（Tags）
 
 Event 支持通过 `Event.Tag` 添加简单标签，便于过滤与统计：
