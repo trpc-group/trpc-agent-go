@@ -3549,3 +3549,175 @@ func TestGetSessionHook(t *testing.T) {
 		assert.Equal(t, []string{"hook1_before", "hook2_before", "hook2_after", "hook1_after"}, order)
 	})
 }
+
+// createUserEventForConsecutiveTest creates a user event for consecutive test.
+func createUserEventForConsecutiveTest(content string) *event.Event {
+	return event.NewResponseEvent(
+		"test-inv",
+		"test-author",
+		&model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleUser,
+						Content: content,
+					},
+				},
+			},
+		},
+	)
+}
+
+// createAssistantEventForConsecutiveTest creates an assistant event for
+// consecutive test.
+func createAssistantEventForConsecutiveTest(content string) *event.Event {
+	return event.NewResponseEvent(
+		"test-inv",
+		"test-author",
+		&model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: content,
+					},
+				},
+			},
+		},
+	)
+}
+
+func TestService_ConsecutiveUserMessage_HandlerCalled(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	handlerCalled := false
+	var prevContent, currContent string
+	handler := func(
+		sess *session.Session,
+		prev, curr *event.Event,
+	) bool {
+		handlerCalled = true
+		prevContent = prev.Response.Choices[0].Message.Content
+		currContent = curr.Response.Choices[0].Message.Content
+		return true
+	}
+
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithOnConsecutiveUserMessage(handler),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test-app", UserID: "user1", SessionID: "session1"}
+
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// First user message.
+	err = svc.AppendEvent(ctx, sess, createUserEventForConsecutiveTest("hello"))
+	require.NoError(t, err)
+
+	// Second user message (consecutive) - handler should be called.
+	err = svc.AppendEvent(ctx, sess, createUserEventForConsecutiveTest("how are you"))
+	require.NoError(t, err)
+
+	// Verify handler was called with correct parameters.
+	assert.True(t, handlerCalled)
+	assert.Equal(t, "hello", prevContent)
+	assert.Equal(t, "how are you", currContent)
+
+	// Get session and verify both events are stored.
+	retrieved, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.Len(t, retrieved.Events, 2)
+}
+
+func TestService_ConsecutiveUserMessage_SkipCurrent(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	skipCurrentHandler := func(
+		sess *session.Session,
+		prev, curr *event.Event,
+	) bool {
+		return false
+	}
+
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithOnConsecutiveUserMessage(skipCurrentHandler),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test-app", UserID: "user1", SessionID: "session1"}
+
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// First user message.
+	err = svc.AppendEvent(ctx, sess, createUserEventForConsecutiveTest("hello"))
+	require.NoError(t, err)
+
+	// Second user message (consecutive) - handler should skip it.
+	err = svc.AppendEvent(ctx, sess, createUserEventForConsecutiveTest("how are you"))
+	require.NoError(t, err)
+
+	// Get session and verify.
+	retrieved, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+
+	// Should have 1 event: only the first user message.
+	require.Len(t, retrieved.Events, 1)
+	assert.Equal(t, "hello", retrieved.Events[0].Response.Choices[0].Message.Content)
+}
+
+func TestService_ConsecutiveUserMessage_NormalFlow(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	handlerCalled := false
+	handler := func(sess *session.Session, prev, curr *event.Event) bool {
+		handlerCalled = true
+		return true
+	}
+
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithOnConsecutiveUserMessage(handler),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test-app", UserID: "user1", SessionID: "session1"}
+
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// User message.
+	err = svc.AppendEvent(ctx, sess, createUserEventForConsecutiveTest("hello"))
+	require.NoError(t, err)
+
+	// Assistant message.
+	err = svc.AppendEvent(ctx, sess, createAssistantEventForConsecutiveTest("hi there"))
+	require.NoError(t, err)
+
+	// Another user message - not consecutive user messages.
+	err = svc.AppendEvent(ctx, sess, createUserEventForConsecutiveTest("how are you"))
+	require.NoError(t, err)
+
+	// Handler should not have been called.
+	assert.False(t, handlerCalled)
+
+	// Get session and verify.
+	retrieved, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.Len(t, retrieved.Events, 3)
+}

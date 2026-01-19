@@ -2109,3 +2109,227 @@ func TestNewSession_OptionOrder(t *testing.T) {
 		t.Errorf("NewSession() option order: CreatedAt = %v, want %v (last option should win)", sess.CreatedAt, secondTime)
 	}
 }
+
+// createTestUserEvent creates a user event for testing.
+func createTestUserEvent(content string) *event.Event {
+	return event.NewResponseEvent(
+		"test-inv",
+		"test-author",
+		&model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleUser,
+						Content: content,
+					},
+				},
+			},
+		},
+	)
+}
+
+// createTestAssistantEvent creates an assistant event for testing.
+func createTestAssistantEvent(content string) *event.Event {
+	return event.NewResponseEvent(
+		"test-inv",
+		"test-author",
+		&model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: content,
+					},
+				},
+			},
+		},
+	)
+}
+
+func TestHandleConsecutiveUserMessage_NilSession(t *testing.T) {
+	var sess *Session
+	evt := createTestUserEvent("hello")
+	handler := func(s *Session, prev, curr *event.Event) bool {
+		t.Error("handler should not be called for nil session")
+		return true
+	}
+	result := sess.HandleConsecutiveUserMessage(evt, handler)
+	assert.True(t, result)
+}
+
+func TestHandleConsecutiveUserMessage_NilEvent(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	handler := func(s *Session, prev, curr *event.Event) bool {
+		t.Error("handler should not be called for nil event")
+		return true
+	}
+	result := sess.HandleConsecutiveUserMessage(nil, handler)
+	assert.True(t, result)
+}
+
+func TestHandleConsecutiveUserMessage_NonUserEvent(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	sess.Events = append(sess.Events, *createTestUserEvent("previous"))
+	evt := createTestAssistantEvent("assistant message")
+
+	handler := func(s *Session, prev, curr *event.Event) bool {
+		t.Error("handler should not be called for non-user event")
+		return true
+	}
+	result := sess.HandleConsecutiveUserMessage(evt, handler)
+	assert.True(t, result)
+}
+
+func TestHandleConsecutiveUserMessage_EmptyEvents(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	evt := createTestUserEvent("first message")
+
+	handler := func(s *Session, prev, curr *event.Event) bool {
+		t.Error("handler should not be called when no previous events")
+		return true
+	}
+	result := sess.HandleConsecutiveUserMessage(evt, handler)
+	assert.True(t, result)
+}
+
+func TestHandleConsecutiveUserMessage_LastEventNotUser(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	sess.Events = append(sess.Events, *createTestAssistantEvent("assistant"))
+	evt := createTestUserEvent("user message")
+
+	handler := func(s *Session, prev, curr *event.Event) bool {
+		t.Error("handler should not be called when last event is not user")
+		return true
+	}
+	result := sess.HandleConsecutiveUserMessage(evt, handler)
+	assert.True(t, result)
+}
+
+func TestHandleConsecutiveUserMessage_ConsecutiveDetected(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	sess.Events = append(sess.Events, *createTestUserEvent("first user"))
+	evt := createTestUserEvent("second user")
+
+	handlerCalled := false
+	handler := func(s *Session, prev, curr *event.Event) bool {
+		handlerCalled = true
+		assert.Equal(t, "first user", prev.Response.Choices[0].Message.Content)
+		assert.Equal(t, "second user", curr.Response.Choices[0].Message.Content)
+		return true
+	}
+	result := sess.HandleConsecutiveUserMessage(evt, handler)
+	assert.True(t, result)
+	assert.True(t, handlerCalled)
+}
+
+func TestHandleConsecutiveUserMessage_HandlerReturnsFalse(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	sess.Events = append(sess.Events, *createTestUserEvent("first user"))
+	evt := createTestUserEvent("second user")
+
+	handler := func(s *Session, prev, curr *event.Event) bool {
+		return false // Skip current event.
+	}
+	result := sess.HandleConsecutiveUserMessage(evt, handler)
+	assert.False(t, result)
+}
+
+func TestHandleConsecutiveUserMessage_NilHandler(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	sess.Events = append(sess.Events, *createTestUserEvent("first user"))
+	evt := createTestUserEvent("second user")
+
+	// No handler - should log warning and return true.
+	result := sess.HandleConsecutiveUserMessage(evt, nil)
+	assert.True(t, result)
+}
+
+func TestHandleConsecutiveUserMessage_ModifyPreviousEvent(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	sess.Events = append(sess.Events, *createTestUserEvent("original content"))
+	evt := createTestUserEvent("second user")
+
+	handler := func(s *Session, prev, curr *event.Event) bool {
+		prev.Response.Choices[0].Message.Content = "[modified]"
+		return true
+	}
+	result := sess.HandleConsecutiveUserMessage(evt, handler)
+	assert.True(t, result)
+	// Verify the previous event was modified in the session.
+	assert.Equal(t, "[modified]", sess.Events[0].Response.Choices[0].Message.Content)
+}
+
+func TestHandleConsecutiveUserMessage_InsertPlaceholder(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	sess.Events = append(sess.Events, *createTestUserEvent("first user"))
+	evt := createTestUserEvent("second user")
+
+	handler := func(s *Session, prev, curr *event.Event) bool {
+		placeholder := event.Event{
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "[placeholder]",
+						},
+					},
+				},
+			},
+		}
+		s.Events = append(s.Events, placeholder)
+		return true
+	}
+	result := sess.HandleConsecutiveUserMessage(evt, handler)
+	assert.True(t, result)
+	// Verify placeholder was inserted.
+	require.Len(t, sess.Events, 2)
+	assert.Equal(t, model.RoleUser, sess.Events[0].Response.Choices[0].Message.Role)
+	assert.Equal(t, model.RoleAssistant, sess.Events[1].Response.Choices[0].Message.Role)
+}
+
+func TestHandleConsecutiveUserMessage_RemovePrevious(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	sess.Events = append(sess.Events, *createTestUserEvent("first user"))
+	evt := createTestUserEvent("second user")
+
+	handler := func(s *Session, prev, curr *event.Event) bool {
+		if len(s.Events) > 0 {
+			s.Events = s.Events[:len(s.Events)-1]
+		}
+		return true
+	}
+	result := sess.HandleConsecutiveUserMessage(evt, handler)
+	assert.True(t, result)
+	// Verify previous was removed.
+	require.Len(t, sess.Events, 0)
+}
+
+func TestHandleConsecutiveUserMessage_EventWithNilResponse(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	sess.Events = append(sess.Events, *createTestUserEvent("first user"))
+	evt := &event.Event{Response: nil}
+
+	handler := func(s *Session, prev, curr *event.Event) bool {
+		t.Error("handler should not be called for event with nil response")
+		return true
+	}
+	result := sess.HandleConsecutiveUserMessage(evt, handler)
+	assert.True(t, result)
+}
+
+func TestHandleConsecutiveUserMessage_LastEventNilResponse(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	sess.Events = append(sess.Events, event.Event{Response: nil})
+	evt := createTestUserEvent("user message")
+
+	handler := func(s *Session, prev, curr *event.Event) bool {
+		t.Error("handler should not be called when last event has nil response")
+		return true
+	}
+	result := sess.HandleConsecutiveUserMessage(evt, handler)
+	assert.True(t, result)
+}

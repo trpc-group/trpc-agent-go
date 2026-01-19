@@ -3295,3 +3295,178 @@ func TestAppendEventInternal_SendOnClosedChannel(t *testing.T) {
 	err = s.appendEventInternal(ctx, sess, evt, key)
 	require.NoError(t, err)
 }
+
+// createUserEventForConsecutiveTest creates a user event for consecutive test.
+func createUserEventForConsecutiveTest(content string) *event.Event {
+	return event.NewResponseEvent(
+		"test-inv",
+		"test-author",
+		&model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleUser,
+						Content: content,
+					},
+				},
+			},
+		},
+	)
+}
+
+// createAssistantEventForConsecutiveTest creates an assistant event for
+// consecutive test.
+func createAssistantEventForConsecutiveTest(content string) *event.Event {
+	return event.NewResponseEvent(
+		"test-inv",
+		"test-author",
+		&model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: content,
+					},
+				},
+			},
+		},
+	)
+}
+
+func TestService_ConsecutiveUserMessage_HandlerCalled(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	handlerCalled := false
+	var prevContent, currContent string
+	handler := func(
+		sess *session.Session,
+		prev, curr *event.Event,
+	) bool {
+		handlerCalled = true
+		prevContent = prev.Response.Choices[0].Message.Content
+		currContent = curr.Response.Choices[0].Message.Content
+		return true
+	}
+
+	s := createTestService(t, db, WithOnConsecutiveUserMessage(handler))
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test-app", UserID: "user1", SessionID: "session1"}
+
+	// Create a session with one user event already in Events.
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	sess.Events = append(sess.Events, *createUserEventForConsecutiveTest("hello"))
+
+	// Mock the SELECT query for getSessionState in addEvent.
+	stateData := &SessionState{State: session.StateMap{}}
+	stateBytes, _ := json.Marshal(stateData)
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "user1", "session1").
+		WillReturnRows(rows)
+	// Mock BEGIN transaction.
+	mock.ExpectBegin()
+	// Mock the UPDATE query for updateSessionState in transaction.
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Mock the INSERT query for insertEvent in transaction.
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Mock COMMIT transaction.
+	mock.ExpectCommit()
+
+	// Call appendEventInternal directly to skip session existence check.
+	err = s.appendEventInternal(ctx, sess,
+		createUserEventForConsecutiveTest("how are you"), key)
+	require.NoError(t, err)
+
+	// Verify handler was called with correct parameters.
+	assert.True(t, handlerCalled)
+	assert.Equal(t, "hello", prevContent)
+	assert.Equal(t, "how are you", currContent)
+}
+
+func TestService_ConsecutiveUserMessage_SkipCurrent(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	skipCurrentHandler := func(
+		sess *session.Session,
+		prev, curr *event.Event,
+	) bool {
+		return false // Skip current event.
+	}
+
+	s := createTestService(t, db, WithOnConsecutiveUserMessage(skipCurrentHandler))
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test-app", UserID: "user1", SessionID: "session1"}
+
+	// Create a session with one user event already in Events.
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	sess.Events = append(sess.Events, *createUserEventForConsecutiveTest("hello"))
+	originalLen := len(sess.Events)
+
+	// Call appendEventInternal directly - should be skipped.
+	// No mock expectations needed since handler returns false and skips DB ops.
+	err = s.appendEventInternal(ctx, sess,
+		createUserEventForConsecutiveTest("how are you"), key)
+	require.NoError(t, err)
+
+	// Session events should still have only the original event.
+	assert.Equal(t, originalLen, len(sess.Events))
+}
+
+func TestService_ConsecutiveUserMessage_NormalFlow(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	handlerCalled := false
+	handler := func(sess *session.Session, prev, curr *event.Event) bool {
+		handlerCalled = true
+		return true
+	}
+
+	s := createTestService(t, db, WithOnConsecutiveUserMessage(handler))
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test-app", UserID: "user1", SessionID: "session1"}
+
+	// Create a session with one assistant event (not user).
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	sess.Events = append(sess.Events, *createAssistantEventForConsecutiveTest("hi there"))
+
+	// Mock the SELECT query for getSessionState in addEvent.
+	stateData := &SessionState{State: session.StateMap{}}
+	stateBytes, _ := json.Marshal(stateData)
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs("test-app", "user1", "session1").
+		WillReturnRows(rows)
+	// Mock BEGIN transaction.
+	mock.ExpectBegin()
+	// Mock the UPDATE query for updateSessionState in transaction.
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Mock the INSERT query for insertEvent in transaction.
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Mock COMMIT transaction.
+	mock.ExpectCommit()
+
+	// Call appendEventInternal directly - not consecutive since last event is assistant.
+	err = s.appendEventInternal(ctx, sess,
+		createUserEventForConsecutiveTest("hello"), key)
+	require.NoError(t, err)
+
+	// Handler should not have been called.
+	assert.False(t, handlerCalled)
+}

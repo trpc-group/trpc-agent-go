@@ -18,6 +18,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
 )
@@ -485,4 +487,174 @@ func TestService_UpdateSessionState(t *testing.T) {
 
 	err := s.UpdateSessionState(ctx, key, session.StateMap{"k1": []byte("v1")})
 	assert.NoError(t, err)
+}
+
+// createUserEventForConsecutiveTest creates a user event for consecutive test.
+func createUserEventForConsecutiveTest(content string) *event.Event {
+	return event.NewResponseEvent(
+		"test-inv",
+		"test-author",
+		&model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleUser,
+						Content: content,
+					},
+				},
+			},
+		},
+	)
+}
+
+// createAssistantEventForConsecutiveTest creates an assistant event for
+// consecutive test.
+func createAssistantEventForConsecutiveTest(content string) *event.Event {
+	return event.NewResponseEvent(
+		"test-inv",
+		"test-author",
+		&model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: content,
+					},
+				},
+			},
+		},
+	)
+}
+
+func TestService_ConsecutiveUserMessage_HandlerCalled(t *testing.T) {
+	mockCli := &mockClient{}
+
+	handlerCalled := false
+	var prevContent, currContent string
+	handler := func(
+		sess *session.Session,
+		prev, curr *event.Event,
+	) bool {
+		handlerCalled = true
+		prevContent = prev.Response.Choices[0].Message.Content
+		currContent = curr.Response.Choices[0].Message.Content
+		return true
+	}
+
+	s := &Service{
+		chClient:           mockCli,
+		opts:               ServiceOpts{onConsecutiveUserMsg: handler},
+		tableSessionStates: "session_states",
+		tableSessionEvents: "session_events",
+	}
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test-app", UserID: "user1", SessionID: "session1"}
+
+	// Create a session with one user event already in Events.
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	sess.Events = append(sess.Events, *createUserEventForConsecutiveTest("hello"))
+
+	// Mock the query for getSessionState in addEvent.
+	sessState := SessionState{State: session.StateMap{}}
+	stateBytes, _ := json.Marshal(sessState)
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		return newMockRows([][]any{{string(stateBytes), time.Now()}}), nil
+	}
+
+	// Mock the exec for updateSessionState and insertEvent.
+	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
+		return nil
+	}
+
+	// Call appendEventInternal directly to skip session existence check.
+	err := s.appendEventInternal(ctx, sess,
+		createUserEventForConsecutiveTest("how are you"), key)
+	assert.NoError(t, err)
+
+	// Verify handler was called with correct parameters.
+	assert.True(t, handlerCalled)
+	assert.Equal(t, "hello", prevContent)
+	assert.Equal(t, "how are you", currContent)
+}
+
+func TestService_ConsecutiveUserMessage_SkipCurrent(t *testing.T) {
+	mockCli := &mockClient{}
+
+	skipCurrentHandler := func(
+		sess *session.Session,
+		prev, curr *event.Event,
+	) bool {
+		return false // Skip current event.
+	}
+
+	s := &Service{
+		chClient:           mockCli,
+		opts:               ServiceOpts{onConsecutiveUserMsg: skipCurrentHandler},
+		tableSessionStates: "session_states",
+		tableSessionEvents: "session_events",
+	}
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test-app", UserID: "user1", SessionID: "session1"}
+
+	// Create a session with one user event already in Events.
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	sess.Events = append(sess.Events, *createUserEventForConsecutiveTest("hello"))
+	originalLen := len(sess.Events)
+
+	// Call appendEventInternal directly - should be skipped.
+	// No mock setup needed since handler returns false and skips DB ops.
+	err := s.appendEventInternal(ctx, sess,
+		createUserEventForConsecutiveTest("how are you"), key)
+	assert.NoError(t, err)
+
+	// Session events should still have only the original event.
+	assert.Equal(t, originalLen, len(sess.Events))
+}
+
+func TestService_ConsecutiveUserMessage_NormalFlow(t *testing.T) {
+	mockCli := &mockClient{}
+
+	handlerCalled := false
+	handler := func(sess *session.Session, prev, curr *event.Event) bool {
+		handlerCalled = true
+		return true
+	}
+
+	s := &Service{
+		chClient:           mockCli,
+		opts:               ServiceOpts{onConsecutiveUserMsg: handler},
+		tableSessionStates: "session_states",
+		tableSessionEvents: "session_events",
+	}
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test-app", UserID: "user1", SessionID: "session1"}
+
+	// Create a session with one assistant event (not user).
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	sess.Events = append(sess.Events, *createAssistantEventForConsecutiveTest("hi there"))
+
+	// Mock the query for getSessionState in addEvent.
+	sessState := SessionState{State: session.StateMap{}}
+	stateBytes, _ := json.Marshal(sessState)
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		return newMockRows([][]any{{string(stateBytes), time.Now()}}), nil
+	}
+
+	// Mock the exec for updateSessionState and insertEvent.
+	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
+		return nil
+	}
+
+	// Call appendEventInternal directly - not consecutive since last event is assistant.
+	err := s.appendEventInternal(ctx, sess,
+		createUserEventForConsecutiveTest("hello"), key)
+	assert.NoError(t, err)
+
+	// Handler should not have been called.
+	assert.False(t, handlerCalled)
 }
