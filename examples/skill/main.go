@@ -1560,7 +1560,7 @@ func runSingleTask(r runner.Runner, task GAIATask) BenchmarkResult {
 					for i, tc := range choice.Message.ToolCalls {
 						log.Printf("    [%d] %s", i+1, tc.Function.Name)
 						// Pretty-print JSON args for logs.
-						var args map[string]interface{}
+						var args map[string]any
 						if err := json.Unmarshal(tc.Function.Arguments, &args); err == nil {
 							argsJSON, err := json.MarshalIndent(
 								args,
