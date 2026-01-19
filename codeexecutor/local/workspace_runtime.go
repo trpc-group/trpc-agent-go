@@ -490,6 +490,13 @@ func (r *Runtime) Collect(
 			seen[name] = true
 			st, statErr := os.Stat(realp)
 			if statErr != nil {
+				if errors.Is(statErr, fs.ErrNotExist) {
+					ls, lsErr := os.Lstat(realp)
+					if lsErr == nil &&
+						ls.Mode()&os.ModeSymlink != 0 {
+						continue
+					}
+				}
 				span.SetStatus(codes.Error, statErr.Error())
 				return nil, statErr
 			}
