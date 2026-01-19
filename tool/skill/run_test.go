@@ -204,6 +204,43 @@ func TestRunTool_PrimaryOutput_SelectsByName(t *testing.T) {
 	require.Contains(t, out.PrimaryOutput.Content, contentHi)
 }
 
+func TestSelectPrimaryOutput_SkipsNonTextAndEmpty(t *testing.T) {
+	large := strings.Repeat("a", maxPrimaryOutputChars+1)
+	files := []runFile{
+		{
+			File: codeexecutor.File{
+				Name:     "b.txt",
+				Content:  "",
+				MIMEType: "text/plain",
+			},
+		},
+		{
+			File: codeexecutor.File{
+				Name:     "c.bin",
+				Content:  "x",
+				MIMEType: "application/octet-stream",
+			},
+		},
+		{
+			File: codeexecutor.File{
+				Name:     "d.txt",
+				Content:  large,
+				MIMEType: "text/plain",
+			},
+		},
+		{
+			File: codeexecutor.File{
+				Name:     "a.txt",
+				Content:  "ok",
+				MIMEType: "text/plain",
+			},
+		},
+	}
+	best := selectPrimaryOutput(files)
+	require.NotNil(t, best)
+	require.Equal(t, "a.txt", best.Name)
+}
+
 func TestRunTool_SaveAsArtifacts_AndOmitInline(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -1676,4 +1713,18 @@ func TestRunTool_WorkspacePersistsAcrossCalls(t *testing.T) {
 	require.Equal(t, 0, o2.ExitCode)
 	require.Len(t, o2.OutputFiles, 1)
 	require.Contains(t, o2.OutputFiles[0].Content, "hi")
+}
+
+func TestSkillStagingHelpers_EarlyReturns(t *testing.T) {
+	require.False(t, skillLinksPresent("", "a"))
+	require.False(t, skillLinksPresent("a", ""))
+
+	require.False(t, isSymlink(filepath.Join(t.TempDir(), "missing")))
+
+	rt := &RunTool{}
+	ctx := context.Background()
+	ws := codeexecutor.Workspace{}
+
+	require.NoError(t, rt.removeWorkspacePath(ctx, nil, ws, ""))
+	require.NoError(t, rt.removeWorkspacePath(ctx, nil, ws, "skills/demo"))
 }

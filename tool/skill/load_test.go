@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -121,6 +122,17 @@ func TestSkillNameEnum_TooManyValuesReturnsNil(t *testing.T) {
 	repo := &mockRepo{
 		ok:   map[string]bool{},
 		sums: make([]skill.Summary, maxSkillEnumValues+1),
+	}
+	require.Nil(t, skillNameEnum(repo))
+}
+
+func TestSkillNameEnum_AllEmptyNamesReturnsNil(t *testing.T) {
+	repo := &mockRepo{
+		ok: map[string]bool{},
+		sums: []skill.Summary{
+			{Name: ""},
+			{Name: ""},
+		},
 	}
 	require.Nil(t, skillNameEnum(repo))
 }

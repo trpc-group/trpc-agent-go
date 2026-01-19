@@ -32,11 +32,32 @@ func TestParse_NoScheme(t *testing.T) {
 	require.Equal(t, "out/a.txt", ref.Path)
 }
 
+func TestParse_EmptyString(t *testing.T) {
+	ref, err := fileref.Parse("   ")
+	require.NoError(t, err)
+	require.Empty(t, ref.Scheme)
+	require.Empty(t, ref.Path)
+}
+
 func TestParse_WorkspaceScheme(t *testing.T) {
 	ref, err := fileref.Parse("workspace://out/a.txt")
 	require.NoError(t, err)
 	require.Equal(t, fileref.SchemeWorkspace, ref.Scheme)
 	require.Equal(t, "out/a.txt", ref.Path)
+}
+
+func TestParse_Workspace_EmptyOrDot(t *testing.T) {
+	ref, err := fileref.Parse("workspace://.")
+	require.NoError(t, err)
+	require.Equal(t, fileref.SchemeWorkspace, ref.Scheme)
+	require.Empty(t, ref.Path)
+}
+
+func TestParse_Workspace_CleansToDot(t *testing.T) {
+	ref, err := fileref.Parse("workspace://a/..")
+	require.NoError(t, err)
+	require.Equal(t, fileref.SchemeWorkspace, ref.Scheme)
+	require.Empty(t, ref.Path)
 }
 
 func TestParse_ArtifactScheme(t *testing.T) {
@@ -50,6 +71,16 @@ func TestParse_ArtifactScheme(t *testing.T) {
 
 func TestParse_UnsupportedScheme(t *testing.T) {
 	_, err := fileref.Parse("unknown://x")
+	require.Error(t, err)
+}
+
+func TestParse_Artifact_InvalidRef(t *testing.T) {
+	_, err := fileref.Parse("artifact://x@bad")
+	require.Error(t, err)
+}
+
+func TestParse_Artifact_EmptyNameAfterParse(t *testing.T) {
+	_, err := fileref.Parse("artifact://@1")
 	require.Error(t, err)
 }
 
@@ -136,6 +167,50 @@ func TestTryRead_Artifact_WithService(t *testing.T) {
 	ctxIO = codeexecutor.WithArtifactSession(ctxIO, info)
 	_, err := codeexecutor.SaveArtifactHelper(
 		ctxIO,
+		"x.txt",
+		[]byte("hi"),
+		"text/plain",
+	)
+	require.NoError(t, err)
+
+	content, mime, handled, err := fileref.TryRead(ctx, "artifact://x.txt")
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.Equal(t, "hi", content)
+	require.Equal(t, "text/plain", mime)
+}
+
+func TestTryRead_NoScheme_NotHandled(t *testing.T) {
+	content, mime, handled, err := fileref.TryRead(
+		context.Background(),
+		"out/a.txt",
+	)
+	require.NoError(t, err)
+	require.False(t, handled)
+	require.Empty(t, content)
+	require.Empty(t, mime)
+}
+
+func TestTryRead_ParseErrorHandled(t *testing.T) {
+	content, mime, handled, err := fileref.TryRead(
+		context.Background(),
+		"unknown://x",
+	)
+	require.Error(t, err)
+	require.True(t, handled)
+	require.Empty(t, content)
+	require.Empty(t, mime)
+}
+
+func TestTryRead_Artifact_WithServiceInContext(t *testing.T) {
+	svc := artifactinmemory.NewService()
+
+	ctx := context.Background()
+	ctx = codeexecutor.WithArtifactService(ctx, svc)
+	ctx = codeexecutor.WithArtifactSession(ctx, artifact.SessionInfo{})
+
+	_, err := codeexecutor.SaveArtifactHelper(
+		ctx,
 		"x.txt",
 		[]byte("hi"),
 		"text/plain",

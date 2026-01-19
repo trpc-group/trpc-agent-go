@@ -244,3 +244,99 @@ func TestReadMultipleFiles_WorkspaceRef(t *testing.T) {
 		"workspace://out/b.txt": "b",
 	}, actual)
 }
+
+func TestReadMultipleFiles_ArtifactGlobRejected(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	rsp, err := fts.readMultipleFiles(
+		context.Background(),
+		&readMultipleFilesRequest{
+			Patterns: []string{"artifact://x*.txt"},
+		},
+	)
+	assert.NoError(t, err)
+	assert.Empty(t, rsp.Files)
+	assert.Contains(t, rsp.Message, "artifact:// does not support glob")
+}
+
+func TestReadMultipleFiles_ArtifactRef_ReadError(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	rsp, err := fts.readMultipleFiles(
+		context.Background(),
+		&readMultipleFilesRequest{
+			Patterns: []string{"artifact://"},
+		},
+	)
+	assert.NoError(t, err)
+	assert.Len(t, rsp.Files, 1)
+	assert.Equal(t, "artifact://", rsp.Files[0].FileName)
+	assert.Contains(t, rsp.Files[0].Message, "artifact name is empty")
+}
+
+func TestReadMultipleFiles_WorkspacePatternInvalid(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/a.txt",
+			Content:  "a",
+			MIMEType: "text/plain",
+		},
+	})
+
+	rsp, err := fts.readMultipleFiles(ctx, &readMultipleFilesRequest{
+		Patterns: []string{"workspace://["},
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, rsp.Files)
+	assert.Contains(t, rsp.Message, "In finding files matched")
+}
+
+func TestReadMultipleFiles_WorkspaceFileTooLarge(t *testing.T) {
+	set, err := NewToolSet(
+		WithBaseDir(t.TempDir()),
+		WithMaxFileSize(1),
+	)
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/a.txt",
+			Content:  "aa",
+			MIMEType: "text/plain",
+		},
+	})
+
+	rsp, err := fts.readMultipleFiles(ctx, &readMultipleFilesRequest{
+		Patterns: []string{"workspace://out/*.txt"},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, rsp.Files, 1)
+	assert.Equal(t, "workspace://out/a.txt", rsp.Files[0].FileName)
+	assert.Contains(t, rsp.Files[0].Message, "too large")
+}
+
+func TestReadFiles_PathResolveError(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	res := fts.readFiles(
+		context.Background(),
+		[]string{"../evil.txt"},
+	)
+	assert.Len(t, res, 1)
+	assert.Contains(t, res[0].Message, "cannot resolve")
+}

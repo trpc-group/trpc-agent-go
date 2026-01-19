@@ -164,6 +164,11 @@ func TestFileTool_listFile_WorkspaceRef(t *testing.T) {
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
 		{
+			Name:     ".",
+			Content:  "ignored",
+			MIMEType: "text/plain",
+		},
+		{
 			Name:     "root.txt",
 			Content:  "root",
 			MIMEType: "text/plain",
@@ -195,6 +200,28 @@ func TestFileTool_listFile_WorkspaceRef(t *testing.T) {
 	assert.Equal(t, "workspace://out", rsp.Path)
 	assert.ElementsMatch(t, []string{"workspace://out/a.txt"}, rsp.Files)
 	assert.ElementsMatch(t, []string{"workspace://out/sub"}, rsp.Folders)
+}
+
+func TestFileTool_listFile_ArtifactUnsupported(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	_, err = fts.listFile(context.Background(), &listFileRequest{
+		Path: "artifact://x.txt",
+	})
+	assert.Error(t, err)
+}
+
+func TestFileTool_listFile_ParseError(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	_, err = fts.listFile(context.Background(), &listFileRequest{
+		Path: "unknown://x",
+	})
+	assert.Error(t, err)
 }
 
 func TestFileTool_listFile_FallbackToWorkspaceCache(t *testing.T) {

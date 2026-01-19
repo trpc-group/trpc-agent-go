@@ -24,6 +24,7 @@ import (
 	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	skilltool "trpc.group/trpc-go/trpc-agent-go/tool/skill"
@@ -46,6 +47,21 @@ func TestFileTool_ReadFile(t *testing.T) {
 	rsp, err := fileToolSet.readFile(context.Background(), req)
 	assert.NoError(t, err)
 	assert.Equal(t, testContent, rsp.Contents)
+}
+
+func TestFileTool_ReadFile_NilRequest(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	rsp, err := fileToolSet.readFile(context.Background(), nil)
+	assert.Error(t, err)
+	assert.NotNil(t, rsp)
+}
+
+func TestValidateReadFileRequest_Nil(t *testing.T) {
+	assert.Error(t, validateReadFileRequest(nil))
 }
 
 func TestFileTool_ReadFile_EmptyFileName(t *testing.T) {
@@ -333,6 +349,87 @@ func TestFileTool_ReadFile_ExceedMaxFileSize(t *testing.T) {
 	// Test reading the file.
 	req := &readFileRequest{FileName: "test.txt"}
 	_, err = fileToolSet.readFile(context.Background(), req)
+	assert.Error(t, err)
+}
+
+func TestFileTool_ReadFile_FromRef_TooLarge(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir), WithMaxFileSize(1))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/a.txt",
+			Content:  "hi",
+			MIMEType: "text/plain",
+		},
+	})
+
+	_, err = fileToolSet.readFile(ctx, &readFileRequest{
+		FileName: "workspace://out/a.txt",
+	})
+	assert.Error(t, err)
+}
+
+func TestFileTool_ReadFile_FromRef_EmptyFile(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/empty.txt",
+			Content:  "",
+			MIMEType: "text/plain",
+		},
+	})
+
+	rsp, err := fileToolSet.readFile(ctx, &readFileRequest{
+		FileName: "workspace://out/empty.txt",
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, rsp.Contents)
+	assert.Contains(t, rsp.Message, "file is empty")
+}
+
+func TestFileTool_ReadFile_FromCache_EmptyFile(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/empty.txt",
+			Content:  "",
+			MIMEType: "text/plain",
+		},
+	})
+
+	rsp, err := fileToolSet.readFile(ctx, &readFileRequest{
+		FileName: "out/empty.txt",
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, rsp.Contents)
+	assert.Contains(t, rsp.Message, "file is empty")
+}
+
+func TestFileTool_ReadFile_FromRef_ParseError(t *testing.T) {
+	toolSet, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	_, err = fileToolSet.readFile(context.Background(), &readFileRequest{
+		FileName: "artifact://",
+	})
 	assert.Error(t, err)
 }
 

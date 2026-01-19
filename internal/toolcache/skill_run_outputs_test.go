@@ -102,3 +102,51 @@ func TestLookupSkillRunOutputFile_InvalidArgs(t *testing.T) {
 	require.Empty(t, content)
 	require.Empty(t, mime)
 }
+
+func TestStoreSkillRunOutputFiles_EarlyReturns(t *testing.T) {
+	StoreSkillRunOutputFiles(
+		nil,
+		[]codeexecutor.File{{Name: "a.txt", Content: "a"}},
+	)
+
+	inv := agent.NewInvocation()
+	StoreSkillRunOutputFiles(inv, nil)
+	StoreSkillRunOutputFiles(inv, []codeexecutor.File{})
+
+	StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{Name: "  ", Content: "ignored"},
+	})
+}
+
+func TestLookupSkillRunOutputFile_WrongStateType(t *testing.T) {
+	inv := agent.NewInvocation()
+	inv.SetState(stateKeySkillRunOutputFiles, 1)
+	content, mime, ok := LookupSkillRunOutputFile(inv, "a.txt")
+	require.False(t, ok)
+	require.Empty(t, content)
+	require.Empty(t, mime)
+}
+
+func TestLookupSkillRunOutputFile_MissingKey(t *testing.T) {
+	inv := agent.NewInvocation()
+	inv.SetState(stateKeySkillRunOutputFiles, map[string]cachedSkillRunFile{
+		"x": {Content: "hi", MIMEType: "text/plain"},
+	})
+	content, mime, ok := LookupSkillRunOutputFile(inv, "y")
+	require.False(t, ok)
+	require.Empty(t, content)
+	require.Empty(t, mime)
+}
+
+func TestSkillRunOutputFiles_WrongOrEmptyState(t *testing.T) {
+	require.Nil(t, SkillRunOutputFiles(nil))
+
+	inv := agent.NewInvocation()
+	require.Nil(t, SkillRunOutputFiles(inv))
+
+	inv.SetState(stateKeySkillRunOutputFiles, map[string]cachedSkillRunFile{})
+	require.Nil(t, SkillRunOutputFiles(inv))
+
+	inv.SetState(stateKeySkillRunOutputFiles, "bad")
+	require.Nil(t, SkillRunOutputFiles(inv))
+}

@@ -349,3 +349,84 @@ func TestFileTool_SearchFile_FallbackToWorkspaceCache(t *testing.T) {
 	}, rsp.Files)
 	assert.Empty(t, rsp.Folders)
 }
+
+func TestFileTool_SearchFile_ArtifactUnsupported(t *testing.T) {
+	fileToolSet := &fileToolSet{baseDir: t.TempDir()}
+	_, err := fileToolSet.searchFile(
+		context.Background(),
+		&searchFileRequest{
+			Path:    "artifact://x.txt",
+			Pattern: "*",
+		},
+	)
+	assert.Error(t, err)
+}
+
+func TestFileTool_SearchFile_ParseError(t *testing.T) {
+	fileToolSet := &fileToolSet{baseDir: t.TempDir()}
+	_, err := fileToolSet.searchFile(
+		context.Background(),
+		&searchFileRequest{
+			Path:    "unknown://x",
+			Pattern: "*",
+		},
+	)
+	assert.Error(t, err)
+}
+
+func TestFileTool_SearchFile_WorkspaceInvalidPattern(t *testing.T) {
+	fileToolSet := &fileToolSet{baseDir: t.TempDir()}
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/a.txt",
+			Content:  "a",
+			MIMEType: "text/plain",
+		},
+	})
+
+	_, err := fileToolSet.searchFile(ctx, &searchFileRequest{
+		Path:    "workspace://",
+		Pattern: "[",
+	})
+	assert.Error(t, err)
+}
+
+func TestBuildWorkspaceIndex_SkipsDotAndStopsAtRoot(t *testing.T) {
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{Name: ".", Content: "x", MIMEType: "text/plain"},
+		{Name: "/abs/x.txt", Content: "x", MIMEType: "text/plain"},
+		{Name: "out/a.txt", Content: "a", MIMEType: "text/plain"},
+	})
+
+	idx := buildWorkspaceIndex(ctx)
+	assert.NotEmpty(t, idx.files)
+	assert.NotEmpty(t, idx.dirs)
+}
+
+func TestMatchWorkspacePaths_EmptyPattern(t *testing.T) {
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	files, dirs, err := matchWorkspacePaths(ctx, "", " ", true)
+	assert.NoError(t, err)
+	assert.Nil(t, files)
+	assert.Nil(t, dirs)
+}
+
+func TestMatchWorkspacePaths_DirSlashPattern(t *testing.T) {
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{Name: "a/b.txt", Content: "b", MIMEType: "text/plain"},
+	})
+
+	files, dirs, err := matchWorkspacePaths(ctx, "", "a/", true)
+	assert.NoError(t, err)
+	assert.Empty(t, files)
+	assert.Equal(t, []string{"workspace://a"}, dirs)
+}
