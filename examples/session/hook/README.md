@@ -1,10 +1,13 @@
-# Content-Filter Hook Demo
+# Session Hooks Demo
 
-This example shows how to use session hooks to mark and filter prohibited content via event tags.
+This example shows how to use session hooks for:
+1. **Content Filtering**: Mark and filter prohibited content via event tags.
+2. **Consecutive User Messages**: Handle duplicate/consecutive user messages via `AppendEventHook` (alternative to `WithOnConsecutiveUserMessage`).
 
 ## What it demonstrates
 - `AppendEventHook`: scans user/assistant messages, tags violations as `violation=<word>` (tags are joined by `event.TagDelimiter`, i.e. `;`).
 - `GetSessionHook`: filters violated Q&A pairs out of session history before they reach the LLM context.
+- `ConsecutiveUserMessageHook`: demonstrates handling consecutive user messages using hooks instead of the dedicated `WithOnConsecutiveUserMessage` option.
 - The console prints when a message is marked/filtered so you can see the hook chain in action.
 
 ## Prerequisites
@@ -19,8 +22,29 @@ This example shows how to use session hooks to mark and filter prohibited conten
 cd examples/session/hook
 export OPENAI_API_KEY="your-key"
 export OPENAI_BASE_URL="https://api.openai.com/v1"
+
+# Basic content filtering.
 go run . -model="${MODEL_NAME:-deepseek-chat}"
+
+# With consecutive user message handling (merge strategy).
+go run . -consecutive=merge
+
+# Other strategies: placeholder, skip.
+go run . -consecutive=placeholder
+go run . -consecutive=skip
 ```
+
+## Consecutive User Message Strategies
+
+The `-consecutive` flag enables handling of consecutive user messages via `AppendEventHook`:
+
+| Strategy | Behavior |
+|----------|----------|
+| `merge` | Merge current message into previous user message |
+| `placeholder` | Insert a placeholder assistant response before appending |
+| `skip` | Skip the current event entirely |
+
+This demonstrates that `AppendEventHook` can be used as an alternative to `WithOnConsecutiveUserMessage` for more complex scenarios where you need additional control over the event processing pipeline.
 
 ## Expected flow (sample)
 1) Normal message passes through, stored as-is.  
@@ -36,7 +60,7 @@ Console snippets you should notice:
 - Multiple tags are concatenated with `event.TagDelimiter` (`;`) if needed in other scenarios.
 
 ## Files of interest
-- `hooks.go`: hook implementations (`MarkViolationHook`, `FilterViolationHook`), tag parsing/append helpers.
+- `hooks.go`: hook implementations (`MarkViolationHook`, `FilterViolationHook`, `ConsecutiveUserMessageHook`), tag parsing/append helpers.
 - `main.go`: wires hooks into in-memory session service and runs the demo conversation.
 
 ## Sample output (abridged)

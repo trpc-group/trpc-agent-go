@@ -7,21 +7,22 @@
 //
 //
 
-// Package main demonstrates how to filter prohibited content using session hooks.
-// When user questions or assistant responses contain prohibited words,
-// they are marked and filtered out from session history before sending to LLM.
+// Package main demonstrates how to use session hooks for various scenarios:
+// 1. Content filtering: Mark and filter prohibited content
+// 2. Consecutive user messages: Handle duplicate/consecutive user messages via hook
 //
 // This is useful for:
 // - Content moderation
 // - Compliance filtering
 // - Preventing sensitive information from being included in LLM context
+// - Handling consecutive user messages without using WithOnConsecutiveUserMessage
 //
 // Usage:
 //
 //	go run . -session=inmemory
-//	go run . -session=redis
-//	go run . -session=postgres
-//	go run . -session=mysql
+//	go run . -session=redis -consecutive=merge
+//	go run . -session=postgres -consecutive=placeholder
+//	go run . -session=mysql -consecutive=skip
 //	go run . -session=clickhouse
 //
 // Environment variables:
@@ -52,8 +53,9 @@ import (
 )
 
 var (
-	modelName   = flag.String("model", os.Getenv("MODEL_NAME"), "Name of the model to use (default: MODEL_NAME env var or deepseek-chat)")
-	sessionType = flag.String("session", "inmemory", "Session backend: inmemory / redis / postgres / mysql / clickhouse")
+	modelName          = flag.String("model", os.Getenv("MODEL_NAME"), "Name of the model to use (default: MODEL_NAME env var or deepseek-chat)")
+	sessionType        = flag.String("session", "inmemory", "Session backend: inmemory / redis / postgres / mysql / clickhouse")
+	consecutiveHandler = flag.String("consecutive", "", "Consecutive user message strategy: merge / placeholder / skip (empty = disabled)")
 )
 
 func getModelName() string {
@@ -69,11 +71,21 @@ func main() {
 	model := getModelName()
 	fmt.Printf("Using model: %s\n", model)
 	fmt.Printf("Session backend: %s\n", *sessionType)
-	fmt.Printf("Prohibited words: %v\n\n", ProhibitedWords)
+	fmt.Printf("Prohibited words: %v\n", ProhibitedWords)
+	if *consecutiveHandler != "" {
+		fmt.Printf("Consecutive handler: %s\n", *consecutiveHandler)
+	}
+	fmt.Println()
 
-	// Create session service with content filtering hooks
+	// Build hooks list.
+	appendHooks := []session.AppendEventHook{MarkViolationHook()}
+	if *consecutiveHandler != "" {
+		appendHooks = append(appendHooks, ConsecutiveUserMessageHook(*consecutiveHandler))
+	}
+
+	// Create session service with content filtering hooks.
 	sessionService, err := util.NewSessionServiceByType(util.SessionType(*sessionType), util.SessionServiceConfig{
-		AppendEventHooks: []session.AppendEventHook{MarkViolationHook()},
+		AppendEventHooks: appendHooks,
 		GetSessionHooks:  []session.GetSessionHook{FilterViolationHook()},
 	})
 	if err != nil {

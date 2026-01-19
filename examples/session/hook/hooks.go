@@ -12,8 +12,10 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -164,4 +166,87 @@ func appendTags(existing string, tags ...string) string {
 	}
 	parts = append(parts, tags...)
 	return strings.Join(parts, event.TagDelimiter)
+}
+
+// ConsecutiveUserMessageHook handles consecutive user messages scenario.
+// When a user sends multiple messages without receiving assistant response,
+// it merges the messages or inserts a placeholder response.
+//
+// This demonstrates using AppendEventHook as an alternative to
+// WithOnConsecutiveUserMessage option.
+func ConsecutiveUserMessageHook(strategy string) session.AppendEventHook {
+	return func(ctx *session.AppendEventContext, next func() error) error {
+		evt := ctx.Event
+		sess := ctx.Session
+
+		// Only handle user messages.
+		if evt == nil || evt.Response == nil || !evt.Response.IsUserMessage() {
+			return next()
+		}
+
+		// Check for consecutive user messages.
+		sess.EventMu.Lock()
+		isConsecutive := false
+		var lastUserEvent *event.Event
+		if len(sess.Events) > 0 {
+			lastEvent := &sess.Events[len(sess.Events)-1]
+			if lastEvent.Response != nil && lastEvent.Response.IsUserMessage() {
+				isConsecutive = true
+				lastUserEvent = lastEvent
+			}
+		}
+		sess.EventMu.Unlock()
+
+		if !isConsecutive {
+			return next()
+		}
+
+		fmt.Printf("  [Hook] Consecutive user messages detected, strategy: %s\n", strategy)
+
+		switch strategy {
+		case "merge":
+			// Merge current message into the previous one.
+			sess.EventMu.Lock()
+			prevContent := lastUserEvent.Response.Choices[0].Message.Content
+			currContent := evt.Response.Choices[0].Message.Content
+			lastUserEvent.Response.Choices[0].Message.Content = prevContent + "\n" + currContent
+			sess.EventMu.Unlock()
+			fmt.Printf("  [Hook] Merged messages: %s\n", truncate(prevContent+"\n"+currContent, 50))
+			// Skip appending current event (already merged).
+			return nil
+
+		case "placeholder":
+			// Insert a placeholder assistant response before this event.
+			placeholder := &event.Event{
+				ID: fmt.Sprintf("placeholder-%d", time.Now().UnixNano()),
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:    model.RoleAssistant,
+								Content: "[System: No response was generated for the previous message]",
+							},
+						},
+					},
+				},
+			}
+			// Temporarily unlock to call AppendEvent-like logic (simplified here).
+			sess.EventMu.Lock()
+			sess.Events = append(sess.Events, *placeholder)
+			sess.EventMu.Unlock()
+			fmt.Printf("  [Hook] Inserted placeholder response\n")
+			return next()
+
+		case "skip":
+			// Skip the current event.
+			fmt.Printf("  [Hook] Skipped duplicate user message: %s\n",
+				truncate(evt.Response.Choices[0].Message.Content, 30))
+			return nil
+
+		default:
+			// Default: just proceed.
+			return next()
+		}
+	}
 }
