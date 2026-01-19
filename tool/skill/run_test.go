@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -28,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
@@ -96,6 +98,48 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.Len(t, out.OutputFiles, 1)
 	require.Equal(t, outATxt, out.OutputFiles[0].Name)
 	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+
+	require.NotNil(t, out.PrimaryOutput)
+	require.Equal(t, outATxt, out.PrimaryOutput.Name)
+	require.Contains(t, out.PrimaryOutput.Content, contentHi)
+}
+
+func TestRunTool_AutoExportsOutToWorkspaceCache(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.NotNil(t, out.PrimaryOutput)
+	require.Equal(t, outATxt, out.PrimaryOutput.Name)
+	require.Contains(t, out.PrimaryOutput.Content, contentHi)
+
+	content, _, ok := toolcache.LookupSkillRunOutputFileFromContext(
+		ctx,
+		outATxt,
+	)
+	require.True(t, ok)
+	require.Contains(t, content, contentHi)
 }
 
 func TestRunTool_DoesNotUseLoginShell(t *testing.T) {
@@ -131,6 +175,33 @@ func TestRunTool_DoesNotUseLoginShell(t *testing.T) {
 	out := res.(runOutput)
 	require.Equal(t, 0, out.ExitCode)
 	require.Equal(t, "\n", out.Stdout)
+}
+
+func TestRunTool_PrimaryOutput_SelectsByName(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt + "; echo " + contentHello +
+			" > " + outBTxt,
+		OutputFiles: []string{outATxt, outBTxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.NotNil(t, out.PrimaryOutput)
+	require.Equal(t, outATxt, out.PrimaryOutput.Name)
+	require.Contains(t, out.PrimaryOutput.Content, contentHi)
 }
 
 func TestRunTool_SaveAsArtifacts_AndOmitInline(t *testing.T) {

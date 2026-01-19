@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -62,6 +63,46 @@ func TestRuntime_RunProgram_Basic(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Contains(t, res.Stdout, "hello runtime")
+}
+
+func TestRuntime_CreateWorkspace_TrustedLocal_ReusesRoot(t *testing.T) {
+	root := t.TempDir()
+	rt := local.NewRuntimeWithOptions(
+		root,
+		local.WithRuntimeWorkspaceMode(
+			local.WorkspaceModeTrustedLocal,
+		),
+	)
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx,
+		"rt-trusted",
+		codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, root, ws.Path)
+
+	require.DirExists(t, filepath.Join(root, codeexecutor.DirOut))
+	require.DirExists(t, filepath.Join(root, codeexecutor.DirWork))
+
+	require.NoError(t, rt.Cleanup(ctx, ws))
+	_, err = os.Stat(root)
+	require.NoError(t, err)
+}
+
+func TestRuntime_CreateWorkspace_TrustedLocal_RequiresRoot(t *testing.T) {
+	rt := local.NewRuntimeWithOptions(
+		"",
+		local.WithRuntimeWorkspaceMode(
+			local.WorkspaceModeTrustedLocal,
+		),
+	)
+	_, err := rt.CreateWorkspace(
+		context.Background(),
+		"rt-trusted-empty",
+		codeexecutor.WorkspacePolicy{},
+	)
+	require.Error(t, err)
 }
 
 func TestRuntime_ExecuteInline_PythonOrSkip(t *testing.T) {

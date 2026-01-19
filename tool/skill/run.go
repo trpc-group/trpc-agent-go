@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -15,8 +16,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -24,6 +27,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -65,6 +70,15 @@ const envAllowedCommands = "TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS"
 const envDeniedCommands = "TRPC_AGENT_SKILL_RUN_DENIED_COMMANDS"
 
 const defaultSkillRunTimeout = 5 * time.Minute
+
+const (
+	defaultAutoExportPattern = codeexecutor.DirOut + "/**"
+	defaultAutoExportMax     = 20
+)
+
+const (
+	skillDirInputs = "inputs"
+)
 
 // WithAllowedCommands restricts skill_run to a single program execution
 // whose command name is in the allowlist.
@@ -180,14 +194,20 @@ type runInput struct {
 
 // runOutput is the structured result returned by skill_run.
 type runOutput struct {
-	OutputFiles   []codeexecutor.File `json:"output_files"`
-	Stdout        string              `json:"stdout"`
-	Stderr        string              `json:"stderr"`
-	ExitCode      int                 `json:"exit_code"`
-	TimedOut      bool                `json:"timed_out"`
-	Duration      int64               `json:"duration_ms"`
-	ArtifactFiles []artifactRef       `json:"artifact_files,omitempty"`
-	Warnings      []string            `json:"warnings,omitempty"`
+	OutputFiles   []runFile     `json:"output_files"`
+	PrimaryOutput *runFile      `json:"primary_output,omitempty"`
+	Stdout        string        `json:"stdout"`
+	Stderr        string        `json:"stderr"`
+	ExitCode      int           `json:"exit_code"`
+	TimedOut      bool          `json:"timed_out"`
+	Duration      int64         `json:"duration_ms"`
+	ArtifactFiles []artifactRef `json:"artifact_files,omitempty"`
+	Warnings      []string      `json:"warnings,omitempty"`
+}
+
+type runFile struct {
+	codeexecutor.File
+	Ref string `json:"ref,omitempty"`
 }
 
 type artifactRef struct {
@@ -200,9 +220,11 @@ func (t *RunTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "skill_run",
 		Description: "Run a command inside a skill workspace. " +
-			"Returns stdout/stderr and collected output files " +
-			"(inline). Prefer output_files content; do not " +
-			"use read_document or file tools for those paths.",
+			"Returns stdout/stderr, a primary_output " +
+			"(best small text file), and collected output_files " +
+			"(inline, with workspace:// refs). Prefer " +
+			"primary_output/output_files content; use " +
+			"output_files[*].ref when passing a file to other tools.",
 		InputSchema: &tool.Schema{
 			Type:        "object",
 			Description: "Run command input",
@@ -215,10 +237,12 @@ func (t *RunTool) Declaration() *tool.Declaration {
 					AdditionalProperties: &tool.Schema{Type: "string"}},
 				"output_files": {Type: "array",
 					Items: &tool.Schema{Type: "string"},
-					Description: "Workspace-relative globs to collect " +
-						"and inline (returned in output_files); " +
-						"do not read them via read_document or " +
-						"file tools"},
+					Description: "Workspace-relative paths/globs to " +
+						"collect and inline (e.g. out/*.txt). " +
+						"Prefer output_files content; for other " +
+						"tools use output_files[*].ref " +
+						"(workspace://...). Do not use " +
+						"workspace:// or artifact:// here."},
 				"timeout": {Type: "integer", Description: "Seconds"},
 				"save_as_artifacts": {Type: "boolean", Description: "" +
 					"Persist collected files via Artifact service"},
@@ -266,6 +290,9 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
+
+	autoFiles := t.autoExportWorkspaceOut(ctxIO, eng, ws, in)
+
 	// Collect outputs via spec or legacy globs.
 	files, manifest, err := t.prepareOutputs(
 		ctxIO, eng, ws, in,
@@ -274,6 +301,7 @@ func (t *RunTool) Call(
 		return nil, err
 	}
 	out := buildRunOutput(rr, files)
+	mergeAutoPrimaryOutput(autoFiles, &out)
 	if len(files) > 0 && !in.SaveArtifacts {
 		out.Warnings = append(out.Warnings,
 			warnOutputFilesWorkspaceOnly)
@@ -285,11 +313,35 @@ func (t *RunTool) Call(
 		return nil, err
 	}
 	mergeManifestArtifactRefs(manifest, &out)
+	if !(in.SaveArtifacts && in.OmitInline) {
+		toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
+	}
 	return out, nil
 }
 
 var _ tool.Tool = (*RunTool)(nil)
 var _ tool.CallableTool = (*RunTool)(nil)
+
+func (t *RunTool) autoExportWorkspaceOut(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	in runInput,
+) []codeexecutor.File {
+	if eng == nil || in.Outputs != nil || len(in.OutputFiles) > 0 {
+		return nil
+	}
+	files, err := eng.FS().Collect(ctx, ws,
+		[]string{defaultAutoExportPattern})
+	if err != nil || len(files) == 0 {
+		return nil
+	}
+	if len(files) > defaultAutoExportMax {
+		files = files[:defaultAutoExportMax]
+	}
+	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
+	return files
+}
 
 // parseRunArgs validates and decodes input args.
 func (t *RunTool) parseRunArgs(args []byte) (runInput, error) {
@@ -370,8 +422,12 @@ func (t *RunTool) stageSkill(
 	// Stage into /skills/<name> inside workspace.
 	dest := path.Join(codeexecutor.DirSkills, name)
 	// If metadata has same digest, skip staging.
-	if s, ok := md.Skills[name]; ok && s.Digest == dg {
+	if s, ok := md.Skills[name]; ok && s.Digest == dg &&
+		s.Mounted && skillLinksPresent(ws.Path, name) {
 		return nil
+	}
+	if err := t.removeWorkspacePath(ctx, eng, ws, dest); err != nil {
+		return err
 	}
 	// Stage as a regular directory first (no read-only mount). We will
 	// add convenience links and then make files read-only except those
@@ -421,6 +477,7 @@ func (t *RunTool) linkWorkspaceDirs(
 	var sb strings.Builder
 	sb.WriteString("set -e; cd ")
 	sb.WriteString(shellQuote(skillRoot))
+	sb.WriteString("; rm -rf out work inputs")
 	sb.WriteString("; mkdir -p ")
 	sb.WriteString(shellQuote(toInputs))
 	sb.WriteString("; ln -sfn ")
@@ -432,6 +489,65 @@ func (t *RunTool) linkWorkspaceDirs(
 	sb.WriteString(" inputs")
 	_, err := eng.Runner().RunProgram(
 		ctx, ws, codeexecutor.RunProgramSpec{
+			Cmd:     "bash",
+			Args:    []string{"-lc", sb.String()},
+			Env:     map[string]string{},
+			Cwd:     ".",
+			Timeout: 5 * time.Second,
+		},
+	)
+	return err
+}
+
+func skillLinksPresent(wsRoot string, name string) bool {
+	root := strings.TrimSpace(wsRoot)
+	skillName := strings.TrimSpace(name)
+	if root == "" || skillName == "" {
+		return false
+	}
+	base := filepath.Join(root, codeexecutor.DirSkills, skillName)
+	return isSymlink(filepath.Join(base, codeexecutor.DirOut)) &&
+		isSymlink(filepath.Join(base, codeexecutor.DirWork)) &&
+		isSymlink(filepath.Join(base, skillDirInputs))
+}
+
+func isSymlink(path string) bool {
+	st, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	return st.Mode()&os.ModeSymlink != 0
+}
+
+func (t *RunTool) removeWorkspacePath(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	rel string,
+) error {
+	target := strings.TrimSpace(rel)
+	if target == "" {
+		return nil
+	}
+	if eng == nil || eng.Runner() == nil {
+		if ws.Path == "" {
+			return nil
+		}
+		p := filepath.Join(ws.Path, filepath.FromSlash(target))
+		return os.RemoveAll(p)
+	}
+	var sb strings.Builder
+	sb.WriteString("set -e; if [ -e ")
+	sb.WriteString(shellQuote(target))
+	sb.WriteString(" ]; then find ")
+	sb.WriteString(shellQuote(target))
+	sb.WriteString(" -type l -prune -o -exec chmod u+w {} +; fi")
+	sb.WriteString("; rm -rf ")
+	sb.WriteString(shellQuote(target))
+	_, err := eng.Runner().RunProgram(
+		ctx,
+		ws,
+		codeexecutor.RunProgramSpec{
 			Cmd:     "bash",
 			Args:    []string{"-lc", sb.String()},
 			Env:     map[string]string{},
@@ -755,19 +871,26 @@ func buildRunOutput(
 	if stderrTrunc {
 		warnings = append(warnings, warnStderrTruncated)
 	}
+
+	outFiles := toRunFiles(files)
 	return runOutput{
-		OutputFiles: files,
-		Stdout:      stdout,
-		Stderr:      stderr,
-		ExitCode:    rr.ExitCode,
-		TimedOut:    rr.TimedOut,
-		Duration:    rr.Duration.Milliseconds(),
-		Warnings:    warnings,
+		OutputFiles:   outFiles,
+		PrimaryOutput: selectPrimaryOutput(outFiles),
+		Stdout:        stdout,
+		Stderr:        stderr,
+		ExitCode:      rr.ExitCode,
+		TimedOut:      rr.TimedOut,
+		Duration:      rr.Duration.Milliseconds(),
+		Warnings:      warnings,
 	}
 }
 
 const (
 	maxOutputChars = 16 * 1024
+)
+
+const (
+	maxPrimaryOutputChars = 32 * 1024
 )
 
 const (
@@ -780,6 +903,56 @@ func truncateOutput(s string) (string, bool) {
 		return s, false
 	}
 	return s[:maxOutputChars], true
+}
+
+func toRunFiles(files []codeexecutor.File) []runFile {
+	out := make([]runFile, 0, len(files))
+	for _, f := range files {
+		out = append(out, runFile{
+			File: f,
+			Ref:  fileref.WorkspaceRef(f.Name),
+		})
+	}
+	return out
+}
+
+func selectPrimaryOutput(files []runFile) *runFile {
+	var best *runFile
+	for _, f := range files {
+		if strings.TrimSpace(f.Content) == "" {
+			continue
+		}
+		if !isTextMIME(f.MIMEType) {
+			continue
+		}
+		if len(f.Content) > maxPrimaryOutputChars {
+			continue
+		}
+		if best != nil && best.Name < f.Name {
+			continue
+		}
+		tmp := f
+		best = &tmp
+	}
+	return best
+}
+
+func mergeAutoPrimaryOutput(files []codeexecutor.File, out *runOutput) {
+	if out == nil || out.PrimaryOutput != nil || len(files) == 0 {
+		return
+	}
+	runFiles := toRunFiles(files)
+	out.PrimaryOutput = selectPrimaryOutput(runFiles)
+}
+
+func isTextMIME(mimeType string) bool {
+	mt := strings.TrimSpace(mimeType)
+	if parsed, _, err := mime.ParseMediaType(mt); err == nil {
+		mt = parsed
+	}
+	return strings.HasPrefix(mt, "text/") ||
+		mt == "application/json" ||
+		strings.HasSuffix(mt, "+json")
 }
 
 // attachArtifactsIfRequested saves files as artifacts when requested
@@ -822,8 +995,8 @@ const warnSaveArtifactsSkippedTmpl = "save_as_artifacts requested but " +
 	"%s; returning inline output_files"
 
 const warnOutputFilesWorkspaceOnly = "output_files are workspace-" +
-	"relative; use output_files content or re-run skill_run " +
-	"(do not use read_document or file tools)"
+	"relative; prefer output_files content; when you need a " +
+	"stable reference, use output_files[*].ref (workspace://...)"
 
 const (
 	reasonNoInvocation = "invocation is missing from context"

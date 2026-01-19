@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -15,23 +16,33 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 // searchContentRequest represents the input for the search content operation.
 type searchContentRequest struct {
-	Path                 string `json:"path" jsonschema:"description=The relative path from the base directory to search in."`
-	FilePattern          string `json:"file_pattern" jsonschema:"description=The file pattern to match."`
-	FileCaseSensitive    bool   `json:"file_case_sensitive" jsonschema:"description=Whether file pattern matching should be case sensitive."`
-	ContentPattern       string `json:"content_pattern" jsonschema:"description=The pattern to search for in file content."`
-	ContentCaseSensitive bool   `json:"content_case_sensitive" jsonschema:"description=Whether content pattern matching should be case sensitive."`
+	// Path is a relative directory under base_directory.
+	Path string `json:"path"`
+	// FilePattern selects files (glob or workspace://... for an exported
+	// workspace file).
+	FilePattern string `json:"file_pattern"`
+	// FileCaseSensitive controls glob case matching.
+	FileCaseSensitive bool `json:"file_case_sensitive"`
+	// ContentPattern is a regex applied per line.
+	ContentPattern string `json:"content_pattern"`
+	// ContentCaseSensitive controls regex case matching.
+	ContentCaseSensitive bool `json:"content_case_sensitive"`
 }
 
-// searchContentResponse represents the output from the search content operation.
+// searchContentResponse represents the output from the search content
+// operation.
 type searchContentResponse struct {
 	BaseDirectory  string       `json:"base_directory"`
 	Path           string       `json:"path"`
@@ -55,7 +66,10 @@ type lineMatch struct {
 }
 
 // searchContent performs the search content operation.
-func (f *fileToolSet) searchContent(_ context.Context, req *searchContentRequest) (*searchContentResponse, error) {
+func (f *fileToolSet) searchContent(
+	ctx context.Context,
+	req *searchContentRequest,
+) (*searchContentResponse, error) {
 	rsp := &searchContentResponse{
 		BaseDirectory:  f.baseDir,
 		Path:           req.Path,
@@ -68,8 +82,103 @@ func (f *fileToolSet) searchContent(_ context.Context, req *searchContentRequest
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return rsp, err
 	}
+	// Compile content pattern as regex.
+	re, err := regexCompile(req.ContentPattern, req.ContentCaseSensitive)
+	if err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
+	}
+
+	// If file_pattern is an explicit file reference (workspace://... or
+	// artifact://...) and it has no glob, resolve and search just that file.
+	if req != nil && !hasGlob(req.FilePattern) {
+		content, _, handled, err := fileref.TryRead(ctx, req.FilePattern)
+		if handled {
+			if err != nil {
+				rsp.Message = fmt.Sprintf("Error: %v", err)
+				return rsp, err
+			}
+			if int64(len(content)) > f.maxFileSize {
+				rsp.Message = fmt.Sprintf(
+					"Error: file size is beyond of max "+
+						"file size, file size: %d, "+
+						"max file size: %d",
+					len(content),
+					f.maxFileSize,
+				)
+				return rsp, fmt.Errorf(
+					"file size is beyond of max file "+
+						"size, file size: %d, "+
+						"max file size: %d",
+					len(content),
+					f.maxFileSize,
+				)
+			}
+			path := req.FilePattern
+			if ref, perr := fileref.Parse(req.FilePattern); perr == nil &&
+				ref.Scheme == fileref.SchemeWorkspace {
+				path = fileref.WorkspaceRef(ref.Path)
+			}
+			match := searchTextContent(path, content, re)
+			if len(match.Matches) == 0 {
+				rsp.FileMatches = []*fileMatch{}
+				rsp.Message = "Found 0 files matching"
+				return rsp, nil
+			}
+			match.Message = fmt.Sprintf(
+				"Found %d matches in file '%s'",
+				len(match.Matches),
+				path,
+			)
+			rsp.FileMatches = []*fileMatch{match}
+			rsp.Message = "Found 1 files matching"
+			return rsp, nil
+		}
+	}
+
+	pathRef, err := fileref.Parse(req.Path)
+	if err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
+	}
+	if pathRef.Scheme == fileref.SchemeArtifact {
+		rsp.Message = "Error: searching artifact:// path is not supported"
+		return rsp, fmt.Errorf(
+			"searching artifact:// path is not supported",
+		)
+	}
+
+	if pathRef.Scheme == fileref.SchemeWorkspace {
+		rsp.Path = fileref.WorkspaceRef(pathRef.Path)
+		matches := f.searchWorkspaceContent(ctx, pathRef.Path, req, re)
+		rsp.FileMatches = matches
+		rsp.Message = fmt.Sprintf("Found %v files matching", len(matches))
+		return rsp, nil
+	}
+
+	reqPath := normalizeToolPath(f.baseDir, pathRef.Path)
+	rsp.Path = reqPath
+	// When path is a file (or a cached workspace output file), search directly
+	// within that single file. Models commonly pass a file path in "path"
+	// together with a glob file_pattern like "*", which would otherwise be
+	// treated as a directory and fail.
+	if matches, ok := f.searchSinglePath(ctx, reqPath, re); ok {
+		rsp.FileMatches = matches
+		rsp.Message = fmt.Sprintf("Found %v files matching", len(matches))
+		return rsp, nil
+	}
+	// Fast path: if the requested file exists only as a skill_run output_files
+	// entry, search against the cached content instead of the host filesystem.
+	// This avoids model loops where a workspace-relative skill output path is
+	// passed to file tools whose base directory is different.
+	if cacheMatch, ok := f.searchSkillCache(ctx, reqPath, req, re); ok {
+		rsp.FileMatches = cacheMatch
+		rsp.Message = fmt.Sprintf("Found %v files matching", len(cacheMatch))
+		return rsp, nil
+	}
+
 	// Resolve and validate the target path.
-	targetPath, err := f.resolvePath(req.Path)
+	targetPath, err := f.resolvePath(reqPath)
 	if err != nil {
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return rsp, err
@@ -77,22 +186,39 @@ func (f *fileToolSet) searchContent(_ context.Context, req *searchContentRequest
 	// Check if the target path exists.
 	stat, err := os.Stat(targetPath)
 	if err != nil {
-		rsp.Message = fmt.Sprintf("Error: cannot access path '%s': %v", req.Path, err)
-		return rsp, fmt.Errorf("accessing path '%s': %w", req.Path, err)
+		rsp.Message = fmt.Sprintf(
+			"Error: cannot access path '%s': %v",
+			reqPath,
+			err,
+		)
+		return rsp, fmt.Errorf("accessing path '%s': %w", reqPath, err)
 	}
 	// Check if the target path is a file.
 	if !stat.IsDir() {
-		rsp.Message = fmt.Sprintf("Error: target path '%s' is a file, not a directory", req.Path)
-		return rsp, fmt.Errorf("target path '%s' is a file, not a directory", req.Path)
-	}
-	// Compile content pattern as regex.
-	re, err := regexCompile(req.ContentPattern, req.ContentCaseSensitive)
-	if err != nil {
-		rsp.Message = fmt.Sprintf("Error: %v", err)
-		return rsp, err
+		match, ok := f.searchSingleLocalFile(targetPath, reqPath, re)
+		if ok {
+			rsp.FileMatches = match
+			rsp.Message = fmt.Sprintf(
+				"Found %v files matching",
+				len(match),
+			)
+			return rsp, nil
+		}
+		rsp.Message = fmt.Sprintf(
+			"Error: target path '%s' is a file, not a directory",
+			reqPath,
+		)
+		return rsp, fmt.Errorf(
+			"target path '%s' is a file, not a directory",
+			reqPath,
+		)
 	}
 	// Find files matching the file pattern.
-	files, err := f.matchFiles(targetPath, req.FilePattern, req.FileCaseSensitive)
+	files, err := f.matchFiles(
+		targetPath,
+		req.FilePattern,
+		req.FileCaseSensitive,
+	)
 	if err != nil {
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return rsp, err
@@ -117,7 +243,11 @@ func (f *fileToolSet) searchContent(_ context.Context, req *searchContentRequest
 			match, err := searchFileContent(fullPath, re)
 			if err == nil && len(match.Matches) > 0 {
 				match.FilePath = relPath
-				match.Message = fmt.Sprintf("Found %d matches in file '%s'", len(match.Matches), relPath)
+				match.Message = fmt.Sprintf(
+					"Found %d matches in file '%s'",
+					len(match.Matches),
+					relPath,
+				)
 				mu.Lock()
 				fileMatches = append(fileMatches, match)
 				mu.Unlock()
@@ -131,27 +261,214 @@ func (f *fileToolSet) searchContent(_ context.Context, req *searchContentRequest
 	return rsp, nil
 }
 
+func (f *fileToolSet) searchSinglePath(
+	ctx context.Context,
+	reqPath string,
+	re *regexp.Regexp,
+) ([]*fileMatch, bool) {
+	if reqPath == "" || re == nil {
+		return nil, false
+	}
+	content, _, ok := toolcache.LookupSkillRunOutputFileFromContext(
+		ctx,
+		reqPath,
+	)
+	if !ok {
+		return nil, false
+	}
+	path := fileref.WorkspaceRef(reqPath)
+	match := searchTextContent(path, content, re)
+	if len(match.Matches) == 0 {
+		return []*fileMatch{}, true
+	}
+	match.Message = fmt.Sprintf(
+		"Found %d matches in file '%s'",
+		len(match.Matches),
+		path,
+	)
+	return []*fileMatch{match}, true
+}
+
+func (f *fileToolSet) searchSingleLocalFile(
+	fullPath string,
+	reqPath string,
+	re *regexp.Regexp,
+) ([]*fileMatch, bool) {
+	if strings.TrimSpace(fullPath) == "" || re == nil {
+		return nil, false
+	}
+	st, err := os.Stat(fullPath)
+	if err != nil || st.IsDir() {
+		return nil, false
+	}
+	if st.Size() > f.maxFileSize {
+		return []*fileMatch{}, true
+	}
+	match, err := searchFileContent(fullPath, re)
+	if err != nil || len(match.Matches) == 0 {
+		if err == nil {
+			return []*fileMatch{}, true
+		}
+		return nil, false
+	}
+	match.FilePath = reqPath
+	match.Message = fmt.Sprintf(
+		"Found %d matches in file '%s'",
+		len(match.Matches),
+		reqPath,
+	)
+	return []*fileMatch{match}, true
+}
+
+func normalizeToolPath(baseDir string, p string) string {
+	s := strings.TrimSpace(p)
+	if s == "" || s == "." {
+		return ""
+	}
+	base := filepath.Base(baseDir)
+	if base != "" && base != "." && s == base {
+		if _, err := os.Stat(filepath.Join(baseDir, s)); err != nil {
+			if os.IsNotExist(err) {
+				return ""
+			}
+		}
+	}
+	return s
+}
+
+func (f *fileToolSet) searchSkillCache(
+	ctx context.Context,
+	reqPath string,
+	req *searchContentRequest,
+	re *regexp.Regexp,
+) ([]*fileMatch, bool) {
+	if req == nil || re == nil {
+		return nil, false
+	}
+	if hasGlob(req.FilePattern) {
+		return nil, false
+	}
+
+	candidate := strings.TrimSpace(req.FilePattern)
+	if candidate == "" {
+		return nil, false
+	}
+	if reqPath != "" && !strings.ContainsAny(candidate, `/\`) {
+		candidate = filepath.Join(reqPath, candidate)
+	}
+
+	content, _, ok := toolcache.LookupSkillRunOutputFileFromContext(
+		ctx,
+		candidate,
+	)
+	if !ok {
+		return nil, false
+	}
+	match := searchTextContent(candidate, content, re)
+	if len(match.Matches) == 0 {
+		return []*fileMatch{}, true
+	}
+	match.Message = fmt.Sprintf(
+		"Found %d matches in file '%s'",
+		len(match.Matches),
+		candidate,
+	)
+	return []*fileMatch{match}, true
+}
+
+func (f *fileToolSet) searchWorkspaceContent(
+	ctx context.Context,
+	dir string,
+	req *searchContentRequest,
+	re *regexp.Regexp,
+) []*fileMatch {
+	if req == nil || re == nil {
+		return []*fileMatch{}
+	}
+
+	sep := string(filepath.Separator)
+	base := filepath.Clean(strings.TrimSpace(dir))
+	if base == "." {
+		base = ""
+	}
+	prefix := base
+	if prefix != "" {
+		prefix += sep
+	}
+
+	var out []*fileMatch
+	for _, entry := range fileref.WorkspaceFiles(ctx) {
+		full := filepath.Clean(strings.TrimSpace(entry.Name))
+		if full == "" || full == "." {
+			continue
+		}
+		if prefix != "" && !strings.HasPrefix(full, prefix) {
+			continue
+		}
+		rel := strings.TrimPrefix(full, prefix)
+		ok, err := matchWorkspacePattern(
+			req.FilePattern,
+			rel,
+			req.FileCaseSensitive,
+		)
+		if err != nil || !ok {
+			continue
+		}
+		if int64(len(entry.Content)) > f.maxFileSize {
+			continue
+		}
+		path := fileref.WorkspaceRef(full)
+		match := searchTextContent(path, entry.Content, re)
+		if len(match.Matches) == 0 {
+			continue
+		}
+		match.Message = fmt.Sprintf(
+			"Found %d matches in file '%s'",
+			len(match.Matches),
+			path,
+		)
+		out = append(out, match)
+	}
+	slices.SortFunc(out, func(a, b *fileMatch) int {
+		return strings.Compare(a.FilePath, b.FilePath)
+	})
+	return out
+}
+
+func hasGlob(p string) bool {
+	return strings.ContainsAny(p, "*?[")
+}
+
+func searchTextContent(
+	path string,
+	content string,
+	re *regexp.Regexp,
+) *fileMatch {
+	lines := strings.Split(content, "\n")
+	matches := &fileMatch{
+		FilePath: path,
+		Matches:  []*lineMatch{},
+	}
+	for lineNum, line := range lines {
+		if re.MatchString(line) {
+			matches.Matches = append(matches.Matches, &lineMatch{
+				LineNumber:  lineNum + 1,
+				LineContent: line,
+			})
+		}
+	}
+	return matches
+}
+
 // searchContentTool returns a callable tool for searching content.
 func (f *fileToolSet) searchContentTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		f.searchContent,
 		function.WithName("search_content"),
-		function.WithDescription("Search files matched by 'file_pattern' under 'path' and return lines that match "+
-			"'content_pattern' using a regular expression. "+
-			"The 'path' parameter specifies the directory to search in, relative to the base directory "+
-			"(e.g., 'subdir', 'subdir/nested'). If 'path' is empty or not provided, searches in the base "+
-			"directory. If 'path' points to a file instead of a directory, returns an error. "+
-			"The 'file_pattern' parameter selects files using a glob and supports '**' for recursive matching. "+
-			"The 'file_case_sensitive' parameter controls whether file pattern matching is case sensitive, "+
-			"false by default. "+
-			"The 'content_pattern' parameter is a regular expression applied per line. "+
-			"The 'content_case_sensitive' parameter controls whether content matching is case sensitive, "+
-			"false by default. "+
-			"If 'file_pattern' is empty or not provided, returns an error. "+
-			"If 'content_pattern' is empty or not provided, returns an error. "+
-			"Pattern examples: '*.txt' (all txt files), 'file*.csv' (csv files starting with 'file'), "+
-			"'subdir/*.go' (go files in subdir), '**/*.go' (all go files recursively), '*data*' (filename or "+
-			"directory containing 'data').",
+		function.WithDescription(
+			"Search text files under base_directory for lines that "+
+				"match a regex. Supports workspace:// paths and "+
+				"artifact:// single-file refs.",
 		),
 	)
 }
@@ -168,20 +485,30 @@ func validatePattern(filePattern string, contentPattern string) error {
 }
 
 // regexCompile compiles a regular expression with case sensitivity.
-func regexCompile(pattern string, caseSensitive bool) (*regexp.Regexp, error) {
+func regexCompile(
+	pattern string,
+	caseSensitive bool,
+) (*regexp.Regexp, error) {
 	flags := ""
 	if !caseSensitive {
 		flags = "(?i)"
 	}
 	re, err := regexp.Compile(flags + pattern)
 	if err != nil {
-		return nil, fmt.Errorf("invalid content pattern '%s': %w", pattern, err)
+		return nil, fmt.Errorf(
+			"invalid content pattern '%s': %w",
+			pattern,
+			err,
+		)
 	}
 	return re, nil
 }
 
 // searchFileContent searches for content matches in a single file.
-func searchFileContent(filePath string, re *regexp.Regexp) (*fileMatch, error) {
+func searchFileContent(
+	filePath string,
+	re *regexp.Regexp,
+) (*fileMatch, error) {
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err

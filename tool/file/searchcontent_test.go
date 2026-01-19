@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -16,6 +17,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 )
 
 func TestSearchContent(t *testing.T) {
@@ -51,13 +57,21 @@ func TestSearchContent(t *testing.T) {
 		wantFiles map[string][]int // relative path -> line numbers.
 	}{
 		{
-			name:    "empty file pattern",
-			req:     searchContentRequest{Path: "", FilePattern: "", ContentPattern: "foo"},
+			name: "empty file pattern",
+			req: searchContentRequest{
+				Path:           "",
+				FilePattern:    "",
+				ContentPattern: "foo",
+			},
 			wantErr: true,
 		},
 		{
-			name:    "empty content pattern",
-			req:     searchContentRequest{Path: "", FilePattern: "**/*.txt", ContentPattern: ""},
+			name: "empty content pattern",
+			req: searchContentRequest{
+				Path:           "",
+				FilePattern:    "**/*.txt",
+				ContentPattern: "",
+			},
 			wantErr: true,
 		},
 		{
@@ -145,7 +159,9 @@ func TestSearchContent(t *testing.T) {
 				FilePattern:    "*.txt",
 				ContentPattern: "foo",
 			},
-			wantErr: true,
+			wantFiles: map[string][]int{
+				"a.txt": {1, 3},
+			},
 		},
 		{
 			name: "directory traversal attack",
@@ -200,4 +216,104 @@ func TestSearchContent(t *testing.T) {
 			assert.Equal(t, tc.wantFiles, actual)
 		})
 	}
+}
+
+func TestSearchContent_FromSkillRunCache(t *testing.T) {
+	tempDir := t.TempDir()
+
+	set, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/transcript.txt",
+			Content:  "freshly squeezed lemon juice\n",
+			MIMEType: "text/plain",
+		},
+	})
+
+	req := searchContentRequest{
+		Path:           filepath.Base(tempDir),
+		FilePattern:    "out/transcript.txt",
+		ContentPattern: "freshly squeezed lemon juice",
+	}
+	rsp, err := fts.searchContent(ctx, &req)
+	assert.NoError(t, err)
+	assert.Equal(t, "", rsp.Path)
+	assert.Len(t, rsp.FileMatches, 1)
+	assert.Equal(t, "out/transcript.txt", rsp.FileMatches[0].FilePath)
+	assert.Len(t, rsp.FileMatches[0].Matches, 1)
+	assert.Contains(t, rsp.FileMatches[0].Matches[0].LineContent,
+		"freshly squeezed lemon juice")
+}
+
+func TestSearchContent_WorkspaceRef(t *testing.T) {
+	tempDir := t.TempDir()
+
+	set, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/transcript.txt",
+			Content:  "freshly squeezed lemon juice\n",
+			MIMEType: "text/plain",
+		},
+	})
+
+	req := searchContentRequest{
+		Path:           "workspace://",
+		FilePattern:    "**/*.txt",
+		ContentPattern: "freshly squeezed lemon juice",
+	}
+	rsp, err := fts.searchContent(ctx, &req)
+	assert.NoError(t, err)
+	assert.Equal(t, "workspace://", rsp.Path)
+	assert.Len(t, rsp.FileMatches, 1)
+	assert.Equal(
+		t,
+		fileref.WorkspaceRef("out/transcript.txt"),
+		rsp.FileMatches[0].FilePath,
+	)
+	assert.Len(t, rsp.FileMatches[0].Matches, 1)
+}
+
+func TestSearchContent_PathFile_FromSkillRunCache(t *testing.T) {
+	tempDir := t.TempDir()
+
+	set, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/transcript.txt",
+			Content:  "freshly squeezed lemon juice\n",
+			MIMEType: "text/plain",
+		},
+	})
+
+	req := searchContentRequest{
+		Path:           "out/transcript.txt",
+		FilePattern:    "*",
+		ContentPattern: "freshly squeezed lemon juice",
+	}
+	rsp, err := fts.searchContent(ctx, &req)
+	assert.NoError(t, err)
+	assert.Equal(t, "out/transcript.txt", rsp.Path)
+	assert.Len(t, rsp.FileMatches, 1)
+	assert.Equal(
+		t,
+		fileref.WorkspaceRef("out/transcript.txt"),
+		rsp.FileMatches[0].FilePath,
+	)
+	assert.Len(t, rsp.FileMatches[0].Matches, 1)
 }
