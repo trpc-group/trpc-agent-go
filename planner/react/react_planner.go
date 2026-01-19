@@ -149,14 +149,14 @@ func (p *Planner) buildPlannerInstruction() string {
 		"",
 		"Follow this process when answering the question: (1) first come up " +
 			"with a plan in natural language text format; (2) Then use tools to " +
-			"execute the plan and provide reasoning between tool code snippets " +
-			"to make a summary of current state and next step. Tool code " +
-			"snippets and reasoning should be interleaved with each other. (3) " +
+			"execute the plan and provide reasoning between tool calls " +
+			"to make a summary of current state and next step. Tool calls " +
+			"and reasoning should be interleaved with each other. (3) " +
 			"In the end, return one final answer.",
 		"",
 		"Follow this format when answering the question: (1) The planning " +
-			"part should be under " + PlanningTag + ". (2) The tool code " +
-			"and tool calls should be under " + ActionTag + ", and the " +
+			"part should be under " + PlanningTag + ". (2) Tool calls " +
+			"should be under " + ActionTag + ", and the " +
 			"reasoning parts should be under " + ReasoningTag + ". (3) The " +
 			"final answer part should be under " + FinalAnswerTag + ".",
 	}, "\n")
@@ -180,10 +180,13 @@ func (p *Planner) buildPlannerInstruction() string {
 
 	actionPreamble := strings.Join([]string{
 		"Below are the requirements for the action:",
-		"Explicitly state your next action in the first person ('I will...').",
-		"If a tool is needed, call it using tool calling (not plain text).",
+		"If no tool is needed, explicitly state your next action in " +
+			"the first person ('I will...').",
+		"If a tool is needed, call it using tool calling (not plain text). " +
+			"You may omit the 'I will...' sentence when calling tools.",
 		"Do not write fake tool invocations like `functions.web_fetch` or " +
 			"`web_fetch({...})` in your message content.",
+		"Do not output JSON/code intended to represent a tool call.",
 		"After a tool call, wait for the tool result message before " +
 			"continuing.",
 	}, "\n")
@@ -212,6 +215,7 @@ func (p *Planner) buildPlannerInstruction() string {
 		"**Use tool calling, not text.**",
 		"- Tool calls are structured; they are not executed from plain " +
 			"text.",
+		"- Do not output a JSON object that 'looks like' a tool call.",
 		"- Use only tool names and parameters that are explicitly defined " +
 			"in the provided tool schemas.",
 		"- Never output tool-call placeholders like `functions.<tool>` in " +
