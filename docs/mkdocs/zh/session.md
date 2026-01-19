@@ -371,6 +371,9 @@ sessionService := inmemory.NewSessionService(
 - `UpdateUserSession` 方法在追加事件前检测是否存在连续的 user message。
 - 如果检测到，调用用户配置的处理函数。
 - 框架自动调用（在各存储的 `appendEventInternal` 中），用户无需手动触发。
+- `previousUserEvent` 是指向 `sess.Events` 中元素的指针，修改会直接反映到切片中。
+
+> **⚠️ 重要提示：** 处理函数在 `EventMu` 锁持有期间执行。请勿在处理函数内调用任何会获取 `EventMu` 的 Session 方法（如 `GetEvents`、`Clone` 等），否则会导致死锁。只能直接操作 `sess.Events` 切片。
 
 #### 常用处理器示例
 

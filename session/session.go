@@ -45,12 +45,17 @@ const SummaryFilterKeyAllContents = ""
 // the issue (insert, remove, merge events, etc.).
 //
 // Parameters:
-//   - sess: Current session (can modify sess.Events).
-//   - previousUserEvent: The previous user message already in sess.Events.
+//   - sess: Current session (can modify sess.Events directly).
+//   - previousUserEvent: Pointer to the previous user message in sess.Events
+//     (modifications are reflected in the slice).
 //   - currentUserEvent: The current user message about to be appended.
 //
 // Return:
 //   - bool: true to append currentUserEvent, false to skip it.
+//
+// IMPORTANT: This handler is called while EventMu is held. Do NOT call any
+// Session methods that acquire EventMu (e.g., GetEvents, Clone) inside the
+// handler, as this will cause a deadlock. Only manipulate sess.Events directly.
 type OnDuplicateUserMessageFunc func(
 	sess *Session,
 	previousUserEvent *event.Event,
@@ -430,7 +435,8 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 		// Check for consecutive user messages before appending.
 		shouldAppend := true
 		if event.Response.IsUserMessage() && len(sess.Events) > 0 {
-			lastEvent := sess.Events[len(sess.Events)-1]
+			lastIdx := len(sess.Events) - 1
+			lastEvent := &sess.Events[lastIdx]
 			if lastEvent.Response != nil && lastEvent.Response.IsUserMessage() {
 				// Consecutive user messages detected.
 				sess.handlerMu.RLock()
@@ -438,8 +444,9 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 				sess.handlerMu.RUnlock()
 
 				if handler != nil {
-					// Let user handle it.
-					shouldAppend = handler(sess, &lastEvent, event)
+					// Let user handle it. Note: handler runs with EventMu held,
+					// so it must not call methods that acquire EventMu.
+					shouldAppend = handler(sess, lastEvent, event)
 				} else {
 					// No handler configured, log warning.
 					log.Warnf(

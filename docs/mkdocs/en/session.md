@@ -364,6 +364,9 @@ sessionService := inmemory.NewSessionService(
 - The `UpdateUserSession` method checks for consecutive user messages before appending events.
 - If detected, calls the user-configured handler function.
 - Automatically invoked by the framework (in each storage's `appendEventInternal`), no manual trigger needed.
+- `previousUserEvent` is a pointer to the element in `sess.Events`, modifications are reflected in the slice.
+
+> **⚠️ Important:** The handler is called while `EventMu` is held. Do NOT call any Session methods that acquire `EventMu` (e.g., `GetEvents`, `Clone`) inside the handler, as this will cause a deadlock. Only manipulate `sess.Events` directly.
 
 #### Common Handler Examples
 

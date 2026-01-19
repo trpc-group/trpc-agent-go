@@ -146,6 +146,9 @@ Assistant: Your name is Alice.
 ## Implementation notes
 
 - Handlers receive the session and both user events (previous and current).
+- `previousUserEvent` is a pointer to the element in `sess.Events`, modifications are reflected in the slice.
 - Handlers can modify `sess.Events` directly to insert, remove, or merge events.
 - Return `true` to append the current event, `false` to skip it.
 - The handler is called **before** the current event is appended to the session.
+
+> **⚠️ Important:** The handler is called while `EventMu` is held. Do NOT call any Session methods that acquire `EventMu` (e.g., `GetEvents`, `Clone`) inside the handler, as this will cause a deadlock. Only manipulate `sess.Events` directly.

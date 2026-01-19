@@ -19,6 +19,9 @@ import (
 
 // InsertPlaceholderHandler inserts a placeholder assistant message
 // between consecutive user messages.
+//
+// Note: This handler runs while EventMu is held. Do not call Session methods
+// that acquire EventMu inside the handler.
 func InsertPlaceholderHandler() session.OnDuplicateUserMessageFunc {
 	return func(sess *session.Session, prev, curr *event.Event) bool {
 		finishReason := "error"
@@ -57,6 +60,9 @@ func InsertPlaceholderHandler() session.OnDuplicateUserMessageFunc {
 
 // RemovePreviousHandler removes the first (older) user message when
 // consecutive user messages are detected.
+//
+// Note: This handler runs while EventMu is held. Do not call Session methods
+// that acquire EventMu inside the handler.
 func RemovePreviousHandler() session.OnDuplicateUserMessageFunc {
 	return func(sess *session.Session, prev, curr *event.Event) bool {
 		if len(sess.Events) > 0 {
@@ -68,6 +74,9 @@ func RemovePreviousHandler() session.OnDuplicateUserMessageFunc {
 
 // SkipCurrentHandler skips the current (newer) user message when
 // consecutive user messages are detected.
+//
+// Note: This handler runs while EventMu is held. Do not call Session methods
+// that acquire EventMu inside the handler.
 func SkipCurrentHandler() session.OnDuplicateUserMessageFunc {
 	return func(sess *session.Session, prev, curr *event.Event) bool {
 		return false
