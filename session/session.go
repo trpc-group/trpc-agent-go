@@ -460,7 +460,22 @@ func (sess *Session) HandleConsecutiveUserMessage(
 
 	// Consecutive user messages detected.
 	if handler != nil {
-		return handler(sess, lastEvent, evt)
+		var result bool
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Errorf(
+						"panic in OnConsecutiveUserMessage handler: %v, "+
+							"session: %s, user: %s",
+						r, sess.ID, sess.UserID,
+					)
+					// Default to true (append the event) on panic.
+					result = true
+				}
+			}()
+			result = handler(sess, lastEvent, evt)
+		}()
+		return result
 	}
 
 	// No handler configured, log warning.

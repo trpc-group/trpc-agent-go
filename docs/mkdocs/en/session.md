@@ -365,6 +365,7 @@ sessionService := inmemory.NewSessionService(
 - If detected, calls the handler function configured on the Session Service.
 - Automatically invoked by the framework, no manual trigger needed.
 - `previousUserEvent` is a pointer to the element in `sess.Events`, modifications are reflected in the slice.
+- If the handler panics, the framework will recover and log an error, then proceed to append the event (default behavior).
 
 > **⚠️ Important:** The handler is called while `EventMu` is held. Do NOT call any Session methods that acquire `EventMu` (e.g., `GetEvents`, `Clone`) inside the handler, as this will cause a deadlock. Only manipulate `sess.Events` directly.
 

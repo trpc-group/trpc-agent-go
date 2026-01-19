@@ -2333,3 +2333,22 @@ func TestHandleConsecutiveUserMessage_LastEventNilResponse(t *testing.T) {
 	result := sess.HandleConsecutiveUserMessage(evt, handler)
 	assert.True(t, result)
 }
+
+func TestHandleConsecutiveUserMessage_HandlerPanic(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	sess.Events = append(sess.Events, *createTestUserEvent("first user"))
+	evt := createTestUserEvent("second user")
+
+	// Handler that panics.
+	handler := func(s *Session, prev, curr *event.Event) bool {
+		panic("test panic in handler")
+	}
+
+	// Should recover from panic and return true (default behavior).
+	result := sess.HandleConsecutiveUserMessage(evt, handler)
+	assert.True(t, result)
+
+	// Verify the mutex is not left in a locked state by calling again.
+	result = sess.HandleConsecutiveUserMessage(evt, nil)
+	assert.True(t, result)
+}
