@@ -57,6 +57,10 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 	var executorOpts []graph.ExecutorOption
 	executorOpts = append(executorOpts,
 		graph.WithChannelBufferSize(options.ChannelBufferSize))
+	if options.MaxConcurrency != 0 {
+		executorOpts = append(executorOpts,
+			graph.WithMaxConcurrency(options.MaxConcurrency))
+	}
 	if options.CheckpointSaver != nil {
 		executorOpts = append(executorOpts,
 			graph.WithCheckpointSaver(options.CheckpointSaver))
@@ -251,13 +255,13 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	isResuming := invocation.RunOptions.RuntimeState != nil &&
 		invocation.RunOptions.RuntimeState[graph.CfgKeyCheckpointID] != nil
 
-	if invocation.Message.Content != "" {
-		// If resuming and the message is just "resume", don't add it as input
-		// This allows pure checkpoint resumption without input interference
+	if invocation.Message.Content != "" && invocation.Message.Role == model.RoleUser {
+		// If resuming and the message is just "resume", don't add it as input.
+		// This allows pure checkpoint resumption without input interference.
 		if isResuming && invocation.Message.Content == "resume" {
-			// Skip adding user_input to preserve checkpoint state
+			// Skip adding user_input to preserve checkpoint state.
 		} else {
-			// Add user input for normal execution or resume with meaningful input
+			// Add user input for normal execution or resume with meaningful input.
 			initialState[graph.StateKeyUserInput] = invocation.Message.Content
 		}
 	}

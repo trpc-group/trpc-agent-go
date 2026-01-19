@@ -254,7 +254,12 @@ Recommended patterns
 - Parallel branches: avoid writing `one_shot_messages` from multiple branches.
   Prefer `one_shot_messages_by_node` so each LLM node consumes only its own
   one‑shot input.
-- To consume an upstream node's text, read `last_response` immediately downstream or fetch from `node_responses[that_node_id]` later.
+- To consume an upstream node's text, read `last_response` immediately
+  downstream or fetch from `node_responses[that_node_id]` later.
+- If the downstream node is an Agent node and you want it to consume an
+  upstream node's output as its input message, you must write it back into
+  `user_input` (for example, use `WithSubgraphInputFromLastResponse()` or a
+  pre‑node callback).
 
 One-shot messages scoped by node ID:
 
@@ -834,6 +839,7 @@ graphAgent, err := graphagent.New(
         "initial_data": "Initial data",
     }),
     graphagent.WithChannelBufferSize(1024),            // Tune event buffer size
+    graphagent.WithMaxConcurrency(8),                 // Cap parallel tasks
     graphagent.WithCheckpointSaver(memorySaver),       // Persist checkpoints if needed
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // Register sub-agents by name
     graphagent.WithAddSessionSummary(true),            // Inject session summary as system message
@@ -966,6 +972,122 @@ stateGraph.AddAgentNode("assistant",
 > The agent node uses its ID for the lookup, so keep `AddAgentNode("assistant")`
 > aligned with `subAgent.Info().Name == "assistant"`.
 
+#### Agent nodes: passing data to the next agent
+
+An agent node does not automatically "pipe" its output into the next agent
+node. Edges only control execution order; data flows through graph state.
+
+By default, an agent node builds the child invocation message from
+`state[graph.StateKeyUserInput]`. But `user_input` is **one‑shot**:
+LLM/Agent nodes clear it after a successful run to avoid reusing the same input.
+This is why a chain like `A (agent) → B (agent)` often looks like "A produced
+output, but B got an empty input".
+
+To make downstream agent nodes consume upstream outputs, explicitly map a state
+field into `user_input` before the downstream agent runs:
+
+```go
+const (
+    nodeA = "a"
+    nodeB = "b"
+)
+
+sg.AddAgentNode(nodeA)
+sg.AddAgentNode(nodeB, graph.WithSubgraphInputFromLastResponse())
+sg.AddEdge(nodeA, nodeB)
+```
+
+Notes:
+
+- `WithSubgraphInputFromLastResponse()` maps the **current** `last_response`
+  into this agent node's `user_input` for this run, so `nodeB` consumes `nodeA`
+  as input.
+- If you need to pass a *specific* node's output (not the most recent), use a
+  pre‑node callback and read from `node_responses[targetNodeID]`, then write it
+  into `user_input`.
+
+#### Agent nodes: combining original input with upstream output
+
+Sometimes the downstream agent needs **both**:
+
+- The upstream agent result (often `state[graph.StateKeyLastResponse]`), and
+- The original user request for this run.
+
+Because `user_input` is one‑shot and is cleared after LLM/Agent nodes, you
+should **persist** the original user input under your own state key, then
+compose the downstream `user_input` explicitly.
+
+The simplest pattern is to add two function nodes:
+
+1. Capture the initial `user_input` once.
+2. Build the next `user_input` from `original_user_input + last_response`.
+
+```go
+const (
+    keyOriginalUserInput = "original_user_input"
+
+    nodeSaveInput = "save_input"
+    nodeA         = "a"
+    nodeCompose   = "compose_input"
+    nodeB         = "b"
+)
+
+func saveOriginalInput(_ context.Context, s graph.State) (any, error) {
+    input, _ := s[graph.StateKeyUserInput].(string)
+    if input == "" {
+        return graph.State{}, nil
+    }
+    return graph.State{keyOriginalUserInput: input}, nil
+}
+
+func composeNextInput(_ context.Context, s graph.State) (any, error) {
+    orig, _ := s[keyOriginalUserInput].(string)
+    last, _ := s[graph.StateKeyLastResponse].(string)
+
+    // This becomes nodeB's Invocation.Message.Content.
+    combined := orig + "\n\n" + last
+    return graph.State{graph.StateKeyUserInput: combined}, nil
+}
+
+sg.AddNode(nodeSaveInput, saveOriginalInput)
+sg.AddAgentNode(nodeA)
+sg.AddNode(nodeCompose, composeNextInput)
+sg.AddAgentNode(nodeB)
+
+sg.AddEdge(nodeSaveInput, nodeA)
+sg.AddEdge(nodeA, nodeCompose)
+sg.AddEdge(nodeCompose, nodeB)
+```
+
+Important:
+
+- Treat `graph.State` passed into function nodes as read‑only.
+- Return a **delta** state update (a small `graph.State`) instead of returning
+  or mutating the full state. Returning full state can accidentally overwrite
+  internal keys (execution context, callbacks, session) and break the workflow.
+
+#### Agent nodes: state mappers (advanced)
+
+Agent nodes support two mappers to control what data crosses the parent/child
+boundary:
+
+- `WithSubgraphInputMapper`: project parent state → child runtime state
+  (`Invocation.RunOptions.RuntimeState`).
+- `WithSubgraphOutputMapper`: project child results → parent state updates.
+
+Use cases:
+
+- **Let the child read structured data from state** (without stuffing it into
+  prompts): pass only selected keys to the child via `WithSubgraphInputMapper`.
+  Runnable example: `examples/graph/subagent_runtime_state`.
+- **Copy structured outputs back to the parent graph**: when the child is a
+  GraphAgent, `SubgraphResult.FinalState` contains the child's final state
+  snapshot and can be mapped into parent keys. Runnable example:
+  `examples/graph/agent_state_handoff`.
+- **Store the child LLM's final text under your own keys**: `SubgraphResult`
+  always includes `LastResponse`, so output mappers work for both GraphAgent and
+  non-graph agents.
+
 #### Agent nodes: isolation vs multi‑turn tool calls
 
 Tool calling is usually multi‑turn within a single run: the model returns a
@@ -992,6 +1114,29 @@ Symptoms of the misconfiguration:
   appear in the prompt).
 - The agent repeats the first tool call or loops because it never “sees” the
   tool output.
+
+#### Agent nodes: checkpoints and nested interrupts
+
+If a sub-agent is a GraphAgent (a graph-based agent) and checkpointing is
+enabled (via a `CheckpointSaver`), the child graph also needs its own checkpoint
+namespace. Otherwise, the child graph can accidentally resume from a checkpoint
+that belongs to the parent graph.
+
+Default behavior for agent nodes that invoke a GraphAgent:
+
+- The child GraphAgent runs under the child checkpoint namespace (the sub-agent
+  name), even though the runtime state is cloned from the parent.
+- The parent checkpoint identifier (ID) is not forwarded to the child unless
+  you explicitly set it via a subgraph input mapper.
+
+Nested Human-in-the-Loop (HITL) interrupt/resume:
+
+- If the child GraphAgent calls `graph.Interrupt`, the parent graph also
+  interrupts and checkpoints.
+- Resume from the parent checkpoint as usual; the agent node resumes the child
+  checkpoint automatically.
+
+Runnable example: `examples/graph/nested_interrupt`.
 
 ### 4. Conditional Routing
 
@@ -1169,7 +1314,8 @@ See the runnable example: `examples/graph/placeholder`.
 
 Injecting retrieval output and user input
 
-- Upstream nodes can place ephemeral values into the session's `temp:` namespace so the LLM instruction can read them with placeholders.
+- Upstream nodes can place temporary values into the session's `temp:`
+  namespace so the LLM instruction can read them with placeholders.
 - Pattern:
 
 ```go
@@ -1196,7 +1342,10 @@ Example: `examples/graph/retrieval_placeholder`.
 
 Best practices for placeholders and session state
 
-- Ephemeral vs persistent: write per‑turn values to `temp:*` on session state (recommended via `sess.SetState`). Persistent configuration should go through `SessionService` with `user:*`/`app:*`.
+- Session-scoped vs persistent: write temporary values used to build
+  prompts to `temp:*` on session state (often overwritten each turn via
+  `sess.SetState`). Persistent configuration should go through
+  `SessionService` with `user:*`/`app:*`.
 - Why `SetState` is recommended: LLM nodes expand placeholders from the session object present in graph state; using `sess.SetState` avoids unsafe concurrent map access.
 - Service guardrails: the in‑memory service intentionally disallows writing `temp:*` (and `app:*` via user updater); see [session/inmemory/service.go](https://github.com/trpc-group/trpc-agent-go/blob/main/session/inmemory/service.go).
 - Concurrency: when multiple branches run in parallel, avoid multiple nodes mutating the same `session.State` keys. Prefer composing in a single node before the LLM, or store intermediate values in graph state then write once to `temp:*`.
@@ -1502,6 +1651,47 @@ func main() {
 ```
 
 The example shows how to declare nodes, connect edges, and run. Next, we'll cover execution with GraphAgent + Runner, then core concepts and common practices.
+
+### 2. Static Interrupts (Debug Breakpoints)
+
+Static interrupts are "breakpoints" that pause the graph **before** or
+**after** specific nodes execute. They are mainly used for debugging, and they
+do not require you to call `graph.Interrupt(...)` inside node logic.
+
+Key differences from HITL interrupts:
+
+- **HITL interrupt**: a node calls `graph.Interrupt(ctx, state, key, prompt)`.
+  Resuming requires providing a resume input for that `key`.
+- **Static interrupt**: you attach interrupt options when declaring nodes.
+  Resuming only requires the checkpoint coordinates (`lineage_id` +
+  `checkpoint_id`).
+
+Enable static interrupts:
+
+```go
+sg.AddNode("my_node", fn, graph.WithInterruptBefore())
+sg.AddNode("my_node", fn, graph.WithInterruptAfter())
+
+// Or enable by node IDs after building nodes:
+sg.WithInterruptBeforeNodes("my_node")
+sg.WithInterruptAfterNodes("my_node")
+```
+
+When a static interrupt is triggered, the executor raises an
+`*graph.InterruptError` with:
+
+- `Key` prefixed by `graph.StaticInterruptKeyPrefixBefore` or
+  `graph.StaticInterruptKeyPrefixAfter`
+- `Value` set to `graph.StaticInterruptPayload` (`phase`, `nodes`,
+  `activeNodes`)
+
+Resuming:
+
+- Run again with the same `lineage_id` and the `checkpoint_id` returned by the
+  interrupt event.
+- No resume input is required because no node called `graph.Interrupt(...)`.
+
+See `examples/graph/static_interrupt` for an end-to-end runnable demo.
 
 ### Execution
 
@@ -2570,6 +2760,7 @@ This design enables per‑step observability and safe interruption/recovery.
 exec, err := graph.NewExecutor(g,
     graph.WithChannelBufferSize(1024),              // event channel buffer
     graph.WithMaxSteps(50),                          // max steps
+    graph.WithMaxConcurrency(8),                     // task concurrency
     graph.WithStepTimeout(5*time.Minute),            // step timeout
     graph.WithNodeTimeout(2*time.Minute),            // node timeout
     graph.WithCheckpointSaver(saver),                // enable checkpoints (sqlite/inmemory)
@@ -2581,7 +2772,7 @@ exec, err := graph.NewExecutor(g,
 
 - Defaults (Executor)
 
-  - `ChannelBufferSize = 256`, `MaxSteps = 100`, `CheckpointSaveTimeout = 10s`
+  - `ChannelBufferSize = 256`, `MaxSteps = 100`, `MaxConcurrency = GOMAXPROCS(0)`, `CheckpointSaveTimeout = 10s`
   - Per‑step/node timeouts are available on `Executor` via `WithStepTimeout` / `WithNodeTimeout` (not exposed by `GraphAgent` options yet)
 
 - Sessions
@@ -2594,7 +2785,8 @@ exec, err := graph.NewExecutor(g,
 
 - Events/backpressure
 
-  - Tune `WithChannelBufferSize`; filter events by `author`/`object` to reduce noise
+  - Tune `WithChannelBufferSize`; cap task parallelism via `WithMaxConcurrency`
+  - Filter events by `author`/`object` to reduce noise
 
 - Naming and keys
 
@@ -2871,6 +3063,76 @@ Per‑node options (see `graph/state_graph.go`):
   `graph.WithRefreshToolSetsOnRun` (rebuild tools from ToolSets on each run for dynamic sources such as MCP)
 - Agent nodes: `graph.WithAgentNodeEventCallback`
 
+#### Invocation‑level Call Options (per‑run overrides)
+
+`graph.WithGenerationConfig(...)` is a **compile‑time** configuration: you set
+it when building the graph. In real services you often want **runtime** control:
+use the same graph, but override sampling parameters for this request.
+
+Graph supports this with **call options**, which are attached to
+`Invocation.RunOptions` and automatically propagated into nested GraphAgent
+subgraphs.
+
+Common use cases:
+
+- One request needs higher `temperature`, another needs lower.
+- The same graph has multiple LLM nodes, and you want different parameters per
+  node.
+- A parent graph calls a subgraph (Agent node), and you want overrides only
+  inside that subgraph.
+
+API:
+
+- `graph.WithCallOptions(...)` attaches call options to this run.
+- `graph.WithCallGenerationConfigPatch(...)` overrides `model.GenerationConfig`
+  fields for LLM nodes in the current graph scope.
+- `graph.DesignateNode(nodeID, ...)` targets a specific node in the current
+  graph.
+  - For LLM nodes: affects that node's model call.
+  - For Agent nodes (subgraphs): affects the child invocation, so it becomes the
+    default for the nested graph.
+- `graph.DesignateNodeWithPath(graph.NodePath{...}, ...)` targets a node inside
+  nested subgraphs (path segments are node IDs).
+
+Patch format:
+
+- Use `model.GenerationConfigPatch` and set only the fields you want to
+  override.
+- Pointer fields use `nil` for "do not override", so you typically create
+  pointers using helpers like `model.Float64Ptr`, `model.IntPtr`, etc.
+- `Stop`: `nil` means "do not override"; an empty slice clears stop sequences.
+
+Example:
+
+```go
+runOpts := graph.WithCallOptions(
+    // Global override for this run (affects all LLM nodes in this graph).
+    graph.WithCallGenerationConfigPatch(model.GenerationConfigPatch{
+        Temperature: model.Float64Ptr(0.2),
+    }),
+
+    // Override a single LLM node in the current graph.
+    graph.DesignateNode("final_answer",
+        graph.WithCallGenerationConfigPatch(model.GenerationConfigPatch{
+            MaxTokens: model.IntPtr(256),
+        }),
+    ),
+
+    // Override a node inside a nested subgraph:
+    // node "child_agent" (Agent node) -> node "llm" (inside the child graph).
+    graph.DesignateNodeWithPath(
+        graph.NodePath{"child_agent", "llm"},
+        graph.WithCallGenerationConfigPatch(model.GenerationConfigPatch{
+            Temperature: model.Float64Ptr(0),
+        }),
+    ),
+)
+
+ch, err := r.Run(ctx, userID, sessionID, msg, runOpts)
+```
+
+See `examples/graph/call_options_generation_config` for a runnable demo.
+
 #### ToolSets in Graphs vs Agents
 
 `graph.WithToolSets` is a **per‑node, compile‑time** configuration. It attaches one or more `tool.ToolSet` instances to a specific LLM node when you build the graph:
@@ -3056,7 +3318,7 @@ Good practice:
 - Execution
   - `graphagent.New(name, compiledGraph, ...opts)` → `runner.NewRunner(app, agent)` → `Run(...)`
 
-See examples under `examples/graph` for end‑to‑end patterns (basic/parallel/multi‑turn/interrupts/tools/placeholder).
+See examples under `examples/graph` for end‑to‑end patterns (basic/parallel/multi‑turn/interrupts/nested_interrupt/static_interrupt/tools/placeholder).
 
 ## Visualization (DOT/Image)
 
@@ -3128,6 +3390,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: "ckpt-123",
     }),
 )
@@ -3144,6 +3407,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: "ckpt-123",
     }),
 )
@@ -3226,6 +3490,7 @@ sg.AddNode(nodeReview, func(ctx context.Context, s graph.State) (any, error) {
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: checkpointID,
         graph.StateKeyResumeMap: map[string]any{
             "review_key": "approved",
@@ -3233,6 +3498,58 @@ eventCh, err := r.Run(ctx, userID, sessionID,
     }),
 )
 ```
+
+#### Nested graphs (child GraphAgent interrupts)
+
+If your parent graph delegates to a child GraphAgent via an agent node
+(`AddAgentNode` / `AddSubgraphNode`), the child graph can interrupt with
+`graph.Interrupt` and the parent graph will also interrupt.
+
+Resume from the parent checkpoint the same way as a non-nested interrupt.
+When the agent node runs again, it will resume the child checkpoint
+automatically.
+
+Runnable example: `examples/graph/nested_interrupt`.
+
+It supports multi-level nesting via the `-depth` flag.
+
+Key idea: `graph.Interrupt(ctx, state, key, prompt)` uses `key` as the routing
+key for `ResumeMap`. When you resume, the map key must match that `key`.
+
+You will see two different identifiers:
+
+- Node Identifier (Node ID): where the current graph paused (in nested graphs,
+  this is often the parent agent node).
+- Task Identifier (Task ID): the interrupt key used for `ResumeMap` routing.
+  For `graph.Interrupt`, Task ID equals the `key` argument.
+
+To resume without hard-coding the key, read the Task ID from the interrupted
+checkpoint and use it as the `ResumeMap` key:
+
+```go
+// cm is a graph.CheckpointManager. If you're using GraphAgent, you can get it
+// from ga.Executor().CheckpointManager().
+latest, err := cm.Latest(ctx, lineageID, namespace)
+if err != nil || latest == nil || latest.Checkpoint == nil {
+    // handle error
+}
+taskID := latest.Checkpoint.InterruptState.TaskID
+
+cmd := graph.NewResumeCommand().
+    AddResumeValue(taskID, "approved")
+
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
+        graph.CfgKeyCheckpointID: latest.Checkpoint.ID,
+        graph.StateKeyCommand:    cmd,
+    }),
+)
+```
+
+This works the same for multi-level nesting: resume from the parent checkpoint
+and the framework will resume each child checkpoint automatically.
 
 Helpers:
 
@@ -3527,7 +3844,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 
 **Q6: Resume did not continue where expected**
 
-- Pass `agent.WithRuntimeState(map[string]any{ graph.CfgKeyCheckpointID: "..." })`.
+- Pass `agent.WithRuntimeState(map[string]any{ graph.CfgKeyLineageID: "...", graph.CfgKeyCheckpointID: "..." })`.
 - Provide `ResumeMap` for HITL continuation when needed. A plain "resume" message is not added to `graph.StateKeyUserInput`.
 
 **Q7: State conflicts in parallel**
@@ -3569,6 +3886,40 @@ graphAgent, _ := graphagent.New("workflow", g,
   }
   ```
 - **Note**: `WithSubgraphIsolatedMessages(true)` only works for `AddSubgraphNode`, not for `AddLLMNode`.
+
+**Q10: Downstream Agent node receives an empty input**
+
+- **Symptom**: In a chain like `A (agent) → B (agent)`, the downstream agent
+  runs but `Invocation.Message.Content` is empty (or it behaves as if it didn't
+  get A's output).
+- **Root cause**: Agent nodes consume `user_input` as their input message and
+  clear it after a successful run. Edges do not automatically pipe outputs.
+- **Solution**: Explicitly write the desired upstream value into `user_input`
+  before the downstream agent runs:
+  ```go
+  sg.AddAgentNode("B", graph.WithSubgraphInputFromLastResponse())
+  // or:
+  sg.AddAgentNode("B",
+      graph.WithPreNodeCallback(func(ctx context.Context, cb *graph.NodeCallbackContext, s graph.State) (any, error) {
+          if v, ok := s[graph.StateKeyLastResponse].(string); ok {
+              s[graph.StateKeyUserInput] = v
+          }
+          return nil, nil
+      }),
+  )
+  ```
+  If you need a specific node's output, read it from
+  `node_responses[targetNodeID]` and write that into `user_input`.
+
+**Q11: Downstream Agent needs both original input and upstream output**
+
+- **Symptom**: `WithSubgraphInputFromLastResponse()` makes the downstream agent
+  consume `last_response` as its current input, but you also need the original
+  user request for this run.
+- **Solution**: Persist the original `user_input` into your own state key (for
+  example, `original_user_input`) and use a function node to compose the next
+  `user_input` as `original + upstream` before the downstream agent runs.
+  See "Agent nodes: combining original input with upstream output".
 
 ## Real‑World Example
 
@@ -3669,5 +4020,5 @@ This guide introduced the core usage of the `graph` package and GraphAgent: decl
   - I/O conventions: `io_conventions`, `io_conventions_tools`
   - Parallel/fan‑out: `parallel`, `fanout`, `diamond`
   - Placeholders: `placeholder`
-  - Checkpoints/interrupts: `checkpoint`, `interrupt`
+  - Checkpoints/interrupts: `checkpoint`, `interrupt`, `nested_interrupt`, `static_interrupt`
 - Further reading: `graph/state_graph.go`, `graph/executor.go`, `agent/graphagent`
