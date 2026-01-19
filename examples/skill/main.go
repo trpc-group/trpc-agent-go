@@ -1436,6 +1436,8 @@ const imageAttachmentHint = `This is an image file.
 
 const defaultAttachmentHint = `Use the read_document tool to read this file.`
 
+const skillWorkspacePathPrefix = "inputs/"
+
 func attachmentHintForPath(filePath string) string {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	if isAudioExt(ext) {
@@ -1495,12 +1497,19 @@ func runSingleTask(r runner.Runner, task GAIATask) BenchmarkResult {
 		} else {
 			absPath := filepath.Join(absDataDir, task.FilePath)
 			if _, err := os.Stat(absPath); err == nil {
+				ext := strings.ToLower(filepath.Ext(rel))
 				prompt.WriteString("\n\nAttached file: ")
 				prompt.WriteString(rel)
 				prompt.WriteString("\n")
-				prompt.WriteString("Skill workspace path: inputs/")
+				prompt.WriteString("Data path: ")
 				prompt.WriteString(rel)
 				prompt.WriteString("\n")
+				if isAudioExt(ext) || isImageExt(ext) {
+					prompt.WriteString("Skill workspace path: ")
+					prompt.WriteString(skillWorkspacePathPrefix)
+					prompt.WriteString(rel)
+					prompt.WriteString("\n")
+				}
 				prompt.WriteString(attachmentHintForPath(rel))
 				log.Printf("  📎 Attached file: %s", absPath)
 			}
