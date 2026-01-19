@@ -80,10 +80,13 @@ func inferenceInvocation(
 	}
 	// Capture the invocation ID, final response, tool uses, and tool responses.
 	var (
-		invocationID  string
-		finalResponse *model.Message
-		tools         = make([]*evalset.Tool, 0)
-		toolIDIdx     = make(map[string]int)
+		firstInvocationID string
+		rootInvocationID  string
+		finalResponse     *model.Message
+		tools             = make([]*evalset.Tool, 0)
+		toolIDIdx         = make(map[string]int)
+		buckets           = make(map[string]*agentInvocationBucket)
+		eventIndex        = 0
 	)
 	for event := range events {
 		if event == nil {
@@ -92,9 +95,27 @@ func inferenceInvocation(
 		if event.Error != nil {
 			return nil, fmt.Errorf("event: %v", event.Error)
 		}
-		// Capture the invocation ID.
-		if invocationID == "" && event.InvocationID != "" {
-			invocationID = event.InvocationID
+
+		currentIndex := eventIndex
+		eventIndex++
+
+		if event.InvocationID != "" {
+			if firstInvocationID == "" {
+				firstInvocationID = event.InvocationID
+			}
+			bucket, ok := buckets[event.InvocationID]
+			if !ok {
+				bucket = &agentInvocationBucket{
+					invocationID:   event.InvocationID,
+					firstSeenIndex: currentIndex,
+				}
+				buckets[event.InvocationID] = bucket
+			}
+			bucket.observeEvent(event)
+		}
+
+		if event.IsRunnerCompletion() && event.InvocationID != "" {
+			rootInvocationID = event.InvocationID
 		}
 		// Capture the final response.
 		if event.IsFinalResponse() {
@@ -120,12 +141,17 @@ func inferenceInvocation(
 			}
 		}
 	}
+	invocationID := rootInvocationID
+	if invocationID == "" {
+		invocationID = firstInvocationID
+	}
 	// Convert the final response to invocation.
 	return &evalset.Invocation{
 		InvocationID:  invocationID,
 		UserContent:   invocation.UserContent,
 		FinalResponse: finalResponse,
 		Tools:         tools,
+		Agents:        buildAgentInvocations(buckets, rootInvocationID),
 	}, nil
 }
 

@@ -50,6 +50,8 @@ type Invocation struct {
 	FinalResponse *model.Message `json:"finalResponse,omitempty"`
 	// Tools represents the tool calls and responses.
 	Tools []*Tool `json:"tools,omitempty"`
+	// Agents records all executed agents (including sub-agents) within this invocation.
+	Agents []*Agent `json:"agents,omitempty"`
 	// IntermediateResponses contains intermediate responses during execution.
 	IntermediateResponses []*model.Message `json:"intermediateResponses,omitempty"`
 	// CreationTimestamp when this invocation was created.
@@ -62,6 +64,18 @@ type Tool struct {
 	Name      string `json:"name,omitempty"`      // Tool name.
 	Arguments any    `json:"arguments,omitempty"` // Tool call parameters.
 	Result    any    `json:"result,omitempty"`    // Tool execution result.
+}
+
+// Agent represents one executed agent (including sub-agents) within a single evaluation invocation.
+type Agent struct {
+	// InvocationID is the runtime invocation id for this agent execution.
+	InvocationID string `json:"invocationId,omitempty"`
+	// ParentInvocationID links to the parent invocation id (if any).
+	ParentInvocationID string `json:"parentInvocationId,omitempty"`
+	// Name is the agent name (agent.Info().Name).
+	Name string `json:"name,omitempty"`
+	// Branch is the branch chain injected into events (e.g., "root/child/grandchild").
+	Branch string `json:"branch,omitempty"`
 }
 
 // SessionInput represents values that help initialize a session.
