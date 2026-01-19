@@ -1826,38 +1826,263 @@ func resumeCommandForSubgraph(
 	return cmd
 }
 
-// NewAgentNodeFunc creates a NodeFunc that looks up and uses a sub-agent by name.
-// The agent name should correspond to a sub-agent in the parent GraphAgent's sub-agent list.
-func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
+const includeContentsNone = "none"
+
+type agentNodeConfig struct {
+	callbacks           *NodeCallbacks
+	inputMapper         SubgraphInputMapper
+	outputMapper        SubgraphOutputMapper
+	isolated            bool
+	scope               string
+	inputFromLast       bool
+	llmGenerationConfig *model.GenerationConfig
+}
+
+func agentNodeConfigFromOptions(opts ...Option) agentNodeConfig {
 	dummyNode := &Node{}
 	for _, opt := range opts {
 		opt(dummyNode)
 	}
-	nodeCallbacks := dummyNode.callbacks
-	inputMapper := dummyNode.agentInputMapper
-	outputMapper := dummyNode.agentOutputMapper
-	isolated := dummyNode.agentIsolatedMessages
-	scope := dummyNode.agentEventScope
-	inputFromLast := dummyNode.agentInputFromLastResponse
+	return agentNodeConfig{
+		callbacks:           dummyNode.callbacks,
+		inputMapper:         dummyNode.agentInputMapper,
+		outputMapper:        dummyNode.agentOutputMapper,
+		isolated:            dummyNode.agentIsolatedMessages,
+		scope:               dummyNode.agentEventScope,
+		inputFromLast:       dummyNode.agentInputFromLastResponse,
+		llmGenerationConfig: dummyNode.llmGenerationConfig,
+	}
+}
+
+func finalizeInvokeAgentSpan(span oteltrace.Span, errp *error) {
+	if errp == nil || *errp == nil {
+		span.End()
+		return
+	}
+	err := *errp
+	span.SetStatus(codes.Error, err.Error())
+	span.SetAttributes(attribute.String(
+		itelemetry.KeyErrorType,
+		itelemetry.ValueDefaultErrorType,
+	))
+	span.End()
+}
+
+func targetAgentFromState(state State, agentName string) (agent.Agent, error) {
+	parentAgent, parentExists := state[StateKeyParentAgent]
+	if !parentExists {
+		return nil, fmt.Errorf(
+			"parent agent not found in state for agent node %s",
+			agentName,
+		)
+	}
+	targetAgent := findSubAgentByName(parentAgent, agentName)
+	if targetAgent == nil {
+		return nil, fmt.Errorf(
+			"sub-agent '%s' not found in parent agent's sub-agent list",
+			agentName,
+		)
+	}
+	return targetAgent, nil
+}
+
+func initialChildStateForAgentNode(parent State, inputMapper SubgraphInputMapper) State {
+	if inputMapper == nil {
+		return copyRuntimeStateFiltered(parent)
+	}
+	if s := inputMapper(parent); s != nil {
+		return s
+	}
+	return State{}
+}
+
+func applyDefaultCheckpointNamespace(child State, targetAgent agent.Agent) {
+	if _, ok := targetAgent.(executorProvider); !ok {
+		return
+	}
+	child[CfgKeyCheckpointNS] = targetAgent.Info().Name
+	delete(child, CfgKeyCheckpointID)
+}
+
+func applyIsolatedMessages(child State, isolated bool) {
+	if !isolated {
+		return
+	}
+	child[CfgKeyIncludeContents] = includeContentsNone
+}
+
+func applyCheckpointResumeFields(child State, info subgraphInterruptInfo) {
+	if info.childCheckpointID != "" {
+		child[CfgKeyCheckpointID] = info.childCheckpointID
+	} else {
+		delete(child, CfgKeyCheckpointID)
+	}
+	if info.childCheckpointNS != "" {
+		child[CfgKeyCheckpointNS] = info.childCheckpointNS
+	}
+	if info.childLineageID != "" {
+		child[CfgKeyLineageID] = info.childLineageID
+	}
+}
+
+func clearResumeChannelsIfNeeded(parent State, child State, cmd *Command) {
+	if cmd == nil || cmd.Resume == nil {
+		return
+	}
+	delete(parent, ResumeChannel)
+	delete(child, ResumeChannel)
+}
+
+func consumeResumeMapEntryIfNeeded(parent State, childTaskID string, cmd *Command) {
+	if cmd == nil || cmd.ResumeMap == nil || childTaskID == "" {
+		return
+	}
+	resumeMap, ok := parent[StateKeyResumeMap].(map[string]any)
+	if !ok {
+		return
+	}
+	delete(resumeMap, childTaskID)
+	if len(resumeMap) == 0 {
+		delete(parent, StateKeyResumeMap)
+	}
+}
+
+func applyResumeCommandForAgentNode(
+	parent State,
+	child State,
+	info subgraphInterruptInfo,
+) {
+	cmd := resumeCommandForSubgraph(parent, info.childTaskID)
+	if cmd == nil {
+		return
+	}
+	child[StateKeyCommand] = cmd
+	clearResumeChannelsIfNeeded(parent, child, cmd)
+	consumeResumeMapEntryIfNeeded(parent, info.childTaskID, cmd)
+	delete(child, StateKeyResumeMap)
+}
+
+func applySubgraphResumeForAgentNode(parent State, child State, nodeID string) {
+	info, ok := subgraphInterruptInfoFromState(parent)
+	if !ok || info.parentNodeID != nodeID {
+		return
+	}
+	applyCheckpointResumeFields(child, info)
+	applyResumeCommandForAgentNode(parent, child, info)
+	delete(parent, StateKeySubgraphInterrupt)
+}
+
+func buildChildStateForAgentNode(
+	parent State,
+	nodeID string,
+	targetAgent agent.Agent,
+	cfg agentNodeConfig,
+) State {
+	childState := initialChildStateForAgentNode(parent, cfg.inputMapper)
+	delete(childState, StateKeySubgraphInterrupt)
+	if cfg.inputMapper == nil {
+		applyDefaultCheckpointNamespace(childState, targetAgent)
+	}
+	applyIsolatedMessages(childState, cfg.isolated)
+	applySubgraphResumeForAgentNode(parent, childState, nodeID)
+	return childState
+}
+
+func mapParentInputFromLastResponse(state State, enabled bool) State {
+	if !enabled {
+		return state
+	}
+	lastResponse, ok := GetStateValue[string](state, StateKeyLastResponse)
+	if !ok || lastResponse == "" {
+		return state
+	}
+	cloned := state.Clone()
+	cloned[StateKeyUserInput] = lastResponse
+	return cloned
+}
+
+func resolveInvokeAgentStream(
+	invocation *agent.Invocation,
+	genCfg *model.GenerationConfig,
+) bool {
+	if invocation != nil && invocation.RunOptions.Stream != nil {
+		return *invocation.RunOptions.Stream
+	}
+	if genCfg != nil {
+		return genCfg.Stream
+	}
+	return false
+}
+
+func setSubgraphInterruptState(
+	ctx context.Context,
+	state State,
+	nodeID string,
+	agentName string,
+	targetAgent agent.Agent,
+	childState State,
+	invocation *agent.Invocation,
+	childTaskID string,
+) {
+	fallbackLineageID := ""
+	if invocation != nil {
+		fallbackLineageID = invocation.InvocationID
+	}
+	childLineageID := stateStringOr(childState, CfgKeyLineageID, fallbackLineageID)
+	childNamespace := stateStringOr(childState, CfgKeyCheckpointNS, targetAgent.Info().Name)
+	childCheckpointID, ckptErr := latestInterruptedCheckpointID(
+		ctx, targetAgent, childLineageID, childNamespace,
+	)
+	if ckptErr != nil {
+		log.DebugfContext(ctx, "subgraph: latest checkpoint failed: %v", ckptErr)
+	}
+	state[StateKeySubgraphInterrupt] = map[string]any{
+		subgraphInterruptKeyParentNodeID:      nodeID,
+		subgraphInterruptKeyChildAgentName:    agentName,
+		subgraphInterruptKeyChildCheckpointID: childCheckpointID,
+		subgraphInterruptKeyChildCheckpointNS: childNamespace,
+		subgraphInterruptKeyChildLineageID:    childLineageID,
+		subgraphInterruptKeyChildTaskID:       childTaskID,
+	}
+}
+
+func finalizeAgentNodeOutput(
+	state State,
+	nodeID string,
+	streamRes agentEventStreamResult,
+	outputMapper SubgraphOutputMapper,
+) any {
+	if outputMapper != nil {
+		mapped := outputMapper(state, SubgraphResult{
+			LastResponse:     streamRes.lastResponse,
+			FinalState:       streamRes.finalState,
+			RawStateDelta:    streamRes.rawDelta,
+			StructuredOutput: streamRes.structuredOutput,
+		})
+		if mapped != nil {
+			return mapped
+		}
+		return State{}
+	}
+	upd := State{}
+	upd[StateKeyLastResponse] = streamRes.lastResponse
+	upd[StateKeyNodeResponses] = map[string]any{
+		nodeID: streamRes.lastResponse,
+	}
+	upd[StateKeyUserInput] = ""
+	return upd
+}
+
+// NewAgentNodeFunc creates a NodeFunc that looks up and uses a sub-agent by name.
+// The agent name should correspond to a sub-agent in the parent GraphAgent's sub-agent list.
+func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
+	cfg := agentNodeConfigFromOptions(opts...)
 	return func(ctx context.Context, state State) (a any, err error) {
 		ctx, span := trace.Tracer.Start(
 			ctx,
-			fmt.Sprintf(
-				"%s %s",
-				itelemetry.OperationInvokeAgent,
-				agentName,
-			),
+			fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, agentName),
 		)
-		defer func() {
-			if err != nil {
-				span.SetStatus(codes.Error, err.Error())
-				span.SetAttributes(attribute.String(
-					itelemetry.KeyErrorType,
-					itelemetry.ValueDefaultErrorType,
-				))
-			}
-			span.End()
-		}()
+		defer finalizeInvokeAgentSpan(span, &err)
 
 		// Extract execution context for event emission.
 		invocationID, _, _, _, eventChan := extractExecutionContext(state)
@@ -1865,102 +2090,15 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		// Extract current node ID from state.
 		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
 
-		// Extract parent agent from state to find the sub-agent.
-		parentAgent, parentExists := state[StateKeyParentAgent]
-		if !parentExists {
-			return nil, fmt.Errorf("parent agent not found in state for agent node %s", agentName)
+		targetAgent, err := targetAgentFromState(state, agentName)
+		if err != nil {
+			return nil, err
 		}
 
-		// Look up the target agent by name from the parent's sub-agents.
-		targetAgent := findSubAgentByName(parentAgent, agentName)
-		if targetAgent == nil {
-			return nil, fmt.Errorf("sub-agent '%s' not found in parent agent's sub-agent list", agentName)
-		}
-
-		// Build child runtime state via optional mapper; default to a filtered shallow copy
-		// of the parent state to avoid leaking internal/ephemeral keys (exec context, callbacks, etc.).
-		childState := State{}
-		if inputMapper != nil {
-			if s := inputMapper(state); s != nil {
-				childState = s
-			}
-		} else {
-			childState = copyRuntimeStateFiltered(state)
-		}
-		delete(childState, StateKeySubgraphInterrupt)
-		if inputMapper == nil {
-			if _, ok := targetAgent.(executorProvider); ok {
-				if childState == nil {
-					childState = State{}
-				}
-				childState[CfgKeyCheckpointNS] =
-					targetAgent.Info().Name
-				delete(childState, CfgKeyCheckpointID)
-			}
-		}
-		if isolated {
-			// Instruct child GraphAgent to not include session contents in its request.
-			childState[CfgKeyIncludeContents] = "none"
-		}
-
-		if info, ok := subgraphInterruptInfoFromState(state); ok {
-			if info.parentNodeID == nodeID {
-				if info.childCheckpointID != "" {
-					childState[CfgKeyCheckpointID] =
-						info.childCheckpointID
-				} else {
-					delete(childState, CfgKeyCheckpointID)
-				}
-				if info.childCheckpointNS != "" {
-					childState[CfgKeyCheckpointNS] =
-						info.childCheckpointNS
-				}
-				if info.childLineageID != "" {
-					childState[CfgKeyLineageID] =
-						info.childLineageID
-				}
-				if cmd := resumeCommandForSubgraph(
-					state,
-					info.childTaskID,
-				); cmd != nil {
-					childState[StateKeyCommand] = cmd
-					if cmd.Resume != nil {
-						delete(state, ResumeChannel)
-						delete(childState, ResumeChannel)
-					}
-					if cmd.ResumeMap != nil &&
-						info.childTaskID != "" {
-						if resumeMap, ok :=
-							state[StateKeyResumeMap].(map[string]any); ok {
-							delete(resumeMap, info.childTaskID)
-							if len(resumeMap) == 0 {
-								delete(
-									state,
-									StateKeyResumeMap,
-								)
-							}
-						}
-					}
-					delete(childState, StateKeyResumeMap)
-				}
-				delete(state, StateKeySubgraphInterrupt)
-			}
-		}
+		childState := buildChildStateForAgentNode(state, nodeID, targetAgent, cfg)
 
 		// Optionally map parent's last_response to user_input for this agent node.
-		parentForInput := state
-		if inputFromLast {
-			lastResponse, ok := GetStateValue[string](
-				state,
-				StateKeyLastResponse,
-			)
-			if ok && lastResponse != "" {
-				// Clone a shallow copy to avoid mutating the original state view.
-				cloned := state.Clone()
-				cloned[StateKeyUserInput] = lastResponse
-				parentForInput = cloned
-			}
-		}
+		parentForInput := mapParentInputFromLastResponse(state, cfg.inputFromLast)
 
 		// Build invocation for the target agent with custom runtime state and scope.
 		invocation := buildAgentInvocationWithStateAndScope(
@@ -1969,7 +2107,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			childState,
 			targetAgent,
 			nodeID,
-			scope,
+			cfg.scope,
 		)
 
 		itelemetry.TraceBeforeInvokeAgent(
@@ -1977,14 +2115,10 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			invocation,
 			targetAgent.Info().Description,
 			"",
-			dummyNode.llmGenerationConfig,
+			cfg.llmGenerationConfig,
 		)
-		var stream bool
-		if invocation.RunOptions.Stream != nil {
-			stream = *invocation.RunOptions.Stream
-		} else if dummyNode.llmGenerationConfig != nil {
-			stream = dummyNode.llmGenerationConfig.Stream
-		}
+
+		stream := resolveInvokeAgentStream(invocation, cfg.llmGenerationConfig)
 		tracker := itelemetry.NewInvokeAgentTracker(
 			ctx,
 			invocation,
@@ -2014,44 +2148,30 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 
 		// Process agent event stream and capture completion state.
 		streamRes, err := processAgentEventStream(
-			ctx, agentEventChan, nodeCallbacks, nodeID, state, eventChan, agentName, tracker,
+			ctx,
+			agentEventChan,
+			cfg.callbacks,
+			nodeID,
+			state,
+			eventChan,
+			agentName,
+			tracker,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process agent event stream: %w", err)
 		}
 
 		if streamRes.interrupt != nil {
-			childLineageID := stateStringOr(
-				childState,
-				CfgKeyLineageID,
-				invocation.InvocationID,
-			)
-			childNamespace := stateStringOr(
-				childState,
-				CfgKeyCheckpointNS,
-				targetAgent.Info().Name,
-			)
-			childCheckpointID, ckptErr := latestInterruptedCheckpointID(
+			setSubgraphInterruptState(
 				ctx,
+				state,
+				nodeID,
+				agentName,
 				targetAgent,
-				childLineageID,
-				childNamespace,
+				childState,
+				invocation,
+				streamRes.interrupt.TaskID,
 			)
-			if ckptErr != nil {
-				log.DebugfContext(
-					ctx,
-					"subgraph: latest checkpoint failed: %v",
-					ckptErr,
-				)
-			}
-			state[StateKeySubgraphInterrupt] = map[string]any{
-				subgraphInterruptKeyParentNodeID:      nodeID,
-				subgraphInterruptKeyChildAgentName:    agentName,
-				subgraphInterruptKeyChildCheckpointID: childCheckpointID,
-				subgraphInterruptKeyChildCheckpointNS: childNamespace,
-				subgraphInterruptKeyChildLineageID:    childLineageID,
-				subgraphInterruptKeyChildTaskID:       streamRes.interrupt.TaskID,
-			}
 			intr := NewInterruptError(streamRes.interrupt.Value)
 			intr.TaskID = streamRes.interrupt.TaskID
 			return nil, intr
@@ -2063,29 +2183,23 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			streamRes.tokenUsage,
 			tracker.FirstTokenTimeDuration(),
 		)
+
 		// Emit agent execution complete event.
 		endTime := time.Now()
-		emitAgentCompleteEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime)
-		// Update state with either custom output mapping or default behavior.
-		if outputMapper != nil {
-			mapped := outputMapper(state, SubgraphResult{
-				LastResponse:     streamRes.lastResponse,
-				FinalState:       streamRes.finalState,
-				RawStateDelta:    streamRes.rawDelta,
-				StructuredOutput: streamRes.structuredOutput,
-			})
-			if mapped != nil {
-				return mapped, nil
-			}
-			return State{}, nil
-		}
-		upd := State{}
-		upd[StateKeyLastResponse] = streamRes.lastResponse
-		upd[StateKeyNodeResponses] = map[string]any{
-			nodeID: streamRes.lastResponse,
-		}
-		upd[StateKeyUserInput] = ""
-		return upd, nil
+		emitAgentCompleteEvent(
+			ctx,
+			eventChan,
+			invocationID,
+			nodeID,
+			startTime,
+			endTime,
+		)
+		return finalizeAgentNodeOutput(
+			state,
+			nodeID,
+			streamRes,
+			cfg.outputMapper,
+		), nil
 	}
 }
 
