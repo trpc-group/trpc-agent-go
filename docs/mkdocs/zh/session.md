@@ -360,6 +360,228 @@ sessionService := inmemory.NewSessionService(
 | 长期会话  | 1000-2000 | 个人助理、持续项目（需配合摘要） |
 | 调试/测试 | 50-100    | 快速验证，减少干扰               |
 
+### 3.5️⃣ 连续 User Message 处理
+
+**问题场景：** 当用户发送消息后，历史记录了 user message，但在模型回复前用户断开连接，导致历史中只有 user message 没有 assistant message。当用户再次对话时，会出现两个连续的 user message，某些 LLM API（如 OpenAI、Anthropic）会拒绝这种格式并报错。
+
+**解决方案：** 框架提供了 `OnDuplicateUserMessage` 回调机制，在检测到连续的 user message 时自动调用处理函数。
+
+#### 工作机制
+
+- `UpdateUserSession` 方法在追加事件前检测是否存在连续的 user message。
+- 如果检测到，调用用户配置的处理函数。
+- 框架自动调用（在各存储的 `appendEventInternal` 中），用户无需手动触发。
+
+#### 常用处理器示例
+
+框架提供了三种常用处理方案的示例代码:
+
+```go
+// 1. 插入占位 assistant message
+insertPlaceholderHandler := func(
+    sess *session.Session,
+    prev, curr *event.Event,
+) bool {
+    finishReason := "error"
+    placeholder := event.Event{
+        Response: &model.Response{
+            ID:        "",
+            Object:    model.ObjectTypeChatCompletion,
+            Created:   0,
+            Done:      true,
+            Timestamp: prev.Timestamp,
+            Choices: []model.Choice{
+                {
+                    Index: 0,
+                    Message: model.Message{
+                        Role:    model.RoleAssistant,
+                        Content: "[Connection interrupted]",
+                    },
+                    FinishReason: &finishReason,
+                },
+            },
+        },
+        RequestID:          prev.RequestID,
+        InvocationID:       prev.InvocationID,
+        ParentInvocationID: prev.ParentInvocationID,
+        Author:             "system",
+        ID:                 "",
+        Timestamp:          prev.Timestamp,
+        Branch:             prev.Branch,
+        FilterKey:          prev.FilterKey,
+        Version:            event.CurrentVersion,
+    }
+    sess.Events = append(sess.Events, placeholder)
+    return true
+}
+
+sess := session.NewSession(
+    "my-app",
+    "user123",
+    "session456",
+    session.WithOnDuplicateUserMessage(insertPlaceholderHandler),
+)
+
+// 2. 删除前一个 user message
+removePreviousHandler := func(
+    sess *session.Session,
+    prev, curr *event.Event,
+) bool {
+    if len(sess.Events) > 0 {
+        sess.Events = sess.Events[:len(sess.Events)-1]
+    }
+    return true
+}
+
+sess := session.NewSession(
+    "my-app",
+    "user123",
+    "session456",
+    session.WithOnDuplicateUserMessage(removePreviousHandler),
+)
+
+// 3. 跳过当前 user message
+skipCurrentHandler := func(
+    sess *session.Session,
+    prev, curr *event.Event,
+) bool {
+    return false
+}
+
+sess := session.NewSession(
+    "my-app",
+    "user123",
+    "session456",
+    session.WithOnDuplicateUserMessage(skipCurrentHandler),
+)
+```
+
+#### 自定义处理器
+
+用户可以实现自己的处理逻辑：
+
+```go
+// 自定义处理器：合并两个 user message
+mergeHandler := func(
+    sess *session.Session,
+    prev, curr *event.Event,
+) bool {
+    // 合并消息内容
+    merged := fmt.Sprintf(
+        "%s\n[连接恢复后继续]\n%s",
+        prev.Response.Choices[0].Message.Content,
+        curr.Response.Choices[0].Message.Content,
+    )
+    curr.Response.Choices[0].Message.Content = merged
+    
+    // 删除前一个消息
+    sess.Events = sess.Events[:len(sess.Events)-1]
+    
+    return true // 追加合并后的当前消息
+}
+
+sess := session.NewSession(
+    "my-app",
+    "user123",
+    "session456",
+    session.WithOnDuplicateUserMessage(mergeHandler),
+)
+```
+
+#### 使用示例
+
+```go
+package main
+
+import (
+    "context"
+    "time"
+    
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+    sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+func main() {
+    // 创建 session 服务
+    sessionSvc, _ := sessioninmemory.NewService()
+    
+    ctx := context.Background()
+    key := session.Key{
+        AppName:   "my-app",
+        UserID:    "user123",
+        SessionID: "session456",
+    }
+    
+    // 定义插入占位符处理器
+    insertPlaceholderHandler := func(
+        sess *session.Session,
+        prev, curr *event.Event,
+    ) bool {
+        finishReason := "error"
+        placeholder := event.Event{
+            Response: &model.Response{
+                ID:        "",
+                Object:    model.ObjectTypeChatCompletion,
+                Created:   0,
+                Done:      true,
+                Timestamp: prev.Timestamp,
+                Choices: []model.Choice{
+                    {
+                        Index: 0,
+                        Message: model.Message{
+                            Role:    model.RoleAssistant,
+                            Content: "[Connection interrupted]",
+                        },
+                        FinishReason: &finishReason,
+                    },
+                },
+            },
+            RequestID:          prev.RequestID,
+            InvocationID:       prev.InvocationID,
+            ParentInvocationID: prev.ParentInvocationID,
+            Author:             "system",
+            ID:                 "",
+            Timestamp:          prev.Timestamp,
+            Branch:             prev.Branch,
+            FilterKey:          prev.FilterKey,
+            Version:            event.CurrentVersion,
+        }
+        sess.Events = append(sess.Events, placeholder)
+        return true
+    }
+    
+    // 创建 session 并配置处理器
+    sess := session.NewSession(
+        "my-app",
+        "user123",
+        "session456",
+        session.WithOnDuplicateUserMessage(insertPlaceholderHandler),
+    )
+    
+    // 用户正常使用 AppendEvent
+    userEvent1 := createUserEvent("hello")
+    sessionSvc.AppendEvent(ctx, sess, userEvent1)
+    
+    // 连接中断，没有 assistant 回复
+    
+    // 用户重新连接发送另一个消息
+    userEvent2 := createUserEvent("how are you")
+    sessionSvc.AppendEvent(ctx, sess, userEvent2)
+    
+    // 处理器自动插入了占位 assistant message
+    // 历史: [user: "hello", assistant: "[Connection interrupted]", user: "how are you"]
+}
+```
+
+#### 向后兼容性
+
+- **默认不启用**：如果用户不配置处理器，行为与之前完全一致。
+- **可选启用**：用户可以选择使用内置处理器或自定义处理器。
+- **不影响正常流程**：只在检测到连续 user message 时触发。
+- **Session 级别配置**：每个 Session 可以有独立的处理器。
+
 ### 4️⃣ TTL 管理（自动过期）
 
 支持为会话数据设置生存时间（Time To Live），自动清理过期数据。

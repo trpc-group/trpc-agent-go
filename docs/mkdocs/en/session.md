@@ -353,6 +353,228 @@ sessionService := inmemory.NewSessionService(
 | Long-term sessions       | 1000-2000         | Personal assistant, ongoing projects (use with summary) |
 | Debug/testing            | 50-100            | Quick validation, reduce noise                          |
 
+### 3.5️⃣ Consecutive User Message Handling
+
+**Problem Scenario:** When a user sends a message, the framework records the user message in history. If the user disconnects before the model responds (or system error occurs), the history will only contain the user message without a corresponding assistant message. When the user reconnects and sends another message, the history will have two consecutive user messages, which some LLM APIs (like OpenAI, Anthropic) will reject and return an error.
+
+**Solution:** The framework provides an `OnDuplicateUserMessage` callback mechanism that automatically calls a handler function when consecutive user messages are detected.
+
+#### How It Works
+
+- The `UpdateUserSession` method checks for consecutive user messages before appending events.
+- If detected, calls the user-configured handler function.
+- Automatically invoked by the framework (in each storage's `appendEventInternal`), no manual trigger needed.
+
+#### Common Handler Examples
+
+The framework provides example code for three common handling approaches:
+
+```go
+// 1. Insert a placeholder assistant message
+insertPlaceholderHandler := func(
+    sess *session.Session,
+    prev, curr *event.Event,
+) bool {
+    finishReason := "error"
+    placeholder := event.Event{
+        Response: &model.Response{
+            ID:        "",
+            Object:    model.ObjectTypeChatCompletion,
+            Created:   0,
+            Done:      true,
+            Timestamp: prev.Timestamp,
+            Choices: []model.Choice{
+                {
+                    Index: 0,
+                    Message: model.Message{
+                        Role:    model.RoleAssistant,
+                        Content: "[Connection interrupted]",
+                    },
+                    FinishReason: &finishReason,
+                },
+            },
+        },
+        RequestID:          prev.RequestID,
+        InvocationID:       prev.InvocationID,
+        ParentInvocationID: prev.ParentInvocationID,
+        Author:             "system",
+        ID:                 "",
+        Timestamp:          prev.Timestamp,
+        Branch:             prev.Branch,
+        FilterKey:          prev.FilterKey,
+        Version:            event.CurrentVersion,
+    }
+    sess.Events = append(sess.Events, placeholder)
+    return true
+}
+
+sess := session.NewSession(
+    "my-app",
+    "user123",
+    "session456",
+    session.WithOnDuplicateUserMessage(insertPlaceholderHandler),
+)
+
+// 2. Remove the previous user message
+removePreviousHandler := func(
+    sess *session.Session,
+    prev, curr *event.Event,
+) bool {
+    if len(sess.Events) > 0 {
+        sess.Events = sess.Events[:len(sess.Events)-1]
+    }
+    return true
+}
+
+sess := session.NewSession(
+    "my-app",
+    "user123",
+    "session456",
+    session.WithOnDuplicateUserMessage(removePreviousHandler),
+)
+
+// 3. Skip the current user message
+skipCurrentHandler := func(
+    sess *session.Session,
+    prev, curr *event.Event,
+) bool {
+    return false
+}
+
+sess := session.NewSession(
+    "my-app",
+    "user123",
+    "session456",
+    session.WithOnDuplicateUserMessage(skipCurrentHandler),
+)
+```
+
+#### Custom Handler
+
+Users can implement their own handling logic:
+
+```go
+// Custom handler: merge two user messages
+mergeHandler := func(
+    sess *session.Session,
+    prev, curr *event.Event,
+) bool {
+    // Merge message content
+    merged := fmt.Sprintf(
+        "%s\n[Connection recovered, continuing...]\n%s",
+        prev.Response.Choices[0].Message.Content,
+        curr.Response.Choices[0].Message.Content,
+    )
+    curr.Response.Choices[0].Message.Content = merged
+    
+    // Remove previous message
+    sess.Events = sess.Events[:len(sess.Events)-1]
+    
+    return true // Append merged current message
+}
+
+sess := session.NewSession(
+    "my-app",
+    "user123",
+    "session456",
+    session.WithOnDuplicateUserMessage(mergeHandler),
+)
+```
+
+#### Usage Example
+
+```go
+package main
+
+import (
+    "context"
+    "time"
+    
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+    sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+func main() {
+    // Create session service
+    sessionSvc, _ := sessioninmemory.NewService()
+    
+    ctx := context.Background()
+    key := session.Key{
+        AppName:   "my-app",
+        UserID:    "user123",
+        SessionID: "session456",
+    }
+    
+    // Define insert placeholder handler
+    insertPlaceholderHandler := func(
+        sess *session.Session,
+        prev, curr *event.Event,
+    ) bool {
+        finishReason := "error"
+        placeholder := event.Event{
+            Response: &model.Response{
+                ID:        "",
+                Object:    model.ObjectTypeChatCompletion,
+                Created:   0,
+                Done:      true,
+                Timestamp: prev.Timestamp,
+                Choices: []model.Choice{
+                    {
+                        Index: 0,
+                        Message: model.Message{
+                            Role:    model.RoleAssistant,
+                            Content: "[Connection interrupted]",
+                        },
+                        FinishReason: &finishReason,
+                    },
+                },
+            },
+            RequestID:          prev.RequestID,
+            InvocationID:       prev.InvocationID,
+            ParentInvocationID: prev.ParentInvocationID,
+            Author:             "system",
+            ID:                 "",
+            Timestamp:          prev.Timestamp,
+            Branch:             prev.Branch,
+            FilterKey:          prev.FilterKey,
+            Version:            event.CurrentVersion,
+        }
+        sess.Events = append(sess.Events, placeholder)
+        return true
+    }
+    
+    // Create session with handler
+    sess := session.NewSession(
+        "my-app",
+        "user123",
+        "session456",
+        session.WithOnDuplicateUserMessage(insertPlaceholderHandler),
+    )
+    
+    // User normally uses AppendEvent
+    userEvent1 := createUserEvent("hello")
+    sessionSvc.AppendEvent(ctx, sess, userEvent1)
+    
+    // Connection breaks, no assistant response
+    
+    // User reconnects and sends another message
+    userEvent2 := createUserEvent("how are you")
+    sessionSvc.AppendEvent(ctx, sess, userEvent2)
+    
+    // Handler automatically inserted a placeholder assistant message
+    // History: [user: "hello", assistant: "[Connection interrupted]", user: "how are you"]
+}
+```
+
+#### Backward Compatibility
+
+- **Not enabled by default**: If user doesn't configure a handler, behavior is identical to before.
+- **Optional enablement**: Users can choose to use built-in handlers or custom handlers.
+- **Doesn't affect normal flow**: Only triggers when consecutive user messages are detected.
+- **Session-level configuration**: Each Session can have its own handler.
+
 ### 4️⃣ TTL Management (Auto-Expiration)
 
 Support setting Time To Live (TTL) for session data, automatically cleaning expired data.

@@ -40,6 +40,23 @@ var (
 // the full-session summary with no filtering applied.
 const SummaryFilterKeyAllContents = ""
 
+// OnDuplicateUserMessageFunc is called when consecutive user messages are
+// detected in UpdateUserSession. User can modify sess.Events directly to fix
+// the issue (insert, remove, merge events, etc.).
+//
+// Parameters:
+//   - sess: Current session (can modify sess.Events).
+//   - previousUserEvent: The previous user message already in sess.Events.
+//   - currentUserEvent: The current user message about to be appended.
+//
+// Return:
+//   - bool: true to append currentUserEvent, false to skip it.
+type OnDuplicateUserMessageFunc func(
+	sess *Session,
+	previousUserEvent *event.Event,
+	currentUserEvent *event.Event,
+) bool
+
 // Session is the interface that all sessions must implement.
 type Session struct {
 	ID       string                 `json:"id"`      // ID is the session id.
@@ -63,6 +80,11 @@ type Session struct {
 	Hash int `json:"-"`
 
 	stateMu sync.RWMutex `json:"-"` // stateMu is the read-write mutex for State.
+
+	// onDuplicateUserMsg is called when consecutive user messages are detected.
+	// If nil, no fixing is performed (default behavior).
+	onDuplicateUserMsg OnDuplicateUserMessageFunc `json:"-"`
+	handlerMu          sync.RWMutex               `json:"-"`
 }
 
 // Clone returns a copy of the session.
@@ -186,6 +208,21 @@ func WithSessionCreatedAt(createdAt time.Time) SessionOptions {
 func WithSessionUpdatedAt(updatedAt time.Time) SessionOptions {
 	return func(sess *Session) {
 		sess.UpdatedAt = updatedAt
+	}
+}
+
+// WithOnDuplicateUserMessage sets the handler for consecutive user messages.
+// This handler is called by UpdateUserSession (which is automatically invoked
+// by the framework in appendEventInternal) when it detects that the event to
+// be appended is a user message and the last event in history is also a user
+// message.
+func WithOnDuplicateUserMessage(
+	handler OnDuplicateUserMessageFunc,
+) SessionOptions {
+	return func(sess *Session) {
+		sess.handlerMu.Lock()
+		defer sess.handlerMu.Unlock()
+		sess.onDuplicateUserMsg = handler
 	}
 }
 
@@ -381,6 +418,7 @@ func (sess *Session) EnsureEventStartWithUser() {
 }
 
 // UpdateUserSession updates the user session with the given event and options.
+// This method is automatically called by the framework in appendEventInternal.
 func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 	if sess == nil || event == nil {
 		log.Info("session or event is nil")
@@ -388,7 +426,38 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 	}
 	if event.Response != nil && !event.IsPartial && event.IsValidContent() {
 		sess.EventMu.Lock()
-		sess.Events = append(sess.Events, *event)
+
+		// Check for consecutive user messages before appending.
+		shouldAppend := true
+		if event.Response.IsUserMessage() && len(sess.Events) > 0 {
+			lastEvent := sess.Events[len(sess.Events)-1]
+			if lastEvent.Response != nil && lastEvent.Response.IsUserMessage() {
+				// Consecutive user messages detected.
+				sess.handlerMu.RLock()
+				handler := sess.onDuplicateUserMsg
+				sess.handlerMu.RUnlock()
+
+				if handler != nil {
+					// Let user handle it.
+					shouldAppend = handler(sess, &lastEvent, event)
+				} else {
+					// No handler configured, log warning.
+					log.Warnf(
+						"consecutive user messages detected without handler, "+
+							"session: %s, user: %s, prev_event: %s, curr_event: %s",
+						sess.ID,
+						sess.UserID,
+						lastEvent.ID,
+						event.ID,
+					)
+				}
+			}
+		}
+
+		if shouldAppend {
+			sess.Events = append(sess.Events, *event)
+		}
+
 		// Apply filtering options.
 		sess.ApplyEventFiltering(opts...)
 		sess.EventMu.Unlock()
