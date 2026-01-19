@@ -125,6 +125,12 @@ go run . -executor local
 go run . -executor container
 ```
 
+GAIA 基准示例（技能 + 文件工具）：
+[examples/skill/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skill/README.md)
+
+该示例包含数据集下载脚本，以及 `whisper`（音频）/`ocr`（图片）等
+技能的 Python 依赖准备说明。
+
 示例技能（节选）：
 [examples/skillrun/skills/python_math/SKILL.md]
 (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)

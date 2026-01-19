@@ -271,18 +271,19 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=str(default_dataset),
         help="Output JSON path (default: data/gaia_2023_level1_validation.json).",
     )
+    p.set_defaults(skip_files=True)
     p.add_argument(
         "--skip-files",
         action="store_true",
-        default=False,
+        dest="skip_files",
         help="Only write the JSON metadata; do not download attachments "
-        "(default: False).",
+        "(default).",
     )
     p.add_argument(
         "--with-files",
         action="store_false",
         dest="skip_files",
-        help="Download attachment files referenced by file_path.",
+        help="Also download attachment files referenced by file_path.",
     )
     p.add_argument(
         "--force",

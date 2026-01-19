@@ -21,16 +21,62 @@ The goal is to show how to combine:
 
 ## Prerequisites
 
+### Go + Model Endpoint
+
 - Go 1.24+
-- An OpenAI-compatible model endpoint:
+- An OpenAI-compatible model endpoint
   - `OPENAI_API_KEY` must be set
   - `OPENAI_BASE_URL` is optional (set it when not using OpenAI)
 
-If you want to run audio/image tasks locally, you also need:
+### Python (Optional, for Audio/Image Tasks)
 
-- Python 3.8+
-- For `whisper`: `openai-whisper` and `ffmpeg`
-- For `ocr`: `pytesseract`, `Pillow`, and the `tesseract` binary
+`skill_run` executes scripts with `python3` from your `PATH`. Install
+dependencies into the same Python environment that `python3` points to.
+
+1) Create a Python environment (pick one)
+
+- `venv`:
+
+  ```bash
+  cd examples/skill
+  python3 -m venv .venv
+  source .venv/bin/activate
+  python3 -m pip install -U pip
+  ```
+
+- `conda`:
+
+  ```bash
+  conda create -n trpc-skill python=3.11
+  conda activate trpc-skill
+  python3 -m pip install -U pip
+  ```
+
+2) Install Python packages
+
+```bash
+python3 -m pip install openai-whisper pillow pytesseract
+```
+
+3) Install system dependencies
+
+- `whisper` needs `ffmpeg`
+- `ocr` needs the `tesseract` binary
+
+Common installs:
+
+- macOS (Homebrew): `brew install ffmpeg tesseract`
+- Ubuntu/Debian: `sudo apt-get install ffmpeg tesseract-ocr`
+
+4) Quick sanity checks
+
+```bash
+which python3
+python3 -c "import whisper; print('whisper ok')"
+python3 -c "import pytesseract; from PIL import Image; print('ocr ok')"
+ffmpeg -version | head -n 1
+tesseract --version | head -n 1
+```
 
 See the skill docs:
 
@@ -57,21 +103,32 @@ ls -la data/2023/validation | head
 
 ### Downloading the Full Dataset (Optional)
 
-If you have access to the GAIA dataset on Hugging Face, you can try:
+GAIA is gated on Hugging Face. To download it, you must request access
+and create a Hugging Face access token.
+
+The script checks `HF_TOKEN`, `HUGGINGFACE_TOKEN`, and
+`HUGGINGFACE_HUB_TOKEN`.
+
+From `examples/skill`:
 
 ```bash
+cd examples/skill
+export HF_TOKEN="hf_..."
 python3 scripts/download_gaia_2023_level1_validation.py
 ```
 
-This downloads only the JSON metadata by default. To also download
-attachment files referenced by `file_path`, run:
+This downloads only the JSON metadata file by default:
+
+- `examples/skill/data/gaia_2023_level1_validation.json`
+
+To also download attachment files referenced by `file_path`, run:
 
 ```bash
 python3 scripts/download_gaia_2023_level1_validation.py --with-files
 ```
 
-If the dataset is gated/private, you will need a Hugging Face token (the
-script checks `HF_TOKEN`, `HUGGINGFACE_TOKEN`, `HUGGINGFACE_HUB_TOKEN`).
+Attachments are saved under `examples/skill/data/` (for example,
+`examples/skill/data/2023/validation/*.mp3`).
 
 ## Running
 

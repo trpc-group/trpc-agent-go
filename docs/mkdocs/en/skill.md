@@ -122,6 +122,12 @@ export OPENAI_API_KEY="your-api-key"
 go run . -executor local     # or: -executor container
 ```
 
+GAIA benchmark demo (skills + file tools):
+[examples/skill/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skill/README.md)
+
+It includes a dataset downloader script and notes on Python dependencies
+for skills like `whisper` (audio) and `ocr` (images).
+
 Sample skill (excerpt):
 [examples/skillrun/skills/python_math/SKILL.md]
 (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)
