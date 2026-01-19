@@ -198,3 +198,4 @@ tool := codeexec.NewTool(
 1. **Security**: `local.New()` executes code directly on the local machine. Do not use in production environments.
 2. **Timeout**: It's recommended to set a reasonable timeout to prevent infinite code execution.
 3. **Language Support**: Supports `python` and `bash` by default. Extend via `WithLanguages`.
+4. **File Outputs & Multi-node Deployments**: If your executor produces output files (e.g., images, CSVs), make sure your application surfaces them via the `file` tool (or another file-serving mechanism). In multi-node deployments, if the `file` tool (or file server) stores files on local disk, each node will have its own state and requests may not be able to read previously generated files—use shared storage (PVC/NFS/object storage) and/or sticky routing to keep file access consistent.
