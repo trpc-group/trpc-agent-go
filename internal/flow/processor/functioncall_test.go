@@ -3337,7 +3337,8 @@ func TestExecuteToolWithCallbacks_PluginBeforeToolArgsModified(
 // TestExecuteToolWithCallbacks_RepairsToolCallArgumentsWhenEnabled verifies arguments are repaired before tool execution.
 func TestExecuteToolWithCallbacks_RepairsToolCallArgumentsWhenEnabled(t *testing.T) {
 	proc := NewFunctionCallResponseProcessor(false, nil)
-	inv := &agent.Invocation{RunOptions: agent.RunOptions{ToolCallArgumentsJSONRepairEnabled: true}}
+	repairEnabled := true
+	inv := &agent.Invocation{RunOptions: agent.RunOptions{ToolCallArgumentsJSONRepairEnabled: &repairEnabled}}
 	toolArgs := ""
 	tl := &mockCallableTool{
 		declaration: &tool.Declaration{Name: "t"},

@@ -14,9 +14,19 @@ import (
 	"context"
 	"encoding/json"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+// IsToolCallArgumentsJSONRepairEnabled reports whether tool call arguments JSON repair is enabled.
+func IsToolCallArgumentsJSONRepairEnabled(invocation *agent.Invocation) bool {
+	if invocation == nil {
+		return false
+	}
+	enabled := invocation.RunOptions.ToolCallArgumentsJSONRepairEnabled
+	return enabled != nil && *enabled
+}
 
 // RepairToolCallArguments returns repaired tool call arguments when the input is not valid JSON.
 func RepairToolCallArguments(ctx context.Context, toolName string, arguments []byte) []byte {

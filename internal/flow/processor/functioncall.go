@@ -1140,7 +1140,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	// Inject tool call ID into context for callbacks to use.
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
 	// Repair tool call arguments in place when needed.
-	if invocation.RunOptions.ToolCallArgumentsJSONRepairEnabled {
+	if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
 		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
 	}
 	toolDeclaration := tl.Declaration()

@@ -746,8 +746,9 @@ func TestRunTool_CallbackShortCircuitAndErrors(t *testing.T) {
 
 // TestRunTool_RepairsToolCallArgumentsWhenEnabled verifies tool call arguments are repaired when enabled.
 func TestRunTool_RepairsToolCallArgumentsWhenEnabled(t *testing.T) {
+	repairEnabled := true
 	inv := agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
-		ToolCallArgumentsJSONRepairEnabled: true,
+		ToolCallArgumentsJSONRepairEnabled: &repairEnabled,
 	}))
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 	tl := function.NewFunctionTool[map[string]any, map[string]any](
@@ -1305,8 +1306,9 @@ func TestProcessModelResponse_RepairsToolCallArgumentsWhenEnabled(t *testing.T) 
 	ctx, span := tracer.Start(context.Background(), "s")
 	defer span.End()
 
+	repairEnabled := true
 	inv := agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
-		ToolCallArgumentsJSONRepairEnabled: true,
+		ToolCallArgumentsJSONRepairEnabled: &repairEnabled,
 	}))
 	ctx = agent.NewInvocationContext(ctx, inv)
 	rsp := &model.Response{

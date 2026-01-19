@@ -470,7 +470,8 @@ func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
 // WithToolCallArgumentsJSONRepairEnabled enables best-effort JSON repair for tool call arguments.
 func WithToolCallArgumentsJSONRepairEnabled(enabled bool) RunOption {
 	return func(opts *RunOptions) {
-		opts.ToolCallArgumentsJSONRepairEnabled = enabled
+		e := enabled
+		opts.ToolCallArgumentsJSONRepairEnabled = &e
 	}
 }
 
@@ -686,7 +687,8 @@ type RunOptions struct {
 	// externally and later provide tool results (RoleTool messages).
 	ToolExecutionFilter tool.FilterFunc
 	// ToolCallArgumentsJSONRepairEnabled enables best-effort JSON repair for tool call arguments.
-	ToolCallArgumentsJSONRepairEnabled bool
+	// When nil, JSON repair is disabled by default.
+	ToolCallArgumentsJSONRepairEnabled *bool
 }
 
 // NewInvocation create a new invocation

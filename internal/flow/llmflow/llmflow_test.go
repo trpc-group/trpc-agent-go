@@ -55,12 +55,8 @@ func TestCollectLongRunningToolIDs(t *testing.T) {
 		// unknown not present
 	}
 	got := collectLongRunningToolIDs(calls, tools)
-	if _, ok := got["2"]; !ok {
-		t.Fatalf("expected long-running id '2' present, got %#v", got)
-	}
-	if len(got) != 1 {
-		t.Fatalf("expected exactly 1 id, got %d", len(got))
-	}
+	require.Contains(t, got, "2")
+	require.Len(t, got, 1)
 }
 
 // minimalAgent exposes tools for preprocess test.
@@ -83,9 +79,7 @@ func TestPreprocess_AddsAgentToolsWhenPresent(t *testing.T) {
 	inv.Agent = &minimalAgent{tools: []tool.Tool{&mockLongRunnerTool{name: "t1"}}}
 	ch := make(chan *event.Event, 4)
 	f.preprocess(context.Background(), inv, req, ch)
-	if _, ok := req.Tools["t1"]; !ok {
-		t.Fatalf("expected tool 't1' added to request")
-	}
+	require.Contains(t, req.Tools, "t1")
 }
 
 func TestCreateLLMResponseEvent_LongRunningIDs(t *testing.T) {
@@ -96,16 +90,15 @@ func TestCreateLLMResponseEvent_LongRunningIDs(t *testing.T) {
 	}}
 	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{{ID: "x", Function: model.FunctionDefinitionParam{Name: "slow"}}}}}}}
 	evt := f.createLLMResponseEvent(inv, rsp, req)
-	if _, ok := evt.LongRunningToolIDs["x"]; !ok {
-		t.Fatalf("expected long-running tool id tracked")
-	}
+	require.Contains(t, evt.LongRunningToolIDs, "x")
 }
 
 // TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled verifies tool call arguments are repaired when enabled.
 func TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled(t *testing.T) {
 	f := New(nil, nil, Options{})
+	repairEnabled := true
 	inv := agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
-		ToolCallArgumentsJSONRepairEnabled: true,
+		ToolCallArgumentsJSONRepairEnabled: &repairEnabled,
 	}))
 	req := &model.Request{}
 	response := &model.Response{

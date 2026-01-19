@@ -1383,7 +1383,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		}
 	}
 	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
-		invocation.RunOptions.ToolCallArgumentsJSONRepairEnabled {
+		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
 		jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, config.Response)
 	}
 	llmEvent := event.NewResponseEvent(
@@ -2381,8 +2381,7 @@ func runTool(
 	t tool.Tool,
 ) (context.Context, any, []byte, error) {
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
-	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
-		invocation.RunOptions.ToolCallArgumentsJSONRepairEnabled {
+	if invocation, ok := agent.InvocationFromContext(ctx); ok && jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
 		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
 	}
 	decl := t.Declaration()

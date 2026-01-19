@@ -294,7 +294,7 @@ func (f *Flow) processStreamingResponses(
 			response = customResp
 		}
 		// Repair tool call arguments in place when needed.
-		if invocation.RunOptions.ToolCallArgumentsJSONRepairEnabled {
+		if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
 			jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, response)
 		}
 		// 4. Create and send LLM response using the clean constructor.

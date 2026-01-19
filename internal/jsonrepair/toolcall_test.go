@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -25,6 +26,22 @@ func withNoopWarnfContext(t *testing.T, fn func()) {
 	log.WarnfContext = func(_ context.Context, _ string, _ ...any) {}
 	t.Cleanup(func() { log.WarnfContext = prev })
 	fn()
+}
+
+// TestIsToolCallArgumentsJSONRepairEnabled_ReturnsExpected verifies the helper handles nil and boolean pointers.
+func TestIsToolCallArgumentsJSONRepairEnabled_ReturnsExpected(t *testing.T) {
+	require.False(t, IsToolCallArgumentsJSONRepairEnabled(nil))
+
+	enabled := true
+	require.True(t, IsToolCallArgumentsJSONRepairEnabled(&agent.Invocation{
+		RunOptions: agent.RunOptions{ToolCallArgumentsJSONRepairEnabled: &enabled},
+	}))
+
+	disabled := false
+	require.False(t, IsToolCallArgumentsJSONRepairEnabled(&agent.Invocation{
+		RunOptions: agent.RunOptions{ToolCallArgumentsJSONRepairEnabled: &disabled},
+	}))
+	require.False(t, IsToolCallArgumentsJSONRepairEnabled(&agent.Invocation{}))
 }
 
 // TestRepairToolCallArguments_ReturnsOriginalForValidJSON verifies that valid JSON arguments are returned unchanged.
