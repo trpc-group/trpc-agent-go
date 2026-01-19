@@ -1,3 +1,7 @@
+// Package fileref parses and reads file references like workspace://... and
+// artifact://....
+//
+// Tools use these references to share a unified file view.
 package fileref
 
 import (
@@ -16,10 +20,14 @@ import (
 const (
 	schemeSep = "://"
 
-	SchemeArtifact  = "artifact"
+	// SchemeArtifact is the artifact:// file ref scheme.
+	SchemeArtifact = "artifact"
+	// SchemeWorkspace is the workspace:// file ref scheme.
 	SchemeWorkspace = "workspace"
 
-	ArtifactPrefix  = SchemeArtifact + schemeSep
+	// ArtifactPrefix is the "artifact://" prefix.
+	ArtifactPrefix = SchemeArtifact + schemeSep
+	// WorkspacePrefix is the "workspace://" prefix.
 	WorkspacePrefix = SchemeWorkspace + schemeSep
 )
 
@@ -37,10 +45,15 @@ type Ref struct {
 	Raw             string
 }
 
+// WorkspaceRef builds a workspace:// reference for the given relative path.
 func WorkspaceRef(rel string) string {
 	return WorkspacePrefix + strings.TrimSpace(rel)
 }
 
+// Parse parses raw into a Ref.
+//
+// When the returned Ref has an empty Scheme, the caller should treat Path as
+// a local path (for example, relative to a tool base directory).
 func Parse(raw string) (Ref, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -118,6 +131,10 @@ func cleanRelPath(p string) (string, error) {
 	return clean, nil
 }
 
+// TryRead reads raw if it is a supported file reference.
+//
+// When handled is false, raw is not a reference and the caller should treat
+// it as a local path.
 func TryRead(
 	ctx context.Context,
 	raw string,
@@ -159,6 +176,7 @@ func TryRead(
 	}
 }
 
+// WorkspaceFiles returns files exported from skill_run output_files in ctx.
 func WorkspaceFiles(
 	ctx context.Context,
 ) []toolcache.SkillRunOutputFile {

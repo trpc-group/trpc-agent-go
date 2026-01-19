@@ -44,148 +44,111 @@ func (f *fileToolSet) readFile(
 ) (*readFileResponse, error) {
 	rsp := &readFileResponse{
 		BaseDirectory: f.baseDir,
-		FileName:      req.FileName,
+		FileName:      "",
 	}
-	// Validate the start line and number of lines.
-	if req.StartLine != nil && *req.StartLine <= 0 {
-		rsp.Message = fmt.Sprintf(
-			"Error: start line must be > 0: %v",
-			*req.StartLine,
-		)
-		return rsp, fmt.Errorf("start line must be > 0: %v",
-			*req.StartLine,
-		)
-	}
-	if req.NumLines != nil && *req.NumLines <= 0 {
-		rsp.Message = fmt.Sprintf(
-			"Error: number of lines must be > 0: %v",
-			*req.NumLines,
-		)
-		return rsp, fmt.Errorf("number of lines must be > 0: %v",
-			*req.NumLines,
-		)
-	}
-
-	content, _, handled, err := fileref.TryRead(ctx, req.FileName)
-	if handled {
-		if err != nil {
-			rsp.Message = fmt.Sprintf("Error: %v", err)
-			return rsp, err
-		}
-		ref, _ := fileref.Parse(req.FileName)
-		source := "ref"
-		switch ref.Scheme {
-		case fileref.SchemeWorkspace:
-			source = fileref.WorkspacePrefix
-		case fileref.SchemeArtifact:
-			source = fileref.ArtifactPrefix
-		}
-		if int64(len(content)) > f.maxFileSize {
-			rsp.Message = fmt.Sprintf(
-				"Error: file size is beyond of max file size, "+
-					"file size: %d, max file size: %d",
-				len(content),
-				f.maxFileSize,
-			)
-			return rsp, fmt.Errorf(
-				"file size is beyond of max file size, "+
-					"file size: %d, max file size: %d",
-				len(content),
-				f.maxFileSize,
-			)
-		}
-		if content == "" {
-			rsp.Message = fmt.Sprintf(
-				"Successfully read %s from %s, but file is empty",
-				req.FileName,
-				source,
-			)
-			rsp.Contents = ""
-			return rsp, nil
-		}
-		chunk, start, end, total, err := sliceTextByLines(
-			content,
-			req.StartLine,
-			req.NumLines,
-		)
-		if err != nil {
-			rsp.Message = fmt.Sprintf("Error: %v", err)
-			return rsp, err
-		}
-		rsp.Contents = chunk
-		rsp.Message = fmt.Sprintf(
-			"Successfully read %s from %s, start line: %d, "+
-				"end line: %d, total lines: %d",
-			req.FileName,
-			source,
-			start,
-			end,
-			total,
-		)
-		return rsp, nil
-	}
-	// Resolve and validate the file path.
-	filePath, err := f.resolvePath(req.FileName)
-	if err != nil {
+	if req == nil {
+		err := fmt.Errorf("request cannot be nil")
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return rsp, err
 	}
-	// Check if the target path exists.
+	rsp.FileName = req.FileName
+
+	// Validate the start line and number of lines.
+	if err := validateReadFileRequest(req); err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
+	}
+
+	if ok, err := f.readFileFromRef(ctx, req, rsp); ok {
+		return rsp, err
+	}
+
+	if err := f.readFileFromDiskOrCache(ctx, req, rsp); err != nil {
+		return rsp, err
+	}
+	return rsp, nil
+}
+
+func validateReadFileRequest(req *readFileRequest) error {
+	if req == nil {
+		return fmt.Errorf("request cannot be nil")
+	}
+	if strings.TrimSpace(req.FileName) == "" {
+		return fmt.Errorf("file name cannot be empty")
+	}
+	if req.StartLine != nil && *req.StartLine <= 0 {
+		return fmt.Errorf("start line must be > 0: %v", *req.StartLine)
+	}
+	if req.NumLines != nil && *req.NumLines <= 0 {
+		return fmt.Errorf("number of lines must be > 0: %v", *req.NumLines)
+	}
+	return nil
+}
+
+func (f *fileToolSet) readFileFromRef(
+	ctx context.Context,
+	req *readFileRequest,
+	rsp *readFileResponse,
+) (bool, error) {
+	content, _, handled, err := fileref.TryRead(ctx, req.FileName)
+	if !handled {
+		return false, nil
+	}
+	if err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return true, err
+	}
+
+	ref, _ := fileref.Parse(req.FileName)
+	source := "ref"
+	switch ref.Scheme {
+	case fileref.SchemeWorkspace:
+		source = fileref.WorkspacePrefix
+	case fileref.SchemeArtifact:
+		source = fileref.ArtifactPrefix
+	}
+
+	chunk, start, end, total, empty, err := f.sliceReadFile(req, content)
+	if err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return true, err
+	}
+	rsp.Contents = chunk
+	if empty {
+		rsp.Message = fmt.Sprintf(
+			"Successfully read %s from %s, but file is empty",
+			req.FileName,
+			source,
+		)
+		return true, nil
+	}
+	rsp.Message = fmt.Sprintf(
+		"Successfully read %s from %s, start line: %d, "+
+			"end line: %d, total lines: %d",
+		req.FileName,
+		source,
+		start,
+		end,
+		total,
+	)
+	return true, nil
+}
+
+func (f *fileToolSet) readFileFromDiskOrCache(
+	ctx context.Context,
+	req *readFileRequest,
+	rsp *readFileResponse,
+) error {
+	filePath, err := f.resolvePath(req.FileName)
+	if err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return err
+	}
 	stat, err := os.Stat(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			content, mime, ok := toolcache.LookupSkillRunOutputFileFromContext(
-				ctx,
-				req.FileName,
-			)
-			if ok {
-				if int64(len(content)) > f.maxFileSize {
-					rsp.Message = fmt.Sprintf(
-						"Error: file size is beyond of max "+
-							"file size, file size: %d, "+
-							"max file size: %d",
-						len(content),
-						f.maxFileSize,
-					)
-					return rsp, fmt.Errorf(
-						"file size is beyond of max file "+
-							"size, file size: %d, "+
-							"max file size: %d",
-						len(content),
-						f.maxFileSize,
-					)
-				}
-				if content == "" {
-					rsp.Message = fmt.Sprintf(
-						"Successfully read %s, but file "+
-							"is empty",
-						req.FileName,
-					)
-					rsp.Contents = ""
-					return rsp, nil
-				}
-				chunk, start, end, total, err := sliceTextByLines(
-					content,
-					req.StartLine,
-					req.NumLines,
-				)
-				if err != nil {
-					rsp.Message = fmt.Sprintf("Error: %v", err)
-					return rsp, err
-				}
-				rsp.Contents = chunk
-				rsp.Message = fmt.Sprintf(
-					"Loaded %s from a prior skill_run "+
-						"output_files cache, start line: %d, "+
-						"end line: %d, total lines: %d "+
-						"(mime: %s)",
-					req.FileName,
-					start,
-					end,
-					total,
-					mime,
-				)
-				return rsp, nil
+			if ok, err := f.readFileFromCache(ctx, req, rsp); ok {
+				return err
 			}
 		}
 		rsp.Message = fmt.Sprintf(
@@ -193,15 +156,14 @@ func (f *fileToolSet) readFile(
 			req.FileName,
 			err,
 		)
-		return rsp, fmt.Errorf("accessing file '%s': %w", req.FileName, err)
+		return fmt.Errorf("accessing file '%s': %w", req.FileName, err)
 	}
-	// Check if the target path is a file.
 	if stat.IsDir() {
 		rsp.Message = fmt.Sprintf(
 			"Error: target path '%s' is a directory",
 			req.FileName,
 		)
-		return rsp, fmt.Errorf(
+		return fmt.Errorf(
 			"target path '%s' is a directory",
 			req.FileName,
 		)
@@ -212,46 +174,105 @@ func (f *fileToolSet) readFile(
 			stat.Size(),
 			f.maxFileSize,
 		)
-		return rsp, fmt.Errorf(
+		return fmt.Errorf(
 			"file is too large: %d > %d",
 			stat.Size(),
 			f.maxFileSize,
 		)
 	}
-	// Read the file.
+
 	contents, err := os.ReadFile(filePath)
 	if err != nil {
 		rsp.Message = fmt.Sprintf("Error: cannot read file: %v", err)
-		return rsp, fmt.Errorf("reading file: %w", err)
+		return fmt.Errorf("reading file: %w", err)
 	}
-	if len(contents) == 0 {
+	chunk, startLine, endLine, total, empty, err := f.sliceReadFile(
+		req,
+		string(contents),
+	)
+	if err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return err
+	}
+	rsp.Contents = chunk
+	if empty {
 		rsp.Message = fmt.Sprintf(
 			"Successfully read %s, but file is empty",
 			req.FileName,
 		)
-		rsp.Contents = ""
-		return rsp, nil
+		return nil
 	}
-	// Split the file contents into lines.
-	chunk, startLine, endLine, totalLines, err := sliceTextByLines(
-		string(contents),
-		req.StartLine,
-		req.NumLines,
-	)
-	if err != nil {
-		rsp.Message = fmt.Sprintf("Error: %v", err)
-		return rsp, err
-	}
-	rsp.Contents = chunk
 	rsp.Message = fmt.Sprintf(
 		"Successfully read %s, start line: %d, "+
 			"end line: %d, total lines: %d",
-		rsp.FileName,
+		req.FileName,
 		startLine,
 		endLine,
-		totalLines,
+		total,
 	)
-	return rsp, nil
+	return nil
+}
+
+func (f *fileToolSet) readFileFromCache(
+	ctx context.Context,
+	req *readFileRequest,
+	rsp *readFileResponse,
+) (bool, error) {
+	content, mime, ok := toolcache.LookupSkillRunOutputFileFromContext(
+		ctx,
+		req.FileName,
+	)
+	if !ok {
+		return false, nil
+	}
+
+	chunk, start, end, total, empty, err := f.sliceReadFile(req, content)
+	if err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return true, err
+	}
+	rsp.Contents = chunk
+	if empty {
+		rsp.Message = fmt.Sprintf(
+			"Successfully read %s, but file is empty",
+			req.FileName,
+		)
+		return true, nil
+	}
+	rsp.Message = fmt.Sprintf(
+		"Loaded %s from a prior skill_run output_files "+
+			"cache, start line: %d, end line: %d, "+
+			"total lines: %d (mime: %s)",
+		req.FileName,
+		start,
+		end,
+		total,
+		mime,
+	)
+	return true, nil
+}
+
+func (f *fileToolSet) sliceReadFile(
+	req *readFileRequest,
+	content string,
+) (string, int, int, int, bool, error) {
+	if int64(len(content)) > f.maxFileSize {
+		return "", 0, 0, 0, false, fmt.Errorf(
+			"file size is beyond of max file size, "+
+				"file size: %d, max file size: %d",
+			len(content),
+			f.maxFileSize,
+		)
+	}
+	if content == "" {
+		return "", 0, 0, 0, true, nil
+	}
+	chunk, start, end, total, err := sliceTextByLines(
+		content,
+		req.StartLine,
+		req.NumLines,
+	)
+	return chunk, start, end, total, false, err
 }
 
 func sliceTextByLines(

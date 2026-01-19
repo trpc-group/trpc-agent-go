@@ -1,3 +1,7 @@
+// Package toolcache provides per-invocation caches for tools.
+//
+// It is used to share skill_run output_files (inline content) across tools
+// without relying on host filesystem paths.
 package toolcache
 
 import (
@@ -24,6 +28,8 @@ type SkillRunOutputFile struct {
 	MIMEType string
 }
 
+// StoreSkillRunOutputFilesFromContext stores skill_run output_files into the
+// invocation state carried by ctx. It is a no-op when ctx has no invocation.
 func StoreSkillRunOutputFilesFromContext(
 	ctx context.Context,
 	files []codeexecutor.File,
@@ -35,6 +41,8 @@ func StoreSkillRunOutputFilesFromContext(
 	StoreSkillRunOutputFiles(inv, files)
 }
 
+// StoreSkillRunOutputFiles stores skill_run output_files into inv so other
+// tools can look them up by name later.
 func StoreSkillRunOutputFiles(
 	inv *agent.Invocation,
 	files []codeexecutor.File,
@@ -69,6 +77,8 @@ func StoreSkillRunOutputFiles(
 	inv.SetState(stateKeySkillRunOutputFiles, merged)
 }
 
+// LookupSkillRunOutputFileFromContext looks up an exported skill_run output
+// file by name from the invocation in ctx.
 func LookupSkillRunOutputFileFromContext(
 	ctx context.Context,
 	name string,
@@ -80,6 +90,8 @@ func LookupSkillRunOutputFileFromContext(
 	return LookupSkillRunOutputFile(inv, name)
 }
 
+// LookupSkillRunOutputFile looks up an exported skill_run output file by name
+// from inv. It returns (content, mime, ok).
 func LookupSkillRunOutputFile(
 	inv *agent.Invocation,
 	name string,
@@ -107,6 +119,8 @@ func LookupSkillRunOutputFile(
 	return f.Content, f.MIMEType, true
 }
 
+// SkillRunOutputFilesFromContext returns a stable list of exported skill_run
+// output files from the invocation in ctx.
 func SkillRunOutputFilesFromContext(
 	ctx context.Context,
 ) []SkillRunOutputFile {
@@ -117,6 +131,8 @@ func SkillRunOutputFilesFromContext(
 	return SkillRunOutputFiles(inv)
 }
 
+// SkillRunOutputFiles returns a stable list of exported skill_run output
+// files from inv.
 func SkillRunOutputFiles(
 	inv *agent.Invocation,
 ) []SkillRunOutputFile {

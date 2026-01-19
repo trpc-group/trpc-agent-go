@@ -72,11 +72,20 @@ func (f *fileToolSet) searchContent(
 ) (*searchContentResponse, error) {
 	rsp := &searchContentResponse{
 		BaseDirectory:  f.baseDir,
-		Path:           req.Path,
-		FilePattern:    req.FilePattern,
-		ContentPattern: req.ContentPattern,
+		Path:           "",
+		FilePattern:    "",
+		ContentPattern: "",
 		FileMatches:    []*fileMatch{},
 	}
+	if req == nil {
+		err := fmt.Errorf("request cannot be nil")
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
+	}
+	rsp.Path = req.Path
+	rsp.FilePattern = req.FilePattern
+	rsp.ContentPattern = req.ContentPattern
+
 	// Validate required parameters.
 	if err := validatePattern(req.FilePattern, req.ContentPattern); err != nil {
 		rsp.Message = fmt.Sprintf("Error: %v", err)
@@ -89,141 +98,146 @@ func (f *fileToolSet) searchContent(
 		return rsp, err
 	}
 
-	// If file_pattern is an explicit file reference (workspace://... or
-	// artifact://...) and it has no glob, resolve and search just that file.
-	if req != nil && !hasGlob(req.FilePattern) {
-		content, _, handled, err := fileref.TryRead(ctx, req.FilePattern)
-		if handled {
-			if err != nil {
-				rsp.Message = fmt.Sprintf("Error: %v", err)
-				return rsp, err
-			}
-			if int64(len(content)) > f.maxFileSize {
-				rsp.Message = fmt.Sprintf(
-					"Error: file size is beyond of max "+
-						"file size, file size: %d, "+
-						"max file size: %d",
-					len(content),
-					f.maxFileSize,
-				)
-				return rsp, fmt.Errorf(
-					"file size is beyond of max file "+
-						"size, file size: %d, "+
-						"max file size: %d",
-					len(content),
-					f.maxFileSize,
-				)
-			}
-			path := req.FilePattern
-			if ref, perr := fileref.Parse(req.FilePattern); perr == nil &&
-				ref.Scheme == fileref.SchemeWorkspace {
-				path = fileref.WorkspaceRef(ref.Path)
-			}
-			match := searchTextContent(path, content, re)
-			if len(match.Matches) == 0 {
-				rsp.FileMatches = []*fileMatch{}
-				rsp.Message = "Found 0 files matching"
-				return rsp, nil
-			}
-			match.Message = fmt.Sprintf(
-				"Found %d matches in file '%s'",
-				len(match.Matches),
-				path,
-			)
-			rsp.FileMatches = []*fileMatch{match}
-			rsp.Message = "Found 1 files matching"
-			return rsp, nil
+	matches, ok, err := f.searchContentByFilePatternRef(ctx, req, re)
+	if ok {
+		if err != nil {
+			rsp.Message = fmt.Sprintf("Error: %v", err)
+			return rsp, err
 		}
-	}
-
-	pathRef, err := fileref.Parse(req.Path)
-	if err != nil {
-		rsp.Message = fmt.Sprintf("Error: %v", err)
-		return rsp, err
-	}
-	if pathRef.Scheme == fileref.SchemeArtifact {
-		rsp.Message = "Error: searching artifact:// path is not supported"
-		return rsp, fmt.Errorf(
-			"searching artifact:// path is not supported",
-		)
-	}
-
-	if pathRef.Scheme == fileref.SchemeWorkspace {
-		rsp.Path = fileref.WorkspaceRef(pathRef.Path)
-		matches := f.searchWorkspaceContent(ctx, pathRef.Path, req, re)
 		rsp.FileMatches = matches
 		rsp.Message = fmt.Sprintf("Found %v files matching", len(matches))
 		return rsp, nil
 	}
 
-	reqPath := normalizeToolPath(f.baseDir, pathRef.Path)
-	rsp.Path = reqPath
+	path, matches, err := f.searchContentByPath(ctx, req, re)
+	if err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
+	}
+	rsp.Path = path
+	rsp.FileMatches = matches
+	rsp.Message = fmt.Sprintf("Found %v files matching", len(matches))
+	return rsp, nil
+}
+
+func (f *fileToolSet) searchContentByFilePatternRef(
+	ctx context.Context,
+	req *searchContentRequest,
+	re *regexp.Regexp,
+) ([]*fileMatch, bool, error) {
+	if req == nil || re == nil || hasGlob(req.FilePattern) {
+		return nil, false, nil
+	}
+	content, _, handled, err := fileref.TryRead(ctx, req.FilePattern)
+	if !handled {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, true, err
+	}
+	if int64(len(content)) > f.maxFileSize {
+		return nil, true, fmt.Errorf(
+			"file size is beyond of max file size, "+
+				"file size: %d, max file size: %d",
+			len(content),
+			f.maxFileSize,
+		)
+	}
+
+	path := req.FilePattern
+	if ref, err := fileref.Parse(req.FilePattern); err == nil &&
+		ref.Scheme == fileref.SchemeWorkspace {
+		path = fileref.WorkspaceRef(ref.Path)
+	}
+	match := searchTextContent(path, content, re)
+	if len(match.Matches) == 0 {
+		return []*fileMatch{}, true, nil
+	}
+	match.Message = fmt.Sprintf(
+		"Found %d matches in file '%s'",
+		len(match.Matches),
+		path,
+	)
+	return []*fileMatch{match}, true, nil
+}
+
+func (f *fileToolSet) searchContentByPath(
+	ctx context.Context,
+	req *searchContentRequest,
+	re *regexp.Regexp,
+) (string, []*fileMatch, error) {
+	if req == nil || re == nil {
+		return "", nil, fmt.Errorf("request cannot be nil")
+	}
+	pathRef, err := fileref.Parse(req.Path)
+	if err != nil {
+		return "", nil, err
+	}
+	switch pathRef.Scheme {
+	case fileref.SchemeArtifact:
+		return "", nil, fmt.Errorf(
+			"searching artifact:// path is not supported",
+		)
+	case fileref.SchemeWorkspace:
+		path := fileref.WorkspaceRef(pathRef.Path)
+		matches := f.searchWorkspaceContent(ctx, pathRef.Path, req, re)
+		return path, matches, nil
+	default:
+		reqPath := normalizeToolPath(f.baseDir, pathRef.Path)
+		matches, err := f.searchContentLocal(ctx, reqPath, req, re)
+		return reqPath, matches, err
+	}
+}
+
+func (f *fileToolSet) searchContentLocal(
+	ctx context.Context,
+	reqPath string,
+	req *searchContentRequest,
+	re *regexp.Regexp,
+) ([]*fileMatch, error) {
 	// When path is a file (or a cached workspace output file), search directly
 	// within that single file. Models commonly pass a file path in "path"
 	// together with a glob file_pattern like "*", which would otherwise be
 	// treated as a directory and fail.
 	if matches, ok := f.searchSinglePath(ctx, reqPath, re); ok {
-		rsp.FileMatches = matches
-		rsp.Message = fmt.Sprintf("Found %v files matching", len(matches))
-		return rsp, nil
+		return matches, nil
 	}
 	// Fast path: if the requested file exists only as a skill_run output_files
 	// entry, search against the cached content instead of the host filesystem.
 	// This avoids model loops where a workspace-relative skill output path is
 	// passed to file tools whose base directory is different.
-	if cacheMatch, ok := f.searchSkillCache(ctx, reqPath, req, re); ok {
-		rsp.FileMatches = cacheMatch
-		rsp.Message = fmt.Sprintf("Found %v files matching", len(cacheMatch))
-		return rsp, nil
+	if matches, ok := f.searchSkillCache(ctx, reqPath, req, re); ok {
+		return matches, nil
 	}
 
-	// Resolve and validate the target path.
 	targetPath, err := f.resolvePath(reqPath)
 	if err != nil {
-		rsp.Message = fmt.Sprintf("Error: %v", err)
-		return rsp, err
+		return nil, err
 	}
-	// Check if the target path exists.
 	stat, err := os.Stat(targetPath)
 	if err != nil {
-		rsp.Message = fmt.Sprintf(
-			"Error: cannot access path '%s': %v",
-			reqPath,
-			err,
-		)
-		return rsp, fmt.Errorf("accessing path '%s': %w", reqPath, err)
+		return nil, fmt.Errorf("accessing path '%s': %w", reqPath, err)
 	}
-	// Check if the target path is a file.
 	if !stat.IsDir() {
 		match, ok := f.searchSingleLocalFile(targetPath, reqPath, re)
 		if ok {
-			rsp.FileMatches = match
-			rsp.Message = fmt.Sprintf(
-				"Found %v files matching",
-				len(match),
-			)
-			return rsp, nil
+			return match, nil
 		}
-		rsp.Message = fmt.Sprintf(
-			"Error: target path '%s' is a file, not a directory",
-			reqPath,
-		)
-		return rsp, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"target path '%s' is a file, not a directory",
 			reqPath,
 		)
 	}
-	// Find files matching the file pattern.
+
 	files, err := f.matchFiles(
 		targetPath,
 		req.FilePattern,
 		req.FileCaseSensitive,
 	)
 	if err != nil {
-		rsp.Message = fmt.Sprintf("Error: %v", err)
-		return rsp, err
+		return nil, err
 	}
-	// Search content in files concurrently.
+
 	var (
 		wg          sync.WaitGroup
 		mu          sync.Mutex
@@ -231,34 +245,35 @@ func (f *fileToolSet) searchContent(
 	)
 	for _, file := range files {
 		fullPath := filepath.Join(targetPath, file)
-		relPath := filepath.Join(req.Path, file)
+		relPath := filepath.Join(reqPath, file)
 		stat, err := os.Stat(fullPath)
-		// Skip directories and files we can't stat.
-		if err != nil || stat.IsDir() || stat.Size() > f.maxFileSize {
+		if err != nil {
 			continue
 		}
+		if stat.IsDir() || stat.Size() > f.maxFileSize {
+			continue
+		}
+
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			match, err := searchFileContent(fullPath, re)
-			if err == nil && len(match.Matches) > 0 {
-				match.FilePath = relPath
-				match.Message = fmt.Sprintf(
-					"Found %d matches in file '%s'",
-					len(match.Matches),
-					relPath,
-				)
-				mu.Lock()
-				fileMatches = append(fileMatches, match)
-				mu.Unlock()
+			if err != nil || len(match.Matches) == 0 {
+				return
 			}
+			match.FilePath = relPath
+			match.Message = fmt.Sprintf(
+				"Found %d matches in file '%s'",
+				len(match.Matches),
+				relPath,
+			)
+			mu.Lock()
+			fileMatches = append(fileMatches, match)
+			mu.Unlock()
 		}()
 	}
-	// Wait for all goroutines to complete.
 	wg.Wait()
-	rsp.FileMatches = fileMatches
-	rsp.Message = fmt.Sprintf("Found %v files matching", len(fileMatches))
-	return rsp, nil
+	return fileMatches, nil
 }
 
 func (f *fileToolSet) searchSinglePath(
