@@ -879,7 +879,7 @@ graphAgent, err := graphagent.New(
 >
 > **Callback Precedence**: When both node-level and state-level callbacks are present:
 > - Node-configured callbacks (via `WithModelCallbacks`/`WithToolCallbacks`) take precedence.
-> - State-level callbacks (via `StateKeyModelCallbacks`/`StateKeyToolCallbacks`) are used as fallback.
+> - State-level callbacks (via `StateKeyModelCallbacks`/`StateKeyToolCallbacks`) are used as a fallback.
 > This allows graph-level configuration to override runtime state when needed.
 
 Session summary notes:
