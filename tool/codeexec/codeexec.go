@@ -147,10 +147,6 @@ func (t *executeCodeTool) Declaration() *tool.Declaration {
 						},
 					},
 				},
-				"error": {
-					Type:        "string",
-					Description: "Error message if execution failed",
-				},
 			},
 		},
 	}

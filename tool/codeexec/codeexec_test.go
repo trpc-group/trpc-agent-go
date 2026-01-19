@@ -59,7 +59,6 @@ func TestNewTool(t *testing.T) {
 		assert.Equal(t, "object", decl.OutputSchema.Type)
 		assert.Equal(t, []string{"output"}, decl.OutputSchema.Required)
 		assert.Equal(t, "string", decl.OutputSchema.Properties["output"].Type)
-		assert.Equal(t, "string", decl.OutputSchema.Properties["error"].Type)
 	})
 
 	t.Run("with custom name", func(t *testing.T) {
