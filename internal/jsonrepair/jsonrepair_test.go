@@ -134,7 +134,7 @@ func TestRegularRepairer_Repair_MatchesCases(t *testing.T) {
 		{input: "{\"s \\ud", want: "{\"s\": null}"},
 		{input: "{\"message\": \"it's working", want: "{\"message\": \"it's working\"}"},
 		{input: "{\"text\":\"Hello Sergey,I hop", want: "{\"text\":\"Hello Sergey,I hop\"}"},
-		{input: "{\"message\": \"with, multiple, commma's, you see?", want: "{\"message\": \"with, multiple, commma's, you see?\"}"},
+		{input: "{\"message\": \"with, multiple, comma's, you see?", want: "{\"message\": \"with, multiple, comma's, you see?\"}"},
 		{input: "[1,2,3,...]", want: "[1,2,3]"},
 		{input: "[1, 2, 3, ... ]", want: "[1, 2, 3  ]"},
 		{input: "[1,2,3,/*comment1*/.../*comment2*/]", want: "[1,2,3]"},
