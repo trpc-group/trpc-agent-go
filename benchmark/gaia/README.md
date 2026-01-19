@@ -9,12 +9,9 @@ benchmark/gaia/
 ├── README.md                    # This file
 ├── data/                        # Dataset directory (Git LFS)
 │   ├── gaia_2023_level1_validation.json
-│   ├── gaia_2023_level2_validation.json
-│   ├── gaia_2023_level3_validation.json
 │   ├── gaia_sample.json
 │   └── 2023/
-│       ├── test/               # Test set attachment files
-│       └── validation/         # Validation set attachments (images/audio/documents)
+│       └── validation/         # Level 1 validation set attachments (images/audio/documents)
 ├── results/                     # Evaluation results output directory
 ├── skills/                      # Agent Skills
 │   └── whisper/                # Audio transcription skill
@@ -24,6 +21,8 @@ benchmark/gaia/
     ├── go.mod
     └── go.sum
 ```
+
+> **Note**: Currently only Level 1 evaluation is supported. Level 2 and Level 3 datasets are not included.
 
 ## Prerequisites
 
@@ -108,9 +107,6 @@ go run main.go -task-id 28
 # Run a specific task (by task_id)
 go run main.go -task-id "e1fc63a2-da7a-432f-be78-7c4a95598703"
 
-# Use a different dataset
-go run main.go -dataset ../data/gaia_2023_level2_validation.json
-
 # Specify model
 go run main.go -model gpt-4o
 ```
@@ -130,10 +126,10 @@ go run main.go -model gpt-4o
 
 | File | Description |
 |------|-------------|
-| `gaia_2023_level1_validation.json` | Level 1 validation set (easiest) |
-| `gaia_2023_level2_validation.json` | Level 2 validation set (medium difficulty) |
-| `gaia_2023_level3_validation.json` | Level 3 validation set (hardest) |
+| `gaia_2023_level1_validation.json` | Level 1 validation set (54 tasks) |
 | `gaia_sample.json` | Small sample for quick testing |
+
+> **Note**: Only Level 1 evaluation is currently supported.
 
 ## Output Format
 
