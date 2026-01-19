@@ -652,9 +652,7 @@ func (r *Runtime) CollectOutputs(
 				break
 			}
 			mAbs := "/" + strings.TrimPrefix(m, "/")
-			if !strings.HasPrefix(
-				mAbs, ws.Path+string(os.PathSeparator),
-			) && mAbs != ws.Path {
+			if !withinWorkspacePath(ws.Path, mAbs) {
 				continue
 			}
 			st, statErr := os.Stat(mAbs)
@@ -723,6 +721,17 @@ func (r *Runtime) CollectOutputs(
 	})
 	_ = codeexecutor.SaveMetadata(ws.Path, md)
 	return out, nil
+}
+
+func withinWorkspacePath(wsPath string, absPath string) bool {
+	if wsPath == "" || absPath == "" {
+		return false
+	}
+	sep := string(os.PathSeparator)
+	if absPath == wsPath {
+		return true
+	}
+	return strings.HasPrefix(absPath, wsPath+sep)
 }
 
 // ExecuteInline writes temp files for code blocks and runs them.
