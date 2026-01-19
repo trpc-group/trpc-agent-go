@@ -276,7 +276,12 @@ Optional safety restriction (denylist):
 
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
-- `output_files` with `name`, `content`, `mime_type`
+- `primary_output` (optional) with `name`, `ref`, `content`, `mime_type`
+  - Convenience pointer to the "best" small text output file (when one
+    exists). Prefer this when there is a single main output.
+- `output_files` with `name`, `ref`, `content`, `mime_type`
+  - `ref` is a stable `workspace://<name>` reference that can be passed
+    to other tools
 - `warnings` (optional): non-fatal notes (for example, when artifact
   saving is skipped)
 - `artifact_files` with `name`, `version` appears in two cases:

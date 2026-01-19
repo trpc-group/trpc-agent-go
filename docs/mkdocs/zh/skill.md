@@ -277,7 +277,11 @@ https://github.com/anthropics/skills
 
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`
-- `output_files`：文件列表（`name`、`content`、`mime_type`）
+- `primary_output`（可选）：包含 `name`、`ref`、`content`、`mime_type`
+  - 便捷字段：指向“最合适的”小型文本输出文件（若存在）。当只有一个主要输出时
+    优先使用它。
+- `output_files`：文件列表（`name`、`ref`、`content`、`mime_type`）
+  - `ref` 是稳定的 `workspace://<name>` 引用，可传给其它工具使用
 - `warnings`（可选）：非致命提示（例如制品保存被跳过）
 - `artifact_files`：制品引用（`name`、`version`）。两种途径：
   - 传统路径：设置了 `save_as_artifacts` 时由工具保存并返回
