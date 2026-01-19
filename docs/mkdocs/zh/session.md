@@ -165,7 +165,7 @@ func main() {
 
 ## 核心能力详解
 
-### 1️⃣ 上下文管理
+### 1. 上下文管理
 
 会话管理的核心功能是维护对话上下文，确保 Agent 能够记住历史交互并基于历史进行智能响应。
 
@@ -177,7 +177,7 @@ func main() {
 
 **默认行为：** 通过 Runner 集成后，上下文管理完全自动化，无需手动干预。
 
-### 2️⃣ 会话摘要（Summary）
+### 2. 会话摘要（Summary）
 
 随着对话持续增长，维护完整的事件历史可能会占用大量内存，并可能超出 LLM 的上下文窗口限制。会话摘要功能使用 LLM 自动将历史对话压缩为简洁的摘要，在保留重要上下文的同时显著降低内存占用和 token 消耗。
 
@@ -332,7 +332,7 @@ agent := llmagent.New(
 
 详细配置和高级用法请参见 [会话摘要](#会话摘要) 章节。
 
-### 3️⃣ 事件限制（EventLimit）
+### 3. 事件限制（EventLimit）
 
 控制每个会话存储的最大事件数量，防止长时间对话导致内存溢出。
 
@@ -360,7 +360,7 @@ sessionService := inmemory.NewSessionService(
 | 长期会话  | 1000-2000 | 个人助理、持续项目（需配合摘要） |
 | 调试/测试 | 50-100    | 快速验证，减少干扰               |
 
-### 3.5️⃣ 连续 User Message 处理
+### 3.1 连续 User Message 处理
 
 **问题场景：** 当用户发送消息后，历史记录了 user message，但在模型回复前用户断开连接，导致历史中只有 user message 没有 assistant message。当用户再次对话时，会出现两个连续的 user message，某些 LLM API（如 OpenAI、Anthropic）会拒绝这种格式并报错。
 
@@ -558,7 +558,7 @@ func main() {
 - **不影响正常流程**：只在检测到连续 user message 时触发。
 - **Service 级别配置**：处理器在 Service 级别配置，对所有 session 生效。
 
-### 4️⃣ TTL 管理（自动过期）
+### 4. TTL 管理（自动过期）
 
 支持为会话数据设置生存时间（Time To Live），自动清理过期数据。
 
@@ -614,6 +614,7 @@ tRPC-Agent-Go 提供五种会话存储后端，满足不同场景需求：
 - **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
 - **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
+- **`WithOnConsecutiveUserMessage(fn OnConsecutiveUserMessageFunc)`**：设置连续用户消息处理器。详见[连续 User Message 处理](#31-连续-user-message-处理)。
 
 ### 基础配置示例
 
@@ -687,6 +688,7 @@ sessionService := inmemory.NewSessionService(
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
 - **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
 - **`WithExtraOptions(extraOptions ...interface{})`**：为 Redis 客户端设置额外选项。
+- **`WithOnConsecutiveUserMessage(fn OnConsecutiveUserMessageFunc)`**：设置连续用户消息处理器。详见[连续 User Message 处理](#31-连续-user-message-处理)。
 
 ### 基础配置示例
 
@@ -819,6 +821,7 @@ summary:{appName}:{userID}:{sessionID}:{filterKey} -> String (JSON)
 - **`WithAsyncSummaryNum(num int)`**：摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：摘要任务队列大小。默认值为 100。
 - **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
+- **`WithOnConsecutiveUserMessage(fn OnConsecutiveUserMessageFunc)`**：设置连续用户消息处理器。详见[连续 User Message 处理](#31-连续-user-message-处理)。
 
 **Schema 和表配置：**
 
@@ -1010,6 +1013,7 @@ sessionService, err := postgres.NewService(
 - **`WithAsyncSummaryNum(num int)`**：摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：摘要任务队列大小。默认值为 100。
 - **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
+- **`WithOnConsecutiveUserMessage(fn OnConsecutiveUserMessageFunc)`**：设置连续用户消息处理器。详见[连续 User Message 处理](#31-连续-user-message-处理)。
 
 **表配置：**
 
@@ -1272,6 +1276,7 @@ SHOW INDEX FROM session_summaries WHERE Key_name = 'idx_session_summaries_unique
 - **`WithAsyncSummaryNum(num int)`**：摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：摘要任务队列大小。默认值为 100。
 - **`WithSummaryJobTimeout(timeout time.Duration)`**：单个摘要任务超时时间。
+- **`WithOnConsecutiveUserMessage(fn OnConsecutiveUserMessageFunc)`**：设置连续用户消息处理器。详见[连续 User Message 处理](#31-连续-user-message-处理)。
 
 **Schema 配置：**
 

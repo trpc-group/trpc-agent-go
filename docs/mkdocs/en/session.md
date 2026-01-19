@@ -165,7 +165,7 @@ After integrating Session Service, Runner automatically provides the following c
 
 ## Core Capabilities
 
-### 1️⃣ Context Management
+### 1. Context Management
 
 The core function of session management is to maintain conversation context, ensuring the Agent can remember historical interactions and provide intelligent responses based on history.
 
@@ -177,7 +177,7 @@ The core function of session management is to maintain conversation context, ens
 
 **Default Behavior:** After Runner integration, context management is fully automated without manual intervention.
 
-### 2️⃣ Session Summary
+### 2. Session Summary
 
 As conversations continue to grow, maintaining complete event history can consume significant memory and may exceed LLM context window limits. The session summary feature uses LLM to automatically compress historical conversations into concise summaries, significantly reducing memory usage and token consumption while preserving important context.
 
@@ -325,7 +325,7 @@ agent := llmagent.New(
 
 For detailed configuration and advanced usage, see the [Session Summary](#session-summary) section.
 
-### 3️⃣ Event Limiting (EventLimit)
+### 3. Event Limiting (EventLimit)
 
 Control the maximum number of events stored per session to prevent memory overflow from long conversations.
 
@@ -353,7 +353,7 @@ sessionService := inmemory.NewSessionService(
 | Long-term sessions       | 1000-2000         | Personal assistant, ongoing projects (use with summary) |
 | Debug/testing            | 50-100            | Quick validation, reduce noise                          |
 
-### 3.5️⃣ Consecutive User Message Handling
+### 3.1 Consecutive User Message Handling
 
 **Problem Scenario:** When a user sends a message, the framework records the user message in history. If the user disconnects before the model responds (or system error occurs), the history will only contain the user message without a corresponding assistant message. When the user reconnects and sends another message, the history will have two consecutive user messages, which some LLM APIs (like OpenAI, Anthropic) will reject and return an error.
 
@@ -551,7 +551,7 @@ func main() {
 - **Doesn't affect normal flow**: Only triggers when consecutive user messages are detected.
 - **Service-level configuration**: Handler is configured at Service level, applies to all sessions.
 
-### 4️⃣ TTL Management (Auto-Expiration)
+### 4. TTL Management (Auto-Expiration)
 
 Support setting Time To Live (TTL) for session data, automatically cleaning expired data.
 
@@ -607,6 +607,7 @@ Suitable for development environments and small-scale applications, no external 
 - **`WithAsyncSummaryNum(num int)`**: Set number of summary processing workers. Default is 3.
 - **`WithSummaryQueueSize(size int)`**: Set summary task queue size. Default is 100.
 - **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 60 seconds.
+- **`WithOnConsecutiveUserMessage(fn OnConsecutiveUserMessageFunc)`**: Set handler for consecutive user messages. See [Consecutive User Message Handling](#31-consecutive-user-message-handling).
 
 ### Basic Configuration Example
 
@@ -677,6 +678,7 @@ Suitable for production environments and distributed applications, provides high
 - **`WithAsyncSummaryNum(num int)`**: Set number of summary processing workers. Default is 3.
 - **`WithSummaryQueueSize(size int)`**: Set summary task queue size. Default is 100.
 - **`WithExtraOptions(extraOptions ...interface{})`**: Set extra options for Redis client.
+- **`WithOnConsecutiveUserMessage(fn OnConsecutiveUserMessageFunc)`**: Set handler for consecutive user messages. See [Consecutive User Message Handling](#31-consecutive-user-message-handling).
 
 ### Basic Configuration Example
 
@@ -803,6 +805,7 @@ Suitable for production environments and applications requiring complex queries,
 - **`WithAsyncSummaryNum(num int)`**: Number of summary processing workers. Default is 3.
 - **`WithSummaryQueueSize(size int)`**: Summary task queue size. Default is 100.
 - **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 60 seconds.
+- **`WithOnConsecutiveUserMessage(fn OnConsecutiveUserMessageFunc)`**: Set handler for consecutive user messages. See [Consecutive User Message Handling](#31-consecutive-user-message-handling).
 
 **Schema and Table Configuration:**
 
@@ -1009,6 +1012,7 @@ Suitable for production environments and applications requiring complex queries,
 - **`WithAsyncSummaryNum(num int)`**: Number of summary processing workers. Default is 3.
 - **`WithSummaryQueueSize(size int)`**: Summary task queue size. Default is 100.
 - **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 60 seconds.
+- **`WithOnConsecutiveUserMessage(fn OnConsecutiveUserMessageFunc)`**: Set handler for consecutive user messages. See [Consecutive User Message Handling](#31-consecutive-user-message-handling).
 
 **Table Configuration:**
 
@@ -1272,6 +1276,7 @@ Suitable for production environments and massive data scenarios, leveraging Clic
 - **`WithAsyncSummaryNum(num int)`**: Number of summary processing workers. Default is 3.
 - **`WithSummaryQueueSize(size int)`**: Summary task queue size. Default is 100.
 - **`WithSummaryJobTimeout(timeout time.Duration)`**: Timeout for single summary task.
+- **`WithOnConsecutiveUserMessage(fn OnConsecutiveUserMessageFunc)`**: Set handler for consecutive user messages. See [Consecutive User Message Handling](#31-consecutive-user-message-handling).
 
 **Schema Configuration:**
 
