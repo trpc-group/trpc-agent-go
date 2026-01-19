@@ -19,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	_ "git.woa.com/trpc-go/trpc-agent-go/trpc"
 	"github.com/google/uuid"
 	"github.com/ledongthuc/pdf"
 	"github.com/xuri/excelize/v2"
