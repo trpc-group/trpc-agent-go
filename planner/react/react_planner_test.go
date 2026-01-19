@@ -496,6 +496,157 @@ func TestPlanner_IsIntentDescription(t *testing.T) {
 	}
 }
 
+// TestPlanner_IsIntentDescription_OnlyAtContentStart tests that intent prefixes
+// only match when they appear at the very beginning of the content (first sentence),
+// not when they appear in later lines or in the middle of a sentence.
+func TestPlanner_IsIntentDescription_OnlyAtContentStart(t *testing.T) {
+	p := New()
+
+	tests := []struct {
+		name     string
+		content  string
+		expected bool
+	}{
+		// Should match: intent prefix at start of content
+		{
+			name:     "I will at content start",
+			content:  "I will search for the answer",
+			expected: true,
+		},
+		{
+			name:     "I'll at content start",
+			content:  "I'll fetch the data now",
+			expected: true,
+		},
+		{
+			name:     "I am going to at content start",
+			content:  "I am going to process this request",
+			expected: true,
+		},
+		{
+			name:     "I'm going to at content start",
+			content:  "I'm going to look this up",
+			expected: true,
+		},
+		// Should match: intent prefix at content start with leading whitespace
+		{
+			name:     "I will with leading spaces",
+			content:  "  I will search for the answer",
+			expected: true,
+		},
+		{
+			name:     "I'll with leading tabs",
+			content:  "\tI'll fetch the data",
+			expected: true,
+		},
+		// Should NOT match: intent prefix at start of later lines (not first sentence)
+		{
+			name:     "I will at line start in multiline",
+			content:  "Here is my analysis:\nI will search for more details.",
+			expected: false,
+		},
+		{
+			name:     "I'll at line start in multiline",
+			content:  "Based on the context:\nI'll proceed with the search.",
+			expected: false,
+		},
+		{
+			name:     "I am going to at line start in multiline",
+			content:  "After reviewing:\nI am going to fetch the data.",
+			expected: false,
+		},
+		{
+			name:     "I'm going to at line start in multiline",
+			content:  "The plan is:\nI'm going to execute step 1.",
+			expected: false,
+		},
+		// Should NOT match: intent prefix in the middle of a sentence
+		{
+			name:     "I will in middle of sentence",
+			content:  "Let me know if I will need to search again.",
+			expected: false,
+		},
+		{
+			name:     "I'll in middle of sentence",
+			content:  "Please tell me what I'll need to do next.",
+			expected: false,
+		},
+		{
+			name:     "I am going to in middle of sentence",
+			content:  "The user asked if I am going to help them.",
+			expected: false,
+		},
+		{
+			name:     "I'm going to in middle of sentence",
+			content:  "They wondered if I'm going to provide an answer.",
+			expected: false,
+		},
+		// Should NOT match: intent phrases as part of quoted text
+		{
+			name:     "I will in quoted text",
+			content:  "The document says \"I will return tomorrow\".",
+			expected: false,
+		},
+		{
+			name:     "I'll in quoted text",
+			content:  "She mentioned \"I'll be there soon\".",
+			expected: false,
+		},
+		// Should NOT match: intent phrases after conjunction
+		{
+			name:     "I will after and",
+			content:  "You should wait and I will respond shortly.",
+			expected: false,
+		},
+		{
+			name:     "I'll after but",
+			content:  "That's incorrect, but I'll help you fix it.",
+			expected: false,
+		},
+		// Should NOT match: normal final answers containing these phrases incidentally
+		{
+			name:     "final answer mentioning I will",
+			content:  "Based on my analysis, the process shows that I will need more data to confirm, but the preliminary answer is 42.",
+			expected: false,
+		},
+		{
+			name:     "explanation with I'll",
+			content:  "The result is correct. Note that I'll highlight the key points: first item is A, second is B.",
+			expected: false,
+		},
+		// Edge cases
+		{
+			name:     "empty content",
+			content:  "",
+			expected: false,
+		},
+		{
+			name:     "only whitespace",
+			content:  "   \n\t  ",
+			expected: false,
+		},
+		{
+			name:     "I will without space (should not match)",
+			content:  "Iwill search",
+			expected: false,
+		},
+		{
+			name:     "I'll without space (should not match)",
+			content:  "I'llfetch",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := p.isIntentDescription(tt.content)
+			if result != tt.expected {
+				t.Errorf("isIntentDescription(%q) = %v, want %v", tt.content, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestPlanner_HasFinalAnswerTag(t *testing.T) {
 	p := New()
 
