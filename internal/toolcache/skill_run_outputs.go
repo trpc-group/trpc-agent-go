@@ -1,3 +1,13 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 // Package toolcache provides per-invocation caches for tools.
 //
 // It is used to share skill_run output_files (inline content) across tools
