@@ -641,8 +641,6 @@ func (s *SessionService) appendEvent(
 	key session.Key,
 	opts ...session.Option,
 ) error {
-	sess.UpdateUserSession(evt, opts...)
-
 	app, ok := s.getAppSessions(key.AppName)
 	if !ok {
 		return fmt.Errorf("app not found: %s", key.AppName)
@@ -651,7 +649,7 @@ func (s *SessionService) appendEvent(
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
-	// Check if user exists first to prevent panic
+	// Check if user exists first to prevent panic.
 	userSessions, ok := app.sessions[key.UserID]
 	if !ok {
 		return fmt.Errorf("user not found: %s", key.UserID)
@@ -662,13 +660,21 @@ func (s *SessionService) appendEvent(
 		return fmt.Errorf("session not found: %s", key.SessionID)
 	}
 
-	// Check if session is expired
+	// Check if session is expired.
 	storedSession := getValidSession(storedSessionWithTTL)
 	if storedSession == nil {
 		return fmt.Errorf("session expired: %s", key.SessionID)
 	}
 
-	// update stored session with the given event
+	// Handle consecutive user messages before updating.
+	if !storedSession.HandleConsecutiveUserMessage(evt, s.opts.onConsecutiveUserMsg) {
+		// Handler returned false, skip this event.
+		return nil
+	}
+
+	sess.UpdateUserSession(evt, opts...)
+
+	// Update stored session with the given event.
 	s.updateStoredSession(storedSession, evt)
 
 	// Update the session in the wrapper and refresh TTL.

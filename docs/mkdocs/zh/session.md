@@ -364,22 +364,29 @@ sessionService := inmemory.NewSessionService(
 
 **问题场景：** 当用户发送消息后，历史记录了 user message，但在模型回复前用户断开连接，导致历史中只有 user message 没有 assistant message。当用户再次对话时，会出现两个连续的 user message，某些 LLM API（如 OpenAI、Anthropic）会拒绝这种格式并报错。
 
-**解决方案：** 框架提供了 `OnConsecutiveUserMessage` 回调机制，在检测到连续的 user message 时自动调用处理函数。
+**解决方案：** 框架提供了 `OnConsecutiveUserMessageFunc` 回调机制，在检测到连续的 user message 时自动调用处理函数。
 
 #### 工作机制
 
-- `UpdateUserSession` 方法在追加事件前检测是否存在连续的 user message。
-- 如果检测到，调用用户配置的处理函数。
-- 框架自动调用（在各存储的 `appendEventInternal` 中），用户无需手动触发。
+- `AppendEvent` 在追加事件前检测是否存在连续的 user message。
+- 如果检测到，调用在 Session Service 上配置的处理函数。
+- 框架自动调用，用户无需手动触发。
 - `previousUserEvent` 是指向 `sess.Events` 中元素的指针，修改会直接反映到切片中。
 
 > **⚠️ 重要提示：** 处理函数在 `EventMu` 锁持有期间执行。请勿在处理函数内调用任何会获取 `EventMu` 的 Session 方法（如 `GetEvents`、`Clone` 等），否则会导致死锁。只能直接操作 `sess.Events` 切片。
 
 #### 常用处理器示例
 
-框架提供了三种常用处理方案的示例代码:
+在创建 Session Service 时配置处理器：
 
 ```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+    sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
 // 1. 插入占位 assistant message
 insertPlaceholderHandler := func(
     sess *session.Session,
@@ -388,9 +395,7 @@ insertPlaceholderHandler := func(
     finishReason := "error"
     placeholder := event.Event{
         Response: &model.Response{
-            ID:        "",
             Object:    model.ObjectTypeChatCompletion,
-            Created:   0,
             Done:      true,
             Timestamp: prev.Timestamp,
             Choices: []model.Choice{
@@ -404,25 +409,15 @@ insertPlaceholderHandler := func(
                 },
             },
         },
-        RequestID:          prev.RequestID,
-        InvocationID:       prev.InvocationID,
-        ParentInvocationID: prev.ParentInvocationID,
-        Author:             "system",
-        ID:                 "",
-        Timestamp:          prev.Timestamp,
-        Branch:             prev.Branch,
-        FilterKey:          prev.FilterKey,
-        Version:            event.CurrentVersion,
+        Author:  "system",
+        Version: event.CurrentVersion,
     }
     sess.Events = append(sess.Events, placeholder)
     return true
 }
 
-sess := session.NewSession(
-    "my-app",
-    "user123",
-    "session456",
-    session.WithOnConsecutiveUserMessage(insertPlaceholderHandler),
+sessionService := sessioninmemory.NewSessionService(
+    sessioninmemory.WithOnConsecutiveUserMessage(insertPlaceholderHandler),
 )
 
 // 2. 删除前一个 user message
@@ -436,11 +431,8 @@ removePreviousHandler := func(
     return true
 }
 
-sess := session.NewSession(
-    "my-app",
-    "user123",
-    "session456",
-    session.WithOnConsecutiveUserMessage(removePreviousHandler),
+sessionService := sessioninmemory.NewSessionService(
+    sessioninmemory.WithOnConsecutiveUserMessage(removePreviousHandler),
 )
 
 // 3. 跳过当前 user message
@@ -451,11 +443,8 @@ skipCurrentHandler := func(
     return false
 }
 
-sess := session.NewSession(
-    "my-app",
-    "user123",
-    "session456",
-    session.WithOnConsecutiveUserMessage(skipCurrentHandler),
+sessionService := sessioninmemory.NewSessionService(
+    sessioninmemory.WithOnConsecutiveUserMessage(skipCurrentHandler),
 )
 ```
 
@@ -483,11 +472,8 @@ mergeHandler := func(
     return true // 追加合并后的当前消息
 }
 
-sess := session.NewSession(
-    "my-app",
-    "user123",
-    "session456",
-    session.WithOnConsecutiveUserMessage(mergeHandler),
+sessionService := sessioninmemory.NewSessionService(
+    sessioninmemory.WithOnConsecutiveUserMessage(mergeHandler),
 )
 ```
 
@@ -498,7 +484,6 @@ package main
 
 import (
     "context"
-    "time"
     
     "trpc.group/trpc-go/trpc-agent-go/event"
     "trpc.group/trpc-go/trpc-agent-go/model"
@@ -507,16 +492,6 @@ import (
 )
 
 func main() {
-    // 创建 session 服务
-    sessionSvc, _ := sessioninmemory.NewService()
-    
-    ctx := context.Background()
-    key := session.Key{
-        AppName:   "my-app",
-        UserID:    "user123",
-        SessionID: "session456",
-    }
-    
     // 定义插入占位符处理器
     insertPlaceholderHandler := func(
         sess *session.Session,
@@ -525,9 +500,7 @@ func main() {
         finishReason := "error"
         placeholder := event.Event{
             Response: &model.Response{
-                ID:        "",
                 Object:    model.ObjectTypeChatCompletion,
-                Created:   0,
                 Done:      true,
                 Timestamp: prev.Timestamp,
                 Choices: []model.Choice{
@@ -541,27 +514,27 @@ func main() {
                     },
                 },
             },
-            RequestID:          prev.RequestID,
-            InvocationID:       prev.InvocationID,
-            ParentInvocationID: prev.ParentInvocationID,
-            Author:             "system",
-            ID:                 "",
-            Timestamp:          prev.Timestamp,
-            Branch:             prev.Branch,
-            FilterKey:          prev.FilterKey,
-            Version:            event.CurrentVersion,
+            Author:  "system",
+            Version: event.CurrentVersion,
         }
         sess.Events = append(sess.Events, placeholder)
         return true
     }
     
-    // 创建 session 并配置处理器
-    sess := session.NewSession(
-        "my-app",
-        "user123",
-        "session456",
-        session.WithOnConsecutiveUserMessage(insertPlaceholderHandler),
+    // 创建 session 服务并配置处理器
+    sessionSvc := sessioninmemory.NewSessionService(
+        sessioninmemory.WithOnConsecutiveUserMessage(insertPlaceholderHandler),
     )
+    
+    ctx := context.Background()
+    key := session.Key{
+        AppName:   "my-app",
+        UserID:    "user123",
+        SessionID: "session456",
+    }
+    
+    // 创建 session
+    sess, _ := sessionSvc.CreateSession(ctx, key, nil)
     
     // 用户正常使用 AppendEvent
     userEvent1 := createUserEvent("hello")
@@ -580,10 +553,10 @@ func main() {
 
 #### 向后兼容性
 
-- **默认不启用**：如果用户不配置处理器，行为与之前完全一致。
-- **可选启用**：用户可以选择使用内置处理器或自定义处理器。
+- **默认不启用**：如果用户不配置处理器，行为与之前完全一致（会打印警告日志）。
+- **可选启用**：用户可以在 Session Service 创建时配置处理器。
 - **不影响正常流程**：只在检测到连续 user message 时触发。
-- **Session 级别配置**：每个 Session 可以有独立的处理器。
+- **Service 级别配置**：处理器在 Service 级别配置，对所有 session 生效。
 
 ### 4️⃣ TTL 管理（自动过期）
 

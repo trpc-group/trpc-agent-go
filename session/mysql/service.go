@@ -715,6 +715,12 @@ func (s *Service) appendEventInternal(
 	key session.Key,
 	opts ...session.Option,
 ) error {
+	// Handle consecutive user messages before updating.
+	if !sess.HandleConsecutiveUserMessage(e, s.opts.onConsecutiveUserMsg) {
+		// Handler returned false, skip this event.
+		return nil
+	}
+
 	// update user session with the given event
 	sess.UpdateUserSession(e, opts...)
 

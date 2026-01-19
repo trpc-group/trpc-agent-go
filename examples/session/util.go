@@ -48,10 +48,11 @@ const (
 
 // SessionServiceConfig holds configuration for creating a session service.
 type SessionServiceConfig struct {
-	EventLimit       int
-	TTL              time.Duration
-	AppendEventHooks []session.AppendEventHook
-	GetSessionHooks  []session.GetSessionHook
+	EventLimit             int
+	TTL                    time.Duration
+	AppendEventHooks       []session.AppendEventHook
+	GetSessionHooks        []session.GetSessionHook
+	OnConsecutiveUserMsg   session.OnConsecutiveUserMessageFunc
 }
 
 // NewSessionServiceByType creates a session service based on the specified type.
@@ -84,12 +85,16 @@ func NewSessionServiceByType(sessionType SessionType, cfg SessionServiceConfig) 
 }
 
 func newInMemorySessionService(cfg SessionServiceConfig) session.Service {
-	return sessioninmemory.NewSessionService(
+	opts := []sessioninmemory.ServiceOpt{
 		sessioninmemory.WithSessionEventLimit(cfg.EventLimit),
 		sessioninmemory.WithSessionTTL(cfg.TTL),
 		sessioninmemory.WithAppendEventHook(cfg.AppendEventHooks...),
 		sessioninmemory.WithGetSessionHook(cfg.GetSessionHooks...),
-	)
+	}
+	if cfg.OnConsecutiveUserMsg != nil {
+		opts = append(opts, sessioninmemory.WithOnConsecutiveUserMessage(cfg.OnConsecutiveUserMsg))
+	}
+	return sessioninmemory.NewSessionService(opts...)
 }
 
 // newRedisSessionService creates a Redis session service.
@@ -99,13 +104,17 @@ func newRedisSessionService(cfg SessionServiceConfig) (session.Service, error) {
 	addr := GetEnvOrDefault("REDIS_ADDR", "localhost:6379")
 	redisURL := fmt.Sprintf("redis://%s", addr)
 
-	return redis.NewService(
+	opts := []redis.ServiceOpt{
 		redis.WithRedisClientURL(redisURL),
 		redis.WithSessionEventLimit(cfg.EventLimit),
 		redis.WithSessionTTL(cfg.TTL),
 		redis.WithAppendEventHook(cfg.AppendEventHooks...),
 		redis.WithGetSessionHook(cfg.GetSessionHooks...),
-	)
+	}
+	if cfg.OnConsecutiveUserMsg != nil {
+		opts = append(opts, redis.WithOnConsecutiveUserMessage(cfg.OnConsecutiveUserMsg))
+	}
+	return redis.NewService(opts...)
 }
 
 // newPostgresSessionService creates a PostgreSQL session service.
@@ -123,7 +132,7 @@ func newPostgresSessionService(cfg SessionServiceConfig) (session.Service, error
 	password := GetEnvOrDefault("PG_PASSWORD", "")
 	database := GetEnvOrDefault("PG_DATABASE", "trpc_agent_go")
 
-	return postgres.NewService(
+	opts := []postgres.ServiceOpt{
 		postgres.WithHost(host),
 		postgres.WithPort(port),
 		postgres.WithUser(user),
@@ -134,7 +143,11 @@ func newPostgresSessionService(cfg SessionServiceConfig) (session.Service, error
 		postgres.WithSessionTTL(cfg.TTL),
 		postgres.WithAppendEventHook(cfg.AppendEventHooks...),
 		postgres.WithGetSessionHook(cfg.GetSessionHooks...),
-	)
+	}
+	if cfg.OnConsecutiveUserMsg != nil {
+		opts = append(opts, postgres.WithOnConsecutiveUserMessage(cfg.OnConsecutiveUserMsg))
+	}
+	return postgres.NewService(opts...)
 }
 
 // newMySQLSessionService creates a MySQL session service.
@@ -154,14 +167,18 @@ func newMySQLSessionService(cfg SessionServiceConfig) (session.Service, error) {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4",
 		user, password, host, port, database)
 
-	return mysql.NewService(
+	opts := []mysql.ServiceOpt{
 		mysql.WithMySQLClientDSN(dsn),
 		mysql.WithTablePrefix("trpc_"),
 		mysql.WithSessionEventLimit(cfg.EventLimit),
 		mysql.WithSessionTTL(cfg.TTL),
 		mysql.WithAppendEventHook(cfg.AppendEventHooks...),
 		mysql.WithGetSessionHook(cfg.GetSessionHooks...),
-	)
+	}
+	if cfg.OnConsecutiveUserMsg != nil {
+		opts = append(opts, mysql.WithOnConsecutiveUserMessage(cfg.OnConsecutiveUserMsg))
+	}
+	return mysql.NewService(opts...)
 }
 
 // newClickHouseSessionService creates a ClickHouse session service.
@@ -181,14 +198,18 @@ func newClickHouseSessionService(cfg SessionServiceConfig) (session.Service, err
 	dsn := fmt.Sprintf("clickhouse://%s:%s@%s:%s/%s",
 		user, password, host, port, database)
 
-	return clickhouse.NewService(
+	opts := []clickhouse.ServiceOpt{
 		clickhouse.WithClickHouseDSN(dsn),
 		clickhouse.WithTablePrefix("trpc_"),
 		clickhouse.WithSessionEventLimit(cfg.EventLimit),
 		clickhouse.WithSessionTTL(cfg.TTL),
 		clickhouse.WithAppendEventHook(cfg.AppendEventHooks...),
 		clickhouse.WithGetSessionHook(cfg.GetSessionHooks...),
-	)
+	}
+	if cfg.OnConsecutiveUserMsg != nil {
+		opts = append(opts, clickhouse.WithOnConsecutiveUserMessage(cfg.OnConsecutiveUserMsg))
+	}
+	return clickhouse.NewService(opts...)
 }
 
 // RunnerConfig holds configuration for creating a runner.

@@ -19,18 +19,12 @@
 // Usage:
 //
 //	go run . -handler=placeholder -session=inmemory
-//	go run . -handler=remove -session=redis
-//	go run . -handler=skip -session=postgres
-//	go run . -handler=skip -session=mysql
-//	go run . -handler=skip -session=clickhouse
+//	go run . -handler=remove -session=inmemory
+//	go run . -handler=skip -session=inmemory
 //
 // Environment variables:
 //
 //	MODEL_NAME: model name (default: deepseek-chat)
-//	redis:      REDIS_ADDR (default: localhost:6379)
-//	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
-//	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
-//	clickhouse: CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, CLICKHOUSE_PASSWORD, CLICKHOUSE_DATABASE
 package main
 
 import (
@@ -49,14 +43,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-
-	util "trpc.group/trpc-go/trpc-agent-go/examples/session"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 var (
-	modelName   = flag.String("model", os.Getenv("MODEL_NAME"), "Name of the model to use (default: MODEL_NAME env var or deepseek-chat)")
-	sessionType = flag.String("session", "inmemory", "Session backend: inmemory / redis / postgres / mysql / clickhouse")
-	handlerType = flag.String("handler", "placeholder", "Handler type: placeholder / remove / skip")
+	modelName   = flag.String("model", os.Getenv("MODEL_NAME"), "model name")
+	handlerType = flag.String("handler", "placeholder", "placeholder / remove / skip")
 )
 
 func getModelName() string {
@@ -69,20 +61,34 @@ func getModelName() string {
 func main() {
 	flag.Parse()
 
-	model := getModelName()
-	fmt.Printf("Using model: %s\n", model)
-	fmt.Printf("Session backend: %s\n", *sessionType)
+	mdl := getModelName()
+	fmt.Printf("Using model: %s\n", mdl)
 	fmt.Printf("Handler type: %s\n\n", *handlerType)
 
-	// Create session service
-	sessionService, err := util.NewSessionServiceByType(util.SessionType(*sessionType), util.SessionServiceConfig{})
-	if err != nil {
-		log.Fatalf("Failed to create session service: %v", err)
+	// Select handler based on type.
+	var handler session.OnConsecutiveUserMessageFunc
+	switch *handlerType {
+	case "placeholder":
+		handler = InsertPlaceholderHandler()
+		fmt.Println("[Using InsertPlaceholderHandler]")
+	case "remove":
+		handler = RemovePreviousHandler()
+		fmt.Println("[Using RemovePreviousHandler]")
+	case "skip":
+		handler = SkipCurrentHandler()
+		fmt.Println("[Using SkipCurrentHandler]")
+	default:
+		log.Fatalf("Unknown handler type: %s", *handlerType)
 	}
+
+	// Create session service with the handler.
+	sessionService := sessioninmemory.NewSessionService(
+		sessioninmemory.WithOnConsecutiveUserMessage(handler),
+	)
 
 	llmAgent := llmagent.New(
 		"test-assistant",
-		llmagent.WithModel(openai.New(model)),
+		llmagent.WithModel(openai.New(mdl)),
 		llmagent.WithInstruction("You are a helpful assistant. Answer questions concisely."),
 	)
 
@@ -96,21 +102,21 @@ func main() {
 	userID := "user1"
 	sessionID := uuid.New().String()
 
-	// Step 1: Normal first request
-	fmt.Println("=== Step 1: Normal first request ===")
+	// Step 1: Normal first request.
+	fmt.Println("\n=== Step 1: Normal first request ===")
 	if err := chat(r, userID, sessionID, "Hello, my name is Alice", "req-1"); err != nil {
 		log.Fatalf("Step 1 failed: %v", err)
 	}
 	printSessionEvents(sessionService, userID, sessionID)
 
-	// Step 2: Simulate duplicate user message (network issue / retry).
-	fmt.Println("\n=== Step 2: Simulate duplicate user message (no assistant response) ===")
-	if err := simulateDuplicateUserMessage(sessionService, userID, sessionID, *handlerType); err != nil {
+	// Step 2: Simulate consecutive user messages (network issue / retry).
+	fmt.Println("\n=== Step 2: Simulate consecutive user messages ===")
+	if err := simulateConsecutiveUserMessages(sessionService, userID, sessionID); err != nil {
 		log.Fatalf("Step 2 failed: %v", err)
 	}
 	printSessionEvents(sessionService, userID, sessionID)
 
-	// Step 3: Normal request after fixing
+	// Step 3: Normal request after fixing.
 	fmt.Println("\n=== Step 3: Normal request after fixing ===")
 	if err := chat(r, userID, sessionID, "What is my name?", "req-3"); err != nil {
 		log.Fatalf("Step 3 failed: %v", err)
@@ -118,18 +124,40 @@ func main() {
 	printSessionEvents(sessionService, userID, sessionID)
 }
 
-const appName = "duplicate-user-demo"
+const appName = "consecutive-user-demo"
 
 func printSessionEvents(svc session.Service, userID, sessionID string) {
 	ctx := context.Background()
-	if err := util.PrintSessionEvents(ctx, svc, appName, userID, sessionID); err != nil {
-		fmt.Printf("PrintSessionEvents error: %v\n", err)
+	key := session.Key{AppName: appName, UserID: userID, SessionID: sessionID}
+	sess, err := svc.GetSession(ctx, key)
+	if err != nil {
+		fmt.Printf("GetSession error: %v\n", err)
+		return
+	}
+	if sess == nil {
+		fmt.Println("Session not found")
+		return
+	}
+	fmt.Printf("--- Session Events (count=%d) ---\n", len(sess.Events))
+	for i, evt := range sess.Events {
+		if evt.Response != nil && len(evt.Response.Choices) > 0 {
+			role := evt.Response.Choices[0].Message.Role
+			content := evt.Response.Choices[0].Message.Content
+			if len(content) > 50 {
+				content = content[:50] + "..."
+			}
+			fmt.Printf("[%d] %s: %s\n", i, role, content)
+		}
 	}
 }
 
 func chat(r runner.Runner, userID, sessionID, message, requestID string) error {
 	ctx := context.Background()
-	eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage(message), agent.WithRequestID(requestID))
+	eventChan, err := r.Run(
+		ctx, userID, sessionID,
+		model.NewUserMessage(message),
+		agent.WithRequestID(requestID),
+	)
 	if err != nil {
 		return err
 	}
@@ -150,32 +178,15 @@ func chat(r runner.Runner, userID, sessionID, message, requestID string) error {
 	return nil
 }
 
-func simulateDuplicateUserMessage(svc session.Service, userID, sessionID, handlerType string) error {
+func simulateConsecutiveUserMessages(svc session.Service, userID, sessionID string) error {
 	ctx := context.Background()
+	key := session.Key{AppName: appName, UserID: userID, SessionID: sessionID}
 
-	// Select handler based on type.
-	var handler session.OnConsecutiveUserMessageFunc
-	switch handlerType {
-	case "placeholder":
-		handler = InsertPlaceholderHandler()
-		fmt.Println("[Using InsertPlaceholderHandler]")
-	case "remove":
-		handler = RemovePreviousHandler()
-		fmt.Println("[Using RemovePreviousHandler]")
-	case "skip":
-		handler = SkipCurrentHandler()
-		fmt.Println("[Using SkipCurrentHandler]")
-	default:
-		return fmt.Errorf("unknown handler type: %s", handlerType)
+	// Get existing session.
+	sess, err := svc.GetSession(ctx, key)
+	if err != nil {
+		return fmt.Errorf("failed to get session: %w", err)
 	}
-
-	// Create a new session with the handler.
-	sess := session.NewSession(
-		appName,
-		userID,
-		sessionID,
-		session.WithOnConsecutiveUserMessage(handler),
-	)
 
 	// Simulate sending consecutive user messages (connection interrupted).
 	userMsg1 := &event.Event{

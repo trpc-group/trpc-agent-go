@@ -15,6 +15,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestWithSessionEventLimit(t *testing.T) {
@@ -271,20 +273,66 @@ func TestOptionsChaining(t *testing.T) {
 }
 
 func TestOptionsOverride(t *testing.T) {
-	// Test that later options can override earlier ones
+	// Test that later options can override earlier ones.
 	opts := &ServiceOpts{}
 
 	WithSessionEventLimit(100)(opts)
 	assert.Equal(t, 100, opts.sessionEventLimit)
 
-	// Override with new value
+	// Override with new value.
 	WithSessionEventLimit(200)(opts)
 	assert.Equal(t, 200, opts.sessionEventLimit)
 
-	// Same for boolean options
+	// Same for boolean options.
 	WithSoftDelete(true)(opts)
 	assert.True(t, opts.softDelete)
 
 	WithSoftDelete(false)(opts)
 	assert.False(t, opts.softDelete)
+}
+
+func TestWithOnConsecutiveUserMessage(t *testing.T) {
+	t.Run("nil handler", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithOnConsecutiveUserMessage(nil)(opts)
+		assert.Nil(t, opts.onConsecutiveUserMsg)
+	})
+
+	t.Run("valid handler", func(t *testing.T) {
+		handler := func(
+			sess *session.Session,
+			prev, curr *event.Event,
+		) bool {
+			return true
+		}
+		opts := &ServiceOpts{}
+		WithOnConsecutiveUserMessage(handler)(opts)
+		assert.NotNil(t, opts.onConsecutiveUserMsg)
+	})
+
+	t.Run("handler override", func(t *testing.T) {
+		callCount := 0
+		handler1 := func(
+			sess *session.Session,
+			prev, curr *event.Event,
+		) bool {
+			callCount = 1
+			return true
+		}
+		handler2 := func(
+			sess *session.Session,
+			prev, curr *event.Event,
+		) bool {
+			callCount = 2
+			return false
+		}
+		opts := &ServiceOpts{}
+		WithOnConsecutiveUserMessage(handler1)(opts)
+		WithOnConsecutiveUserMessage(handler2)(opts)
+
+		// Execute the stored handler to verify it's handler2.
+		result := opts.onConsecutiveUserMsg(nil, nil, nil)
+		assert.Equal(t, 2, callCount)
+		assert.False(t, result)
+	})
 }

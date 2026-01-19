@@ -41,8 +41,8 @@ var (
 const SummaryFilterKeyAllContents = ""
 
 // OnConsecutiveUserMessageFunc is called when consecutive user messages are
-// detected in UpdateUserSession. User can modify sess.Events directly to fix
-// the issue (insert, remove, merge events, etc.).
+// detected. User can modify sess.Events directly to fix the issue (insert,
+// remove, merge events, etc.).
 //
 // Parameters:
 //   - sess: Current session (can modify sess.Events directly).
@@ -85,11 +85,6 @@ type Session struct {
 	Hash int `json:"-"`
 
 	stateMu sync.RWMutex `json:"-"` // stateMu is the read-write mutex for State.
-
-	// onConsecutiveUserMsg is called when consecutive user messages are detected.
-	// If nil, no fixing is performed (default behavior).
-	onConsecutiveUserMsg OnConsecutiveUserMessageFunc `json:"-"`
-	handlerMu            sync.RWMutex                 `json:"-"`
 }
 
 // Clone returns a copy of the session.
@@ -213,21 +208,6 @@ func WithSessionCreatedAt(createdAt time.Time) SessionOptions {
 func WithSessionUpdatedAt(updatedAt time.Time) SessionOptions {
 	return func(sess *Session) {
 		sess.UpdatedAt = updatedAt
-	}
-}
-
-// WithOnConsecutiveUserMessage sets the handler for consecutive user messages.
-// This handler is called by UpdateUserSession (which is automatically invoked
-// by the framework in appendEventInternal) when it detects that the event to
-// be appended is a user message and the last event in history is also a user
-// message.
-func WithOnConsecutiveUserMessage(
-	handler OnConsecutiveUserMessageFunc,
-) SessionOptions {
-	return func(sess *Session) {
-		sess.handlerMu.Lock()
-		defer sess.handlerMu.Unlock()
-		sess.onConsecutiveUserMsg = handler
 	}
 }
 
@@ -431,40 +411,7 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 	}
 	if event.Response != nil && !event.IsPartial && event.IsValidContent() {
 		sess.EventMu.Lock()
-
-		// Check for consecutive user messages before appending.
-		shouldAppend := true
-		if event.Response.IsUserMessage() && len(sess.Events) > 0 {
-			lastIdx := len(sess.Events) - 1
-			lastEvent := &sess.Events[lastIdx]
-			if lastEvent.Response != nil && lastEvent.Response.IsUserMessage() {
-				// Consecutive user messages detected.
-				sess.handlerMu.RLock()
-				handler := sess.onConsecutiveUserMsg
-				sess.handlerMu.RUnlock()
-
-				if handler != nil {
-					// Let user handle it. Note: handler runs with EventMu held,
-					// so it must not call methods that acquire EventMu.
-					shouldAppend = handler(sess, lastEvent, event)
-				} else {
-					// No handler configured, log warning.
-					log.Warnf(
-						"consecutive user messages detected without handler, "+
-							"session: %s, user: %s, prev_event: %s, curr_event: %s",
-						sess.ID,
-						sess.UserID,
-						lastEvent.ID,
-						event.ID,
-					)
-				}
-			}
-		}
-
-		if shouldAppend {
-			sess.Events = append(sess.Events, *event)
-		}
-
+		sess.Events = append(sess.Events, *event)
 		// Apply filtering options.
 		sess.ApplyEventFiltering(opts...)
 		sess.EventMu.Unlock()
@@ -472,6 +419,60 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 
 	sess.UpdatedAt = time.Now()
 	sess.ApplyEventStateDelta(event)
+}
+
+// HandleConsecutiveUserMessage checks for consecutive user messages and invokes
+// the handler if provided. This should be called before UpdateUserSession.
+//
+// Parameters:
+//   - evt: The event about to be appended.
+//   - handler: Optional handler to invoke when consecutive user messages are
+//     detected. If nil, a warning is logged.
+//
+// Returns:
+//   - bool: true if the event should be appended, false to skip it.
+//
+// IMPORTANT: The handler is called while EventMu is held. Do NOT call any
+// Session methods that acquire EventMu inside the handler.
+func (sess *Session) HandleConsecutiveUserMessage(
+	evt *event.Event,
+	handler OnConsecutiveUserMessageFunc,
+) bool {
+	if sess == nil || evt == nil {
+		return true
+	}
+	if evt.Response == nil || !evt.Response.IsUserMessage() {
+		return true
+	}
+
+	sess.EventMu.Lock()
+	defer sess.EventMu.Unlock()
+
+	if len(sess.Events) == 0 {
+		return true
+	}
+
+	lastIdx := len(sess.Events) - 1
+	lastEvent := &sess.Events[lastIdx]
+	if lastEvent.Response == nil || !lastEvent.Response.IsUserMessage() {
+		return true
+	}
+
+	// Consecutive user messages detected.
+	if handler != nil {
+		return handler(sess, lastEvent, evt)
+	}
+
+	// No handler configured, log warning.
+	log.Warnf(
+		"consecutive user messages detected without handler, "+
+			"session: %s, user: %s, prev_event: %s, curr_event: %s",
+		sess.ID,
+		sess.UserID,
+		lastEvent.ID,
+		evt.ID,
+	)
+	return true
 }
 
 // ApplyEventFiltering applies event number and time filtering to session events

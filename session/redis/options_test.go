@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -427,4 +428,50 @@ func TestWithAsyncPersisterNum(t *testing.T) {
 			assert.Equal(t, tt.expected, opts.asyncPersisterNum)
 		})
 	}
+}
+
+func TestWithOnConsecutiveUserMessage(t *testing.T) {
+	t.Run("nil handler", func(t *testing.T) {
+		opts := ServiceOpts{}
+		WithOnConsecutiveUserMessage(nil)(&opts)
+		assert.Nil(t, opts.onConsecutiveUserMsg)
+	})
+
+	t.Run("valid handler", func(t *testing.T) {
+		handler := func(
+			sess *session.Session,
+			prev, curr *event.Event,
+		) bool {
+			return true
+		}
+		opts := ServiceOpts{}
+		WithOnConsecutiveUserMessage(handler)(&opts)
+		assert.NotNil(t, opts.onConsecutiveUserMsg)
+	})
+
+	t.Run("handler override", func(t *testing.T) {
+		callCount := 0
+		handler1 := func(
+			sess *session.Session,
+			prev, curr *event.Event,
+		) bool {
+			callCount = 1
+			return true
+		}
+		handler2 := func(
+			sess *session.Session,
+			prev, curr *event.Event,
+		) bool {
+			callCount = 2
+			return false
+		}
+		opts := ServiceOpts{}
+		WithOnConsecutiveUserMessage(handler1)(&opts)
+		WithOnConsecutiveUserMessage(handler2)(&opts)
+
+		// Execute the stored handler to verify it's handler2.
+		result := opts.onConsecutiveUserMsg(nil, nil, nil)
+		assert.Equal(t, 2, callCount)
+		assert.False(t, result)
+	})
 }

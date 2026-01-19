@@ -67,6 +67,8 @@ type ServiceOpts struct {
 	// hooks for session operations.
 	appendEventHooks []session.AppendEventHook
 	getSessionHooks  []session.GetSessionHook
+	// onConsecutiveUserMsg is called when consecutive user messages are detected.
+	onConsecutiveUserMsg session.OnConsecutiveUserMessageFunc
 }
 
 // ServiceOpt is the option for the MySQL session service.
@@ -266,5 +268,16 @@ func WithAppendEventHook(hooks ...session.AppendEventHook) ServiceOpt {
 func WithGetSessionHook(hooks ...session.GetSessionHook) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.getSessionHooks = append(opts.getSessionHooks, hooks...)
+	}
+}
+
+// WithOnConsecutiveUserMessage sets the handler for consecutive user messages.
+// This handler is called when AppendEvent detects that the event to be appended
+// is a user message and the last event in history is also a user message.
+func WithOnConsecutiveUserMessage(
+	handler session.OnConsecutiveUserMessageFunc,
+) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.onConsecutiveUserMsg = handler
 	}
 }
