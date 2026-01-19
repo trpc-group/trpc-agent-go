@@ -40,11 +40,21 @@ The `-consecutive` flag enables handling of consecutive user messages via `Appen
 
 | Strategy | Behavior |
 |----------|----------|
-| `merge` | Merge current message into previous user message |
+| `merge` | Merge current message into previous user message (also re-checks for violations) |
 | `placeholder` | Insert a placeholder assistant response before appending |
 | `skip` | Skip the current event entirely |
 
 This demonstrates that `AppendEventHook` can be used as an alternative to `WithOnConsecutiveUserMessage` for more complex scenarios where you need additional control over the event processing pipeline.
+
+### When do consecutive user messages occur?
+
+Consecutive user messages happen when a user message is written to the session but no assistant response follows. Common scenarios:
+
+1. **User disconnection**: User sends a message, disconnects before receiving response, then reconnects and sends another message.
+2. **Network issues**: Client retries due to timeout while the first request was already processed.
+3. **Rapid messaging**: User sends multiple messages before the assistant can respond.
+
+The demo simulates this by directly appending a user message to the session without waiting for an assistant response. When `-consecutive` is enabled, you'll see the hook handle this scenario.
 
 ## Expected flow (sample)
 1) Normal message passes through, stored as-is.  

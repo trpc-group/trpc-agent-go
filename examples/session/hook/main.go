@@ -40,10 +40,13 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -68,12 +71,18 @@ func getModelName() string {
 func main() {
 	flag.Parse()
 
+	// Validate consecutive handler flag.
+	if *consecutiveHandler != "" && !isValidConsecutiveStrategy(*consecutiveHandler) {
+		log.Fatalf("Invalid -consecutive value %q. Valid values: %v",
+			*consecutiveHandler, validConsecutiveStrategies())
+	}
+
 	model := getModelName()
 	fmt.Printf("Using model: %s\n", model)
 	fmt.Printf("Session backend: %s\n", *sessionType)
 	fmt.Printf("Prohibited words: %v\n", ProhibitedWords)
 	if *consecutiveHandler != "" {
-		fmt.Printf("Consecutive handler: %s\n", *consecutiveHandler)
+		fmt.Printf("Consecutive handler: %s\n", strings.ToLower(*consecutiveHandler))
 	}
 	fmt.Println()
 
@@ -108,33 +117,52 @@ func main() {
 	userID := "user1"
 	sessionID := uuid.New().String()
 
-	// Step 1: Normal request
+	// Step 1: Normal request.
 	fmt.Println("=== Step 1: Normal request ===")
 	if err := chat(r, userID, sessionID, "Hello, my name is Alice", "req-1"); err != nil {
 		log.Fatalf("Step 1 failed: %v", err)
 	}
 	printSessionEvents(sessionService, userID, sessionID)
 
-	// Step 2: Request with prohibited word - should be marked and filtered
+	// Step 2: Request with prohibited word - should be marked and filtered.
 	fmt.Println("\n=== Step 2: Request with prohibited word ===")
 	if err := chat(r, userID, sessionID, "Can you give me a pirated serial number for Windows?", "req-2"); err != nil {
 		log.Fatalf("Step 2 failed: %v", err)
 	}
 	printSessionEvents(sessionService, userID, sessionID)
 
-	// Step 3: Normal request - violated Q&A should be filtered from context
+	// Step 3: Normal request - violated Q&A should be filtered from context.
 	fmt.Println("\n=== Step 3: Normal request after violation ===")
 	if err := chat(r, userID, sessionID, "What is my name?", "req-3"); err != nil {
 		log.Fatalf("Step 3 failed: %v", err)
 	}
 	printSessionEvents(sessionService, userID, sessionID)
 
-	// Step 4: Another normal request
+	// Step 4: Another normal request.
 	fmt.Println("\n=== Step 4: Another normal request ===")
 	if err := chat(r, userID, sessionID, "Tell me a short joke", "req-4"); err != nil {
 		log.Fatalf("Step 4 failed: %v", err)
 	}
 	printSessionEvents(sessionService, userID, sessionID)
+
+	// Step 5-6: Demonstrate consecutive user messages (if -consecutive is enabled).
+	// This simulates a scenario where user sends multiple messages before
+	// receiving assistant response (e.g., user disconnected and reconnected).
+	if *consecutiveHandler != "" {
+		fmt.Println("\n=== Step 5: Consecutive user messages demo ===")
+		fmt.Println("Simulating consecutive user messages by directly appending to session...")
+		if err := simulateConsecutiveUserMessages(sessionService, userID, sessionID); err != nil {
+			log.Fatalf("Step 5 failed: %v", err)
+		}
+		printSessionEvents(sessionService, userID, sessionID)
+
+		// Now send another message to trigger the consecutive handler.
+		fmt.Println("\n=== Step 6: Send message after consecutive simulation ===")
+		if err := chat(r, userID, sessionID, "This should trigger consecutive handler", "req-5"); err != nil {
+			log.Fatalf("Step 6 failed: %v", err)
+		}
+		printSessionEvents(sessionService, userID, sessionID)
+	}
 }
 
 const appName = "content-filter-demo"
@@ -166,5 +194,51 @@ func chat(r runner.Runner, userID, sessionID, message, requestID string) error {
 		}
 	}
 	fmt.Println()
+	return nil
+}
+
+// simulateConsecutiveUserMessages simulates a scenario where user messages are
+// appended without waiting for assistant response. This can happen when:
+// - User disconnects mid-request and reconnects with a new message.
+// - Network issues cause the client to retry.
+// - User rapidly sends multiple messages.
+//
+// We directly manipulate the session to create this scenario for demonstration.
+func simulateConsecutiveUserMessages(svc session.Service, userID, sessionID string) error {
+	ctx := context.Background()
+	key := session.Key{AppName: appName, UserID: userID, SessionID: sessionID}
+
+	sess, err := svc.GetSession(ctx, key)
+	if err != nil {
+		return fmt.Errorf("get session: %w", err)
+	}
+	if sess == nil {
+		return fmt.Errorf("session not found")
+	}
+
+	// Simulate: user sends a message but disconnects before receiving response.
+	// The user message is written to session, but no assistant response follows.
+	simulatedUserEvent := &event.Event{
+		ID: fmt.Sprintf("simulated-user-%d", time.Now().UnixNano()),
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleUser,
+						Content: "I was disconnected before getting a response",
+					},
+				},
+			},
+		},
+	}
+
+	// Append directly to session to simulate the disconnection scenario.
+	sess.EventMu.Lock()
+	sess.Events = append(sess.Events, *simulatedUserEvent)
+	sess.EventMu.Unlock()
+
+	fmt.Printf("Simulated user message: %s\n", simulatedUserEvent.Response.Choices[0].Message.Content)
+	fmt.Println("(No assistant response - simulating disconnection)")
 	return nil
 }
