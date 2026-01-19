@@ -87,8 +87,10 @@ func (p *Planner) BuildPlanningInstruction(
 // tool calls to ensure only valid function calls are preserved.
 //
 // This method:
-// - Filters out tool calls with empty function names
-// - Preserves all other response content unchanged
+//   - Filters out tool calls with empty function names
+//   - Detects intent descriptions (e.g., "I will...") without actual tool calls
+//     and marks them as non-final to prevent premature termination
+//   - Preserves all other response content unchanged
 func (p *Planner) ProcessPlanningResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -119,7 +121,73 @@ func (p *Planner) ProcessPlanningResponse(
 		processedResponse.Choices[i] = processedChoice
 	}
 
+	// Check if this looks like an intent description without actual tool calls.
+	// If so, mark response as not done to prevent premature termination.
+	if processedResponse.Done && !p.hasValidToolCalls(&processedResponse) {
+		content := p.getResponseContent(&processedResponse)
+		if p.isIntentDescription(content) && !p.hasFinalAnswerTag(content) {
+			// This is an intent description without FINAL_ANSWER tag,
+			// likely a malformed response. Mark as not done to continue the loop.
+			processedResponse.Done = false
+		}
+	}
+
 	return &processedResponse
+}
+
+// hasValidToolCalls checks if the response contains any valid tool calls.
+func (p *Planner) hasValidToolCalls(response *model.Response) bool {
+	if response == nil || len(response.Choices) == 0 {
+		return false
+	}
+	for _, choice := range response.Choices {
+		if len(choice.Message.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// getResponseContent extracts the text content from the response.
+func (p *Planner) getResponseContent(response *model.Response) string {
+	if response == nil || len(response.Choices) == 0 {
+		return ""
+	}
+	return response.Choices[0].Message.Content
+}
+
+// isIntentDescription checks if the content appears to be an intent description
+// rather than a final answer. Intent descriptions typically indicate the agent
+// wants to take an action but hasn't properly formed the tool call.
+func (p *Planner) isIntentDescription(content string) bool {
+	if content == "" {
+		return false
+	}
+
+	// Common patterns that indicate intent to take action.
+	// Keep these relatively specific to avoid matching benign phrases
+	// in otherwise valid final answers.
+	intentPatterns := []string{
+		"I will ",
+		"I'll ",
+		"I am going to ",
+		"I'm going to ",
+		ActionTag,     // /*ACTION*/ tag without actual tool call
+		PlanningTag,   // /*PLANNING*/ tag indicates still planning
+		ReplanningTag, // /*REPLANNING*/ tag indicates replanning
+	}
+
+	for _, pattern := range intentPatterns {
+		if strings.Contains(content, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasFinalAnswerTag checks if the content contains the FINAL_ANSWER tag.
+func (p *Planner) hasFinalAnswerTag(content string) bool {
+	return strings.Contains(content, FinalAnswerTag)
 }
 
 // splitByLastPattern splits text by the last occurrence of a separator.
