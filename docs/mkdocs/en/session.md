@@ -408,7 +408,7 @@ Suitable for development environments and small-scale applications, no external 
 - **`WithSummarizer(s summary.SessionSummarizer)`**: Inject session summarizer.
 - **`WithAsyncSummaryNum(num int)`**: Set number of summary processing workers. Default is 3.
 - **`WithSummaryQueueSize(size int)`**: Set summary task queue size. Default is 100.
-- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 30 seconds.
+- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 60 seconds.
 
 ### Basic Configuration Example
 
@@ -459,7 +459,7 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithSummarizer(summarizer),
     inmemory.WithAsyncSummaryNum(2),
     inmemory.WithSummaryQueueSize(100),
-    inmemory.WithSummaryJobTimeout(30*time.Second),
+    inmemory.WithSummaryJobTimeout(60*time.Second),
 )
 ```
 
@@ -604,7 +604,7 @@ Suitable for production environments and applications requiring complex queries,
 - **`WithSummarizer(s summary.SessionSummarizer)`**: Inject session summarizer.
 - **`WithAsyncSummaryNum(num int)`**: Number of summary processing workers. Default is 3.
 - **`WithSummaryQueueSize(size int)`**: Summary task queue size. Default is 100.
-- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 30 seconds.
+- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 60 seconds.
 
 **Schema and Table Configuration:**
 
@@ -810,7 +810,7 @@ Suitable for production environments and applications requiring complex queries,
 - **`WithSummarizer(s summary.SessionSummarizer)`**: Inject session summarizer.
 - **`WithAsyncSummaryNum(num int)`**: Number of summary processing workers. Default is 3.
 - **`WithSummaryQueueSize(size int)`**: Summary task queue size. Default is 100.
-- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 30 seconds.
+- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 60 seconds.
 
 **Table Configuration:**
 
@@ -1498,7 +1498,7 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithSummarizer(summarizer),
     inmemory.WithAsyncSummaryNum(2),                // 2 async workers.
     inmemory.WithSummaryQueueSize(100),             // Queue size 100.
-    inmemory.WithSummaryJobTimeout(30*time.Second), // 30s timeout per job.
+    inmemory.WithSummaryJobTimeout(60*time.Second), // 60s timeout per job.
 )
 
 // Option 2: Redis session service with summarizer.
@@ -1703,9 +1703,9 @@ summarizer := summary.NewSummarizer(
 Configure async summary processing in session services:
 
 - **`WithSummarizer(s summary.SessionSummarizer)`**: Inject the summarizer into the session service.
-- **`WithAsyncSummaryNum(num int)`**: Set the number of async worker goroutines for summary processing. Default is 2. More workers allow higher concurrency but consume more resources.
+- **`WithAsyncSummaryNum(num int)`**: Set the number of async worker goroutines for summary processing. Default is 3. More workers allow higher concurrency but consume more resources.
 - **`WithSummaryQueueSize(size int)`**: Set the size of the summary job queue. Default is 100. Larger queues allow more pending jobs but consume more memory.
-- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set the timeout for processing a single summary job. Default is 30 seconds.
+- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set the timeout for processing a single summary job. Default is 60 seconds.
 
 ### Manual Summarization
 
@@ -1951,7 +1951,7 @@ func main() {
         inmemory.WithSummarizer(summarizer),
         inmemory.WithAsyncSummaryNum(2),
         inmemory.WithSummaryQueueSize(100),
-        inmemory.WithSummaryJobTimeout(30*time.Second),
+        inmemory.WithSummaryJobTimeout(60*time.Second),
     )
 
     // Create agent with summary injection enabled.

@@ -4923,6 +4923,223 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 		assert.Equal(t, 2, nextIndex)
 	})
 
+	t.Run("fix indices for repeated chunks of the same tool call ID", func(t *testing.T) {
+		// This test covers providers that keep returning index 0 for subsequent chunks of a later tool call, which would otherwise corrupt the accumulator state.
+		idToIndexMap := make(map[string]int)
+		nextIndex := 0
+		// Prepare streaming chunks.
+		chunk1 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_1",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_a",
+									Arguments: `{"arg":"v1_part1"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		chunk2 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_1",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Arguments: `{"arg":"v1_part2"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		chunk3 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_2",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_b",
+									Arguments: `{"arg":"v2_part1"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		chunk4 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_2",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Arguments: `{"arg":"v2_part2"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		// Apply index fixing per chunk.
+		fixed1 := fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
+		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
+		fixed3 := fixToolCallIndices(chunk3, idToIndexMap, &nextIndex)
+		fixed4 := fixToolCallIndices(chunk4, idToIndexMap, &nextIndex)
+		// Verify fixed indices and mapping.
+		assert.Equal(t, int64(0), fixed1.Choices[0].Delta.ToolCalls[0].Index)
+		assert.Equal(t, int64(0), fixed2.Choices[0].Delta.ToolCalls[0].Index)
+		assert.Equal(t, int64(1), fixed3.Choices[0].Delta.ToolCalls[0].Index)
+		assert.Equal(t, int64(1), fixed4.Choices[0].Delta.ToolCalls[0].Index)
+		assert.Equal(t, map[string]int{"call_1": 0, "call_2": 1}, idToIndexMap)
+		assert.Equal(t, 2, nextIndex)
+		// Feed fixed chunks into the accumulator.
+		acc := openai.ChatCompletionAccumulator{}
+		acc.AddChunk(fixed1)
+		acc.AddChunk(fixed2)
+		acc.AddChunk(fixed3)
+		acc.AddChunk(fixed4)
+		// Verify the accumulator keeps tool calls separated.
+		assert.Len(t, acc.Choices, 1)
+		assert.Len(t, acc.Choices[0].Message.ToolCalls, 2)
+		assert.Equal(t, "call_1", acc.Choices[0].Message.ToolCalls[0].ID)
+		assert.Equal(t, "call_2", acc.Choices[0].Message.ToolCalls[1].ID)
+		assert.Equal(t, "tool_a", acc.Choices[0].Message.ToolCalls[0].Function.Name)
+		assert.Equal(t, "tool_b", acc.Choices[0].Message.ToolCalls[1].Function.Name)
+		assert.Equal(t, `{"arg":"v1_part1"}{"arg":"v1_part2"}`, acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
+		assert.Equal(t, `{"arg":"v2_part1"}{"arg":"v2_part2"}`, acc.Choices[0].Message.ToolCalls[1].Function.Arguments)
+	})
+
+	t.Run("fix indices for multiple tool calls in a single chunk with same index 0", func(t *testing.T) {
+		// This test covers providers that emit multiple tool calls in a single chunk with all indices set to 0.
+		idToIndexMap := make(map[string]int)
+		nextIndex := 0
+		// Prepare a chunk containing two tool calls.
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_1",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_a",
+									Arguments: `{"arg":"value1"}`,
+								},
+							},
+							{
+								Index: 0,
+								ID:    "call_2",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_b",
+									Arguments: `{"arg":"value2"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		// Apply index fixing and verify mapping.
+		fixed := fixToolCallIndices(chunk, idToIndexMap, &nextIndex)
+		assert.Equal(t, int64(0), fixed.Choices[0].Delta.ToolCalls[0].Index)
+		assert.Equal(t, int64(1), fixed.Choices[0].Delta.ToolCalls[1].Index)
+		assert.Equal(t, map[string]int{"call_1": 0, "call_2": 1}, idToIndexMap)
+		assert.Equal(t, 2, nextIndex)
+		// Verify accumulator output.
+		acc := openai.ChatCompletionAccumulator{}
+		acc.AddChunk(fixed)
+		require.Len(t, acc.Choices, 1)
+		require.Len(t, acc.Choices[0].Message.ToolCalls, 2)
+		assert.Equal(t, "call_1", acc.Choices[0].Message.ToolCalls[0].ID)
+		assert.Equal(t, "call_2", acc.Choices[0].Message.ToolCalls[1].ID)
+		assert.Equal(t, "tool_a", acc.Choices[0].Message.ToolCalls[0].Function.Name)
+		assert.Equal(t, "tool_b", acc.Choices[0].Message.ToolCalls[1].Function.Name)
+		assert.Equal(t, `{"arg":"value1"}`, acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
+		assert.Equal(t, `{"arg":"value2"}`, acc.Choices[0].Message.ToolCalls[1].Function.Arguments)
+	})
+
+	t.Run("fix indices for multiple tool calls in a single chunk with colliding non-zero index", func(t *testing.T) {
+		// This test covers providers that emit multiple tool calls sharing a non-zero index in the same chunk.
+		idToIndexMap := make(map[string]int)
+		nextIndex := 0
+		// Prepare a chunk containing two tool calls that both claim the same non-zero index.
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 5,
+								ID:    "call_1",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_a",
+									Arguments: `{"arg":"value1"}`,
+								},
+							},
+							{
+								Index: 5,
+								ID:    "call_2",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_b",
+									Arguments: `{"arg":"value2"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		// Apply index fixing and verify both tool calls end up with distinct indices.
+		fixed := fixToolCallIndices(chunk, idToIndexMap, &nextIndex)
+		idx1 := int(fixed.Choices[0].Delta.ToolCalls[0].Index)
+		idx2 := int(fixed.Choices[0].Delta.ToolCalls[1].Index)
+		require.NotEqual(t, idx1, idx2)
+		assert.Equal(t, idx1, idToIndexMap["call_1"])
+		assert.Equal(t, idx2, idToIndexMap["call_2"])
+		// Verify accumulator output uses separate slots for both tool calls.
+		acc := openai.ChatCompletionAccumulator{}
+		acc.AddChunk(fixed)
+		require.Len(t, acc.Choices, 1)
+		maxIndex := idx1
+		if idx2 > maxIndex {
+			maxIndex = idx2
+		}
+		require.GreaterOrEqual(t, len(acc.Choices[0].Message.ToolCalls), maxIndex+1)
+		assert.Equal(t, "call_1", acc.Choices[0].Message.ToolCalls[idx1].ID)
+		assert.Equal(t, "call_2", acc.Choices[0].Message.ToolCalls[idx2].ID)
+		assert.Equal(t, "tool_a", acc.Choices[0].Message.ToolCalls[idx1].Function.Name)
+		assert.Equal(t, "tool_b", acc.Choices[0].Message.ToolCalls[idx2].Function.Name)
+		assert.Equal(t, `{"arg":"value1"}`, acc.Choices[0].Message.ToolCalls[idx1].Function.Arguments)
+		assert.Equal(t, `{"arg":"value2"}`, acc.Choices[0].Message.ToolCalls[idx2].Function.Arguments)
+	})
+
 	t.Run("preserve correct indices when provider sets them properly", func(t *testing.T) {
 		idToIndexMap := make(map[string]int)
 		nextIndex := 0

@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -534,7 +535,8 @@ func TestRunNoMessages(t *testing.T) {
 	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"}
 	eventsCh, err := r.Run(context.Background(), input)
 	assert.Nil(t, eventsCh)
-	assert.EqualError(t, err, "no messages provided")
+	assert.ErrorContains(t, err, "build input message")
+	assert.ErrorContains(t, err, "no messages provided")
 	assert.Equal(t, 0, underlying.calls)
 }
 
@@ -584,7 +586,34 @@ func TestRunLastMessageNotUser(t *testing.T) {
 	}
 	eventsCh, err := r.Run(context.Background(), input)
 	assert.Nil(t, eventsCh)
-	assert.EqualError(t, err, "last message is not a user message")
+	assert.ErrorContains(t, err, "build input message")
+	assert.ErrorContains(t, err, "last message role must be user or tool")
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunToolMessageMissingToolCallID(t *testing.T) {
+	underlying := &fakeRunner{}
+	fakeTrans := &fakeTranslator{}
+	r := &runner{
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
+		userIDResolver:    NewOptions().UserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+	}
+
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleTool, Content: "ok"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.Nil(t, eventsCh)
+	assert.ErrorContains(t, err, "build input message")
+	assert.ErrorContains(t, err, "tool message missing tool call id")
 	assert.Equal(t, 0, underlying.calls)
 }
 
@@ -618,6 +647,155 @@ func TestRunUnderlyingRunnerError(t *testing.T) {
 	_, ok := evts[1].(*aguievents.RunErrorEvent)
 	assert.True(t, ok)
 	assert.Equal(t, 1, underlying.calls)
+}
+
+func TestRunToolMessageRecordedInTrackAndForwarded(t *testing.T) {
+	var got model.Message
+	tracker := &recordingTracker{}
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			got = message
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		appName:            "app",
+		runner:             underlying,
+		translatorFactory:  defaultTranslatorFactory,
+		userIDResolver:     defaultUserIDResolver,
+		stateResolver:      defaultStateResolver,
+		runOptionResolver:  defaultRunOptionResolver,
+		tracker:            tracker,
+		startSpan:          defaultStartSpan,
+		translateCallbacks: nil,
+	}
+
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{
+			{
+				ID:         "tool-msg-1",
+				Role:       types.RoleTool,
+				Content:    "result",
+				Name:       "calc",
+				ToolCallID: "call-1",
+			},
+		},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+
+	var sseFound bool
+	for _, evt := range evts {
+		res, ok := evt.(*aguievents.ToolCallResultEvent)
+		if !ok {
+			continue
+		}
+		assert.Equal(t, "tool-msg-1", res.MessageID)
+		assert.Equal(t, "call-1", res.ToolCallID)
+		assert.Equal(t, "result", res.Content)
+		sseFound = true
+	}
+	assert.True(t, sseFound)
+
+	assert.Equal(t, model.RoleTool, got.Role)
+	assert.Equal(t, "result", got.Content)
+	assert.Equal(t, "calc", got.ToolName)
+	assert.Equal(t, "call-1", got.ToolID)
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	var found bool
+	for _, evt := range tracker.events {
+		res, ok := evt.(*aguievents.ToolCallResultEvent)
+		if !ok {
+			continue
+		}
+		assert.Equal(t, "tool-msg-1", res.MessageID)
+		assert.Equal(t, "call-1", res.ToolCallID)
+		assert.Equal(t, "result", res.Content)
+		found = true
+	}
+	assert.True(t, found)
+}
+
+func TestRunToolMessageSSEOrderAfterRunStarted(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event, 1)
+			ch <- agentevent.New("inv", "assistant")
+			close(ch)
+			return ch, nil
+		},
+	}
+	fakeTrans := &fakeTranslator{
+		events: [][]aguievents.Event{
+			{
+				aguievents.NewActivityDeltaEvent(
+					"activity-1",
+					"graph.node.start",
+					[]aguievents.JSONPatchOperation{
+						{
+							Op:   "add",
+							Path: "/node",
+							Value: map[string]any{
+								"nodeId": "external_tool",
+							},
+						},
+					},
+				),
+				aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant")),
+			},
+		},
+	}
+	r := &runner{
+		runner: underlying,
+		translatorFactory: func(ctx context.Context, input *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
+		userIDResolver:    NewOptions().UserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{
+			{
+				ID:         "tool-msg-1",
+				Role:       types.RoleTool,
+				Content:    "tool result",
+				ToolCallID: "call-1",
+			},
+		},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 4)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	assert.IsType(t, (*aguievents.ToolCallResultEvent)(nil), evts[1])
+	assert.IsType(t, (*aguievents.ActivityDeltaEvent)(nil), evts[2])
+	assert.IsType(t, (*aguievents.TextMessageStartEvent)(nil), evts[3])
+
+	resultEvent, ok := evts[1].(*aguievents.ToolCallResultEvent)
+	require.True(t, ok)
+	assert.Equal(t, "tool-msg-1", resultEvent.MessageID)
+	assert.Equal(t, "call-1", resultEvent.ToolCallID)
+	assert.Equal(t, "tool result", resultEvent.Content)
 }
 
 func TestRunRunOptionResolverError(t *testing.T) {
@@ -692,7 +870,6 @@ func TestRunLastMessageContentNotString(t *testing.T) {
 		}},
 	}
 	startSpanCalled := false
-	var span *spySpan
 	r := &runner{
 		runner: underlying,
 		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
@@ -704,18 +881,16 @@ func TestRunLastMessageContentNotString(t *testing.T) {
 		startSpan: func(ctx context.Context, in *adapter.RunAgentInput) (context.Context, trace.Span, error) {
 			assert.Same(t, input, in)
 			startSpanCalled = true
-			span = &spySpan{Span: trace.SpanFromContext(ctx)}
-			return ctx, span, nil
+			return ctx, trace.SpanFromContext(ctx), nil
 		},
 	}
 
 	eventsCh, err := r.Run(context.Background(), input)
 	assert.Nil(t, eventsCh)
-	assert.EqualError(t, err, "last message content is not a string")
-	assert.True(t, startSpanCalled)
+	assert.ErrorContains(t, err, "build input message")
+	assert.ErrorContains(t, err, "last message content is not a string")
+	assert.False(t, startSpanCalled)
 	assert.Equal(t, 0, underlying.calls)
-	assert.NotNil(t, span)
-	assert.Equal(t, 1, span.endCalls)
 }
 
 func TestRunFlushesTracker(t *testing.T) {
@@ -1439,6 +1614,30 @@ func (f *flushRecorder) GetEvents(ctx context.Context, key session.Key) (*sessio
 
 func (f *flushRecorder) Flush(ctx context.Context, key session.Key) error {
 	f.flushCount++
+	return nil
+}
+
+type recordingTracker struct {
+	mu         sync.Mutex
+	events     []aguievents.Event
+	flushCount int
+}
+
+func (r *recordingTracker) AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+	return nil
+}
+
+func (r *recordingTracker) GetEvents(ctx context.Context, key session.Key) (*session.TrackEvents, error) {
+	return nil, nil
+}
+
+func (r *recordingTracker) Flush(ctx context.Context, key session.Key) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.flushCount++
 	return nil
 }
 

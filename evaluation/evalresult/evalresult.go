@@ -41,6 +41,8 @@ type EvalCaseResult struct {
 	EvalID string `json:"evalId,omitempty"`
 	// FinalEvalStatus is the final eval status for this eval case.
 	FinalEvalStatus status.EvalStatus `json:"finalEvalStatus,omitempty"`
+	// ErrorMessage contains the error message when evaluation execution failed.
+	ErrorMessage string `json:"errorMessage,omitempty"`
 	// OverallEvalMetricResults contains overall result for each metric for the entire eval case.
 	OverallEvalMetricResults []*EvalMetricResult `json:"overallEvalMetricResults,omitempty"`
 	// EvalMetricResultPerInvocation contains result for each metric on a per invocation basis.
