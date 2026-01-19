@@ -3334,6 +3334,32 @@ func TestExecuteToolWithCallbacks_PluginBeforeToolArgsModified(
 	require.Equal(t, modifiedArgs, string(gotArgs))
 }
 
+// TestExecuteToolWithCallbacks_RepairsToolCallArgumentsWhenEnabled verifies arguments are repaired before tool execution.
+func TestExecuteToolWithCallbacks_RepairsToolCallArgumentsWhenEnabled(t *testing.T) {
+	proc := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{RunOptions: agent.RunOptions{ToolCallArgumentsJSONRepairEnabled: true}}
+	toolArgs := ""
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, args []byte) (any, error) {
+			toolArgs = string(args)
+			return "ok", nil
+		},
+	}
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "t",
+			Arguments: []byte("{a:2}"),
+		},
+	}
+
+	_, res, _, err := proc.executeToolWithCallbacks(context.Background(), inv, toolCall, tl, nil)
+	require.NoError(t, err)
+	require.Equal(t, "ok", res)
+	require.Equal(t, "{\"a\":2}", toolArgs)
+}
+
 func TestExecuteToolWithCallbacks_PluginAfterToolError(t *testing.T) {
 	p := &hookPlugin{
 		name: "p",

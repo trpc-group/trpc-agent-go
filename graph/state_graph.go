@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -1381,7 +1382,10 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 			config.Response = customResponse
 		}
 	}
-
+	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
+		invocation.RunOptions.ToolCallArgumentsJSONRepairEnabled {
+		jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, config.Response)
+	}
 	llmEvent := event.NewResponseEvent(
 		config.InvocationID,
 		modelResponseAuthor(config),
@@ -2377,7 +2381,10 @@ func runTool(
 	t tool.Tool,
 ) (context.Context, any, []byte, error) {
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
-
+	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
+		invocation.RunOptions.ToolCallArgumentsJSONRepairEnabled {
+		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
+	}
 	decl := t.Declaration()
 
 	ctx, toolCall, customResult, err := runBeforeToolPluginCallbacks(

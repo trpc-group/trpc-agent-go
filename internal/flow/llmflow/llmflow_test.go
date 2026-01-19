@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
@@ -98,6 +99,46 @@ func TestCreateLLMResponseEvent_LongRunningIDs(t *testing.T) {
 	if _, ok := evt.LongRunningToolIDs["x"]; !ok {
 		t.Fatalf("expected long-running tool id tracked")
 	}
+}
+
+// TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled verifies tool call arguments are repaired when enabled.
+func TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+		ToolCallArgumentsJSONRepairEnabled: true,
+	}))
+	req := &model.Request{}
+	response := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   "call-1",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "tool",
+								Arguments: []byte("{a:2}"),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	responseChan := make(chan *model.Response, 1)
+	responseChan <- response
+	close(responseChan)
+
+	eventChan := make(chan *event.Event, 10)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	ctx, span := tracer.Start(context.Background(), "s")
+	defer span.End()
+
+	lastEvent, err := f.processStreamingResponses(ctx, inv, req, responseChan, eventChan, span)
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.Equal(t, "{\"a\":2}", string(response.Choices[0].Message.ToolCalls[0].Function.Arguments))
 }
 
 // mockAgent implements agent.Agent for testing
