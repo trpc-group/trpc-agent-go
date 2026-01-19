@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package main
 
 import (
@@ -78,7 +87,7 @@ type BenchmarkResult struct {
 	GroundTruth     string        `json:"ground_truth"`
 	Correct         bool          `json:"correct"`
 	Steps           int           `json:"steps"`
-	ExecutionTime   time.Duration `json:"execution_time_ms"`
+	ExecutionTime   time.Duration `json:"execution_time"`
 	TokensUsed      int           `json:"tokens_used"`
 	ToolCalls       int           `json:"tool_calls"`
 	Error           string        `json:"error,omitempty"`
