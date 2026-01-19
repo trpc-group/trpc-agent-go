@@ -16,7 +16,7 @@ The goal is to show how to combine:
 ## What You Get
 
 - A runnable GAIA evaluation driver (`main.go`)
-- A small dataset file and a few sample attachments under `./data`
+- A `./data/` placeholder (gitignored) for GAIA JSON/files
 - Two example skills under `./skills` (`whisper`, `ocr`)
 
 ## Prerequisites
@@ -85,7 +85,7 @@ See the skill docs:
 
 ## Data Layout
 
-This example expects:
+This example expects (you need to download/populate these files locally):
 
 - Dataset JSON: `./data/gaia_2023_level1_validation.json`
 - Attachments: `./data/2023/validation/*`

@@ -131,6 +131,19 @@ GAIA 基准示例（技能 + 文件工具）：
 该示例包含数据集下载脚本，以及 `whisper`（音频）/`ocr`（图片）等
 技能的 Python 依赖准备说明。
 
+快速开始（下载数据集 JSON 到 `examples/skill/data/`）：
+
+```bash
+export HF_TOKEN="hf_..."
+python3 examples/skill/scripts/download_gaia_2023_level1_validation.py
+```
+
+如需同时下载引用到的附件文件：
+
+```bash
+python3 examples/skill/scripts/download_gaia_2023_level1_validation.py --with-files
+```
+
 示例技能（节选）：
 [examples/skillrun/skills/python_math/SKILL.md]
 (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)

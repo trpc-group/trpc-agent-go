@@ -128,6 +128,19 @@ GAIA benchmark demo (skills + file tools):
 It includes a dataset downloader script and notes on Python dependencies
 for skills like `whisper` (audio) and `ocr` (images).
 
+Quick start (download dataset JSON into `examples/skill/data/`):
+
+```bash
+export HF_TOKEN="hf_..."
+python3 examples/skill/scripts/download_gaia_2023_level1_validation.py
+```
+
+To also download referenced attachment files:
+
+```bash
+python3 examples/skill/scripts/download_gaia_2023_level1_validation.py --with-files
+```
+
 Sample skill (excerpt):
 [examples/skillrun/skills/python_math/SKILL.md]
 (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)
