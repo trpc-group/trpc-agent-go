@@ -29,3 +29,66 @@ func TestSkillRunOutputFilesFromContext_Sorted(t *testing.T) {
 	require.Equal(t, "b.txt", files[1].Name)
 	require.Equal(t, "b", files[1].Content)
 }
+
+func TestStoreSkillRunOutputFilesFromContext_NoInvocation(t *testing.T) {
+	StoreSkillRunOutputFilesFromContext(
+		context.Background(),
+		[]codeexecutor.File{{Name: "a.txt", Content: "a"}},
+	)
+}
+
+func TestStoreSkillRunOutputFiles_Merges(t *testing.T) {
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	StoreSkillRunOutputFilesFromContext(
+		ctx,
+		[]codeexecutor.File{{Name: "a.txt", Content: "a"}},
+	)
+	StoreSkillRunOutputFilesFromContext(
+		ctx,
+		[]codeexecutor.File{
+			{Name: "b.txt", Content: "b"},
+			{Name: "  ", Content: "ignored"},
+		},
+	)
+
+	content, _, ok := LookupSkillRunOutputFileFromContext(ctx, "a.txt")
+	require.True(t, ok)
+	require.Equal(t, "a", content)
+
+	content, _, ok = LookupSkillRunOutputFileFromContext(ctx, "b.txt")
+	require.True(t, ok)
+	require.Equal(t, "b", content)
+}
+
+func TestLookupSkillRunOutputFileFromContext_Miss(t *testing.T) {
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	content, mime, ok := LookupSkillRunOutputFileFromContext(ctx, "a.txt")
+	require.False(t, ok)
+	require.Empty(t, content)
+	require.Empty(t, mime)
+
+	content, mime, ok = LookupSkillRunOutputFileFromContext(
+		context.Background(),
+		"a.txt",
+	)
+	require.False(t, ok)
+	require.Empty(t, content)
+	require.Empty(t, mime)
+}
+
+func TestLookupSkillRunOutputFile_InvalidArgs(t *testing.T) {
+	content, mime, ok := LookupSkillRunOutputFile(nil, "a.txt")
+	require.False(t, ok)
+	require.Empty(t, content)
+	require.Empty(t, mime)
+
+	inv := agent.NewInvocation()
+	content, mime, ok = LookupSkillRunOutputFile(inv, "  ")
+	require.False(t, ok)
+	require.Empty(t, content)
+	require.Empty(t, mime)
+}

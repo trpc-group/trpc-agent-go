@@ -317,3 +317,63 @@ func TestSearchContent_PathFile_FromSkillRunCache(t *testing.T) {
 	)
 	assert.Len(t, rsp.FileMatches[0].Matches, 1)
 }
+
+func TestSearchContent_FilePattern_WorkspaceRef(t *testing.T) {
+	tempDir := t.TempDir()
+
+	set, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/transcript.txt",
+			Content:  "freshly squeezed lemon juice\n",
+			MIMEType: "text/plain",
+		},
+	})
+
+	req := searchContentRequest{
+		Path:           "",
+		FilePattern:    fileref.WorkspaceRef("out/transcript.txt"),
+		ContentPattern: "freshly squeezed lemon juice",
+	}
+	rsp, err := fts.searchContent(ctx, &req)
+	assert.NoError(t, err)
+	assert.Len(t, rsp.FileMatches, 1)
+	assert.Equal(t, fileref.WorkspaceRef("out/transcript.txt"),
+		rsp.FileMatches[0].FilePath)
+	assert.Len(t, rsp.FileMatches[0].Matches, 1)
+}
+
+func TestSearchContent_FromSkillRunCache_JoinsBasename(t *testing.T) {
+	tempDir := t.TempDir()
+
+	set, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/transcript.txt",
+			Content:  "freshly squeezed lemon juice\n",
+			MIMEType: "text/plain",
+		},
+	})
+
+	req := searchContentRequest{
+		Path:           "out",
+		FilePattern:    "transcript.txt",
+		ContentPattern: "freshly squeezed lemon juice",
+	}
+	rsp, err := fts.searchContent(ctx, &req)
+	assert.NoError(t, err)
+	assert.Equal(t, "out", rsp.Path)
+	assert.Len(t, rsp.FileMatches, 1)
+	assert.Equal(t, "out/transcript.txt", rsp.FileMatches[0].FilePath)
+	assert.Len(t, rsp.FileMatches[0].Matches, 1)
+}

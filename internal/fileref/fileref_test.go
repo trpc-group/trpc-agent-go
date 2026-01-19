@@ -7,9 +7,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestParse_NoScheme(t *testing.T) {
@@ -40,6 +43,23 @@ func TestParse_UnsupportedScheme(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestParse_Artifact_EmptyName(t *testing.T) {
+	_, err := fileref.Parse("artifact://")
+	require.Error(t, err)
+}
+
+func TestParse_Workspace_InvalidPath(t *testing.T) {
+	_, err := fileref.Parse("workspace://../x")
+	require.Error(t, err)
+
+	_, err = fileref.Parse("workspace:///abs")
+	require.Error(t, err)
+}
+
+func TestWorkspaceRef(t *testing.T) {
+	require.Equal(t, "workspace://out/a.txt", fileref.WorkspaceRef("out/a.txt"))
+}
+
 func TestTryRead_Workspace_FromCache(t *testing.T) {
 	inv := agent.NewInvocation()
 	ctx := agent.NewInvocationContext(context.Background(), inv)
@@ -63,6 +83,20 @@ func TestTryRead_Workspace_FromCache(t *testing.T) {
 	require.Equal(t, "text/plain", mime)
 }
 
+func TestTryRead_Workspace_NotExported(t *testing.T) {
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	content, mime, handled, err := fileref.TryRead(
+		ctx,
+		"workspace://out/a.txt",
+	)
+	require.Error(t, err)
+	require.True(t, handled)
+	require.Empty(t, content)
+	require.Empty(t, mime)
+}
+
 func TestTryRead_Artifact_NoService(t *testing.T) {
 	content, mime, handled, err := fileref.TryRead(
 		context.Background(),
@@ -72,4 +106,49 @@ func TestTryRead_Artifact_NoService(t *testing.T) {
 	require.True(t, handled)
 	require.Empty(t, content)
 	require.Empty(t, mime)
+}
+
+func TestTryRead_Artifact_WithService(t *testing.T) {
+	svc := artifactinmemory.NewService()
+	sess := session.NewSession("app", "user", "sess")
+
+	inv := agent.NewInvocation()
+	inv.Session = sess
+	inv.ArtifactService = svc
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	info := artifact.SessionInfo{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}
+	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
+	ctxIO = codeexecutor.WithArtifactSession(ctxIO, info)
+	_, err := codeexecutor.SaveArtifactHelper(
+		ctxIO,
+		"x.txt",
+		[]byte("hi"),
+		"text/plain",
+	)
+	require.NoError(t, err)
+
+	content, mime, handled, err := fileref.TryRead(ctx, "artifact://x.txt")
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.Equal(t, "hi", content)
+	require.Equal(t, "text/plain", mime)
+}
+
+func TestWorkspaceFiles(t *testing.T) {
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	toolcache.StoreSkillRunOutputFilesFromContext(
+		ctx,
+		[]codeexecutor.File{{Name: "out/a.txt", Content: "hi"}},
+	)
+	files := fileref.WorkspaceFiles(ctx)
+	require.Len(t, files, 1)
+	require.Equal(t, "out/a.txt", files[0].Name)
+	require.Equal(t, "hi", files[0].Content)
 }

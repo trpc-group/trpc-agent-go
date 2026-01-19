@@ -20,7 +20,11 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	skilltool "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 )
@@ -375,6 +379,42 @@ func TestFileTool_ReadFile_FromSkillRunCache(t *testing.T) {
 
 	rsp, err = fileToolSet.readFile(ctx, &readFileRequest{
 		FileName: "workspace://out/a.txt",
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, "hi", rsp.Contents)
+}
+
+func TestFileTool_ReadFile_ArtifactRef(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet, ok := toolSet.(*fileToolSet)
+	assert.True(t, ok)
+
+	svc := artifactinmemory.NewService()
+	sess := session.NewSession("app", "user", "sess")
+	inv := agent.NewInvocation()
+	inv.Session = sess
+	inv.ArtifactService = svc
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	info := artifact.SessionInfo{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}
+	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
+	ctxIO = codeexecutor.WithArtifactSession(ctxIO, info)
+	_, err = codeexecutor.SaveArtifactHelper(
+		ctxIO,
+		"x.txt",
+		[]byte("hi"),
+		"text/plain",
+	)
+	assert.NoError(t, err)
+
+	rsp, err := fileToolSet.readFile(ctx, &readFileRequest{
+		FileName: "artifact://x.txt",
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, "hi", rsp.Contents)
