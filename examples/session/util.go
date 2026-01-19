@@ -48,11 +48,11 @@ const (
 
 // SessionServiceConfig holds configuration for creating a session service.
 type SessionServiceConfig struct {
-	EventLimit             int
-	TTL                    time.Duration
-	AppendEventHooks       []session.AppendEventHook
-	GetSessionHooks        []session.GetSessionHook
-	OnConsecutiveUserMsg   session.OnConsecutiveUserMessageFunc
+	EventLimit           int
+	TTL                  time.Duration
+	AppendEventHooks     []session.AppendEventHook
+	GetSessionHooks      []session.GetSessionHook
+	OnConsecutiveUserMsg session.OnConsecutiveUserMessageFunc
 }
 
 // NewSessionServiceByType creates a session service based on the specified type.
