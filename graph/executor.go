@@ -511,16 +511,28 @@ func (e *Executor) applyExecutableNextNodes(restored State, tuple *CheckpointTup
 
 // processResumeCommand applies resume-related fields from the initial state.
 func (e *Executor) processResumeCommand(execState, initialState State) State {
-	if cmd, ok := initialState[StateKeyCommand].(*Command); ok {
-		// Apply resume values if present.
-		if cmd.Resume != nil {
-			execState[ResumeChannel] = cmd.Resume
-		}
-		if cmd.ResumeMap != nil {
-			execState[StateKeyResumeMap] = cmd.ResumeMap
-		}
-		delete(execState, StateKeyCommand)
+	cmd, ok := initialState[StateKeyCommand]
+	if !ok {
+		return execState
 	}
+	var resumeCmd *ResumeCommand
+	switch v := cmd.(type) {
+	case *Command:
+		resumeCmd = NewResumeCommand().WithResume(v.Resume).WithResumeMap(v.ResumeMap)
+	case *ResumeCommand:
+		resumeCmd = v
+	default:
+	}
+	if resumeCmd != nil {
+		// Apply resume values if present.
+		if resumeCmd.Resume != nil {
+			execState[ResumeChannel] = resumeCmd.Resume
+		}
+		if len(resumeCmd.ResumeMap) > 0 {
+			execState[StateKeyResumeMap] = resumeCmd.ResumeMap
+		}
+	}
+	delete(execState, StateKeyCommand)
 	return execState
 }
 

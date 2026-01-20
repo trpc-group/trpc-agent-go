@@ -445,6 +445,12 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 		if isInvocationMessage {
 			includedInvocationMessage = true
 		}
+		// use error fill message content if message content is empty
+		if len(evt.Choices) > 0 && evt.Choices[0].Message.Content == "" && evt.Response.Error != nil {
+			evt.Choices[0].Message.Content = fmt.Sprintf(
+				"type: %s, message: %s", evt.Response.Error.Type, evt.Response.Error.Message,
+			)
+		}
 		events = append(events, evt)
 	}
 	inv.Session.EventMu.RUnlock()
@@ -540,6 +546,12 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 		// Skip invalid events
 		if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
 			continue
+		}
+		// use error fill message content if message content is empty
+		if len(evt.Choices) > 0 && evt.Choices[0].Message.Content == "" && evt.Response.Error != nil {
+			evt.Choices[0].Message.Content = fmt.Sprintf(
+				"type: %s, message: %s", evt.Response.Error.Type, evt.Response.Error.Message,
+			)
 		}
 		events = append(events, evt)
 	}
