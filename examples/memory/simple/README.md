@@ -5,6 +5,7 @@ This example demonstrates simple memory management using the `Runner` orchestrat
 ## Overview
 
 This is the simple memory example that shows how to integrate memory capabilities using explicit tool registration. The LLM agent can:
+
 - Add new memories about the user
 - Update existing memories
 - Search for relevant memories
@@ -82,28 +83,34 @@ runner := runner.NewRunner(
 
 ### Memory Service Environment Variables
 
-| Variable         | Description              | Default Value    |
-| ---------------- | ------------------------ | ---------------- |
-| `REDIS_ADDR`     | Redis server address     | `localhost:6379` |
-| `PG_HOST`        | PostgreSQL host          | `localhost`      |
-| `PG_PORT`        | PostgreSQL port          | `5432`           |
-| `PG_USER`        | PostgreSQL user          | `postgres`       |
-| `PG_PASSWORD`    | PostgreSQL password      | `my-secret-pw`   |
-| `PG_DATABASE`    | PostgreSQL database name | `postgres`       |
-| `MYSQL_HOST`     | MySQL host               | `localhost`      |
-| `MYSQL_PORT`     | MySQL port               | `3306`           |
-| `MYSQL_USER`     | MySQL user               | `root`           |
-| `MYSQL_PASSWORD` | MySQL password           | ``               |
-| `MYSQL_DATABASE` | MySQL database name      | `trpc_agent_go`  |
+| Variable                  | Description                  | Default Value            |
+| ------------------------- | ---------------------------- | ------------------------ |
+| `REDIS_ADDR`              | Redis server address         | `localhost:6379`         |
+| `PG_HOST`                 | PostgreSQL host              | `localhost`              |
+| `PG_PORT`                 | PostgreSQL port              | `5432`                   |
+| `PG_USER`                 | PostgreSQL user              | `postgres`               |
+| `PG_PASSWORD`             | PostgreSQL password          | ``                       |
+| `PG_DATABASE`             | PostgreSQL database name     | `trpc-agent-go-pgmemory` |
+| `PGVECTOR_HOST`           | pgvector PostgreSQL host     | `localhost`              |
+| `PGVECTOR_PORT`           | pgvector PostgreSQL port     | `5432`                   |
+| `PGVECTOR_USER`           | pgvector PostgreSQL user     | `postgres`               |
+| `PGVECTOR_PASSWORD`       | pgvector PostgreSQL password | ``                       |
+| `PGVECTOR_DATABASE`       | pgvector PostgreSQL database | `trpc-agent-go-pgmemory` |
+| `PGVECTOR_EMBEDDER_MODEL` | pgvector embedder model      | `text-embedding-3-small` |
+| `MYSQL_HOST`              | MySQL host                   | `localhost`              |
+| `MYSQL_PORT`              | MySQL port                   | `3306`                   |
+| `MYSQL_USER`              | MySQL user                   | `root`                   |
+| `MYSQL_PASSWORD`          | MySQL password               | ``                       |
+| `MYSQL_DATABASE`          | MySQL database name          | `trpc_agent_go`          |
 
 ## Command Line Arguments
 
-| Argument       | Description                                                 | Default Value   |
-| -------------- | ----------------------------------------------------------- | --------------- |
-| `-model`       | Name of the model to use                                    | `deepseek-chat` |
-| `-memory`      | Memory service: `inmemory`, `redis`, `mysql`, or `postgres` | `inmemory`      |
-| `-soft-delete` | Enable soft delete for MySQL/PostgreSQL memory service      | `false`         |
-| `-streaming`   | Enable streaming mode for responses                         | `true`          |
+| Argument       | Description                                                             | Default Value   |
+| -------------- | ----------------------------------------------------------------------- | --------------- |
+| `-model`       | Name of the model to use                                                | `deepseek-chat` |
+| `-memory`      | Memory service: `inmemory`, `redis`, `mysql`, `postgres`, or `pgvector` | `inmemory`      |
+| `-soft-delete` | Enable soft delete for MySQL/PostgreSQL/pgvector memory service         | `false`         |
+| `-streaming`   | Enable streaming mode for responses                                     | `true`          |
 
 ## Usage
 
@@ -147,7 +154,7 @@ go run main.go -model gpt-4o -streaming=false
 
 ### Service Configuration
 
-The example supports four memory service backends: in-memory, Redis, MySQL, and PostgreSQL:
+The example supports five memory service backends: in-memory, Redis, MySQL, PostgreSQL, and pgvector:
 
 ```bash
 # Default in-memory memory service
@@ -168,9 +175,18 @@ go run main.go -memory mysql
 export PG_HOST=localhost
 export PG_PORT=5432
 export PG_USER=postgres
-export PG_PASSWORD=my-secret-pw
-export PG_DATABASE=trpc_agent_go
+export PG_PASSWORD=""
+export PG_DATABASE=trpc-agent-go-pgmemory
 go run main.go -memory postgres
+
+# pgvector memory service (using environment variables)
+export PGVECTOR_HOST=localhost
+export PGVECTOR_PORT=5432
+export PGVECTOR_USER=postgres
+export PGVECTOR_PASSWORD=""
+export PGVECTOR_DATABASE=trpc-agent-go-pgmemory
+export PGVECTOR_EMBEDDER_MODEL=text-embedding-3-small
+go run main.go -memory pgvector
 ```
 
 ## Chat Interface
@@ -207,7 +223,7 @@ Available tools: memory_add, memory_update, memory_search, memory_load
 🆕 Started new memory session!
    Previous: memory-session-1703123456
    Current:  memory-session-1703123457
-   (Memory and conversation history have been reset)
+   (Conversation history has been reset, memories are preserved)
 
 👤 You: What do you remember about me?
 🤖 Assistant: Let me check what I remember about you.
@@ -230,7 +246,7 @@ Based on my memory, I know:
 ### Session Commands
 
 - `/memory` - Ask the agent to show stored memories
-- `/new` - Start a new session (resets conversation context and memory)
+- `/new` - Start a new session (resets conversation history, memories are preserved)
 - `/exit` - End the conversation
 
 ## Memory Management Features
@@ -246,6 +262,7 @@ The agent can search for and retrieve relevant memories when users ask questions
 ### Memory Visualization
 
 All memory operations are clearly displayed, showing:
+
 - Tool calls with arguments
 - Tool execution status
 - Tool responses with results
@@ -254,6 +271,7 @@ All memory operations are clearly displayed, showing:
 ### Custom Tool Enhancements
 
 The example demonstrates a custom clear tool with enhanced logging:
+
 - **Enhanced Logging**: Custom tools can provide more detailed execution logs
 - **Special Effects**: Custom tools can add visual indicators (emojis, colors)
 - **Extended Functionality**: Custom tools can perform additional operations
@@ -263,11 +281,12 @@ The example demonstrates a custom clear tool with enhanced logging:
 
 ### Memory Service Integration
 
-- Supports multiple backends: in-memory, Redis, MySQL, and PostgreSQL
+- Supports multiple backends: in-memory, Redis, MySQL, PostgreSQL, and pgvector
 - Uses `memoryinmemory.NewMemoryService()` for in-memory storage
 - Uses `memoryredis.NewService()` for Redis-based storage
 - Uses `memorymysql.NewService()` for MySQL-based storage
 - Uses `memorypostgres.NewService()` for PostgreSQL-based storage
+- Uses `memorypgvector.NewService()` for pgvector-based storage with vector similarity search
 - Memory tools directly access the memory service
 - Two-step integration: Step 1 (manual tool registration) + Step 2 (runner service setup)
 
@@ -300,15 +319,17 @@ User Input → Runner → Agent → Memory Tools → Memory Service → Response
 | Tool Registration | Manual        | Automatic   |
 | Memory Extraction | LLM decides   | Background  |
 | Tools Available   | All tools     | Limited     |
-| Control          | High          | Medium      |
-| Setup Complexity | Simple        | Complex     |
+| Control           | High          | Medium      |
+| Setup Complexity  | Simple        | Complex     |
 
 Use **Simple Memory** when you want:
+
 - Explicit control over memory operations
 - Full access to all memory tools
 - Simpler setup and understanding
 
 Use **Auto Memory** (see `../auto/`) when you want:
+
 - Automatic background memory extraction
 - Transparent memory management
 - Reduced manual tool configuration
@@ -316,6 +337,7 @@ Use **Auto Memory** (see `../auto/`) when you want:
 ## Extensibility
 
 This example demonstrates how to:
+
 1. Integrate memory tools into existing systems
 2. Add memory capabilities to agents
 3. Handle memory tool calls and responses
@@ -323,6 +345,7 @@ This example demonstrates how to:
 5. Create custom memory tools with enhanced functionality
 
 Future enhancements could include:
+
 - Memory expiration and cleanup
 - Memory priority and relevance scoring
 - Automatic memory summarization

@@ -5,6 +5,7 @@ go 1.24.4
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../../memory/mysql
+	trpc.group/trpc-go/trpc-agent-go/memory/pgvector => ../../memory/pgvector
 	trpc.group/trpc-go/trpc-agent-go/memory/postgres => ../../memory/postgres
 	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../../memory/redis
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../../storage/mysql
@@ -14,6 +15,7 @@ replace (
 require (
 	trpc.group/trpc-go/trpc-agent-go v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.1.1
+	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/postgres v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v1.1.1
 )
@@ -33,8 +35,10 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.7.2 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/lib/pq v1.10.9 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
+	github.com/pgvector/pgvector-go v0.2.3 // indirect
 	github.com/redis/go-redis/v9 v9.11.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
@@ -62,6 +66,6 @@ require (
 	google.golang.org/protobuf v1.34.2 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.6.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.0.0-20251126064502-c8c2594d2519 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.1.1 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0 // indirect
 )

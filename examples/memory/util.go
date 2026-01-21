@@ -15,11 +15,15 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
+	memorypgvector "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
 	memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
 	memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -36,12 +40,20 @@ const (
 	MemoryInMemory MemoryType = "inmemory"
 	MemoryRedis    MemoryType = "redis"
 	MemoryPostgres MemoryType = "postgres"
+	MemoryPGVector MemoryType = "pgvector"
 	MemoryMySQL    MemoryType = "mysql"
 )
 
 // MemoryServiceConfig holds configuration for creating a memory service.
 type MemoryServiceConfig struct {
+	// Soft delete configuration.
 	SoftDelete bool
+	// Extractor configuration for auto memory mode.
+	Extractor extractor.MemoryExtractor
+	// Async memory worker configuration.
+	AsyncMemoryNum   int
+	MemoryQueueSize  int
+	MemoryJobTimeout time.Duration
 }
 
 // RunnerConfig holds configuration for creating a runner.
@@ -70,14 +82,24 @@ func DefaultRunnerConfig() RunnerConfig {
 
 // NewMemoryServiceByType creates a memory service based on the specified type.
 //
+// This function supports both manual memory mode and auto memory mode:
+// - Manual mode: cfg.Extractor == nil, uses explicit memory tool calls
+// - Auto mode: cfg.Extractor != nil, automatically extracts memories from conversations
+//
 // Parameters:
-//   - memoryType: one of inmemory, redis, postgres, mysql
-//   - cfg: memory service configuration (softDelete)
+//   - memoryType: one of inmemory, redis, postgres, pgvector, mysql
+//   - cfg: memory service configuration
+//   - SoftDelete: enable soft delete for SQL backends
+//   - Extractor: memory extractor for auto mode (nil = manual mode)
+//   - AsyncMemoryNum: number of async workers for auto mode (default 1)
+//   - MemoryQueueSize: queue size for memory jobs in auto mode (default 10)
+//   - MemoryJobTimeout: timeout for each memory job in auto mode (default 30s)
 //
 // Environment variables by memory type:
 //
 //	redis:      REDIS_ADDR (default: localhost:6379)
 //	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
+//	pgvector:   PGVECTOR_HOST, PGVECTOR_PORT, PGVECTOR_USER, PGVECTOR_PASSWORD, PGVECTOR_DATABASE, PGVECTOR_EMBEDDER_MODEL
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (memory.Service, error) {
 	switch memoryType {
@@ -85,6 +107,8 @@ func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (mem
 		return newRedisMemoryService(cfg)
 	case MemoryPostgres:
 		return newPostgresMemoryService(cfg)
+	case MemoryPGVector:
+		return newPGVectorMemoryService(cfg)
 	case MemoryMySQL:
 		return newMySQLMemoryService(cfg)
 	case MemoryInMemory:
@@ -95,35 +119,58 @@ func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (mem
 }
 
 // newInMemoryMemoryService creates an in-memory memory service.
+// Supports both manual mode (cfg.Extractor == nil) and auto mode (cfg.Extractor != nil).
+func newInMemoryMemoryService(cfg MemoryServiceConfig) memory.Service {
+	opts := []memoryinmemory.ServiceOpt{}
 
-func newInMemoryMemoryService(_ MemoryServiceConfig) memory.Service {
-	return memoryinmemory.NewMemoryService(
-	// Additional options can be added:
-	//
-	//	memoryinmemory.WithToolEnabled(memory.DeleteToolName, true) - enable delete tool
-	//	memoryinmemory.WithToolEnabled(memory.ClearToolName, true) - enable clear tool
-	//	memoryinmemory.WithCustomTool(memory.ClearToolName, customTool) - use custom tool
-	)
+	// Configure extractor for auto memory mode if provided.
+	if cfg.Extractor != nil {
+		opts = append(opts, memoryinmemory.WithExtractor(cfg.Extractor))
+		if cfg.AsyncMemoryNum > 0 {
+			opts = append(opts, memoryinmemory.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
+		}
+		if cfg.MemoryQueueSize > 0 {
+			opts = append(opts, memoryinmemory.WithMemoryQueueSize(cfg.MemoryQueueSize))
+		}
+		if cfg.MemoryJobTimeout > 0 {
+			opts = append(opts, memoryinmemory.WithMemoryJobTimeout(cfg.MemoryJobTimeout))
+		}
+	}
+
+	return memoryinmemory.NewMemoryService(opts...)
 }
 
 // newRedisMemoryService creates a Redis memory service.
+// Supports both manual mode (cfg.Extractor == nil) and auto mode (cfg.Extractor != nil).
 // Environment variables:
 //   - REDIS_ADDR: Redis server address (default: localhost:6379)
-func newRedisMemoryService(_ MemoryServiceConfig) (memory.Service, error) {
+func newRedisMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	addr := GetEnvOrDefault("REDIS_ADDR", "localhost:6379")
 	redisURL := fmt.Sprintf("redis://%s", addr)
 
-	return memoryredis.NewService(
+	opts := []memoryredis.ServiceOpt{
 		memoryredis.WithRedisClientURL(redisURL),
-		// Additional options can be added:
-		//
-		//	memoryredis.WithToolEnabled(memory.DeleteToolName, true) - enable delete tool
-		//	memoryredis.WithToolEnabled(memory.ClearToolName, true) - enable clear tool
-		//	memoryredis.WithCustomTool(memory.ClearToolName, customTool) - use custom tool
-	)
+	}
+
+	// Configure extractor for auto memory mode if provided.
+	if cfg.Extractor != nil {
+		opts = append(opts, memoryredis.WithExtractor(cfg.Extractor))
+		if cfg.AsyncMemoryNum > 0 {
+			opts = append(opts, memoryredis.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
+		}
+		if cfg.MemoryQueueSize > 0 {
+			opts = append(opts, memoryredis.WithMemoryQueueSize(cfg.MemoryQueueSize))
+		}
+		if cfg.MemoryJobTimeout > 0 {
+			opts = append(opts, memoryredis.WithMemoryJobTimeout(cfg.MemoryJobTimeout))
+		}
+	}
+
+	return memoryredis.NewService(opts...)
 }
 
 // newPostgresMemoryService creates a PostgreSQL memory service.
+// Supports both manual mode (cfg.Extractor == nil) and auto mode (cfg.Extractor != nil).
 // Environment variables:
 //   - PG_HOST: PostgreSQL host (default: localhost)
 //   - PG_PORT: PostgreSQL port (default: 5432)
@@ -143,21 +190,87 @@ func newPostgresMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	password := GetEnvOrDefault("PG_PASSWORD", "")
 	database := GetEnvOrDefault("PG_DATABASE", "trpc-agent-go-pgmemory")
 
-	return memorypostgres.NewService(
+	opts := []memorypostgres.ServiceOpt{
 		memorypostgres.WithHost(host),
 		memorypostgres.WithPort(port),
 		memorypostgres.WithUser(user),
 		memorypostgres.WithPassword(password),
 		memorypostgres.WithDatabase(database),
 		memorypostgres.WithSoftDelete(cfg.SoftDelete),
-		// Additional options can be added:
-		// memorypostgres.WithToolEnabled(memory.DeleteToolName, true) - enable delete tool
-		// memorypostgres.WithToolEnabled(memory.ClearToolName, true) - enable clear tool
-		// memorypostgres.WithCustomTool(memory.ClearToolName, customTool) - use custom tool
-	)
+	}
+
+	// Configure extractor for auto memory mode if provided.
+	if cfg.Extractor != nil {
+		opts = append(opts, memorypostgres.WithExtractor(cfg.Extractor))
+		if cfg.AsyncMemoryNum > 0 {
+			opts = append(opts, memorypostgres.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
+		}
+		if cfg.MemoryQueueSize > 0 {
+			opts = append(opts, memorypostgres.WithMemoryQueueSize(cfg.MemoryQueueSize))
+		}
+		if cfg.MemoryJobTimeout > 0 {
+			opts = append(opts, memorypostgres.WithMemoryJobTimeout(cfg.MemoryJobTimeout))
+		}
+	}
+
+	return memorypostgres.NewService(opts...)
+}
+
+// newPGVectorMemoryService creates a pgvector memory service.
+// Supports both manual mode (cfg.Extractor == nil) and auto mode (cfg.Extractor != nil).
+// Environment variables:
+//   - PGVECTOR_HOST: PostgreSQL host (default: localhost)
+//   - PGVECTOR_PORT: PostgreSQL port (default: 5432)
+//   - PGVECTOR_USER: PostgreSQL user (default: postgres)
+//   - PGVECTOR_PASSWORD: PostgreSQL password (default: empty)
+//   - PGVECTOR_DATABASE: PostgreSQL database (default: trpc-agent-go-pgmemory)
+//   - PGVECTOR_EMBEDDER_MODEL: Embedder model name (default: text-embedding-3-small)
+func newPGVectorMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
+	host := GetEnvOrDefault("PGVECTOR_HOST", "localhost")
+	portStr := GetEnvOrDefault("PGVECTOR_PORT", "5432")
+	port := 5432
+	if portStr != "" {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			port = p
+		}
+	}
+	user := GetEnvOrDefault("PGVECTOR_USER", "postgres")
+	password := GetEnvOrDefault("PGVECTOR_PASSWORD", "")
+	database := GetEnvOrDefault("PGVECTOR_DATABASE", "trpc-agent-go-pgmemory")
+	embedderModel := GetEnvOrDefault("PGVECTOR_EMBEDDER_MODEL", "text-embedding-3-small")
+
+	// Create embedder - for simplicity, we'll use OpenAI embedder
+	embedder := openaiembedder.New(openaiembedder.WithModel(embedderModel))
+
+	opts := []memorypgvector.ServiceOpt{
+		memorypgvector.WithHost(host),
+		memorypgvector.WithPort(port),
+		memorypgvector.WithUser(user),
+		memorypgvector.WithPassword(password),
+		memorypgvector.WithDatabase(database),
+		memorypgvector.WithEmbedder(embedder),
+		memorypgvector.WithSoftDelete(cfg.SoftDelete),
+	}
+
+	// Configure extractor for auto memory mode if provided.
+	if cfg.Extractor != nil {
+		opts = append(opts, memorypgvector.WithExtractor(cfg.Extractor))
+		if cfg.AsyncMemoryNum > 0 {
+			opts = append(opts, memorypgvector.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
+		}
+		if cfg.MemoryQueueSize > 0 {
+			opts = append(opts, memorypgvector.WithMemoryQueueSize(cfg.MemoryQueueSize))
+		}
+		if cfg.MemoryJobTimeout > 0 {
+			opts = append(opts, memorypgvector.WithMemoryJobTimeout(cfg.MemoryJobTimeout))
+		}
+	}
+
+	return memorypgvector.NewService(opts...)
 }
 
 // newMySQLMemoryService creates a MySQL memory service.
+// Supports both manual mode (cfg.Extractor == nil) and auto mode (cfg.Extractor != nil).
 // Environment variables:
 //   - MYSQL_HOST: MySQL host (default: localhost)
 //   - MYSQL_PORT: MySQL port (default: 3306)
@@ -174,14 +287,26 @@ func newMySQLMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4",
 		user, password, host, port, database)
 
-	return memorymysql.NewService(
+	opts := []memorymysql.ServiceOpt{
 		memorymysql.WithMySQLClientDSN(dsn),
 		memorymysql.WithSoftDelete(cfg.SoftDelete),
-		// Additional options can be added:
-		// memorymysql.WithToolEnabled(memory.DeleteToolName, true) - enable delete tool
-		// memorymysql.WithToolEnabled(memory.ClearToolName, true) - enable clear tool
-		// memorymysql.WithCustomTool(memory.ClearToolName, customTool) - use custom tool
-	)
+	}
+
+	// Configure extractor for auto memory mode if provided.
+	if cfg.Extractor != nil {
+		opts = append(opts, memorymysql.WithExtractor(cfg.Extractor))
+		if cfg.AsyncMemoryNum > 0 {
+			opts = append(opts, memorymysql.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
+		}
+		if cfg.MemoryQueueSize > 0 {
+			opts = append(opts, memorymysql.WithMemoryQueueSize(cfg.MemoryQueueSize))
+		}
+		if cfg.MemoryJobTimeout > 0 {
+			opts = append(opts, memorymysql.WithMemoryJobTimeout(cfg.MemoryJobTimeout))
+		}
+	}
+
+	return memorymysql.NewService(opts...)
 }
 
 // NewRunner creates a runner with the given memory service and configuration.
@@ -240,6 +365,14 @@ func PrintMemoryInfo(memoryType MemoryType, softDelete bool) {
 		port := GetEnvOrDefault("PG_PORT", "5432")
 		database := GetEnvOrDefault("PG_DATABASE", "trpc-agent-go-pgmemory")
 		fmt.Printf("PostgreSQL: %s:%s/%s\n", host, port, database)
+		fmt.Printf("Soft delete: %t\n", softDelete)
+	case MemoryPGVector:
+		host := GetEnvOrDefault("PGVECTOR_HOST", "localhost")
+		port := GetEnvOrDefault("PGVECTOR_PORT", "5432")
+		database := GetEnvOrDefault("PGVECTOR_DATABASE", "trpc-agent-go-pgmemory")
+		embedderModel := GetEnvOrDefault("PGVECTOR_EMBEDDER_MODEL", "text-embedding-3-small")
+		fmt.Printf("pgvector: %s:%s/%s\n", host, port, database)
+		fmt.Printf("Embedder model: %s\n", embedderModel)
 		fmt.Printf("Soft delete: %t\n", softDelete)
 	case MemoryMySQL:
 		host := GetEnvOrDefault("MYSQL_HOST", "localhost")
