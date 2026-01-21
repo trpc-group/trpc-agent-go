@@ -3374,6 +3374,54 @@ _ = cm.DeleteLineage(ctx, lineageID)
 
 建议在生产中为 `namespace` 使用稳定的业务标识（如 `svc:prod:flowX`），便于审计与对账。
 
+#### 时间旅行：读取/编辑 State
+
+从检查点恢复可以做“时间旅行”（回到任意 checkpoint 继续跑）。在 HITL 和调试场景里，你通常还需要：在某个 checkpoint 上把 state 改掉，然后从这个点继续跑。
+
+关键点：恢复时，执行器会先用 checkpoint 的 state 还原；`runtime_state` 不会覆盖 checkpoint 里已有的 key，只会补齐缺失且非内部的 key。要改“已有 key”，需要写一个新的 checkpoint。
+
+使用 `graph.TimeTravel`：
+
+```go
+// 如果你使用 GraphAgent：
+tt, _ := ga.TimeTravel()
+// 或者如果你直接拿到 Executor：
+// tt, _ := exec.TimeTravel()
+
+base := graph.CheckpointRef{
+    LineageID:    lineageID,
+    Namespace:    namespace,
+    CheckpointID: checkpointID, // 为空表示 "latest"
+}
+
+// 读取 checkpoint 的 state（会按 schema 还原类型）。
+snap, _ := tt.GetState(ctx, base)
+
+// 基于 base 写一个 "update" checkpoint，并应用 state patch。
+newRef, _ := tt.EditState(ctx, base, graph.State{
+    "counter": 42,
+})
+
+// 从更新后的 checkpoint 恢复（如有需要同时提供 resume 值）。
+cmd := graph.NewResumeCommand().
+    AddResumeValue("review_key", "approved")
+
+rs := newRef.ToRuntimeState()
+rs[graph.StateKeyCommand] = cmd
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(rs),
+)
+```
+
+注意：
+
+- `EditState` 会写入一个新 checkpoint：`Source="update"` 且 `ParentCheckpointID=base`。
+- 默认禁止编辑内部 key；如确有需要再使用 `graph.WithAllowInternalKeys()`。
+- 更新 checkpoint 会写入 metadata key：`graph.CheckpointMetaKeyBaseCheckpointID` 与 `graph.CheckpointMetaKeyUpdatedKeys`。
+
+可运行示例：`examples/graph/time_travel_edit_state`。
+
 ### 默认值与注意事项
 
 - 默认值（Executor）
@@ -3453,14 +3501,15 @@ sg.AddNode(nodeReview, func(ctx context.Context, s graph.State) (any, error) {
 })
 
 // 恢复执行（需要 import agent 包）
+cmd := graph.NewResumeCommand().
+    AddResumeValue(interruptKeyReview, "approved")
+
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
         graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: checkpointID,
-        graph.StateKeyResumeMap: map[string]any{
-            "review_key": "approved",
-        },
+        graph.StateKeyCommand:    cmd,
     }),
 )
 ```
