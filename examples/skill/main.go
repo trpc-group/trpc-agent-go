@@ -146,6 +146,14 @@ func ensureWhisperPython3() {
 }
 
 func canImportWhisper(cmd string) bool {
+	// Only allow safe, predefined Python interpreter names.
+	switch cmd {
+	case "python3", "python":
+		// Safe: These are well-known system commands.
+	default:
+		// Reject any other input to prevent command injection.
+		return false
+	}
 	c := exec.Command(cmd, "-c", "import whisper")
 	c.Stdout = io.Discard
 	c.Stderr = io.Discard
