@@ -560,6 +560,139 @@ func TestNewToolsNodeFunc_WithEnableParallelTools(t *testing.T) {
 	<-done
 }
 
+func TestNewToolsNodeFunc_WithToolCallbacks(t *testing.T) {
+	// Track callback invocations.
+	var beforeCalled, afterCalled bool
+	callbacks := tool.NewCallbacks()
+	callbacks.BeforeTool = append(callbacks.BeforeTool,
+		func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+			beforeCalled = true
+			return &tool.BeforeToolResult{Context: ctx}, nil
+		},
+	)
+	callbacks.AfterTool = append(callbacks.AfterTool,
+		func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+			afterCalled = true
+			return &tool.AfterToolResult{Context: ctx}, nil
+		},
+	)
+
+	// Create a simple tool.
+	simpleTool := &dummyTool{name: "simple"}
+	tools := map[string]tool.Tool{"simple": simpleTool}
+
+	// Build node func with tool callbacks configured via WithToolCallbacks option.
+	nf := NewToolsNodeFunc(tools, WithToolCallbacks(callbacks))
+
+	// Prepare state with tool call.
+	state := State{
+		StateKeyMessages: []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: makeToolCalls("simple"),
+		}},
+	}
+
+	// Run the node function.
+	res, err := nf(context.Background(), state)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	// Verify callbacks were invoked.
+	require.True(t, beforeCalled, "BeforeTool callback should be invoked")
+	require.True(t, afterCalled, "AfterTool callback should be invoked")
+
+	// Verify messages were created.
+	msgs, ok := res.(State)[StateKeyMessages].([]model.Message)
+	require.True(t, ok, "expected messages in result state")
+	require.Len(t, msgs, 1, "expected one tool result message")
+}
+
+func TestNewToolsNodeFunc_ToolCallbacksPrecedence(t *testing.T) {
+	// Test that node-configured callbacks take precedence over state callbacks.
+	var nodeCallbackUsed, stateCallbackUsed bool
+
+	// Node-level callbacks.
+	nodeCallbacks := tool.NewCallbacks()
+	nodeCallbacks.BeforeTool = append(nodeCallbacks.BeforeTool,
+		func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+			nodeCallbackUsed = true
+			return &tool.BeforeToolResult{Context: ctx}, nil
+		},
+	)
+
+	// State-level callbacks.
+	stateCallbacks := tool.NewCallbacks()
+	stateCallbacks.BeforeTool = append(stateCallbacks.BeforeTool,
+		func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+			stateCallbackUsed = true
+			return &tool.BeforeToolResult{Context: ctx}, nil
+		},
+	)
+
+	// Create a simple tool.
+	simpleTool := &dummyTool{name: "simple"}
+	tools := map[string]tool.Tool{"simple": simpleTool}
+
+	// Build node func with node-level callbacks.
+	nf := NewToolsNodeFunc(tools, WithToolCallbacks(nodeCallbacks))
+
+	// Prepare state with tool call and state-level callbacks.
+	state := State{
+		StateKeyMessages: []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: makeToolCalls("simple"),
+		}},
+		StateKeyToolCallbacks: stateCallbacks,
+	}
+
+	// Run the node function.
+	res, err := nf(context.Background(), state)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	// Verify only node-level callbacks were used.
+	require.True(t, nodeCallbackUsed, "node callback should be used")
+	require.False(t, stateCallbackUsed, "state callback should NOT be used when node callback is configured")
+}
+
+func TestNewToolsNodeFunc_StateCallbacksFallback(t *testing.T) {
+	// Test that state callbacks are used when node callbacks are not configured.
+	var stateCallbackUsed bool
+
+	// State-level callbacks.
+	stateCallbacks := tool.NewCallbacks()
+	stateCallbacks.BeforeTool = append(stateCallbacks.BeforeTool,
+		func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+			stateCallbackUsed = true
+			return &tool.BeforeToolResult{Context: ctx}, nil
+		},
+	)
+
+	// Create a simple tool.
+	simpleTool := &dummyTool{name: "simple"}
+	tools := map[string]tool.Tool{"simple": simpleTool}
+
+	// Build node func WITHOUT node-level callbacks.
+	nf := NewToolsNodeFunc(tools)
+
+	// Prepare state with tool call and state-level callbacks.
+	state := State{
+		StateKeyMessages: []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: makeToolCalls("simple"),
+		}},
+		StateKeyToolCallbacks: stateCallbacks,
+	}
+
+	// Run the node function.
+	res, err := nf(context.Background(), state)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	// Verify state callbacks were used.
+	require.True(t, stateCallbackUsed, "state callback should be used as fallback")
+}
+
 func TestBuilderEdges(t *testing.T) {
 	builder := NewStateGraph(NewStateSchema())
 
