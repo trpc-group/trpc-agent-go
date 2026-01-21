@@ -54,10 +54,11 @@ kb := knowledge.New(
 | `WithEncodingFormat(fmt string)` | 设置编码格式 ("float", "base64")            | `"float"`                |
 | `WithUser(user string)`          | 设置用户标识                                | -                        |
 | `WithAPIKey(key string)`         | 设置 API Key (优先于环境变量)               | -                        |
-|                                  |                                             |                          |
 | `WithOrganization(org string)`   | 设置组织 ID (优先于环境变量)                | -                        |
 | `WithBaseURL(url string)`        | 设置 Base URL                               | -                        |
 | `WithRequestOptions(opts...)`    | 设置额外请求选项                            | -                        |
+| `WithMaxRetries(n int)`          | 设置最大重试次数                            | `2` |
+| `WithRetryBackoff(durations)`    | 设置重试退避时间（每次重试的等待时间），如果重试次数超过 backoff 数组长度，则其余重试使用最后一个值 | `[100ms, 200ms, 400ms, 800ms]` |
 
 ## Gemini Embedder
 

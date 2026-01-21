@@ -11,6 +11,9 @@
 package document
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"time"
 
@@ -20,7 +23,7 @@ import (
 // CreateDocument creates a new document with the given content and name.
 func CreateDocument(content string, name string) *document.Document {
 	return &document.Document{
-		ID:        GenerateDocumentID(name),
+		ID:        GenerateDocumentID(name, content),
 		Name:      name,
 		Content:   content,
 		Metadata:  make(map[string]any),
@@ -30,7 +33,22 @@ func CreateDocument(content string, name string) *document.Document {
 }
 
 // GenerateDocumentID generates a unique ID for a document.
-func GenerateDocumentID(name string) string {
-	// Simple ID generation based on name and timestamp.
-	return strings.ReplaceAll(name, " ", "_") + "_" + time.Now().Format("20060102150405")
+// Uses content hash for identification and random bytes for uniqueness.
+func GenerateDocumentID(name string, content string) string {
+	// Content hash (first 8 bytes = 16 hex chars)
+	hash := sha256.Sum256([]byte(content))
+	contentHash := hex.EncodeToString(hash[:8])
+
+	// Random bytes for uniqueness (8 bytes = 16 hex chars)
+	randomBytes := make([]byte, 8)
+	if _, err := rand.Read(randomBytes); err != nil {
+		// Fallback to timestamp-based uniqueness if crypto/rand fails
+		ts := time.Now().UnixNano()
+		for i := 0; i < 8; i++ {
+			randomBytes[i] = byte(ts >> (i * 8))
+		}
+	}
+	randomStr := hex.EncodeToString(randomBytes)
+
+	return strings.ReplaceAll(name, " ", "_") + "_" + contentHash + "_" + randomStr
 }
