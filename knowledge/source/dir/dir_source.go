@@ -44,6 +44,7 @@ type Source struct {
 	customChunkingStrategy chunking.Strategy
 	ocrExtractor           ocr.Extractor
 	transformers           []transform.Transformer
+	fileReaderType         source.FileReaderType
 }
 
 // New creates a new directory knowledge source.
@@ -94,6 +95,9 @@ func (s *Source) initializeReaders() {
 
 // getFileType determines the file type based on the file extension.
 func (s *Source) getFileType(filePath string) string {
+	if s.fileReaderType != "" {
+		return string(s.fileReaderType)
+	}
 	return isource.GetFileType(filePath)
 }
 

@@ -45,6 +45,7 @@ type Source struct {
 	chunkOverlap           int
 	customChunkingStrategy chunking.Strategy
 	transformers           []transform.Transformer
+	fileReaderType         source.FileReaderType
 }
 
 // New creates a new URL knowledge source.
@@ -158,7 +159,12 @@ func (s *Source) processURL(fetchingURL string, identifierURL string) ([]*docume
 	contentType := resp.Header.Get("Content-Type")
 	fileName := s.getFileName(parsedIdentifierURL, contentType)
 	// Determine file type and get appropriate reader.
-	fileType := isource.GetFileTypeFromContentType(contentType, fileName)
+	var fileType string
+	if s.fileReaderType != "" {
+		fileType = string(s.fileReaderType)
+	} else {
+		fileType = isource.GetFileTypeFromContentType(contentType, fileName)
+	}
 	reader, exists := s.readers[fileType]
 	if !exists {
 		return nil, fmt.Errorf("no reader available for file type: %s", fileType)

@@ -11,6 +11,7 @@
 package source
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -172,6 +173,7 @@ func GetFileTypeFromContentType(contentType, fileName string) string {
 	case ".docx", ".doc":
 		return "docx"
 	default:
+		fmt.Printf("Warning: unknown file extension '%s' for file '%s', treating as text\n", ext, fileName)
 		return "text"
 	}
 }

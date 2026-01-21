@@ -46,6 +46,7 @@ type Source struct {
 	customChunkingStrategy chunking.Strategy
 	ocrExtractor           ocr.Extractor
 	transformers           []transform.Transformer
+	fileReaderType         source.FileReaderType
 }
 
 // New creates a new auto knowledge source.
@@ -86,7 +87,18 @@ func (s *Source) initializeReaders() {
 		opts = append(opts, reader.WithTransformers(s.transformers...))
 	}
 
-	s.textReader = text.New(opts...)
+	if s.fileReaderType != "" {
+		// Get all readers first
+		allReaders := reader.GetAllReaders(opts...)
+		// Try to get the specific reader for the override file type
+		if r, exists := allReaders[string(s.fileReaderType)]; exists {
+			s.textReader = r
+		} else {
+			s.textReader = text.New(opts...)
+		}
+	} else {
+		s.textReader = text.New(opts...)
+	}
 }
 
 // ReadDocuments automatically detects the source type and reads documents.
