@@ -668,6 +668,7 @@ type Registry interface {
 框架默认注册了以下评估器：
 
 - `tool_trajectory_avg_score` 工具轨迹一致性评估器，需要配置预期输出。
+ - `final_response_avg_score` 最终响应评估器，不需要 LLM，需要配置预期输出。
 - `llm_final_response` LLM 最终响应评估器，需要配置预期输出。
 - `llm_rubric_response` LLM rubric 响应评估器，需要评估集提供会话输入并配置 LLMJudge/rubrics。
 - `llm_rubric_knowledge_recall` LLM rubric 知识召回评估器，需要评估集提供会话输入并配置 LLMJudge/rubrics。
@@ -1678,6 +1679,66 @@ evalMetric := &metric.EvalMetric{
 ```
 
 完整示例参见 [examples/evaluation/tooltrajectory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/tooltrajectory)。
+
+#### 最终响应评估器
+
+最终响应评估器对应的指标名称为 `final_response_avg_score`，不依赖 LLM，用于基于确定性规则对比 Agent 的最终回答与预期输出，适用于需要静态规则匹配文本或 JSON 输出的场景。
+
+评估逻辑：
+
+- 使用 `FinalResponseCriterion` 对每轮对话的 `Invocation.FinalResponse.Content` 进行对比；匹配得 1 分，不匹配得 0 分。
+- 多次会话场景下对所有会话的得分取平均值，并与 `EvalMetric.Threshold` 比较得到通过/未通过判定。
+
+`FinalResponseCriterion` 支持两类准则：
+
+- `text`：使用 `TextCriterion` 按 `exact/contains/regex` 等策略比较文本，详细介绍可见 [TextCriterion](#textcriterion)。
+- `json`：将 `FinalResponse.Content` 解析为 JSON 后使用 `JSONCriterion` 进行匹配。可配置 `ignoreTree`、`numberTolerance` 等参数，详细介绍可见 [JsonCriterion](#jsoncriterion)。
+
+代码示例如下：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+)
+
+evalMetric := &metric.EvalMetric{
+	MetricName: "final_response_avg_score",
+	Threshold:  1.0,
+	Criterion: criterion.New(
+		criterion.WithFinalResponse(
+			cfinalresponse.New(
+				cfinalresponse.WithJSONCriterion(cjson.New()),
+				cfinalresponse.WithTextCriterion(ctext.New()),
+			),
+		),
+	),
+}
+```
+
+对应的指标配置文件写法示例
+
+```json
+[
+  {
+    "metricName": "final_response_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "text": {
+          "matchStrategy": "exact"
+        },
+        "json": {
+          "matchStrategy": "exact"
+        }
+      }
+    }
+  }
+]
+```
 
 #### LLM 最终响应评估器
 

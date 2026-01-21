@@ -17,11 +17,11 @@ import (
 )
 
 func TestTextCriterionJSONRoundTrip(t *testing.T) {
-	criterion := &TextCriterion{
-		Ignore:          true,
-		CaseInsensitive: true,
-		MatchStrategy:   TextMatchStrategyRegex,
-	}
+	criterion := New(
+		WithIgnore(true),
+		WithCaseInsensitive(true),
+		WithMatchStrategy(TextMatchStrategyRegex),
+	)
 	data, err := json.Marshal(criterion)
 	assert.NoError(t, err)
 	assert.JSONEq(t, `{"ignore":true,"caseInsensitive":true,"matchStrategy":"regex"}`, string(data))
