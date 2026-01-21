@@ -844,6 +844,15 @@ func TestExecutor_ProcessResumeCommand_And_ApplyExecutableNextNodes(t *testing.T
 	out := exec.processResumeCommand(make(State), init)
 	require.Equal(t, "v", out[ResumeChannel])
 	require.NotNil(t, out[StateKeyResumeMap])
+	init2 := State{
+		StateKeyCommand: NewResumeCommand().
+			WithResume("v2").
+			AddResumeValue("t", 2),
+	}
+	out2 := exec.processResumeCommand(make(State), init2)
+	require.Equal(t, "v2", out2[ResumeChannel])
+	require.Equal(t, 2, out2[StateKeyResumeMap].(map[string]any)["t"])
+	require.NotContains(t, out2, StateKeyCommand)
 	// applyExecutableNextNodes (pendingWrites empty and NextNodes has A)
 	tuple := &CheckpointTuple{Checkpoint: &Checkpoint{NextNodes: []string{"A", End, ""}}}
 	restored := make(State)
