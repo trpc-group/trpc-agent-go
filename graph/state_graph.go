@@ -407,10 +407,11 @@ func WithSubgraphInputFromLastResponse() Option {
 	}
 }
 
-// WithSubgraphEventScope customizes the child invocation's filter scope segment.
-// Docs note: Scope may be hierarchical (can include '/'). If empty, it
-// defaults to the child agent name. The final filterKey becomes
-// parent/scope/<uuid>.
+// WithSubgraphEventScope customizes the child's event filter scope.
+// Docs note: Scope may be hierarchical (can include '/').
+// If empty, it defaults to the child agent name.
+// The final filterKey becomes parent/scope (no UUID).
+// This keeps the filterKey stable across turns.
 func WithSubgraphEventScope(scope string) Option {
 	return func(node *Node) {
 		node.agentEventScope = scope
