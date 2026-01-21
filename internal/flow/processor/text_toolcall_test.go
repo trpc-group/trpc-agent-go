@@ -13,6 +13,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -108,6 +109,91 @@ func TestTextToolCall_ToFunctions_NoJSON(t *testing.T) {
 	require.NotContains(t, rsp.Choices[0].Message.Content, "to=functions")
 }
 
+func TestTextToolCall_FunctionsCall_WithParensJSON(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_search": stubTool{name: "web_search"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					Content: strings.Join(
+						[]string{
+							"note",
+							"functions.web_search({\"query\":\"hi\"," +
+								"\"max_results\":5})",
+						},
+						"\n",
+					),
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Len(t, rsp.Choices[0].Message.ToolCalls, 1)
+	tc := rsp.Choices[0].Message.ToolCalls[0]
+	require.Equal(t, "web_search", tc.Function.Name)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(tc.Function.Arguments, &got))
+	require.Equal(t, "hi", got["query"])
+	require.Equal(t, float64(5), got["max_results"])
+	require.NotContains(t, rsp.Choices[0].Message.Content, "functions.")
+}
+
+func TestTextToolCall_FunctionsCall_WithSpacedJSON(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_search": stubTool{name: "web_search"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					Content: "functions.web_search " +
+						"{\"query\":\"hi\"}\n",
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Len(t, rsp.Choices[0].Message.ToolCalls, 1)
+	tc := rsp.Choices[0].Message.ToolCalls[0]
+	require.Equal(t, "web_search", tc.Function.Name)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(tc.Function.Arguments, &got))
+	require.Equal(t, "hi", got["query"])
+	require.NotContains(t, rsp.Choices[0].Message.Content, "functions.")
+}
+
 func TestTextToolCall_ToolObject(t *testing.T) {
 	p := NewTextToolCallResponseProcessor()
 
@@ -164,6 +250,43 @@ func TestTextToolCall_SkipsWhenFinalAnswerTagPresent(t *testing.T) {
 					Content: "/*FINAL_ANSWER*/\n" +
 						"to=functions.web_search\n" +
 						"{\"query\":\"hi\"}\n",
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Empty(t, rsp.Choices[0].Message.ToolCalls)
+}
+
+func TestTextToolCall_SkipsWhenFinalAnswerPrefixPresent(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_search": stubTool{name: "web_search"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					Content: strings.Join(
+						[]string{
+							"FINAL ANSWER: 3",
+							"functions.web_search({\"query\":\"hi\"})",
+						},
+						"\n",
+					),
 				},
 			},
 		},

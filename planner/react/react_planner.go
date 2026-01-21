@@ -48,6 +48,7 @@ const (
 	actionTagPrefix     = "/*ACTION"
 	planningTagPrefix   = "/*PLANNING"
 	replanningTagPrefix = "/*REPLANNING"
+	finalAnswerPrefix   = "FINAL ANSWER:"
 )
 
 // Verify that Planner implements the planner.Planner interface.
@@ -138,9 +139,18 @@ func (p *Planner) ProcessPlanningResponse(
 		firstChoice := processedResponse.Choices[0]
 		if len(firstChoice.Message.ToolCalls) == 0 {
 			content := firstChoice.Message.Content
-			if p.isIntentDescription(content) && !p.hasFinalAnswerTag(content) {
-				// This is an intent description without FINAL_ANSWER tag,
-				// likely a malformed response. Mark as not done to continue the loop.
+			hasFinalAnswer := p.hasFinalAnswer(content)
+			containsFinalAnswerTag := strings.Contains(
+				content,
+				FinalAnswerTag,
+			)
+			if (p.isIntentDescription(content) ||
+				containsFinalAnswerTag) &&
+				!hasFinalAnswer {
+				// The model appears to be in an intermediate state (e.g.,
+				// planning/action tags or an empty FINAL_ANSWER section) without
+				// actually providing a final answer. Mark as not done to
+				// continue the loop.
 				processedResponse.Done = false
 			}
 		}
@@ -223,9 +233,40 @@ func (p *Planner) isIntentDescription(content string) bool {
 	return false
 }
 
-// hasFinalAnswerTag checks if the content contains the FINAL_ANSWER tag.
+// hasFinalAnswer reports whether the content contains a valid final answer
+// marker (either a non-empty FINAL_ANSWER section or a "FINAL ANSWER:" line).
+func (p *Planner) hasFinalAnswer(content string) bool {
+	if p.hasFinalAnswerTag(content) {
+		return true
+	}
+	upper := strings.ToUpper(content)
+	return strings.Contains(upper, finalAnswerPrefix)
+}
+
+// hasFinalAnswerTag checks if the content contains a non-empty FINAL_ANSWER
+// section. A bare tag with no answer does not count as final.
 func (p *Planner) hasFinalAnswerTag(content string) bool {
-	return strings.Contains(content, FinalAnswerTag)
+	idx := strings.LastIndex(content, FinalAnswerTag)
+	if idx == -1 {
+		return false
+	}
+	rest := strings.TrimSpace(content[idx+len(FinalAnswerTag):])
+	if rest == "" {
+		return false
+	}
+
+	tagPrefixes := []string{
+		actionTagPrefix,
+		planningTagPrefix,
+		replanningTagPrefix,
+		ReasoningTag,
+	}
+	for _, prefix := range tagPrefixes {
+		if strings.HasPrefix(rest, prefix) {
+			return false
+		}
+	}
+	return true
 }
 
 // splitByLastPattern splits text by the last occurrence of a separator.

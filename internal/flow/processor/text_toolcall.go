@@ -26,6 +26,7 @@ const (
 	textToolCallTypeFunction = "function"
 
 	textToolCallFinalAnswerTag = "/*FINAL_ANSWER*/"
+	textToolCallFinalAnswer    = "FINAL ANSWER:"
 
 	textToolCallActionTagPrefix = "/*ACTION"
 
@@ -84,6 +85,9 @@ func (p *TextToolCallResponseProcessor) ProcessResponse(
 		if strings.Contains(msg.Content, textToolCallFinalAnswerTag) {
 			continue
 		}
+		if containsFinalAnswerPrefix(msg.Content) {
+			continue
+		}
 
 		toolCall, cleaned, ok := parseTextToolCall(
 			msg.Content,
@@ -107,12 +111,22 @@ func parseTextToolCall(
 		return toolCall, cleaned, true
 	}
 
+	toolCall, cleaned, ok = parseFunctionsToolCall(content, tools)
+	if ok {
+		return toolCall, cleaned, true
+	}
+
 	toolCall, cleaned, ok = parseToolObjectToolCall(content, tools)
 	if ok {
 		return toolCall, cleaned, true
 	}
 
 	return model.ToolCall{}, content, false
+}
+
+func containsFinalAnswerPrefix(content string) bool {
+	upper := strings.ToUpper(content)
+	return strings.Contains(upper, textToolCallFinalAnswer)
 }
 
 func parseToFunctionsToolCall(
@@ -154,6 +168,98 @@ func parseToFunctionsToolCall(
 	return toolCall, cleaned, true
 }
 
+func parseFunctionsToolCall(
+	content string,
+	tools map[string]tool.Tool,
+) (model.ToolCall, string, bool) {
+	lineStart := 0
+	for lineStart <= len(content) {
+		lineEnd := strings.Index(content[lineStart:], "\n")
+		if lineEnd == -1 {
+			lineEnd = len(content)
+		} else {
+			lineEnd = lineStart + lineEnd
+		}
+		line := strings.TrimSpace(content[lineStart:lineEnd])
+
+		if strings.HasPrefix(strings.ToLower(line), textToolCallFunctionsPrefix) {
+			toolCall, cleaned, ok := parseFunctionsToolCallAt(
+				line,
+				content,
+				lineStart,
+				tools,
+			)
+			if ok {
+				return toolCall, cleaned, true
+			}
+		}
+
+		if lineEnd >= len(content) {
+			break
+		}
+		lineStart = lineEnd + 1
+	}
+	return model.ToolCall{}, content, false
+}
+
+func parseFunctionsToolCallAt(
+	line string,
+	content string,
+	lineStart int,
+	tools map[string]tool.Tool,
+) (model.ToolCall, string, bool) {
+	lowerLine := strings.ToLower(line)
+	if !strings.HasPrefix(lowerLine, textToolCallFunctionsPrefix) {
+		return model.ToolCall{}, content, false
+	}
+	nameStart := len(textToolCallFunctionsPrefix)
+	nameEnd := nameStart
+	for nameEnd < len(line) && isToolNameChar(line[nameEnd]) {
+		nameEnd++
+	}
+	if nameEnd == nameStart {
+		return model.ToolCall{}, content, false
+	}
+	name := line[nameStart:nameEnd]
+	if _, ok := tools[name]; !ok {
+		return model.ToolCall{}, content, false
+	}
+
+	args, ok := parseJSONArgsFromLine(line[nameEnd:])
+	if ok {
+		toolCall := newTextToolCall(name, args)
+		cleaned := dropLineFrom(content, lineStart)
+		return toolCall, cleaned, true
+	}
+
+	toolCall := newTextToolCall(name, []byte("{}"))
+	cleaned := dropLineFrom(content, lineStart)
+	return toolCall, cleaned, true
+}
+
+func parseJSONArgsFromLine(rest string) ([]byte, bool) {
+	braceRel := strings.Index(rest, "{")
+	if braceRel == -1 {
+		return nil, false
+	}
+	jsonStart := braceRel
+
+	dec := json.NewDecoder(strings.NewReader(rest[jsonStart:]))
+	var args any
+	if err := dec.Decode(&args); err != nil {
+		return nil, false
+	}
+	argsMap, ok := args.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	argsBytes, err := json.Marshal(argsMap)
+	if err != nil {
+		return nil, false
+	}
+	return argsBytes, true
+}
+
 func parseToolObjectToolCall(
 	content string,
 	tools map[string]tool.Tool,
@@ -188,7 +294,6 @@ func parseToolObjectAt(
 	tools map[string]tool.Tool,
 ) (model.ToolCall, string, bool) {
 	dec := json.NewDecoder(strings.NewReader(content[start:]))
-	dec.UseNumber()
 	var args any
 	if err := dec.Decode(&args); err != nil {
 		return model.ToolCall{}, content, false
@@ -241,7 +346,6 @@ func parseToolCallArgsFromJSON(
 	jsonStart := toolNameEnd + braceRel
 
 	dec := json.NewDecoder(strings.NewReader(content[jsonStart:]))
-	dec.UseNumber()
 	var args any
 	if err := dec.Decode(&args); err != nil {
 		return model.ToolCall{}, content, false
