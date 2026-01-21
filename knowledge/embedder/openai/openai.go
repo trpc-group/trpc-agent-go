@@ -35,6 +35,8 @@ const (
 	DefaultDimensions = 1536
 	// DefaultEncodingFormat is the default encoding format for embeddings.
 	DefaultEncodingFormat = "float"
+	// DefaultMaxRetries is the default maximum number of retries (same as OpenAI SDK).
+	DefaultMaxRetries = 2
 
 	// ModelTextEmbedding3Small represents the text-embedding-3-small model.
 	ModelTextEmbedding3Small = "text-embedding-3-small"
@@ -142,7 +144,7 @@ func WithRequestOptions(opts ...option.RequestOption) Option {
 }
 
 // WithMaxRetries sets the maximum number of retries for errors.
-// Default is 0 (no retries). Negative values are treated as 0.
+// Default is 2 (same as OpenAI SDK default). Negative values are treated as 0.
 func WithMaxRetries(maxRetries int) Option {
 	return func(e *Embedder) {
 		if maxRetries < 0 {
@@ -169,6 +171,7 @@ func New(opts ...Option) *Embedder {
 		model:          DefaultModel,
 		dimensions:     DefaultDimensions,
 		encodingFormat: DefaultEncodingFormat,
+		maxRetries:     DefaultMaxRetries,
 		retryBackoff:   defaultRetryBackoff,
 	}
 

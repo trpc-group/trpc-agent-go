@@ -537,7 +537,7 @@ func TestRetryLogic(t *testing.T) {
 		emb := New(
 			WithBaseURL(srv.URL),
 			WithAPIKey("dummy"),
-			// maxRetries defaults to 0
+			WithMaxRetries(0), // Explicitly disable retries
 			// Disable SDK internal retry to test our retry logic
 			WithRequestOptions(option.WithMaxRetries(0)),
 		)
