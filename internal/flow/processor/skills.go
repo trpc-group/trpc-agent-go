@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -199,9 +200,12 @@ func defaultToolingAndWorkspaceGuidance() string {
 	b.WriteString("- Skills run inside an isolated workspace; you see ")
 	b.WriteString("only files that are in the workspace or have been ")
 	b.WriteString("staged there by tools.\n")
-	b.WriteString("- Prefer $SKILLS_DIR, $WORK_DIR, $OUTPUT_DIR, ")
-	b.WriteString("$RUN_DIR, and $WORKSPACE_DIR over hard-coded ")
-	b.WriteString("paths when forming commands.\n")
+	b.WriteString("- skill_run runs with CWD at the skill root by ")
+	b.WriteString("default; avoid setting cwd unless needed.\n")
+	b.WriteString("- If you set cwd, use $SKILLS_DIR/$SKILL_NAME (or ")
+	b.WriteString("a subdir). $SKILLS_DIR alone is the parent dir.\n")
+	b.WriteString("- Prefer $WORK_DIR, $OUTPUT_DIR, $RUN_DIR, and ")
+	b.WriteString("$WORKSPACE_DIR over hard-coded paths.\n")
 	b.WriteString("- Treat $WORK_DIR/inputs (and a skill's inputs/ ")
 	b.WriteString("directory) as the place where tools stage user or ")
 	b.WriteString("host input files. Avoid overwriting or mutating ")
@@ -214,6 +218,18 @@ func defaultToolingAndWorkspaceGuidance() string {
 	b.WriteString("skill's out/ directory and include output_files ")
 	b.WriteString("globs (or an outputs spec) so files can be ")
 	b.WriteString("collected or saved as artifacts.\n")
+	b.WriteString("- output_files entries are workspace paths/globs ")
+	b.WriteString("(e.g. out/*.txt). Do not use workspace:// or ")
+	b.WriteString("artifact:// in output_files.\n")
+	b.WriteString("- When skill_run returns primary_output or ")
+	b.WriteString("output_files, prefer using the inline content ")
+	b.WriteString("directly. ")
+	b.WriteString("If you need a stable reference for other tools, ")
+	b.WriteString("use output_files[*].ref (workspace://...).\n")
+	b.WriteString("- Do not rerun the same skill_run command when you ")
+	b.WriteString("already have the needed content.\n")
+	b.WriteString("- If you already have the needed file content, ")
+	b.WriteString("stop calling file tools and answer.\n")
 	b.WriteString("- When chaining multiple skills, read previous ")
 	b.WriteString("results from $OUTPUT_DIR (or a skill's out/ ")
 	b.WriteString("directory) instead of copying them back into ")
