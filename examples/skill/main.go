@@ -125,10 +125,10 @@ func init() {
 }
 
 func ensureWhisperPython3() {
-	if canImportWhisper("python3") {
+	if canImportWhisperWithPython3() {
 		return
 	}
-	if !canImportWhisper("python") {
+	if !canImportWhisperWithPython() {
 		return
 	}
 	py, err := exec.LookPath("python")
@@ -145,16 +145,17 @@ func ensureWhisperPython3() {
 	log.Printf("Updated PATH to prefer python from: %s", pyDir)
 }
 
-func canImportWhisper(cmd string) bool {
-	// Only allow safe, predefined Python interpreter names.
-	switch cmd {
-	case "python3", "python":
-		// Safe: These are well-known system commands.
-	default:
-		// Reject any other input to prevent command injection.
-		return false
-	}
-	c := exec.Command(cmd, "-c", "import whisper")
+// canImportWhisperWithPython3 checks if whisper can be imported using python3.
+func canImportWhisperWithPython3() bool {
+	c := exec.Command("python3", "-c", "import whisper")
+	c.Stdout = io.Discard
+	c.Stderr = io.Discard
+	return c.Run() == nil
+}
+
+// canImportWhisperWithPython checks if whisper can be imported using python.
+func canImportWhisperWithPython() bool {
+	c := exec.Command("python", "-c", "import whisper")
 	c.Stdout = io.Discard
 	c.Stderr = io.Discard
 	return c.Run() == nil
