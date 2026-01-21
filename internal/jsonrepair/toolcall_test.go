@@ -19,12 +19,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-// withNoopWarnfContext temporarily disables warning logs during the callback.
-func withNoopWarnfContext(t *testing.T, fn func()) {
+// withNoopErrorfContext temporarily disables error logs during the callback.
+func withNoopErrorfContext(t *testing.T, fn func()) {
 	t.Helper()
-	prev := log.WarnfContext
-	log.WarnfContext = func(_ context.Context, _ string, _ ...any) {}
-	t.Cleanup(func() { log.WarnfContext = prev })
+	prev := log.ErrorfContext
+	log.ErrorfContext = func(_ context.Context, _ string, _ ...any) {}
+	t.Cleanup(func() { log.ErrorfContext = prev })
 	fn()
 }
 
@@ -64,7 +64,7 @@ func TestRepairToolCallArguments_RepairsInvalidJSON(t *testing.T) {
 
 // TestRepairToolCallArguments_ReturnsOriginalOnRepairError verifies that arguments are returned unchanged when repair fails.
 func TestRepairToolCallArguments_ReturnsOriginalOnRepairError(t *testing.T) {
-	withNoopWarnfContext(t, func() {
+	withNoopErrorfContext(t, func() {
 		ctx := context.Background()
 		arguments := []byte("callback {}")
 
@@ -181,8 +181,9 @@ func TestRepairResponseToolCallArgumentsInPlace_RepairsAllChoices(t *testing.T) 
 func TestChooseToolCallArguments_ReturnsOriginalForInvalidOutput(t *testing.T) {
 	original := []byte("{a:2}")
 
-	repaired := chooseToolCallArguments(original, []byte("not json"))
-	require.Equal(t, original, repaired)
+	chosen, usedRepair := chooseToolCallArguments(original, []byte("not json"))
+	require.Equal(t, original, chosen)
+	require.False(t, usedRepair)
 }
 
 // TestRepairToolCallArgumentsInPlace_NoPanicOnNil verifies nil tool calls are ignored.
