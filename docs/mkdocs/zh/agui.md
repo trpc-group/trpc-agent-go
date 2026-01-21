@@ -669,6 +669,8 @@ server, err := agui.New(
 使用示例如下所示
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
 server, err := agui.New(
     runner,
     agui.WithBasePath("/agui"),                // 设置 AG-UI 前缀路由
@@ -696,6 +698,8 @@ if err != nil {
 该事件默认关闭，可在创建 AG-UI Server 时通过 `agui.WithGraphNodeLifecycleActivityEnabled(true)` 开启。
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
 server, err := agui.New(
 	runner,
 	agui.WithGraphNodeLifecycleActivityEnabled(true),
@@ -769,6 +773,8 @@ server, err := agui.New(
 该事件默认关闭，可在创建 AG-UI Server 时通过 `agui.WithGraphNodeInterruptActivityEnabled(true)` 开启。
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
 server, err := agui.New(
 	runner,
 	agui.WithGraphNodeInterruptActivityEnabled(true),
@@ -798,6 +804,18 @@ server, err := agui.New(
 ```
 
 该事件表示执行在该节点暂停。前端可使用 `/interrupt.prompt` 渲染中断提示，并用 `/interrupt.key` 选择需要提供的恢复值。`checkpointId` 与 `lineageId` 可用于定位需要恢复的 checkpoint 并关联多次 run。
+
+如果使用多级 GraphAgent，子图中断会向上冒泡，事件流中默认可能出现多条 `graph.node.interrupt`。如果前端只希望保留用于恢复的最外层中断，可额外开启 `agui.WithGraphNodeInterruptActivityTopLevelOnly(true)`，开启后仅发送最外层中断事件。
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
+server, err := agui.New(
+	runner,
+	agui.WithGraphNodeInterruptActivityEnabled(true),
+	agui.WithGraphNodeInterruptActivityTopLevelOnly(true),
+)
+```
 
 #### 恢复回执（`graph.node.interrupt`）
 

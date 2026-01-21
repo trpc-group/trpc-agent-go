@@ -11,8 +11,9 @@ package translator
 
 // options configures which graph-related AG-UI events the translator emits.
 type options struct {
-	graphNodeLifecycleActivityEnabled bool // graphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
-	graphNodeInterruptActivityEnabled bool // graphNodeInterruptActivityEnabled enables graph interrupt activity events.
+	graphNodeLifecycleActivityEnabled      bool // graphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
+	graphNodeInterruptActivityEnabled      bool // graphNodeInterruptActivityEnabled enables graph interrupt activity events.
+	graphNodeInterruptActivityTopLevelOnly bool // graphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
 }
 
 // Option is a function that configures the options.
@@ -40,5 +41,13 @@ func WithGraphNodeLifecycleActivityEnabled(enabled bool) Option {
 func WithGraphNodeInterruptActivityEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.graphNodeInterruptActivityEnabled = enabled
+	}
+}
+
+// WithGraphNodeInterruptActivityTopLevelOnly controls whether the translator only emits
+// graph interrupt activity events for the top-level invocation.
+func WithGraphNodeInterruptActivityTopLevelOnly(enabled bool) Option {
+	return func(o *options) {
+		o.graphNodeInterruptActivityTopLevelOnly = enabled
 	}
 }
