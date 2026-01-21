@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -62,6 +63,10 @@ type Embedder struct {
 	organization   string
 	baseURL        string
 	requestOptions []option.RequestOption
+
+	// Retry configuration
+	maxRetries   int
+	retryBackoff []time.Duration
 }
 
 // Option represents a functional option for configuring the Embedder.
@@ -128,6 +133,24 @@ func WithRequestOptions(opts ...option.RequestOption) Option {
 	}
 }
 
+// WithMaxRetries sets the maximum number of retries for rate limit errors.
+// Default is 0 (no retries).
+func WithMaxRetries(maxRetries int) Option {
+	return func(e *Embedder) {
+		e.maxRetries = maxRetries
+	}
+}
+
+// WithRetryBackoff sets the backoff durations for each retry attempt.
+// If the number of retries exceeds the length of backoff slice,
+// the last backoff duration will be used for remaining retries.
+// Default is empty (no backoff).
+func WithRetryBackoff(backoff []time.Duration) Option {
+	return func(e *Embedder) {
+		e.retryBackoff = backoff
+	}
+}
+
 // New creates a new OpenAI embedder with the given options.
 func New(opts ...Option) *Embedder {
 	// Create embedder with defaults.
@@ -163,7 +186,7 @@ func New(opts ...Option) *Embedder {
 // GetEmbedding implements the embedder.Embedder interface.
 // It generates an embedding vector for the given text.
 func (e *Embedder) GetEmbedding(ctx context.Context, text string) ([]float64, error) {
-	response, err := e.response(ctx, text)
+	response, err := e.responseWithRetry(ctx, text)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create embedding: %w", err)
 	}
@@ -186,7 +209,7 @@ func (e *Embedder) GetEmbedding(ctx context.Context, text string) ([]float64, er
 // GetEmbeddingWithUsage implements the embedder.Embedder interface.
 // It generates an embedding vector for the given text and returns usage information.
 func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]float64, map[string]any, error) {
-	response, err := e.response(ctx, text)
+	response, err := e.responseWithRetry(ctx, text)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create embedding: %w", err)
 	}
@@ -211,6 +234,67 @@ func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]fl
 	}
 
 	return embedding, usage, nil
+}
+
+// responseWithRetry wraps response with retry logic for rate limit errors.
+func (e *Embedder) responseWithRetry(ctx context.Context, text string) (*openai.CreateEmbeddingResponse, error) {
+	var lastErr error
+	for attempt := 0; attempt <= e.maxRetries; attempt++ {
+		rsp, err := e.response(ctx, text)
+		if err == nil {
+			return rsp, nil
+		}
+
+		if !isRetryableError(err) {
+			return nil, err
+		}
+
+		lastErr = err
+
+		// No more retries
+		if attempt >= e.maxRetries {
+			break
+		}
+
+		// Get backoff duration for this attempt
+		backoff := e.getBackoffDuration(attempt)
+		if backoff > 0 {
+			log.InfoContext(ctx, fmt.Sprintf("rate limited, retrying in %v (attempt %d/%d)", backoff, attempt+1, e.maxRetries))
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+
+	return nil, lastErr
+}
+
+// getBackoffDuration returns the backoff duration for the given attempt.
+// If attempt index exceeds the backoff slice length, returns the last backoff duration.
+func (e *Embedder) getBackoffDuration(attempt int) time.Duration {
+	if len(e.retryBackoff) == 0 {
+		return 0
+	}
+	if attempt < len(e.retryBackoff) {
+		return e.retryBackoff[attempt]
+	}
+	return e.retryBackoff[len(e.retryBackoff)-1]
+}
+
+// isRetryableError checks if the error is retryable (e.g., rate limit errors).
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	// Check for rate limit related error messages
+	return strings.Contains(errStr, "rate limit") ||
+		strings.Contains(errStr, "Rate limit") ||
+		strings.Contains(errStr, "429") ||
+		strings.Contains(errStr, "too many requests") ||
+		strings.Contains(errStr, "Too Many Requests")
 }
 
 func (e *Embedder) response(ctx context.Context, text string) (rsp *openai.CreateEmbeddingResponse, err error) {
