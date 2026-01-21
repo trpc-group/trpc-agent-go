@@ -1,5 +1,4 @@
 # Session Hooks Demo
-# Session Hooks Demo
 
 This example shows how to use session hooks for:
 1. **Content Filtering**: Mark and filter prohibited content via event tags.
