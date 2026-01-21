@@ -283,30 +283,33 @@ func TestRedisService_EnqueueSummaryJob_AsyncDisabled_FallbackToSync(t *testing.
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	// Create service with async summary disabled
+	// Create service with async summary disabled and async persist disabled.
 	s, err := NewService(
 		WithRedisClientURL(redisURL),
+		WithEnableAsyncPersist(false),
 		WithSummarizer(&fakeSummarizer{allow: true, out: "sync-summary"}),
 	)
 	require.NoError(t, err)
-	defer s.Close()
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
 
-	// Create a session first
+	// Create a session first.
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
 	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
 	require.NoError(t, err)
 
-	// Append an event to make delta non-empty
+	// Append an event to make delta non-empty.
 	e := event.New("inv", "author")
 	e.Timestamp = time.Now()
 	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
 	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
 
-	// Enqueue summary job (should fall back to sync)
+	// Enqueue summary job (should fall back to sync).
 	err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
 	require.NoError(t, err)
 
-	// Verify summary was created immediately in Redis (sync processing)
+	// Verify summary was created immediately in Redis (sync processing).
 	client := buildRedisClient(t, redisURL)
 	raw, err := client.HGet(context.Background(), getSessionSummaryKey(key), key.SessionID).Bytes()
 	require.NoError(t, err)

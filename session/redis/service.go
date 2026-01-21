@@ -587,11 +587,6 @@ func (s *Service) AppendTrackEvent(
 // Close closes the service.
 func (s *Service) Close() error {
 	s.once.Do(func() {
-		// Close redis connection.
-		if s.redisClient != nil {
-			s.redisClient.Close()
-		}
-
 		// Close event pair channels and wait for persist workers.
 		for _, ch := range s.eventPairChans {
 			close(ch)
@@ -605,6 +600,11 @@ func (s *Service) Close() error {
 		// Close summary job channels and wait for summary workers.
 		if s.asyncWorker != nil {
 			s.asyncWorker.Stop()
+		}
+
+		// Close redis connection after all workers are stopped.
+		if s.redisClient != nil {
+			s.redisClient.Close()
 		}
 	})
 
