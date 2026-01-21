@@ -239,93 +239,6 @@ func (p *Planner) buildPlannerInstruction() string {
 	highLevelPreamble := strings.Join([]string{
 		"You are an AI assistant that solves problems step by step using available tools.",
 		"",
-<<<<<<< HEAD
-		"Follow this process when answering the question: (1) first come up " +
-			"with a plan in natural language text format; (2) Then use tools to " +
-			"execute the plan and provide reasoning between tool calls " +
-			"to make a summary of current state and next step. Tool calls " +
-			"and reasoning should be interleaved with each other. (3) " +
-			"In the end, return one final answer.",
-		"",
-		"Follow this format when answering the question: (1) The planning " +
-			"part should be under " + PlanningTag + ". (2) Tool calls " +
-			"should be under " + ActionTag + ", and the " +
-			"reasoning parts should be under " + ReasoningTag + ". (3) The " +
-			"final answer part should be under " + FinalAnswerTag + ".",
-	}, "\n")
-
-	planningPreamble := strings.Join([]string{
-		"Below are the requirements for the planning:",
-		"The plan is made to answer the user query if following the " +
-			"plan. The plan is coherent and covers all aspects of " +
-			"information from user query, and " +
-			"only involves the tools that are accessible by the agent.",
-		"The plan contains the decomposed steps as a numbered list " +
-			"where each step " +
-			"should use one or multiple available tools.",
-		"By reading the plan, you can intuitively know which tools to trigger or " +
-			"what actions to take.",
-		"If the initial plan cannot be successfully executed, you " +
-			"should learn from previous execution results and revise " +
-			"your plan. The revised plan should " +
-			"be under " + ReplanningTag + ". Then use tools to follow the new plan.",
-	}, "\n")
-
-	actionPreamble := strings.Join([]string{
-		"Below are the requirements for the action:",
-		"If no tool is needed, explicitly state your next action in " +
-			"the first person ('I will...').",
-		"If a tool is needed, call it using tool calling (not plain text). " +
-			"You may omit the 'I will...' sentence when calling tools.",
-		"Do not write fake tool invocations like `functions.web_fetch` or " +
-			"`web_fetch({...})` in your message content.",
-		"Do not output JSON/code intended to represent a tool call.",
-		"After a tool call, wait for the tool result message before " +
-			"continuing.",
-	}, "\n")
-
-	reasoningPreamble := strings.Join([]string{
-		"Below are the requirements for the reasoning:",
-		"The reasoning makes a summary of the current trajectory " +
-			"based on the user query and tool outputs.",
-		"Based on the tool outputs and plan, the reasoning also comes up with " +
-			"instructions to the next steps, making the trajectory closer to the " +
-			"final answer.",
-	}, "\n")
-
-	finalAnswerPreamble := strings.Join([]string{
-		"Below are the requirements for the final answer:",
-		"The final answer should be precise and follow query formatting " +
-			"requirements.",
-		"Some queries may not be answerable with the available tools and " +
-			"information. In those cases, inform the user why you cannot process " +
-			"their query and ask for more information.",
-	}, "\n")
-
-	toolCodePreamble := strings.Join([]string{
-		"Below are the requirements for tool calls:",
-		"",
-		"**Use tool calling, not text.**",
-		"- Tool calls are structured; they are not executed from plain " +
-			"text.",
-		"- Do not output a JSON object that 'looks like' a tool call.",
-		"- Use only tool names and parameters that are explicitly defined " +
-			"in the provided tool schemas.",
-		"- Never output tool-call placeholders like `functions.<tool>` in " +
-			"the assistant message content.",
-		"- If you cannot call a tool, do not pretend you did; ask for " +
-			"clarification or proceed without it.",
-	}, "\n")
-
-	userInputPreamble := strings.Join([]string{
-		"VERY IMPORTANT instruction that you MUST follow in addition " +
-			"to the above instructions:",
-		"",
-		"You should ask for clarification if you need more information to answer " +
-			"the question.",
-		"You should prefer using the information available in the " +
-			"context instead of repeated tool use.",
-=======
 		"WORKFLOW (execute one step at a time):",
 		"1. PLAN: Create a numbered plan under " + PlanningTag,
 		"2. EXECUTE: For each step, output " + ActionTag + " with a brief description, then CALL the tool",
@@ -395,7 +308,6 @@ func (p *Planner) buildPlannerInstruction() string {
 		"ADDITIONAL GUIDELINES:",
 		"- Prefer using information already in context over repeated tool calls.",
 		"- Ask for clarification if the query is ambiguous or lacks necessary details.",
->>>>>>> 17b20a72... remmove text toollcall
 	}, "\n")
 
 	return strings.Join([]string{
