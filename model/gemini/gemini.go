@@ -201,13 +201,12 @@ func (m *Model) convertContentBlock(candidates []*genai.Candidate) (model.Messag
 		}
 		if candidate.Content != nil {
 			for _, part := range candidate.Content.Parts {
-				if len(part.Text) == 0 {
-					continue
-				}
-				if part.Thought {
-					reasoningBuilder.WriteString(part.Text)
-				} else {
-					textBuilder.WriteString(part.Text)
+				if part.Text != "" {
+					if part.Thought {
+						reasoningBuilder.WriteString(part.Text)
+					} else {
+						textBuilder.WriteString(part.Text)
+					}
 				}
 				if part.FunctionCall != nil {
 					args, _ := json.Marshal(part.FunctionCall.Args)
