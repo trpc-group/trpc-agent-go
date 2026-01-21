@@ -2639,6 +2639,252 @@ func TestExecutor_JoinEdge_WaitsForAll(t *testing.T) {
 	require.Greater(t, iJoin, iC)
 }
 
+// TestExecutor_NodeCallbacksNotOverwriteStateCallbacks ensures that when a
+// node doesn't configure tool/model callbacks, the executor doesn't inject
+// nil values that would override state-level callbacks.
+func TestExecutor_NodeCallbacksNotOverwriteStateCallbacks(t *testing.T) {
+	// State-level tool callback that should be preserved.
+	stateToolCallbacks := tool.NewCallbacks()
+	stateToolCallbacks.RegisterAfterTool(
+		func(ctx context.Context, args *tool.AfterToolArgs) (
+			*tool.AfterToolResult, error) {
+			return nil, nil
+		},
+	)
+
+	// State-level model callback that should be preserved.
+	stateModelCallbacks := model.NewCallbacks()
+	stateModelCallbacks.RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (
+			*model.BeforeModelResult, error) {
+			return nil, nil
+		},
+	)
+
+	// Create a graph with a node that doesn't configure its own callbacks.
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("llm_node", func(ctx context.Context, state State) (
+		any, error) {
+		// Verify state-level callbacks are still present in node input.
+		toolCbs, hasToolCbs := state[StateKeyToolCallbacks]
+		require.True(t, hasToolCbs, "StateKeyToolCallbacks should be present")
+		require.NotNil(t, toolCbs,
+			"StateKeyToolCallbacks should not be nil")
+
+		modelCbs, hasModelCbs := state[StateKeyModelCallbacks]
+		require.True(t, hasModelCbs,
+			"StateKeyModelCallbacks should be present")
+		require.NotNil(t, modelCbs,
+			"StateKeyModelCallbacks should not be nil")
+
+		return State{"result": "done"}, nil
+	})
+	builder.SetEntryPoint("llm_node")
+	builder.SetFinishPoint("llm_node")
+
+	g, err := builder.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	// Initial state with callbacks configured at state level.
+	initialState := State{
+		StateKeyToolCallbacks:  stateToolCallbacks,
+		StateKeyModelCallbacks: stateModelCallbacks,
+	}
+
+	inv := &agent.Invocation{InvocationID: "inv-callback-test"}
+	ch, err := exec.Execute(context.Background(), initialState, inv)
+	require.NoError(t, err)
+
+	for range ch {
+		// Drain events.
+	}
+
+	// If node-level nil callbacks overwrite state-level callbacks, the
+	// state-level callbacks would be lost and this would fail.
+	// With the fix, state-level callbacks should remain accessible.
+}
+
+// TestExecutor_NodeCallbacksOverrideStateCallbacks ensures that when a node
+// configures its own callbacks, they override state-level callbacks.
+func TestExecutor_NodeCallbacksOverrideStateCallbacks(t *testing.T) {
+	// State-level callbacks.
+	stateToolCallbacks := tool.NewCallbacks()
+	stateCallbackInvoked := false
+	stateToolCallbacks.RegisterAfterTool(
+		func(ctx context.Context, args *tool.AfterToolArgs) (
+			*tool.AfterToolResult, error) {
+			stateCallbackInvoked = true
+			return nil, nil
+		},
+	)
+
+	// Node-level callbacks that should override state-level.
+	nodeToolCallbacks := tool.NewCallbacks()
+	nodeCallbackInvoked := false
+	nodeToolCallbacks.RegisterAfterTool(
+		func(ctx context.Context, args *tool.AfterToolArgs) (
+			*tool.AfterToolResult, error) {
+			nodeCallbackInvoked = true
+			return nil, nil
+		},
+	)
+
+	// Create a graph with a node that configures its own callbacks.
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("llm_node", func(ctx context.Context, state State) (
+		any, error) {
+		// Verify node-level callbacks override state-level.
+		toolCbs := state[StateKeyToolCallbacks]
+		require.NotNil(t, toolCbs)
+		require.Equal(t, nodeToolCallbacks, toolCbs,
+			"Node callbacks should override state callbacks")
+
+		return State{"result": "done"}, nil
+	}, WithToolCallbacks(nodeToolCallbacks))
+	builder.SetEntryPoint("llm_node")
+	builder.SetFinishPoint("llm_node")
+
+	g, err := builder.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	// Initial state with state-level callbacks.
+	initialState := State{
+		StateKeyToolCallbacks: stateToolCallbacks,
+	}
+
+	inv := &agent.Invocation{InvocationID: "inv-callback-override-test"}
+	ch, err := exec.Execute(context.Background(), initialState, inv)
+	require.NoError(t, err)
+
+	for range ch {
+		// Drain events.
+	}
+
+	// Node-level callbacks should override, so state callback should not
+	// be invoked (in this test, both would be invoked only if tools were
+	// actually called, but the important part is that the right callback
+	// object is in State).
+	require.False(t, stateCallbackInvoked,
+		"State callback should not be used when node callback exists")
+	require.False(t, nodeCallbackInvoked,
+		"Node callback should not be invoked without tool calls")
+}
+
+// TestExecutor_NodeModelCallbacksOverrideStateCallbacks ensures that when a
+// node configures only model callbacks, they override state-level model
+// callbacks.
+func TestExecutor_NodeModelCallbacksOverrideStateCallbacks(t *testing.T) {
+	// State-level model callbacks.
+	stateModelCallbacks := model.NewCallbacks()
+	stateModelCallbacks.RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (
+			*model.BeforeModelResult, error) {
+			return nil, nil
+		},
+	)
+
+	// Node-level model callbacks that should override state-level.
+	nodeModelCallbacks := model.NewCallbacks()
+	nodeModelCallbacks.RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (
+			*model.BeforeModelResult, error) {
+			return nil, nil
+		},
+	)
+
+	// Create a graph with a node that configures only model callbacks.
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("llm_node", func(ctx context.Context, state State) (
+		any, error) {
+		// Verify node-level model callbacks override state-level.
+		modelCbs := state[StateKeyModelCallbacks]
+		require.NotNil(t, modelCbs)
+		require.Equal(t, nodeModelCallbacks, modelCbs,
+			"Node model callbacks should override state model callbacks")
+
+		return State{"result": "done"}, nil
+	}, WithModelCallbacks(nodeModelCallbacks))
+	builder.SetEntryPoint("llm_node")
+	builder.SetFinishPoint("llm_node")
+
+	g, err := builder.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	// Initial state with state-level model callbacks.
+	initialState := State{
+		StateKeyModelCallbacks: stateModelCallbacks,
+	}
+
+	inv := &agent.Invocation{InvocationID: "inv-model-callback-override"}
+	ch, err := exec.Execute(context.Background(), initialState, inv)
+	require.NoError(t, err)
+
+	for range ch {
+		// Drain events.
+	}
+}
+
+// TestExecutor_NodeBothCallbacksOverrideState ensures that when a node
+// configures both tool and model callbacks, both override state-level
+// callbacks.
+func TestExecutor_NodeBothCallbacksOverrideState(t *testing.T) {
+	// State-level callbacks.
+	stateToolCallbacks := tool.NewCallbacks()
+	stateModelCallbacks := model.NewCallbacks()
+
+	// Node-level callbacks.
+	nodeToolCallbacks := tool.NewCallbacks()
+	nodeModelCallbacks := model.NewCallbacks()
+
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("llm_node", func(ctx context.Context, state State) (
+		any, error) {
+		// Verify both node-level callbacks override state-level.
+		toolCbs := state[StateKeyToolCallbacks]
+		require.NotNil(t, toolCbs)
+		require.Equal(t, nodeToolCallbacks, toolCbs,
+			"Node tool callbacks should override state callbacks")
+
+		modelCbs := state[StateKeyModelCallbacks]
+		require.NotNil(t, modelCbs)
+		require.Equal(t, nodeModelCallbacks, modelCbs,
+			"Node model callbacks should override state callbacks")
+
+		return State{"result": "done"}, nil
+	}, WithToolCallbacks(nodeToolCallbacks), WithModelCallbacks(nodeModelCallbacks))
+	builder.SetEntryPoint("llm_node")
+	builder.SetFinishPoint("llm_node")
+
+	g, err := builder.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	// Initial state with both state-level callbacks.
+	initialState := State{
+		StateKeyToolCallbacks:  stateToolCallbacks,
+		StateKeyModelCallbacks: stateModelCallbacks,
+	}
+
+	inv := &agent.Invocation{InvocationID: "inv-both-callbacks-override"}
+	ch, err := exec.Execute(context.Background(), initialState, inv)
+	require.NoError(t, err)
+
+	for range ch {
+		// Drain events.
+	}
+}
+
 func TestExecutor_WithMaxConcurrency(t *testing.T) {
 	const (
 		nodeRoot       = "root"

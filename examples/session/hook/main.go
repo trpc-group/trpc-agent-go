@@ -10,6 +10,9 @@
 // Package main demonstrates how to use session hooks for various scenarios:
 // 1. Content filtering: Mark and filter prohibited content
 // 2. Consecutive user messages: Handle duplicate/consecutive user messages via hook
+// Package main demonstrates how to use session hooks for various scenarios:
+// 1. Content filtering: Mark and filter prohibited content
+// 2. Consecutive user messages: Handle duplicate/consecutive user messages via hook
 //
 // This is useful for:
 // - Content moderation
