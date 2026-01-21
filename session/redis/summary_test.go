@@ -290,6 +290,9 @@ func TestRedisService_EnqueueSummaryJob_AsyncDisabled_FallbackToSync(t *testing.
 		WithSummarizer(&fakeSummarizer{allow: true, out: "sync-summary"}),
 	)
 	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
 
 	// Create a session first.
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
@@ -315,9 +318,6 @@ func TestRedisService_EnqueueSummaryJob_AsyncDisabled_FallbackToSync(t *testing.
 	sum, ok := m[""]
 	require.True(t, ok)
 	require.Equal(t, "sync-summary", sum.Summary)
-
-	// Close service.
-	s.Close()
 }
 
 func TestRedisService_EnqueueSummaryJob_NoSummarizer_NoOp(t *testing.T) {
