@@ -2134,6 +2134,18 @@ used for convenience during development.</p>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_API_KEY</span><span class="o">=</span><span class="s2">&quot;your-api-key&quot;</span>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-executor<span class="w"> </span><span class="nb">local</span><span class="w">     </span><span class="c1"># or: -executor container</span>
 </span></code></pre></div></td></tr></table></div>
+<p>GAIA benchmark demo (skills + file tools):
+<a href="https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skill/README.md">examples/skill/README.md</a></p>
+<p>It includes a dataset downloader script and notes on Python dependencies
+for skills like <code>whisper</code> (audio) and <code>ocr</code> (images).</p>
+<p>Quick start (download dataset JSON into <code>examples/skill/data/</code>):</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
+<span class="normal"><a href="#__codelineno-4-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">HF_TOKEN</span><span class="o">=</span><span class="s2">&quot;hf_...&quot;</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a>python3<span class="w"> </span>examples/skill/scripts/download_gaia_2023_level1_validation.py
+</span></code></pre></div></td></tr></table></div>
+<p>To also download referenced attachment files:</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a>python3<span class="w"> </span>examples/skill/scripts/download_gaia_2023_level1_validation.py<span class="w"> </span>--with-files
+</span></code></pre></div></td></tr></table></div>
 <p>Sample skill (excerpt):
 [examples/skillrun/skills/python_math/SKILL.md]
 (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)</p>
@@ -2144,33 +2156,33 @@ used for convenience during development.</p>
   <code>skill_run</code> to execute and return output files.</p>
 <h2 id="skillmd-anatomy">SKILL.md Anatomy</h2>
 <p><code>SKILL.md</code> uses YAML front matter + Markdown body:</p>
-<div class="language-markdown highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-4-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-4-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-4-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-4-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-4-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-4-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-4-10">10</a></span>
-<span class="normal"><a href="#__codelineno-4-11">11</a></span>
-<span class="normal"><a href="#__codelineno-4-12">12</a></span>
-<span class="normal"><a href="#__codelineno-4-13">13</a></span>
-<span class="normal"><a href="#__codelineno-4-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a>---
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a>name: python-math
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="gu">description: Small Python utilities for math and text files.</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="gu">---</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a>Overview
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a>Run short Python scripts inside the skill workspace...
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a>Examples
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a>1) Print the first N Fibonacci numbers
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a>   Command: python3 scripts/fib.py 10 &gt; out/fib.txt
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a>
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a>Output Files
-</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a><span class="k">-</span><span class="w"> </span>out/fib.txt
+<div class="language-markdown highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-6-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-6-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-6-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-6-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-6-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-6-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-6-10">10</a></span>
+<span class="normal"><a href="#__codelineno-6-11">11</a></span>
+<span class="normal"><a href="#__codelineno-6-12">12</a></span>
+<span class="normal"><a href="#__codelineno-6-13">13</a></span>
+<span class="normal"><a href="#__codelineno-6-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a>---
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a>name: python-math
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="gu">description: Small Python utilities for math and text files.</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="gu">---</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a>Overview
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a>Run short Python scripts inside the skill workspace...
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a>Examples
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a>1) Print the first N Fibonacci numbers
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a>   Command: python3 scripts/fib.py 10 &gt; out/fib.txt
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a>Output Files
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14"></a><span class="k">-</span><span class="w"> </span>out/fib.txt
 </span></code></pre></div></td></tr></table></div>
 <p>Recommendations:
 - Keep <code>name</code>/<code>description</code> succinct for the overview
@@ -2219,7 +2231,7 @@ them directly when driving the conversation naturally.</p>
 <p>Declaration: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go">tool/skill/run.go</a></p>
 <p>Input:
 - <code>skill</code> (required)
-- <code>command</code> (required; by default runs via <code>bash -lc</code>)
+- <code>command</code> (required; by default runs via <code>bash -c</code>)
 - <code>cwd</code>, <code>env</code> (optional)
 - <code>output_files</code> (optional, legacy collection): glob patterns (e.g.,
   <code>out/*.txt</code>). Patterns are workspace‑relative; env‑style prefixes
@@ -2254,7 +2266,11 @@ them directly when driving the conversation naturally.</p>
   via <code>output_files</code> and return <code>artifact_files</code> in the result</li>
 <li><code>omit_inline_content</code> (optional): with <code>save_as_artifacts</code>, omit
   <code>output_files[*].content</code> and return metadata only</li>
-<li><code>artifact_prefix</code> (optional): prefix for the legacy artifact path</li>
+<li><code>artifact_prefix</code> (optional): prefix for the legacy artifact path<ul>
+<li>If the Artifact service is not configured, <code>skill_run</code> keeps
+  returning inline <code>output_files</code> and reports a <code>warnings</code> entry.</li>
+</ul>
+</li>
 </ul>
 <p>Optional safety restriction (allowlist):
 - Env var <code>TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS</code>:
@@ -2275,7 +2291,14 @@ them directly when driving the conversation naturally.</p>
   <code>llmagent.WithSkillRunDeniedCommands(...)</code>.</p>
 <p>Output:
 - <code>stdout</code>, <code>stderr</code>, <code>exit_code</code>, <code>timed_out</code>, <code>duration_ms</code>
-- <code>output_files</code> with <code>name</code>, <code>content</code>, <code>mime_type</code>
+- <code>primary_output</code> (optional) with <code>name</code>, <code>ref</code>, <code>content</code>, <code>mime_type</code>
+  - Convenience pointer to the "best" small text output file (when one
+    exists). Prefer this when there is a single main output.
+- <code>output_files</code> with <code>name</code>, <code>ref</code>, <code>content</code>, <code>mime_type</code>
+  - <code>ref</code> is a stable <code>workspace://&lt;name&gt;</code> reference that can be passed
+    to other tools
+- <code>warnings</code> (optional): non-fatal notes (for example, when artifact
+  saving is skipped)
 - <code>artifact_files</code> with <code>name</code>, <code>version</code> appears in two cases:
   - Legacy path: when <code>save_as_artifacts</code> is set
   - Manifest path: when <code>outputs.save=true</code> (executor persists files)</p>
@@ -2288,10 +2311,15 @@ them directly when driving the conversation naturally.</p>
 <p>Environment and CWD:
 - When <code>cwd</code> is omitted, runs at the skill root: <code>/skills/&lt;name&gt;</code>
 - A relative <code>cwd</code> is resolved under the skill root
+- <code>cwd</code> may start with <code>$WORK_DIR</code>, <code>$OUTPUT_DIR</code>, <code>$SKILLS_DIR</code>,
+  <code>$WORKSPACE_DIR</code>, <code>$RUN_DIR</code> (or <code>${...}</code>) and will be normalized to
+  workspace‑relative directories
 - Runtime injects env vars: <code>WORKSPACE_DIR</code>, <code>SKILLS_DIR</code>, <code>WORK_DIR</code>,
   <code>OUTPUT_DIR</code>, <code>RUN_DIR</code>; the tool injects <code>SKILL_NAME</code>
 - Convenience symlinks are created under the skill root: <code>out/</code>,
-  <code>work/</code>, and <code>inputs/</code> point to workspace‑level dirs</p>
+  <code>work/</code>, and <code>inputs/</code> point to workspace‑level dirs
+- File tools accept <code>inputs/&lt;path&gt;</code> as an alias to <code>&lt;path&gt;</code> when the
+  configured base directory does not contain a real <code>inputs/</code> folder</p>
 <h2 id="executor">Executor</h2>
 <p>Interface: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/codeexecutor.go">codeexecutor/codeexecutor.go</a></p>
 <p>Implementations:
@@ -2306,6 +2334,7 @@ them directly when driving the conversation naturally.</p>
 <p>Security &amp; limits:
 - Reads/writes confined to the workspace
 - Timeouts and read‑only skill trees reduce risk
+- <code>stdout</code>/<code>stderr</code> may be truncated (see <code>warnings</code>)
 - Output file read size is capped to prevent oversized payloads</p>
 <h2 id="events-and-tracing">Events and Tracing</h2>
 <p>Tools emit <code>tool.response</code> events and may carry state deltas (used by
@@ -2373,7 +2402,7 @@ them directly when driving the conversation naturally.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 14, 2026 05:13:26 UTC">2026-01-14 05:13:26</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 21, 2026 08:24:17 UTC">2026-01-21 08:24:17</span>
   </span>
 
     

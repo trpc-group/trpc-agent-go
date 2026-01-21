@@ -2140,6 +2140,18 @@
 </span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="c1"># 或容器执行器（需 Docker）</span>
 </span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-executor<span class="w"> </span>container
 </span></code></pre></div></td></tr></table></div>
+<p>GAIA 基准示例（技能 + 文件工具）：
+<a href="https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skill/README.md">examples/skill/README.md</a></p>
+<p>该示例包含数据集下载脚本，以及 <code>whisper</code>（音频）/<code>ocr</code>（图片）等
+技能的 Python 依赖准备说明。</p>
+<p>快速开始（下载数据集 JSON 到 <code>examples/skill/data/</code>）：</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
+<span class="normal"><a href="#__codelineno-4-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">HF_TOKEN</span><span class="o">=</span><span class="s2">&quot;hf_...&quot;</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a>python3<span class="w"> </span>examples/skill/scripts/download_gaia_2023_level1_validation.py
+</span></code></pre></div></td></tr></table></div>
+<p>如需同时下载引用到的附件文件：</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a>python3<span class="w"> </span>examples/skill/scripts/download_gaia_2023_level1_validation.py<span class="w"> </span>--with-files
+</span></code></pre></div></td></tr></table></div>
 <p>示例技能（节选）：
 [examples/skillrun/skills/python_math/SKILL.md]
 (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)</p>
@@ -2149,43 +2161,43 @@
   <code>skill_run</code> 执行命令并回传输出文件。</p>
 <h2 id="skillmd"><code>SKILL.md</code> 结构与示例</h2>
 <p><code>SKILL.md</code> 采用 YAML 头信息 + Markdown 正文：</p>
-<div class="language-markdown highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-4-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-4-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-4-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-4-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-4-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-4-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-4-10">10</a></span>
-<span class="normal"><a href="#__codelineno-4-11">11</a></span>
-<span class="normal"><a href="#__codelineno-4-12">12</a></span>
-<span class="normal"><a href="#__codelineno-4-13">13</a></span>
-<span class="normal"><a href="#__codelineno-4-14">14</a></span>
-<span class="normal"><a href="#__codelineno-4-15">15</a></span>
-<span class="normal"><a href="#__codelineno-4-16">16</a></span>
-<span class="normal"><a href="#__codelineno-4-17">17</a></span>
-<span class="normal"><a href="#__codelineno-4-18">18</a></span>
-<span class="normal"><a href="#__codelineno-4-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a>---
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a>name: python-math
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="gu">description: Small Python utilities for math and text files.</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="gu">---</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a>Overview
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a>Run short Python scripts inside the skill workspace...
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a>Examples
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a>1) Print the first N Fibonacci numbers
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a>
-</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a>   Command:
-</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15"></a>   python3 scripts/fib.py 10 &gt; out/fib.txt
-</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a>
-</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17"></a>Output Files
-</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18"></a>
-</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a><span class="k">-</span><span class="w"> </span>out/fib.txt
+<div class="language-markdown highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-6-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-6-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-6-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-6-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-6-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-6-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-6-10">10</a></span>
+<span class="normal"><a href="#__codelineno-6-11">11</a></span>
+<span class="normal"><a href="#__codelineno-6-12">12</a></span>
+<span class="normal"><a href="#__codelineno-6-13">13</a></span>
+<span class="normal"><a href="#__codelineno-6-14">14</a></span>
+<span class="normal"><a href="#__codelineno-6-15">15</a></span>
+<span class="normal"><a href="#__codelineno-6-16">16</a></span>
+<span class="normal"><a href="#__codelineno-6-17">17</a></span>
+<span class="normal"><a href="#__codelineno-6-18">18</a></span>
+<span class="normal"><a href="#__codelineno-6-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a>---
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a>name: python-math
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="gu">description: Small Python utilities for math and text files.</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="gu">---</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a>Overview
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a>Run short Python scripts inside the skill workspace...
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a>Examples
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a>1) Print the first N Fibonacci numbers
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14"></a>   Command:
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15"></a>   python3 scripts/fib.py 10 &gt; out/fib.txt
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16"></a>
+</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17"></a>Output Files
+</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18"></a>
+</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19"></a><span class="k">-</span><span class="w"> </span>out/fib.txt
 </span></code></pre></div></td></tr></table></div>
 <p>建议：
 - 头信息的 <code>name</code>/<code>description</code> 要简洁，便于“概览注入”
@@ -2228,7 +2240,7 @@ https://github.com/anthropics/skills</p>
 <p>声明： <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go">tool/skill/run.go</a></p>
 <p>输入：
 - <code>skill</code>（必填）：技能名
-- <code>command</code>（必填）：Shell 命令（默认通过 <code>bash -lc</code> 执行）
+- <code>command</code>（必填）：Shell 命令（默认通过 <code>bash -c</code> 执行）
 - <code>cwd</code>（可选）：相对技能根目录的工作路径
 - <code>env</code>（可选）：环境变量映射
 - <code>output_files</code>（可选，传统收集方式）：通配符列表
@@ -2264,7 +2276,11 @@ https://github.com/anthropics/skills</p>
   <code>artifact_files</code>。</li>
 <li><code>omit_inline_content</code>（可选）：与 <code>save_as_artifacts</code> 配合，
   为 true 时不返回文件内容，仅保留文件名/MIME 信息。</li>
-<li><code>artifact_prefix</code>（可选）：与 <code>save_as_artifacts</code> 配合的前缀。</li>
+<li><code>artifact_prefix</code>（可选）：与 <code>save_as_artifacts</code> 配合的前缀。<ul>
+<li>若未配置制品服务（Artifact service），<code>skill_run</code> 会继续
+  返回内联的 <code>output_files</code>，并在 <code>warnings</code> 中给出提示。</li>
+</ul>
+</li>
 </ul>
 <p>可选的安全限制（白名单）：
 - 环境变量 <code>TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS</code>：
@@ -2283,7 +2299,12 @@ https://github.com/anthropics/skills</p>
 - 代码侧也可通过 <code>llmagent.WithSkillRunDeniedCommands(...)</code> 配置。</p>
 <p>输出：
 - <code>stdout</code>、<code>stderr</code>、<code>exit_code</code>、<code>timed_out</code>、<code>duration_ms</code>
-- <code>output_files</code>：文件列表（<code>name</code>、<code>content</code>、<code>mime_type</code>）
+- <code>primary_output</code>（可选）：包含 <code>name</code>、<code>ref</code>、<code>content</code>、<code>mime_type</code>
+  - 便捷字段：指向“最合适的”小型文本输出文件（若存在）。当只有一个主要输出时
+    优先使用它。
+- <code>output_files</code>：文件列表（<code>name</code>、<code>ref</code>、<code>content</code>、<code>mime_type</code>）
+  - <code>ref</code> 是稳定的 <code>workspace://&lt;name&gt;</code> 引用，可传给其它工具使用
+- <code>warnings</code>（可选）：非致命提示（例如制品保存被跳过）
 - <code>artifact_files</code>：制品引用（<code>name</code>、<code>version</code>）。两种途径：
   - 传统路径：设置了 <code>save_as_artifacts</code> 时由工具保存并返回
   - 清单路径：<code>outputs.save=true</code> 时由执行器保存并附加到结果</p>
@@ -2296,12 +2317,17 @@ https://github.com/anthropics/skills</p>
 <p>运行环境与工作目录：
 - 未提供 <code>cwd</code> 时，默认在技能根目录运行：<code>/skills/&lt;name&gt;</code>
 - 相对 <code>cwd</code> 会被解析为技能根目录下的子路径
+- <code>cwd</code> 也可以以 <code>$WORK_DIR</code>、<code>$OUTPUT_DIR</code>、<code>$SKILLS_DIR</code>、
+  <code>$WORKSPACE_DIR</code>、<code>$RUN_DIR</code>（或 <code>${...}</code>）开头，
+  工具会将其规范化为工作区内的相对目录
 - 运行时注入环境变量：
   - <code>WORKSPACE_DIR</code>、<code>SKILLS_DIR</code>、<code>WORK_DIR</code>、<code>OUTPUT_DIR</code>、
     <code>RUN_DIR</code>（由执行器注入）
   - <code>SKILL_NAME</code>（由工具注入）
 - 便捷符号链接：在技能根目录下自动创建 <code>out/</code>、<code>work/</code>、
-  <code>inputs/</code> 链接到工作区对应目录，方便按文档中的相对路径使用。</p>
+  <code>inputs/</code> 链接到工作区对应目录，方便按文档中的相对路径使用。
+- 文件工具在 base directory 下不存在真实 <code>inputs/</code> 目录时，会将
+  <code>inputs/&lt;path&gt;</code> 视为 <code>&lt;path&gt;</code> 的别名</p>
 <h2 id="_6">执行器</h2>
 <p>接口： <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/codeexecutor.go">codeexecutor/codeexecutor.go</a></p>
 <p>实现：
@@ -2316,6 +2342,7 @@ https://github.com/anthropics/skills</p>
 <p>安全与资源：
 - 本地/容器均限制读取与写入在工作区内
 - 可通过超时、脚本权限（如只读挂载技能树）降低风险
+- <code>stdout</code>/<code>stderr</code> 可能会被截断（见 <code>warnings</code>）
 - 输出文件读取大小有限制，避免过大文件影响</p>
 <h2 id="_7">事件与追踪</h2>
 <p>事件：工具响应以 <code>tool.response</code> 形式产出，可携带状态增量（见
@@ -2384,7 +2411,7 @@ https://github.com/anthropics/skills</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月14日 05:13:26 UTC">2026-01-14 05:13:26</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月21日 08:24:17 UTC">2026-01-21 08:24:17</span>
   </span>
 
     
