@@ -80,12 +80,13 @@ Both examples share the following capabilities:
 
 All examples support multiple storage backends:
 
-| Backend    | Description                 | Usage              |
-| ---------- | --------------------------- | ------------------ |
-| `inmemory` | In-memory storage (default) | `-memory=inmemory` |
-| `redis`    | Redis-based storage         | `-memory=redis`    |
-| `mysql`    | MySQL-based storage         | `-memory=mysql`    |
-| `postgres` | PostgreSQL-based storage    | `-memory=postgres` |
+| Backend    | Description                                 | Usage              |
+| ---------- | ------------------------------------------- | ------------------ |
+| `inmemory` | In-memory storage (default)                 | `-memory=inmemory` |
+| `redis`    | Redis-based storage                         | `-memory=redis`    |
+| `mysql`    | MySQL-based storage                         | `-memory=mysql`    |
+| `postgres` | PostgreSQL-based storage                    | `-memory=postgres` |
+| `pgvector` | pgvector PostgreSQL storage with embeddings | `-memory=pgvector` |
 
 ### Session Management
 
@@ -107,27 +108,27 @@ All examples support multiple storage backends:
 
 ## Comparison
 
-| Feature           | Agentic Mode (Simple)                     | Auto Mode (Auto)                        |
-| ----------------- | ---------------------------------------- | -------------------------------------- |
-| Tool Registration | Manual (`WithTools`)                  | Automatic (`WithExtractor`)              |
-| Memory Extraction | Agent calls tools directly               | Background extraction                     |
-| Tools Available   | 6 tools (4 default, 2 configurable)       | Limited (search, optional load)         |
-| Control Level     | High (explicit)                        | Medium (background)                     |
-| Setup Complexity  | Simple                                   | Complex                                 |
-| Best For          | Fine-grained control needs                 | Transparent memory needs                   |
+| Feature           | Agentic Mode (Simple)               | Auto Mode (Auto)                |
+| ----------------- | ----------------------------------- | ------------------------------- |
+| Tool Registration | Manual (`WithTools`)                | Automatic (`WithExtractor`)     |
+| Memory Extraction | Agent calls tools directly          | Background extraction           |
+| Tools Available   | 6 tools (4 default, 2 configurable) | Limited (search, optional load) |
+| Control Level     | High (explicit)                     | Medium (background)             |
+| Setup Complexity  | Simple                              | Complex                         |
+| Best For          | Fine-grained control needs          | Transparent memory needs        |
 
 ## Memory Tools
 
 Memory provides 6 tools with different availability in each mode:
 
-| Tool            | Function         | Agentic Mode (Simple) | Auto Extraction Mode (Auto) | Description                           |
-| --------------- | -------------- | --------------------- | --------------------------- | ------------------------------------ |
-| `memory_add`    | Add new memory  | ✅ Default          | ❌ Unavailable               | Create new memory entry               |
-| `memory_update` | Update memory   | ✅ Default          | ❌ Unavailable               | Modify existing memory               |
-| `memory_search` | Search memory   | ✅ Default          | ✅ Default                  | Find by keywords                   |
-| `memory_load`   | Load memories    | ✅ Default          | ⚙️ Configurable            | Load recent memories                |
-| `memory_delete` | Delete memory    | ⚙️ Configurable     | ❌ Unavailable               | Delete single memory                |
-| `memory_clear`  | Clear memories   | ⚙️ Configurable     | ❌ Unavailable               | Delete all memories                |
+| Tool            | Function       | Agentic Mode (Simple) | Auto Extraction Mode (Auto) | Description             |
+| --------------- | -------------- | --------------------- | --------------------------- | ----------------------- |
+| `memory_add`    | Add new memory | ✅ Default            | ❌ Unavailable              | Create new memory entry |
+| `memory_update` | Update memory  | ✅ Default            | ❌ Unavailable              | Modify existing memory  |
+| `memory_search` | Search memory  | ✅ Default            | ✅ Default                  | Find by keywords        |
+| `memory_load`   | Load memories  | ✅ Default            | ⚙️ Configurable             | Load recent memories    |
+| `memory_delete` | Delete memory  | ⚙️ Configurable       | ❌ Unavailable              | Delete single memory    |
+| `memory_clear`  | Clear memories | ⚙️ Configurable       | ❌ Unavailable              | Delete all memories     |
 
 **Notes:**
 
@@ -150,26 +151,32 @@ Memory provides 6 tools with different availability in each mode:
 
 ### Required
 
-| Variable         | Description                    | Default  |
-| ---------------- | ------------------------------ | ------- |
-| `OPENAI_API_KEY` | API key for model service    | (empty)  |
+| Variable         | Description               | Default |
+| ---------------- | ------------------------- | ------- |
+| `OPENAI_API_KEY` | API key for model service | (empty) |
 
 ### Optional
 
-| Variable          | Description                           | Default                     |
-| ----------------- | ------------------------------------ | --------------------------- |
-| `OPENAI_BASE_URL` | Base URL for model API             | `https://api.openai.com/v1`   |
-| `REDIS_ADDR`      | Redis server address                | `localhost:6379`             |
-| `PG_HOST`         | PostgreSQL host                   | `localhost`                   |
-| `PG_PORT`         | PostgreSQL port                   | `5432`                        |
-| `PG_USER`         | PostgreSQL user                   | `postgres`                    |
-| `PG_PASSWORD`     | PostgreSQL password               | (empty)                       |
-| `PG_DATABASE`     | PostgreSQL database                | `trpc-agent-go-pgmemory`      |
-| `MYSQL_HOST`      | MySQL host                        | `localhost`                   |
-| `MYSQL_PORT`      | MySQL port                        | `3306`                        |
-| `MYSQL_USER`      | MySQL user                        | `root`                        |
-| `MYSQL_PASSWORD`  | MySQL password                    | (empty)                       |
-| `MYSQL_DATABASE`  | MySQL database                    | `trpc_agent_go`              |
+| Variable                  | Description                  | Default                     |
+| ------------------------- | ---------------------------- | --------------------------- |
+| `OPENAI_BASE_URL`         | Base URL for model API       | `https://api.openai.com/v1` |
+| `REDIS_ADDR`              | Redis server address         | `localhost:6379`            |
+| `PG_HOST`                 | PostgreSQL host              | `localhost`                 |
+| `PG_PORT`                 | PostgreSQL port              | `5432`                      |
+| `PG_USER`                 | PostgreSQL user              | `postgres`                  |
+| `PG_PASSWORD`             | PostgreSQL password          | (empty)                     |
+| `PG_DATABASE`             | PostgreSQL database          | `trpc-agent-go-pgmemory`    |
+| `PGVECTOR_HOST`           | pgvector PostgreSQL host     | `localhost`                 |
+| `PGVECTOR_PORT`           | pgvector PostgreSQL port     | `5432`                      |
+| `PGVECTOR_USER`           | pgvector PostgreSQL user     | `postgres`                  |
+| `PGVECTOR_PASSWORD`       | pgvector PostgreSQL password | (empty)                     |
+| `PGVECTOR_DATABASE`       | pgvector PostgreSQL database | `trpc-agent-go-pgmemory`    |
+| `PGVECTOR_EMBEDDER_MODEL` | pgvector embedder model      | `text-embedding-3-small`    |
+| `MYSQL_HOST`              | MySQL host                   | `localhost`                 |
+| `MYSQL_PORT`              | MySQL port                   | `3306`                      |
+| `MYSQL_USER`              | MySQL user                   | `root`                      |
+| `MYSQL_PASSWORD`          | MySQL password               | (empty)                     |
+| `MYSQL_DATABASE`          | MySQL database               | `trpc_agent_go`             |
 
 ## Quick Start
 
@@ -227,9 +234,18 @@ go run main.go -memory mysql
 export PG_HOST=localhost
 export PG_PORT=5432
 export PG_USER=postgres
-export PG_PASSWORD=my-secret-pw
-export PG_DATABASE=trpc_agent_go
+export PG_PASSWORD=""
+export PG_DATABASE=trpc-agent-go-pgmemory
 go run main.go -memory postgres
+
+# pgvector memory service (using environment variables)
+export PGVECTOR_HOST=localhost
+export PGVECTOR_PORT=5432
+export PGVECTOR_USER=postgres
+export PGVECTOR_PASSWORD=""
+export PGVECTOR_DATABASE=trpc-agent-go-pgmemory
+export PGVECTOR_EMBEDDER_MODEL=text-embedding-3-small
+go run main.go -memory pgvector
 ```
 
 ### Custom Models
