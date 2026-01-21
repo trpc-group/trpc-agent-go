@@ -522,6 +522,7 @@ func (e *Executor) processResumeCommand(execState, initialState State) State {
 	case *ResumeCommand:
 		resumeCmd = v
 	default:
+		return execState
 	}
 	if resumeCmd != nil {
 		// Apply resume values if present.
