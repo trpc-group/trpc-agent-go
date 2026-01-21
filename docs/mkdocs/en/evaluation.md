@@ -681,6 +681,7 @@ type Registry interface {
 The framework registers the following evaluators by default:
 
 - `tool_trajectory_avg_score` tool trajectory consistency evaluator, requires expected outputs.
+- `final_response_avg_score` final response evaluator, does not require an LLM, and requires expected outputs.
 - `llm_final_response` LLM final response evaluator, requires expected outputs.
 - `llm_rubric_response` LLM rubric response evaluator, requires EvalSet to provide conversation input and configure LLMJudge/rubrics.
 - `llm_rubric_knowledge_recall` LLM rubric knowledge recall evaluator, requires EvalSet to provide conversation input and configure LLMJudge/rubrics.
@@ -1690,6 +1691,66 @@ An example of the corresponding metric config file:
 ```
 
 For a complete example, see [examples/evaluation/tooltrajectory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/tooltrajectory).
+
+#### Final Response Evaluator
+
+The metric name corresponding to the final response evaluator is `final_response_avg_score`. It does not require an LLM and compares the Agent’s final response with the expected output using deterministic rules. It is suitable for cases where you need strict text or JSON output validation.
+
+Evaluation logic:
+
+- Use `FinalResponseCriterion` to compare `Invocation.FinalResponse.Content` for each invocation; a match scores 1, otherwise 0.
+- For multiple runs, take the average score across invocations and compare it with `EvalMetric.Threshold` to determine pass/fail.
+
+`FinalResponseCriterion` supports two criteria:
+
+- `text`: Compare plain text using `TextCriterion` with strategies like `exact/contains/regex`. For details, see [TextCriterion](#textcriterion).
+- `json`: Parse `FinalResponse.Content` as JSON and compare using `JSONCriterion`. You can configure `ignoreTree`, `numberTolerance`, and more. For details, see [JSONCriterion](#jsoncriterion).
+
+Code example:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+)
+
+evalMetric := &metric.EvalMetric{
+	MetricName: "final_response_avg_score",
+	Threshold:  1.0,
+	Criterion: criterion.New(
+		criterion.WithFinalResponse(
+			cfinalresponse.New(
+				cfinalresponse.WithJSONCriterion(cjson.New()),
+				cfinalresponse.WithTextCriterion(ctext.New()),
+			),
+		),
+	),
+}
+```
+
+An example metric config file
+
+```json
+[
+  {
+    "metricName": "final_response_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "text": {
+          "matchStrategy": "exact"
+        },
+        "json": {
+          "matchStrategy": "exact"
+        }
+      }
+    }
+  }
+]
+```
 
 #### LLM Final Response Evaluator
 
