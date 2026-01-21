@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 )
 
@@ -28,9 +29,16 @@ func TestCriterionWithToolTrajectory(t *testing.T) {
 	assert.Equal(t, custom, c.ToolTrajectory)
 }
 
+func TestCriterionWithFinalResponse(t *testing.T) {
+	custom := cfinalresponse.New()
+	c := New(WithFinalResponse(custom))
+	assert.Equal(t, custom, c.FinalResponse)
+}
+
 func TestCriterionJSONRoundTrip(t *testing.T) {
 	c := &Criterion{
 		ToolTrajectory: tooltrajectory.New(),
+		FinalResponse:  cfinalresponse.New(),
 	}
 	data, err := json.Marshal(c)
 	assert.NoError(t, err)
@@ -39,4 +47,5 @@ func TestCriterionJSONRoundTrip(t *testing.T) {
 	err = json.Unmarshal(data, &decoded)
 	assert.NoError(t, err)
 	assert.NotNil(t, decoded.ToolTrajectory)
+	assert.NotNil(t, decoded.FinalResponse)
 }
