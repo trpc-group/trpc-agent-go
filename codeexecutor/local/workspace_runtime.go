@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -45,7 +46,20 @@ type Runtime struct {
 	ReadOnlyStagedSkill bool
 	InputsHostBase      string
 	AutoInputs          bool
+	Mode                WorkspaceMode
 }
+
+// WorkspaceMode controls how the local runtime chooses workspace roots.
+type WorkspaceMode int
+
+const (
+	// WorkspaceModeIsolated creates a unique workspace directory for each
+	// CreateWorkspace call. This is the default and is safer.
+	WorkspaceModeIsolated WorkspaceMode = iota
+	// WorkspaceModeTrustedLocal reuses WorkRoot as the workspace root.
+	// Cleanup becomes a no-op to avoid deleting user directories.
+	WorkspaceModeTrustedLocal
+)
 
 // NewRuntime creates a new local Runtime. When workRoot is empty, a
 // temporary directory will be used per workspace.
@@ -53,11 +67,17 @@ func NewRuntime(workRoot string) *Runtime {
 	return &Runtime{
 		WorkRoot:   workRoot,
 		AutoInputs: true,
+		Mode:       WorkspaceModeIsolated,
 	}
 }
 
 // RuntimeOption customizes the local Runtime behavior.
 type RuntimeOption func(*Runtime)
+
+// WithRuntimeWorkspaceMode sets the workspace mode for the runtime.
+func WithRuntimeWorkspaceMode(mode WorkspaceMode) RuntimeOption {
+	return func(r *Runtime) { r.Mode = mode }
+}
 
 // WithReadOnlyStagedSkill toggles making staged skill trees read-only.
 func WithReadOnlyStagedSkill(readOnly bool) RuntimeOption {
@@ -85,6 +105,7 @@ func NewRuntimeWithOptions(
 	r := &Runtime{
 		WorkRoot:   workRoot,
 		AutoInputs: true,
+		Mode:       WorkspaceModeIsolated,
 	}
 	for _, o := range opts {
 		o(r)
@@ -101,6 +122,11 @@ func (r *Runtime) CreateWorkspace(
 	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceCreate)
 	span.SetAttributes(attribute.String(codeexecutor.AttrExecID, execID))
 	defer span.End()
+
+	if r.Mode == WorkspaceModeTrustedLocal {
+		return r.createTrustedWorkspace(ctx, execID)
+	}
+
 	var base string
 	if r.WorkRoot != "" {
 		base = r.WorkRoot
@@ -161,6 +187,43 @@ func (r *Runtime) CreateWorkspace(
 	return ws, nil
 }
 
+func (r *Runtime) createTrustedWorkspace(
+	ctx context.Context,
+	execID string,
+) (codeexecutor.Workspace, error) {
+	root := strings.TrimSpace(r.WorkRoot)
+	if root == "" {
+		return codeexecutor.Workspace{}, errors.New(
+			"trusted local mode requires WorkRoot",
+		)
+	}
+	if !filepath.IsAbs(root) {
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs
+		}
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return codeexecutor.Workspace{}, err
+	}
+	if _, err := codeexecutor.EnsureLayout(root); err != nil {
+		return codeexecutor.Workspace{}, err
+	}
+	ws := codeexecutor.Workspace{ID: execID, Path: root}
+	if r.AutoInputs && r.InputsHostBase != "" {
+		specs := []codeexecutor.InputSpec{{
+			From: "host://" + r.InputsHostBase,
+			To: filepath.Join(
+				codeexecutor.DirWork, "inputs",
+			),
+			Mode: "link",
+		}}
+		if err := r.StageInputs(ctx, ws, specs); err != nil {
+			return codeexecutor.Workspace{}, err
+		}
+	}
+	return ws, nil
+}
+
 // Cleanup removes workspace directory if it exists.
 func (r *Runtime) Cleanup(
 	ctx context.Context,
@@ -169,6 +232,9 @@ func (r *Runtime) Cleanup(
 	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceCleanup)
 	span.SetAttributes(attribute.String(codeexecutor.AttrPath, ws.Path))
 	defer span.End()
+	if r.Mode == WorkspaceModeTrustedLocal {
+		return nil
+	}
 	if ws.Path == "" {
 		return nil
 	}
@@ -422,6 +488,21 @@ func (r *Runtime) Collect(
 				continue
 			}
 			seen[name] = true
+			st, statErr := os.Stat(realp)
+			if statErr != nil {
+				if errors.Is(statErr, fs.ErrNotExist) {
+					ls, lsErr := os.Lstat(realp)
+					if lsErr == nil &&
+						ls.Mode()&os.ModeSymlink != 0 {
+						continue
+					}
+				}
+				span.SetStatus(codes.Error, statErr.Error())
+				return nil, statErr
+			}
+			if st.IsDir() {
+				continue
+			}
 			content, mime, err := readLimited(realp)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
@@ -578,9 +659,14 @@ func (r *Runtime) CollectOutputs(
 				break
 			}
 			mAbs := "/" + strings.TrimPrefix(m, "/")
-			if !strings.HasPrefix(
-				mAbs, ws.Path+string(os.PathSeparator),
-			) && mAbs != ws.Path {
+			if !withinWorkspacePath(ws.Path, mAbs) {
+				continue
+			}
+			st, statErr := os.Stat(mAbs)
+			if statErr != nil {
+				return codeexecutor.OutputManifest{}, statErr
+			}
+			if st.IsDir() {
 				continue
 			}
 			name := strings.TrimPrefix(
@@ -642,6 +728,17 @@ func (r *Runtime) CollectOutputs(
 	})
 	_ = codeexecutor.SaveMetadata(ws.Path, md)
 	return out, nil
+}
+
+func withinWorkspacePath(wsPath string, absPath string) bool {
+	if wsPath == "" || absPath == "" {
+		return false
+	}
+	sep := string(os.PathSeparator)
+	if absPath == wsPath {
+		return true
+	}
+	return strings.HasPrefix(absPath, wsPath+sep)
 }
 
 // ExecuteInline writes temp files for code blocks and runs them.

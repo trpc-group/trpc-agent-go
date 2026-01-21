@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -17,7 +18,9 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -26,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
@@ -94,6 +98,147 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.Len(t, out.OutputFiles, 1)
 	require.Equal(t, outATxt, out.OutputFiles[0].Name)
 	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+
+	require.NotNil(t, out.PrimaryOutput)
+	require.Equal(t, outATxt, out.PrimaryOutput.Name)
+	require.Contains(t, out.PrimaryOutput.Content, contentHi)
+}
+
+func TestRunTool_AutoExportsOutToWorkspaceCache(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.NotNil(t, out.PrimaryOutput)
+	require.Equal(t, outATxt, out.PrimaryOutput.Name)
+	require.Contains(t, out.PrimaryOutput.Content, contentHi)
+
+	content, _, ok := toolcache.LookupSkillRunOutputFileFromContext(
+		ctx,
+		outATxt,
+	)
+	require.True(t, ok)
+	require.Contains(t, content, contentHi)
+}
+
+func TestRunTool_DoesNotUseLoginShell(t *testing.T) {
+	// A login shell would source ~/.bash_profile and set this variable.
+	home := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(home, ".bash_profile"),
+		[]byte("export TRPC_AGENT_TEST_LOGIN=1\n"),
+		0o644,
+	))
+	t.Setenv("HOME", home)
+
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "echo $TRPC_AGENT_TEST_LOGIN",
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Equal(t, "\n", out.Stdout)
+}
+
+func TestRunTool_PrimaryOutput_SelectsByName(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt + "; echo " + contentHello +
+			" > " + outBTxt,
+		OutputFiles: []string{outATxt, outBTxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.NotNil(t, out.PrimaryOutput)
+	require.Equal(t, outATxt, out.PrimaryOutput.Name)
+	require.Contains(t, out.PrimaryOutput.Content, contentHi)
+}
+
+func TestSelectPrimaryOutput_SkipsNonTextAndEmpty(t *testing.T) {
+	large := strings.Repeat("a", maxPrimaryOutputChars+1)
+	files := []runFile{
+		{
+			File: codeexecutor.File{
+				Name:     "b.txt",
+				Content:  "",
+				MIMEType: "text/plain",
+			},
+		},
+		{
+			File: codeexecutor.File{
+				Name:     "c.bin",
+				Content:  "x",
+				MIMEType: "application/octet-stream",
+			},
+		},
+		{
+			File: codeexecutor.File{
+				Name:     "d.txt",
+				Content:  large,
+				MIMEType: "text/plain",
+			},
+		},
+		{
+			File: codeexecutor.File{
+				Name:     "a.txt",
+				Content:  "ok",
+				MIMEType: "text/plain",
+			},
+		},
+	}
+	best := selectPrimaryOutput(files)
+	require.NotNil(t, best)
+	require.Equal(t, "a.txt", best.Name)
 }
 
 func TestRunTool_SaveAsArtifacts_AndOmitInline(t *testing.T) {
@@ -139,6 +284,165 @@ func TestRunTool_SaveAsArtifacts_AndOmitInline(t *testing.T) {
 	// OmitInline should clear inline file contents.
 	require.Len(t, out.OutputFiles, 1)
 	require.Equal(t, "", out.OutputFiles[0].Content)
+}
+
+func TestRunTool_SaveAsArtifacts_NoArtifactService(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		OutputFiles:   []string{outGlobTxt},
+		Timeout:       timeoutSecSmall,
+		SaveArtifacts: true,
+		OmitInline:    true,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	// Invocation exists, but ArtifactService is nil.
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "s1",
+			State: session.StateMap{},
+		}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Empty(t, out.ArtifactFiles)
+	require.Len(t, out.Warnings, 1)
+	require.Contains(t, out.Warnings[0], "artifact service")
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
+func TestRunTool_SaveAsArtifacts_NoInvocation(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		OutputFiles:   []string{outGlobTxt},
+		Timeout:       timeoutSecSmall,
+		SaveArtifacts: true,
+		OmitInline:    true,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Empty(t, out.ArtifactFiles)
+	require.Len(t, out.Warnings, 1)
+	require.Contains(t, out.Warnings[0], reasonNoInvocation)
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
+func TestRunTool_SaveAsArtifacts_NoSession(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		OutputFiles:   []string{outGlobTxt},
+		Timeout:       timeoutSecSmall,
+		SaveArtifacts: true,
+		OmitInline:    true,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationArtifactService(inmemory.NewService()),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Empty(t, out.ArtifactFiles)
+	require.Len(t, out.Warnings, 1)
+	require.Contains(t, out.Warnings[0], reasonNoSession)
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
+func TestRunTool_SaveAsArtifacts_SessionMissingIDs(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		OutputFiles:   []string{outGlobTxt},
+		Timeout:       timeoutSecSmall,
+		SaveArtifacts: true,
+		OmitInline:    true,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "",
+			State: session.StateMap{},
+		}),
+		agent.WithInvocationArtifactService(inmemory.NewService()),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Empty(t, out.ArtifactFiles)
+	require.Len(t, out.Warnings, 1)
+	require.Contains(t, out.Warnings[0], reasonNoSessionIDs)
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
 }
 
 // errArtifactService always fails on save to cover error path.
@@ -431,6 +735,62 @@ func TestRunTool_AllowedCommands_OptionOverridesEnv(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestRunTool_DeniedCommands_OptionOverridesEnv(t *testing.T) {
+	t.Setenv(envDeniedCommands, cmdLS)
+
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec, WithDeniedCommands(cmdEcho))
+
+	deny := runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+		Timeout: timeoutSecSmall,
+	}
+	denyEnc, err := jsonMarshal(deny)
+	require.NoError(t, err)
+	_, err = rt.Call(context.Background(), denyEnc)
+	require.Error(t, err)
+
+	allow := runInput{
+		Skill:   testSkillName,
+		Command: cmdLS,
+		Timeout: timeoutSecSmall,
+	}
+	allowEnc, err := jsonMarshal(allow)
+	require.NoError(t, err)
+	_, err = rt.Call(context.Background(), allowEnc)
+	require.NoError(t, err)
+}
+
+func TestRunTool_setAllowedCommands_TrimsAndSkipsEmpty(t *testing.T) {
+	rt := &RunTool{}
+	rt.setAllowedCommands(nil)
+	require.Nil(t, rt.allowedCmds)
+
+	rt.setAllowedCommands([]string{"", "  ", cmdEcho})
+	require.Contains(t, rt.allowedCmds, cmdEcho)
+
+	rt.setAllowedCommands([]string{cmdLS})
+	require.Contains(t, rt.allowedCmds, cmdLS)
+}
+
+func TestRunTool_setDeniedCommands_TrimsAndSkipsEmpty(t *testing.T) {
+	rt := &RunTool{}
+	rt.setDeniedCommands(nil)
+	require.Nil(t, rt.deniedCmds)
+
+	rt.setDeniedCommands([]string{"", "  ", cmdEcho})
+	require.Contains(t, rt.deniedCmds, cmdEcho)
+
+	rt.setDeniedCommands([]string{cmdLS})
+	require.Contains(t, rt.deniedCmds, cmdLS)
+}
+
 func TestSplitCommandLine(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -670,6 +1030,16 @@ func TestShellQuote(t *testing.T) {
 	require.Equal(t, "''", shellQuote(""))
 }
 
+func TestAppendWarning_SkipsNilOrEmpty(t *testing.T) {
+	appendWarning(nil, reasonNoInvocation)
+	out := &runOutput{}
+	appendWarning(out, "")
+	require.Empty(t, out.Warnings)
+
+	appendWarning(out, reasonNoInvocation)
+	require.Len(t, out.Warnings, 1)
+}
+
 // filepathBase trims trailing slash and returns last element.
 func TestFilepathBase(t *testing.T) {
 	require.Equal(t, "b", filepathBase("/a/b/"))
@@ -894,13 +1264,130 @@ func TestRunTool_stageSkill_EnsureLayoutError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestRunTool_stageSkill_DirDigestError(t *testing.T) {
+	rt := &RunTool{}
+	eng := &fakeEngine{}
+	ws := codeexecutor.Workspace{ID: "x", Path: t.TempDir()}
+
+	missing := filepath.Join(t.TempDir(), "missing-skill")
+	err := rt.stageSkill(context.Background(), eng, ws, missing,
+		testSkillName,
+	)
+	require.Error(t, err)
+}
+
+type errFS struct{}
+
+func (e *errFS) PutFiles(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	_ []codeexecutor.PutFile,
+) error {
+	return nil
+}
+
+func (e *errFS) StageDirectory(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	_ string,
+	_ string,
+	_ codeexecutor.StageOptions,
+) error {
+	return fmt.Errorf("forced-error")
+}
+
+func (e *errFS) Collect(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	_ []string,
+) ([]codeexecutor.File, error) {
+	return nil, nil
+}
+
+func (e *errFS) StageInputs(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	_ []codeexecutor.InputSpec,
+) error {
+	return nil
+}
+
+func (e *errFS) CollectOutputs(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	_ codeexecutor.OutputSpec,
+) (codeexecutor.OutputManifest, error) {
+	return codeexecutor.OutputManifest{}, nil
+}
+
+type fsFailEngine struct {
+	f codeexecutor.WorkspaceFS
+}
+
+func (e *fsFailEngine) Manager() codeexecutor.WorkspaceManager {
+	return nil
+}
+
+func (e *fsFailEngine) FS() codeexecutor.WorkspaceFS { return e.f }
+
+func (e *fsFailEngine) Runner() codeexecutor.ProgramRunner { return nil }
+
+func (e *fsFailEngine) Describe() codeexecutor.Capabilities {
+	return codeexecutor.Capabilities{}
+}
+
+func TestRunTool_stageSkill_StageDirectoryError(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+
+	rt := &RunTool{}
+	eng := &fsFailEngine{f: &errFS{}}
+	ws := codeexecutor.Workspace{ID: "x", Path: t.TempDir()}
+
+	err := rt.stageSkill(context.Background(), eng, ws, dir,
+		testSkillName,
+	)
+	require.Error(t, err)
+}
+
+func TestRunTool_stageSkill_LoadMetadataError(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+
+	ws := codeexecutor.Workspace{ID: "x", Path: t.TempDir()}
+	_, err := codeexecutor.EnsureLayout(ws.Path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(ws.Path, codeexecutor.MetaFileName),
+		[]byte("{"),
+		0o644,
+	))
+
+	rt := &RunTool{}
+	eng := &fakeEngine{}
+	err = rt.stageSkill(context.Background(), eng, ws, dir,
+		testSkillName,
+	)
+	require.Error(t, err)
+}
+
 func TestRunTool_stageSkill_CreatesInputsDir(t *testing.T) {
 	root := t.TempDir()
 	dir := writeSkill(t, root, testSkillName)
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 	rt := NewRunTool(repo, localexec.New())
-	eng := localexec.New().Engine()
+
+	workRoot, err := os.MkdirTemp("", "skill-stage-")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		makeTreeWritable(workRoot)
+		_ = os.RemoveAll(workRoot)
+	})
+
+	loc := localexec.NewRuntime(workRoot)
+	fs := &countingFS{inner: loc}
+	eng := &countingEngine{m: loc, f: fs, r: loc}
 
 	ctx := context.Background()
 	ws, err := eng.Manager().CreateWorkspace(
@@ -910,6 +1397,11 @@ func TestRunTool_stageSkill_CreatesInputsDir(t *testing.T) {
 
 	err = rt.stageSkill(ctx, eng, ws, dir, testSkillName)
 	require.NoError(t, err)
+	require.Equal(t, 1, fs.stageCalls)
+
+	err = rt.stageSkill(ctx, eng, ws, dir, testSkillName)
+	require.NoError(t, err)
+	require.Equal(t, 1, fs.stageCalls)
 
 	inputsPath := filepath.Join(
 		ws.Path, codeexecutor.DirWork, "inputs",
@@ -919,11 +1411,44 @@ func TestRunTool_stageSkill_CreatesInputsDir(t *testing.T) {
 	require.True(t, info.IsDir())
 }
 
+func makeTreeWritable(root string) {
+	if root == "" {
+		return
+	}
+	_ = filepath.Walk(root, func(p string, info os.FileInfo,
+		err error,
+	) error {
+		if err != nil || info == nil {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		_ = os.Chmod(p, info.Mode()|0o200)
+		return nil
+	})
+}
+
 func TestResolveCWD_AbsolutePath(t *testing.T) {
-	// Absolute cwd should be returned unchanged.
-	abs := "/"
-	got := resolveCWD(abs, testSkillName)
-	require.Equal(t, abs, got)
+	base := path.Join(codeexecutor.DirSkills, testSkillName)
+
+	// "/" means workspace root.
+	got := resolveCWD("/", testSkillName)
+	require.Equal(t, ".", got)
+
+	// Workspace-absolute paths are normalized to workspace-relative.
+	got = resolveCWD("/skills/other", testSkillName)
+	require.Equal(t, "skills/other", got)
+	got = resolveCWD("/work", testSkillName)
+	require.Equal(t, "work", got)
+	got = resolveCWD("/out/x", testSkillName)
+	require.Equal(t, "out/x", got)
+	got = resolveCWD("/runs/r1", testSkillName)
+	require.Equal(t, "runs/r1", got)
+
+	// Host-absolute paths are rejected and fall back to skill root.
+	got = resolveCWD("/Users/example", testSkillName)
+	require.Equal(t, base, got)
 }
 
 func TestResolveCWD_DefaultAndRelative(t *testing.T) {
@@ -935,6 +1460,147 @@ func TestResolveCWD_DefaultAndRelative(t *testing.T) {
 	// Relative: appended under the skill root.
 	got = resolveCWD("sub/dir", testSkillName)
 	require.Equal(t, path.Join(base, "sub/dir"), got)
+}
+
+func TestResolveCWD_WorkspaceEnvPrefixes(t *testing.T) {
+	got := resolveCWD("$WORK_DIR", testSkillName)
+	require.Equal(t, codeexecutor.DirWork, got)
+
+	got = resolveCWD("${OUTPUT_DIR}/x", testSkillName)
+	require.Equal(t, path.Join(codeexecutor.DirOut, "x"), got)
+}
+
+func TestBuildRunOutput_TruncatesStdoutStderr(t *testing.T) {
+	long := strings.Repeat("a", maxOutputChars+1)
+	rr := codeexecutor.RunResult{
+		Stdout:   long,
+		Stderr:   long,
+		ExitCode: 0,
+	}
+	out := buildRunOutput(rr, nil)
+	require.Len(t, out.Warnings, 2)
+	require.Equal(t, maxOutputChars, len(out.Stdout))
+	require.Equal(t, maxOutputChars, len(out.Stderr))
+}
+
+type countingFS struct {
+	inner      codeexecutor.WorkspaceFS
+	stageCalls int
+}
+
+func (c *countingFS) PutFiles(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	files []codeexecutor.PutFile,
+) error {
+	return c.inner.PutFiles(ctx, ws, files)
+}
+
+func (c *countingFS) StageDirectory(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	src string,
+	to string,
+	opt codeexecutor.StageOptions,
+) error {
+	c.stageCalls++
+	return c.inner.StageDirectory(ctx, ws, src, to, opt)
+}
+
+func (c *countingFS) Collect(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	patterns []string,
+) ([]codeexecutor.File, error) {
+	return c.inner.Collect(ctx, ws, patterns)
+}
+
+func (c *countingFS) StageInputs(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	specs []codeexecutor.InputSpec,
+) error {
+	return c.inner.StageInputs(ctx, ws, specs)
+}
+
+func (c *countingFS) CollectOutputs(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.OutputSpec,
+) (codeexecutor.OutputManifest, error) {
+	return c.inner.CollectOutputs(ctx, ws, spec)
+}
+
+type countingEngine struct {
+	m codeexecutor.WorkspaceManager
+	f *countingFS
+	r codeexecutor.ProgramRunner
+}
+
+func (e *countingEngine) Manager() codeexecutor.WorkspaceManager {
+	return e.m
+}
+
+func (e *countingEngine) FS() codeexecutor.WorkspaceFS { return e.f }
+
+func (e *countingEngine) Runner() codeexecutor.ProgramRunner {
+	return e.r
+}
+
+func (e *countingEngine) Describe() codeexecutor.Capabilities {
+	return codeexecutor.Capabilities{}
+}
+
+type recordingRunner struct {
+	last codeexecutor.RunProgramSpec
+}
+
+func (r *recordingRunner) RunProgram(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	r.last = spec
+	return codeexecutor.RunResult{}, nil
+}
+
+type fakeEngine struct {
+	r codeexecutor.ProgramRunner
+}
+
+func (e *fakeEngine) Manager() codeexecutor.WorkspaceManager { return nil }
+func (e *fakeEngine) FS() codeexecutor.WorkspaceFS           { return nil }
+func (e *fakeEngine) Runner() codeexecutor.ProgramRunner     { return e.r }
+func (e *fakeEngine) Describe() codeexecutor.Capabilities {
+	return codeexecutor.Capabilities{}
+}
+
+func TestRunTool_runProgram_DefaultTimeout(t *testing.T) {
+	rr := &recordingRunner{}
+	eng := &fakeEngine{r: rr}
+	ws := codeexecutor.Workspace{ID: "x", Path: t.TempDir()}
+	rt := &RunTool{}
+
+	_, err := rt.runProgram(
+		context.Background(),
+		eng,
+		ws,
+		".",
+		runInput{Skill: testSkillName, Command: echoOK},
+	)
+	require.NoError(t, err)
+	require.Equal(t, defaultSkillRunTimeout, rr.last.Timeout)
+
+	rr.last = codeexecutor.RunProgramSpec{}
+	_, err = rt.runProgram(
+		context.Background(),
+		eng,
+		ws,
+		".",
+		runInput{Skill: testSkillName, Command: echoOK, Timeout: 1},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1*time.Second, rr.last.Timeout)
 }
 
 // dummyExec implements CodeExecutor but not EngineProvider to cover
@@ -1047,4 +1713,18 @@ func TestRunTool_WorkspacePersistsAcrossCalls(t *testing.T) {
 	require.Equal(t, 0, o2.ExitCode)
 	require.Len(t, o2.OutputFiles, 1)
 	require.Contains(t, o2.OutputFiles[0].Content, "hi")
+}
+
+func TestSkillStagingHelpers_EarlyReturns(t *testing.T) {
+	require.False(t, skillLinksPresent("", "a"))
+	require.False(t, skillLinksPresent("a", ""))
+
+	require.False(t, isSymlink(filepath.Join(t.TempDir(), "missing")))
+
+	rt := &RunTool{}
+	ctx := context.Background()
+	ws := codeexecutor.Workspace{}
+
+	require.NoError(t, rt.removeWorkspacePath(ctx, nil, ws, ""))
+	require.NoError(t, rt.removeWorkspacePath(ctx, nil, ws, "skills/demo"))
 }

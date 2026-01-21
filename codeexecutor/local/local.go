@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -33,9 +34,9 @@ type CodeExecutor struct {
 	ws                 *Runtime
 	inputsHostBase     string
 	autoInputs         bool
+	workspaceMode      WorkspaceMode
 }
 
-// CodeExecutorOption configures CodeExecutor.
 // CodeExecutorOption configures a local CodeExecutor.
 type CodeExecutorOption func(*CodeExecutor)
 
@@ -67,12 +68,25 @@ func WithWorkspaceAutoInputs(enable bool) CodeExecutorOption {
 	return func(l *CodeExecutor) { l.autoInputs = enable }
 }
 
+// WithWorkspaceMode configures how local workspaces are created.
+//
+// The default is WorkspaceModeIsolated, which creates a unique workspace per
+// run. WorkspaceModeTrustedLocal reuses WorkDir as the workspace root.
+func WithWorkspaceMode(mode WorkspaceMode) CodeExecutorOption {
+	return func(l *CodeExecutor) { l.workspaceMode = mode }
+}
+
 // WithCodeBlockDelimiter sets the code block delimiter.
-func WithCodeBlockDelimiter(delimiter codeexecutor.CodeBlockDelimiter) CodeExecutorOption {
+func WithCodeBlockDelimiter(
+	delimiter codeexecutor.CodeBlockDelimiter,
+) CodeExecutorOption {
 	return func(l *CodeExecutor) { l.codeBlockDelimiter = delimiter }
 }
 
-var defaultCodeBlockDelimiter = codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+var defaultCodeBlockDelimiter = codeexecutor.CodeBlockDelimiter{
+	Start: "```",
+	End:   "```",
+}
 
 // New creates a local CodeExecutor.
 func New(options ...CodeExecutorOption) *CodeExecutor {
@@ -81,6 +95,7 @@ func New(options ...CodeExecutorOption) *CodeExecutor {
 		CleanTempFiles:     true,
 		codeBlockDelimiter: defaultCodeBlockDelimiter,
 		autoInputs:         true,
+		workspaceMode:      WorkspaceModeIsolated,
 	}
 	for _, option := range options {
 		option(executor)
@@ -234,7 +249,8 @@ func (e *CodeExecutor) executeCommand(
 	return string(output), nil
 }
 
-// CodeBlockDelimiter returns the code block delimiter used by the local executor.
+// CodeBlockDelimiter returns the code block delimiter used by the local
+// executor.
 func (e *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	return e.codeBlockDelimiter
 }
@@ -250,8 +266,15 @@ func (e *CodeExecutor) ensureWS() *Runtime {
 				opts, WithInputsHostBase(e.inputsHostBase),
 			)
 		}
+		opts = append(opts, WithRuntimeWorkspaceMode(e.workspaceMode))
 		opts = append(opts, WithAutoInputs(e.autoInputs))
-		e.ws = NewRuntimeWithOptions("", opts...)
+		workRoot := strings.TrimSpace(e.WorkDir)
+		if workRoot != "" && !filepath.IsAbs(workRoot) {
+			if abs, err := filepath.Abs(workRoot); err == nil {
+				workRoot = abs
+			}
+		}
+		e.ws = NewRuntimeWithOptions(workRoot, opts...)
 	}
 	return e.ws
 }

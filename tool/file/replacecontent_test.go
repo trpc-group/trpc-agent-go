@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -166,6 +167,18 @@ func TestFileTool_ReplaceContent_InvalidAbsolutePath(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestFileTool_ReplaceContent_RejectsFileRef(t *testing.T) {
+	tempDir := t.TempDir()
+	fts := &fileToolSet{baseDir: tempDir}
+	_, err := fts.replaceContent(context.Background(), &replaceContentRequest{
+		FileName:        "workspace://out/a.txt",
+		OldString:       "a",
+		NewString:       "b",
+		NumReplacements: 1,
+	})
+	assert.Error(t, err)
+}
+
 func TestFileTool_ReplaceContent_PreservePermissions(t *testing.T) {
 	// Prepare test file.
 	tempDir := t.TempDir()
@@ -200,7 +213,10 @@ func TestFileTool_MultiLine(t *testing.T) {
 	fileName := "multiline.txt"
 	fullPath := filepath.Join(tempDir, fileName)
 	mode := os.FileMode(0600)
-	assert.NoError(t, os.WriteFile(fullPath, []byte("123aaa\nbbb\naaa456"), mode))
+	assert.NoError(
+		t,
+		os.WriteFile(fullPath, []byte("123aaa\nbbb\naaa456"), mode),
+	)
 	// Replace.
 	req := &replaceContentRequest{
 		FileName:        fileName,

@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -147,6 +148,28 @@ func TestResolvePath_Normal(t *testing.T) {
 	p, err := fts.resolvePath("a.txt")
 	assert.NoError(t, err)
 	assert.Equal(t, filepath.Join(dir, "a.txt"), p)
+}
+
+func TestResolvePath_InputsPrefixAlias(t *testing.T) {
+	dir := t.TempDir()
+	set, err := NewToolSet(WithBaseDir(dir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+	p, err := fts.resolvePath("inputs/a.txt")
+	assert.NoError(t, err)
+	assert.Equal(t, filepath.Join(dir, "a.txt"), p)
+}
+
+func TestResolvePath_InputsPrefixRealDir(t *testing.T) {
+	dir := t.TempDir()
+	err := os.Mkdir(filepath.Join(dir, "inputs"), 0755)
+	assert.NoError(t, err)
+	set, err := NewToolSet(WithBaseDir(dir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+	p, err := fts.resolvePath("inputs/a.txt")
+	assert.NoError(t, err)
+	assert.Equal(t, filepath.Join(dir, "inputs", "a.txt"), p)
 }
 
 func TestResolvePath_DirTraversal(t *testing.T) {

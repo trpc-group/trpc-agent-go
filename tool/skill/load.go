@@ -59,10 +59,9 @@ func (t *LoadTool) Declaration() *tool.Declaration {
 			Description: "Load skill input",
 			Required:    []string{"skill"},
 			Properties: map[string]*tool.Schema{
-				"skill": {
-					Type:        "string",
-					Description: "Skill name to load",
-				},
+				"skill": skillNameSchema(
+					t.repo, "Skill name to load",
+				),
 				"docs": {
 					Type: "array",
 					Items: &tool.Schema{
