@@ -55,6 +55,8 @@ kb := knowledge.New(
 | `WithOrganization(org string)` | Set Organization ID (prioritized over env var) | - |
 | `WithBaseURL(url string)` | Set Base URL | - |
 | `WithRequestOptions(opts...)` | Set additional request options | - |
+| `WithMaxRetries(n int)` | Set max retry count | `2` |
+| `WithRetryBackoff(durations)` | Set retry backoff durations (wait time for each retry). If retry count exceeds backoff array length, remaining retries use the last value | `[100ms, 200ms, 400ms, 800ms]` |
 
 ## Gemini Embedder
 
