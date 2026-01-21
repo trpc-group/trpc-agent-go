@@ -41,7 +41,13 @@ func GenerateDocumentID(name string, content string) string {
 
 	// Random bytes for uniqueness (8 bytes = 16 hex chars)
 	randomBytes := make([]byte, 8)
-	rand.Read(randomBytes)
+	if _, err := rand.Read(randomBytes); err != nil {
+		// Fallback to timestamp-based uniqueness if crypto/rand fails
+		ts := time.Now().UnixNano()
+		for i := 0; i < 8; i++ {
+			randomBytes[i] = byte(ts >> (i * 8))
+		}
+	}
 	randomStr := hex.EncodeToString(randomBytes)
 
 	return strings.ReplaceAll(name, " ", "_") + "_" + contentHash + "_" + randomStr

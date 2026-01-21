@@ -550,6 +550,37 @@ func TestRetryLogic(t *testing.T) {
 			t.Errorf("Expected 1 attempt (no retries), got %d", attemptCount)
 		}
 	})
+
+	t.Run("negative maxRetries treated as 0", func(t *testing.T) {
+		attemptCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attemptCount++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"message": "Rate limit exceeded",
+					"type":    "rate_limit_error",
+				},
+			})
+		}))
+		defer srv.Close()
+
+		emb := New(
+			WithBaseURL(srv.URL),
+			WithAPIKey("dummy"),
+			WithMaxRetries(-5), // Negative value should be treated as 0
+			WithRequestOptions(option.WithMaxRetries(0)),
+		)
+
+		_, err := emb.GetEmbedding(context.Background(), "test")
+		if err == nil {
+			t.Fatal("Expected error when retries disabled")
+		}
+		if attemptCount != 1 {
+			t.Errorf("Expected 1 attempt (negative maxRetries treated as 0), got %d", attemptCount)
+		}
+	})
 }
 
 // TestGetBackoffDuration tests the getBackoffDuration method.

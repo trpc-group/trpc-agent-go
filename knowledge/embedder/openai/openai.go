@@ -142,9 +142,12 @@ func WithRequestOptions(opts ...option.RequestOption) Option {
 }
 
 // WithMaxRetries sets the maximum number of retries for errors.
-// Default is 0 (no retries).
+// Default is 0 (no retries). Negative values are treated as 0.
 func WithMaxRetries(maxRetries int) Option {
 	return func(e *Embedder) {
+		if maxRetries < 0 {
+			maxRetries = 0
+		}
 		e.maxRetries = maxRetries
 	}
 }
