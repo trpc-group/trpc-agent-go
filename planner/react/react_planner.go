@@ -91,8 +91,10 @@ func (p *Planner) BuildPlanningInstruction(
 // cleaning tool calls to ensure only valid function calls are preserved.
 //
 // This method:
-// - Filters out tool calls with empty function names
-// - Preserves all other response content unchanged
+//   - Filters out tool calls with empty function names
+//   - Detects intent descriptions (e.g., "I will...") without actual tool calls
+//     and marks them as non-final to prevent premature termination
+//   - Preserves all other response content unchanged
 func (p *Planner) ProcessPlanningResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -123,7 +125,98 @@ func (p *Planner) ProcessPlanningResponse(
 		processedResponse.Choices[i] = processedChoice
 	}
 
+	// Check if this looks like an intent description without actual tool calls.
+	// If so, mark response as not done to prevent premature termination.
+	// Only check the first choice to be consistent with other logic.
+	if processedResponse.Done && len(processedResponse.Choices) > 0 {
+		firstChoice := processedResponse.Choices[0]
+		if len(firstChoice.Message.ToolCalls) == 0 {
+			content := firstChoice.Message.Content
+			if p.isIntentDescription(content) && !p.hasFinalAnswerTag(content) {
+				// This is an intent description without FINAL_ANSWER tag,
+				// likely a malformed response. Mark as not done to continue the loop.
+				processedResponse.Done = false
+			}
+		}
+	}
+
 	return &processedResponse
+}
+
+// hasValidToolCalls checks if the response contains any valid tool calls.
+func (p *Planner) hasValidToolCalls(response *model.Response) bool {
+	if response == nil || len(response.Choices) == 0 {
+		return false
+	}
+	for _, choice := range response.Choices {
+		if len(choice.Message.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// getResponseContent extracts the text content from the response.
+func (p *Planner) getResponseContent(response *model.Response) string {
+	if response == nil || len(response.Choices) == 0 {
+		return ""
+	}
+	return response.Choices[0].Message.Content
+}
+
+// isIntentDescription checks if the content appears to be an intent description
+// rather than a final answer. Intent descriptions typically indicate the agent
+// wants to take an action but hasn't properly formed the tool call.
+//
+// To avoid false positives (e.g., "Let me know if you have questions" in a valid
+// final answer), this function uses a conservative heuristic:
+//  1. Action-related tags (/*ACTION*/, /*PLANNING*/, /*REPLANNING*/) are always
+//     considered intent descriptions since they explicitly indicate ongoing planning.
+//  2. Natural language intent patterns ("I will", "I'll", etc.) are only considered
+//     intent descriptions if they appear at the start of content or a line,
+//     suggesting the agent is declaring its next action rather than using these
+//     phrases incidentally.
+func (p *Planner) isIntentDescription(content string) bool {
+	if content == "" {
+		return false
+	}
+
+	// Action-related tags explicitly indicate ongoing planning - always match these.
+	actionTags := []string{
+		ActionTag,     // /*ACTION*/ tag without actual tool call
+		PlanningTag,   // /*PLANNING*/ tag indicates still planning
+		ReplanningTag, // /*REPLANNING*/ tag indicates replanning
+	}
+	for _, tag := range actionTags {
+		if strings.Contains(content, tag) {
+			return true
+		}
+	}
+
+	// Natural language intent patterns - only match at the very beginning of content.
+	// This avoids false positives like "Let me know if I'll need to..." or
+	// "I should also mention that I will...".
+	intentPrefixes := []string{
+		"I will ",
+		"I'll ",
+		"I am going to ",
+		"I'm going to ",
+	}
+
+	// Only check if the first sentence starts with any intent prefix.
+	trimmedContent := strings.TrimSpace(content)
+	for _, prefix := range intentPrefixes {
+		if strings.HasPrefix(trimmedContent, prefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// hasFinalAnswerTag checks if the content contains the FINAL_ANSWER tag.
+func (p *Planner) hasFinalAnswerTag(content string) bool {
+	return strings.Contains(content, FinalAnswerTag)
 }
 
 // splitByLastPattern splits text by the last occurrence of a separator.
