@@ -499,8 +499,9 @@ func TestRunTool_PluginBeforeToolShortCircuits(t *testing.T) {
 			Arguments: []byte(`{}`),
 		},
 	}
+	state := State{}
 
-	_, got, _, err := runTool(ctx, tc, local, tl)
+	_, got, _, err := runTool(ctx, tc, local, tl, state)
 	require.NoError(t, err)
 	require.Equal(t, map[string]any{"ok": true}, got)
 	require.False(t, localCalled)
@@ -557,8 +558,9 @@ func TestRunTool_PluginAfterToolOverridesError(t *testing.T) {
 			Arguments: []byte(`{}`),
 		},
 	}
+	state := State{}
 
-	_, got, _, err := runTool(ctx, tc, local, tl)
+	_, got, _, err := runTool(ctx, tc, local, tl, state)
 	require.NoError(t, err)
 	require.Equal(t, fixed, got)
 	require.True(t, tl.called)
@@ -596,8 +598,9 @@ func TestRunTool_PluginBeforeTool_CustomResultWithError(t *testing.T) {
 			Arguments: []byte(`{"x":1}`),
 		},
 	}
+	state := State{}
 
-	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl)
+	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl, state)
 	require.Error(t, err)
 	var interruptErr *InterruptError
 	require.ErrorAs(t, err, &interruptErr)
@@ -636,8 +639,9 @@ func TestRunTool_PluginBeforeTool_ErrorWithModifiedArguments(t *testing.T) {
 			Arguments: []byte(`{"x":1}`),
 		},
 	}
+	state := State{}
 
-	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl)
+	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl, state)
 	require.Error(t, err)
 	require.Nil(t, got)
 	require.Equal(t, modifiedArgs, gotArgs)
@@ -673,8 +677,9 @@ func TestRunTool_BeforeTool_CustomResultWithError(t *testing.T) {
 			Arguments: []byte(`{"x":1}`),
 		},
 	}
+	state := State{}
 
-	gotCtx, got, gotArgs, err := runTool(context.Background(), tc, local, tl)
+	gotCtx, got, gotArgs, err := runTool(context.Background(), tc, local, tl, state)
 	require.Error(t, err)
 	var interruptErr *InterruptError
 	require.ErrorAs(t, err, &interruptErr)
@@ -707,8 +712,9 @@ func TestRunTool_AfterTool_InterruptWithoutCustomResultPreservesResult(t *testin
 			Arguments: []byte(`{"x":1}`),
 		},
 	}
+	state := State{}
 
-	gotCtx, got, gotArgs, err := runTool(context.Background(), tc, local, tl)
+	gotCtx, got, gotArgs, err := runTool(context.Background(), tc, local, tl, state)
 	require.Error(t, err)
 	var interruptErr *InterruptError
 	require.ErrorAs(t, err, &interruptErr)
@@ -740,8 +746,9 @@ func TestRunTool_AfterTool_ErrorWithoutCustomResultReturnsNilResult(t *testing.T
 			Arguments: []byte(`{"x":1}`),
 		},
 	}
+	state := State{}
 
-	gotCtx, got, gotArgs, err := runTool(context.Background(), tc, local, tl)
+	gotCtx, got, gotArgs, err := runTool(context.Background(), tc, local, tl, state)
 	require.Error(t, err)
 	require.Nil(t, got)
 	require.Equal(t, []byte(`{"x":1}`), gotArgs)
@@ -778,8 +785,9 @@ func TestRunTool_PluginAfterTool_CustomResultWithError(t *testing.T) {
 			Arguments: []byte(`{"x":1}`),
 		},
 	}
+	state := State{}
 
-	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl)
+	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl, state)
 	require.Error(t, err)
 	require.Equal(t, customResult, got)
 	require.Equal(t, []byte(`{"x":1}`), gotArgs)
@@ -813,8 +821,9 @@ func TestRunTool_PluginAfterTool_InterruptWithoutCustomResultPreservesResult(t *
 			Arguments: []byte(`{"x":1}`),
 		},
 	}
+	state := State{}
 
-	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl)
+	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl, state)
 	require.Error(t, err)
 	var interruptErr *InterruptError
 	require.ErrorAs(t, err, &interruptErr)
@@ -842,8 +851,9 @@ func TestRunTool_PluginToolCallbacksNilFallsBack(t *testing.T) {
 			Arguments: []byte(`{"x":1}`),
 		},
 	}
+	state := State{}
 
-	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl)
+	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl, state)
 	require.NoError(t, err)
 	require.Equal(t, toolResult, got)
 	require.Equal(t, []byte(`{"x":1}`), gotArgs)
@@ -877,8 +887,9 @@ func TestRunTool_PluginAfterTool_ErrorWithoutResultReturnsNilResult(t *testing.T
 			Arguments: []byte(`{"x":1}`),
 		},
 	}
+	state := State{}
 
-	_, got, gotArgs, err := runTool(ctx, tc, nil, tl)
+	_, got, gotArgs, err := runTool(ctx, tc, nil, tl, state)
 	require.Error(t, err)
 	require.Nil(t, got)
 	require.Equal(t, []byte(`{"x":1}`), gotArgs)
@@ -902,8 +913,9 @@ func TestRunTool_PluginAfterTool_NoResultNoCustomResultReturnsNil(t *testing.T) 
 			Arguments: []byte(`{"x":1}`),
 		},
 	}
+	state := State{}
 
-	_, got, gotArgs, err := runTool(ctx, tc, nil, tl)
+	_, got, gotArgs, err := runTool(ctx, tc, nil, tl, state)
 	require.NoError(t, err)
 	require.Nil(t, got)
 	require.Equal(t, []byte(`{"x":1}`), gotArgs)
@@ -924,8 +936,9 @@ func TestRunTool_AfterTool_NoResultNoCustomResultReturnsNil(t *testing.T) {
 			Arguments: []byte(`{"x":1}`),
 		},
 	}
+	state := State{}
 
-	_, got, gotArgs, err := runTool(context.Background(), tc, tool.NewCallbacks(), tl)
+	_, got, gotArgs, err := runTool(context.Background(), tc, tool.NewCallbacks(), tl, state)
 	require.NoError(t, err)
 	require.Nil(t, got)
 	require.Equal(t, []byte(`{"x":1}`), gotArgs)
@@ -944,11 +957,13 @@ func TestRunTool_NotCallableReturnsError(t *testing.T) {
 			Arguments: []byte(`{}`),
 		},
 	}
+	state := State{}
 	_, _, _, err := runTool(
 		context.Background(),
 		tc,
 		nil,
 		&declOnlyTool{name: toolName},
+		state,
 	)
 	require.Error(t, err)
 }
