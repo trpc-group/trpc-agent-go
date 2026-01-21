@@ -446,7 +446,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 			includedInvocationMessage = true
 		}
 		// use error fill message content if message content is empty
-		if len(evt.Choices) > 0 && evt.Choices[0].Message.Content == "" && evt.Error != nil {
+		if len(evt.Response.Choices) > 0 && evt.Response.Choices[0].Message.Content == "" && evt.Response.Error != nil {
 			rsp := evt.Response.Clone()
 			rsp.Choices[0].Message.Content = fmt.Sprintf("type: %s, message: %s", rsp.Error.Type, rsp.Error.Message)
 			evt.Response = rsp
@@ -548,7 +548,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 			continue
 		}
 		// use error fill message content if message content is empty
-		if len(evt.Choices) > 0 && evt.Choices[0].Message.Content == "" && evt.Error != nil {
+		if len(evt.Response.Choices) > 0 && evt.Response.Choices[0].Message.Content == "" && evt.Response.Error != nil {
 			rsp := evt.Response.Clone()
 			rsp.Choices[0].Message.Content = fmt.Sprintf("type: %s, message: %s", rsp.Error.Type, rsp.Error.Message)
 			evt.Response = rsp
