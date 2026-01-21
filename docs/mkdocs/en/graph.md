@@ -3440,6 +3440,54 @@ _ = cm.DeleteLineage(ctx, lineageID)
 
 Use a stable business identifier for `namespace` in production (e.g., `svc:prod:flowX`) for clear auditing.
 
+#### Time Travel: Read / Edit State
+
+Resuming from a checkpoint gives you "time travel" (rewind to any checkpoint and continue). For HITL and debugging, you often want one extra step: edit the state at a checkpoint and keep running from there.
+
+Important detail: on resume, the executor restores state from the checkpoint first. `runtime_state` does not override existing checkpoint keys; it only fills missing non-internal keys. If you need to change an existing key, you must write a new checkpoint.
+
+Use `graph.TimeTravel`:
+
+```go
+// If you're using GraphAgent:
+tt, _ := ga.TimeTravel()
+// Or if you have a raw executor:
+// tt, _ := exec.TimeTravel()
+
+base := graph.CheckpointRef{
+    LineageID:    lineageID,
+    Namespace:    namespace,
+    CheckpointID: checkpointID, // empty means "latest"
+}
+
+// Read checkpointed state (types restored using the graph schema).
+snap, _ := tt.GetState(ctx, base)
+
+// Write an "update" checkpoint derived from base with patched state.
+newRef, _ := tt.EditState(ctx, base, graph.State{
+    "counter": 42,
+})
+
+// Resume from the updated checkpoint (and provide resume values if needed).
+cmd := graph.NewResumeCommand().
+    AddResumeValue("review_key", "approved")
+
+rs := newRef.ToRuntimeState()
+rs[graph.StateKeyCommand] = cmd
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(rs),
+)
+```
+
+Notes:
+
+- `EditState` writes a new checkpoint with `Source="update"` and `ParentCheckpointID=base`.
+- Internal keys are blocked by default; use `graph.WithAllowInternalKeys()` only if you know what you're doing.
+- Updated checkpoints include metadata keys: `graph.CheckpointMetaKeyBaseCheckpointID` and `graph.CheckpointMetaKeyUpdatedKeys`.
+
+Runnable example: `examples/graph/time_travel_edit_state`.
+
 ### Events at a Glance
 
 - Authors
@@ -3492,14 +3540,15 @@ sg.AddNode(nodeReview, func(ctx context.Context, s graph.State) (any, error) {
 })
 
 // Resume execution (requires the agent package)
+cmd := graph.NewResumeCommand().
+    AddResumeValue(interruptKeyReview, "approved")
+
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
         graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: checkpointID,
-        graph.StateKeyResumeMap: map[string]any{
-            "review_key": "approved",
-        },
+        graph.StateKeyCommand:    cmd,
     }),
 )
 ```
