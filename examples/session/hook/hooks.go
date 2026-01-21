@@ -186,83 +186,83 @@ func isValidConsecutiveStrategy(s string) bool {
 	return slices.Contains(validConsecutiveStrategies(), strings.ToLower(s))
 }
 
-// ConsecutiveUserMessageHook handles consecutive user messages scenario.
-// When a user sends multiple messages without receiving assistant response,
-// it merges the messages or inserts a placeholder response.
+// FixConsecutiveUserMessagesHook fixes consecutive user messages in session history.
+// This is a GetSessionHook that runs when session is retrieved, before sending to LLM.
 //
 // Supported strategies:
-//   - "merge": Merge current message content into the previous user message.
-//   - "placeholder": Insert a placeholder assistant response before appending.
-//   - "skip": Skip the current event entirely.
+//   - "merge": Merge consecutive user messages into one.
+//   - "placeholder": Insert placeholder assistant responses between consecutive user messages.
+//   - "skip": Keep only the last user message, skip earlier ones.
 //
-// This demonstrates using AppendEventHook as an alternative to
-// WithOnConsecutiveUserMessage option.
-//
-// NOTE: The "placeholder" strategy directly appends to sess.Events, bypassing
-// other hooks and storage persistence. In production, consider using the
-// session service's AppendEvent method or the dedicated
-// WithOnConsecutiveUserMessage option for proper event handling.
-func ConsecutiveUserMessageHook(strategy string) session.AppendEventHook {
-	// Normalize strategy to lowercase.
+// Using GetSessionHook is simpler than AppendEventHook because:
+//  1. No need to access sessionService (no persistence needed, just fix in-memory).
+//  2. No recursion concerns.
+//  3. Fixes happen at read time, keeping storage unchanged.
+func FixConsecutiveUserMessagesHook(strategy string) session.GetSessionHook {
 	strategy = strings.ToLower(strategy)
-
-	return func(ctx *session.AppendEventContext, next func() error) error {
-		evt := ctx.Event
-		sess := ctx.Session
-
-		// Only handle user messages with valid choices.
-		if evt == nil || evt.Response == nil || !evt.Response.IsUserMessage() {
-			return next()
+	return func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+		sess, err := next()
+		if err != nil || sess == nil {
+			return sess, err
 		}
-		if len(evt.Response.Choices) == 0 {
-			return next()
-		}
+		fixConsecutiveUserMessages(sess, strategy)
+		return sess, nil
+	}
+}
 
-		// Check for consecutive user messages.
-		sess.EventMu.Lock()
-		isConsecutive := false
-		var lastUserEvent *event.Event
-		if len(sess.Events) > 0 {
-			lastEvent := &sess.Events[len(sess.Events)-1]
-			if lastEvent.Response != nil &&
-				lastEvent.Response.IsUserMessage() &&
-				len(lastEvent.Response.Choices) > 0 {
-				isConsecutive = true
-				lastUserEvent = lastEvent
-			}
-		}
-		sess.EventMu.Unlock()
+// fixConsecutiveUserMessages modifies session events to fix consecutive user messages.
+func fixConsecutiveUserMessages(sess *session.Session, strategy string) {
+	sess.EventMu.Lock()
+	defer sess.EventMu.Unlock()
 
-		if !isConsecutive {
-			return next()
-		}
+	if len(sess.Events) < 2 {
+		return
+	}
 
-		fmt.Printf("  [Hook] Consecutive user messages detected, strategy: %s\n", strategy)
+	switch strategy {
+	case strategyMerge:
+		sess.Events = mergeConsecutiveUserMessages(sess.Events)
+	case strategyPlaceholder:
+		sess.Events = insertPlaceholdersBetweenUserMessages(sess.Events)
+	case strategySkip:
+		sess.Events = skipEarlierConsecutiveUserMessages(sess.Events)
+	}
+}
 
-		switch strategy {
-		case strategyMerge:
-			// Merge current message into the previous one.
-			sess.EventMu.Lock()
-			prevContent := lastUserEvent.Response.Choices[0].Message.Content
-			currContent := evt.Response.Choices[0].Message.Content
+// mergeConsecutiveUserMessages merges consecutive user messages into one.
+func mergeConsecutiveUserMessages(events []event.Event) []event.Event {
+	if len(events) < 2 {
+		return events
+	}
+	result := make([]event.Event, 0, len(events))
+	for i := range events {
+		evt := events[i]
+		// If current is user message and previous in result is also user message, merge.
+		if len(result) > 0 && evt.IsUserMessage() && result[len(result)-1].IsUserMessage() {
+			prevContent := getEventContent(&result[len(result)-1])
+			currContent := getEventContent(&evt)
 			mergedContent := prevContent + "\n" + currContent
-			lastUserEvent.Response.Choices[0].Message.Content = mergedContent
+			result[len(result)-1].Response.Choices[0].Message.Content = mergedContent
+			fmt.Printf("  [Hook] Merged consecutive user messages\n")
+		} else {
+			result = append(result, evt)
+		}
+	}
+	return result
+}
 
-			// Re-check merged content for prohibited words and update tag.
-			if word := containsProhibitedWord(mergedContent); word != "" {
-				lastUserEvent.Tag = appendTags(lastUserEvent.Tag, ViolationTagPrefix+word)
-				fmt.Printf("  [Hook] Merged content contains prohibited word: %s\n", word)
-			}
-			sess.EventMu.Unlock()
-			fmt.Printf("  [Hook] Merged messages: %s\n", truncate(mergedContent, 50))
-			// Skip appending current event (already merged).
-			return nil
-
-		case strategyPlaceholder:
-			// Insert a placeholder assistant response before this event.
-			// NOTE: This directly modifies sess.Events, bypassing hooks and storage.
-			// For production use, consider using the session service's AppendEvent.
-			placeholder := &event.Event{
+// insertPlaceholdersBetweenUserMessages inserts placeholder assistant responses.
+func insertPlaceholdersBetweenUserMessages(events []event.Event) []event.Event {
+	if len(events) < 2 {
+		return events
+	}
+	result := make([]event.Event, 0, len(events)*2)
+	for i := range events {
+		evt := events[i]
+		// If current is user message and previous in result is also user message,
+		// insert placeholder before current.
+		if len(result) > 0 && evt.IsUserMessage() && result[len(result)-1].IsUserMessage() {
+			placeholder := event.Event{
 				ID: fmt.Sprintf("placeholder-%d", time.Now().UnixNano()),
 				Response: &model.Response{
 					Done: true,
@@ -276,23 +276,30 @@ func ConsecutiveUserMessageHook(strategy string) session.AppendEventHook {
 					},
 				},
 			}
-			sess.EventMu.Lock()
-			sess.Events = append(sess.Events, *placeholder)
-			sess.EventMu.Unlock()
-			fmt.Printf("  [Hook] Inserted placeholder response\n")
-			return next()
+			result = append(result, placeholder)
+			fmt.Printf("  [Hook] Inserted placeholder for consecutive user messages\n")
+		}
+		result = append(result, evt)
+	}
+	return result
+}
 
-		case strategySkip:
-			// Skip the current event.
-			fmt.Printf("  [Hook] Skipped duplicate user message: %s\n",
-				truncate(evt.Response.Choices[0].Message.Content, 30))
-			return nil
-
-		default:
-			// Unknown strategy, log warning and proceed with default behavior.
-			fmt.Printf("  [Hook] Unknown strategy %q, proceeding with default behavior. "+
-				"Valid strategies: %v\n", strategy, validConsecutiveStrategies())
-			return next()
+// skipEarlierConsecutiveUserMessages keeps only the last user message in consecutive sequence.
+func skipEarlierConsecutiveUserMessages(events []event.Event) []event.Event {
+	if len(events) < 2 {
+		return events
+	}
+	result := make([]event.Event, 0, len(events))
+	for i := range events {
+		evt := events[i]
+		// If current is user message and previous in result is also user message,
+		// replace previous with current (keep the later one).
+		if len(result) > 0 && evt.IsUserMessage() && result[len(result)-1].IsUserMessage() {
+			result[len(result)-1] = evt
+			fmt.Printf("  [Hook] Skipped earlier consecutive user message\n")
+		} else {
+			result = append(result, evt)
 		}
 	}
+	return result
 }
