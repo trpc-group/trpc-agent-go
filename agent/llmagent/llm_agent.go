@@ -141,6 +141,11 @@ func New(name string, opts ...Option) *LLMAgent {
 		responseProcessors = append(responseProcessors, planningResponseProcessor)
 	}
 
+	responseProcessors = append(
+		responseProcessors,
+		processor.NewTextToolCallResponseProcessor(),
+	)
+
 	responseProcessors = append(responseProcessors, processor.NewCodeExecutionResponseProcessor())
 
 	// Add output response processor if output_key or output_schema is configured or structured output is requested.
