@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -166,8 +167,14 @@ func TestLocalCodeExecutor_ExecuteCode(t *testing.T) {
 			t.Logf("Output: %q", result.Output)
 
 			if tt.expected.outputContains != "" {
-				assert.Contains(t, result.Output, tt.expected.outputContains,
-					"Expected output to contain '%s', but got: '%s'", tt.expected.outputContains, result.Output)
+				assert.Contains(
+					t,
+					result.Output,
+					tt.expected.outputContains,
+					"Expected output to contain '%s', but got: '%s'",
+					tt.expected.outputContains,
+					result.Output,
+				)
 			}
 
 			// OutputFiles should always be empty for CodeExecutor
@@ -213,6 +220,26 @@ func TestLocalCodeExecutor_ExecuteCode_WithWorkDir(t *testing.T) {
 	outputFile := filepath.Join(tempDir, "test_output.txt")
 	_, err = os.Stat(outputFile)
 	assert.NoError(t, err, "File should exist in work directory")
+}
+
+func TestLocalCodeExecutor_WorkspaceMode_TrustedLocal(t *testing.T) {
+	root := t.TempDir()
+	executor := local.New(
+		local.WithWorkDir(root),
+		local.WithWorkspaceMode(local.WorkspaceModeTrustedLocal),
+	)
+	eng := executor.Engine()
+
+	ws, err := eng.Manager().CreateWorkspace(
+		context.Background(),
+		"trusted-ce",
+		codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, root, ws.Path)
+
+	require.NoError(t, eng.Manager().Cleanup(context.Background(), ws))
+	require.DirExists(t, root)
 }
 
 func TestLocalCodeExecutor_ExecuteCode_WithRelativeWorkDir(t *testing.T) {
@@ -272,7 +299,8 @@ func TestLocalCodeExecutor_ExecuteCode_WithoutWorkDir(t *testing.T) {
 	input := codeexecutor.CodeExecutionInput{
 		CodeBlocks: []codeexecutor.CodeBlock{
 			{
-				Code:     "echo 'Testing temp dir' > temp_output.txt\ncat temp_output.txt",
+				Code: "echo 'Testing temp dir' > " +
+					"temp_output.txt\ncat temp_output.txt",
 				Language: "bash",
 			},
 		},
@@ -305,7 +333,9 @@ func TestLocalCodeExecutor_ExecuteCode_ContextCancellation(t *testing.T) {
 
 	result, err := executor.ExecuteCode(ctx, input)
 
-	assert.NoError(t, err) // ExecuteCode itself doesn't return error for block execution failures
+	// ExecuteCode itself doesn't return an error for
+	// block execution failures.
+	assert.NoError(t, err)
 	assert.Contains(t, result.Output, "Error executing code block")
 }
 
@@ -368,7 +398,8 @@ func TestLocalCodeExecutor_WithCodeBlockDelimiter(t *testing.T) {
 }
 
 func TestLocalCodeExecutor_DefaultCodeBlockDelimiter(t *testing.T) {
-	// Test that default delimiter is used when WithCodeBlockDelimiter is not called
+	// Test that default delimiter is used when
+	// WithCodeBlockDelimiter is not called.
 	executor := local.New()
 	delimiter := executor.CodeBlockDelimiter()
 
@@ -377,13 +408,15 @@ func TestLocalCodeExecutor_DefaultCodeBlockDelimiter(t *testing.T) {
 }
 
 func TestLocalCodeExecutor_ExecuteCode_InvalidWorkDir(t *testing.T) {
-	// Use a path that cannot be created (e.g., under a file instead of directory)
+	// Use a path that cannot be created (for example, under a file
+	// instead of a directory).
 	tempFile, err := os.CreateTemp("", "test-file-")
 	require.NoError(t, err)
 	tempFile.Close()
 	defer os.Remove(tempFile.Name())
 
-	invalidWorkDir := filepath.Join(tempFile.Name(), "subdir") // Try to create dir under a file
+	// Try to create a dir under a file.
+	invalidWorkDir := filepath.Join(tempFile.Name(), "subdir")
 
 	executor := local.New(
 		local.WithWorkDir(invalidWorkDir),
@@ -442,7 +475,9 @@ func TestLocalCodeExecutor_WithTimeout(t *testing.T) {
 	ctx := context.Background()
 	result, err := executor.ExecuteCode(ctx, input)
 
-	assert.NoError(t, err) // ExecuteCode itself doesn't return error for block execution failures
+	// ExecuteCode itself doesn't return an error for
+	// block execution failures.
+	assert.NoError(t, err)
 	assert.Contains(t, result.Output, "Error executing code block")
 }
 
@@ -561,9 +596,12 @@ echo "Bash says hello"
 		{
 			name: "custom delimiter with python code",
 			input: `<code>python
-print("Custom delimiter test")
-</code>`,
-			delimiter:      codeexecutor.CodeBlockDelimiter{Start: "<code>", End: "</code>"},
+	print("Custom delimiter test")
+	</code>`,
+			delimiter: codeexecutor.CodeBlockDelimiter{
+				Start: "<code>",
+				End:   "</code>",
+			},
 			expectedBlocks: 1,
 			outputContains: []string{"Custom delimiter test"},
 			skipIfMissing:  []string{"python"},
@@ -586,11 +624,15 @@ Valid bash:
 
 ` + "```bash" + `
 echo "This works too"
-` + "```",
+			` + "```",
 			delimiter:      codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"},
 			expectedBlocks: 3,
-			outputContains: []string{"This works", "unsupported language: javascript", "This works too"},
-			skipIfMissing:  []string{"python", "bash"},
+			outputContains: []string{
+				"This works",
+				"unsupported language: javascript",
+				"This works too",
+			},
+			skipIfMissing: []string{"python", "bash"},
 		},
 		{
 			name: "no code blocks",
@@ -615,7 +657,14 @@ Some more text here.`,
 
 			// Step 1: Extract code blocks from input
 			blocks := codeexecutor.ExtractCodeBlock(tt.input, tt.delimiter)
-			assert.Len(t, blocks, tt.expectedBlocks, "Expected %d code blocks, got %d", tt.expectedBlocks, len(blocks))
+			assert.Len(
+				t,
+				blocks,
+				tt.expectedBlocks,
+				"Expected %d code blocks, got %d",
+				tt.expectedBlocks,
+				len(blocks),
+			)
 
 			// If no blocks were extracted, test the "no output" case
 			if len(blocks) == 0 {
@@ -656,9 +705,16 @@ Some more text here.`,
 				// Check both raw output and formatted result
 				outputFound := strings.Contains(result.Output, expectedOutput) ||
 					strings.Contains(formattedResult, expectedOutput)
-				assert.True(t, outputFound,
-					"Expected output '%s' not found in result:\nRaw output: %q\nFormatted: %q",
-					expectedOutput, result.Output, formattedResult)
+				assert.True(
+					t,
+					outputFound,
+					`Expected output '%s' not found in result:
+Raw output: %q
+Formatted: %q`,
+					expectedOutput,
+					result.Output,
+					formattedResult,
+				)
 			}
 
 			// Verify OutputFiles is always empty for CodeExecutor
@@ -819,7 +875,11 @@ cat temp_file.txt
 		// Code files should still exist
 		codeFiles, err := filepath.Glob(filepath.Join(tempDir, "code_*.sh"))
 		assert.NoError(t, err)
-		assert.NotEmpty(t, codeFiles, "Code files should exist when CleanTempFiles is false")
+		assert.NotEmpty(
+			t,
+			codeFiles,
+			"Code files should exist when CleanTempFiles is false",
+		)
 	})
 
 	// Test with CleanTempFiles = true (default)
@@ -840,7 +900,8 @@ cat temp_file.txt
 		assert.Contains(t, result.Output, "Temporary content")
 		assert.Contains(t, result.String(), "Code execution result:")
 
-		// Code files should be cleaned up (though this is timing-dependent, so we might not catch it reliably)
+		// Code files should be cleaned up. This is timing-dependent,
+		// so the test might not catch it reliably.
 		// The important thing is that execution succeeded
 	})
 }
