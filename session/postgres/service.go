@@ -783,11 +783,6 @@ func (s *Service) Close() error {
 		// Stop cleanup routine.
 		s.stopCleanupRoutine()
 
-		// Close postgres connection.
-		if s.pgClient != nil {
-			s.pgClient.Close()
-		}
-
 		// Close event pair channels and wait for persist workers.
 		for _, ch := range s.eventPairChans {
 			close(ch)
@@ -801,6 +796,11 @@ func (s *Service) Close() error {
 		// Close summary job channels and wait for summary workers.
 		if s.asyncWorker != nil {
 			s.asyncWorker.Stop()
+		}
+
+		// Close postgres connection after all workers are stopped.
+		if s.pgClient != nil {
+			s.pgClient.Close()
 		}
 	})
 
