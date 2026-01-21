@@ -766,8 +766,9 @@ func TestRunTool_RepairsToolCallArgumentsWhenEnabled(t *testing.T) {
 			Arguments: []byte("{a:2}"),
 		},
 	}
+	state := State{}
 
-	_, result, _, err := runTool(ctx, toolCall, nil, tl)
+	_, result, _, err := runTool(ctx, toolCall, nil, tl, state)
 	require.NoError(t, err)
 	args, ok := result.(map[string]any)
 	require.True(t, ok)
