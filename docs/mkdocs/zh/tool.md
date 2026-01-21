@@ -11,6 +11,7 @@ Tool 工具系统是 tRPC-Agent-Go 框架的核心组件，为 Agent 提供了�
 - **⚡ 并行执行**：工具调用支持并行执行以提升性能
 - **🔄 MCP 协议**：完整支持 STDIO、SSE、Streamable HTTP 三种传输方式
 - **🛠️ 配置支持**：提供配置选项和过滤器支持
+- **🧹 参数修复**：可选启用 `agent.WithToolCallArgumentsJSONRepairEnabled(true)`，对 `tool_calls` 的 `arguments` 做一次尽力 JSON 修复，提升工具执行与外部解析的鲁棒性
 
 ### 核心概念
 
@@ -890,6 +891,20 @@ if !removed {
 
 - 通过 `WithTools` 和所有 ToolSet（包括动态添加的 ToolSet）注册的工具都视为**用户工具**，会受到 `WithToolFilter` 以及每次调用的运行时过滤控制。
 - 框架工具（`transfer_to_agent`、`knowledge_search`、`agentic_knowledge_search`）仍然**永远不被过滤**，始终对 Agent 可用。
+
+#### Tool Call 参数自动修复
+
+部分模型在生成 `tool_calls` 时，可能产出非严格 JSON 的参数（例如对象 key 未加引号、尾逗号等），从而导致工具执行或外部解析失败。
+
+Tool Call 参数自动修复功能适用于调用方需要在框架外部解析 `toolCall.Function.Arguments`，或工具严格要求入参为合法 JSON 的场景。
+
+在 `runner.Run` 中启用 `agent.WithToolCallArgumentsJSONRepairEnabled(true)` 后，框架会尽力修复 `toolCall.Function.Arguments`。
+
+```go
+ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("..."),
+    agent.WithToolCallArgumentsJSONRepairEnabled(true),
+)
+```
 
 ## 快速开始
 

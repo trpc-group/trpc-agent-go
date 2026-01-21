@@ -275,6 +275,12 @@ If the last event is a user or tool message (or a plain assistant reply
 without `tool_calls`), `WithResume(true)` is a no-op and the flow behaves like
 today’s `Run` call.
 
+#### Tool Call Arguments Auto Repair
+
+Some models may emit non-strict JSON arguments for `tool_calls` (for example, unquoted object keys or trailing commas), which can break tool execution or external parsing.
+
+When `agent.WithToolCallArgumentsJSONRepairEnabled(true)` is enabled in `runner.Run`, the framework will best-effort repair `toolCall.Function.Arguments`. For detailed usage, see [Tool Call Arguments Auto Repair](./runner.md#tool-call-arguments-auto-repair).
+
 #### Provide Conversation History (auto-seed + session reuse)
 
 If your upstream service maintains the conversation and you want the agent to

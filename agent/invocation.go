@@ -467,6 +467,14 @@ func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
 	}
 }
 
+// WithToolCallArgumentsJSONRepairEnabled enables best-effort JSON repair for tool call arguments.
+func WithToolCallArgumentsJSONRepairEnabled(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		e := enabled
+		opts.ToolCallArgumentsJSONRepairEnabled = &e
+	}
+}
+
 // WithA2ARequestOptions sets the A2A request options for the RunOptions.
 // These options will be passed to A2A agent's SendMessage and StreamMessage calls.
 // This allows passing dynamic HTTP headers or other request-specific options for each run.
@@ -474,7 +482,6 @@ func WithA2ARequestOptions(opts ...any) RunOption {
 	return func(runOpts *RunOptions) {
 		runOpts.A2ARequestOptions = append(runOpts.A2ARequestOptions, opts...)
 	}
-
 }
 
 // WithCustomAgentConfigs sets custom agent configurations.
@@ -679,6 +686,9 @@ type RunOptions struct {
 	// assistant tool_call response so the caller can execute the tool
 	// externally and later provide tool results (RoleTool messages).
 	ToolExecutionFilter tool.FilterFunc
+	// ToolCallArgumentsJSONRepairEnabled enables best-effort JSON repair for tool call arguments.
+	// When nil, JSON repair is disabled by default.
+	ToolCallArgumentsJSONRepairEnabled *bool
 }
 
 // NewInvocation create a new invocation
