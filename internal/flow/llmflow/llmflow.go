@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -249,10 +250,11 @@ func (f *Flow) runOneStep(
 	defer span.End()
 
 	// 2. Call LLM (get response channel).
-	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
+	ctx, responseChan, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
 		return nil, err
 	}
+
 	// 3. Process streaming responses.
 	return f.processStreamingResponses(ctx, invocation, llmRequest, responseChan, eventChan, span)
 }
@@ -292,7 +294,10 @@ func (f *Flow) processStreamingResponses(
 		if customResp != nil {
 			response = customResp
 		}
-
+		// Repair tool call arguments in place when needed.
+		if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+			jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, response)
+		}
 		// 4. Create and send LLM response using the clean constructor.
 		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
 		agent.EmitEvent(ctx, invocation, eventChan, llmResponseEvent)
@@ -310,7 +315,6 @@ func (f *Flow) processStreamingResponses(
 		}
 
 		itelemetry.TraceChat(span, invocation, llmRequest, response, llmResponseEvent.ID, tracker.FirstTokenTimeDuration())
-
 	}
 
 	return lastEvent, nil
@@ -574,9 +578,9 @@ func (f *Flow) callLLM(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
-) (<-chan *model.Response, error) {
+) (context.Context, <-chan *model.Response, error) {
 	if invocation.Model == nil {
-		return nil, errors.New("no model available for LLM call")
+		return ctx, nil, errors.New("no model available for LLM call")
 	}
 
 	log.DebugfContext(
@@ -589,7 +593,7 @@ func (f *Flow) callLLM(
 	// configured (<= 0), this is a no-op and preserves existing behavior.
 	if err := invocation.IncLLMCallCount(); err != nil {
 		log.Errorf("LLM call limit exceeded for agent %s: %v", invocation.AgentName, err)
-		return nil, err
+		return ctx, nil, err
 	}
 
 	// Run before model callbacks if they exist.
@@ -607,7 +611,7 @@ func (f *Flow) callLLM(
 					invocation.AgentName,
 					err,
 				)
-				return nil, err
+				return ctx, nil, err
 			}
 			if result != nil && result.Context != nil {
 				ctx = result.Context
@@ -616,7 +620,7 @@ func (f *Flow) callLLM(
 				responseChan := make(chan *model.Response, 1)
 				responseChan <- result.CustomResponse
 				close(responseChan)
-				return responseChan, nil
+				return ctx, responseChan, nil
 			}
 		}
 	}
@@ -632,7 +636,7 @@ func (f *Flow) callLLM(
 				invocation.AgentName,
 				err,
 			)
-			return nil, err
+			return ctx, nil, err
 		}
 		// Use the context from result if provided.
 		if result != nil && result.Context != nil {
@@ -643,7 +647,7 @@ func (f *Flow) callLLM(
 			responseChan := make(chan *model.Response, 1)
 			responseChan <- result.CustomResponse
 			close(responseChan)
-			return responseChan, nil
+			return ctx, responseChan, nil
 		}
 	}
 
@@ -656,10 +660,10 @@ func (f *Flow) callLLM(
 			invocation.AgentName,
 			err,
 		)
-		return nil, err
+		return ctx, nil, err
 	}
 
-	return responseChan, nil
+	return ctx, responseChan, nil
 }
 
 // postprocess handles post-LLM call processing using response processors.

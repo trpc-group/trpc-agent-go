@@ -252,7 +252,10 @@ schema.AddField("counter", graph.StateField{
   （例如加入包含解析信息的 system message）。
 - 并行分支：如果多个分支需要为不同的 LLM 节点准备不同的一次性输入，
   不要同时写 `one_shot_messages`，优先使用 `one_shot_messages_by_node`。
-- 需要消费上游文本结果时：紧邻下游读取 `last_response`，或在任意后续节点读取 `node_responses[节点ID]`。
+- 需要消费上游文本结果时：紧邻下游读取 `last_response`，或在任意后续节点读取
+  `node_responses[节点ID]`。
+- 如果下游是 Agent 节点，并希望它把上游输出当作自己的输入消息，需要显式把目标值写回
+  `user_input`（例如使用 `WithSubgraphInputFromLastResponse()` 或前置回调）。
 
 按节点 ID 定向的一次性消息覆盖示例：
 
@@ -788,7 +791,8 @@ stateGraph.AddLLMNode(
 
 将检索结果与用户输入注入指令
 
-- 在进入 LLM 节点前的任意节点，将临时值写入会话的 `temp:` 命名空间，LLM 指令即可用占位符读取。
+- 在进入 LLM 节点前的任意节点，将临时值写入会话的 `temp:`
+  命名空间，LLM 指令即可用占位符读取。
 - 示例模式：
 
 ```go
@@ -815,7 +819,10 @@ stateGraph.AddLLMNode("answer", mdl,
 
 占位符与会话状态的最佳实践
 
-- 短期 vs 持久：只用于本轮提示词组装的数据写到 `temp:*`（建议通过 `sess.SetState` 写入）；需要跨轮/跨会话保留的配置，请通过 SessionService（会话服务）更新 `user:*`/`app:*`。
+- 会话内临时 vs 持久：通常用于提示词组装的临时数据写到 `temp:*`
+  （常见做法是每轮覆盖，建议通过 `sess.SetState` 写入）；需要跨轮/
+  跨会话保留的配置，请通过 SessionService（会话服务）更新
+  `user:*`/`app:*`。
 - 为什么推荐用 SetState：LLM 节点从图状态里的会话对象读取并展开占位符，使用 `sess.SetState` 可避免不安全的并发 map 访问。
 - 服务侧护栏：内存实现禁止通过“更新用户态”的接口写 `temp:*`（以及 `app:*` via user updater），见 [session/inmemory/service.go](https://github.com/trpc-group/trpc-agent-go/blob/main/session/inmemory/service.go)。
 - 并发建议：并行分支不要同时改同一批 `session.State` 键；建议汇总到单节点合并后一次写入，或先放图状态再一次写到 `temp:*`。
@@ -899,6 +906,7 @@ graphAgent, err := graphagent.New(
 		"initial_data": "初始数据",
 	}),
 	graphagent.WithChannelBufferSize(1024),            // 调整事件通道缓冲区
+	graphagent.WithMaxConcurrency(8),                  // 限制并行任务数
 	graphagent.WithCheckpointSaver(memorySaver),       // 使用持久化检查点
 	graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
 	graphagent.WithAddSessionSummary(true),            // 将会话摘要注入 system 消息
@@ -934,6 +942,11 @@ graphAgent, err := graphagent.New(
 
 > 模型/工具回调需要在节点级配置，例如 `AddLLMNode(..., graph.WithModelCallbacks(...))`
 > 或 `AddToolsNode(..., graph.WithToolCallbacks(...))`。
+>
+> **回调优先级**：当同时存在节点级和状态级回调时：
+> - 节点配置的回调（通过 `WithModelCallbacks`/`WithToolCallbacks`）优先级更高。
+> - 状态级回调（通过 `StateKeyModelCallbacks`/`StateKeyToolCallbacks`）作为兜底回调使用。
+> 这允许图级配置在需要时覆盖运行时状态。
 
 使用会话摘要的注意事项：
 
@@ -1033,6 +1046,113 @@ stateGraph.AddAgentNode("assistant",
 > Agent 节点会以节点 ID 作为查找键，因此需确保 `AddAgentNode("assistant")`
 > 与 `subAgent.Info().Name == "assistant"` 一致。
 
+#### Agent 节点：把上游输出传给下游 Agent
+
+Agent 节点不会自动把“上游输出”作为“下游输入”。边只负责控制执行顺序；数据必须通过 State
+在节点之间显式传递。
+
+默认情况下，Agent 节点会从 `state[graph.StateKeyUserInput]` 构造子代理的输入消息。
+但 `user_input` 是**一次性**输入：LLM/Agent 节点成功执行后会清空它以避免重复消费。
+因此当你写出 `A (agent) → B (agent)` 这种链路时，很容易出现“ A 有输出，但 B 看起来没拿到输入”的现象。
+
+要让下游 Agent 消费上游结果，需要在下游 Agent 节点执行前，把目标字段写回 `user_input`：
+
+```go
+const (
+    nodeA = "a"
+    nodeB = "b"
+)
+
+sg.AddAgentNode(nodeA)
+sg.AddAgentNode(nodeB, graph.WithSubgraphInputFromLastResponse())
+sg.AddEdge(nodeA, nodeB)
+```
+
+说明：
+
+- `WithSubgraphInputFromLastResponse()` 会把当前的 `last_response` 映射到该 Agent 节点的
+  `user_input`，因此 `nodeB` 会把 `nodeA` 的输出当作输入。
+- 如果你需要消费“指定节点”的输出（而不是最近一次），可以通过前置回调从
+  `node_responses[targetNodeID]` 取值并写入 `user_input`。
+
+#### Agent 节点：拼接原始输入与上游输出
+
+有时下游 Agent 需要同时拿到：
+
+- 上游 Agent 的结果（常见是 `state[graph.StateKeyLastResponse]`），以及
+- 本次 Run 的“原始用户请求”。
+
+由于 `user_input` 是一次性输入，会在 LLM/Agent 节点成功执行后被清空，你需要把原始输入
+**持久化**到一个自定义 state key（例如 `original_user_input`），再显式拼接并写回
+下游的 `user_input`。
+
+最简单的写法是增加两个 function 节点：
+
+1. 在入口处只保存一次初始 `user_input`；
+2. 在下游 Agent 前把 `original_user_input + last_response` 写回 `user_input`。
+
+```go
+const (
+    keyOriginalUserInput = "original_user_input"
+
+    nodeSaveInput = "save_input"
+    nodeA         = "a"
+    nodeCompose   = "compose_input"
+    nodeB         = "b"
+)
+
+func saveOriginalInput(_ context.Context, s graph.State) (any, error) {
+    input, _ := s[graph.StateKeyUserInput].(string)
+    if input == "" {
+        return graph.State{}, nil
+    }
+    return graph.State{keyOriginalUserInput: input}, nil
+}
+
+func composeNextInput(_ context.Context, s graph.State) (any, error) {
+    orig, _ := s[keyOriginalUserInput].(string)
+    last, _ := s[graph.StateKeyLastResponse].(string)
+
+    // This becomes nodeB's Invocation.Message.Content.
+    combined := orig + "\n\n" + last
+    return graph.State{graph.StateKeyUserInput: combined}, nil
+}
+
+sg.AddNode(nodeSaveInput, saveOriginalInput)
+sg.AddAgentNode(nodeA)
+sg.AddNode(nodeCompose, composeNextInput)
+sg.AddAgentNode(nodeB)
+
+sg.AddEdge(nodeSaveInput, nodeA)
+sg.AddEdge(nodeA, nodeCompose)
+sg.AddEdge(nodeCompose, nodeB)
+```
+
+重要：
+
+- 把 function 节点入参里的 `graph.State` 当作只读。
+- 返回一个**增量**更新（一个小 `graph.State`），不要返回或原地修改“完整 state”。
+  否则可能会覆盖内部 key（执行上下文、回调、session 等）导致工作流异常。
+
+#### Agent 节点：输入/输出映射（进阶）
+
+Agent 节点支持两个映射器，用于控制父图/子代理之间到底传什么：
+
+- `WithSubgraphInputMapper`：父 State → 子 RuntimeState（`Invocation.RunOptions.RuntimeState`）
+- `WithSubgraphOutputMapper`：子执行结果 → 父 State 更新
+
+常见用途：
+
+- **让子代理读取结构化状态**（避免把结构化数据硬塞进 prompt）：通过
+  `WithSubgraphInputMapper` 只传递必要键。可运行示例：
+  `examples/graph/subagent_runtime_state`。
+- **把子图的结构化输出带回父图**：当子代理是 GraphAgent 时，
+  `SubgraphResult.FinalState` 会携带子图最终状态快照，可通过
+  `WithSubgraphOutputMapper` 拷贝到父 State。可运行示例：
+  `examples/graph/agent_state_handoff`。
+- **把子代理最终文本写入自定义键**：`SubgraphResult` 总会包含 `LastResponse`，
+  因此输出映射对 GraphAgent 与非图 Agent 都可用。
+
 #### Agent 节点：隔离与工具多轮
 
 工具调用通常是“多轮”的：模型（Large Language Model，LLM，大语言模型）
@@ -1056,6 +1176,24 @@ stateGraph.AddAgentNode("assistant",
 
 - 第二次模型请求与第一次几乎一致（prompt 里看不到工具返回）。
 - 子 Agent 会重复第一轮工具调用，或进入循环，因为它永远“看不到”工具结果。
+
+#### Agent 节点：检查点与嵌套中断
+
+当子 Agent 本身也是 GraphAgent（基于图的 Agent），并且开启了检查点（checkpoint）时，
+子图需要使用自己的检查点命名空间（checkpoint namespace）。否则子图可能会误用父图的
+检查点进行恢复，导致执行位置与图结构不一致。
+
+对于“Agent 节点调用 GraphAgent”的默认行为：
+
+- 子 GraphAgent 会使用子 Agent 的名称作为检查点命名空间，即使运行时状态是从父态克隆来的。
+- 父图的检查点标识（ID）不会自动透传到子图；如果你需要指定，请通过子图输入映射显式设置。
+
+嵌套的人机协作（Human-in-the-Loop (HITL)）中断/恢复：
+
+- 当子 GraphAgent 调用 `graph.Interrupt` 时，父图也会中断并生成父检查点。
+- 恢复时只需要恢复父检查点；当 Agent 节点再次执行时，会自动恢复子检查点。
+
+可运行示例：`examples/graph/nested_interrupt`。
 
 ### 4. 条件路由
 
@@ -1500,6 +1638,44 @@ func main() {
 ```
 
 上面的例子展示了如何声明节点、连边并运行。接下来先介绍执行方式与会话管理，然后进入核心概念与常见用法。
+
+### 2. 静态中断（调试断点）
+
+静态中断可以理解为“断点”：让图在某些节点执行**前**或执行**后**
+暂停。它主要用于调试和逐步观察状态变化，不需要你在节点函数里手动
+调用 `graph.Interrupt(...)`。
+
+与 HITL 中断的区别：
+
+- **HITL 中断**：节点内部调用 `graph.Interrupt(ctx, state, key, prompt)`，
+  恢复时需要为该 `key` 提供 resume 输入。
+- **静态中断**：在声明节点时附加中断 option。恢复只需要 checkpoint
+  坐标（`lineage_id` + `checkpoint_id`）。
+
+启用静态中断：
+
+```go
+sg.AddNode("my_node", fn, graph.WithInterruptBefore())
+sg.AddNode("my_node", fn, graph.WithInterruptAfter())
+
+// 也可以在节点都声明完后，按 nodeID 批量开启：
+sg.WithInterruptBeforeNodes("my_node")
+sg.WithInterruptAfterNodes("my_node")
+```
+
+当触发静态中断时，执行器会抛出 `*graph.InterruptError`，并且：
+
+- `Key` 以 `graph.StaticInterruptKeyPrefixBefore` 或
+  `graph.StaticInterruptKeyPrefixAfter` 为前缀
+- `Value` 为 `graph.StaticInterruptPayload`（包含 `phase`、`nodes`、
+  `activeNodes`）
+
+恢复方式：
+
+- 用相同的 `lineage_id` 和中断事件返回的 `checkpoint_id` 重新运行。
+- 因为节点没有调用 `graph.Interrupt(...)`，所以不需要 resume 输入。
+
+可参考 `examples/graph/static_interrupt` 的完整可运行示例。
 
 ### 执行方式
 
@@ -2555,6 +2731,7 @@ flowchart TB
 exec, err := graph.NewExecutor(g,
     graph.WithChannelBufferSize(1024),              // 事件通道缓冲
     graph.WithMaxSteps(50),                          // 最大步数
+    graph.WithMaxConcurrency(8),                     // 并行任务数
     graph.WithStepTimeout(5*time.Minute),            // 步骤超时
     graph.WithNodeTimeout(2*time.Minute),            // 节点超时
     graph.WithCheckpointSaver(saver),                // 开启检查点（如 sqlite/inmemory）
@@ -2830,6 +3007,71 @@ Graph 的状态底层是 `map[string]any`，通过 `StateSchema` 提供运行时
   `graph.WithRefreshToolSetsOnRun`（在每次运行时从 ToolSet 重新构造工具列表，适合 MCP 等动态工具源）
 - Agent 节点可用 `graph.WithAgentNodeEventCallback`
 
+#### 调用级 Call Options（按本次 Run 覆盖）
+
+`graph.WithGenerationConfig(...)` 是**构图期**配置：你在构建图时设置它。
+但在真实业务里，经常需要**运行时**控制：同一张图，不同请求用不同的采样
+策略（比如 temperature / max_tokens），并且还能精确打到某个节点或子图里。
+
+Graph 通过 **call options** 支持这件事：它们会被挂到
+`Invocation.RunOptions` 上，并且在 GraphAgent 调用子 GraphAgent（Agent 节点）
+时自动向下传递。
+
+典型场景：
+
+- 请求 A 希望更保守（低 temperature），请求 B 希望更发散（高 temperature）。
+- 同一张图里有多个 LLM 节点，需要不同节点使用不同参数。
+- 父图通过 Agent 节点调用子图，希望覆盖只在子图内部生效。
+
+API：
+
+- `graph.WithCallOptions(...)`：把 call options 绑定到本次运行。
+- `graph.WithCallGenerationConfigPatch(...)`：在当前图作用域内，对 LLM 节点的
+  `model.GenerationConfig` 做“按字段覆盖”。
+- `graph.DesignateNode(nodeID, ...)`：把覆盖精确打到当前图中的某个节点。
+  - 对 LLM 节点：影响该节点的模型调用。
+  - 对 Agent 节点（子图）：影响子 Invocation，因此会成为子图的默认覆盖。
+- `graph.DesignateNodeWithPath(graph.NodePath{...}, ...)`：把覆盖打到嵌套子图
+  内部的某个节点（path 的每一段都是节点 ID）。
+
+Patch 说明：
+
+- 使用 `model.GenerationConfigPatch`，只设置你想覆盖的字段即可。
+- 指针字段用 `nil` 表示“不覆盖”，一般用 `model.Float64Ptr`、`model.IntPtr`
+  等辅助函数来创建指针。
+- `Stop`：`nil` 表示“不覆盖”；空 slice 表示清空 stop sequences。
+
+示例：
+
+```go
+runOpts := graph.WithCallOptions(
+    // 本次运行的全局覆盖（影响当前图内所有 LLM 节点）。
+    graph.WithCallGenerationConfigPatch(model.GenerationConfigPatch{
+        Temperature: model.Float64Ptr(0.2),
+    }),
+
+    // 只覆盖当前图里的某个 LLM 节点。
+    graph.DesignateNode("final_answer",
+        graph.WithCallGenerationConfigPatch(model.GenerationConfigPatch{
+            MaxTokens: model.IntPtr(256),
+        }),
+    ),
+
+    // 覆盖嵌套子图里的某个节点：
+    // 节点 "child_agent"（Agent 节点）-> 节点 "llm"（子图内部节点）。
+    graph.DesignateNodeWithPath(
+        graph.NodePath{"child_agent", "llm"},
+        graph.WithCallGenerationConfigPatch(model.GenerationConfigPatch{
+            Temperature: model.Float64Ptr(0),
+        }),
+    ),
+)
+
+ch, err := r.Run(ctx, userID, sessionID, msg, runOpts)
+```
+
+可直接运行示例：`examples/graph/call_options_generation_config`。
+
 #### Graph 中的 ToolSet 与 Agent 的区别
 
 `graph.WithToolSets` 是**节点级、构图期**配置：在构建图时，把一个或多个 `tool.ToolSet` 绑定到特定的 LLM 节点，例如：
@@ -3015,7 +3257,7 @@ stateGraph.
 - 执行
   - `graphagent.New(name, compiledGraph, ...opts)` → `runner.NewRunner(app, agent)` → `Run(...)`
 
-更多端到端用法见 `examples/graph`（基础/并行/多轮/中断/工具/占位符）。
+更多端到端用法见 `examples/graph`（基础/并行/多轮/中断/嵌套中断/静态中断/工具/占位符）。
 
 ## 可视化导出（DOT/图片）
 
@@ -3087,6 +3329,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: "ckpt-123",
     }),
 )
@@ -3103,6 +3346,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: "ckpt-123",
     }),
 )
@@ -3130,11 +3374,59 @@ _ = cm.DeleteLineage(ctx, lineageID)
 
 建议在生产中为 `namespace` 使用稳定的业务标识（如 `svc:prod:flowX`），便于审计与对账。
 
+#### 时间旅行：读取/编辑 State
+
+从检查点恢复可以做“时间旅行”（回到任意 checkpoint 继续跑）。在 HITL 和调试场景里，你通常还需要：在某个 checkpoint 上把 state 改掉，然后从这个点继续跑。
+
+关键点：恢复时，执行器会先用 checkpoint 的 state 还原；`runtime_state` 不会覆盖 checkpoint 里已有的 key，只会补齐缺失且非内部的 key。要改“已有 key”，需要写一个新的 checkpoint。
+
+使用 `graph.TimeTravel`：
+
+```go
+// 如果你使用 GraphAgent：
+tt, _ := ga.TimeTravel()
+// 或者如果你直接拿到 Executor：
+// tt, _ := exec.TimeTravel()
+
+base := graph.CheckpointRef{
+    LineageID:    lineageID,
+    Namespace:    namespace,
+    CheckpointID: checkpointID, // 为空表示 "latest"
+}
+
+// 读取 checkpoint 的 state（会按 schema 还原类型）。
+snap, _ := tt.GetState(ctx, base)
+
+// 基于 base 写一个 "update" checkpoint，并应用 state patch。
+newRef, _ := tt.EditState(ctx, base, graph.State{
+    "counter": 42,
+})
+
+// 从更新后的 checkpoint 恢复（如有需要同时提供 resume 值）。
+cmd := graph.NewResumeCommand().
+    AddResumeValue("review_key", "approved")
+
+rs := newRef.ToRuntimeState()
+rs[graph.StateKeyCommand] = cmd
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(rs),
+)
+```
+
+注意：
+
+- `EditState` 会写入一个新 checkpoint：`Source="update"` 且 `ParentCheckpointID=base`。
+- 默认禁止编辑内部 key；如确有需要再使用 `graph.WithAllowInternalKeys()`。
+- 更新 checkpoint 会写入 metadata key：`graph.CheckpointMetaKeyBaseCheckpointID` 与 `graph.CheckpointMetaKeyUpdatedKeys`。
+
+可运行示例：`examples/graph/time_travel_edit_state`。
+
 ### 默认值与注意事项
 
 - 默认值（Executor）
 
-  - `ChannelBufferSize = 256`、`MaxSteps = 100`、`CheckpointSaveTimeout = 10s`
+  - `ChannelBufferSize = 256`、`MaxSteps = 100`、`MaxConcurrency = GOMAXPROCS(0)`、`CheckpointSaveTimeout = 10s`
   - 步/节点超时可通过 `Executor` 的 `WithStepTimeout` / `WithNodeTimeout` 配置（目前 GraphAgent 选项未直接暴露）
 
 - 会话
@@ -3147,7 +3439,8 @@ _ = cm.DeleteLineage(ctx, lineageID)
 
 - 事件与背压
 
-  - 调整 `WithChannelBufferSize`；按 `author`/`object` 过滤事件降低噪音
+  - 调整 `WithChannelBufferSize`；用 `WithMaxConcurrency` 限制并行任务数
+  - 按 `author`/`object` 过滤事件降低噪音
 
 - 命名与键
 
@@ -3208,16 +3501,66 @@ sg.AddNode(nodeReview, func(ctx context.Context, s graph.State) (any, error) {
 })
 
 // 恢复执行（需要 import agent 包）
+cmd := graph.NewResumeCommand().
+    AddResumeValue(interruptKeyReview, "approved")
+
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: checkpointID,
-        graph.StateKeyResumeMap: map[string]any{
-            "review_key": "approved",
-        },
+        graph.StateKeyCommand:    cmd,
     }),
 )
 ```
+
+#### 嵌套图（子 GraphAgent 中断）
+
+如果父图通过 Agent 节点调用子 GraphAgent（`AddAgentNode` / `AddSubgraphNode`），
+子图同样可以通过 `graph.Interrupt` 触发中断，并且父图会一起中断。
+
+恢复时仍然只需要恢复父图的检查点；当 Agent 节点再次执行时，会自动恢复子图的检查点。
+
+可运行示例：`examples/graph/nested_interrupt`。
+
+该示例支持通过 `-depth` 参数模拟多级嵌套。
+
+关键点：`graph.Interrupt(ctx, state, key, prompt)` 里的 `key` 会作为 `ResumeMap`
+的路由 key。也就是说，恢复时 `ResumeMap` 的 map key 必须与这里的 `key` 一致。
+
+你会看到两个不同的标识：
+
+- 节点标识（Node Identifier (Node ID)）：当前这张图暂停的位置（在嵌套图里，
+  通常是父图的 Agent 节点）。
+- 任务标识（Task Identifier (Task ID)）：用于 `ResumeMap` 路由的中断 key。
+  对 `graph.Interrupt` 而言，Task ID 等于传入的 `key` 参数。
+
+如果你不想在代码里写死中断 key，可以从“中断检查点”里取出 Task ID，并用它作为
+`ResumeMap` 的 key：
+
+```go
+// cm 是 graph.CheckpointManager。如果你使用 GraphAgent，可以通过
+// ga.Executor().CheckpointManager() 获取。
+latest, err := cm.Latest(ctx, lineageID, namespace)
+if err != nil || latest == nil || latest.Checkpoint == nil {
+    // handle error
+}
+taskID := latest.Checkpoint.InterruptState.TaskID
+
+cmd := graph.NewResumeCommand().
+    AddResumeValue(taskID, "approved")
+
+events, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
+        graph.CfgKeyCheckpointID: latest.Checkpoint.ID,
+        graph.StateKeyCommand:    cmd,
+    }),
+)
+```
+
+多级嵌套的语义是一样的：只需要恢复父图检查点，框架会自动逐层恢复每一层子图。
 
 恢复辅助函数：
 
@@ -3527,7 +3870,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 
 **Q6: 从检查点恢复未按预期继续**
 
-- 通过 `agent.WithRuntimeState(map[string]any{ graph.CfgKeyCheckpointID: "..." })` 传入；
+- 通过 `agent.WithRuntimeState(map[string]any{ graph.CfgKeyLineageID: "...", graph.CfgKeyCheckpointID: "..." })` 传入；
 - HITL 恢复时提供 `ResumeMap`；纯 "resume" 文本不会注入到 `graph.StateKeyUserInput`。
 
 **Q7: 并行下状态冲突**
@@ -3569,6 +3912,36 @@ graphAgent, _ := graphagent.New("workflow", g,
   }
   ```
 - **注意**：`WithSubgraphIsolatedMessages(true)` 只对 `AddSubgraphNode` 有效，对 `AddLLMNode` 无效。
+
+**Q10: 下游 Agent 节点拿到的输入是空的**
+
+- **问题现象**：`A (agent) → B (agent)` 串联时，B 能执行但看起来没拿到 A 的输出
+  （`Invocation.Message.Content` 为空，或行为像“没输入”）。
+- **根本原因**：Agent 节点把 `user_input` 当作输入消息，并在成功执行后清空它；
+  边不会自动把上游输出“管道式”传下去。
+- **解决方案**：在下游 Agent 执行前显式把目标值写入 `user_input`：
+  ```go
+  sg.AddAgentNode("B", graph.WithSubgraphInputFromLastResponse())
+  // 或：
+  sg.AddAgentNode("B",
+      graph.WithPreNodeCallback(func(ctx context.Context, cb *graph.NodeCallbackContext, s graph.State) (any, error) {
+          if v, ok := s[graph.StateKeyLastResponse].(string); ok {
+              s[graph.StateKeyUserInput] = v
+          }
+          return nil, nil
+      }),
+  )
+  ```
+  如果你需要消费“指定节点”的输出，可从 `node_responses[targetNodeID]` 取值并写入 `user_input`。
+
+**Q11: 下游 Agent 既要原始输入也要上游输出**
+
+- **问题现象**：你使用 `WithSubgraphInputFromLastResponse()` 让下游 Agent 把
+  `last_response` 当作当前输入，但你还希望它同时拿到本次 Run 的原始用户请求。
+- **解决方案**：把原始 `user_input` 持久化到自定义 state key（例如
+  `original_user_input`），并在下游 Agent 节点执行前用 function 节点把
+  `original + upstream` 显式拼接写回 `user_input`。
+  见“Agent 节点：拼接原始输入与上游输出”。
 
 ## 实际案例
 
@@ -3669,5 +4042,5 @@ func buildApprovalWorkflow() (*graph.Graph, error) {
   - I/O 约定：`io_conventions`、`io_conventions_tools`
   - 并行 / 扇出：`parallel`、`fanout`、`diamond`
   - 占位符：`placeholder`
-  - 检查点 / 中断：`checkpoint`、`interrupt`
+  - 检查点 / 中断：`checkpoint`、`interrupt`、`nested_interrupt`、`static_interrupt`
 - 进一步阅读：`graph/state_graph.go`、`graph/executor.go`、`agent/graphagent`

@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -20,9 +21,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
-type mockRepo struct{ ok map[string]bool }
+type mockRepo struct {
+	ok   map[string]bool
+	sums []skill.Summary
+}
 
-func (m *mockRepo) Summaries() []skill.Summary { return nil }
+func (m *mockRepo) Summaries() []skill.Summary { return m.sums }
 func (m *mockRepo) Get(name string) (*skill.Skill, error) {
 	if m.ok[name] {
 		return &skill.Skill{Summary: skill.Summary{Name: name}}, nil
@@ -99,4 +103,36 @@ func TestLoadTool_Call_NoRepoSkipsValidation(t *testing.T) {
 	))
 	require.NoError(t, err)
 	require.Equal(t, "loaded: x", out)
+}
+
+func TestSkillNameEnum_SortsAndSkipsEmpty(t *testing.T) {
+	repo := &mockRepo{
+		ok: map[string]bool{},
+		sums: []skill.Summary{
+			{Name: "b"},
+			{Name: ""},
+			{Name: "a"},
+		},
+	}
+	got := skillNameEnum(repo)
+	require.Equal(t, []any{"a", "b"}, got)
+}
+
+func TestSkillNameEnum_TooManyValuesReturnsNil(t *testing.T) {
+	repo := &mockRepo{
+		ok:   map[string]bool{},
+		sums: make([]skill.Summary, maxSkillEnumValues+1),
+	}
+	require.Nil(t, skillNameEnum(repo))
+}
+
+func TestSkillNameEnum_AllEmptyNamesReturnsNil(t *testing.T) {
+	repo := &mockRepo{
+		ok: map[string]bool{},
+		sums: []skill.Summary{
+			{Name: ""},
+			{Name: ""},
+		},
+	}
+	require.Nil(t, skillNameEnum(repo))
 }

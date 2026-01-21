@@ -57,6 +57,10 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 	var executorOpts []graph.ExecutorOption
 	executorOpts = append(executorOpts,
 		graph.WithChannelBufferSize(options.ChannelBufferSize))
+	if options.MaxConcurrency != 0 {
+		executorOpts = append(executorOpts,
+			graph.WithMaxConcurrency(options.MaxConcurrency))
+	}
 	if options.CheckpointSaver != nil {
 		executorOpts = append(executorOpts,
 			graph.WithCheckpointSaver(options.CheckpointSaver))
@@ -251,13 +255,13 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	isResuming := invocation.RunOptions.RuntimeState != nil &&
 		invocation.RunOptions.RuntimeState[graph.CfgKeyCheckpointID] != nil
 
-	if invocation.Message.Content != "" {
-		// If resuming and the message is just "resume", don't add it as input
-		// This allows pure checkpoint resumption without input interference
+	if invocation.Message.Content != "" && invocation.Message.Role == model.RoleUser {
+		// If resuming and the message is just "resume", don't add it as input.
+		// This allows pure checkpoint resumption without input interference.
 		if isResuming && invocation.Message.Content == "resume" {
-			// Skip adding user_input to preserve checkpoint state
+			// Skip adding user_input to preserve checkpoint state.
 		} else {
-			// Add user input for normal execution or resume with meaningful input
+			// Add user input for normal execution or resume with meaningful input.
 			initialState[graph.StateKeyUserInput] = invocation.Message.Content
 		}
 	}
@@ -283,6 +287,16 @@ func (ga *GraphAgent) setupInvocation(invocation *agent.Invocation) {
 
 // Tools returns the list of tools available to this agent.
 func (ga *GraphAgent) Tools() []tool.Tool { return nil }
+
+// TimeTravel exposes checkpoint-based time travel helpers for this GraphAgent.
+//
+// It requires a checkpoint saver configured via graphagent.WithCheckpointSaver.
+func (ga *GraphAgent) TimeTravel() (*graph.TimeTravel, error) {
+	if ga == nil || ga.executor == nil {
+		return nil, fmt.Errorf("graph executor is not configured")
+	}
+	return ga.executor.TimeTravel()
+}
 
 // Info returns the basic information about this agent.
 func (ga *GraphAgent) Info() agent.Info {

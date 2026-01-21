@@ -225,6 +225,81 @@ cycleAgent := cycleagent.New(
 )
 ```
 
+#### Escalation Function (WithEscalationFunc)
+
+In a `CycleAgent`, **escalation** simply means: **stop the loop now**.
+
+A `CycleAgent` runs its SubAgents in order, then repeats the whole sequence.
+It stops when one of these happens:
+
+1. Your `EscalationFunc` returns `true` for an event
+2. `WithMaxIterations(n)` is reached
+3. The `context.Context` is cancelled
+
+##### What does `EscalationFunc` receive?
+
+The callback signature is:
+
+```go
+type EscalationFunc func(*event.Event) bool
+```
+
+The function is evaluated on events forwarded from sub-agents. To avoid
+stopping on half-finished streaming chunks, `CycleAgent` only checks
+escalation on "meaningful" events such as:
+
+- error events (`evt.Error != nil`)
+- tool response events (`evt.Object == model.ObjectTypeToolResponse`)
+- final completion events (`evt.Done == true`, non-streaming)
+
+##### Default behavior
+
+If you do not set `WithEscalationFunc`, `CycleAgent` stops only on errors.
+
+##### Example: quality-based stopping
+
+A common pattern is: **Generate → Critic → stop when "good enough"**.
+
+Have your critic Agent emit a machine-readable signal (for example, a
+`record_score` tool that returns JSON with `needs_improvement`). Then stop
+the cycle as soon as `needs_improvement` becomes `false` (requires
+`encoding/json`):
+
+```go
+type scoreResult struct {
+	NeedsImprovement bool `json:"needs_improvement"`
+}
+
+func qualityEscalationFunc(evt *event.Event) bool {
+	if evt == nil || evt.Response == nil {
+		return false
+	}
+	if evt.Error != nil {
+		return true
+	}
+	if evt.Object != model.ObjectTypeToolResponse {
+		return false
+	}
+
+	for _, choice := range evt.Response.Choices {
+		msg := choice.Message
+		if msg.Role != model.RoleTool {
+			continue
+		}
+
+		var res scoreResult
+		if err := json.Unmarshal([]byte(msg.Content), &res); err != nil {
+			continue
+		}
+		return !res.NeedsImprovement
+	}
+	return false
+}
+```
+
+Keep the function fast and defensive (check `nil`, ignore parse errors),
+because it runs inside the event loop.
+
 #### Example Session
 
 ```

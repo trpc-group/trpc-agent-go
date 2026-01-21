@@ -35,3 +35,4 @@ next-env.d.ts
 .codebuddy
 examples/**/*.evalset_result.json
 !examples/evaluation/**/*.evalset_result.json
+examples/results/

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
@@ -54,12 +55,8 @@ func TestCollectLongRunningToolIDs(t *testing.T) {
 		// unknown not present
 	}
 	got := collectLongRunningToolIDs(calls, tools)
-	if _, ok := got["2"]; !ok {
-		t.Fatalf("expected long-running id '2' present, got %#v", got)
-	}
-	if len(got) != 1 {
-		t.Fatalf("expected exactly 1 id, got %d", len(got))
-	}
+	require.Contains(t, got, "2")
+	require.Len(t, got, 1)
 }
 
 // minimalAgent exposes tools for preprocess test.
@@ -82,9 +79,7 @@ func TestPreprocess_AddsAgentToolsWhenPresent(t *testing.T) {
 	inv.Agent = &minimalAgent{tools: []tool.Tool{&mockLongRunnerTool{name: "t1"}}}
 	ch := make(chan *event.Event, 4)
 	f.preprocess(context.Background(), inv, req, ch)
-	if _, ok := req.Tools["t1"]; !ok {
-		t.Fatalf("expected tool 't1' added to request")
-	}
+	require.Contains(t, req.Tools, "t1")
 }
 
 func TestCreateLLMResponseEvent_LongRunningIDs(t *testing.T) {
@@ -95,9 +90,48 @@ func TestCreateLLMResponseEvent_LongRunningIDs(t *testing.T) {
 	}}
 	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{{ID: "x", Function: model.FunctionDefinitionParam{Name: "slow"}}}}}}}
 	evt := f.createLLMResponseEvent(inv, rsp, req)
-	if _, ok := evt.LongRunningToolIDs["x"]; !ok {
-		t.Fatalf("expected long-running tool id tracked")
+	require.Contains(t, evt.LongRunningToolIDs, "x")
+}
+
+// TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled verifies tool call arguments are repaired when enabled.
+func TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled(t *testing.T) {
+	f := New(nil, nil, Options{})
+	repairEnabled := true
+	inv := agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+		ToolCallArgumentsJSONRepairEnabled: &repairEnabled,
+	}))
+	req := &model.Request{}
+	response := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   "call-1",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "tool",
+								Arguments: []byte("{a:2}"),
+							},
+						},
+					},
+				},
+			},
+		},
 	}
+	responseChan := make(chan *model.Response, 1)
+	responseChan <- response
+	close(responseChan)
+
+	eventChan := make(chan *event.Event, 10)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	ctx, span := tracer.Start(context.Background(), "s")
+	defer span.End()
+
+	lastEvent, err := f.processStreamingResponses(ctx, inv, req, responseChan, eventChan, span)
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.Equal(t, "{\"a\":2}", string(response.Choices[0].Message.ToolCalls[0].Function.Arguments))
 }
 
 // mockAgent implements agent.Agent for testing
@@ -345,6 +379,68 @@ func TestModelCallbacks_BeforeError(t *testing.T) {
 	}
 	require.Equal(t, 2, len(events))
 	require.Equal(t, "before error", events[1].Error.Message)
+}
+
+func TestModelCallbacks_BeforeSetsContext_AfterSeesValue(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	const want = "ctx-from-before"
+	afterSawCh := make(chan string, 1)
+
+	modelCallbacks := model.NewCallbacks().
+		RegisterBeforeModel(func(
+			ctx context.Context,
+			args *model.BeforeModelArgs,
+		) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				Context: context.WithValue(ctx, testCtxKey{}, want),
+			}, nil
+		}).
+		RegisterAfterModel(func(
+			ctx context.Context,
+			args *model.AfterModelArgs,
+		) (*model.AfterModelResult, error) {
+			if v, ok := ctx.Value(testCtxKey{}).(string); ok {
+				select {
+				case afterSawCh <- v:
+				default:
+				}
+			}
+			return nil, nil
+		})
+
+	llmFlow := New(nil, nil, Options{ModelCallbacks: modelCallbacks})
+	invocation := agent.NewInvocation(
+		agent.WithInvocationModel(&mockModel{
+			responses: []*model.Response{
+				{
+					Done: true,
+					Choices: []model.Choice{
+						{Message: model.NewAssistantMessage("ok")},
+					},
+				},
+			},
+		}),
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+	)
+
+	eventChan, err := llmFlow.Run(ctx, invocation)
+	require.NoError(t, err)
+
+	for evt := range eventChan {
+		if evt.RequiresCompletion {
+			key := agent.AppendEventNoticeKeyPrefix + evt.ID
+			invocation.NotifyCompletion(ctx, key)
+		}
+	}
+
+	select {
+	case got := <-afterSawCh:
+		require.Equal(t, want, got)
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for after callback to observe context value")
+	}
 }
 
 func TestModelCBs_AfterOverride(t *testing.T) {
@@ -653,7 +749,7 @@ func TestFlow_CallLLM_PluginBeforeModelCanShortCircuit(t *testing.T) {
 		Plugins:   pm,
 	}
 
-	ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
+	_, ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
 	require.NoError(t, err)
 	for range ch {
 	}
@@ -697,7 +793,7 @@ func TestFlow_CallLLM_PluginBeforeModelError(t *testing.T) {
 		Plugins:   pm,
 	}
 
-	ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
+	_, ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
 	require.Error(t, err)
 	require.Nil(t, ch)
 	require.True(t, plugCalled)
@@ -742,12 +838,13 @@ func TestFlow_CallLLM_PluginBeforeModelContextPropagates(t *testing.T) {
 		Plugins:   pm,
 	}
 
-	ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
+	_, ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
 	require.NoError(t, err)
 	for range ch {
 	}
 	require.True(t, plugCalled)
 	require.Equal(t, "v", localSaw)
+
 }
 
 func TestFlow_AfterModelPluginOverridesLocal(t *testing.T) {
@@ -909,7 +1006,7 @@ func TestFlow_callLLM_NoModel(t *testing.T) {
 	inv := agent.NewInvocation()
 	req := &model.Request{}
 
-	ch, err := f.callLLM(context.Background(), inv, req)
+	_, ch, err := f.callLLM(context.Background(), inv, req)
 	require.Error(t, err)
 	require.Nil(t, ch)
 }
@@ -921,7 +1018,7 @@ func TestFlow_callLLM_ModelError(t *testing.T) {
 	)
 	req := &model.Request{}
 
-	ch, err := f.callLLM(context.Background(), inv, req)
+	_, ch, err := f.callLLM(context.Background(), inv, req)
 	require.Error(t, err)
 	require.Nil(t, ch)
 }

@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -107,6 +108,117 @@ func TestGraphAgentWithOptions(t *testing.T) {
 	info := graphAgent.Info()
 	if info.Description != "Test agent description" {
 		t.Errorf("Expected description to be set")
+	}
+}
+
+func TestGraphAgent_WithMaxConcurrency(t *testing.T) {
+	const (
+		nodeRoot       = "root"
+		nodeCount      = 12
+		maxConcurrency = 3
+		waitTimeout    = 2 * time.Second
+	)
+
+	stateGraph := graph.NewStateGraph(graph.NewStateSchema())
+	stateGraph.AddNode(nodeRoot, func(context.Context, graph.State) (any, error) {
+		return nil, nil
+	})
+	stateGraph.SetEntryPoint(nodeRoot)
+
+	var active atomic.Int64
+	var maxActive atomic.Int64
+	started := make(chan struct{}, nodeCount)
+	unblock := make(chan struct{})
+
+	worker := func(ctx context.Context, state graph.State) (any, error) {
+		cur := active.Add(1)
+		updateMaxInt64(&maxActive, cur)
+		started <- struct{}{}
+		<-unblock
+		active.Add(-1)
+		return nil, nil
+	}
+
+	for i := 0; i < nodeCount; i++ {
+		nodeID := fmt.Sprintf("w%d", i)
+		stateGraph.AddNode(nodeID, worker)
+		stateGraph.AddEdge(nodeRoot, nodeID)
+	}
+
+	g, err := stateGraph.Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New(
+		"test-agent",
+		g,
+		WithMaxConcurrency(maxConcurrency),
+	)
+	require.NoError(t, err)
+
+	invocation := &agent.Invocation{
+		Agent:        graphAgent,
+		AgentName:    "test-agent",
+		InvocationID: "inv-max-concurrency",
+	}
+
+	events, err := graphAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		for range events {
+		}
+		close(done)
+	}()
+
+	waitForNSignals(t, started, maxConcurrency, waitTimeout)
+
+	select {
+	case <-started:
+		t.Fatalf("expected at most %d tasks to start", maxConcurrency)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(unblock)
+
+	select {
+	case <-done:
+	case <-time.After(waitTimeout):
+		t.Fatal("timeout waiting for graphagent to complete")
+	}
+
+	require.LessOrEqual(t, maxActive.Load(), int64(maxConcurrency))
+}
+
+func updateMaxInt64(max *atomic.Int64, value int64) {
+	for {
+		current := max.Load()
+		if value <= current {
+			return
+		}
+		if max.CompareAndSwap(current, value) {
+			return
+		}
+	}
+}
+
+func waitForNSignals(
+	t *testing.T,
+	ch <-chan struct{},
+	n int,
+	timeout time.Duration,
+) {
+	t.Helper()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	for i := 0; i < n; i++ {
+		select {
+		case <-ch:
+		case <-timer.C:
+			t.Fatalf("timeout waiting for %d signals", n)
+		}
 	}
 }
 
@@ -863,6 +975,58 @@ func TestGraphAgent_CreateInitialStateWithResume(t *testing.T) {
 	for range eventChan2 {
 		// Just drain the channel.
 	}
+}
+
+func TestGraphAgent_CreateInitialStateWithToolMessageDoesNotSetUserInput(t *testing.T) {
+	schema := graph.NewStateSchema().
+		AddField("messages", graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		}).
+		AddField(graph.StateKeyUserInput, graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New("test-agent", g)
+	require.NoError(t, err)
+
+	toolMsg := model.NewToolMessage("call-1", "calc", "result")
+	toolEvt := event.NewResponseEvent("inv", "test-agent", &model.Response{
+		Choices: []model.Choice{{Index: 0, Message: toolMsg}},
+	})
+
+	sess := &session.Session{
+		ID:     "sid",
+		Events: []event.Event{*toolEvt},
+	}
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv"),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(toolMsg),
+	)
+	graphAgent.setupInvocation(invocation)
+
+	state := graphAgent.createInitialState(context.Background(), invocation)
+	_, hasUserInput := state[graph.StateKeyUserInput]
+	require.False(t, hasUserInput)
+
+	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+	require.True(t, ok)
+	require.NotEmpty(t, messages)
+	require.Equal(t, model.RoleTool, messages[len(messages)-1].Role)
+	require.Equal(t, "call-1", messages[len(messages)-1].ToolID)
+	require.Equal(t, "result", messages[len(messages)-1].Content)
 }
 
 // mockCheckpointSaver is a mock implementation of graph.CheckpointSaver.

@@ -423,7 +423,7 @@ metricManager.Add(ctx, appName, evalSetID, evalMetric)
 - The Evaluator compares the actual session results with the expected session results, calculates the specific score, and determines the evaluation status based on the metric threshold.
 - The Evaluator Registry maintains the mapping between metric names and corresponding evaluators and supports dynamic registration and search of evaluators.
 - The Evaluation Service, as a core component, integrates the Agent to be evaluated, the EvalSet, the Metric, the Evaluator Registry, and the EvalResult Registry. The evaluation process is divided into two phases:
-  - Inference: Extracting user input from the EvalSet, invoking the Agent to perform inference, and combining the Agent's actual output with the expected output to form the inference result. 
+  - Inference: In default mode, extract user input from the EvalSet, invoke the Agent to perform inference, and combine the Agent's actual output with the expected output to form the inference result; in trace mode, treat the EvalSet `conversation` as the actual output trace and skip runner inference.
   - Result Evaluation Phase: Evaluate retrieves the corresponding evaluator from the registry based on the evaluation metric name. Multiple evaluators are used to perform a multi-dimensional evaluation of the inference results, ultimately generating the evaluation result, EvalResult.
 - Agent Evaluator: To reduce the randomness of the agent's output, the evaluation service is called NumRuns times and aggregates the results to obtain a more stable evaluation result.
 
@@ -433,17 +433,30 @@ An EvalSet is a collection of EvalCase instances, identified by a unique EvalSet
 
 An EvalCase represents a set of evaluation cases within the same Session and includes a unique identifier (EvalID), the conversation content, optional `contextMessages`, and session initialization information.
 
-Conversation data includes three types of content:
+Conversation data includes four types of content:
 
 - User input
 - Agent final response
 - Tool invocation and result
 - Intermediate response information
 
+EvalCase supports configuring the evaluation mode via `evalMode`:
+
+- Default mode (`evalMode` omitted or empty string): `conversation` is treated as the expected output, and evaluation invokes the Runner/Agent to generate the actual output.
+- Trace mode (`evalMode` is `"trace"`): `conversation` is treated as the actual output trace, and evaluation does not invoke the Runner/Agent for inference.
+
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+// EvalMode represents the evaluation mode type.
+type EvalMode string
+
+const (
+	EvalModeDefault EvalMode = ""      // EvalModeDefault indicates the default mode.
+	EvalModeTrace   EvalMode = "trace" // EvalModeTrace indicates the trace evaluation mode.
 )
 
 // EvalSet represents an evaluation set.
@@ -458,6 +471,7 @@ type EvalSet struct {
 // EvalCase represents a single evaluation case.
 type EvalCase struct {
 	EvalID            string               // Unique identifier of the case.
+	EvalMode          EvalMode             // Evaluation mode.
 	ContextMessages   []*model.Message     // Context messages injected into each inference run.
 	Conversation      []*Invocation        // Conversation sequence.
 	SessionInput      *SessionInput        // Session initialization data.
@@ -476,10 +490,10 @@ type Invocation struct {
 
 // Tool represents a single tool invocation and its execution result.
 type Tool struct {
-	ID        string         // Tool invocation ID.
-	Name      string         // Tool name.
-	Arguments map[string]any // Tool invocation parameters.
-	Result    map[string]any // Tool execution result.
+	ID        string // Tool invocation ID.
+	Name      string // Tool name.
+	Arguments any    // Tool invocation parameters.
+	Result    any    // Tool execution result.
 }
 
 // SessionInput represents session initialization input.
@@ -1181,6 +1195,63 @@ func (l *customLocator) List(baseDir, appName string) ([]string, error) {
 	return results, nil
 }
 ```
+
+### Trace evaluation mode
+
+Trace evaluation mode is used to evaluate an offline-collected execution trace, and evaluation does not invoke the Runner for inference.
+
+Set `evalMode: "trace"` in the target evalCase of the EvalSet, and fill `conversation` with the actual output invocation sequence, such as `userContent`, `finalResponse`, `tools`, and `intermediateResponses`. Since trace mode does not provide expected outputs, choose metrics that do not depend on expected outputs, such as `llm_rubric_response`.
+
+```json
+{
+  "evalSetId": "trace-basic",
+  "name": "trace-basic",
+  "evalCases": [
+    {
+      "evalId": "trace_calc_add",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "trace_calc_add-1",
+          "userContent": {
+            "role": "user",
+            "content": "calc add 123 456"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "calc result: 579"
+          },
+          "tools": [
+            {
+              "id": "call_00_example",
+              "name": "calculator",
+              "arguments": {
+                "a": 123,
+                "b": 456,
+                "operation": "add"
+              },
+              "result": {
+                "a": 123,
+                "b": 456,
+                "operation": "add",
+                "result": 579
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "trace-eval-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}
+```
+
+For a complete example, see [examples/evaluation/trace][trace-eval-example].
+
+[trace-eval-example]: https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trace
 
 ### Evaluation Criterion
 
