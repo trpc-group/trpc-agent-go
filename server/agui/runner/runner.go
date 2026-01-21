@@ -316,14 +316,27 @@ func parseResumeInfo(opt []agent.RunOption) *resumeInfo {
 		return nil
 	}
 	var cmd *graph.Command
+	var resumeCmd *graph.ResumeCommand
 	if rawCmd, ok := state[graph.StateKeyCommand]; ok {
 		cmd, _ = rawCmd.(*graph.Command)
+		if cmd == nil {
+			resumeCmd, _ = rawCmd.(*graph.ResumeCommand)
+		}
 	}
 	var resumeMap map[string]any
 	if cmd != nil && cmd.ResumeMap != nil && len(cmd.ResumeMap) > 0 {
 		resumeMap = cmd.ResumeMap
 	}
-	if resumeMap == nil && (cmd == nil || cmd.ResumeMap == nil) {
+	cmdBindsResumeMap := cmd != nil && cmd.ResumeMap != nil
+	if resumeMap == nil &&
+		resumeCmd != nil &&
+		resumeCmd.ResumeMap != nil &&
+		len(resumeCmd.ResumeMap) > 0 {
+		resumeMap = resumeCmd.ResumeMap
+	}
+	cmdBindsResumeMap = cmdBindsResumeMap ||
+		(resumeCmd != nil && resumeCmd.ResumeMap != nil)
+	if resumeMap == nil && !cmdBindsResumeMap {
 		switch v := state[graph.StateKeyResumeMap].(type) {
 		case map[string]any:
 			if len(v) > 0 {
@@ -341,6 +354,10 @@ func parseResumeInfo(opt []agent.RunOption) *resumeInfo {
 	if cmd != nil && cmd.Resume != nil {
 		resumeSet = true
 		resumeValue = cmd.Resume
+	}
+	if !resumeSet && resumeCmd != nil && resumeCmd.Resume != nil {
+		resumeSet = true
+		resumeValue = resumeCmd.Resume
 	}
 	if !resumeSet {
 		if rawResume, ok := state[graph.ResumeChannel]; ok {
