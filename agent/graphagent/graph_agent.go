@@ -12,6 +12,7 @@ package graphagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -29,6 +30,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+const invocationNilErrMsg = "invocation is nil"
 
 // GraphAgent is an agent that executes a graph.
 type GraphAgent struct {
@@ -86,6 +89,9 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 
 // Run executes the graph with the provided invocation.
 func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	if invocation == nil {
+		return nil, errors.New(invocationNilErrMsg)
+	}
 	// Setup invocation
 	ga.setupInvocation(invocation)
 
