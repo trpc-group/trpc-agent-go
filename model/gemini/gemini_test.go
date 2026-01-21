@@ -417,6 +417,75 @@ func TestModel_buildResponse(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "buildResponse-functionCall-empty-text",
+			fields: fields{
+				m: &Model{},
+			},
+			args: args{
+				chatCompletion: &genai.GenerateContentResponse{
+					ResponseID:   "2",
+					CreateTime:   now,
+					ModelVersion: "pro-v1",
+					Candidates: []*genai.Candidate{
+						{
+							Content: &genai.Content{
+								Parts: []*genai.Part{
+									{
+										FunctionCall: &genai.FunctionCall{
+											ID:   "id",
+											Name: "function_call",
+											Args: functionArgs,
+										},
+									},
+									{
+										Text: "Answer",
+									},
+								},
+							},
+							FinishReason: genai.FinishReason(finishReason),
+						},
+					},
+				},
+			},
+			want: &model.Response{
+				ID:        "2",
+				Created:   now.Unix(),
+				Timestamp: now,
+				Model:     "pro-v1",
+				Choices: []model.Choice{
+					{
+						FinishReason: &finishReason,
+						Delta: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "Answer",
+							ToolCalls: []model.ToolCall{
+								{
+									ID: "id",
+									Function: model.FunctionDefinitionParam{
+										Name:      "function_call",
+										Arguments: functionArgsBytes,
+									},
+								},
+							},
+						},
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "Answer",
+							ToolCalls: []model.ToolCall{
+								{
+									ID: "id",
+									Function: model.FunctionDefinitionParam{
+										Name:      "function_call",
+										Arguments: functionArgsBytes,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -432,6 +501,8 @@ func TestModel_buildResponse(t *testing.T) {
 			assert.Equal(t, tt.want.Choices[0].Delta.ReasoningContent, response.Choices[0].Delta.ReasoningContent)
 			assert.Equal(t, tt.want.Choices[0].Delta.Content, response.Choices[0].Delta.Content)
 			assert.Equal(t, tt.want.Choices[0].Delta.Role, response.Choices[0].Delta.Role)
+			assert.Equal(t, tt.want.Choices[0].Delta.ToolCalls, response.Choices[0].Delta.ToolCalls)
+			assert.Equal(t, tt.want.Choices[0].Message.ToolCalls, response.Choices[0].Message.ToolCalls)
 		})
 	}
 }
