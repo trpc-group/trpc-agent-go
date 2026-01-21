@@ -87,7 +87,7 @@ Try:
 > schedule a meeting tomorrow at 3pm titled team sync
 ...streaming assistant text…
 ---
-[parent/assistant/<uuid>] Scheduled meeting: ...
+[parent/assistant] Scheduled meeting: ...
 [final] {"last_response":"...","parsed_time":"2025-...","meeting":{...},"child_last":"...","child_final_keys":N}
 ```
 
