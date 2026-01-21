@@ -37,10 +37,14 @@ const (
 // tool name and arguments and populates ToolCalls.
 type TextToolCallResponseProcessor struct{}
 
+// NewTextToolCallResponseProcessor creates a response processor that recovers
+// tool calls that appear in plain text.
 func NewTextToolCallResponseProcessor() *TextToolCallResponseProcessor {
 	return &TextToolCallResponseProcessor{}
 }
 
+// ProcessResponse converts supported text tool-call patterns into structured
+// tool calls so the tool execution pipeline can run them.
 func (p *TextToolCallResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,

@@ -169,3 +169,259 @@ func TestTextToolCall_SkipsWhenFinalAnswerTagPresent(t *testing.T) {
 
 	require.Empty(t, rsp.Choices[0].Message.ToolCalls)
 }
+
+func TestTextToolCall_SkipsWhenPartialResponse(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_search": stubTool{name: "web_search"},
+		},
+	}
+	rsp := &model.Response{
+		IsPartial: true,
+		Done:      true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					Content: "to=functions.web_search\n" +
+						"{\"query\":\"hi\"}\n",
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Empty(t, rsp.Choices[0].Message.ToolCalls)
+}
+
+func TestTextToolCall_SkipsWhenToolCallsAlreadyPresent(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_search": stubTool{name: "web_search"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							Function: model.FunctionDefinitionParam{
+								Name: "web_search",
+							},
+						},
+					},
+					Content: "to=functions.web_search\n" +
+						"{\"query\":\"hi\"}\n",
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Len(t, rsp.Choices[0].Message.ToolCalls, 1)
+	require.Equal(
+		t,
+		"web_search",
+		rsp.Choices[0].Message.ToolCalls[0].Function.Name,
+	)
+}
+
+func TestTextToolCall_ToolObject_ScansUntilJSON(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_search": stubTool{name: "web_search"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					Content: "Note: \"tool\" in plain text.\n" +
+						"{\"tool\":\"functions.web_search\"," +
+						"\"parameters\":{\"query\":\"hi\"}}",
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Len(t, rsp.Choices[0].Message.ToolCalls, 1)
+	tc := rsp.Choices[0].Message.ToolCalls[0]
+	require.Equal(t, "web_search", tc.Function.Name)
+}
+
+func TestTextToolCall_ToolObject_InvalidParameters(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_search": stubTool{name: "web_search"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					Content: "{\"tool\":\"functions.web_search\"," +
+						"\"parameters\":\"hi\"}",
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Empty(t, rsp.Choices[0].Message.ToolCalls)
+}
+
+func TestTextToolCall_ToolObject_MissingParameters(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_search": stubTool{name: "web_search"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "{\"tool\":\"functions.web_search\"}",
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Empty(t, rsp.Choices[0].Message.ToolCalls)
+}
+
+func TestTextToolCall_ToolObject_UnknownTool(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_search": stubTool{name: "web_search"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					Content: "{\"tool\":\"functions.nope\"," +
+						"\"parameters\":{\"query\":\"hi\"}}",
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Empty(t, rsp.Choices[0].Message.ToolCalls)
+}
+
+func TestTextToolCall_ToolObject_InvalidJSON(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_search": stubTool{name: "web_search"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "{\"tool\":\"functions.web_search\",",
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Empty(t, rsp.Choices[0].Message.ToolCalls)
+}
+
+func TestTextToolCall_IsToolNameChar(t *testing.T) {
+	require.True(t, isToolNameChar('_'))
+	require.True(t, isToolNameChar('-'))
+	require.True(t, isToolNameChar('a'))
+	require.True(t, isToolNameChar('Z'))
+	require.True(t, isToolNameChar('0'))
+	require.False(t, isToolNameChar('.'))
+}
+
+func TestTextToolCall_DropHelpers(t *testing.T) {
+	cleaned := dropLineFrom("to=functions.web_search", 0)
+	require.Equal(t, "", cleaned)
+
+	content := "line1\nline2\nline3"
+	unchanged := dropRangeFromLine(content, 7, 5)
+	require.Equal(t, content, unchanged)
+}
