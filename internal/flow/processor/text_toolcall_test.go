@@ -70,6 +70,45 @@ func TestTextToolCall_ToFunctions_WithJSON(t *testing.T) {
 	require.NotContains(t, rsp.Choices[0].Message.Content, "to=functions")
 }
 
+func TestTextToolCall_ToFunctions_WithNumericJSON(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_search": stubTool{name: "web_search"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					Content: "to=functions.web_search\n" +
+						"{\"query\":\"hi\",\"max_results\":5}\n",
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Len(t, rsp.Choices[0].Message.ToolCalls, 1)
+	tc := rsp.Choices[0].Message.ToolCalls[0]
+	require.Equal(t, "web_search", tc.Function.Name)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(tc.Function.Arguments, &got))
+	require.Equal(t, "hi", got["query"])
+	require.Equal(t, float64(5), got["max_results"])
+}
+
 func TestTextToolCall_ToFunctions_NoJSON(t *testing.T) {
 	p := NewTextToolCallResponseProcessor()
 
@@ -194,6 +233,113 @@ func TestTextToolCall_FunctionsCall_WithSpacedJSON(t *testing.T) {
 	require.NotContains(t, rsp.Choices[0].Message.Content, "functions.")
 }
 
+func TestTextToolCall_FunctionsCall_NoJSONArgs(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_fetch": stubTool{name: "web_fetch"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "functions.web_fetch\n",
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Len(t, rsp.Choices[0].Message.ToolCalls, 1)
+	tc := rsp.Choices[0].Message.ToolCalls[0]
+	require.Equal(t, "web_fetch", tc.Function.Name)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(tc.Function.Arguments, &got))
+	require.Empty(t, got)
+}
+
+func TestTextToolCall_FunctionsCall_UnknownTool(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_search": stubTool{name: "web_search"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					Content: "functions.unknown_tool " +
+						"{\"query\":\"hi\"}\n",
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Empty(t, rsp.Choices[0].Message.ToolCalls)
+}
+
+func TestTextToolCall_FunctionsCall_InvalidJSON(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_search": stubTool{name: "web_search"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					Content: "functions.web_search " +
+						"{\"query\":\"hi\"\n",
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Len(t, rsp.Choices[0].Message.ToolCalls, 1)
+	tc := rsp.Choices[0].Message.ToolCalls[0]
+	require.Equal(t, "web_search", tc.Function.Name)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(tc.Function.Arguments, &got))
+	require.Empty(t, got)
+}
+
 func TestTextToolCall_ToolObject(t *testing.T) {
 	p := NewTextToolCallResponseProcessor()
 
@@ -231,6 +377,46 @@ func TestTextToolCall_ToolObject(t *testing.T) {
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(tc.Function.Arguments, &got))
 	require.Equal(t, "hi", got["query"])
+}
+
+func TestTextToolCall_ToolObject_WithNumericParameters(t *testing.T) {
+	p := NewTextToolCallResponseProcessor()
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"web_search": stubTool{name: "web_search"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					Content: "{\"tool\":\"functions.web_search\"," +
+						"\"parameters\":" +
+						"{\"query\":\"hi\",\"max_results\":5}}\n",
+				},
+			},
+		},
+	}
+
+	p.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+		rsp,
+		nil,
+	)
+
+	require.Len(t, rsp.Choices[0].Message.ToolCalls, 1)
+	tc := rsp.Choices[0].Message.ToolCalls[0]
+	require.Equal(t, "web_search", tc.Function.Name)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(tc.Function.Arguments, &got))
+	require.Equal(t, "hi", got["query"])
+	require.Equal(t, float64(5), got["max_results"])
 }
 
 func TestTextToolCall_SkipsWhenFinalAnswerTagPresent(t *testing.T) {
