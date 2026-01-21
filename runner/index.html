@@ -873,6 +873,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#tool-call-arguments-auto-repair" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tool Call Arguments Auto Repair
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#provide-conversation-history-auto-seed-session-reuse" class="md-nav__link">
     <span class="md-ellipsis">
       Provide Conversation History (auto-seed + session reuse)
@@ -2178,6 +2187,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#tool-call-arguments-auto-repair" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tool Call Arguments Auto Repair
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#provide-conversation-history-auto-seed-session-reuse" class="md-nav__link">
     <span class="md-ellipsis">
       Provide Conversation History (auto-seed + session reuse)
@@ -2859,6 +2877,9 @@ from that point instead of asking the model to repeat the tool calls:</p>
 <p>If the last event is a user or tool message (or a plain assistant reply
 without <code>tool_calls</code>), <code>WithResume(true)</code> is a no-op and the flow behaves like
 today’s <code>Run</code> call.</p>
+<h4 id="tool-call-arguments-auto-repair">Tool Call Arguments Auto Repair</h4>
+<p>Some models may emit non-strict JSON arguments for <code>tool_calls</code> (for example, unquoted object keys or trailing commas), which can break tool execution or external parsing.</p>
+<p>When <code>agent.WithToolCallArgumentsJSONRepairEnabled(true)</code> is enabled in <code>runner.Run</code>, the framework will best-effort repair <code>toolCall.Function.Arguments</code>. For detailed usage, see <a href="./#tool-call-arguments-auto-repair">Tool Call Arguments Auto Repair</a>.</p>
 <h4 id="provide-conversation-history-auto-seed-session-reuse">Provide Conversation History (auto-seed + session reuse)</h4>
 <p>If your upstream service maintains the conversation and you want the agent to
 see that context, you can pass a full history (<code>[]model.Message</code>) directly. The
@@ -3744,7 +3765,7 @@ are forwarded to your <code>eventChan</code>.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 9, 2026 08:49:15 UTC">2026-01-09 08:49:15</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 21, 2026 07:29:59 UTC">2026-01-21 07:29:59</span>
   </span>
 
     
