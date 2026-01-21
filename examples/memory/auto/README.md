@@ -198,12 +198,12 @@ memoryService := memoryinmemory.NewMemoryService(
 | `PG_PORT`                 | PostgreSQL port                          | `5432`                      |
 | `PG_USER`                 | PostgreSQL user                          | `postgres`                  |
 | `PG_PASSWORD`             | PostgreSQL password                      | ``                          |
-| `PG_DATABASE`             | PostgreSQL database                      | `trpc-agent-go-pgmemory`    |
+| `PG_DATABASE`             | PostgreSQL database                      | `trpc_agent_go`    |
 | `PGVECTOR_HOST`           | pgvector PostgreSQL host                 | `localhost`                 |
 | `PGVECTOR_PORT`           | pgvector PostgreSQL port                 | `5432`                      |
 | `PGVECTOR_USER`           | pgvector PostgreSQL user                 | `postgres`                  |
 | `PGVECTOR_PASSWORD`       | pgvector PostgreSQL password             | ``                          |
-| `PGVECTOR_DATABASE`       | pgvector PostgreSQL database             | `trpc-agent-go-pgvector`    |
+| `PGVECTOR_DATABASE`       | pgvector PostgreSQL database             | `trpc_agent_go`    |
 | `PGVECTOR_EMBEDDER_MODEL` | pgvector embedder model                  | `text-embedding-3-small`    |
 | `MYSQL_HOST`              | MySQL host                               | `localhost`                 |
 | `MYSQL_PORT`              | MySQL port                               | `3306`                      |

@@ -35,14 +35,14 @@
 //		export PG_PORT="5432"
 //		export PG_USER="postgres"
 //		export PG_PASSWORD=""
-//		export PG_DATABASE="trpc-agent-go-pgmemory"
+//		export PG_DATABASE="trpc_agent_go"
 //
 //	pgvector:
 //		export PGVECTOR_HOST="localhost"
 //		export PGVECTOR_PORT="5432"
 //		export PGVECTOR_USER="postgres"
 //		export PGVECTOR_PASSWORD=""
-//		export PGVECTOR_DATABASE="trpc-agent-go-pgvector"
+//		export PGVECTOR_DATABASE="trpc_agent_go"
 //		export PGVECTOR_EMBEDDER_MODEL="text-embedding-3-small"
 package main
 
