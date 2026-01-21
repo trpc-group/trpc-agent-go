@@ -237,9 +237,9 @@ func (p *Planner) splitByLastPattern(
 // for the React planner.
 func (p *Planner) buildPlannerInstruction() string {
 	highLevelPreamble := strings.Join([]string{
-		"When answering the question, try to leverage the available tools " +
-			"to gather the information instead of your memorized knowledge.",
+		"You are an AI assistant that solves problems step by step using available tools.",
 		"",
+<<<<<<< HEAD
 		"Follow this process when answering the question: (1) first come up " +
 			"with a plan in natural language text format; (2) Then use tools to " +
 			"execute the plan and provide reasoning between tool calls " +
@@ -325,15 +325,86 @@ func (p *Planner) buildPlannerInstruction() string {
 			"the question.",
 		"You should prefer using the information available in the " +
 			"context instead of repeated tool use.",
+=======
+		"WORKFLOW (execute one step at a time):",
+		"1. PLAN: Create a numbered plan under " + PlanningTag,
+		"2. EXECUTE: For each step, output " + ActionTag + " with a brief description, then CALL the tool",
+		"3. REASON: After receiving tool results, output " + ReasoningTag + " to analyze and decide next step",
+		"4. REPEAT steps 2-3 until you have enough information",
+		"5. ANSWER: Output " + FinalAnswerTag + " followed by ONLY the final answer",
+	}, "\n")
+
+	criticalRules := strings.Join([]string{
+		"CRITICAL RULES:",
+		"",
+		"1. ONE STEP PER RESPONSE: Each response should contain only ONE action or the final answer.",
+		"   - Do NOT output multiple " + ActionTag + " sections in a single response.",
+		"   - Do NOT repeat or summarize previous steps.",
+		"",
+		"2. TOOL CALLS MUST USE FUNCTION CALLING API:",
+		"   - NEVER write tool calls as text/JSON in your response (e.g., {\"query\": \"...\"}).",
+		"   - Tools are executed via the function calling mechanism, not by writing code in text.",
+		"   - After " + ActionTag + ", describe what you will do, then issue the actual tool call.",
+		"",
+		"3. FINAL ANSWER FORMAT:",
+		"   - When ready to answer, output " + FinalAnswerTag + " followed by the answer.",
+		"   - Do NOT include " + PlanningTag + ", " + ActionTag + ", or " + ReasoningTag + " after " + FinalAnswerTag + ".",
+		"   - Do NOT summarize or repeat the reasoning process in the final answer.",
+		"   - Include brief explanation only if necessary for clarity.",
+		"   - Example: " + FinalAnswerTag + "\n   42",
+		"",
+		"4. ONLY USE AVAILABLE TOOLS:",
+		"   - Only use tools explicitly provided in the context.",
+		"   - Do NOT invent or assume tools that are not available.",
+		"",
+		"5. NO RETROSPECTIVE SUMMARIES:",
+		"   - Do NOT output a \"summary\" of all previous steps at the end.",
+		"   - Do NOT repeat the plan or actions you already executed.",
+		"   - Each response should only contain NEW content for the current step.",
+	}, "\n")
+
+	planningPreamble := strings.Join([]string{
+		"PLANNING REQUIREMENTS:",
+		"- Create a coherent plan that covers all aspects of the user query.",
+		"- The plan should be a numbered list where each step uses available tools.",
+		"- If the initial plan fails, use " + ReplanningTag + " to revise it.",
+	}, "\n")
+
+	actionPreamble := strings.Join([]string{
+		"ACTION REQUIREMENTS:",
+		"- State your next action briefly: 'I will [action]'.",
+		"- Then issue ONE tool call via the function calling API.",
+		"- Wait for the tool result before proceeding.",
+	}, "\n")
+
+	reasoningPreamble := strings.Join([]string{
+		"REASONING REQUIREMENTS:",
+		"- Summarize what the tool result tells you.",
+		"- Decide whether you have enough information or need another step.",
+		"- Keep reasoning concise (2-3 sentences).",
+	}, "\n")
+
+	finalAnswerPreamble := strings.Join([]string{
+		"FINAL ANSWER REQUIREMENTS:",
+		"- The answer should be precise and match any formatting requirements in the query.",
+		"- Output the answer directly. Include brief explanation only if necessary for clarity.",
+		"- If the query cannot be answered, explain why briefly.",
+	}, "\n")
+
+	userInputPreamble := strings.Join([]string{
+		"ADDITIONAL GUIDELINES:",
+		"- Prefer using information already in context over repeated tool calls.",
+		"- Ask for clarification if the query is ambiguous or lacks necessary details.",
+>>>>>>> 17b20a72... remmove text toollcall
 	}, "\n")
 
 	return strings.Join([]string{
 		highLevelPreamble,
+		criticalRules,
 		planningPreamble,
 		actionPreamble,
 		reasoningPreamble,
 		finalAnswerPreamble,
-		toolCodePreamble,
 		userInputPreamble,
 	}, "\n\n")
 }
