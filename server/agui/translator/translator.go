@@ -35,27 +35,29 @@ type Translator interface {
 func New(ctx context.Context, threadID, runID string, opts ...Option) (Translator, error) {
 	options := newOptions(opts...)
 	return &translator{
-		threadID:                          threadID,
-		runID:                             runID,
-		lastMessageID:                     "",
-		receivingMessage:                  false,
-		seenResponseIDs:                   make(map[string]struct{}),
-		seenToolCallIDs:                   make(map[string]struct{}),
-		graphNodeLifecycleActivityEnabled: options.graphNodeLifecycleActivityEnabled,
-		graphNodeInterruptActivityEnabled: options.graphNodeInterruptActivityEnabled,
+		threadID:                               threadID,
+		runID:                                  runID,
+		lastMessageID:                          "",
+		receivingMessage:                       false,
+		seenResponseIDs:                        make(map[string]struct{}),
+		seenToolCallIDs:                        make(map[string]struct{}),
+		graphNodeLifecycleActivityEnabled:      options.graphNodeLifecycleActivityEnabled,
+		graphNodeInterruptActivityEnabled:      options.graphNodeInterruptActivityEnabled,
+		graphNodeInterruptActivityTopLevelOnly: options.graphNodeInterruptActivityTopLevelOnly,
 	}, nil
 }
 
 // translator is the default implementation of the Translator.
 type translator struct {
-	threadID                          string
-	runID                             string
-	lastMessageID                     string
-	receivingMessage                  bool
-	seenResponseIDs                   map[string]struct{}
-	seenToolCallIDs                   map[string]struct{}
-	graphNodeLifecycleActivityEnabled bool
-	graphNodeInterruptActivityEnabled bool
+	threadID                               string
+	runID                                  string
+	lastMessageID                          string
+	receivingMessage                       bool
+	seenResponseIDs                        map[string]struct{}
+	seenToolCallIDs                        map[string]struct{}
+	graphNodeLifecycleActivityEnabled      bool
+	graphNodeInterruptActivityEnabled      bool
+	graphNodeInterruptActivityTopLevelOnly bool
 }
 
 // Translate translates one trpc-agent-go event into zero or more AG-UI events.
@@ -194,6 +196,9 @@ func (t *translator) graphNodeActivityEvents(evt *agentevent.Event) []aguievents
 
 func (t *translator) graphNodeInterruptActivityEvents(evt *agentevent.Event) []aguievents.Event {
 	if evt == nil || evt.StateDelta == nil {
+		return nil
+	}
+	if t.graphNodeInterruptActivityTopLevelOnly && evt.ParentInvocationID != "" {
 		return nil
 	}
 	raw, ok := evt.StateDelta[graph.MetadataKeyPregel]
