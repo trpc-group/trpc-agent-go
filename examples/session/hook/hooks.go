@@ -247,7 +247,9 @@ func mergeConsecutiveUserMessages(events []event.Event) []event.Event {
 			result[len(result)-1].Response.Choices[0].Message.Content = mergedContent
 			// Merge tags from current event to prevent losing violation tags.
 			if evt.Tag != "" {
-				result[len(result)-1].Tag = appendTags(result[len(result)-1].Tag, evt.Tag)
+				for tag := range strings.SplitSeq(evt.Tag, event.TagDelimiter) {
+					result[len(result)-1].Tag = appendTags(result[len(result)-1].Tag, tag)
+				}
 			}
 			fmt.Printf("  [Hook] Merged consecutive user messages\n")
 		} else {
