@@ -88,14 +88,17 @@ func main() {
 
 	// Build hooks list.
 	appendHooks := []session.AppendEventHook{MarkViolationHook()}
+	getHooks := []session.GetSessionHook{FilterViolationHook()}
 	if *consecutiveHandler != "" {
-		appendHooks = append(appendHooks, ConsecutiveUserMessageHook(*consecutiveHandler))
+		// Use GetSessionHook to fix consecutive user messages at read time.
+		// This is simpler than AppendEventHook because no persistence is needed.
+		getHooks = append(getHooks, FixConsecutiveUserMessagesHook(*consecutiveHandler))
 	}
 
-	// Create session service with content filtering hooks.
+	// Create session service with hooks.
 	sessionService, err := util.NewSessionServiceByType(util.SessionType(*sessionType), util.SessionServiceConfig{
 		AppendEventHooks: appendHooks,
-		GetSessionHooks:  []session.GetSessionHook{FilterViolationHook()},
+		GetSessionHooks:  getHooks,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create session service: %v", err)
@@ -203,7 +206,7 @@ func chat(r runner.Runner, userID, sessionID, message, requestID string) error {
 // - Network issues cause the client to retry.
 // - User rapidly sends multiple messages.
 //
-// We directly manipulate the session to create this scenario for demonstration.
+// We use AppendEvent to persist the simulated message properly.
 func simulateConsecutiveUserMessages(svc session.Service, userID, sessionID string) error {
 	ctx := context.Background()
 	key := session.Key{AppName: appName, UserID: userID, SessionID: sessionID}
@@ -233,10 +236,11 @@ func simulateConsecutiveUserMessages(svc session.Service, userID, sessionID stri
 		},
 	}
 
-	// Append directly to session to simulate the disconnection scenario.
-	sess.EventMu.Lock()
-	sess.Events = append(sess.Events, *simulatedUserEvent)
-	sess.EventMu.Unlock()
+	// Use AppendEvent to persist the simulated message.
+	// This ensures the message is stored properly in the session backend.
+	if err := svc.AppendEvent(ctx, sess, simulatedUserEvent); err != nil {
+		return fmt.Errorf("append simulated event: %w", err)
+	}
 
 	fmt.Printf("Simulated user message: %s\n", simulatedUserEvent.Response.Choices[0].Message.Content)
 	fmt.Println("(No assistant response - simulating disconnection)")

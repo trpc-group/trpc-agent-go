@@ -7,7 +7,7 @@ This example shows how to use session hooks for:
 ## What it demonstrates
 - `AppendEventHook`: scans user/assistant messages, tags violations as `violation=<word>` (tags are joined by `event.TagDelimiter`, i.e. `;`).
 - `GetSessionHook`: filters violated Q&A pairs out of session history before they reach the LLM context.
-- `ConsecutiveUserMessageHook`: demonstrates handling consecutive user messages using hooks instead of the dedicated `WithOnConsecutiveUserMessage` option.
+- `FixConsecutiveUserMessagesHook`: a `GetSessionHook` that fixes consecutive user messages at read time (simpler than using `AppendEventHook` because no persistence is needed).
 - The console prints when a message is marked/filtered so you can see the hook chain in action.
 
 ## Prerequisites
@@ -36,15 +36,18 @@ go run . -consecutive=skip
 
 ## Consecutive User Message Strategies
 
-The `-consecutive` flag enables handling of consecutive user messages via `AppendEventHook`:
+The `-consecutive` flag enables handling of consecutive user messages via `GetSessionHook`:
 
 | Strategy | Behavior |
 |----------|----------|
 | `merge` | Merge current message into previous user message (also re-checks for violations) |
-| `placeholder` | Insert a placeholder assistant response before appending |
-| `skip` | Skip the current event entirely |
+| `placeholder` | Insert a placeholder assistant response in-memory between consecutive user messages (not persisted) |
+| `skip` | Keep only the last user message in consecutive sequence |
 
-This demonstrates that `AppendEventHook` can be used as an alternative to `WithOnConsecutiveUserMessage` for more complex scenarios where you need additional control over the event processing pipeline.
+This demonstrates that `GetSessionHook` is a simpler approach for fixing consecutive user messages compared to `AppendEventHook`, because:
+1. No need to access `sessionService` (no persistence needed, just fix in-memory).
+2. No recursion concerns.
+3. Fixes happen at read time, keeping storage unchanged.
 
 ### When do consecutive user messages occur?
 
@@ -70,7 +73,7 @@ Console snippets you should notice:
 - Multiple tags are concatenated with `event.TagDelimiter` (`;`) if needed in other scenarios.
 
 ## Files of interest
-- `hooks.go`: hook implementations (`MarkViolationHook`, `FilterViolationHook`, `ConsecutiveUserMessageHook`), tag parsing/append helpers.
+- `hooks.go`: hook implementations (`MarkViolationHook`, `FilterViolationHook`, `FixConsecutiveUserMessagesHook`), tag parsing/append helpers.
 - `main.go`: wires hooks into in-memory session service and runs the demo conversation.
 
 ## Sample output (abridged)
