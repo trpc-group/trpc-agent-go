@@ -41,7 +41,7 @@ The `-consecutive` flag enables handling of consecutive user messages via `GetSe
 | Strategy | Behavior |
 |----------|----------|
 | `merge` | Merge current message into previous user message (also re-checks for violations) |
-| `placeholder` | Insert a placeholder assistant response before appending (persisted via session service) |
+| `placeholder` | Insert a placeholder assistant response in-memory between consecutive user messages (not persisted) |
 | `skip` | Keep only the last user message in consecutive sequence |
 
 This demonstrates that `GetSessionHook` is a simpler approach for fixing consecutive user messages compared to `AppendEventHook`, because:

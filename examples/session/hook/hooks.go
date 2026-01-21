@@ -226,6 +226,8 @@ func fixConsecutiveUserMessages(sess *session.Session, strategy string) {
 		sess.Events = insertPlaceholdersBetweenUserMessages(sess.Events)
 	case strategySkip:
 		sess.Events = skipEarlierConsecutiveUserMessages(sess.Events)
+	default:
+		fmt.Printf("  [Hook] Warning: unknown consecutive message strategy '%s', no action taken\n", strategy)
 	}
 }
 
@@ -243,6 +245,10 @@ func mergeConsecutiveUserMessages(events []event.Event) []event.Event {
 			currContent := getEventContent(&evt)
 			mergedContent := prevContent + "\n" + currContent
 			result[len(result)-1].Response.Choices[0].Message.Content = mergedContent
+			// Merge tags from current event to prevent losing violation tags.
+			if evt.Tag != "" {
+				result[len(result)-1].Tag = appendTags(result[len(result)-1].Tag, evt.Tag)
+			}
 			fmt.Printf("  [Hook] Merged consecutive user messages\n")
 		} else {
 			result = append(result, evt)
