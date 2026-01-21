@@ -128,6 +128,13 @@ func WithGraphNodeInterruptActivityEnabled(enabled bool) Option {
 	}
 }
 
+// WithGraphNodeInterruptActivityTopLevelOnly controls whether the AG-UI server only emits graph interrupt activity events for the top-level invocation.
+func WithGraphNodeInterruptActivityTopLevelOnly(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithGraphNodeInterruptActivityTopLevelOnly(enabled))
+	}
+}
+
 // WithMessagesSnapshotPath sets the HTTP path for the messages snapshot handler, "/history" in default.
 func WithMessagesSnapshotPath(p string) Option {
 	return func(o *options) {

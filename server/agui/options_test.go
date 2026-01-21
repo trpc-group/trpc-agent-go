@@ -92,6 +92,12 @@ func TestWithGraphNodeInterruptActivityEnabled(t *testing.T) {
 	assert.True(t, ro.GraphNodeInterruptActivityEnabled)
 }
 
+func TestWithGraphNodeInterruptActivityTopLevelOnly(t *testing.T) {
+	opts := newOptions(WithGraphNodeInterruptActivityTopLevelOnly(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.GraphNodeInterruptActivityTopLevelOnly)
+}
+
 func TestWithCancelEnabled(t *testing.T) {
 	opts := newOptions(WithCancelEnabled(true))
 	assert.True(t, opts.cancelEnabled)
