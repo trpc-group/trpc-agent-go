@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -120,6 +121,17 @@ func TestFileTool_SaveFile_EmptyFileName(t *testing.T) {
 		Overwrite: true,
 	}
 	_, err := fileToolSet.saveFile(context.Background(), req)
+	assert.Error(t, err)
+}
+
+func TestFileTool_SaveFile_RejectsFileRef(t *testing.T) {
+	tempDir := t.TempDir()
+	fts := &fileToolSet{baseDir: tempDir}
+	_, err := fts.saveFile(context.Background(), &saveFileRequest{
+		Contents:  "x",
+		FileName:  "workspace://out/a.txt",
+		Overwrite: true,
+	})
 	assert.Error(t, err)
 }
 

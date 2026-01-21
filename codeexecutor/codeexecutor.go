@@ -58,9 +58,9 @@ func (r CodeExecutionResult) String() string {
 
 // File represents a file generated during code execution.
 type File struct {
-	Name     string
-	Content  string
-	MIMEType string
+	Name     string `json:"name"`
+	Content  string `json:"content"`
+	MIMEType string `json:"mime_type"`
 }
 
 // CodeBlock represents a single block of code to be executed.

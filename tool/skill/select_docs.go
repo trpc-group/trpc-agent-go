@@ -64,10 +64,9 @@ func (t *SelectDocsTool) Declaration() *tool.Declaration {
 			Description: "Select docs input",
 			Required:    []string{"skill"},
 			Properties: map[string]*tool.Schema{
-				"skill": {
-					Type:        "string",
-					Description: "Skill name",
-				},
+				"skill": skillNameSchema(
+					t.repo, "Skill name",
+				),
 				"docs": {
 					Type:        "array",
 					Description: "Doc names to select",

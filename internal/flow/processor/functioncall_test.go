@@ -2120,6 +2120,20 @@ func (d *deltaTool) StateDelta(_ []byte, _ []byte) map[string][]byte {
 	return map[string][]byte{"x": []byte("y")}
 }
 
+type errorDeltaTool struct{}
+
+func (e *errorDeltaTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "errdelta"}
+}
+
+func (e *errorDeltaTool) Call(_ context.Context, _ []byte) (any, error) {
+	return nil, errors.New("boom")
+}
+
+func (e *errorDeltaTool) StateDelta(_ []byte, _ []byte) map[string][]byte {
+	return map[string][]byte{"x": []byte("y")}
+}
+
 func TestExecuteSingleToolCallSequential_AttachesStateDelta(t *testing.T) {
 	p := NewFunctionCallResponseProcessor(false, nil)
 	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
@@ -2140,6 +2154,29 @@ func TestExecuteSingleToolCallSequential_AttachesStateDelta(t *testing.T) {
 	require.NotNil(t, ev)
 	require.NotNil(t, ev.StateDelta)
 	require.Equal(t, []byte("y"), ev.StateDelta["x"])
+}
+
+func TestExecuteSingleToolCallSequential_SkipsStateDeltaOnError(
+	t *testing.T,
+) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
+	rsp := &model.Response{Choices: []model.Choice{{}}}
+	tc := model.ToolCall{
+		ID: "c1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "errdelta",
+			Arguments: []byte(`{}`),
+		},
+	}
+	tools := map[string]tool.Tool{"errdelta": &errorDeltaTool{}}
+	ch := make(chan *event.Event, 4)
+	ev, err := p.executeSingleToolCallSequential(
+		context.Background(), inv, rsp, tools, ch, 0, tc,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Empty(t, ev.StateDelta)
 }
 
 func TestSubAgentCall(t *testing.T) {
