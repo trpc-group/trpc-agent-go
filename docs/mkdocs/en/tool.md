@@ -11,6 +11,7 @@ The Tool system is a core component of the tRPC-Agent-Go framework, enabling Age
 - **⚡ Parallel Execution**: Tool invocations support parallel execution to improve performance.
 - **🔄 MCP Protocol**: Full support for STDIO, SSE, and Streamable HTTP transports.
 - **🛠️ Configuration Support**: Provides configuration options and filter support.
+- **🧹 Arguments Repair**: Optionally enable `agent.WithToolCallArgumentsJSONRepairEnabled(true)` to best-effort repair `tool_calls` `arguments`, improving robustness for tool execution and external parsing.
 
 ### Core Concepts
 
@@ -899,6 +900,20 @@ Runtime ToolSet updates integrate seamlessly with the **tool filtering** logic d
 
 - Tools coming from `WithTools` or any ToolSet (including dynamically added ones) are treated as **user tools** and are subject to `WithToolFilter` and per‑run filters.
 - Framework tools such as `transfer_to_agent`, `knowledge_search`, and `agentic_knowledge_search` remain **never filtered** and are always available.
+
+#### Tool Call Arguments Auto Repair
+
+Some models may emit non-strict JSON arguments for `tool_calls` (for example, unquoted object keys or trailing commas), which can break tool execution or external parsing.
+
+Tool call arguments auto repair is useful when the caller needs to parse `toolCall.Function.Arguments` outside the framework, or when tools require strictly valid JSON input.
+
+When `agent.WithToolCallArgumentsJSONRepairEnabled(true)` is enabled in `runner.Run`, the framework will attempt to repair `toolCall.Function.Arguments` on a best-effort basis.
+
+```go
+ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("..."),
+    agent.WithToolCallArgumentsJSONRepairEnabled(true),
+)
+```
 
 ## Quick Start
 

@@ -275,6 +275,12 @@ eventChan, err := r.Run(
 如果最后一条事件是 user / tool 消息，或者是普通的 assistant 文本回复，
 则 `WithResume(true)` 不会做任何额外处理，行为等同于普通的 `Run` 调用。
 
+#### Tool Call 参数自动修复
+
+部分模型在生成 `tool_calls` 时，可能产出非严格 JSON 的参数（例如对象 key 未加引号、尾逗号等），从而导致工具执行或外部解析失败。
+
+在 `runner.Run` 中启用 `agent.WithToolCallArgumentsJSONRepairEnabled(true)` 后，框架会对 `toolCall.Function.Arguments` 做一次尽力修复，详细使用方法可参照 [ToolCall参数自动修复](./runner.md#tool-call-参数自动修复)。
+
 #### 传入对话历史（auto-seed + 复用 Session）
 
 如果上游服务已经维护了会话历史，并希望让 Agent 看见这些上下文，可以直接传入整段

@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -293,7 +294,10 @@ func (f *Flow) processStreamingResponses(
 		if customResp != nil {
 			response = customResp
 		}
-
+		// Repair tool call arguments in place when needed.
+		if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+			jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, response)
+		}
 		// 4. Create and send LLM response using the clean constructor.
 		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
 		agent.EmitEvent(ctx, invocation, eventChan, llmResponseEvent)
@@ -311,7 +315,6 @@ func (f *Flow) processStreamingResponses(
 		}
 
 		itelemetry.TraceChat(span, invocation, llmRequest, response, llmResponseEvent.ID, tracker.FirstTokenTimeDuration())
-
 	}
 
 	return lastEvent, nil

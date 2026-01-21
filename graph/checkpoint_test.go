@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 func TestNewCheckpointConfig_PanicsOnEmptyLineage(t *testing.T) {
@@ -743,6 +744,35 @@ func TestRunTool_CallbackShortCircuitAndErrors(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestRunTool_RepairsToolCallArgumentsWhenEnabled verifies tool call arguments are repaired when enabled.
+func TestRunTool_RepairsToolCallArgumentsWhenEnabled(t *testing.T) {
+	repairEnabled := true
+	inv := agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+		ToolCallArgumentsJSONRepairEnabled: &repairEnabled,
+	}))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	tl := function.NewFunctionTool[map[string]any, map[string]any](
+		func(_ context.Context, input map[string]any) (map[string]any, error) {
+			return input, nil
+		},
+		function.WithName("echo"),
+		function.WithDescription("Echo tool."),
+	)
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "echo",
+			Arguments: []byte("{a:2}"),
+		},
+	}
+
+	_, result, _, err := runTool(ctx, toolCall, nil, tl)
+	require.NoError(t, err)
+	args, ok := result.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, float64(2), args["a"])
+}
+
 // AddAgentNode builder coverage
 func TestStateGraph_AddAgentNode_Build(t *testing.T) {
 	g, err := NewStateGraph(NewStateSchema()).
@@ -1268,6 +1298,49 @@ func TestProcessModelResponse_EventAndErrors(t *testing.T) {
 		Span:         span,
 	})
 	require.Error(t, err)
+}
+
+// TestProcessModelResponse_RepairsToolCallArgumentsWhenEnabled verifies tool call arguments are repaired when enabled.
+func TestProcessModelResponse_RepairsToolCallArgumentsWhenEnabled(t *testing.T) {
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	ctx, span := tracer.Start(context.Background(), "s")
+	defer span.End()
+
+	repairEnabled := true
+	inv := agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+		ToolCallArgumentsJSONRepairEnabled: &repairEnabled,
+	}))
+	ctx = agent.NewInvocationContext(ctx, inv)
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   "call-1",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "tool",
+								Arguments: []byte("{a:2}"),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, _, err := processModelResponse(ctx, modelResponseConfig{
+		Response:     rsp,
+		EventChan:    nil,
+		InvocationID: "inv",
+		SessionID:    "sid",
+		LLMModel:     &dummyModel{},
+		Request:      &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}},
+		Span:         span,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "{\"a\":2}", string(rsp.Choices[0].Message.ToolCalls[0].Function.Arguments))
 }
 
 func TestProcessModelResponse_DoneWithContentEmitsEvent(t *testing.T) {
