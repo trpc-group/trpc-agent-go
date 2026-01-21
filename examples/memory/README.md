@@ -165,12 +165,12 @@ Memory provides 6 tools with different availability in each mode:
 | `PG_PORT`                 | PostgreSQL port              | `5432`                      |
 | `PG_USER`                 | PostgreSQL user              | `postgres`                  |
 | `PG_PASSWORD`             | PostgreSQL password          | (empty)                     |
-| `PG_DATABASE`             | PostgreSQL database          | `trpc_agent_go`    |
+| `PG_DATABASE`             | PostgreSQL database          | `trpc-agent-go-pgmemory`    |
 | `PGVECTOR_HOST`           | pgvector PostgreSQL host     | `localhost`                 |
 | `PGVECTOR_PORT`           | pgvector PostgreSQL port     | `5432`                      |
 | `PGVECTOR_USER`           | pgvector PostgreSQL user     | `postgres`                  |
 | `PGVECTOR_PASSWORD`       | pgvector PostgreSQL password | (empty)                     |
-| `PGVECTOR_DATABASE`       | pgvector PostgreSQL database | `trpc_agent_go`    |
+| `PGVECTOR_DATABASE`       | pgvector PostgreSQL database | `trpc-agent-go-pgmemory`    |
 | `PGVECTOR_EMBEDDER_MODEL` | pgvector embedder model      | `text-embedding-3-small`    |
 | `MYSQL_HOST`              | MySQL host                   | `localhost`                 |
 | `MYSQL_PORT`              | MySQL port                   | `3306`                      |
@@ -235,7 +235,7 @@ export PG_HOST=localhost
 export PG_PORT=5432
 export PG_USER=postgres
 export PG_PASSWORD=""
-export PG_DATABASE=trpc_agent_go
+export PG_DATABASE=trpc-agent-go-pgmemory
 go run main.go -memory postgres
 
 # pgvector memory service (using environment variables)
@@ -243,7 +243,7 @@ export PGVECTOR_HOST=localhost
 export PGVECTOR_PORT=5432
 export PGVECTOR_USER=postgres
 export PGVECTOR_PASSWORD=""
-export PGVECTOR_DATABASE=trpc_agent_go
+export PGVECTOR_DATABASE=trpc-agent-go-pgmemory
 export PGVECTOR_EMBEDDER_MODEL=text-embedding-3-small
 go run main.go -memory pgvector
 ```

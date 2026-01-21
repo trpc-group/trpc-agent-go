@@ -176,7 +176,7 @@ func newRedisMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 //   - PG_PORT: PostgreSQL port (default: 5432)
 //   - PG_USER: PostgreSQL user (default: postgres)
 //   - PG_PASSWORD: PostgreSQL password (default: empty)
-//   - PG_DATABASE: PostgreSQL database (default: trpc_agent_go)
+//   - PG_DATABASE: PostgreSQL database (default: trpc-agent-go-pgmemory)
 func newPostgresMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	host := GetEnvOrDefault("PG_HOST", "localhost")
 	portStr := GetEnvOrDefault("PG_PORT", "5432")
@@ -188,7 +188,7 @@ func newPostgresMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	}
 	user := GetEnvOrDefault("PG_USER", "postgres")
 	password := GetEnvOrDefault("PG_PASSWORD", "")
-	database := GetEnvOrDefault("PG_DATABASE", "trpc_agent_go")
+	database := GetEnvOrDefault("PG_DATABASE", "trpc-agent-go-pgmemory")
 
 	opts := []memorypostgres.ServiceOpt{
 		memorypostgres.WithHost(host),
@@ -223,7 +223,7 @@ func newPostgresMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 //   - PGVECTOR_PORT: PostgreSQL port (default: 5432)
 //   - PGVECTOR_USER: PostgreSQL user (default: postgres)
 //   - PGVECTOR_PASSWORD: PostgreSQL password (default: empty)
-//   - PGVECTOR_DATABASE: PostgreSQL database (default: trpc_agent_go)
+//   - PGVECTOR_DATABASE: PostgreSQL database (default: trpc-agent-go-pgmemory)
 //   - PGVECTOR_EMBEDDER_MODEL: Embedder model name (default: text-embedding-3-small)
 func newPGVectorMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	host := GetEnvOrDefault("PGVECTOR_HOST", "localhost")
@@ -236,7 +236,7 @@ func newPGVectorMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	}
 	user := GetEnvOrDefault("PGVECTOR_USER", "postgres")
 	password := GetEnvOrDefault("PGVECTOR_PASSWORD", "")
-	database := GetEnvOrDefault("PGVECTOR_DATABASE", "trpc_agent_go")
+	database := GetEnvOrDefault("PGVECTOR_DATABASE", "trpc-agent-go-pgmemory")
 	embedderModel := GetEnvOrDefault("PGVECTOR_EMBEDDER_MODEL", "text-embedding-3-small")
 
 	// Create embedder - for simplicity, we'll use OpenAI embedder
@@ -363,13 +363,13 @@ func PrintMemoryInfo(memoryType MemoryType, softDelete bool) {
 	case MemoryPostgres:
 		host := GetEnvOrDefault("PG_HOST", "localhost")
 		port := GetEnvOrDefault("PG_PORT", "5432")
-		database := GetEnvOrDefault("PG_DATABASE", "trpc_agent_go")
+		database := GetEnvOrDefault("PG_DATABASE", "trpc-agent-go-pgmemory")
 		fmt.Printf("PostgreSQL: %s:%s/%s\n", host, port, database)
 		fmt.Printf("Soft delete: %t\n", softDelete)
 	case MemoryPGVector:
 		host := GetEnvOrDefault("PGVECTOR_HOST", "localhost")
 		port := GetEnvOrDefault("PGVECTOR_PORT", "5432")
-		database := GetEnvOrDefault("PGVECTOR_DATABASE", "trpc_agent_go")
+		database := GetEnvOrDefault("PGVECTOR_DATABASE", "trpc-agent-go-pgmemory")
 		embedderModel := GetEnvOrDefault("PGVECTOR_EMBEDDER_MODEL", "text-embedding-3-small")
 		fmt.Printf("pgvector: %s:%s/%s\n", host, port, database)
 		fmt.Printf("Embedder model: %s\n", embedderModel)

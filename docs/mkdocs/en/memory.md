@@ -720,7 +720,7 @@ func createMemoryService(memType string, softDelete bool) (
             memorypostgres.WithPort(getEnvInt("PG_PORT", 5432)),
             memorypostgres.WithUser(getEnv("PG_USER", "postgres")),
             memorypostgres.WithPassword(getEnv("PG_PASSWORD", "")),
-            memorypostgres.WithDatabase(getEnv("PG_DATABASE", "postgres")),
+            memorypostgres.WithDatabase(getEnv("PG_DATABASE", "trpc-agent-go-pgmemory")),
             memorypostgres.WithSoftDelete(softDelete),
             memorypostgres.WithToolEnabled(memory.DeleteToolName, false),
         )
@@ -940,7 +940,7 @@ pgvectorService, err := memorypgvector.NewService(
 - `WithPostgresInstance(name)`: Use pre-registered PostgreSQL instance
 - `WithEmbedder(embedder)`: Text embedder for vector generation (required)
 - `WithSoftDelete(enabled)`: Enable soft delete (default false)
-- `WithTableName(name)`: Custom table name (default "vector_memories")
+- `WithTableName(name)`: Custom table name (default "memories")
 - `WithSchema(schema)`: Specify database schema (default is public)
 - `WithIndexDimension(dim)`: Vector dimension (default 1536)
 - `WithMaxResults(limit)`: Max search results (default 10)
@@ -956,7 +956,7 @@ pgvectorService, err := memorypgvector.NewService(
 **Table schema** (auto-created):
 
 ```sql
-CREATE TABLE vector_memories (
+CREATE TABLE memories (
     memory_id TEXT PRIMARY KEY,
     app_name TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -969,10 +969,10 @@ CREATE TABLE vector_memories (
 );
 
 -- Indexes for performance
-CREATE INDEX ON vector_memories(app_name, user_id);
-CREATE INDEX ON vector_memories(updated_at DESC);
-CREATE INDEX ON vector_memories(deleted_at);
-CREATE INDEX ON vector_memories USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON memories(app_name, user_id);
+CREATE INDEX ON memories(updated_at DESC);
+CREATE INDEX ON memories(deleted_at);
+CREATE INDEX ON memories USING hnsw (embedding vector_cosine_ops);
 ```
 
 **Resource cleanup**: Call `Close()` method to release database connection:

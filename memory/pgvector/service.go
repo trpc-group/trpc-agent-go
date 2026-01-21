@@ -31,7 +31,7 @@ var _ memory.Service = (*Service)(nil)
 
 // Service is the pgvector memory service.
 // Storage structure.
-// Table: vector_memories (configurable).
+// Table: memories (configurable).
 // Columns: memory_id, app_name, user_id, memory_content, topics, embedding.
 // created_at, updated_at, deleted_at.
 // Primary key: memory_id.

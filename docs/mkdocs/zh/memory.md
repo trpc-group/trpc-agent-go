@@ -1031,7 +1031,7 @@ pgvectorService, err := memorypgvector.NewService(
 - `WithPostgresInstance(name)`: 使用预注册的 PostgreSQL 实例
 - `WithEmbedder(embedder)`: 文本嵌入器，用于生成向量（必需）
 - `WithSoftDelete(enabled)`: 启用软删除（默认 false）
-- `WithTableName(name)`: 自定义表名（默认 "vector_memories"）
+- `WithTableName(name)`: 自定义表名（默认 "memories"）
 - `WithSchema(schema)`: 指定数据库 schema（默认为 public）
 - `WithIndexDimension(dim)`: 向量维度（默认 1536）
 - `WithMaxResults(limit)`: 最大搜索结果数（默认 10）
@@ -1047,7 +1047,7 @@ pgvectorService, err := memorypgvector.NewService(
 **表结构**（自动创建）：
 
 ```sql
-CREATE TABLE vector_memories (
+CREATE TABLE memories (
     memory_id TEXT PRIMARY KEY,
     app_name TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -1060,10 +1060,10 @@ CREATE TABLE vector_memories (
 );
 
 -- 性能索引
-CREATE INDEX ON vector_memories(app_name, user_id);
-CREATE INDEX ON vector_memories(updated_at DESC);
-CREATE INDEX ON vector_memories(deleted_at);
-CREATE INDEX ON vector_memories USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON memories(app_name, user_id);
+CREATE INDEX ON memories(updated_at DESC);
+CREATE INDEX ON memories(deleted_at);
+CREATE INDEX ON memories USING hnsw (embedding vector_cosine_ops);
 ```
 
 **资源清理**：使用完毕后需调用 `Close()` 方法释放数据库连接：

@@ -29,7 +29,7 @@ const (
 
 // Default table and index settings.
 const (
-	defaultTableName      = "vector_memories"
+	defaultTableName      = "memories"
 	defaultIndexDimension = 1536
 	defaultMaxResults     = 10
 )
@@ -213,7 +213,7 @@ func WithPostgresInstance(instanceName string) ServiceOpt {
 }
 
 // WithTableName sets the table name for storing memories.
-// Default is "vector_memories".
+// Default is "memories".
 //
 // Panics if the table name is invalid.
 func WithTableName(tableName string) ServiceOpt {
