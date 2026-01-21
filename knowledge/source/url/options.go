@@ -103,7 +103,7 @@ func WithTransformers(transformers ...transform.Transformer) Option {
 //
 // Example:
 //
-//	source := url.New([]string{"https://example.com/api/data"}, url.WithFileReaderType(source.FileTypeJSON))
+//	source := url.New([]string{"https://example.com/api/data"}, url.WithFileReaderType(source.FileReaderTypeJSON))
 func WithFileReaderType(fileType source.FileReaderType) Option {
 	return func(s *Source) {
 		s.fileReaderType = fileType

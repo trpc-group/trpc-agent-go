@@ -97,7 +97,7 @@ func WithTransformers(transformers ...transform.Transformer) Option {
 //
 // Example:
 //
-//	source := file.New([]string{"data.txt"}, file.WithFileReaderType(source.FileTypeJSON))
+//	source := file.New([]string{"data.txt"}, file.WithFileReaderType(source.FileReaderTypeJSON))
 func WithFileReaderType(fileType source.FileReaderType) Option {
 	return func(s *Source) {
 		s.fileReaderType = fileType

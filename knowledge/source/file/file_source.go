@@ -119,12 +119,7 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 		return nil, fmt.Errorf("not a regular file: %s", filePath)
 	}
 	// Determine file type and get appropriate reader.
-	var fileType string
-	if s.fileReaderType != "" {
-		fileType = string(s.fileReaderType)
-	} else {
-		fileType = isource.GetFileType(filePath)
-	}
+	fileType := isource.ResolveFileType(string(s.fileReaderType), isource.GetFileType(filePath))
 	reader, exists := s.readers[fileType]
 	if !exists {
 		return nil, fmt.Errorf("no reader available for file type: %s", fileType)

@@ -99,7 +99,7 @@ func WithTransformers(transformers ...transform.Transformer) Option {
 //
 // Example:
 //
-//	source := auto.New([]string{"# Title\nContent"}, auto.WithFileReaderType(source.FileTypeMarkdown))
+//	source := auto.New([]string{"# Title\nContent"}, auto.WithFileReaderType(source.FileReaderTypeMarkdown))
 func WithFileReaderType(fileType source.FileReaderType) Option {
 	return func(s *Source) {
 		s.fileReaderType = fileType

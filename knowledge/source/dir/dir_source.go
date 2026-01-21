@@ -95,10 +95,7 @@ func (s *Source) initializeReaders() {
 
 // getFileType determines the file type based on the file extension.
 func (s *Source) getFileType(filePath string) string {
-	if s.fileReaderType != "" {
-		return string(s.fileReaderType)
-	}
-	return isource.GetFileType(filePath)
+	return isource.ResolveFileType(string(s.fileReaderType), isource.GetFileType(filePath))
 }
 
 // ReadDocuments reads all files in the directories and returns documents using appropriate readers.

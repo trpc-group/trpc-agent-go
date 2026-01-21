@@ -352,3 +352,24 @@ func TestBuildReaderOptions(t *testing.T) {
 		require.Len(t, opts, 1)
 	})
 }
+
+func TestResolveFileType(t *testing.T) {
+	tests := []struct {
+		name         string
+		overrideType string
+		detectedType string
+		expected     string
+	}{
+		{"override takes precedence", "json", "text", "json"},
+		{"empty override uses detected", "", "markdown", "markdown"},
+		{"both empty returns empty", "", "", ""},
+		{"override with empty detected", "csv", "", "csv"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ResolveFileType(tt.overrideType, tt.detectedType)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}

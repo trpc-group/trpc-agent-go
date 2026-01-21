@@ -87,17 +87,14 @@ func (s *Source) initializeReaders() {
 		opts = append(opts, reader.WithTransformers(s.transformers...))
 	}
 
+	// Default to text reader
+	s.textReader = text.New(opts...)
+
+	// Override with specific reader if fileReaderType is set
 	if s.fileReaderType != "" {
-		// Get all readers first
-		allReaders := reader.GetAllReaders(opts...)
-		// Try to get the specific reader for the override file type
-		if r, exists := allReaders[string(s.fileReaderType)]; exists {
+		if r, exists := reader.GetAllReaders(opts...)[string(s.fileReaderType)]; exists {
 			s.textReader = r
-		} else {
-			s.textReader = text.New(opts...)
 		}
-	} else {
-		s.textReader = text.New(opts...)
 	}
 }
 

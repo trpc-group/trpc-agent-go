@@ -11,7 +11,6 @@
 package source
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -173,7 +172,7 @@ func GetFileTypeFromContentType(contentType, fileName string) string {
 	case ".docx", ".doc":
 		return "docx"
 	default:
-		fmt.Printf("Warning: unknown file extension '%s' for file '%s', treating as text\n", ext, fileName)
+		// Unknown extension, fallback to text reader
 		return "text"
 	}
 }
@@ -182,4 +181,14 @@ func GetFileTypeFromContentType(contentType, fileName string) string {
 // Deprecated: Use GetReaders(WithChunkSize(size), WithChunkOverlap(overlap)) instead.
 func GetReadersWithChunkConfig(chunkSize, overlap int) map[string]reader.Reader {
 	return GetReaders(WithChunkSize(chunkSize), WithChunkOverlap(overlap))
+}
+
+// ResolveFileType returns the file type to use, considering any override.
+// If overrideType is non-empty, it returns the override; otherwise returns detectedType.
+// This provides a unified way to handle fileReaderType override logic across all sources.
+func ResolveFileType(overrideType, detectedType string) string {
+	if overrideType != "" {
+		return overrideType
+	}
+	return detectedType
 }

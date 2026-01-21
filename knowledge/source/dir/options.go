@@ -111,7 +111,7 @@ func WithTransformers(transformers ...transform.Transformer) Option {
 //
 // Example:
 //
-//	source := dir.New([]string{"./data"}, dir.WithFileReaderType(source.FileTypeJSON))
+//	source := dir.New([]string{"./data"}, dir.WithFileReaderType(source.FileReaderTypeJSON))
 func WithFileReaderType(fileType source.FileReaderType) Option {
 	return func(s *Source) {
 		s.fileReaderType = fileType
