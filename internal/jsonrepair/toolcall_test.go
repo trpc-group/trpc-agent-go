@@ -73,6 +73,30 @@ func TestRepairToolCallArguments_ReturnsOriginalOnRepairError(t *testing.T) {
 	})
 }
 
+// TestRepairToolCallArguments_ReturnsOriginalWhenRepairedInvalidJSON verifies invalid repair output does not replace arguments.
+func TestRepairToolCallArguments_ReturnsOriginalWhenRepairedInvalidJSON(t *testing.T) {
+	prev := log.ErrorfContext
+	var calls int
+	var gotFormat string
+	var gotArgs []any
+	log.ErrorfContext = func(_ context.Context, format string, args ...any) {
+		calls++
+		gotFormat = format
+		gotArgs = args
+	}
+	t.Cleanup(func() { log.ErrorfContext = prev })
+
+	ctx := context.Background()
+	arguments := []byte("callback(")
+
+	repaired := RepairToolCallArguments(ctx, "test_tool", arguments)
+	require.Equal(t, arguments, repaired)
+	require.Equal(t, 1, calls)
+	require.Equal(t, "Tool call arguments JSON repair produced invalid JSON for %s", gotFormat)
+	require.Len(t, gotArgs, 1)
+	require.Equal(t, "test_tool", gotArgs[0])
+}
+
 // TestRepairToolCallArgumentsInPlace_RepairsArguments verifies that tool call arguments are repaired in place.
 func TestRepairToolCallArgumentsInPlace_RepairsArguments(t *testing.T) {
 	ctx := context.Background()
