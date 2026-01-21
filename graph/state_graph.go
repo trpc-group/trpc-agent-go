@@ -3096,8 +3096,10 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		if errors.As(err, &interruptErr) {
 			// Do not emit error payload for interrupt so clients treat it as pause.
 			eventErr = nil
-			// Set result to interrupt value.
-			result = interruptErr.Value
+			if result == nil {
+				// Set result to interrupt value when no result is provided.
+				result = interruptErr.Value
+			}
 		}
 	}
 	// Emit tool execution complete event.
