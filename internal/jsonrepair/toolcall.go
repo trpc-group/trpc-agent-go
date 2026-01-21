@@ -36,7 +36,7 @@ func RepairToolCallArguments(ctx context.Context, toolName string, arguments []b
 	}
 	repaired, err := Repair(arguments)
 	if err != nil {
-		log.WarnfContext(
+		log.ErrorfContext(
 			ctx,
 			"Tool call arguments JSON repair failed for %s: %v",
 			toolName,
@@ -44,16 +44,30 @@ func RepairToolCallArguments(ctx context.Context, toolName string, arguments []b
 		)
 		return arguments
 	}
-	return chooseToolCallArguments(arguments, repaired)
+	chosen, usedRepair := chooseToolCallArguments(arguments, repaired)
+	if !usedRepair {
+		log.ErrorfContext(
+			ctx,
+			"Tool call arguments JSON repair produced invalid JSON for %s",
+			toolName,
+		)
+		return arguments
+	}
+	log.InfofContext(
+		ctx,
+		"Tool call arguments JSON repaired for %s",
+		toolName,
+	)
+	return chosen
 }
 
 // chooseToolCallArguments prefers repaired when it is a non-empty JSON payload.
-func chooseToolCallArguments(arguments []byte, repaired []byte) []byte {
+func chooseToolCallArguments(arguments []byte, repaired []byte) ([]byte, bool) {
 	repairedTrimmed := bytes.TrimSpace(repaired)
 	if len(repairedTrimmed) == 0 || !json.Valid(repairedTrimmed) {
-		return arguments
+		return arguments, false
 	}
-	return repaired
+	return repaired, true
 }
 
 // RepairToolCallArgumentsInPlace repairs the tool call arguments in place when needed.

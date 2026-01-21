@@ -19,12 +19,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-// withNoopWarnfContext temporarily disables warning logs during the callback.
-func withNoopWarnfContext(t *testing.T, fn func()) {
+// withNoopErrorfContext temporarily disables error logs during the callback.
+func withNoopErrorfContext(t *testing.T, fn func()) {
 	t.Helper()
-	prev := log.WarnfContext
-	log.WarnfContext = func(_ context.Context, _ string, _ ...any) {}
-	t.Cleanup(func() { log.WarnfContext = prev })
+	prev := log.ErrorfContext
+	log.ErrorfContext = func(_ context.Context, _ string, _ ...any) {}
+	t.Cleanup(func() { log.ErrorfContext = prev })
 	fn()
 }
 
@@ -64,13 +64,37 @@ func TestRepairToolCallArguments_RepairsInvalidJSON(t *testing.T) {
 
 // TestRepairToolCallArguments_ReturnsOriginalOnRepairError verifies that arguments are returned unchanged when repair fails.
 func TestRepairToolCallArguments_ReturnsOriginalOnRepairError(t *testing.T) {
-	withNoopWarnfContext(t, func() {
+	withNoopErrorfContext(t, func() {
 		ctx := context.Background()
 		arguments := []byte("callback {}")
 
 		repaired := RepairToolCallArguments(ctx, "test_tool", arguments)
 		require.Equal(t, arguments, repaired)
 	})
+}
+
+// TestRepairToolCallArguments_ReturnsOriginalWhenRepairedInvalidJSON verifies invalid repair output does not replace arguments.
+func TestRepairToolCallArguments_ReturnsOriginalWhenRepairedInvalidJSON(t *testing.T) {
+	prev := log.ErrorfContext
+	var calls int
+	var gotFormat string
+	var gotArgs []any
+	log.ErrorfContext = func(_ context.Context, format string, args ...any) {
+		calls++
+		gotFormat = format
+		gotArgs = args
+	}
+	t.Cleanup(func() { log.ErrorfContext = prev })
+
+	ctx := context.Background()
+	arguments := []byte("callback(")
+
+	repaired := RepairToolCallArguments(ctx, "test_tool", arguments)
+	require.Equal(t, arguments, repaired)
+	require.Equal(t, 1, calls)
+	require.Equal(t, "Tool call arguments JSON repair produced invalid JSON for %s", gotFormat)
+	require.Len(t, gotArgs, 1)
+	require.Equal(t, "test_tool", gotArgs[0])
 }
 
 // TestRepairToolCallArgumentsInPlace_RepairsArguments verifies that tool call arguments are repaired in place.
@@ -181,8 +205,9 @@ func TestRepairResponseToolCallArgumentsInPlace_RepairsAllChoices(t *testing.T) 
 func TestChooseToolCallArguments_ReturnsOriginalForInvalidOutput(t *testing.T) {
 	original := []byte("{a:2}")
 
-	repaired := chooseToolCallArguments(original, []byte("not json"))
-	require.Equal(t, original, repaired)
+	chosen, usedRepair := chooseToolCallArguments(original, []byte("not json"))
+	require.Equal(t, original, chosen)
+	require.False(t, usedRepair)
 }
 
 // TestRepairToolCallArgumentsInPlace_NoPanicOnNil verifies nil tool calls are ignored.
