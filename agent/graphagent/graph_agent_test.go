@@ -111,6 +111,31 @@ func TestGraphAgentWithOptions(t *testing.T) {
 	}
 }
 
+func TestGraphAgentRun_NilInvocation(t *testing.T) {
+	const nodeNoop = "noop"
+
+	stateGraph := graph.NewStateGraph(graph.NewStateSchema())
+	stateGraph.AddNode(
+		nodeNoop,
+		func(context.Context, graph.State) (any, error) {
+			return nil, nil
+		},
+	)
+	stateGraph.SetEntryPoint(nodeNoop)
+	stateGraph.SetFinishPoint(nodeNoop)
+
+	g, err := stateGraph.Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New("test-agent", g)
+	require.NoError(t, err)
+
+	eventCh, err := graphAgent.Run(context.Background(), nil)
+	require.Error(t, err)
+	require.Nil(t, eventCh)
+	require.Equal(t, invocationNilErrMsg, err.Error())
+}
+
 func TestGraphAgent_WithMaxConcurrency(t *testing.T) {
 	const (
 		nodeRoot       = "root"
