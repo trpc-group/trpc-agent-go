@@ -567,7 +567,7 @@ func (r *runner) recordUserMessage(ctx context.Context, key session.Key, message
 		events = append(events, aguievents.NewTextMessageContentEvent(messageID, message.Content))
 	}
 	events = append(events, aguievents.NewTextMessageEndEvent(messageID))
-	for len(message.ContentParts) > 0 {
+	if len(message.ContentParts) > 0 {
 		events = append(events, aguievents.NewCustomEvent(fmt.Sprintf("message.content.part-%s", messageID), aguievents.WithValue(message.ContentParts)))
 	}
 	for _, evt := range events {
