@@ -180,6 +180,112 @@ sources := []source.Source{
 }
 ```
 
+## Content Transformer
+
+> **Example Code**: [examples/knowledge/features/transform](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/transform)
+
+Transformer is used to preprocess and postprocess content before and after document chunking. This is particularly useful for cleaning text extracted from PDFs, web pages, and other sources, removing excess whitespace, duplicate characters, and other noise.
+
+### Processing Flow
+
+```
+Document → Preprocess → Processed Document → Chunking → Chunks → Postprocess → Final Chunks
+```
+
+### Built-in Transformers
+
+#### CharFilter - Character Filter
+
+Removes specified characters or strings:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+
+// Remove newlines, tabs, and carriage returns
+filter := transform.NewCharFilter("\n", "\t", "\r")
+```
+
+#### CharDedup - Character Deduplicator
+
+Merges consecutive duplicate characters or strings into a single instance:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+
+// Merge multiple consecutive spaces into one, merge multiple newlines into one
+dedup := transform.NewCharDedup(" ", "\n")
+
+// Example:
+// Input:  "hello     world\n\n\nfoo"
+// Output: "hello world\nfoo"
+```
+
+### Usage
+
+Transformers are passed to various document sources via the `WithTransformers` option:
+
+```go
+import (
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+    dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
+    urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
+    autosource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+)
+
+// Create transformers
+filter := transform.NewCharFilter("\t")           // Remove tabs
+dedup := transform.NewCharDedup(" ", "\n")        // Merge consecutive spaces and newlines
+
+// File source with transformers
+fileSrc := filesource.New(
+    []string{"./data/document.pdf"},
+    filesource.WithTransformers(filter, dedup),
+)
+
+// Directory source with transformers
+dirSrc := dirsource.New(
+    []string{"./docs"},
+    dirsource.WithTransformers(filter, dedup),
+)
+
+// URL source with transformers
+urlSrc := urlsource.New(
+    []string{"https://example.com/article"},
+    urlsource.WithTransformers(filter, dedup),
+)
+
+// Auto source with transformers
+autoSrc := autosource.New(
+    []string{"./mixed-content"},
+    autosource.WithTransformers(filter, dedup),
+)
+```
+
+### Combining Multiple Transformers
+
+Multiple transformers are executed in sequence:
+
+```go
+// First remove tabs, then merge consecutive spaces
+filter := transform.NewCharFilter("\t")
+dedup := transform.NewCharDedup(" ")
+
+src := filesource.New(
+    []string{"./data/messy.txt"},
+    filesource.WithTransformers(filter, dedup),  // Executed in order
+)
+```
+
+### Typical Use Cases
+
+| Scenario | Recommended Configuration |
+|----------|---------------------------|
+| PDF text cleanup | `CharDedup(" ", "\n")` - Merge excess spaces and newlines from PDF extraction |
+| Web content processing | `CharFilter("\t")` + `CharDedup(" ")` - Remove tabs and merge spaces |
+| Code documentation processing | `CharDedup("\n")` - Merge excess blank lines, preserve code indentation |
+| General text cleanup | `CharFilter("\r")` + `CharDedup(" ", "\n")` - Remove carriage returns and merge whitespace |
+
 ## PDF File Support
 
 Since the PDF reader depends on third-party libraries, to avoid introducing unnecessary dependencies in the main module, the PDF reader uses a separate `go.mod`.
