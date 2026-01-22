@@ -743,6 +743,22 @@ Model (LLM) messages, you can enable `agent.WithStreamMode(...)` (see
 "Event Monitoring"). When `agent.StreamModeMessages` is selected, graph LLM
 nodes enable final model responses automatically for that run.
 
+Tip: parsing JSON / structured output from streaming
+
+- Streaming chunks (`choice.Delta.Content`) are incremental and are not
+  guaranteed to form valid JSON until the end of the model call.
+- If you need to parse JSON (or any structured text), do not `json.Unmarshal`
+  per chunk. Buffer and parse once you have the full string.
+
+Common approaches:
+
+- **Inside the graph**: parse in a downstream node from
+  `node_responses[nodeID]` (or `last_response` in strictly serial flows),
+  because those values are only set after the node finishes.
+- **Outside the graph** (event consumer): accumulate `Delta.Content` and parse
+  when you see a non-partial response that carries `choice.Message.Content`
+  (or when the workflow finishes).
+
 #### Three input paradigms
 
 - OneShot (`StateKeyOneShotMessages`):
@@ -1249,6 +1265,9 @@ sg.AddMultiConditionalEdges(
 
 Notes:
 
+- Like other routing, targets become runnable in the **next** BSP superstep
+  (after the router node finishes). This can affect latency; see “BSP superstep
+  barrier” below.
 - Results are de‑duplicated before triggering; repeated keys do not trigger a
   target more than once in the same step.
 - Resolution precedence for each branch key mirrors single‑conditional routing:
@@ -2347,6 +2366,54 @@ after every `from` node has reported completion. The barrier resets after it
 triggers, so the same join can be reached again in loops.
 
 Reference example: `examples/graph/join_edge`.
+
+#### BSP superstep barrier (why downstream waits)
+
+Graph executes workflows in **BSP supersteps** (Planning → Execution → Update).
+In each superstep:
+
+- Planning computes the runnable frontier from channels updated in the previous
+  superstep.
+- Execution runs all runnable nodes concurrently (up to `WithMaxConcurrency`).
+- Update merges state updates and applies routing signals (channel writes).
+
+The next superstep starts only after **all** nodes in the current superstep
+finish. Because routing signals are applied in Update, a node triggered by an
+upstream completion always becomes runnable in the **next** superstep.
+
+This can look like “depth‑K nodes wait for depth‑(K‑1) nodes”, even across
+independent branches.
+
+Example graph:
+
+```mermaid
+flowchart LR
+    S[split] --> B[branch_b]
+    B --> C[branch_b_next]
+    S --> E[branch_e]
+    S --> F[branch_f]
+```
+
+Runtime behavior:
+
+- Superstep 0: `split`
+- Superstep 1: `branch_b`, `branch_e`, `branch_f` run in parallel
+- Superstep 2: `branch_b_next` runs (even though it only depends on `branch_b`)
+
+Practical tips:
+
+- **Reduce supersteps**: if `X → Y` is always sequential, consider collapsing it
+  into one node so you don’t pay an extra superstep.
+- **Avoid extra “prepare” nodes** when you only need to enrich a single node’s
+  input: move the preparation into the node, or use `graph.WithPreNodeCallback`
+  on that node.
+- **Use stable per-branch outputs** in parallel flows: avoid reading a specific
+  branch from `last_response`; use `node_responses[nodeID]` (or dedicated state
+  keys) so fan-in logic does not depend on scheduling.
+- **Choose the right fan-in**:
+  - Use `AddEdge(from, to)` when `to` should react to incremental updates (it
+    may run multiple times).
+  - Use `AddJoinEdge([...], to)` when you need “wait for all, then run once”.
 
 Tip: setting entry and finish points implicitly connects to virtual Start/End nodes:
 

@@ -735,6 +735,20 @@ Model，LLM）消息（例如用于用户界面（User Interface，UI）的流�
 `agent.WithStreamMode(...)` 作为统一开关（见下文“事件监控”）。当选择
 `agent.StreamModeMessages` 时，Runner 会为本次运行自动开启 Graph 的最终响应事件输出。
 
+小贴士：解析 JSON/结构化文本（流式）
+
+- 流式分片（`choice.Delta.Content`）是增量输出，在模型调用结束前不保证能组成合法
+  JSON。
+- 如果你需要解析 JSON（或其他结构化文本），请不要对每个分片直接
+  `json.Unmarshal`。推荐先缓存完整字符串，再统一解析。
+
+常见做法：
+
+- **图内解析**：在下游节点从 `node_responses[nodeID]`（或严格串行流程里的
+  `last_response`）读取完整输出后再解析，因为这些值只会在节点完成后才写入状态。
+- **图外解析**（事件消费端）：累计 `Delta.Content`，在看到非 partial 的最终消息
+  （`choice.Message.Content`）或流程结束后再解析。
+
 #### 三种输入范式
 
 - OneShot（`StateKeyOneShotMessages`）：
@@ -1299,6 +1313,8 @@ sg.AddMultiConditionalEdges(
 
 说明：
 
+- 与其他路由一样，扇出的目标节点会在 **下一步** BSP 超步（superstep）才变为可运行
+  （router 节点完成之后）。这会影响端到端延迟，见下文“BSP 超步屏障”。
 - 返回结果会先去重，同一分支键在同一步内只触发一次；
 - 每个分支键的解析优先级与单条件路由一致：
   1. 条件边 `pathMap`；2) 节点 Ends；3) 直接当作节点 ID；
@@ -2327,6 +2343,50 @@ sg.AddJoinEdge([]string{nodeA, nodeB}, nodeJoin)
   无需显式添加这两条边。
 
 常量名：`graph.Start == "__start__"`，`graph.End == "__end__"`。
+
+#### BSP 超步屏障（为什么下游会等待）
+
+Graph 的执行模型是 **BSP 超步（superstep）**：计划（Planning）→ 执行（Execution）
+→ 合并（Update）。在每一个超步中：
+
+- 计划阶段：基于“上一超步”更新过的通道（channel）计算可运行节点集合；
+- 执行阶段：把可运行节点并发执行（并发上限由 `WithMaxConcurrency` 控制）；
+- 合并阶段：合并状态更新（Reducer）并应用路由信号（写通道）。
+
+下一超步只有在“当前超步”的所有节点都执行结束后才会开始。又因为路由信号在合并阶段
+才生效，所以某个下游节点即使在逻辑上“已经 ready”，也只能在 **下一步** 超步才开始
+执行。
+
+这会表现为一种看似“按层执行”的效果：深度更深的节点会等待同一层（同一超步）里的
+其他分支完成，即使它们之间没有依赖关系。
+
+示例图：
+
+```mermaid
+flowchart LR
+    S[split] --> B[branch_b]
+    B --> C[branch_b_next]
+    S --> E[branch_e]
+    S --> F[branch_f]
+```
+
+运行时：
+
+- 超步 0：`split`
+- 超步 1：`branch_b`、`branch_e`、`branch_f` 并行
+- 超步 2：`branch_b_next` 执行（尽管它只依赖 `branch_b`）
+
+实用建议：
+
+- **减少超步数**：若 `X → Y` 永远顺序执行，考虑把它们合并到一个节点里，避免为每一段
+  串行链路额外支付一个超步。
+- **避免额外的 prepare 节点**：如果只是想给某个节点补充输入，优先把准备逻辑挪到该
+  节点内部，或在该节点上使用 `graph.WithPreNodeCallback`。
+- **并行场景下不要从 `last_response` 读取某个分支的输出**：请使用
+  `node_responses[nodeID]`（或自定义独立状态键）来实现稳定的 fan-in/选择逻辑。
+- **选择合适的汇聚语义**：
+  - `AddEdge(from, to)` 适合增量触发（`to` 可能执行多次）；
+  - `AddJoinEdge([...], to)` 适合“等待全部，再执行一次”。
 
 ### 消息可见性选项
 当前Agent可在需要时根据不同场景控制其对其他Agent生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
