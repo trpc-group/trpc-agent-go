@@ -1235,6 +1235,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#bsp-superstep-barrier-why-downstream-waits" class="md-nav__link">
+    <span class="md-ellipsis">
+      BSP superstep barrier (why downstream waits)
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3244,6 +3253,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#bsp-superstep-barrier-why-downstream-waits" class="md-nav__link">
+    <span class="md-ellipsis">
+      BSP superstep barrier (why downstream waits)
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4757,6 +4775,22 @@ running via Runner. See <code>runner.md</code> for details and examples.</p>
 Model (LLM) messages, you can enable <code>agent.WithStreamMode(...)</code> (see
 "Event Monitoring"). When <code>agent.StreamModeMessages</code> is selected, graph LLM
 nodes enable final model responses automatically for that run.</p>
+<p>Tip: parsing JSON / structured output from streaming</p>
+<ul>
+<li>Streaming chunks (<code>choice.Delta.Content</code>) are incremental and are not
+  guaranteed to form valid JSON until the end of the model call.</li>
+<li>If you need to parse JSON (or any structured text), do not <code>json.Unmarshal</code>
+  per chunk. Buffer and parse once you have the full string.</li>
+</ul>
+<p>Common approaches:</p>
+<ul>
+<li><strong>Inside the graph</strong>: parse in a downstream node from
+  <code>node_responses[nodeID]</code> (or <code>last_response</code> in strictly serial flows),
+  because those values are only set after the node finishes.</li>
+<li><strong>Outside the graph</strong> (event consumer): accumulate <code>Delta.Content</code> and parse
+  when you see a non-partial response that carries <code>choice.Message.Content</code>
+  (or when the workflow finishes).</li>
+</ul>
 <h4 id="three-input-paradigms">Three input paradigms</h4>
 <ul>
 <li>
@@ -5387,6 +5421,9 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 </span></code></pre></div></td></tr></table></div>
 <p>Notes:</p>
 <ul>
+<li>Like other routing, targets become runnable in the <strong>next</strong> BSP superstep
+  (after the router node finishes). This can affect latency; see “BSP superstep
+  barrier” below.</li>
 <li>Results are de‑duplicated before triggering; repeated keys do not trigger a
   target more than once in the same step.</li>
 <li>Resolution precedence for each branch key mirrors single‑conditional routing:<ol>
@@ -7081,6 +7118,49 @@ use <code>AddJoinEdge</code>:</p>
 after every <code>from</code> node has reported completion. The barrier resets after it
 triggers, so the same join can be reached again in loops.</p>
 <p>Reference example: <code>examples/graph/join_edge</code>.</p>
+<h4 id="bsp-superstep-barrier-why-downstream-waits">BSP superstep barrier (why downstream waits)</h4>
+<p>Graph executes workflows in <strong>BSP supersteps</strong> (Planning → Execution → Update).
+In each superstep:</p>
+<ul>
+<li>Planning computes the runnable frontier from channels updated in the previous
+  superstep.</li>
+<li>Execution runs all runnable nodes concurrently (up to <code>WithMaxConcurrency</code>).</li>
+<li>Update merges state updates and applies routing signals (channel writes).</li>
+</ul>
+<p>The next superstep starts only after <strong>all</strong> nodes in the current superstep
+finish. Because routing signals are applied in Update, a node triggered by an
+upstream completion always becomes runnable in the <strong>next</strong> superstep.</p>
+<p>This can look like “depth‑K nodes wait for depth‑(K‑1) nodes”, even across
+independent branches.</p>
+<p>Example graph:</p>
+<pre class="mermaid"><code>flowchart LR
+    S[split] --&gt; B[branch_b]
+    B --&gt; C[branch_b_next]
+    S --&gt; E[branch_e]
+    S --&gt; F[branch_f]</code></pre>
+<p>Runtime behavior:</p>
+<ul>
+<li>Superstep 0: <code>split</code></li>
+<li>Superstep 1: <code>branch_b</code>, <code>branch_e</code>, <code>branch_f</code> run in parallel</li>
+<li>Superstep 2: <code>branch_b_next</code> runs (even though it only depends on <code>branch_b</code>)</li>
+</ul>
+<p>Practical tips:</p>
+<ul>
+<li><strong>Reduce supersteps</strong>: if <code>X → Y</code> is always sequential, consider collapsing it
+  into one node so you don’t pay an extra superstep.</li>
+<li><strong>Avoid extra “prepare” nodes</strong> when you only need to enrich a single node’s
+  input: move the preparation into the node, or use <code>graph.WithPreNodeCallback</code>
+  on that node.</li>
+<li><strong>Use stable per-branch outputs</strong> in parallel flows: avoid reading a specific
+  branch from <code>last_response</code>; use <code>node_responses[nodeID]</code> (or dedicated state
+  keys) so fan-in logic does not depend on scheduling.</li>
+<li><strong>Choose the right fan-in</strong>:<ul>
+<li>Use <code>AddEdge(from, to)</code> when <code>to</code> should react to incremental updates (it
+  may run multiple times).</li>
+<li>Use <code>AddJoinEdge([...], to)</code> when you need “wait for all, then run once”.</li>
+</ul>
+</li>
+</ul>
 <p>Tip: setting entry and finish points implicitly connects to virtual Start/End nodes:</p>
 <ul>
 <li><code>SetEntryPoint("first")</code> is equivalent to Start → first.</li>
@@ -9466,7 +9546,7 @@ tokens for user interface streaming).</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 21, 2026 13:36:27 UTC">2026-01-21 13:36:27</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 22, 2026 03:29:52 UTC">2026-01-22 03:29:52</span>
   </span>
 
     
