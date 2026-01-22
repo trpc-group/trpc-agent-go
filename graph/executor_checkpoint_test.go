@@ -792,6 +792,7 @@ func TestExecutor_HandleCommandRouting_SetsStepMark(t *testing.T) {
 	const (
 		targetNode = "x"
 		step       = 3
+		taskID     = "task"
 	)
 
 	g := New(NewStateSchema())
@@ -802,14 +803,28 @@ func TestExecutor_HandleCommandRouting_SetsStepMark(t *testing.T) {
 		context.Background(),
 		nil,
 		ec,
+		taskID,
 		targetNode,
 		step,
 	)
 
 	channelName := fmt.Sprintf("%s%s", ChannelTriggerPrefix, targetNode)
+	defCh, ok := g.getChannel(channelName)
+	require.True(t, ok)
+	require.NotNil(t, defCh)
+	require.Equal(t, ichannel.BehaviorLastValue, defCh.Behavior)
+
 	perRunCh, ok := ec.channels.GetChannel(channelName)
 	require.True(t, ok)
 	require.True(t, perRunCh.IsUpdatedInStep(step))
+
+	require.Len(t, ec.pendingWrites, 1)
+	require.Equal(t, PendingWrite{
+		Channel:  channelName,
+		Value:    channelUpdateMarker,
+		TaskID:   taskID,
+		Sequence: 1,
+	}, ec.pendingWrites[0])
 
 	checkpoint := exec.createCheckpointFromState(ec.State, step, ec)
 	require.Contains(t, checkpoint.UpdatedChannels, channelName)

@@ -2266,6 +2266,7 @@ func (e *Executor) handleNodeResult(
 					execCtx,
 					v,
 					step,
+					t.TaskID,
 				); err != nil {
 					return false, err
 				}
@@ -2442,8 +2443,14 @@ func syncResumeKey(target, source State, key string) {
 }
 
 // handleCommandResult handles a Command result from node execution.
-func (e *Executor) handleCommandResult(ctx context.Context, invocation *agent.Invocation,
-	execCtx *ExecutionContext, cmdResult *Command, step int) error {
+func (e *Executor) handleCommandResult(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	cmdResult *Command,
+	step int,
+	taskID string,
+) error {
 	// Update state with command updates.
 	if cmdResult.Update != nil {
 		e.updateStateFromResult(execCtx, cmdResult.Update)
@@ -2451,28 +2458,57 @@ func (e *Executor) handleCommandResult(ctx context.Context, invocation *agent.In
 
 	// Handle GoTo routing.
 	if cmdResult.GoTo != "" {
-		e.handleCommandRouting(ctx, invocation, execCtx, cmdResult.GoTo, step)
+		e.handleCommandRouting(
+			ctx,
+			invocation,
+			execCtx,
+			taskID,
+			cmdResult.GoTo,
+			step,
+		)
 	}
 
 	return nil
 }
 
 // handleCommandRouting handles the routing specified by a Command.
-func (e *Executor) handleCommandRouting(ctx context.Context, invocation *agent.Invocation,
-	execCtx *ExecutionContext, targetNode string, step int) {
+func (e *Executor) handleCommandRouting(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	taskID string,
+	targetNode string,
+	step int,
+) {
 	// Create trigger channel for the target node (including self).
 	triggerChannel := fmt.Sprintf("%s%s", ChannelTriggerPrefix, targetNode)
+	e.graph.addChannel(triggerChannel, channel.BehaviorLastValue)
 	e.graph.addNodeTrigger(triggerChannel, targetNode)
 	if execCtx != nil && execCtx.channels != nil {
 		// Ensure the per-execution channel exists and write to it.
 		execCtx.channels.AddChannel(triggerChannel, channel.BehaviorLastValue)
 		if ch, ok := execCtx.channels.GetChannel(triggerChannel); ok && ch != nil {
 			ch.Update([]any{channelUpdateMarker}, step)
+			execCtx.pendingMu.Lock()
+			execCtx.pendingWrites = append(execCtx.pendingWrites, PendingWrite{
+				Channel:  triggerChannel,
+				Value:    channelUpdateMarker,
+				TaskID:   taskID,
+				Sequence: execCtx.seq.Add(1),
+			})
+			execCtx.pendingMu.Unlock()
 		}
 	}
 
 	// Emit channel update event.
-	e.emitChannelUpdateEvent(ctx, invocation, execCtx, triggerChannel, channel.BehaviorLastValue, []string{targetNode})
+	e.emitChannelUpdateEvent(
+		ctx,
+		invocation,
+		execCtx,
+		triggerChannel,
+		channel.BehaviorLastValue,
+		[]string{targetNode},
+	)
 }
 
 // processChannelWrites processes the channel writes for a task.
