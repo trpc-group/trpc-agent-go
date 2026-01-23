@@ -713,12 +713,13 @@ func TestRunTool_CallbackShortCircuitAndErrors(t *testing.T) {
 	ctx := context.Background()
 	tdecl := &dummyTool{name: "echo"}
 	call := model.ToolCall{ID: "id", Function: model.FunctionDefinitionParam{Name: "echo", Arguments: []byte(`{"x":1}`)}}
+	state := State{}
 
 	// Before callback returns custom result
 	cbs := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, args *[]byte) (any, error) {
 		return map[string]any{"short": true}, nil
 	})
-	_, res, _, err := runTool(ctx, call, cbs, tdecl)
+	_, res, _, err := runTool(ctx, call, cbs, tdecl, state)
 	require.NoError(t, err)
 	m, _ := res.(map[string]any)
 	require.Equal(t, true, m["short"])
@@ -727,20 +728,20 @@ func TestRunTool_CallbackShortCircuitAndErrors(t *testing.T) {
 	cbs2 := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, args *[]byte) (any, error) {
 		return nil, assert.AnError
 	})
-	_, _, _, err = runTool(ctx, call, cbs2, tdecl)
+	_, _, _, err = runTool(ctx, call, cbs2, tdecl, state)
 	require.Error(t, err)
 
 	// After callback returns custom result
 	cbs3 := tool.NewCallbacks().RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, args []byte, result any, runErr error) (any, error) {
 		return map[string]any{"override": true}, nil
 	})
-	_, res, _, err = runTool(ctx, call, cbs3, tdecl)
+	_, res, _, err = runTool(ctx, call, cbs3, tdecl, state)
 	require.NoError(t, err)
 	m2, _ := res.(map[string]any)
 	require.Equal(t, true, m2["override"])
 
 	// Not callable tool
-	_, _, _, err = runTool(ctx, call, nil, &notCallableTool{})
+	_, _, _, err = runTool(ctx, call, nil, &notCallableTool{}, state)
 	require.Error(t, err)
 }
 
@@ -765,8 +766,9 @@ func TestRunTool_RepairsToolCallArgumentsWhenEnabled(t *testing.T) {
 			Arguments: []byte("{a:2}"),
 		},
 	}
+	state := State{}
 
-	_, result, _, err := runTool(ctx, toolCall, nil, tl)
+	_, result, _, err := runTool(ctx, toolCall, nil, tl, state)
 	require.NoError(t, err)
 	args, ok := result.(map[string]any)
 	require.True(t, ok)
@@ -1796,10 +1798,11 @@ func TestRunTool_CallbackContextPropagation(t *testing.T) {
 		ID:       "id",
 		Function: model.FunctionDefinitionParam{Name: "echo", Arguments: []byte(`{"x":1}`)},
 	}
+	state := State{}
 
 	// Run the tool.
 	ctx := context.Background()
-	ctx, result, _, err := runTool(ctx, toolCall, callbacks, dummyTool)
+	ctx, result, _, err := runTool(ctx, toolCall, callbacks, dummyTool, state)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
