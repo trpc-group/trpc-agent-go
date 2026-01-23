@@ -23,45 +23,70 @@ import (
 )
 
 const (
-	ctxKeySkillRunOutputFiles = "skill_run_output_files"
+	stateKeySkillRunOutputFiles = "tool:skill_run:output_files"
 )
 
-// SkillRunOutputFile represents a file exported from skill_run output_files.
-type SkillRunOutputFile struct {
-	RelPath string
-	Content string
-	MIME    string
+// skillRunOutputFile represents a file exported from skill_run output_files.
+type skillRunOutputFile struct {
+	Content  string
+	MIMEType string
 }
 
 // lookupSkillRunOutputFileFromContext looks up a file from the
-// skill_run output_files stored in ctx.
+// skill_run output_files stored in the invocation state within ctx.
 func lookupSkillRunOutputFileFromContext(
 	ctx context.Context,
 	relPath string,
 ) (string, string, bool) {
-	files := skillRunOutputFilesFromContext(ctx)
-	for _, f := range files {
-		if f.RelPath == relPath {
-			return f.Content, f.MIME, true
-		}
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil {
+		return "", "", false
 	}
-	return "", "", false
+
+	name := strings.TrimSpace(relPath)
+	if name == "" {
+		return "", "", false
+	}
+
+	v, ok := inv.GetState(stateKeySkillRunOutputFiles)
+	if !ok {
+		return "", "", false
+	}
+	m, ok := v.(map[string]skillRunOutputFile)
+	if !ok {
+		return "", "", false
+	}
+	f, ok := m[name]
+	if !ok {
+		return "", "", false
+	}
+	return f.Content, f.MIMEType, true
 }
 
 // skillRunOutputFilesFromContext returns all files exported from
-// skill_run output_files in ctx.
+// skill_run output_files in the invocation state within ctx.
 func skillRunOutputFilesFromContext(
 	ctx context.Context,
-) []SkillRunOutputFile {
-	v := ctx.Value(ctxKeySkillRunOutputFiles)
-	if v == nil {
+) []skillRunOutputFile {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil {
 		return nil
 	}
-	files, ok := v.([]SkillRunOutputFile)
+
+	v, ok := inv.GetState(stateKeySkillRunOutputFiles)
 	if !ok {
 		return nil
 	}
-	return files
+	m, ok := v.(map[string]skillRunOutputFile)
+	if !ok || len(m) == 0 {
+		return nil
+	}
+
+	out := make([]skillRunOutputFile, 0, len(m))
+	for _, f := range m {
+		out = append(out, f)
+	}
+	return out
 }
 
 const (
@@ -92,8 +117,8 @@ func parseFileRef(raw string) (fileRef, error) {
 		return fileRef{Raw: raw}, nil
 	}
 
-	if strings.HasPrefix(s, workspacePrefix) {
-		p := strings.TrimPrefix(s, workspacePrefix)
+	if after, ok := strings.CutPrefix(s, workspacePrefix); ok {
+		p := after
 		rel, err := cleanRelPath(p)
 		if err != nil {
 			return fileRef{}, err
@@ -105,8 +130,8 @@ func parseFileRef(raw string) (fileRef, error) {
 		}, nil
 	}
 
-	if strings.HasPrefix(s, artifactPrefix) {
-		rest := strings.TrimPrefix(s, artifactPrefix)
+	if after, ok := strings.CutPrefix(s, artifactPrefix); ok {
+		rest := after
 		rest = strings.TrimSpace(rest)
 		if rest == "" {
 			return fileRef{}, fmt.Errorf(errArtifactNameEmpty)
