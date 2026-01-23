@@ -8,6 +8,7 @@
 //
 //
 
+// Package main is the main package for the skill example.
 package main
 
 import (
@@ -41,8 +42,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
-	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/planner/react"
@@ -524,7 +523,7 @@ func readFileContent(
 		return ReadFileResponse{Error: "file_path is empty"}, nil
 	}
 
-	content, _, handled, err := fileref.TryRead(ctx, rawPath)
+	content, _, handled, err := tryReadFileRef(ctx, rawPath)
 	if handled {
 		if err != nil {
 			return ReadFileResponse{Error: err.Error()}, nil
@@ -553,11 +552,10 @@ func readFileContent(
 
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		if looksLikeSkillWorkspacePath(cacheKey) {
-			if content, _, ok := toolcache.
-				LookupSkillRunOutputFileFromContext(
-					ctx,
-					cacheKey,
-				); ok {
+			if content, _, ok := lookupSkillRunOutputFileFromContext(
+				ctx,
+				cacheKey,
+			); ok {
 				return ReadFileResponse{
 					Content:  content,
 					FileType: "text",
@@ -808,7 +806,7 @@ func excelCellBGColor(
 	if err != nil || style == nil {
 		return ""
 	}
-	if style.Fill.Color == nil || len(style.Fill.Color) == 0 {
+	if len(style.Fill.Color) == 0 {
 		return ""
 	}
 	bg := strings.ToUpper(style.Fill.Color[0])
