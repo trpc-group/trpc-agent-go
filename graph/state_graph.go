@@ -2417,6 +2417,7 @@ func runBeforeToolPluginCallbacks(
 	ctx context.Context,
 	toolCall model.ToolCall,
 	decl *tool.Declaration,
+	state State,
 ) (context.Context, model.ToolCall, any, error) {
 	invocation, ok := agent.InvocationFromContext(ctx)
 	if !ok || invocation == nil || invocation.Plugins == nil {
@@ -2427,12 +2428,16 @@ func runBeforeToolPluginCallbacks(
 	if callbacks == nil {
 		return ctx, toolCall, nil, nil
 	}
+	resumeValue, _ := GetStateValue[any](state, ResumeChannel)
+	resumeMap, _ := GetStateValue[map[string]any](state, StateKeyResumeMap)
 
 	args := &tool.BeforeToolArgs{
 		ToolCallID:  toolCall.ID,
 		ToolName:    toolCall.Function.Name,
 		Declaration: decl,
 		Arguments:   toolCall.Function.Arguments,
+		ResumeValue: resumeValue,
+		ResumeMap:   resumeMap,
 	}
 	result, err := callbacks.RunBeforeTool(ctx, args)
 
@@ -2461,16 +2466,21 @@ func runBeforeToolCallbacks(
 	toolCall model.ToolCall,
 	decl *tool.Declaration,
 	toolCallbacks *tool.Callbacks,
+	state State,
 ) (context.Context, model.ToolCall, any, error) {
 	if toolCallbacks == nil {
 		return ctx, toolCall, nil, nil
 	}
+	resumeValue, _ := GetStateValue[any](state, ResumeChannel)
+	resumeMap, _ := GetStateValue[map[string]any](state, StateKeyResumeMap)
 
 	args := &tool.BeforeToolArgs{
 		ToolCallID:  toolCall.ID,
 		ToolName:    toolCall.Function.Name,
 		Declaration: decl,
 		Arguments:   toolCall.Function.Arguments,
+		ResumeValue: resumeValue,
+		ResumeMap:   resumeMap,
 	}
 	result, err := toolCallbacks.RunBeforeTool(ctx, args)
 	if result != nil && result.Context != nil {
@@ -2601,6 +2611,7 @@ func runTool(
 	toolCall model.ToolCall,
 	toolCallbacks *tool.Callbacks,
 	t tool.Tool,
+	state State,
 ) (context.Context, any, []byte, error) {
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
 	if invocation, ok := agent.InvocationFromContext(ctx); ok && jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
@@ -2612,6 +2623,7 @@ func runTool(
 		ctx,
 		toolCall,
 		decl,
+		state,
 	)
 	if err != nil {
 		return ctx, customResult, toolCall.Function.Arguments, err
@@ -2625,6 +2637,7 @@ func runTool(
 		toolCall,
 		decl,
 		toolCallbacks,
+		state,
 	)
 	if err != nil {
 		return ctx, customResult, toolCall.Function.Arguments, err
@@ -3069,7 +3082,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	// Execute the tool with callbacks and get modified arguments.
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
-	ctx, result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
+	ctx, result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t, config.State)
 
 	// Emit tool execution start event with modified arguments.
 	emitToolStartEvent(
@@ -3083,6 +3096,10 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		if errors.As(err, &interruptErr) {
 			// Do not emit error payload for interrupt so clients treat it as pause.
 			eventErr = nil
+			if result == nil {
+				// Set result to interrupt value when no result is provided.
+				result = interruptErr.Value
+			}
 		}
 	}
 	// Emit tool execution complete event.

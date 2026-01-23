@@ -462,11 +462,52 @@ func TestContentRequestProcessor_getFilterIncrementalMessagesWithTime(t *testing
 							},
 						},
 					},
+					{
+						Author:    "tool.call",
+						Timestamp: baseTime.Add(1*time.Hour + time.Second),
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										Role: model.RoleAssistant,
+										ToolCalls: []model.ToolCall{
+											{
+												ID: "call_123123",
+												Function: model.FunctionDefinitionParam{
+													Name:      "test_tool",
+													Arguments: []byte(`{"arg":"value"}`),
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+					{
+						Author:    "tool.err",
+						Timestamp: baseTime.Add(1*time.Hour + 2*time.Second),
+						Response: &model.Response{
+							Object: model.ObjectTypeToolResponse,
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										Role:   model.RoleTool,
+										ToolID: "call_123123",
+									},
+								},
+							},
+							Error: &model.ResponseError{
+								Message: "call err",
+								Type:    model.ErrorTypeFlowError,
+							},
+						},
+					},
 				},
 			},
 			summaryUpdatedAt: time.Time{},
-			expectedCount:    2,
-			expectedContent:  []string{"old message", "new message"},
+			expectedCount:    4,
+			expectedContent:  []string{"old message", "new message", "", "type: flow_error, message: call err"},
 		},
 		{
 			name: "with summary, include events after summary time",
@@ -2797,6 +2838,31 @@ func TestContentRequestProcessor_getCurrentInvocationMessages(t *testing.T) {
 		}
 	}
 
+	// Helper to create tool result err event
+	createToolResultErrEvent := func(invocationID, author, toolID, errmsg string, ts time.Time) event.Event {
+		return event.Event{
+			Author:       author,
+			InvocationID: invocationID,
+			Timestamp:    ts,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Object: model.ObjectTypeToolResponse,
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:   model.RoleTool,
+							ToolID: toolID,
+						},
+					},
+				},
+				Error: &model.ResponseError{
+					Message: errmsg,
+					Type:    model.ErrorTypeFlowError,
+				},
+			},
+		}
+	}
+
 	// Helper to create assistant event
 	createAssistantEvent := func(invocationID, author, content string, ts time.Time) event.Event {
 		return event.Event{
@@ -2958,6 +3024,17 @@ func TestContentRequestProcessor_getCurrentInvocationMessages(t *testing.T) {
 			invocationID:  "inv1",
 			agentName:     "my_agent",
 			expectedCount: 2,
+		},
+		{
+			name: "fill tool result choice empty content by error",
+			sessionEvents: []event.Event{
+				createToolCallEvent("inv1", "agent1", "call1", baseTime),
+				createToolResultErrEvent("inv1", "agent1", "call1", "call err", baseTime.Add(time.Second)),
+			},
+			invocationID:    "inv1",
+			agentName:       "agent1",
+			expectedCount:   2,
+			expectedContent: []string{"", "type: flow_error, message: call err"},
 		},
 	}
 
