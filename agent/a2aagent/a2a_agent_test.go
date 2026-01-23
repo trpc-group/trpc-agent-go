@@ -490,7 +490,7 @@ func TestA2AAgent_shouldUseStreaming(t *testing.T) {
 				},
 			},
 			invocation: &agent.Invocation{},
-			setupFunc: func(tc *testCase) {},
+			setupFunc:  func(tc *testCase) {},
 			validateFunc: func(t *testing.T, useStreaming bool) {
 				if !useStreaming {
 					t.Error("expected streaming to be enabled")
@@ -507,7 +507,7 @@ func TestA2AAgent_shouldUseStreaming(t *testing.T) {
 				},
 			},
 			invocation: &agent.Invocation{},
-			setupFunc: func(tc *testCase) {},
+			setupFunc:  func(tc *testCase) {},
 			validateFunc: func(t *testing.T, useStreaming bool) {
 				if useStreaming {
 					t.Error("expected streaming to be disabled")
@@ -520,7 +520,7 @@ func TestA2AAgent_shouldUseStreaming(t *testing.T) {
 				agentCard: &server.AgentCard{},
 			},
 			invocation: &agent.Invocation{},
-			setupFunc: func(tc *testCase) {},
+			setupFunc:  func(tc *testCase) {},
 			validateFunc: func(t *testing.T, useStreaming bool) {
 				if useStreaming {
 					t.Error("expected streaming to be disabled by default")
@@ -528,10 +528,10 @@ func TestA2AAgent_shouldUseStreaming(t *testing.T) {
 			},
 		},
 		{
-			name:      "returns false when no agent card",
-			agent:     &A2AAgent{},
+			name:       "returns false when no agent card",
+			agent:      &A2AAgent{},
 			invocation: &agent.Invocation{},
-			setupFunc: func(tc *testCase) {},
+			setupFunc:  func(tc *testCase) {},
 			validateFunc: func(t *testing.T, useStreaming bool) {
 				if useStreaming {
 					t.Error("expected streaming to be disabled when no agent card")
