@@ -29,6 +29,9 @@ const (
 	BehaviorBarrier
 )
 
+// StepUnmarked indicates the channel has no step mark.
+const StepUnmarked = -1
+
 // Channel represents a communication channel between nodes in Pregel-style execution.
 type Channel struct {
 	mu              sync.RWMutex
@@ -47,11 +50,12 @@ type Channel struct {
 // NewChannel creates a new channel with the specified behavior.
 func NewChannel(name string, channelBehavior Behavior) *Channel {
 	return &Channel{
-		Name:       name,
-		Behavior:   channelBehavior,
-		Values:     make([]any, 0),
-		BarrierSet: make(map[string]bool),
-		Available:  false,
+		Name:            name,
+		Behavior:        channelBehavior,
+		Values:          make([]any, 0),
+		BarrierSet:      make(map[string]bool),
+		Available:       false,
+		LastUpdatedStep: StepUnmarked,
 	}
 }
 
@@ -198,7 +202,7 @@ func (c *Channel) IsUpdatedInStep(step int) bool {
 func (c *Channel) ClearStepMark() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.LastUpdatedStep = 0
+	c.LastUpdatedStep = StepUnmarked
 }
 
 // Finish marks the channel as finished (for barrier channels).

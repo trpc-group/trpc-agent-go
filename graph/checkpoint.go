@@ -70,7 +70,8 @@ type Checkpoint struct {
 	VersionsSeen map[string]map[string]int64 `json:"versions_seen"`
 	// ParentCheckpointID is the ID of the parent checkpoint (for branching).
 	ParentCheckpointID string `json:"parent_checkpoint_id,omitempty"`
-	// UpdatedChannels lists channels updated in this checkpoint.
+	// UpdatedChannels lists channels updated in the step that produced this
+	// checkpoint.
 	UpdatedChannels []string `json:"updated_channels,omitempty"`
 	// PendingSends contains messages that haven't been sent yet.
 	PendingSends []PendingSend `json:"pending_sends,omitempty"`

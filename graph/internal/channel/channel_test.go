@@ -81,7 +81,30 @@ func TestNewChannel(t *testing.T) {
 			if ch.Version != 0 {
 				t.Errorf("NewChannel() version = %v, want 0", ch.Version)
 			}
+			if ch.LastUpdatedStep != StepUnmarked {
+				t.Errorf(
+					"NewChannel() LastUpdatedStep = %v, want %v",
+					ch.LastUpdatedStep,
+					StepUnmarked,
+				)
+			}
 		})
+	}
+}
+
+func TestChannel_ClearStepMark(t *testing.T) {
+	ch := NewChannel("test", BehaviorLastValue)
+	ch.Update([]any{"value"}, 3)
+	ch.ClearStepMark()
+	if ch.LastUpdatedStep != StepUnmarked {
+		t.Errorf(
+			"ClearStepMark() LastUpdatedStep = %v, want %v",
+			ch.LastUpdatedStep,
+			StepUnmarked,
+		)
+	}
+	if ch.IsUpdatedInStep(0) {
+		t.Error("ClearStepMark() should not mark step 0")
 	}
 }
 
