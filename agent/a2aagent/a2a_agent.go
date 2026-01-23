@@ -159,7 +159,7 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	var err error
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, r.name))
 	itelemetry.TraceBeforeInvokeAgent(span, invocation, r.description, "", nil)
-	useStreaming := r.shouldUseStreaming()
+	useStreaming := r.shouldUseStreaming(invocation)
 	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, useStreaming, &err)
 
 	if r.a2aClient == nil {
@@ -195,8 +195,19 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	return r.wrapEventChannelWithTelemetry(ctx, invocation, eventChan, span, tracker), nil
 }
 
-// shouldUseStreaming determines whether to use streaming protocol
-func (r *A2AAgent) shouldUseStreaming() bool {
+// shouldUseStreaming determines whether to use streaming protocol.
+//
+// Priority:
+//  1. Per-run override (agent.WithStream / invocation.RunOptions.Stream)
+//  2. Agent option (WithEnableStreaming)
+//  3. Agent card capability
+//  4. Default false
+func (r *A2AAgent) shouldUseStreaming(invocation *agent.Invocation) bool {
+	// Per-run override.
+	if invocation != nil && invocation.RunOptions.Stream != nil {
+		return *invocation.RunOptions.Stream
+	}
+
 	// If explicitly set via option, use that value
 	if r.enableStreaming != nil {
 		return *r.enableStreaming
