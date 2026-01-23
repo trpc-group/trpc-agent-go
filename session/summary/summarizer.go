@@ -353,6 +353,8 @@ func (s *sessionSummarizer) extractConversationText(events []event.Event) string
 		}
 
 		// Handle tool calls from assistant.
+		// Note: A message may contain both ToolCalls and Content (e.g., "Let me check
+		// the weather" + tool call), so we process both without using continue.
 		if len(msg.ToolCalls) > 0 {
 			for _, tc := range msg.ToolCalls {
 				toolCallText := toolCallFmt(tc)
@@ -360,7 +362,6 @@ func (s *sessionSummarizer) extractConversationText(events []event.Event) string
 					parts = append(parts, fmt.Sprintf("%s: %s", author, toolCallText))
 				}
 			}
-			continue
 		}
 
 		// Handle tool response.
@@ -369,7 +370,7 @@ func (s *sessionSummarizer) extractConversationText(events []event.Event) string
 			if toolRespText != "" {
 				parts = append(parts, fmt.Sprintf("%s: %s", author, toolRespText))
 			}
-			continue
+			continue // Tool responses don't have additional content.
 		}
 
 		// Handle regular message content.
