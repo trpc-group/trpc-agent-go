@@ -181,6 +181,103 @@ sources := []source.Source{
 }
 ```
 
+## 内容转换器 (Transformer)
+
+> **示例代码**: [examples/knowledge/features/transform](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/transform)
+
+Transformer 用于在文档分块（Chunking）前后对内容进行预处理和后处理。这对于清理从 PDF、网页等来源提取的文本特别有用，可以去除多余的空白字符、重复字符等噪声。
+
+### 处理流程
+
+```
+文档 → Preprocess（预处理） → 处理后的文档 → Chunking（分块） → 分块 → Postprocess（后处理） → 最终分块
+```
+
+### 内置转换器
+
+#### CharFilter - 字符过滤器
+
+移除指定的字符或字符串：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+
+// 移除换行符和制表符
+filter := transform.NewCharFilter("\n", "\t", "\r")
+```
+
+#### CharDedup - 字符去重器
+
+将连续重复的字符或字符串合并为单个：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+
+// 将多个连续空格合并为单个空格，多个换行合并为单个换行
+dedup := transform.NewCharDedup(" ", "\n")
+
+// 示例：
+// 输入:  "hello     world\n\n\nfoo"
+// 输出:  "hello world\nfoo"
+```
+
+### 使用方式
+
+Transformer 通过 `WithTransformers` 选项传递给各类文档源：
+
+```go
+import (
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+    dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
+    urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
+    autosource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+)
+
+// 创建转换器
+filter := transform.NewCharFilter("\t")           // 移除制表符
+dedup := transform.NewCharDedup(" ", "\n")        // 合并连续空格和换行
+
+// 文件源使用转换器
+fileSrc := filesource.New(
+    []string{"./data/document.pdf"},
+    filesource.WithTransformers(filter, dedup),
+)
+
+// 目录源使用转换器
+dirSrc := dirsource.New(
+    []string{"./docs"},
+    dirsource.WithTransformers(filter, dedup),
+)
+
+// URL 源使用转换器
+urlSrc := urlsource.New(
+    []string{"https://example.com/article"},
+    urlsource.WithTransformers(filter, dedup),
+)
+
+// 自动源使用转换器
+autoSrc := autosource.New(
+    []string{"./mixed-content"},
+    autosource.WithTransformers(filter, dedup),
+)
+```
+
+### 组合多个转换器
+
+多个转换器按顺序依次执行：
+
+```go
+// 先移除制表符，再合并连续空格
+filter := transform.NewCharFilter("\t")
+dedup := transform.NewCharDedup(" ")
+
+src := filesource.New(
+    []string{"./data/messy.txt"},
+    filesource.WithTransformers(filter, dedup),  // 按顺序执行
+)
+```
+
 ## PDF 文件支持
 
 由于 PDF reader 依赖第三方库，为避免主模块引入不必要的依赖，PDF reader 采用独立 `go.mod` 管理。

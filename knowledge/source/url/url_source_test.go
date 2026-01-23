@@ -544,3 +544,134 @@ func TestWithContentFetchingURL(t *testing.T) {
 		})
 	}
 }
+
+// TestWithFileReaderType verifies the WithFileReaderType option.
+func TestWithFileReaderType(t *testing.T) {
+	tests := []struct {
+		name           string
+		fileReaderType source.FileReaderType
+	}{
+		{
+			name:           "markdown_reader_type",
+			fileReaderType: source.FileReaderTypeMarkdown,
+		},
+		{
+			name:           "json_reader_type",
+			fileReaderType: source.FileReaderTypeJSON,
+		},
+		{
+			name:           "text_reader_type",
+			fileReaderType: source.FileReaderTypeText,
+		},
+		{
+			name:           "csv_reader_type",
+			fileReaderType: source.FileReaderTypeCSV,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := New([]string{"https://example.com"}, WithFileReaderType(tt.fileReaderType))
+
+			if src.fileReaderType != tt.fileReaderType {
+				t.Errorf("fileReaderType = %s, want %s", src.fileReaderType, tt.fileReaderType)
+			}
+		})
+	}
+}
+
+// TestFileReaderTypeOverridesContentType verifies that WithFileReaderType overrides content-type detection.
+func TestFileReaderTypeOverridesContentType(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("plain_text_server_with_json_reader", func(t *testing.T) {
+		// Server returns text/plain content-type but content is JSON
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write([]byte(`{"key": "value"}`))
+		}))
+		defer server.Close()
+
+		// Force JSON reader
+		src := New([]string{server.URL}, WithFileReaderType(source.FileReaderTypeJSON))
+		docs, err := src.ReadDocuments(ctx)
+		if err != nil {
+			t.Fatalf("ReadDocuments failed: %v", err)
+		}
+		if len(docs) == 0 {
+			t.Fatal("expected at least one document")
+		}
+	})
+
+	t.Run("html_server_with_markdown_reader", func(t *testing.T) {
+		// Server returns text/html but we want markdown processing
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("# Title\n\nContent"))
+		}))
+		defer server.Close()
+
+		src := New([]string{server.URL}, WithFileReaderType(source.FileReaderTypeMarkdown))
+		docs, err := src.ReadDocuments(ctx)
+		if err != nil {
+			t.Fatalf("ReadDocuments failed: %v", err)
+		}
+		if len(docs) == 0 {
+			t.Fatal("expected at least one document")
+		}
+	})
+
+	t.Run("default_detection_without_override", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write([]byte("plain text"))
+		}))
+		defer server.Close()
+
+		src := New([]string{server.URL})
+		if src.fileReaderType != "" {
+			t.Error("fileReaderType should be empty by default")
+		}
+
+		docs, err := src.ReadDocuments(ctx)
+		if err != nil {
+			t.Fatalf("ReadDocuments failed: %v", err)
+		}
+		if len(docs) == 0 {
+			t.Fatal("expected at least one document")
+		}
+	})
+}
+
+// TestFileReaderTypeWithChunking verifies WithFileReaderType works with chunking options.
+func TestFileReaderTypeWithChunking(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte(strings.Repeat("word ", 100)))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL},
+		WithFileReaderType(source.FileReaderTypeText),
+		WithChunkSize(50),
+		WithChunkOverlap(10),
+	)
+
+	if src.fileReaderType != source.FileReaderTypeText {
+		t.Errorf("fileReaderType = %s, want %s", src.fileReaderType, source.FileReaderTypeText)
+	}
+	if src.chunkSize != 50 {
+		t.Errorf("chunkSize = %d, want 50", src.chunkSize)
+	}
+	if src.chunkOverlap != 10 {
+		t.Errorf("chunkOverlap = %d, want 10", src.chunkOverlap)
+	}
+
+	docs, err := src.ReadDocuments(context.Background())
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+}
