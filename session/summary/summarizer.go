@@ -373,8 +373,8 @@ func (s *sessionSummarizer) extractConversationText(events []event.Event) string
 		}
 
 		// Handle regular message content.
-		if msg.Content != "" {
-			parts = append(parts, fmt.Sprintf("%s: %s", author, strings.TrimSpace(msg.Content)))
+		if trimmed := strings.TrimSpace(msg.Content); trimmed != "" {
+			parts = append(parts, fmt.Sprintf("%s: %s", author, trimmed))
 		}
 	}
 
