@@ -887,6 +887,13 @@ graphAgent, err := graphagent.New(
     graphagent.WithAgentCallbacks(&agent.Callbacks{
         // Agent-level callbacks.
     }),
+    // Pass executor options directly
+    graphagent.WithExecutorOptions(
+        graph.WithMaxSteps(50),                          // max steps
+        graph.WithStepTimeout(5*time.Minute),            // step timeout
+        graph.WithNodeTimeout(2*time.Minute),            // node timeout (useful for agent tool nodes)
+        graph.WithCheckpointSaveTimeout(30*time.Second), // checkpoint save timeout
+    ),
 )
 ```
 
@@ -947,6 +954,37 @@ ga := graphagent.New(
 - Custom formatters should ensure that the summary is clearly distinguishable from other messages
 - The default format is designed to be compatible with most models and use cases
 - When `WithAddSessionSummary(false)` is used, the formatter is never invoked
+
+#### Executor Advanced Configuration
+
+`WithExecutorOptions` allows you to pass executor options directly to configure the behavior of the underlying executor. This is useful for scenarios that require fine-grained control over executor behavior, such as:
+
+- **Timeout Control**: Set appropriate timeout durations for long-running nodes (e.g., agent tool nodes)
+- **Step Limits**: Limit the maximum number of steps in graph execution to prevent infinite loops
+- **Retry Policies**: Configure default retry policies
+
+**Usage Example:**
+
+```go
+graphAgent, err := graphagent.New("my-agent", compiledGraph,
+	graphagent.WithDescription("Workflow description"),
+	// Pass executor options directly
+	graphagent.WithExecutorOptions(
+		graph.WithMaxSteps(50),                          // max steps limit
+		graph.WithStepTimeout(5*time.Minute),            // timeout per step
+		graph.WithNodeTimeout(2*time.Minute),            // timeout per node
+		graph.WithCheckpointSaveTimeout(30*time.Second), // checkpoint save timeout
+		graph.WithDefaultRetryPolicy(                    // default retry policy
+			graph.WithSimpleRetry(3, 1*time.Second),
+		),
+	),
+)
+```
+
+**Notes:**
+
+- Options passed via `WithExecutorOptions` are applied after mapped options (`ChannelBufferSize`, `MaxConcurrency`, `CheckpointSaver`), so they can override those settings if needed
+- If `WithStepTimeout` is not set, `WithNodeTimeout` will not be automatically derived (defaults to no timeout)
 
 #### Concurrency considerations
 
@@ -2840,12 +2878,37 @@ exec, err := graph.NewExecutor(g,
 )
 ```
 
+### GraphAgent Executor Options
+
+When creating a `GraphAgent`, you can pass executor options directly using `WithExecutorOptions`:
+
+```go
+graphAgent, err := graphagent.New("my-agent", compiledGraph,
+	graphagent.WithDescription("Workflow description"),
+	// Pass executor options directly
+	graphagent.WithExecutorOptions(
+		graph.WithMaxSteps(50),                          // max steps
+		graph.WithStepTimeout(5*time.Minute),            // step timeout
+		graph.WithNodeTimeout(2*time.Minute),            // node timeout (useful for agent tool nodes)
+		graph.WithCheckpointSaveTimeout(30*time.Second), // checkpoint save timeout
+		graph.WithDefaultRetryPolicy(                    // default retry policy
+			graph.WithSimpleRetry(3, 1*time.Second),
+		),
+	),
+)
+```
+
+**Notes:**
+
+- Options passed via `WithExecutorOptions` are applied after mapped options (`ChannelBufferSize`, `MaxConcurrency`, `CheckpointSaver`), so they can override those settings if needed
+- If `WithStepTimeout` is not set, `WithNodeTimeout` will not be automatically derived (defaults to no timeout)
+
 ### Defaults and Notes
 
 - Defaults (Executor)
 
   - `ChannelBufferSize = 256`, `MaxSteps = 100`, `MaxConcurrency = GOMAXPROCS(0)`, `CheckpointSaveTimeout = 10s`
-  - Per‑step/node timeouts are available on `Executor` via `WithStepTimeout` / `WithNodeTimeout` (not exposed by `GraphAgent` options yet)
+  - Per‑step/node timeouts are available via `WithExecutorOptions` when creating `GraphAgent`, or directly on `Executor` via `WithStepTimeout` / `WithNodeTimeout`
 
 - Sessions
   - Prefer Redis session backend in production; set TTLs and cleanup
