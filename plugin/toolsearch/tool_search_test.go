@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -27,6 +28,28 @@ func TestNew_NilModel(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "model is nil") {
 		t.Fatalf("unexpected err: %v", err)
+	}
+}
+
+func TestToolSearch_AsPlugin(t *testing.T) {
+	t.Parallel()
+
+	m := &fakeModel{}
+	ts, err := New(m)
+	if err != nil {
+		t.Fatalf("New err: %v", err)
+	}
+	if ts.Name() == "" {
+		t.Fatalf("expected plugin name")
+	}
+
+	pm, err := plugin.NewManager(ts)
+	if err != nil {
+		t.Fatalf("NewManager err: %v", err)
+	}
+	cbs := pm.ModelCallbacks()
+	if cbs == nil || len(cbs.BeforeModel) == 0 {
+		t.Fatalf("expected before model callback")
 	}
 }
 

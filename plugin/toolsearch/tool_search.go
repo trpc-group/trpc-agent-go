@@ -7,7 +7,7 @@
 //
 //
 
-// Package toolsearch provides an LLM-based tool selector.
+// Package toolsearch provides a Tool Search plugin.
 package toolsearch
 
 import (
@@ -16,17 +16,21 @@ import (
 	"sort"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // ToolSearch uses an LLM to select relevant tools before the main
 // model call by mutating `args.Request.Tools` in a BeforeModel callback.
 type ToolSearch struct {
+	name          string
 	searcher      searcher
 	maxTools      int
 	alwaysInclude []string
 	failOpen      bool
 }
+
+const defaultToolSearchPluginName = "tool_search"
 
 // New creates a new ToolSearch.
 func New(m model.Model, opts ...Option) (*ToolSearch, error) {
@@ -39,12 +43,16 @@ func New(m model.Model, opts ...Option) (*ToolSearch, error) {
 	}
 
 	s := &ToolSearch{
+		name:          cfg.Name,
 		maxTools:      cfg.MaxTools,
 		alwaysInclude: append([]string(nil), cfg.AlwaysInclude...),
 		failOpen:      cfg.FailOpen,
 	}
 	if s.maxTools <= 0 {
 		s.maxTools = defaultMaxTools
+	}
+	if s.name == "" {
+		s.name = defaultToolSearchPluginName
 	}
 
 	if cfg.toolKnowledge != nil {
@@ -53,6 +61,22 @@ func New(m model.Model, opts ...Option) (*ToolSearch, error) {
 		s.searcher = newLlmSearch(cfg.Model, cfg.SystemPrompt)
 	}
 	return s, nil
+}
+
+// Name implements plugin.Plugin.
+func (s *ToolSearch) Name() string {
+	if s == nil {
+		return ""
+	}
+	return s.name
+}
+
+// Register implements plugin.Plugin.
+func (s *ToolSearch) Register(r *plugin.Registry) {
+	if s == nil || r == nil {
+		return
+	}
+	r.BeforeModel(s.Callback())
 }
 
 // Callback returns a BeforeModel callback that performs tool selection.

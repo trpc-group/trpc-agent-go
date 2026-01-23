@@ -603,6 +603,11 @@ apply to all agents
 
 In addition to rule-based filtering (Tool Filter), the framework provides **Tool Search**: before each main model call, it runs a lightweight “tool selection” step to shrink the available tool set to **TopK** (for example, 3 tools), then sends only those tools to the main model. This typically reduces token usage (especially **PromptTokens**) when the full tool list is large.
 
+Trade-offs to keep in mind:
+
+- **Latency**: Tool Search adds extra work (another LLM call and/or embedding + vector search), so end-to-end latency may increase.
+- **Prompt caching**: the tool list can change every turn, which may reduce prompt caching hit rate on some providers.
+
 How it differs from Tool Filter:
 
 - **Tool Filter**: you (or your business logic) decide which tools are allowed/blocked (access control / cost control).
@@ -621,14 +626,44 @@ They can be combined: use Tool Filter for permissions/allow-lists first, then us
 
 ##### Basic Usage (LLM Search)
 
-Register Tool Search as a `BeforeModel` callback. It will mutate `req.Tools` before the main model call:
+Tool Search can be used either as a Runner plugin or as a per-agent callback.
+
+**Option A: Runner Plugin**
 
 ```go
 import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/agent/middleware/toolsearch"
-    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
 )
+
+ts, err := toolsearch.New(modelInstance,
+    toolsearch.WithMaxTools(3),
+    toolsearch.WithFailOpen(), // optional: fallback to full tool set on failure
+)
+if err != nil { /* handle */ }
+
+ag := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(allTools), // register full tools; Tool Search picks TopK
+)
+
+r := runner.NewRunner("app", ag,
+    runner.WithPlugins(ts),
+)
+```
+
+**Option B: Per-Agent BeforeModel Callback**
+
+Register Tool Search as a `BeforeModel` callback. It will mutate `req.Tools`
+before the main model call:
+
+```go
+	import (
+	    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+	    "trpc.group/trpc-go/trpc-agent-go/model"
+	)
 
 modelCallbacks := model.NewCallbacks()
 tc, err := toolsearch.New(modelInstance,
@@ -650,11 +685,11 @@ agent := llmagent.New("assistant",
 Create a `ToolKnowledge` (embedder + vector store) and enable it via `toolsearch.WithToolKnowledge(...)`:
 
 ```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/agent/middleware/toolsearch"
-    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
-    vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
-)
+	import (
+	    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+	    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	    vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
+	)
 
 toolKnowledge, err := toolsearch.NewToolKnowledge(
     openaiembedder.New(openaiembedder.WithModel(openaiembedder.ModelTextEmbedding3Small)),
@@ -676,7 +711,7 @@ modelCallbacks.RegisterBeforeModel(tc.Callback())
 Tool Search stores usage in `context.Context`, which you can use for metrics/cost analysis:
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/agent/middleware/toolsearch"
+	import "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
 
 if usage, ok := toolsearch.ToolSearchUsageFromContext(ctx); ok && usage != nil {
     // usage.PromptTokens / usage.CompletionTokens / usage.TotalTokens

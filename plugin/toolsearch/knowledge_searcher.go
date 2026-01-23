@@ -47,7 +47,7 @@ func (s *knowledgeSearcher) Search(ctx context.Context, candidates map[string]to
 		return ctx, nil, err
 	}
 	defer func() {
-		newCtx = SetToolSearchUsage(ctx, usage)
+		newCtx = SetToolSearchUsage(newCtx, usage)
 	}()
 	upsertUsage, err := s.toolKnowledge.upsert(newCtx, candidates)
 	if err != nil {
@@ -80,7 +80,7 @@ func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (con
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(s.model.Info().Name))
 	defer span.End()
 	invocation, ok := agent.InvocationFromContext(ctx)
-	if ok || invocation == nil {
+	if !ok || invocation == nil {
 		invocation = agent.NewInvocation()
 	}
 	timingInfo := invocation.GetOrCreateTimingInfo()

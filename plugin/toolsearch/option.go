@@ -14,6 +14,9 @@ import "trpc.group/trpc-go/trpc-agent-go/model"
 // Config holds all configurable values for ToolSearch.
 // It is mutated by Option functions and then applied when constructing the searcher.
 type Config struct {
+	// Name is the plugin name used by plugin.Manager.
+	// If empty, ToolSearch uses a default name.
+	Name          string
 	Model         model.Model
 	toolKnowledge *ToolKnowledge
 	SystemPrompt  string
@@ -26,6 +29,12 @@ type Config struct {
 
 // Option configures ToolSearch by mutating a Config.
 type Option func(*Config)
+
+// WithName sets the plugin name for ToolSearch.
+// Names must be unique per Runner.
+func WithName(name string) Option {
+	return func(c *Config) { c.Name = name }
+}
 
 // WithToolKnowledge sets the tool knowledge used for tool selection.
 func WithToolKnowledge(k *ToolKnowledge) Option {

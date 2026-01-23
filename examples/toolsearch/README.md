@@ -65,9 +65,13 @@ examples/toolsearch/toollibrary/small/
 ### 多轮对话 user message 的设置
 
 ### 评价指标
+	
+指标包括 Token 消耗、耗时、最终结果的准确性。
 
-指标包括 Token 消耗，耗时，最终结果的准确性。
-本报告仅测试 Token 消耗量。
+本报告仅测试 Token 消耗量；但在真实业务中，耗时与 Prompt Caching 的影响也很重要：
+
+- Tool Search 会引入额外步骤（LLM 选工具 / query rewrite + embedding + vector search），因此端到端耗时可能增加。
+- 由于每轮传给主模型的工具列表会变化，可能降低 Prompt Caching 的命中率（例如 cached_tokens），进而影响整体成本评估。
 
 Total Token =  Tool Search (Chat Model) + Tool Search (Embedding Model) + Other Chat Model Token
 

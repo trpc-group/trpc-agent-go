@@ -594,6 +594,11 @@ toolSet := mcp.NewMCPToolSet(
 
 除了“规则过滤（Tool Filter）”，框架还提供 **Tool Search**：在每次主模型调用前，先做一次“工具选择”，把**候选工具集压缩到 TopK**（例如 3 个），再交给主模型执行，从而进一步降低 token（尤其是 PromptTokens）。
 
+需要注意的 trade-off：
+
+- **耗时**：Tool Search 会引入额外步骤（额外 LLM 调用、以及/或 embedding + 向量检索），端到端耗时可能增加。
+- **Prompt Caching**：每轮传给主模型的工具列表会变化，可能降低部分平台的 prompt caching 命中率。
+
 和 Tool Filter 的区别：
 
 - **Tool Filter**：你（或业务）通过规则决定“允许/禁止哪些工具”（访问控制/成本控制），更偏策略与安全。
@@ -612,14 +617,45 @@ toolSet := mcp.NewMCPToolSet(
 
 ##### 基本用法（LLM Search）
 
-通过 `modelCallbacks.RegisterBeforeModel(...)` 注册 Tool Search 的 callback（会在主模型调用前自动重写 `req.Tools`）：
+Tool Search 既可以作为 Runner plugin 使用，也可以作为单个 Agent 的
+callback 使用。
+
+**方案 A：Runner Plugin**
 
 ```go
 import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/agent/middleware/toolsearch"
-    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
 )
+
+ts, err := toolsearch.New(modelInstance,
+    toolsearch.WithMaxTools(3),
+    toolsearch.WithFailOpen(), // 可选：search 失败时退回到“全部工具可用”
+)
+if err != nil { /* handle */ }
+
+ag := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(allTools), // 仍然注册“全量工具”，Tool Search 会挑 TopK
+)
+
+r := runner.NewRunner("app", ag,
+    runner.WithPlugins(ts),
+)
+```
+
+**方案 B：Per-Agent BeforeModel Callback**
+
+通过 `modelCallbacks.RegisterBeforeModel(...)` 注册 Tool Search 的 callback
+（会在主模型调用前自动重写 `req.Tools`）：
+
+```go
+	import (
+	    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+	    "trpc.group/trpc-go/trpc-agent-go/model"
+	)
 
 modelCallbacks := model.NewCallbacks()
 tc, err := toolsearch.New(modelInstance,
@@ -641,11 +677,11 @@ agent := llmagent.New("assistant",
 需要先创建 `ToolKnowledge`（embedding + vector store），再通过 `toolsearch.WithToolKnowledge(...)` 启用 Knowledge Search：
 
 ```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/agent/middleware/toolsearch"
-    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
-    vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
-)
+	import (
+	    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+	    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	    vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
+	)
 
 toolKnowledge, err := toolsearch.NewToolKnowledge(
     openaiembedder.New(openaiembedder.WithModel(openaiembedder.ModelTextEmbedding3Small)),
@@ -667,7 +703,7 @@ modelCallbacks.RegisterBeforeModel(tc.Callback())
 Tool Search 的 token usage 会写入 context，可用于打点与成本分析：
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/agent/middleware/toolsearch"
+import "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
 
 if usage, ok := toolsearch.ToolSearchUsageFromContext(ctx); ok && usage != nil {
     // usage.PromptTokens / usage.CompletionTokens / usage.TotalTokens

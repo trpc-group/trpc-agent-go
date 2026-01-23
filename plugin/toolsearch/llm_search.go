@@ -30,7 +30,7 @@ import (
 // tool names from a provided candidate set.
 //
 // It intentionally uses the existing request-building/parsing code paths to keep behavior
-// consistent with the middleware callback.
+// consistent with the ToolSearch callback.
 type llmSearch struct {
 	model        model.Model
 	systemPrompt string
@@ -128,9 +128,7 @@ func searchTools(ctx context.Context, m model.Model, req *model.Request, tools m
 
 func invocationFromContextOrNew(ctx context.Context) *agent.Invocation {
 	invocation, ok := agent.InvocationFromContext(ctx)
-	// Preserve existing behavior: a new invocation is created when `ok` is true,
-	// or when the invocation is missing.
-	if ok || invocation == nil {
+	if !ok || invocation == nil {
 		invocation = agent.NewInvocation()
 	}
 	return invocation
