@@ -1991,7 +1991,7 @@ func TestBuildEventResponse_WithTag(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			evt := buildEventResponse(tt.isStreaming, "msg-id", tt.result, invocation, "test-agent")
+			evt := buildEventResponse(tt.isStreaming, "msg-id", tt.result, invocation, "test-agent", protocol.MessageRoleAgent)
 
 			if evt == nil {
 				t.Fatal("expected event, got nil")
@@ -2262,7 +2262,7 @@ func TestProcessFunctionCall_MissingName(t *testing.T) {
 func TestBuildStreamingResponse_ToolResponses(t *testing.T) {
 	resp := buildStreamingResponse("msg-123", &parseResult{
 		toolResponses: []toolResponseData{{id: "tool-1", name: "tool", content: "resp"}},
-	})
+	}, protocol.MessageRoleAgent)
 	if resp == nil {
 		t.Fatalf("expected response, got nil")
 	}
@@ -2412,7 +2412,7 @@ func TestBuildStreamingResponse_WithReasoningContent(t *testing.T) {
 	resp := buildStreamingResponse("msg-123", &parseResult{
 		textContent:      "Answer",
 		reasoningContent: "Thinking...",
-	})
+	}, protocol.MessageRoleAgent)
 	if resp == nil {
 		t.Fatalf("expected response, got nil")
 	}
@@ -2432,7 +2432,7 @@ func TestBuildNonStreamingResponse_WithReasoningContent(t *testing.T) {
 	resp := buildNonStreamingResponse("msg-123", &parseResult{
 		textContent:      "Answer",
 		reasoningContent: "Thinking...",
-	})
+	}, protocol.MessageRoleAgent)
 	if resp == nil {
 		t.Fatalf("expected response, got nil")
 	}
