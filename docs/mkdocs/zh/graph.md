@@ -951,13 +951,8 @@ graphAgent, err := graphagent.New(
 	graphagent.WithAgentCallbacks(&agent.Callbacks{
 		// Agent 级回调配置
 	}),
-	// 透传执行器高级配置选项
-	graphagent.WithExecutorOptions(
-		graph.WithMaxSteps(50),                          // 最大步数
-		graph.WithStepTimeout(5*time.Minute),            // 步骤超时
-		graph.WithNodeTimeout(2*time.Minute),            // 节点超时（适用于 agent tool 节点等长时间执行场景）
-		graph.WithCheckpointSaveTimeout(30*time.Second), // 检查点保存超时
-	),
+	// 执行器高级配置选项，详见下方"执行器高级配置"章节
+	// graphagent.WithExecutorOptions(...),
 )
 ```
 

@@ -887,13 +887,8 @@ graphAgent, err := graphagent.New(
     graphagent.WithAgentCallbacks(&agent.Callbacks{
         // Agent-level callbacks.
     }),
-    // Pass executor options directly
-    graphagent.WithExecutorOptions(
-        graph.WithMaxSteps(50),                          // max steps
-        graph.WithStepTimeout(5*time.Minute),            // step timeout
-        graph.WithNodeTimeout(2*time.Minute),            // node timeout (useful for agent tool nodes)
-        graph.WithCheckpointSaveTimeout(30*time.Second), // checkpoint save timeout
-    ),
+    // Executor advanced configuration options, see "Executor Advanced Configuration" section below
+    // graphagent.WithExecutorOptions(...),
 )
 ```
 
@@ -2878,37 +2873,12 @@ exec, err := graph.NewExecutor(g,
 )
 ```
 
-### GraphAgent Executor Options
-
-When creating a `GraphAgent`, you can pass executor options directly using `WithExecutorOptions`:
-
-```go
-graphAgent, err := graphagent.New("my-agent", compiledGraph,
-	graphagent.WithDescription("Workflow description"),
-	// Pass executor options directly
-	graphagent.WithExecutorOptions(
-		graph.WithMaxSteps(50),                          // max steps
-		graph.WithStepTimeout(5*time.Minute),            // step timeout
-		graph.WithNodeTimeout(2*time.Minute),            // node timeout (useful for agent tool nodes)
-		graph.WithCheckpointSaveTimeout(30*time.Second), // checkpoint save timeout
-		graph.WithDefaultRetryPolicy(                    // default retry policy
-			graph.WithSimpleRetry(3),
-		),
-	),
-)
-```
-
-**Notes:**
-
-- Options passed via `WithExecutorOptions` are applied after mapped options (`ChannelBufferSize`, `MaxConcurrency`, `CheckpointSaver`), so they can override those settings if needed
-- If `WithStepTimeout` is not set, `WithNodeTimeout` will not be automatically derived (defaults to no timeout)
-
 ### Defaults and Notes
 
 - Defaults (Executor)
 
   - `ChannelBufferSize = 256`, `MaxSteps = 100`, `MaxConcurrency = GOMAXPROCS(0)`, `CheckpointSaveTimeout = 10s`
-  - Per‑step/node timeouts are available via `WithExecutorOptions` when creating `GraphAgent`, or directly on `Executor` via `WithStepTimeout` / `WithNodeTimeout`
+  - Per‑step/node timeouts are available via `WithExecutorOptions` when creating `GraphAgent` (see "Executor Advanced Configuration" section above), or directly on `Executor` via `WithStepTimeout` / `WithNodeTimeout`
 
 - Sessions
   - Prefer Redis session backend in production; set TTLs and cleanup
