@@ -22,9 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
-const (
-	ctxKeySkillRunOutputFiles = "skill_run_output_files"
-)
+type ctxKeySkillRunOutputFiles struct{}
 
 // SkillRunOutputFile represents a file exported from skill_run output_files.
 type SkillRunOutputFile struct {
@@ -53,7 +51,7 @@ func lookupSkillRunOutputFileFromContext(
 func skillRunOutputFilesFromContext(
 	ctx context.Context,
 ) []SkillRunOutputFile {
-	v := ctx.Value(ctxKeySkillRunOutputFiles)
+	v := ctx.Value(ctxKeySkillRunOutputFiles{})
 	if v == nil {
 		return nil
 	}
