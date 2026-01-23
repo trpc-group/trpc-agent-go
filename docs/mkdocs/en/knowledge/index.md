@@ -169,6 +169,10 @@ knowledge/
 │   ├── topk/            # TopK simple truncation implementation
 │   ├── cohere/          # Cohere SaaS Rerank implementation
 │   └── infinity/        # Infinity/TEI standard Rerank API implementation
+├── transform/            # Content transformers
+│   ├── transform.go     # Transformer interface definition
+│   ├── charfilter.go    # Character filter (remove specified characters)
+│   └── chardedup.go     # Character deduplicator (merge consecutive duplicate characters)
 ├── document/             # Document processing
 │   ├── document.go      # Document structure definition
 │   └── reader/          # Document readers (supports txt/md/csv/json/docx/pdf, etc.)

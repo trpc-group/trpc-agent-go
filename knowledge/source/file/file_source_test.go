@@ -447,3 +447,137 @@ func TestProcessFileAbsPathError(t *testing.T) {
 		t.Fatal("expected at least one document")
 	}
 }
+
+// TestWithFileReaderType verifies the WithFileReaderType option.
+func TestWithFileReaderType(t *testing.T) {
+	tests := []struct {
+		name           string
+		fileReaderType source.FileReaderType
+	}{
+		{
+			name:           "markdown_reader_type",
+			fileReaderType: source.FileReaderTypeMarkdown,
+		},
+		{
+			name:           "json_reader_type",
+			fileReaderType: source.FileReaderTypeJSON,
+		},
+		{
+			name:           "text_reader_type",
+			fileReaderType: source.FileReaderTypeText,
+		},
+		{
+			name:           "csv_reader_type",
+			fileReaderType: source.FileReaderTypeCSV,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := New([]string{"dummy.txt"}, WithFileReaderType(tt.fileReaderType))
+
+			if src.fileReaderType != tt.fileReaderType {
+				t.Errorf("fileReaderType = %s, want %s", src.fileReaderType, tt.fileReaderType)
+			}
+		})
+	}
+}
+
+// TestFileReaderTypeOverridesDetection verifies that WithFileReaderType overrides automatic file type detection.
+func TestFileReaderTypeOverridesDetection(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	t.Run("txt_file_with_json_reader", func(t *testing.T) {
+		// Create a .txt file with JSON content
+		filePath := filepath.Join(tmpDir, "data.txt")
+		jsonContent := `{"key": "value"}`
+		if err := os.WriteFile(filePath, []byte(jsonContent), 0600); err != nil {
+			t.Fatalf("failed to write file: %v", err)
+		}
+
+		// Use JSON reader type to force JSON parsing
+		src := New([]string{filePath}, WithFileReaderType(source.FileReaderTypeJSON))
+		docs, err := src.ReadDocuments(ctx)
+		if err != nil {
+			t.Fatalf("ReadDocuments failed: %v", err)
+		}
+		if len(docs) == 0 {
+			t.Fatal("expected at least one document")
+		}
+	})
+
+	t.Run("txt_file_with_markdown_reader", func(t *testing.T) {
+		// Create a .txt file with markdown content
+		filePath := filepath.Join(tmpDir, "readme.txt")
+		markdownContent := "# Title\n\nParagraph content."
+		if err := os.WriteFile(filePath, []byte(markdownContent), 0600); err != nil {
+			t.Fatalf("failed to write file: %v", err)
+		}
+
+		// Use Markdown reader type
+		src := New([]string{filePath}, WithFileReaderType(source.FileReaderTypeMarkdown))
+		docs, err := src.ReadDocuments(ctx)
+		if err != nil {
+			t.Fatalf("ReadDocuments failed: %v", err)
+		}
+		if len(docs) == 0 {
+			t.Fatal("expected at least one document")
+		}
+	})
+
+	t.Run("default_detection_without_override", func(t *testing.T) {
+		filePath := filepath.Join(tmpDir, "sample.txt")
+		if err := os.WriteFile(filePath, []byte("plain text"), 0600); err != nil {
+			t.Fatalf("failed to write file: %v", err)
+		}
+
+		src := New([]string{filePath})
+		if src.fileReaderType != "" {
+			t.Error("fileReaderType should be empty by default")
+		}
+
+		docs, err := src.ReadDocuments(ctx)
+		if err != nil {
+			t.Fatalf("ReadDocuments failed: %v", err)
+		}
+		if len(docs) == 0 {
+			t.Fatal("expected at least one document")
+		}
+	})
+}
+
+// TestFileReaderTypeWithChunking verifies WithFileReaderType works with chunking options.
+func TestFileReaderTypeWithChunking(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.txt")
+	content := strings.Repeat("word ", 100)
+	if err := os.WriteFile(filePath, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{filePath},
+		WithFileReaderType(source.FileReaderTypeText),
+		WithChunkSize(50),
+		WithChunkOverlap(10),
+	)
+
+	if src.fileReaderType != source.FileReaderTypeText {
+		t.Errorf("fileReaderType = %s, want %s", src.fileReaderType, source.FileReaderTypeText)
+	}
+	if src.chunkSize != 50 {
+		t.Errorf("chunkSize = %d, want 50", src.chunkSize)
+	}
+	if src.chunkOverlap != 10 {
+		t.Errorf("chunkOverlap = %d, want 10", src.chunkOverlap)
+	}
+
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+}
