@@ -109,7 +109,7 @@ func (r *DifyAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-ch
 	}
 	r.difyClient = cli
 
-	useStreaming := r.shouldUseStreaming()
+	useStreaming := r.shouldUseStreaming(invocation)
 	if useStreaming {
 		return r.runStreaming(ctx, invocation)
 	}
@@ -117,7 +117,11 @@ func (r *DifyAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-ch
 }
 
 // shouldUseStreaming determines whether to use streaming protocol
-func (r *DifyAgent) shouldUseStreaming() bool {
+func (r *DifyAgent) shouldUseStreaming(invocation *agent.Invocation) bool {
+	// Per-run override.
+	if invocation != nil && invocation.RunOptions.Stream != nil {
+		return *invocation.RunOptions.Stream
+	}
 	// If explicitly set via option, use that value
 	if r.enableStreaming != nil {
 		return *r.enableStreaming

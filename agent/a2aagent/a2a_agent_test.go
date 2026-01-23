@@ -440,11 +440,46 @@ func TestA2AAgent_shouldUseStreaming(t *testing.T) {
 	type testCase struct {
 		name         string
 		agent        *A2AAgent
+		invocation   *agent.Invocation
 		setupFunc    func(tc *testCase)
 		validateFunc func(t *testing.T, useStreaming bool)
 	}
 
 	tests := []testCase{
+		{
+			name: "per-run override true wins over agent card false",
+			agent: &A2AAgent{
+				agentCard: &server.AgentCard{
+					Capabilities: server.AgentCapabilities{
+						Streaming: boolPtr(false),
+					},
+				},
+			},
+			invocation: &agent.Invocation{
+				RunOptions: agent.RunOptions{Stream: boolPtr(true)},
+			},
+			setupFunc: func(tc *testCase) {},
+			validateFunc: func(t *testing.T, useStreaming bool) {
+				if !useStreaming {
+					t.Error("expected per-run streaming override to be enabled")
+				}
+			},
+		},
+		{
+			name: "per-run override false wins over enableStreaming true",
+			agent: &A2AAgent{
+				enableStreaming: boolPtr(true),
+			},
+			invocation: &agent.Invocation{
+				RunOptions: agent.RunOptions{Stream: boolPtr(false)},
+			},
+			setupFunc: func(tc *testCase) {},
+			validateFunc: func(t *testing.T, useStreaming bool) {
+				if useStreaming {
+					t.Error("expected per-run streaming override to be disabled")
+				}
+			},
+		},
 		{
 			name: "returns true when streaming enabled",
 			agent: &A2AAgent{
@@ -454,7 +489,8 @@ func TestA2AAgent_shouldUseStreaming(t *testing.T) {
 					},
 				},
 			},
-			setupFunc: func(tc *testCase) {},
+			invocation: &agent.Invocation{},
+			setupFunc:  func(tc *testCase) {},
 			validateFunc: func(t *testing.T, useStreaming bool) {
 				if !useStreaming {
 					t.Error("expected streaming to be enabled")
@@ -470,7 +506,8 @@ func TestA2AAgent_shouldUseStreaming(t *testing.T) {
 					},
 				},
 			},
-			setupFunc: func(tc *testCase) {},
+			invocation: &agent.Invocation{},
+			setupFunc:  func(tc *testCase) {},
 			validateFunc: func(t *testing.T, useStreaming bool) {
 				if useStreaming {
 					t.Error("expected streaming to be disabled")
@@ -482,7 +519,8 @@ func TestA2AAgent_shouldUseStreaming(t *testing.T) {
 			agent: &A2AAgent{
 				agentCard: &server.AgentCard{},
 			},
-			setupFunc: func(tc *testCase) {},
+			invocation: &agent.Invocation{},
+			setupFunc:  func(tc *testCase) {},
 			validateFunc: func(t *testing.T, useStreaming bool) {
 				if useStreaming {
 					t.Error("expected streaming to be disabled by default")
@@ -490,9 +528,10 @@ func TestA2AAgent_shouldUseStreaming(t *testing.T) {
 			},
 		},
 		{
-			name:      "returns false when no agent card",
-			agent:     &A2AAgent{},
-			setupFunc: func(tc *testCase) {},
+			name:       "returns false when no agent card",
+			agent:      &A2AAgent{},
+			invocation: &agent.Invocation{},
+			setupFunc:  func(tc *testCase) {},
 			validateFunc: func(t *testing.T, useStreaming bool) {
 				if useStreaming {
 					t.Error("expected streaming to be disabled when no agent card")
@@ -504,7 +543,7 @@ func TestA2AAgent_shouldUseStreaming(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.setupFunc(&tc)
-			useStreaming := tc.agent.shouldUseStreaming()
+			useStreaming := tc.agent.shouldUseStreaming(tc.invocation)
 			tc.validateFunc(t, useStreaming)
 		})
 	}
@@ -1198,11 +1237,11 @@ func TestShouldUseStreaming_WithExplicitOption(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			agent := &A2AAgent{
+			a2aAgt := &A2AAgent{
 				enableStreaming: tt.enableStreaming,
 				agentCard:       tt.agentCard,
 			}
-			result := agent.shouldUseStreaming()
+			result := a2aAgt.shouldUseStreaming(&agent.Invocation{})
 			if result != tt.expected {
 				t.Errorf("expected %v, got %v", tt.expected, result)
 			}
