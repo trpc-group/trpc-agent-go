@@ -2265,7 +2265,11 @@
 <span class="normal"><a href="#__codelineno-2-33">33</a></span>
 <span class="normal"><a href="#__codelineno-2-34">34</a></span>
 <span class="normal"><a href="#__codelineno-2-35">35</a></span>
-<span class="normal"><a href="#__codelineno-2-36">36</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a>knowledge/
+<span class="normal"><a href="#__codelineno-2-36">36</a></span>
+<span class="normal"><a href="#__codelineno-2-37">37</a></span>
+<span class="normal"><a href="#__codelineno-2-38">38</a></span>
+<span class="normal"><a href="#__codelineno-2-39">39</a></span>
+<span class="normal"><a href="#__codelineno-2-40">40</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a>knowledge/
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a>├── knowledge.go          # Core interface definitions and main implementation
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a>├── source/               # Document source management
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a>│   ├── source.go        # Source interface definition
@@ -2292,15 +2296,19 @@
 </span><span id="__span-2-25"><a id="__codelineno-2-25" name="__codelineno-2-25"></a>│   ├── topk/            # TopK simple truncation implementation
 </span><span id="__span-2-26"><a id="__codelineno-2-26" name="__codelineno-2-26"></a>│   ├── cohere/          # Cohere SaaS Rerank implementation
 </span><span id="__span-2-27"><a id="__codelineno-2-27" name="__codelineno-2-27"></a>│   └── infinity/        # Infinity/TEI standard Rerank API implementation
-</span><span id="__span-2-28"><a id="__codelineno-2-28" name="__codelineno-2-28"></a>├── document/             # Document processing
-</span><span id="__span-2-29"><a id="__codelineno-2-29" name="__codelineno-2-29"></a>│   ├── document.go      # Document structure definition
-</span><span id="__span-2-30"><a id="__codelineno-2-30" name="__codelineno-2-30"></a>│   └── reader/          # Document readers (supports txt/md/csv/json/docx/pdf, etc.)
-</span><span id="__span-2-31"><a id="__codelineno-2-31" name="__codelineno-2-31"></a>├── query/                # Query enhancers
-</span><span id="__span-2-32"><a id="__codelineno-2-32" name="__codelineno-2-32"></a>│   ├── query.go         # QueryEnhancer interface definition
-</span><span id="__span-2-33"><a id="__codelineno-2-33" name="__codelineno-2-33"></a>│   └── passthrough.go   # Default passthrough enhancer
-</span><span id="__span-2-34"><a id="__codelineno-2-34" name="__codelineno-2-34"></a>└── ocr/                  # OCR text recognition
-</span><span id="__span-2-35"><a id="__codelineno-2-35" name="__codelineno-2-35"></a>    ├── ocr.go           # Extractor interface definition
-</span><span id="__span-2-36"><a id="__codelineno-2-36" name="__codelineno-2-36"></a>    └── tesseract/       # Tesseract OCR implementation (separate go.mod)
+</span><span id="__span-2-28"><a id="__codelineno-2-28" name="__codelineno-2-28"></a>├── transform/            # Content transformers
+</span><span id="__span-2-29"><a id="__codelineno-2-29" name="__codelineno-2-29"></a>│   ├── transform.go     # Transformer interface definition
+</span><span id="__span-2-30"><a id="__codelineno-2-30" name="__codelineno-2-30"></a>│   ├── charfilter.go    # Character filter (remove specified characters)
+</span><span id="__span-2-31"><a id="__codelineno-2-31" name="__codelineno-2-31"></a>│   └── chardedup.go     # Character deduplicator (merge consecutive duplicate characters)
+</span><span id="__span-2-32"><a id="__codelineno-2-32" name="__codelineno-2-32"></a>├── document/             # Document processing
+</span><span id="__span-2-33"><a id="__codelineno-2-33" name="__codelineno-2-33"></a>│   ├── document.go      # Document structure definition
+</span><span id="__span-2-34"><a id="__codelineno-2-34" name="__codelineno-2-34"></a>│   └── reader/          # Document readers (supports txt/md/csv/json/docx/pdf, etc.)
+</span><span id="__span-2-35"><a id="__codelineno-2-35" name="__codelineno-2-35"></a>├── query/                # Query enhancers
+</span><span id="__span-2-36"><a id="__codelineno-2-36" name="__codelineno-2-36"></a>│   ├── query.go         # QueryEnhancer interface definition
+</span><span id="__span-2-37"><a id="__codelineno-2-37" name="__codelineno-2-37"></a>│   └── passthrough.go   # Default passthrough enhancer
+</span><span id="__span-2-38"><a id="__codelineno-2-38" name="__codelineno-2-38"></a>└── ocr/                  # OCR text recognition
+</span><span id="__span-2-39"><a id="__codelineno-2-39" name="__codelineno-2-39"></a>    ├── ocr.go           # Extractor interface definition
+</span><span id="__span-2-40"><a id="__codelineno-2-40" name="__codelineno-2-40"></a>    └── tesseract/       # Tesseract OCR implementation (separate go.mod)
 </span></code></pre></div></td></tr></table></div>
 <h2 id="agent-integration_1">Agent Integration</h2>
 <p>The Knowledge system provides search tools to integrate knowledge base capabilities into Agents.</p>
@@ -2542,7 +2550,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 23, 2026 06:32:06 UTC">2026-01-23 06:32:06</span>
   </span>
 
     

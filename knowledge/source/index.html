@@ -1121,6 +1121,90 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#content-transformer" class="md-nav__link">
+    <span class="md-ellipsis">
+      Content Transformer
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Content Transformer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#processing-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Processing Flow
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#built-in-transformers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Built-in Transformers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Built-in Transformers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#charfilter-character-filter" class="md-nav__link">
+    <span class="md-ellipsis">
+      CharFilter - Character Filter
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chardedup-character-deduplicator" class="md-nav__link">
+    <span class="md-ellipsis">
+      CharDedup - Character Deduplicator
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#combining-multiple-transformers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Combining Multiple Transformers
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#typical-use-cases" class="md-nav__link">
+    <span class="md-ellipsis">
+      Typical Use Cases
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#pdf-file-support" class="md-nav__link">
     <span class="md-ellipsis">
       PDF File Support
@@ -1767,6 +1851,90 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#content-transformer" class="md-nav__link">
+    <span class="md-ellipsis">
+      Content Transformer
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Content Transformer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#processing-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Processing Flow
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#built-in-transformers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Built-in Transformers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Built-in Transformers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#charfilter-character-filter" class="md-nav__link">
+    <span class="md-ellipsis">
+      CharFilter - Character Filter
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chardedup-character-deduplicator" class="md-nav__link">
+    <span class="md-ellipsis">
+      CharDedup - Character Deduplicator
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#combining-multiple-transformers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Combining Multiple Transformers
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#typical-use-cases" class="md-nav__link">
+    <span class="md-ellipsis">
+      Typical Use Cases
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#pdf-file-support" class="md-nav__link">
     <span class="md-ellipsis">
       PDF File Support
@@ -2093,16 +2261,170 @@
 </span><span id="__span-6-30"><a id="__codelineno-6-30" name="__codelineno-6-30"></a><span class="w">    </span><span class="p">),</span>
 </span><span id="__span-6-31"><a id="__codelineno-6-31" name="__codelineno-6-31"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<h2 id="content-transformer">Content Transformer</h2>
+<blockquote>
+<p><strong>Example Code</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/transform">examples/knowledge/features/transform</a></p>
+</blockquote>
+<p>Transformer is used to preprocess and postprocess content before and after document chunking. This is particularly useful for cleaning text extracted from PDFs, web pages, and other sources, removing excess whitespace, duplicate characters, and other noise.</p>
+<h3 id="processing-flow">Processing Flow</h3>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a>Document → Preprocess → Processed Document → Chunking → Chunks → Postprocess → Final Chunks
+</span></code></pre></div></td></tr></table></div>
+<h3 id="built-in-transformers">Built-in Transformers</h3>
+<h4 id="charfilter-character-filter">CharFilter - Character Filter</h4>
+<p>Removes specified characters or strings:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1">1</a></span>
+<span class="normal"><a href="#__codelineno-8-2">2</a></span>
+<span class="normal"><a href="#__codelineno-8-3">3</a></span>
+<span class="normal"><a href="#__codelineno-8-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/transform&quot;</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="c1">// Remove newlines, tabs, and carriage returns</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharFilter</span><span class="p">(</span><span class="s">&quot;\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\t&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\r&quot;</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h4 id="chardedup-character-deduplicator">CharDedup - Character Deduplicator</h4>
+<p>Merges consecutive duplicate characters or strings into a single instance:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1">1</a></span>
+<span class="normal"><a href="#__codelineno-9-2">2</a></span>
+<span class="normal"><a href="#__codelineno-9-3">3</a></span>
+<span class="normal"><a href="#__codelineno-9-4">4</a></span>
+<span class="normal"><a href="#__codelineno-9-5">5</a></span>
+<span class="normal"><a href="#__codelineno-9-6">6</a></span>
+<span class="normal"><a href="#__codelineno-9-7">7</a></span>
+<span class="normal"><a href="#__codelineno-9-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/transform&quot;</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="c1">// Merge multiple consecutive spaces into one, merge multiple newlines into one</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="nx">dedup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharDedup</span><span class="p">(</span><span class="s">&quot; &quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">)</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="c1">// Example:</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="c1">// Input:  &quot;hello     world\n\n\nfoo&quot;</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="c1">// Output: &quot;hello world\nfoo&quot;</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="usage">Usage</h3>
+<p>Transformers are passed to various document sources via the <code>WithTransformers</code> option:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-10-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-10-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-10-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-10-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-10-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-10-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-10-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-10-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-10-10">10</a></span>
+<span class="normal"><a href="#__codelineno-10-11">11</a></span>
+<span class="normal"><a href="#__codelineno-10-12">12</a></span>
+<span class="normal"><a href="#__codelineno-10-13">13</a></span>
+<span class="normal"><a href="#__codelineno-10-14">14</a></span>
+<span class="normal"><a href="#__codelineno-10-15">15</a></span>
+<span class="normal"><a href="#__codelineno-10-16">16</a></span>
+<span class="normal"><a href="#__codelineno-10-17">17</a></span>
+<span class="normal"><a href="#__codelineno-10-18">18</a></span>
+<span class="normal"><a href="#__codelineno-10-19">19</a></span>
+<span class="normal"><a href="#__codelineno-10-20">20</a></span>
+<span class="normal"><a href="#__codelineno-10-21">21</a></span>
+<span class="normal"><a href="#__codelineno-10-22">22</a></span>
+<span class="normal"><a href="#__codelineno-10-23">23</a></span>
+<span class="normal"><a href="#__codelineno-10-24">24</a></span>
+<span class="normal"><a href="#__codelineno-10-25">25</a></span>
+<span class="normal"><a href="#__codelineno-10-26">26</a></span>
+<span class="normal"><a href="#__codelineno-10-27">27</a></span>
+<span class="normal"><a href="#__codelineno-10-28">28</a></span>
+<span class="normal"><a href="#__codelineno-10-29">29</a></span>
+<span class="normal"><a href="#__codelineno-10-30">30</a></span>
+<span class="normal"><a href="#__codelineno-10-31">31</a></span>
+<span class="normal"><a href="#__codelineno-10-32">32</a></span>
+<span class="normal"><a href="#__codelineno-10-33">33</a></span>
+<span class="normal"><a href="#__codelineno-10-34">34</a></span>
+<span class="normal"><a href="#__codelineno-10-35">35</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="w">    </span><span class="nx">filesource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/file&quot;</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="nx">dirsource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir&quot;</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">    </span><span class="nx">urlsource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/url&quot;</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a><span class="w">    </span><span class="nx">autosource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto&quot;</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/transform&quot;</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7"></a><span class="p">)</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8"></a>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9"></a><span class="c1">// Create transformers</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharFilter</span><span class="p">(</span><span class="s">&quot;\t&quot;</span><span class="p">)</span><span class="w">           </span><span class="c1">// Remove tabs</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11"></a><span class="nx">dedup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharDedup</span><span class="p">(</span><span class="s">&quot; &quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">)</span><span class="w">        </span><span class="c1">// Merge consecutive spaces and newlines</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12"></a>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13"></a><span class="c1">// File source with transformers</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14"></a><span class="nx">fileSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./data/document.pdf&quot;</span><span class="p">},</span>
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17"></a><span class="p">)</span>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18"></a>
+</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19"></a><span class="c1">// Directory source with transformers</span>
+</span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20"></a><span class="nx">dirSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./docs&quot;</span><span class="p">},</span>
+</span><span id="__span-10-22"><a id="__codelineno-10-22" name="__codelineno-10-22"></a><span class="w">    </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
+</span><span id="__span-10-23"><a id="__codelineno-10-23" name="__codelineno-10-23"></a><span class="p">)</span>
+</span><span id="__span-10-24"><a id="__codelineno-10-24" name="__codelineno-10-24"></a>
+</span><span id="__span-10-25"><a id="__codelineno-10-25" name="__codelineno-10-25"></a><span class="c1">// URL source with transformers</span>
+</span><span id="__span-10-26"><a id="__codelineno-10-26" name="__codelineno-10-26"></a><span class="nx">urlSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-10-27"><a id="__codelineno-10-27" name="__codelineno-10-27"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;https://example.com/article&quot;</span><span class="p">},</span>
+</span><span id="__span-10-28"><a id="__codelineno-10-28" name="__codelineno-10-28"></a><span class="w">    </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
+</span><span id="__span-10-29"><a id="__codelineno-10-29" name="__codelineno-10-29"></a><span class="p">)</span>
+</span><span id="__span-10-30"><a id="__codelineno-10-30" name="__codelineno-10-30"></a>
+</span><span id="__span-10-31"><a id="__codelineno-10-31" name="__codelineno-10-31"></a><span class="c1">// Auto source with transformers</span>
+</span><span id="__span-10-32"><a id="__codelineno-10-32" name="__codelineno-10-32"></a><span class="nx">autoSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">autosource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-10-33"><a id="__codelineno-10-33" name="__codelineno-10-33"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./mixed-content&quot;</span><span class="p">},</span>
+</span><span id="__span-10-34"><a id="__codelineno-10-34" name="__codelineno-10-34"></a><span class="w">    </span><span class="nx">autosource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
+</span><span id="__span-10-35"><a id="__codelineno-10-35" name="__codelineno-10-35"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="combining-multiple-transformers">Combining Multiple Transformers</h3>
+<p>Multiple transformers are executed in sequence:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1">1</a></span>
+<span class="normal"><a href="#__codelineno-11-2">2</a></span>
+<span class="normal"><a href="#__codelineno-11-3">3</a></span>
+<span class="normal"><a href="#__codelineno-11-4">4</a></span>
+<span class="normal"><a href="#__codelineno-11-5">5</a></span>
+<span class="normal"><a href="#__codelineno-11-6">6</a></span>
+<span class="normal"><a href="#__codelineno-11-7">7</a></span>
+<span class="normal"><a href="#__codelineno-11-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="c1">// First remove tabs, then merge consecutive spaces</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharFilter</span><span class="p">(</span><span class="s">&quot;\t&quot;</span><span class="p">)</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="nx">dedup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharDedup</span><span class="p">(</span><span class="s">&quot; &quot;</span><span class="p">)</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="nx">src</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./data/messy.txt&quot;</span><span class="p">},</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span><span class="w">  </span><span class="c1">// Executed in order</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="typical-use-cases">Typical Use Cases</h3>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Recommended Configuration</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PDF text cleanup</td>
+<td><code>CharDedup(" ", "\n")</code> - Merge excess spaces and newlines from PDF extraction</td>
+</tr>
+<tr>
+<td>Web content processing</td>
+<td><code>CharFilter("\t")</code> + <code>CharDedup(" ")</code> - Remove tabs and merge spaces</td>
+</tr>
+<tr>
+<td>Code documentation processing</td>
+<td><code>CharDedup("\n")</code> - Merge excess blank lines, preserve code indentation</td>
+</tr>
+<tr>
+<td>General text cleanup</td>
+<td><code>CharFilter("\r")</code> + <code>CharDedup(" ", "\n")</code> - Remove carriage returns and merge whitespace</td>
+</tr>
+</tbody>
+</table>
 <h2 id="pdf-file-support">PDF File Support</h2>
 <p>Since the PDF reader depends on third-party libraries, to avoid introducing unnecessary dependencies in the main module, the PDF reader uses a separate <code>go.mod</code>.</p>
 <p>To support PDF file reading, manually import the PDF reader package in your code:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span>
-<span class="normal"><a href="#__codelineno-7-2">2</a></span>
-<span class="normal"><a href="#__codelineno-7-3">3</a></span>
-<span class="normal"><a href="#__codelineno-7-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="c1">// Import PDF reader to support .pdf file parsing</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf&quot;</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1">1</a></span>
+<span class="normal"><a href="#__codelineno-12-2">2</a></span>
+<span class="normal"><a href="#__codelineno-12-3">3</a></span>
+<span class="normal"><a href="#__codelineno-12-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="w">    </span><span class="c1">// Import PDF reader to support .pdf file parsing</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf&quot;</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <blockquote>
 <p><strong>Note</strong>: Readers for other formats (.txt/.md/.csv/.json, etc.) are automatically registered and don't need manual import.</p>
@@ -2129,7 +2451,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 23, 2026 06:32:06 UTC">2026-01-23 06:32:06</span>
   </span>
 
     

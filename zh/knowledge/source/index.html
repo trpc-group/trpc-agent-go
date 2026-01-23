@@ -1121,6 +1121,81 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#transformer" class="md-nav__link">
+    <span class="md-ellipsis">
+      内容转换器 (Transformer)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="内容转换器 (Transformer)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      处理流程
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      内置转换器
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="内置转换器">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#charfilter-" class="md-nav__link">
+    <span class="md-ellipsis">
+      CharFilter - 字符过滤器
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chardedup-" class="md-nav__link">
+    <span class="md-ellipsis">
+      CharDedup - 字符去重器
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      使用方式
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      组合多个转换器
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#pdf" class="md-nav__link">
     <span class="md-ellipsis">
       PDF 文件支持
@@ -1767,6 +1842,81 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#transformer" class="md-nav__link">
+    <span class="md-ellipsis">
+      内容转换器 (Transformer)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="内容转换器 (Transformer)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      处理流程
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      内置转换器
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="内置转换器">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#charfilter-" class="md-nav__link">
+    <span class="md-ellipsis">
+      CharFilter - 字符过滤器
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chardedup-" class="md-nav__link">
+    <span class="md-ellipsis">
+      CharDedup - 字符去重器
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      使用方式
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      组合多个转换器
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#pdf" class="md-nav__link">
     <span class="md-ellipsis">
       PDF 文件支持
@@ -2093,16 +2243,143 @@
 </span><span id="__span-6-30"><a id="__codelineno-6-30" name="__codelineno-6-30"></a><span class="w">    </span><span class="p">),</span>
 </span><span id="__span-6-31"><a id="__codelineno-6-31" name="__codelineno-6-31"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<h2 id="transformer">内容转换器 (Transformer)</h2>
+<blockquote>
+<p><strong>示例代码</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/transform">examples/knowledge/features/transform</a></p>
+</blockquote>
+<p>Transformer 用于在文档分块（Chunking）前后对内容进行预处理和后处理。这对于清理从 PDF、网页等来源提取的文本特别有用，可以去除多余的空白字符、重复字符等噪声。</p>
+<h3 id="_5">处理流程</h3>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a>文档 → Preprocess（预处理） → 处理后的文档 → Chunking（分块） → 分块 → Postprocess（后处理） → 最终分块
+</span></code></pre></div></td></tr></table></div>
+<h3 id="_6">内置转换器</h3>
+<h4 id="charfilter-">CharFilter - 字符过滤器</h4>
+<p>移除指定的字符或字符串：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1">1</a></span>
+<span class="normal"><a href="#__codelineno-8-2">2</a></span>
+<span class="normal"><a href="#__codelineno-8-3">3</a></span>
+<span class="normal"><a href="#__codelineno-8-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/transform&quot;</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="c1">// 移除换行符和制表符</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharFilter</span><span class="p">(</span><span class="s">&quot;\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\t&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\r&quot;</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h4 id="chardedup-">CharDedup - 字符去重器</h4>
+<p>将连续重复的字符或字符串合并为单个：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1">1</a></span>
+<span class="normal"><a href="#__codelineno-9-2">2</a></span>
+<span class="normal"><a href="#__codelineno-9-3">3</a></span>
+<span class="normal"><a href="#__codelineno-9-4">4</a></span>
+<span class="normal"><a href="#__codelineno-9-5">5</a></span>
+<span class="normal"><a href="#__codelineno-9-6">6</a></span>
+<span class="normal"><a href="#__codelineno-9-7">7</a></span>
+<span class="normal"><a href="#__codelineno-9-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/transform&quot;</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="c1">// 将多个连续空格合并为单个空格，多个换行合并为单个换行</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="nx">dedup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharDedup</span><span class="p">(</span><span class="s">&quot; &quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">)</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="c1">// 示例：</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="c1">// 输入:  &quot;hello     world\n\n\nfoo&quot;</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="c1">// 输出:  &quot;hello world\nfoo&quot;</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="_7">使用方式</h3>
+<p>Transformer 通过 <code>WithTransformers</code> 选项传递给各类文档源：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-10-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-10-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-10-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-10-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-10-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-10-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-10-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-10-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-10-10">10</a></span>
+<span class="normal"><a href="#__codelineno-10-11">11</a></span>
+<span class="normal"><a href="#__codelineno-10-12">12</a></span>
+<span class="normal"><a href="#__codelineno-10-13">13</a></span>
+<span class="normal"><a href="#__codelineno-10-14">14</a></span>
+<span class="normal"><a href="#__codelineno-10-15">15</a></span>
+<span class="normal"><a href="#__codelineno-10-16">16</a></span>
+<span class="normal"><a href="#__codelineno-10-17">17</a></span>
+<span class="normal"><a href="#__codelineno-10-18">18</a></span>
+<span class="normal"><a href="#__codelineno-10-19">19</a></span>
+<span class="normal"><a href="#__codelineno-10-20">20</a></span>
+<span class="normal"><a href="#__codelineno-10-21">21</a></span>
+<span class="normal"><a href="#__codelineno-10-22">22</a></span>
+<span class="normal"><a href="#__codelineno-10-23">23</a></span>
+<span class="normal"><a href="#__codelineno-10-24">24</a></span>
+<span class="normal"><a href="#__codelineno-10-25">25</a></span>
+<span class="normal"><a href="#__codelineno-10-26">26</a></span>
+<span class="normal"><a href="#__codelineno-10-27">27</a></span>
+<span class="normal"><a href="#__codelineno-10-28">28</a></span>
+<span class="normal"><a href="#__codelineno-10-29">29</a></span>
+<span class="normal"><a href="#__codelineno-10-30">30</a></span>
+<span class="normal"><a href="#__codelineno-10-31">31</a></span>
+<span class="normal"><a href="#__codelineno-10-32">32</a></span>
+<span class="normal"><a href="#__codelineno-10-33">33</a></span>
+<span class="normal"><a href="#__codelineno-10-34">34</a></span>
+<span class="normal"><a href="#__codelineno-10-35">35</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="w">    </span><span class="nx">filesource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/file&quot;</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="nx">dirsource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir&quot;</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">    </span><span class="nx">urlsource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/url&quot;</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a><span class="w">    </span><span class="nx">autosource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto&quot;</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/transform&quot;</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7"></a><span class="p">)</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8"></a>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9"></a><span class="c1">// 创建转换器</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharFilter</span><span class="p">(</span><span class="s">&quot;\t&quot;</span><span class="p">)</span><span class="w">           </span><span class="c1">// 移除制表符</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11"></a><span class="nx">dedup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharDedup</span><span class="p">(</span><span class="s">&quot; &quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">)</span><span class="w">        </span><span class="c1">// 合并连续空格和换行</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12"></a>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13"></a><span class="c1">// 文件源使用转换器</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14"></a><span class="nx">fileSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./data/document.pdf&quot;</span><span class="p">},</span>
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17"></a><span class="p">)</span>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18"></a>
+</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19"></a><span class="c1">// 目录源使用转换器</span>
+</span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20"></a><span class="nx">dirSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./docs&quot;</span><span class="p">},</span>
+</span><span id="__span-10-22"><a id="__codelineno-10-22" name="__codelineno-10-22"></a><span class="w">    </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
+</span><span id="__span-10-23"><a id="__codelineno-10-23" name="__codelineno-10-23"></a><span class="p">)</span>
+</span><span id="__span-10-24"><a id="__codelineno-10-24" name="__codelineno-10-24"></a>
+</span><span id="__span-10-25"><a id="__codelineno-10-25" name="__codelineno-10-25"></a><span class="c1">// URL 源使用转换器</span>
+</span><span id="__span-10-26"><a id="__codelineno-10-26" name="__codelineno-10-26"></a><span class="nx">urlSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-10-27"><a id="__codelineno-10-27" name="__codelineno-10-27"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;https://example.com/article&quot;</span><span class="p">},</span>
+</span><span id="__span-10-28"><a id="__codelineno-10-28" name="__codelineno-10-28"></a><span class="w">    </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
+</span><span id="__span-10-29"><a id="__codelineno-10-29" name="__codelineno-10-29"></a><span class="p">)</span>
+</span><span id="__span-10-30"><a id="__codelineno-10-30" name="__codelineno-10-30"></a>
+</span><span id="__span-10-31"><a id="__codelineno-10-31" name="__codelineno-10-31"></a><span class="c1">// 自动源使用转换器</span>
+</span><span id="__span-10-32"><a id="__codelineno-10-32" name="__codelineno-10-32"></a><span class="nx">autoSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">autosource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-10-33"><a id="__codelineno-10-33" name="__codelineno-10-33"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./mixed-content&quot;</span><span class="p">},</span>
+</span><span id="__span-10-34"><a id="__codelineno-10-34" name="__codelineno-10-34"></a><span class="w">    </span><span class="nx">autosource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
+</span><span id="__span-10-35"><a id="__codelineno-10-35" name="__codelineno-10-35"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="_8">组合多个转换器</h3>
+<p>多个转换器按顺序依次执行：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1">1</a></span>
+<span class="normal"><a href="#__codelineno-11-2">2</a></span>
+<span class="normal"><a href="#__codelineno-11-3">3</a></span>
+<span class="normal"><a href="#__codelineno-11-4">4</a></span>
+<span class="normal"><a href="#__codelineno-11-5">5</a></span>
+<span class="normal"><a href="#__codelineno-11-6">6</a></span>
+<span class="normal"><a href="#__codelineno-11-7">7</a></span>
+<span class="normal"><a href="#__codelineno-11-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="c1">// 先移除制表符，再合并连续空格</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharFilter</span><span class="p">(</span><span class="s">&quot;\t&quot;</span><span class="p">)</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="nx">dedup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharDedup</span><span class="p">(</span><span class="s">&quot; &quot;</span><span class="p">)</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="nx">src</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./data/messy.txt&quot;</span><span class="p">},</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span><span class="w">  </span><span class="c1">// 按顺序执行</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
 <h2 id="pdf">PDF 文件支持</h2>
 <p>由于 PDF reader 依赖第三方库，为避免主模块引入不必要的依赖，PDF reader 采用独立 <code>go.mod</code> 管理。</p>
 <p>如需支持 PDF 文件读取，需在代码中手动引入 PDF reader 包进行注册：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span>
-<span class="normal"><a href="#__codelineno-7-2">2</a></span>
-<span class="normal"><a href="#__codelineno-7-3">3</a></span>
-<span class="normal"><a href="#__codelineno-7-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="c1">// 引入 PDF reader 以支持 .pdf 文件解析</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf&quot;</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1">1</a></span>
+<span class="normal"><a href="#__codelineno-12-2">2</a></span>
+<span class="normal"><a href="#__codelineno-12-3">3</a></span>
+<span class="normal"><a href="#__codelineno-12-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="w">    </span><span class="c1">// 引入 PDF reader 以支持 .pdf 文件解析</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf&quot;</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <blockquote>
 <p><strong>注意</strong>：其他格式（.txt/.md/.csv/.json 等）的 reader 已自动注册，无需手动引入。</p>
@@ -2129,7 +2406,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月8日 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月23日 06:32:06 UTC">2026-01-23 06:32:06</span>
   </span>
 
     
