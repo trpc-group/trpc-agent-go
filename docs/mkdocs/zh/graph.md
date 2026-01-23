@@ -1041,7 +1041,7 @@ graphAgent, err := graphagent.New("my-agent", compiledGraph,
 		graph.WithNodeTimeout(2*time.Minute),            // 单个节点的超时时间
 		graph.WithCheckpointSaveTimeout(30*time.Second), // 检查点保存超时
 		graph.WithDefaultRetryPolicy(                    // 默认重试策略
-			graph.WithSimpleRetry(3, 1*time.Second),
+			graph.WithSimpleRetry(3),
 		),
 	),
 )

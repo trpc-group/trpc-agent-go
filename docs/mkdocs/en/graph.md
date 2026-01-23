@@ -975,7 +975,7 @@ graphAgent, err := graphagent.New("my-agent", compiledGraph,
 		graph.WithNodeTimeout(2*time.Minute),            // timeout per node
 		graph.WithCheckpointSaveTimeout(30*time.Second), // checkpoint save timeout
 		graph.WithDefaultRetryPolicy(                    // default retry policy
-			graph.WithSimpleRetry(3, 1*time.Second),
+			graph.WithSimpleRetry(3),
 		),
 	),
 )
@@ -2892,7 +2892,7 @@ graphAgent, err := graphagent.New("my-agent", compiledGraph,
 		graph.WithNodeTimeout(2*time.Minute),            // node timeout (useful for agent tool nodes)
 		graph.WithCheckpointSaveTimeout(30*time.Second), // checkpoint save timeout
 		graph.WithDefaultRetryPolicy(                    // default retry policy
-			graph.WithSimpleRetry(3, 1*time.Second),
+			graph.WithSimpleRetry(3),
 		),
 	),
 )
