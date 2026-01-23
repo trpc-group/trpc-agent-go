@@ -752,10 +752,117 @@ func TestExecutor_GetNextChannelsInStep_And_ClearMarks_And_UpdateVersionsSeen(t 
 	// clear marks
 	exec.clearChannelStepMarks(ec)
 	require.False(t, perRunCh.IsUpdatedInStep(5))
+	require.False(t, perRunCh.IsUpdatedInStep(0))
+	require.Equal(t, ichannel.StepUnmarked, perRunCh.LastUpdatedStep)
 
 	// updateVersionsSeen should record current version for triggers
 	exec.updateVersionsSeen(ec, "nodeA", []string{"branch:to:x"})
 	require.Equal(t, perRunCh.Version, ec.versionsSeen["nodeA"]["branch:to:x"])
+}
+
+func TestExecutor_ProcessChannelWrites_SetsStepMark(t *testing.T) {
+	const (
+		channelName = "branch:to:x"
+		step        = 7
+	)
+
+	g := New(NewStateSchema())
+	g.addChannel(channelName, ichannel.BehaviorLastValue)
+	exec := &Executor{graph: g}
+	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
+
+	exec.processChannelWrites(
+		context.Background(),
+		nil,
+		ec,
+		"task",
+		[]channelWriteEntry{{Channel: channelName, Value: "v"}},
+		step,
+	)
+
+	perRunCh, ok := ec.channels.GetChannel(channelName)
+	require.True(t, ok)
+	require.True(t, perRunCh.IsUpdatedInStep(step))
+
+	checkpoint := exec.createCheckpointFromState(ec.State, step, ec)
+	require.Contains(t, checkpoint.UpdatedChannels, channelName)
+}
+
+func TestExecutor_HandleCommandRouting_SetsStepMark(t *testing.T) {
+	const (
+		targetNode = "x"
+		step       = 3
+		taskID     = "task"
+	)
+
+	g := New(NewStateSchema())
+	exec := &Executor{graph: g}
+	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
+
+	exec.handleCommandRouting(
+		context.Background(),
+		nil,
+		ec,
+		taskID,
+		targetNode,
+		step,
+	)
+
+	channelName := fmt.Sprintf("%s%s", ChannelTriggerPrefix, targetNode)
+	defCh, ok := g.getChannel(channelName)
+	require.True(t, ok)
+	require.NotNil(t, defCh)
+	require.Equal(t, ichannel.BehaviorLastValue, defCh.Behavior)
+
+	perRunCh, ok := ec.channels.GetChannel(channelName)
+	require.True(t, ok)
+	require.True(t, perRunCh.IsUpdatedInStep(step))
+
+	require.Len(t, ec.pendingWrites, 1)
+	require.Equal(t, PendingWrite{
+		Channel:  channelName,
+		Value:    channelUpdateMarker,
+		TaskID:   taskID,
+		Sequence: 1,
+	}, ec.pendingWrites[0])
+
+	checkpoint := exec.createCheckpointFromState(ec.State, step, ec)
+	require.Contains(t, checkpoint.UpdatedChannels, channelName)
+}
+
+func TestExecutor_ProcessConditionalResult_SetsStepMark(t *testing.T) {
+	const (
+		fromNode   = "a"
+		targetNode = "b"
+		resultKey  = "route"
+		step       = 9
+	)
+
+	g := New(NewStateSchema())
+	exec := &Executor{graph: g}
+	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
+	condEdge := &ConditionalEdge{
+		From:    fromNode,
+		PathMap: map[string]string{resultKey: targetNode},
+	}
+
+	err := exec.processConditionalResult(
+		context.Background(),
+		nil,
+		ec,
+		condEdge,
+		resultKey,
+		step,
+	)
+	require.NoError(t, err)
+
+	channelName := fmt.Sprintf("%s%s", ChannelBranchPrefix, targetNode)
+	perRunCh, ok := ec.channels.GetChannel(channelName)
+	require.True(t, ok)
+	require.True(t, perRunCh.IsUpdatedInStep(step))
+
+	checkpoint := exec.createCheckpointFromState(ec.State, step, ec)
+	require.Contains(t, checkpoint.UpdatedChannels, channelName)
 }
 
 // mock saver for createCheckpoint
