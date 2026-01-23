@@ -87,6 +87,57 @@ func TestGetFileType(t *testing.T) {
 	}
 }
 
+func TestGetFileTypeUnknownExtension(t *testing.T) {
+	// Test files with unknown extensions that should fallback to text
+	unknownExtCases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"log_with_numeric_suffix", "app.log.123213", "text"},
+		{"log_with_date_suffix", "app.log.20250121", "text"},
+		{"multiple_dots", "app.service.log.1", "text"},
+		{"unknown_extension", "data.xyz", "text"},
+		{"no_extension", "Makefile", "text"},
+		{"empty_extension", "file.", "text"},
+		{"log_file", "app.log", "text"},
+	}
+
+	for _, c := range unknownExtCases {
+		t.Run(c.name, func(t *testing.T) {
+			got := GetFileType(c.path)
+			require.Equal(t, c.want, got, "path %s should be treated as text", c.path)
+		})
+	}
+}
+
+func TestGetFileTypeAllExtensions(t *testing.T) {
+	// Test all supported extensions via GetFileType function
+	cases := []struct {
+		ext  string
+		want string
+	}{
+		{".txt", "text"},
+		{".text", "text"},
+		{".html", "text"},
+		{".htm", "text"},
+		{".pdf", "pdf"},
+		{".md", "markdown"},
+		{".markdown", "markdown"},
+		{".json", "json"},
+		{".csv", "csv"},
+		{".docx", "docx"},
+		{".doc", "docx"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.ext, func(t *testing.T) {
+			got := GetFileType("file" + c.ext)
+			require.Equal(t, c.want, got, "extension %s should map to %s", c.ext, c.want)
+		})
+	}
+}
+
 func TestGetFileTypeFromContentType(t *testing.T) {
 	cases := []struct {
 		contentType string
@@ -125,6 +176,29 @@ func TestGetFileTypeFromContentType(t *testing.T) {
 	for _, c := range cases {
 		got := GetFileTypeFromContentType(c.contentType, c.fileName)
 		require.Equal(t, c.want, got, "ctype %s fname %s", c.contentType, c.fileName)
+	}
+}
+
+func TestGetFileTypeFromContentTypeUnknownExtension(t *testing.T) {
+	// Test files with unknown extensions when content type is not available
+	unknownExtCases := []struct {
+		name        string
+		contentType string
+		fileName    string
+		want        string
+	}{
+		{"log_with_numeric_suffix", "", "app.log.123213", "text"},
+		{"log_with_date_suffix", "", "app.log.20250121", "text"},
+		{"unknown_extension", "", "data.xyz", "text"},
+		{"no_extension", "", "Makefile", "text"},
+		{"unknown_content_type_fallback", "application/octet-stream", "file.bin", "text"},
+	}
+
+	for _, c := range unknownExtCases {
+		t.Run(c.name, func(t *testing.T) {
+			got := GetFileTypeFromContentType(c.contentType, c.fileName)
+			require.Equal(t, c.want, got)
+		})
 	}
 }
 
@@ -277,4 +351,25 @@ func TestBuildReaderOptions(t *testing.T) {
 		opts := buildReaderOptions(config)
 		require.Len(t, opts, 1)
 	})
+}
+
+func TestResolveFileType(t *testing.T) {
+	tests := []struct {
+		name         string
+		overrideType string
+		detectedType string
+		expected     string
+	}{
+		{"override takes precedence", "json", "text", "json"},
+		{"empty override uses detected", "", "markdown", "markdown"},
+		{"both empty returns empty", "", "", ""},
+		{"override with empty detected", "csv", "", "csv"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ResolveFileType(tt.overrideType, tt.detectedType)
+			require.Equal(t, tt.expected, result)
+		})
+	}
 }
