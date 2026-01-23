@@ -64,6 +64,10 @@ type BeforeToolArgs struct {
 	Declaration *Declaration
 	// Arguments is the tool arguments in JSON bytes (can be modified).
 	Arguments []byte
+	// ResumeValue is the value of the resume.
+	ResumeValue any
+	// ResumeMap is the map of resume values.
+	ResumeMap map[string]any
 }
 
 // BeforeToolResult contains the return value for before tool callback.
