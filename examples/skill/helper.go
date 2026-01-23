@@ -24,8 +24,8 @@ import (
 
 type ctxKeySkillRunOutputFiles struct{}
 
-// SkillRunOutputFile represents a file exported from skill_run output_files.
-type SkillRunOutputFile struct {
+// skillRunOutputFile represents a file exported from skill_run output_files.
+type skillRunOutputFile struct {
 	RelPath string
 	Content string
 	MIME    string
@@ -50,12 +50,12 @@ func lookupSkillRunOutputFileFromContext(
 // skill_run output_files in ctx.
 func skillRunOutputFilesFromContext(
 	ctx context.Context,
-) []SkillRunOutputFile {
+) []skillRunOutputFile {
 	v := ctx.Value(ctxKeySkillRunOutputFiles{})
 	if v == nil {
 		return nil
 	}
-	files, ok := v.([]SkillRunOutputFile)
+	files, ok := v.([]skillRunOutputFile)
 	if !ok {
 		return nil
 	}
@@ -90,8 +90,8 @@ func parseFileRef(raw string) (fileRef, error) {
 		return fileRef{Raw: raw}, nil
 	}
 
-	if strings.HasPrefix(s, workspacePrefix) {
-		p := strings.TrimPrefix(s, workspacePrefix)
+	if after, ok := strings.CutPrefix(s, workspacePrefix); ok {
+		p := after
 		rel, err := cleanRelPath(p)
 		if err != nil {
 			return fileRef{}, err
@@ -103,8 +103,8 @@ func parseFileRef(raw string) (fileRef, error) {
 		}, nil
 	}
 
-	if strings.HasPrefix(s, artifactPrefix) {
-		rest := strings.TrimPrefix(s, artifactPrefix)
+	if after, ok := strings.CutPrefix(s, artifactPrefix); ok {
+		rest := after
 		rest = strings.TrimSpace(rest)
 		if rest == "" {
 			return fileRef{}, fmt.Errorf(errArtifactNameEmpty)
