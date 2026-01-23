@@ -165,6 +165,10 @@ knowledge/
 │   ├── topk/            # TopK 简单截断实现
 │   ├── cohere/          # Cohere SaaS Rerank 实现
 │   └── infinity/        # Infinity/TEI 标准 Rerank API 实现
+├── transform/            # 内容转换器
+│   ├── transform.go     # Transformer 接口定义
+│   ├── charfilter.go    # 字符过滤器（移除指定字符）
+│   └── chardedup.go     # 字符去重器（合并连续重复字符）
 ├── document/             # 文档处理
 │   ├── document.go      # Document 结构定义
 │   └── reader/          # 文档读取器（支持 txt/md/csv/json/docx/pdf 等格式）

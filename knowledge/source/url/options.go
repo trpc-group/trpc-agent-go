@@ -14,6 +14,7 @@ import (
 	"net/http"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
@@ -93,5 +94,18 @@ func WithChunkOverlap(overlap int) Option {
 func WithTransformers(transformers ...transform.Transformer) Option {
 	return func(s *Source) {
 		s.transformers = append(s.transformers, transformers...)
+	}
+}
+
+// WithFileReaderType overrides the automatic file reader type detection based on content-type or URL extension.
+// This forces the source to use the specified file type reader.
+// Use predefined constants from source package for type safety.
+//
+// Example:
+//
+//	source := url.New([]string{"https://example.com/api/data"}, url.WithFileReaderType(source.FileReaderTypeJSON))
+func WithFileReaderType(fileType source.FileReaderType) Option {
+	return func(s *Source) {
+		s.fileReaderType = fileType
 	}
 }
