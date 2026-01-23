@@ -82,12 +82,12 @@ type trimEventOptions struct {
 	ConversationCount int
 }
 
-// TrimEventOption customizes trimming.
-type TrimEventOption func(*trimEventOptions)
+// TrimConversationOption customizes trimming.
+type TrimConversationOption func(*trimEventOptions)
 
-// WithTrimTopNConversation trims the most recent N conversations.
+// WithCount sets the number of conversations to trim.
 // Each conversation is a group of events with the same RequestID.
-func WithTrimTopNConversation(n int) TrimEventOption {
+func WithCount(n int) TrimConversationOption {
 	return func(o *trimEventOptions) {
 		o.ConversationCount = n
 	}
@@ -608,12 +608,13 @@ func (s *Service) AppendTrackEvent(
 	return nil
 }
 
-// TrimEvents trims recent conversations and returns the deleted events.
+// TrimConversations trims recent conversations and returns the deleted events.
 // A conversation is defined as all events sharing the same RequestID.
-func (s *Service) TrimEvents(
+// By default, it trims 1 conversation.
+func (s *Service) TrimConversations(
 	ctx context.Context,
 	key session.Key,
-	options ...TrimEventOption,
+	options ...TrimConversationOption,
 ) ([]event.Event, error) {
 	if err := key.CheckSessionKey(); err != nil {
 		return nil, err
