@@ -41,8 +41,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
-	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
+	"trpc.group/trpc-go/trpc-agent-go/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/planner/react"
@@ -553,11 +552,9 @@ func readFileContent(
 
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		if looksLikeSkillWorkspacePath(cacheKey) {
-			if content, _, ok := toolcache.
-				LookupSkillRunOutputFileFromContext(
-					ctx,
-					cacheKey,
-				); ok {
+			ref := fileref.WorkspaceRef(cacheKey)
+			content, _, handled, err := fileref.TryRead(ctx, ref)
+			if handled && err == nil {
 				return ReadFileResponse{
 					Content:  content,
 					FileType: "text",
