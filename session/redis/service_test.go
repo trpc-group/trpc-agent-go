@@ -3608,11 +3608,11 @@ func TestGetSessionHook(t *testing.T) {
 	})
 }
 
-func TestService_TrimEvents(t *testing.T) {
+func TestService_TrimConversations(t *testing.T) {
 	tests := []struct {
 		name           string
 		setupEvents    func(t *testing.T, service *Service, key session.Key) []event.Event
-		trimOptions    []TrimEventOption
+		trimOptions    []TrimConversationOption
 		expectedCount  int
 		expectedReqIDs []string
 		wantErr        bool
@@ -3660,7 +3660,7 @@ func TestService_TrimEvents(t *testing.T) {
 				}
 				return events
 			},
-			trimOptions:    []TrimEventOption{WithTrimTopNConversation(2)},
+			trimOptions:    []TrimConversationOption{WithCount(2)},
 			expectedCount:  2,
 			expectedReqIDs: []string{"req3", "req4"},
 			wantErr:        false,
@@ -3685,7 +3685,7 @@ func TestService_TrimEvents(t *testing.T) {
 				}
 				return events
 			},
-			trimOptions:    []TrimEventOption{WithTrimTopNConversation(1)},
+			trimOptions:    []TrimConversationOption{WithCount(1)},
 			expectedCount:  3,
 			expectedReqIDs: []string{"req2", "req2", "req2"},
 			wantErr:        false,
@@ -3743,7 +3743,7 @@ func TestService_TrimEvents(t *testing.T) {
 				}
 				return events
 			},
-			trimOptions:    []TrimEventOption{WithTrimTopNConversation(0)},
+			trimOptions:    []TrimConversationOption{WithCount(0)},
 			expectedCount:  1,
 			expectedReqIDs: []string{"req2"},
 			wantErr:        false,
@@ -3765,7 +3765,7 @@ func TestService_TrimEvents(t *testing.T) {
 				}
 				return events
 			},
-			trimOptions:    []TrimEventOption{WithTrimTopNConversation(-5)},
+			trimOptions:    []TrimConversationOption{WithCount(-5)},
 			expectedCount:  1,
 			expectedReqIDs: []string{"req2"},
 			wantErr:        false,
@@ -3786,7 +3786,7 @@ func TestService_TrimEvents(t *testing.T) {
 				}
 				return events
 			},
-			trimOptions:    []TrimEventOption{WithTrimTopNConversation(10)},
+			trimOptions:    []TrimConversationOption{WithCount(10)},
 			expectedCount:  1,
 			expectedReqIDs: []string{"req1"},
 			wantErr:        false,
@@ -3813,7 +3813,7 @@ func TestService_TrimEvents(t *testing.T) {
 
 			tt.setupEvents(t, service, key)
 
-			deleted, err := service.TrimEvents(context.Background(), key, tt.trimOptions...)
+			deleted, err := service.TrimConversations(context.Background(), key, tt.trimOptions...)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -3835,7 +3835,7 @@ func TestService_TrimEvents(t *testing.T) {
 	}
 }
 
-func TestService_TrimEvents_InvalidKey(t *testing.T) {
+func TestService_TrimConversations_InvalidKey(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
@@ -3867,14 +3867,14 @@ func TestService_TrimEvents_InvalidKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := service.TrimEvents(context.Background(), tt.key)
+			_, err := service.TrimConversations(context.Background(), tt.key)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.errContains)
 		})
 	}
 }
 
-func TestService_TrimEvents_ChronologicalOrder(t *testing.T) {
+func TestService_TrimConversations_ChronologicalOrder(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
@@ -3900,7 +3900,7 @@ func TestService_TrimEvents_ChronologicalOrder(t *testing.T) {
 		require.NoError(t, service.AppendEvent(ctx, sess, &events[i]))
 	}
 
-	deleted, err := service.TrimEvents(ctx, key)
+	deleted, err := service.TrimConversations(ctx, key)
 	require.NoError(t, err)
 	require.Len(t, deleted, 3)
 
@@ -3910,7 +3910,7 @@ func TestService_TrimEvents_ChronologicalOrder(t *testing.T) {
 	assert.Equal(t, "e3", deleted[2].ID)
 }
 
-func TestService_TrimEvents_TTLRefresh(t *testing.T) {
+func TestService_TrimConversations_TTLRefresh(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
@@ -3938,7 +3938,7 @@ func TestService_TrimEvents_TTLRefresh(t *testing.T) {
 	}
 
 	// Perform trim operation (trim 1 conversation, leave 1).
-	_, err = service.TrimEvents(ctx, key, WithTrimTopNConversation(1))
+	_, err = service.TrimConversations(ctx, key, WithCount(1))
 	require.NoError(t, err)
 
 	// Verify TTL was refreshed by checking keys still exist with TTL.
@@ -3956,7 +3956,7 @@ func TestService_TrimEvents_TTLRefresh(t *testing.T) {
 	assert.Greater(t, sessTTL, time.Duration(0), "session key TTL should be set")
 }
 
-func TestService_TrimEvents_RemainingEvents(t *testing.T) {
+func TestService_TrimConversations_RemainingEvents(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
@@ -3982,7 +3982,7 @@ func TestService_TrimEvents_RemainingEvents(t *testing.T) {
 	}
 
 	// Trim 1 conversation (the most recent one: req3).
-	deleted, err := service.TrimEvents(ctx, key, WithTrimTopNConversation(1))
+	deleted, err := service.TrimConversations(ctx, key, WithCount(1))
 	require.NoError(t, err)
 	require.Len(t, deleted, 1)
 	assert.Equal(t, "req3", deleted[0].RequestID)
