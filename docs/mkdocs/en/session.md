@@ -1634,6 +1634,61 @@ Configure the summarizer behavior with the following options:
 - **`WithPrompt(prompt string)`**: Provide a custom summarization prompt. The prompt must include the placeholder `{conversation_text}`, which will be replaced with the conversation content. Optionally include `{max_summary_words}` for word limit instructions.
 - **`WithSkipRecent(skipFunc SkipRecentFunc)`**: Skip the _most recent_ events during summarization using a custom function. The function receives all events and returns how many tail events to skip. Return 0 to skip none. Useful for avoiding summarizing very recent/incomplete conversations, or applying time/content-based skipping strategies.
 
+**Tool Call Formatting:**
+
+By default, the summarizer includes tool calls and tool results in the conversation text sent to the LLM for summarization. The default format is:
+
+- Tool calls: `[Called tool: toolName with args: {"arg": "value"}]`
+- Tool results: `[toolName returned: result content]`
+
+You can customize how tool calls and results are formatted using these options:
+
+- **`WithToolCallFormatter(f ToolCallFormatter)`**: Customize how tool calls are formatted in the summary input. The formatter receives a `model.ToolCall` and returns a formatted string. Return empty string to exclude the tool call.
+- **`WithToolResultFormatter(f ToolResultFormatter)`**: Customize how tool results are formatted in the summary input. The formatter receives the `model.Message` containing the tool result and returns a formatted string. Return empty string to exclude the result.
+
+**Example with custom tool formatters:**
+
+```go
+// Truncate long tool arguments
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolCallFormatter(func(tc model.ToolCall) string {
+        name := tc.Function.Name
+        if name == "" {
+            return ""
+        }
+        args := string(tc.Function.Arguments)
+        const maxLen = 100
+        if len(args) > maxLen {
+            args = args[:maxLen] + "...(truncated)"
+        }
+        return fmt.Sprintf("[Tool: %s, Args: %s]", name, args)
+    }),
+    summary.WithEventThreshold(20),
+)
+
+// Exclude tool results from summary
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolResultFormatter(func(msg model.Message) string {
+        return "" // Return empty to exclude tool results.
+    }),
+    summary.WithEventThreshold(20),
+)
+
+// Only include tool names, exclude arguments
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolCallFormatter(func(tc model.ToolCall) string {
+        if tc.Function.Name == "" {
+            return ""
+        }
+        return fmt.Sprintf("[Used tool: %s]", tc.Function.Name)
+    }),
+    summary.WithEventThreshold(20),
+)
+```
+
 **Example with custom prompt:**
 
 ```go
