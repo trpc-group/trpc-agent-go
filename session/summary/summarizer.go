@@ -50,6 +50,44 @@ const (
 	authorUnknown = "unknown"
 )
 
+// ToolCallFormatter formats a tool call for inclusion in the summary input.
+// It receives the tool call and returns a formatted string.
+// Return empty string to exclude this tool call from the summary.
+type ToolCallFormatter func(tc model.ToolCall) string
+
+// ToolResultFormatter formats a tool result for inclusion in the summary input.
+// It receives the message containing the tool result and returns a formatted string.
+// Return empty string to exclude this tool result from the summary.
+type ToolResultFormatter func(msg model.Message) string
+
+// defaultToolCallFormatter is the default formatter for tool calls.
+// It formats as "[Called tool: name with args: {args}]".
+func defaultToolCallFormatter(tc model.ToolCall) string {
+	name := tc.Function.Name
+	if name == "" {
+		return ""
+	}
+	args := string(tc.Function.Arguments)
+	if args == "" || args == "{}" {
+		return fmt.Sprintf("[Called tool: %s]", name)
+	}
+	return fmt.Sprintf("[Called tool: %s with args: %s]", name, args)
+}
+
+// defaultToolResultFormatter is the default formatter for tool results.
+// It formats as "[toolName returned: content]".
+func defaultToolResultFormatter(msg model.Message) string {
+	content := strings.TrimSpace(msg.Content)
+	if content == "" {
+		return ""
+	}
+	toolName := msg.ToolName
+	if toolName == "" {
+		toolName = "tool"
+	}
+	return fmt.Sprintf("[%s returned: %s]", toolName, content)
+}
+
 // validatePrompt validates that the prompt contains required placeholders.
 // conversationTextPlaceholder is always required.
 // maxSummaryWordsPlaceholder is required when maxSummaryWords > 0.
@@ -93,6 +131,11 @@ type sessionSummarizer struct {
 	preHook          PreSummaryHook
 	postHook         PostSummaryHook
 	hookAbortOnError bool
+
+	// toolCallFormatter customizes how tool calls are formatted in summary input.
+	toolCallFormatter ToolCallFormatter
+	// toolResultFormatter customizes how tool results are formatted in summary input.
+	toolResultFormatter ToolResultFormatter
 }
 
 // NewSummarizer creates a new session summarizer.
@@ -285,23 +328,55 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 }
 
 // extractConversationText extracts conversation text from events.
+// This includes regular messages, tool calls, and tool responses.
 func (s *sessionSummarizer) extractConversationText(events []event.Event) string {
 	var parts []string
+
+	// Use default formatters if not configured.
+	toolCallFmt := s.toolCallFormatter
+	if toolCallFmt == nil {
+		toolCallFmt = defaultToolCallFormatter
+	}
+	toolResultFmt := s.toolResultFormatter
+	if toolResultFmt == nil {
+		toolResultFmt = defaultToolResultFormatter
+	}
 
 	for _, e := range events {
 		if e.Response == nil || len(e.Response.Choices) == 0 {
 			continue
 		}
-		content := e.Response.Choices[0].Message.Content
-		if content == "" {
-			continue
-		}
-		// Format as "Author: content".
+		msg := e.Response.Choices[0].Message
 		author := e.Author
 		if author == "" {
 			author = authorUnknown
 		}
-		parts = append(parts, fmt.Sprintf("%s: %s", author, strings.TrimSpace(content)))
+
+		// Handle tool calls from assistant.
+		// Note: A message may contain both ToolCalls and Content (e.g., "Let me check
+		// the weather" + tool call), so we process both without using continue.
+		if len(msg.ToolCalls) > 0 {
+			for _, tc := range msg.ToolCalls {
+				toolCallText := toolCallFmt(tc)
+				if toolCallText != "" {
+					parts = append(parts, fmt.Sprintf("%s: %s", author, toolCallText))
+				}
+			}
+		}
+
+		// Handle tool response.
+		if msg.ToolID != "" {
+			toolRespText := toolResultFmt(msg)
+			if toolRespText != "" {
+				parts = append(parts, fmt.Sprintf("%s: %s", author, toolRespText))
+			}
+			continue // Tool responses don't have additional content.
+		}
+
+		// Handle regular message content.
+		if trimmed := strings.TrimSpace(msg.Content); trimmed != "" {
+			parts = append(parts, fmt.Sprintf("%s: %s", author, trimmed))
+		}
 	}
 
 	return strings.Join(parts, "\n")
