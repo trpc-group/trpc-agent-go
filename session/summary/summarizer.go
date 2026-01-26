@@ -417,7 +417,14 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, conversationTex
 	var summary string
 	for response := range responseChan {
 		if response.Error != nil {
-			return "", fmt.Errorf("model error during summarization: %s", response.Error.Message)
+			errMsg := response.Error.Message
+			if response.Error.Type != "" {
+				errMsg = fmt.Sprintf("[%s] %s", response.Error.Type, errMsg)
+			}
+			if response.Error.Code != nil && *response.Error.Code != "" {
+				errMsg = fmt.Sprintf("%s (code: %s)", errMsg, *response.Error.Code)
+			}
+			return "", fmt.Errorf("model error during summarization: %s", errMsg)
 		}
 
 		if len(response.Choices) > 0 {
