@@ -27,7 +27,7 @@ type Options struct {
 	EvalResultManager                evalresult.Manager               // EvalResultManager is used to store and retrieve eval results.
 	Registry                         registry.Registry                // Registry is used to store and retrieve evaluator.
 	SessionIDSupplier                func(ctx context.Context) string // SessionIDSupplier is used to generate session IDs.
-	Callbacks                        *Callbacks                       // Callbacks holds evaluation lifecycle callbacks.
+	Callbacks                        *Callbacks                       // Callbacks holds evaluation callbacks.
 	EvalCaseParallelism              int                              // EvalCaseParallelism controls concurrent inference across eval cases.
 	EvalCaseParallelInferenceEnabled bool                             // EvalCaseParallelInferenceEnabled toggles parallel inference across eval cases.
 }

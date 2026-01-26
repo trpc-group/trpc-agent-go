@@ -21,9 +21,6 @@ func wrapCallbackError(point string, idx int, name string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if name == "" {
-		return fmt.Errorf("%s callback[%d]: %w", point, idx, err)
-	}
 	return fmt.Errorf("%s callback[%d] (%s): %w", point, idx, name, err)
 }
 
@@ -65,7 +62,7 @@ func callCallbackWithRecoveryInto[Args any, Result any, CallbackFn ~func(context
 	*errp = err
 }
 
-func runBeforeCallbacks[Args any, Result any, CallbackFn ~func(context.Context, *Args) (*Result, error)](
+func runCallbacks[Args any, Result any, CallbackFn ~func(context.Context, *Args) (*Result, error)](
 	ctx *context.Context,
 	callbacks []service.NamedCallback[CallbackFn],
 	args *Args,
@@ -75,36 +72,6 @@ func runBeforeCallbacks[Args any, Result any, CallbackFn ~func(context.Context, 
 	if len(callbacks) == 0 {
 		return nil, nil
 	}
-
-	var lastResult *Result
-	for idx, named := range callbacks {
-		result, err := callCallbackWithRecovery(*ctx, point, idx, named.Name, named.Callback, args)
-		if err != nil {
-			return nil, wrapCallbackError(point, idx, named.Name, err)
-		}
-		if result != nil {
-			lastResult = result
-		}
-		if getContext != nil {
-			if next := getContext(result); next != nil {
-				*ctx = next
-			}
-		}
-	}
-	return lastResult, nil
-}
-
-func runAfterCallbacks[Args any, Result any, CallbackFn ~func(context.Context, *Args) (*Result, error)](
-	ctx *context.Context,
-	callbacks []service.NamedCallback[CallbackFn],
-	args *Args,
-	point string,
-	getContext func(*Result) context.Context,
-) (*Result, error) {
-	if len(callbacks) == 0 {
-		return nil, nil
-	}
-
 	var lastResult *Result
 	for idx, named := range callbacks {
 		result, err := callCallbackWithRecovery(*ctx, point, idx, named.Name, named.Callback, args)
@@ -128,7 +95,7 @@ func RunBeforeInferenceSet(ctx context.Context, callbacks *service.Callbacks, ar
 	if callbacks == nil {
 		return nil, nil
 	}
-	result, err := runBeforeCallbacks(&ctx, callbacks.BeforeInferenceSet, args, "BeforeInferenceSet",
+	result, err := runCallbacks(&ctx, callbacks.BeforeInferenceSet, args, "BeforeInferenceSet",
 		func(result *service.BeforeInferenceSetResult) context.Context {
 			if result == nil {
 				return nil
@@ -150,7 +117,7 @@ func RunAfterInferenceSet(ctx context.Context, callbacks *service.Callbacks, arg
 	if callbacks == nil {
 		return nil, nil
 	}
-	result, err := runAfterCallbacks(&ctx, callbacks.AfterInferenceSet, args, "AfterInferenceSet",
+	result, err := runCallbacks(&ctx, callbacks.AfterInferenceSet, args, "AfterInferenceSet",
 		func(result *service.AfterInferenceSetResult) context.Context {
 			if result == nil {
 				return nil
@@ -172,7 +139,7 @@ func RunBeforeInferenceCase(ctx context.Context, callbacks *service.Callbacks, a
 	if callbacks == nil {
 		return nil, nil
 	}
-	result, err := runBeforeCallbacks(&ctx, callbacks.BeforeInferenceCase, args, "BeforeInferenceCase",
+	result, err := runCallbacks(&ctx, callbacks.BeforeInferenceCase, args, "BeforeInferenceCase",
 		func(result *service.BeforeInferenceCaseResult) context.Context {
 			if result == nil {
 				return nil
@@ -194,7 +161,7 @@ func RunAfterInferenceCase(ctx context.Context, callbacks *service.Callbacks, ar
 	if callbacks == nil {
 		return nil, nil
 	}
-	result, err := runAfterCallbacks(&ctx, callbacks.AfterInferenceCase, args, "AfterInferenceCase",
+	result, err := runCallbacks(&ctx, callbacks.AfterInferenceCase, args, "AfterInferenceCase",
 		func(result *service.AfterInferenceCaseResult) context.Context {
 			if result == nil {
 				return nil
@@ -216,7 +183,7 @@ func RunBeforeEvaluateSet(ctx context.Context, callbacks *service.Callbacks, arg
 	if callbacks == nil {
 		return nil, nil
 	}
-	result, err := runBeforeCallbacks(&ctx, callbacks.BeforeEvaluateSet, args, "BeforeEvaluateSet",
+	result, err := runCallbacks(&ctx, callbacks.BeforeEvaluateSet, args, "BeforeEvaluateSet",
 		func(result *service.BeforeEvaluateSetResult) context.Context {
 			if result == nil {
 				return nil
@@ -238,7 +205,7 @@ func RunAfterEvaluateSet(ctx context.Context, callbacks *service.Callbacks, args
 	if callbacks == nil {
 		return nil, nil
 	}
-	result, err := runAfterCallbacks(&ctx, callbacks.AfterEvaluateSet, args, "AfterEvaluateSet",
+	result, err := runCallbacks(&ctx, callbacks.AfterEvaluateSet, args, "AfterEvaluateSet",
 		func(result *service.AfterEvaluateSetResult) context.Context {
 			if result == nil {
 				return nil
@@ -260,7 +227,7 @@ func RunBeforeEvaluateCase(ctx context.Context, callbacks *service.Callbacks, ar
 	if callbacks == nil {
 		return nil, nil
 	}
-	result, err := runBeforeCallbacks(&ctx, callbacks.BeforeEvaluateCase, args, "BeforeEvaluateCase",
+	result, err := runCallbacks(&ctx, callbacks.BeforeEvaluateCase, args, "BeforeEvaluateCase",
 		func(result *service.BeforeEvaluateCaseResult) context.Context {
 			if result == nil {
 				return nil
@@ -282,7 +249,7 @@ func RunAfterEvaluateCase(ctx context.Context, callbacks *service.Callbacks, arg
 	if callbacks == nil {
 		return nil, nil
 	}
-	result, err := runAfterCallbacks(&ctx, callbacks.AfterEvaluateCase, args, "AfterEvaluateCase",
+	result, err := runCallbacks(&ctx, callbacks.AfterEvaluateCase, args, "AfterEvaluateCase",
 		func(result *service.AfterEvaluateCaseResult) context.Context {
 			if result == nil {
 				return nil

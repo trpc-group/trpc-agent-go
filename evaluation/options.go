@@ -95,7 +95,7 @@ func WithEvaluationService(s service.Service) Option {
 	}
 }
 
-// WithCallbacks sets evaluation lifecycle callbacks for the default local evaluation service.
+// WithCallbacks sets evaluation callbacks for evaluation service.
 func WithCallbacks(c *service.Callbacks) Option {
 	return func(o *options) {
 		o.callbacks = c

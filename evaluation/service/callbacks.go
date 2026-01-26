@@ -17,7 +17,9 @@ import (
 
 // NamedCallback binds a callback function with a component name.
 type NamedCallback[T any] struct {
-	Name     string
+	// Name is the component name for the callback.
+	Name string
+	// Callback is the callback function.
 	Callback T
 }
 
@@ -45,7 +47,7 @@ type BeforeEvaluateCaseCallback func(context.Context, *BeforeEvaluateCaseArgs) (
 // AfterEvaluateCaseCallback is called after an evaluation run finishes for an eval case.
 type AfterEvaluateCaseCallback func(context.Context, *AfterEvaluateCaseArgs) (*AfterEvaluateCaseResult, error)
 
-// Callback groups optional callbacks for evaluation lifecycle points.
+// Callback groups optional callbacks for evaluation points.
 type Callback struct {
 	// BeforeInferenceSet is called before an inference run starts for an eval set.
 	BeforeInferenceSet BeforeInferenceSetCallback
@@ -67,14 +69,22 @@ type Callback struct {
 
 // Callbacks stores all registered callbacks for evaluation lifecycle points.
 type Callbacks struct {
-	BeforeInferenceSet  []NamedCallback[BeforeInferenceSetCallback]
-	AfterInferenceSet   []NamedCallback[AfterInferenceSetCallback]
+	// BeforeInferenceSet contains callbacks called before inference starts for an eval set.
+	BeforeInferenceSet []NamedCallback[BeforeInferenceSetCallback]
+	// AfterInferenceSet contains callbacks called after inference finishes for an eval set.
+	AfterInferenceSet []NamedCallback[AfterInferenceSetCallback]
+	// BeforeInferenceCase contains callbacks called before inference starts for an eval case.
 	BeforeInferenceCase []NamedCallback[BeforeInferenceCaseCallback]
-	AfterInferenceCase  []NamedCallback[AfterInferenceCaseCallback]
-	BeforeEvaluateSet   []NamedCallback[BeforeEvaluateSetCallback]
-	AfterEvaluateSet    []NamedCallback[AfterEvaluateSetCallback]
-	BeforeEvaluateCase  []NamedCallback[BeforeEvaluateCaseCallback]
-	AfterEvaluateCase   []NamedCallback[AfterEvaluateCaseCallback]
+	// AfterInferenceCase contains callbacks called after inference finishes for an eval case.
+	AfterInferenceCase []NamedCallback[AfterInferenceCaseCallback]
+	// BeforeEvaluateSet contains callbacks called before evaluation starts for an eval set.
+	BeforeEvaluateSet []NamedCallback[BeforeEvaluateSetCallback]
+	// AfterEvaluateSet contains callbacks called after evaluation finishes for an eval set.
+	AfterEvaluateSet []NamedCallback[AfterEvaluateSetCallback]
+	// BeforeEvaluateCase contains callbacks called before evaluation starts for an eval case.
+	BeforeEvaluateCase []NamedCallback[BeforeEvaluateCaseCallback]
+	// AfterEvaluateCase contains callbacks called after evaluation finishes for an eval case.
+	AfterEvaluateCase []NamedCallback[AfterEvaluateCaseCallback]
 }
 
 // Register adds a callback component with the provided name.
