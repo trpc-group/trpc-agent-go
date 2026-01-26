@@ -35,6 +35,11 @@ var (
 	_ session.TrackService = (*Service)(nil)
 )
 
+const (
+	// trimScanBatchSize controls how many recent events are scanned per Redis call when trimming.
+	trimScanBatchSize int64 = 32
+)
+
 // SessionState is the state of a session.
 type SessionState struct {
 	ID        string           `json:"id"`
@@ -49,6 +54,7 @@ type SessionState struct {
 // UserState: appName + userId -> hash [key -> value(json)]
 // SessionState: appName + userId -> hash [sessionId -> SessionState(json)]
 // Event: appName + userId + sessionId -> sorted set [value: Event(json) score: timestamp]
+// TrackEvent: appName + userId + sessionId + trackName -> sorted set [value: TrackEvent(json) score: timestamp]
 type Service struct {
 	opts            ServiceOpts
 	redisClient     redis.UniversalClient
@@ -67,6 +73,24 @@ type sessionEventPair struct {
 type trackEventPair struct {
 	key   session.Key
 	event *session.TrackEvent
+}
+
+// trimEventOptions defines trimming behavior.
+type trimEventOptions struct {
+	// ConversationCount is the number of recent conversations to trim.
+	// A conversation is defined as all events sharing the same RequestID.
+	ConversationCount int
+}
+
+// TrimConversationOption customizes trimming.
+type TrimConversationOption func(*trimEventOptions)
+
+// WithCount sets the number of conversations to trim.
+// Each conversation is a group of events with the same RequestID.
+func WithCount(n int) TrimConversationOption {
+	return func(o *trimEventOptions) {
+		o.ConversationCount = n
+	}
 }
 
 // NewService creates a new redis session service.
@@ -582,6 +606,99 @@ func (s *Service) AppendTrackEvent(
 		return fmt.Errorf("redis session service append track event failed: %w", err)
 	}
 	return nil
+}
+
+// TrimConversations trims recent conversations and returns the deleted events.
+// A conversation is defined as all events sharing the same RequestID.
+// By default, it trims 1 conversation.
+func (s *Service) TrimConversations(
+	ctx context.Context,
+	key session.Key,
+	options ...TrimConversationOption,
+) ([]event.Event, error) {
+	if err := key.CheckSessionKey(); err != nil {
+		return nil, err
+	}
+	opt := &trimEventOptions{
+		ConversationCount: 1,
+	}
+	for _, o := range options {
+		o(opt)
+	}
+	if opt.ConversationCount <= 0 {
+		opt.ConversationCount = 1
+	}
+
+	eventKey := getEventKey(key)
+	targetReqIDs := make(map[string]struct{})
+	var toDelete []any
+	var deletedEvents []event.Event
+	var offset int64
+	stop := false
+
+	for !stop {
+		batch, err := s.redisClient.ZRevRange(
+			ctx,
+			eventKey,
+			offset,
+			offset+trimScanBatchSize-1,
+		).Result()
+		if err != nil && err != redis.Nil {
+			return nil, fmt.Errorf("trim events: load events: %w", err)
+		}
+		if len(batch) == 0 {
+			break
+		}
+
+		for _, raw := range batch {
+			var evt event.Event
+			if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+				return nil, fmt.Errorf("trim events: unmarshal event: %w", err)
+			}
+			if evt.RequestID == "" {
+				continue
+			}
+
+			if _, ok := targetReqIDs[evt.RequestID]; !ok {
+				if len(targetReqIDs) >= opt.ConversationCount {
+					stop = true
+					break
+				}
+				targetReqIDs[evt.RequestID] = struct{}{}
+			}
+
+			toDelete = append(toDelete, raw)
+			deletedEvents = append(deletedEvents, evt)
+		}
+
+		if stop {
+			break
+		}
+		offset += trimScanBatchSize
+	}
+
+	if len(toDelete) == 0 {
+		return nil, nil
+	}
+
+	// Batch remove from ZSet.
+	pipe := s.redisClient.TxPipeline()
+	pipe.ZRem(ctx, eventKey, toDelete...)
+	// Refresh TTL for all session-related keys to keep them consistent.
+	sessKey := getSessionStateKey(key)
+	sumKey := getSessionSummaryKey(key)
+	appStateKey := getAppStateKey(key.AppName)
+	userStateKey := getUserStateKey(key)
+	s.appendSessionTTL(ctx, pipe, key, sessKey, sumKey, appStateKey, userStateKey)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, fmt.Errorf("trim events: remove events: %w", err)
+	}
+
+	// Reverse to return events in chronological order.
+	for i, j := 0, len(deletedEvents)-1; i < j; i, j = i+1, j-1 {
+		deletedEvents[i], deletedEvents[j] = deletedEvents[j], deletedEvents[i]
+	}
+	return deletedEvents, nil
 }
 
 // Close closes the service.
