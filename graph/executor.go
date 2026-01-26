@@ -299,17 +299,8 @@ func (e *Executor) executeGraph(
 	eventChan chan<- *event.Event,
 	startTime time.Time,
 ) error {
-	execState,
-		checkpointConfig,
-		resumed,
-		resumedStep,
-		lastCkpt,
-		restoredPending,
-		prepErr := e.prepareCheckpointAndState(
-		ctx,
-		initialState,
-		invocation,
-	)
+	execState, checkpointConfig, resumed, resumedStep, lastCkpt, restoredPending,
+		prepErr := e.prepareCheckpointAndState(ctx, initialState, invocation)
 	if prepErr != nil {
 		return prepErr
 	}
