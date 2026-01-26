@@ -325,6 +325,8 @@ https://github.com/anthropics/skills
   - `SKILL_NAME`（由工具注入）
 - 便捷符号链接：在技能根目录下自动创建 `out/`、`work/`、
   `inputs/` 链接到工作区对应目录，方便按文档中的相对路径使用。
+- `.venv/`：技能根目录下的可写目录，用于安装技能依赖
+  （例如 `python -m venv .venv` + `pip install ...`）。
 - 文件工具在 base directory 下不存在真实 `inputs/` 目录时，会将
   `inputs/<path>` 视为 `<path>` 的别名
 

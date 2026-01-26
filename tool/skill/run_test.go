@@ -177,6 +177,41 @@ func TestRunTool_DoesNotUseLoginShell(t *testing.T) {
 	require.Equal(t, "\n", out.Stdout)
 }
 
+func TestRunTool_AutoPrependsVenvBinToPATH(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	cmd := strings.Join([]string{
+		"set -e",
+		"mkdir -p .venv/bin",
+		"printf '%s\\n' '#!/usr/bin/env bash' 'echo OK' " +
+			"> .venv/bin/hello",
+		"chmod +x .venv/bin/hello",
+		"hello",
+	}, "; ")
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: cmd,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Contains(t, out.Stdout, "OK")
+}
+
 func TestRunTool_PrimaryOutput_SelectsByName(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -1409,6 +1444,23 @@ func TestRunTool_stageSkill_CreatesInputsDir(t *testing.T) {
 	info, err := os.Stat(inputsPath)
 	require.NoError(t, err)
 	require.True(t, info.IsDir())
+
+	venvPath := filepath.Join(
+		ws.Path,
+		codeexecutor.DirSkills,
+		testSkillName,
+		skillDirVenv,
+	)
+	info, err = os.Stat(venvPath)
+	require.NoError(t, err)
+	require.True(t, info.IsDir())
+
+	err = os.WriteFile(
+		filepath.Join(venvPath, "writable.txt"),
+		[]byte("ok"),
+		0o644,
+	)
+	require.NoError(t, err)
 }
 
 func makeTreeWritable(root string) {

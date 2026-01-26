@@ -78,6 +78,12 @@ const (
 
 const (
 	skillDirInputs = "inputs"
+	skillDirVenv   = ".venv"
+)
+
+const (
+	envPath       = "PATH"
+	envVirtualEnv = "VIRTUAL_ENV"
 )
 
 // WithAllowedCommands restricts skill_run to a single program execution
@@ -477,9 +483,12 @@ func (t *RunTool) linkWorkspaceDirs(
 	var sb strings.Builder
 	sb.WriteString("set -e; cd ")
 	sb.WriteString(shellQuote(skillRoot))
-	sb.WriteString("; rm -rf out work inputs")
+	sb.WriteString("; rm -rf out work inputs ")
+	sb.WriteString(shellQuote(skillDirVenv))
 	sb.WriteString("; mkdir -p ")
 	sb.WriteString(shellQuote(toInputs))
+	sb.WriteString(" ")
+	sb.WriteString(shellQuote(skillDirVenv))
 	sb.WriteString("; ln -sfn ")
 	sb.WriteString(shellQuote(toOut))
 	sb.WriteString(" out; ln -sfn ")
@@ -565,11 +574,14 @@ func (t *RunTool) readOnlyExceptSymlinks(
 	ctx context.Context, eng codeexecutor.Engine,
 	ws codeexecutor.Workspace, dest string,
 ) error {
+	venv := path.Join(dest, skillDirVenv)
 	var sb strings.Builder
 	// Use find to skip symlinks and chmod others.
 	sb.WriteString("set -e; find ")
 	sb.WriteString(shellQuote(dest))
-	sb.WriteString(" -type l -prune -o -exec chmod a-w {} +")
+	sb.WriteString(" -path ")
+	sb.WriteString(shellQuote(venv))
+	sb.WriteString(" -prune -o -type l -prune -o -exec chmod a-w {} +")
 	_, err := eng.Runner().RunProgram(
 		ctx, ws, codeexecutor.RunProgramSpec{
 			Cmd:     "bash",
@@ -690,7 +702,11 @@ func (t *RunTool) runProgram(
 	if _, ok := env[codeexecutor.EnvSkillName]; !ok {
 		env[codeexecutor.EnvSkillName] = in.Skill
 	}
+
+	venvRel, venvBinRel := venvRelPaths(cwd, in.Skill)
+
 	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
+		injectVenvEnv(env, venvRel, venvBinRel)
 		argv, err := splitCommandLine(in.Command)
 		if err != nil {
 			return codeexecutor.RunResult{}, err
@@ -718,15 +734,110 @@ func (t *RunTool) runProgram(
 			},
 		)
 	}
+
+	cmd := wrapWithVenvPrefix(in.Command, venvRel, venvBinRel)
 	return eng.Runner().RunProgram(
 		ctx, ws, codeexecutor.RunProgramSpec{
 			Cmd:     "bash",
-			Args:    []string{"-c", in.Command},
+			Args:    []string{"-c", cmd},
 			Env:     env,
 			Cwd:     cwd,
 			Timeout: timeout,
 		},
 	)
+}
+
+func venvRelPaths(cwd string, skillName string) (string, string) {
+	base := path.Clean(strings.TrimSpace(cwd))
+	if base == "" {
+		base = "."
+	}
+	skillRoot := path.Join(codeexecutor.DirSkills, skillName)
+	venv := path.Join(skillRoot, skillDirVenv)
+	venvBin := path.Join(venv, "bin")
+
+	relVenv := slashRel(base, venv)
+	relBin := slashRel(base, venvBin)
+	return relVenv, relBin
+}
+
+func slashRel(base string, target string) string {
+	base = strings.TrimPrefix(path.Clean(base), "/")
+	target = strings.TrimPrefix(path.Clean(target), "/")
+	if base == "." {
+		base = ""
+	}
+	if target == "." {
+		target = ""
+	}
+	if base == target {
+		return "."
+	}
+
+	var bParts []string
+	if base != "" {
+		bParts = strings.Split(base, "/")
+	}
+	var tParts []string
+	if target != "" {
+		tParts = strings.Split(target, "/")
+	}
+
+	i := 0
+	for i < len(bParts) && i < len(tParts) && bParts[i] == tParts[i] {
+		i++
+	}
+	var out []string
+	for j := i; j < len(bParts); j++ {
+		if bParts[j] == "" || bParts[j] == "." {
+			continue
+		}
+		out = append(out, "..")
+	}
+	out = append(out, tParts[i:]...)
+	if len(out) == 0 {
+		return "."
+	}
+	return strings.Join(out, "/")
+}
+
+func injectVenvEnv(env map[string]string, venv string, venvBin string) {
+	if env == nil {
+		return
+	}
+	if _, ok := env[envVirtualEnv]; !ok && strings.TrimSpace(venv) != "" {
+		env[envVirtualEnv] = venv
+	}
+	basePATH := strings.TrimSpace(env[envPath])
+	if basePATH == "" {
+		basePATH = strings.TrimSpace(os.Getenv(envPath))
+	}
+	sep := string(os.PathListSeparator)
+	if basePATH == "" {
+		env[envPath] = venvBin
+		return
+	}
+	env[envPath] = venvBin + sep + basePATH
+}
+
+func wrapWithVenvPrefix(cmd string, venv string, venvBin string) string {
+	var sb strings.Builder
+	sb.WriteString("export ")
+	sb.WriteString(envPath)
+	sb.WriteString("=")
+	sb.WriteString(shellQuote(venvBin))
+	sb.WriteString(":\"$")
+	sb.WriteString(envPath)
+	sb.WriteString("\"; ")
+	sb.WriteString("if [ -z \"$")
+	sb.WriteString(envVirtualEnv)
+	sb.WriteString("\" ]; then export ")
+	sb.WriteString(envVirtualEnv)
+	sb.WriteString("=")
+	sb.WriteString(shellQuote(venv))
+	sb.WriteString("; fi; ")
+	sb.WriteString(cmd)
+	return sb.String()
 }
 
 const disallowedShellMeta = "\n\r;&|<>"
