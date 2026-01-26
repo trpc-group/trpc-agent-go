@@ -109,10 +109,14 @@ func TestSelectUpdatedAt_Fallbacks(t *testing.T) {
 type fakeSummarizer struct {
 	allow bool
 	out   string
+	err   error
 }
 
 func (f *fakeSummarizer) ShouldSummarize(sess *session.Session) bool { return f.allow }
 func (f *fakeSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
 	return f.out, nil
 }
 func (f *fakeSummarizer) SetPrompt(prompt string)  {}
@@ -260,6 +264,42 @@ func TestSummarizeSession_EmptySummary_NotUpdated(t *testing.T) {
 	updated, err := SummarizeSession(context.Background(), s, base, "b1", false)
 	require.NoError(t, err)
 	require.False(t, updated)
+}
+
+func TestSummarizeSession_SummarizerError_ReturnsError(t *testing.T) {
+	now := time.Now()
+	base := &session.Session{ID: "test-session-123", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("e1", now.Add(-1*time.Minute), "b1"),
+	}
+
+	// Summarizer returns an error - should propagate with session ID.
+	summarizerErr := errors.New("model API error: rate limit exceeded")
+	s := &fakeSummarizer{allow: true, out: "", err: summarizerErr}
+	updated, err := SummarizeSession(context.Background(), s, base, "b1", false)
+	require.Error(t, err)
+	require.False(t, updated)
+	require.Contains(t, err.Error(), "summarize session test-session-123 failed")
+	require.Contains(t, err.Error(), "model API error: rate limit exceeded")
+	require.ErrorIs(t, err, summarizerErr)
+}
+
+func TestSummarizeSession_SummarizerError_FullSession(t *testing.T) {
+	now := time.Now()
+	base := &session.Session{ID: "full-session-456", AppName: "app", UserID: "user"}
+	base.Events = []event.Event{
+		makeEvent("e1", now.Add(-2*time.Minute), ""),
+		makeEvent("e2", now.Add(-1*time.Minute), ""),
+	}
+
+	// Summarizer returns an error for full session summary.
+	summarizerErr := errors.New("empty summary generated")
+	s := &fakeSummarizer{allow: true, out: "", err: summarizerErr}
+	updated, err := SummarizeSession(context.Background(), s, base, "", false)
+	require.Error(t, err)
+	require.False(t, updated)
+	require.Contains(t, err.Error(), "summarize session full-session-456 failed")
+	require.ErrorIs(t, err, summarizerErr)
 }
 
 func TestComputeDeltaSince_WithFilterKey(t *testing.T) {

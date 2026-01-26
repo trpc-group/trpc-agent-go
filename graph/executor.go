@@ -942,7 +942,10 @@ func (e *Executor) applyPendingWrites(ctx context.Context, invocation *agent.Inv
 	})
 	for _, w := range sortedWrites {
 		if ch, ok := execCtx.channels.GetChannel(w.Channel); ok && ch != nil {
-			ch.Update([]any{w.Value}, -1)
+			ch.Update(
+				[]any{w.Value},
+				channel.StepUnmarked,
+			)
 			// Emit channel update event to mirror live execution behavior.
 			e.emitChannelUpdateEvent(ctx, invocation, execCtx, w.Channel, ch.Behavior, e.getTriggeredNodes(w.Channel))
 		}
@@ -990,7 +993,10 @@ func (e *Executor) initializeChannels(execCtx *ExecutionContext, state State, up
 		execCtx.channels.AddChannel(channelName, channel.BehaviorLastValue)
 		if updateChannels {
 			if ch, ok := execCtx.channels.GetChannel(channelName); ok && ch != nil {
-				ch.Update([]any{val}, -1)
+				ch.Update(
+					[]any{val},
+					channel.StepUnmarked,
+				)
 			}
 		}
 	}
@@ -1530,10 +1536,8 @@ func (e *Executor) attemptCacheLookup(t *Task) (bool, any) {
 	sanitized := sanitizeForCacheKey(t.Input)
 
 	// Apply optional cache key selector (node-level) to focus on relevant inputs.
-	if node, ok := e.graph.Node(t.NodeID); ok && node != nil && node.cacheKeySelector != nil {
-		if m, ok2 := sanitized.(map[string]any); ok2 {
-			sanitized = node.cacheKeySelector(m)
-		}
+	if node, ok := e.graph.Node(t.NodeID); ok && node != nil {
+		sanitized = applyCacheKeySelector(node.cacheKeySelector, sanitized)
 	}
 
 	keyBytes, kerr := pol.KeyFunc(sanitized)
@@ -1546,6 +1550,23 @@ func (e *Executor) attemptCacheLookup(t *Task) (bool, any) {
 		return true, cached
 	}
 	return false, nil
+}
+
+func applyCacheKeySelector(
+	selector func(map[string]any) any,
+	input any,
+) any {
+	if selector == nil {
+		return input
+	}
+	switch m := input.(type) {
+	case State:
+		return selector(m)
+	case map[string]any:
+		return selector(m)
+	default:
+		return input
+	}
 }
 
 // handleCachedResult processes a cache hit by running callbacks and handling
@@ -1571,7 +1592,14 @@ func (e *Executor) handleCachedResult(
 	e.syncResumeState(execCtx, nodeCtx.stateCopy)
 
 	// Handle result and process channel writes.
-	routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
+	routed, herr := e.handleNodeResult(
+		ctx,
+		invocation,
+		execCtx,
+		t,
+		result,
+		step,
+	)
 	if herr != nil {
 		return herr
 	}
@@ -1676,7 +1704,14 @@ func (e *Executor) finalizeSuccessfulExecution(
 	e.syncResumeState(execCtx, nodeCtx.stateCopy)
 
 	// Handle result and process channel writes.
-	routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
+	routed, herr := e.handleNodeResult(
+		ctx,
+		invocation,
+		execCtx,
+		t,
+		result,
+		step,
+	)
 	if herr != nil {
 		return herr
 	}
@@ -1686,10 +1721,11 @@ func (e *Executor) finalizeSuccessfulExecution(
 		if pol := e.getEffectiveCachePolicy(t.NodeID); pol != nil && pol.KeyFunc != nil {
 			// Use the same sanitized input used for lookup (post-callback state copy).
 			sanitized := sanitizeForCacheKey(nodeCtx.stateCopy)
-			if node, ok := e.graph.Node(t.NodeID); ok && node != nil && node.cacheKeySelector != nil {
-				if m, ok2 := sanitized.(map[string]any); ok2 {
-					sanitized = node.cacheKeySelector(m)
-				}
+			if node, ok := e.graph.Node(t.NodeID); ok && node != nil {
+				sanitized = applyCacheKeySelector(
+					node.cacheKeySelector,
+					sanitized,
+				)
 			}
 			if keyBytes, kerr := pol.KeyFunc(sanitized); kerr == nil {
 				ns := e.graph.cacheNamespace(t.NodeID)
@@ -1986,7 +2022,14 @@ func (e *Executor) runBeforeCallbacks(
 		return false, nil
 	}
 	e.syncResumeState(execCtx, stateCopy)
-	routed, err := e.handleNodeResult(ctx, invocation, execCtx, t, customResult)
+	routed, err := e.handleNodeResult(
+		ctx,
+		invocation,
+		execCtx,
+		t,
+		customResult,
+		step,
+	)
 	if err != nil {
 		return true, err
 	}
@@ -2206,8 +2249,14 @@ func (e *Executor) emitNodeErrorEvent(
 }
 
 // handleNodeResult handles the result from node execution.
-func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invocation,
-	execCtx *ExecutionContext, t *Task, result any) (bool, error) {
+func (e *Executor) handleNodeResult(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	t *Task,
+	result any,
+	step int,
+) (bool, error) {
 	// Even if result is nil, static edge writes should still occur so that
 	// downstream nodes can be triggered. Only skip static writes when we
 	// have explicit routing (Command with GoTo) or fan-out ([]*Command).
@@ -2227,7 +2276,14 @@ func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invoc
 						v.GoTo = resolved
 					}
 				}
-				if err := e.handleCommandResult(ctx, invocation, execCtx, v); err != nil {
+				if err := e.handleCommandResult(
+					ctx,
+					invocation,
+					execCtx,
+					v,
+					step,
+					t.TaskID,
+				); err != nil {
 					return false, err
 				}
 				// If the command explicitly routes via GoTo, avoid also writing to
@@ -2257,7 +2313,14 @@ func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invoc
 	// nodes with nil results (e.g., pure routing/start nodes) still trigger
 	// their outgoing static edges.
 	if !routed && len(t.Writes) > 0 {
-		e.processChannelWrites(ctx, invocation, execCtx, t.TaskID, t.Writes)
+		e.processChannelWrites(
+			ctx,
+			invocation,
+			execCtx,
+			t.TaskID,
+			t.Writes,
+			step,
+		)
 	}
 
 	return routed, nil
@@ -2396,8 +2459,14 @@ func syncResumeKey(target, source State, key string) {
 }
 
 // handleCommandResult handles a Command result from node execution.
-func (e *Executor) handleCommandResult(ctx context.Context, invocation *agent.Invocation,
-	execCtx *ExecutionContext, cmdResult *Command) error {
+func (e *Executor) handleCommandResult(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	cmdResult *Command,
+	step int,
+	taskID string,
+) error {
 	// Update state with command updates.
 	if cmdResult.Update != nil {
 		e.updateStateFromResult(execCtx, cmdResult.Update)
@@ -2405,33 +2474,62 @@ func (e *Executor) handleCommandResult(ctx context.Context, invocation *agent.In
 
 	// Handle GoTo routing.
 	if cmdResult.GoTo != "" {
-		e.handleCommandRouting(ctx, invocation, execCtx, cmdResult.GoTo)
+		e.handleCommandRouting(
+			ctx,
+			invocation,
+			execCtx,
+			taskID,
+			cmdResult.GoTo,
+			step,
+		)
 	}
 
 	return nil
 }
 
 // handleCommandRouting handles the routing specified by a Command.
-func (e *Executor) handleCommandRouting(ctx context.Context, invocation *agent.Invocation,
-	execCtx *ExecutionContext, targetNode string) {
+func (e *Executor) handleCommandRouting(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	taskID string,
+	targetNode string,
+	step int,
+) {
 	// Create trigger channel for the target node (including self).
 	triggerChannel := fmt.Sprintf("%s%s", ChannelTriggerPrefix, targetNode)
+	e.graph.addChannel(triggerChannel, channel.BehaviorLastValue)
 	e.graph.addNodeTrigger(triggerChannel, targetNode)
 	if execCtx != nil && execCtx.channels != nil {
 		// Ensure the per-execution channel exists and write to it.
 		execCtx.channels.AddChannel(triggerChannel, channel.BehaviorLastValue)
 		if ch, ok := execCtx.channels.GetChannel(triggerChannel); ok && ch != nil {
-			ch.Update([]any{channelUpdateMarker}, -1)
+			ch.Update([]any{channelUpdateMarker}, step)
+			execCtx.pendingMu.Lock()
+			execCtx.pendingWrites = append(execCtx.pendingWrites, PendingWrite{
+				Channel:  triggerChannel,
+				Value:    channelUpdateMarker,
+				TaskID:   taskID,
+				Sequence: execCtx.seq.Add(1),
+			})
+			execCtx.pendingMu.Unlock()
 		}
 	}
 
 	// Emit channel update event.
-	e.emitChannelUpdateEvent(ctx, invocation, execCtx, triggerChannel, channel.BehaviorLastValue, []string{targetNode})
+	e.emitChannelUpdateEvent(
+		ctx,
+		invocation,
+		execCtx,
+		triggerChannel,
+		channel.BehaviorLastValue,
+		[]string{targetNode},
+	)
 }
 
 // processChannelWrites processes the channel writes for a task.
 func (e *Executor) processChannelWrites(ctx context.Context, invocation *agent.Invocation,
-	execCtx *ExecutionContext, taskID string, writes []channelWriteEntry) {
+	execCtx *ExecutionContext, taskID string, writes []channelWriteEntry, step int) {
 	if execCtx == nil || execCtx.channels == nil {
 		return
 	}
@@ -2440,7 +2538,7 @@ func (e *Executor) processChannelWrites(ctx context.Context, invocation *agent.I
 		if !ok || ch == nil {
 			continue
 		}
-		ch.Update([]any{write.Value}, -1)
+		ch.Update([]any{write.Value}, step)
 
 		// Emit channel update event.
 		e.emitChannelUpdateEvent(ctx, invocation, execCtx, write.Channel, ch.Behavior, e.getTriggeredNodes(write.Channel))
@@ -2717,7 +2815,7 @@ func (e *Executor) processConditionalResult(
 	if execCtx != nil && execCtx.channels != nil {
 		execCtx.channels.AddChannel(channelName, channel.BehaviorLastValue)
 		if ch, ok := execCtx.channels.GetChannel(channelName); ok && ch != nil {
-			ch.Update([]any{channelUpdateMarker}, -1)
+			ch.Update([]any{channelUpdateMarker}, step)
 			e.emitChannelUpdateEvent(ctx, invocation, execCtx, channelName,
 				channel.BehaviorLastValue, []string{target})
 			execCtx.pendingMu.Lock()
