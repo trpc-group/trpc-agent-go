@@ -425,7 +425,10 @@ func (e *Executor) resumeOrInitWithSaver(
 	if err != nil {
 		if resumeRequested {
 			return nil, nil, false, 0, nil, nil, fmt.Errorf(
-				"get checkpoint tuple: %w",
+				"get checkpoint tuple (ln=%s ns=%s ck=%s): %w",
+				lineageID,
+				namespace,
+				checkpointID,
 				err,
 			)
 		}
