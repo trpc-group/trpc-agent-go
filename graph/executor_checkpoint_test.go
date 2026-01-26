@@ -701,6 +701,76 @@ func TestExecutor_ApplyGraphInterruptInputs_MapState(t *testing.T) {
 	require.Contains(t, m, nodeID)
 }
 
+func TestExecutor_ApplyGraphInterruptInputs_MapAny(t *testing.T) {
+	const nodeID = "node-a"
+	const key = "k"
+
+	exec := &Executor{}
+	restored := make(State)
+	tuple := &CheckpointTuple{
+		Metadata: &CheckpointMetadata{
+			Extra: map[string]any{
+				CheckpointMetaKeyGraphInterruptInputs: map[string]any{
+					nodeID: State{key: "v"},
+					"":     State{key: "skip-empty-node"},
+					"b":    nil,
+				},
+			},
+		},
+	}
+	exec.applyGraphInterruptInputs(restored, tuple)
+
+	raw, ok := restored[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	m, ok := raw.(map[string]any)
+	require.True(t, ok)
+	require.Len(t, m, 1)
+	require.Contains(t, m, nodeID)
+}
+
+func TestExecutor_ApplyGraphInterruptInputs_MapStateSlice(t *testing.T) {
+	const nodeID = "node-a"
+	const key = "k"
+
+	exec := &Executor{}
+	restored := make(State)
+	tuple := &CheckpointTuple{
+		Metadata: &CheckpointMetadata{
+			Extra: map[string]any{
+				CheckpointMetaKeyGraphInterruptInputs: map[string][]State{
+					nodeID: {
+						{key: "v"},
+						nil,
+					},
+					"": {
+						{key: "skip-empty-node"},
+					},
+					"b": nil,
+				},
+			},
+		},
+	}
+	exec.applyGraphInterruptInputs(restored, tuple)
+
+	raw, ok := restored[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	m, ok := raw.(map[string]any)
+	require.True(t, ok)
+	require.Len(t, m, 1)
+
+	rawInputs, ok := m[nodeID]
+	require.True(t, ok)
+	inputs, ok := rawInputs.([]any)
+	require.True(t, ok)
+	require.Len(t, inputs, 1)
+
+	st, ok := inputs[0].(State)
+	require.True(t, ok)
+	require.Equal(t, "v", st[key])
+}
+
 func TestExecutor_ApplyGraphInterruptInputs_IgnoresInvalidTuples(t *testing.T) {
 	exec := &Executor{}
 	exec.applyGraphInterruptInputs(nil, nil)
@@ -717,6 +787,41 @@ func TestExecutor_ApplyGraphInterruptInputs_IgnoresInvalidTuples(t *testing.T) {
 		},
 	})
 	require.Empty(t, restored)
+}
+
+func TestGraphInterruptInputCopyHelpers_EmptyInputs(t *testing.T) {
+	require.Nil(t, copyGraphInterruptInputsState(nil))
+	require.Nil(t, copyGraphInterruptInputsState(map[string]State{}))
+	require.Nil(t, copyGraphInterruptInputsAny(nil))
+	require.Nil(t, copyGraphInterruptInputsAny(map[string]any{}))
+	require.Nil(t, copyGraphInterruptInputsAnySlice(nil))
+	require.Nil(t, copyGraphInterruptInputsAnySlice(map[string][]any{}))
+	require.Nil(t, copyGraphInterruptInputsStateSlice(nil))
+	require.Nil(t, copyGraphInterruptInputsStateSlice(map[string][]State{}))
+}
+
+func TestGraphInterruptConsumeStateHelpers(t *testing.T) {
+	st := State{"k": "v"}
+
+	_, ok := consumeStateFromStateSlice(nil)
+	require.False(t, ok)
+	_, ok = consumeStateFromStateSlice([]State{})
+	require.False(t, ok)
+	_, ok = consumeStateFromStateSlice([]State{nil})
+	require.False(t, ok)
+	got, ok := consumeStateFromStateSlice([]State{st})
+	require.True(t, ok)
+	require.Equal(t, st, got)
+
+	_, ok = consumeStateFromAnySlice(nil)
+	require.False(t, ok)
+	_, ok = consumeStateFromAnySlice([]any{})
+	require.False(t, ok)
+	_, ok = consumeStateFromAnySlice([]any{123})
+	require.False(t, ok)
+	got, ok = consumeStateFromAnySlice([]any{st})
+	require.True(t, ok)
+	require.Equal(t, st, got)
 }
 
 func TestGraphInterruptHelpers_NilSafeAndIdempotent(t *testing.T) {
@@ -832,6 +937,8 @@ func TestExecutor_CreateTask_ConsumesGraphInterruptInputs(t *testing.T) {
 	const nodeA = "a"
 	const key = "k"
 	const value = "v"
+	const v1 = 1
+	const v2 = 2
 
 	g, err := NewStateGraph(NewStateSchema()).
 		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
@@ -872,6 +979,348 @@ func TestExecutor_CreateTask_ConsumesGraphInterruptInputs(t *testing.T) {
 	require.Equal(t, value, input[key])
 	_, ok = stateAny[StateKeyGraphInterruptInputs]
 	require.False(t, ok)
+
+	stateAnyState := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: State{key: value},
+		},
+	}
+	task = exec.createTask(nodeA, stateAnyState, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, value, input[key])
+	_, ok = stateAnyState[StateKeyGraphInterruptInputs]
+	require.False(t, ok)
+
+	stateSlices := State{
+		StateKeyGraphInterruptInputs: map[string][]State{
+			nodeA: {
+				{key: v1},
+				{key: v2},
+			},
+		},
+	}
+	task = exec.createTask(nodeA, stateSlices, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v1, input[key])
+
+	task = exec.createTask(nodeA, stateSlices, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v2, input[key])
+	_, ok = stateSlices[StateKeyGraphInterruptInputs]
+	require.False(t, ok)
+
+	stateAnyValueSlices := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: []State{
+				{key: v1},
+				{key: v2},
+			},
+		},
+	}
+	task = exec.createTask(nodeA, stateAnyValueSlices, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v1, input[key])
+
+	task = exec.createTask(nodeA, stateAnyValueSlices, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v2, input[key])
+	_, ok = stateAnyValueSlices[StateKeyGraphInterruptInputs]
+	require.False(t, ok)
+
+	stateAnyValueAnySlice := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: []any{
+				State{key: v1},
+				map[string]any{key: v2},
+			},
+		},
+	}
+	task = exec.createTask(nodeA, stateAnyValueAnySlice, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v1, input[key])
+
+	task = exec.createTask(nodeA, stateAnyValueAnySlice, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v2, input[key])
+	_, ok = stateAnyValueAnySlice[StateKeyGraphInterruptInputs]
+	require.False(t, ok)
+
+	stateAnySlices := State{
+		StateKeyGraphInterruptInputs: map[string][]any{
+			nodeA: {
+				State{key: v1},
+				map[string]any{key: v2},
+			},
+		},
+	}
+	task = exec.createTask(nodeA, stateAnySlices, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v1, input[key])
+
+	task = exec.createTask(nodeA, stateAnySlices, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v2, input[key])
+	_, ok = stateAnySlices[StateKeyGraphInterruptInputs]
+	require.False(t, ok)
+}
+
+func TestExecutor_CreateTask_DoesNotConsumeInvalidInterruptInputs(t *testing.T) {
+	const nodeA = "a"
+	const key = "k"
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint(nodeA).
+		SetFinishPoint(nodeA).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	stateEmptySlices := State{
+		StateKeyGraphInterruptInputs: map[string][]State{
+			nodeA: {},
+		},
+		key: "v",
+	}
+	task := exec.createTask(nodeA, stateEmptySlices, 0)
+	require.NotNil(t, task)
+	_, ok := stateEmptySlices[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateNilSlice := State{
+		StateKeyGraphInterruptInputs: map[string][]State{
+			nodeA: {nil},
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateNilSlice, 0)
+	require.NotNil(t, task)
+	_, ok = stateNilSlice[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyEmpty := State{
+		StateKeyGraphInterruptInputs: map[string][]any{
+			nodeA: {},
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyEmpty, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyEmpty[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyBad := State{
+		StateKeyGraphInterruptInputs: map[string][]any{
+			nodeA: {123},
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyBad, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyBad[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyValueBad := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: "bad",
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyValueBad, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyValueBad[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyValueNil := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: nil,
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyValueNil, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyValueNil[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyValueNilState := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: State(nil),
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyValueNilState, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyValueNilState[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyValueNilMap := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: map[string]any(nil),
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyValueNilMap, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyValueNilMap[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyValueEmptySlice := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: []any{},
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyValueEmptySlice, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyValueEmptySlice[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyValueBadSlice := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: []any{123},
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyValueBadSlice, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyValueBadSlice[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyValueBadStateSlice := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: []State{nil},
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyValueBadStateSlice, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyValueBadStateSlice[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateUnknown := State{
+		StateKeyGraphInterruptInputs: 123,
+		key:                          "v",
+	}
+	task = exec.createTask(nodeA, stateUnknown, 0)
+	require.NotNil(t, task)
+	_, ok = stateUnknown[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+}
+
+func TestGraphInterruptStateHelpers(t *testing.T) {
+	const nodeA = "a"
+	const nodeB = "b"
+	const key = "k"
+
+	require.Nil(t, (&Executor{}).stateFields())
+	require.Nil(t, (&Executor{graph: &Graph{}}).stateFields())
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint(nodeA).
+		SetFinishPoint(nodeA).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+	require.NotNil(t, exec.stateFields())
+
+	st := State{key: "v"}
+	_, ok := stateFromAny(nil)
+	require.False(t, ok)
+	_, ok = stateFromAny(1)
+	require.False(t, ok)
+
+	got, ok := stateFromAny(st)
+	require.True(t, ok)
+	require.Equal(t, st, got)
+
+	got, ok = stateFromAny(map[string]any{key: "v"})
+	require.True(t, ok)
+	require.Equal(t, "v", got[key])
+
+	next := nextNodesFromTasks([]*Task{
+		nil,
+		{NodeID: End},
+		{NodeID: nodeA},
+		{NodeID: nodeB},
+	})
+	require.Equal(t, []string{nodeA, nodeB}, next)
+	require.Nil(t, nextNodesFromTasks(nil))
+
+	meta := exec.metaExtraForPlannedExternalInterrupt([]*Task{
+		nil,
+		{NodeID: ""},
+		{NodeID: nodeA, Input: State{key: "v"}},
+		{NodeID: nodeB, Input: 123},
+	})
+	require.NotNil(t, meta)
+	raw := meta[CheckpointMetaKeyGraphInterruptInputs]
+	require.NotNil(t, raw)
+
+	inputs, ok := raw.(map[string][]any)
+	require.True(t, ok)
+	require.Len(t, inputs[nodeA], 1)
+	require.Nil(t, exec.metaExtraForPlannedExternalInterrupt(nil))
+}
+
+func TestExecutor_MetaExtraForForcedInterrupt_FallbackToTaskInput(t *testing.T) {
+	const nodeA = "a"
+	const key = "k"
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint(nodeA).
+		SetFinishPoint(nodeA).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	report := newStepExecutionReport(nil)
+	task := &Task{NodeID: nodeA, Input: State{key: "v"}}
+	meta := exec.metaExtraForForcedInterrupt(report, []*Task{task})
+	require.NotNil(t, meta)
+
+	raw := meta[CheckpointMetaKeyGraphInterruptInputs]
+	require.NotNil(t, raw)
+	m, ok := raw.(map[string][]any)
+	require.True(t, ok)
+	require.Len(t, m[nodeA], 1)
+
+	meta = exec.metaExtraForForcedInterrupt(
+		report,
+		[]*Task{{NodeID: nodeA, Input: 123}},
+	)
+	require.Nil(t, meta)
 }
 
 func TestExecutor_PlanTasksForBspStep_ResumedStartStep(t *testing.T) {
