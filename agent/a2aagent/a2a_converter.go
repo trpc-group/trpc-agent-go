@@ -500,16 +500,13 @@ func buildEventResponse(
 func buildStreamingResponse(messageID string, result *parseResult, role protocol.MessageRole) *model.Response {
 	now := time.Now()
 
-	// Convert A2A protocol role to internal model role
-	internalRole := convertA2ARoleToModelRole(role)
-
 	// Tool call: use Message (tool calls are complete units, not streamed incrementally)
 	if len(result.toolCalls) > 0 {
 		return &model.Response{
 			ID: messageID,
 			Choices: []model.Choice{{
 				Message: model.Message{
-					Role:             internalRole,
+					Role:             model.RoleAssistant,
 					Content:          result.textContent,
 					ReasoningContent: result.reasoningContent,
 					ToolCalls:        result.toolCalls,
@@ -560,6 +557,8 @@ func buildStreamingResponse(messageID string, result *parseResult, role protocol
 		objectType = model.ObjectTypeChatCompletionChunk
 	}
 
+	// Convert A2A protocol role to internal model role
+	internalRole := convertA2ARoleToModelRole(role)
 	return &model.Response{
 		ID: messageID,
 		Choices: []model.Choice{{
@@ -604,17 +603,12 @@ func extractObjectType(result *parseResult) string {
 // In non-streaming mode, all content uses Message (not Delta).
 func buildNonStreamingResponse(messageID string, result *parseResult, role protocol.MessageRole) *model.Response {
 	now := time.Now()
-
-	// Convert A2A protocol role to internal model role
-	internalRole := convertA2ARoleToModelRole(role)
-
 	var choices []model.Choice
-
 	// Tool call: assistant requesting tool execution
 	if len(result.toolCalls) > 0 {
 		choices = append(choices, model.Choice{
 			Message: model.Message{
-				Role:             internalRole,
+				Role:             model.RoleAssistant,
 				Content:          result.textContent,
 				ReasoningContent: result.reasoningContent,
 				ToolCalls:        result.toolCalls,
@@ -645,6 +639,7 @@ func buildNonStreamingResponse(messageID string, result *parseResult, role proto
 		} else if result.codeExecutionResult != "" {
 			content = result.codeExecutionResult
 		}
+		internalRole := convertA2ARoleToModelRole(role)
 		choices = append(choices, model.Choice{
 			Message: model.Message{
 				Role:             internalRole,

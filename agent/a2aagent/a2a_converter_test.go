@@ -2447,3 +2447,41 @@ func TestBuildNonStreamingResponse_WithReasoningContent(t *testing.T) {
 		t.Errorf("expected reasoningContent %q, got %q", "Thinking...", msg.ReasoningContent)
 	}
 }
+
+func TestConvertA2ARoleToModelRole(t *testing.T) {
+	tests := []struct {
+		name     string
+		role     protocol.MessageRole
+		expected model.Role
+	}{
+		{
+			name:     "MessageRoleUser converts to RoleUser",
+			role:     protocol.MessageRoleUser,
+			expected: model.RoleUser,
+		},
+		{
+			name:     "MessageRoleAgent converts to RoleAssistant",
+			role:     protocol.MessageRoleAgent,
+			expected: model.RoleAssistant,
+		},
+		{
+			name:     "unknown role defaults to RoleAssistant",
+			role:     protocol.MessageRole("unknown"),
+			expected: model.RoleAssistant,
+		},
+		{
+			name:     "empty role defaults to RoleAssistant",
+			role:     protocol.MessageRole(""),
+			expected: model.RoleAssistant,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := convertA2ARoleToModelRole(tt.role)
+			if result != tt.expected {
+				t.Errorf("convertA2ARoleToModelRole(%v) = %v, want %v", tt.role, result, tt.expected)
+			}
+		})
+	}
+}
