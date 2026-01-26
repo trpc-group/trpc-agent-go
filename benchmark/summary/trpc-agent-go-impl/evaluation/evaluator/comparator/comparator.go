@@ -98,10 +98,16 @@ func (c *ToolTrajectoryComparator) toolsMatch(
 	if expected.Name != actual.Name {
 		return false
 	}
-	if c.StrictArgs {
-		return argsEqual(expected.Arguments.(map[string]any), actual.Arguments.(map[string]any))
+	if !c.StrictArgs {
+		return true
 	}
-	return true
+	exp, ok1 := expected.Arguments.(map[string]any)
+	act, ok2 := actual.Arguments.(map[string]any)
+	if !ok1 || !ok2 {
+		// If type assertion fails, treat nil/empty as equal.
+		return expected.Arguments == nil && actual.Arguments == nil
+	}
+	return argsEqual(exp, act)
 }
 
 func argsEqual(a, b map[string]any) bool {

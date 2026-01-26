@@ -388,6 +388,13 @@ func parseRetentionResponse(
 	return rate, missing, nil
 }
 
+// Pre-compiled regex patterns for extractKeyInformation.
+var (
+	numberPattern     = regexp.MustCompile(`\b\d+[\d,\.]*\b`)
+	quotePattern      = regexp.MustCompile(`["']([^"']+)["']`)
+	properNounPattern = regexp.MustCompile(`\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b`)
+)
+
 // extractKeyInformation extracts key information from text.
 func extractKeyInformation(text string) []string {
 	if text == "" {
@@ -395,7 +402,6 @@ func extractKeyInformation(text string) []string {
 	}
 	info := make([]string, 0)
 	// Extract numbers (dates, amounts, etc.).
-	numberPattern := regexp.MustCompile(`\b\d+[\d,\.]*\b`)
 	numbers := numberPattern.FindAllString(text, -1)
 	const minNumberLength = 2
 	for _, n := range numbers {
@@ -404,7 +410,6 @@ func extractKeyInformation(text string) []string {
 		}
 	}
 	// Extract quoted content.
-	quotePattern := regexp.MustCompile(`["']([^"']+)["']`)
 	quotes := quotePattern.FindAllStringSubmatch(text, -1)
 	const minQuoteLength = 3
 	for _, q := range quotes {
@@ -413,7 +418,6 @@ func extractKeyInformation(text string) []string {
 		}
 	}
 	// Extract capitalized proper nouns (simple heuristic).
-	properNounPattern := regexp.MustCompile(`\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b`)
 	nouns := properNounPattern.FindAllString(text, -1)
 	const minNounLength = 3
 	for _, n := range nouns {

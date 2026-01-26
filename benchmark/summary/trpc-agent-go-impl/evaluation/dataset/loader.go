@@ -81,6 +81,7 @@ func (l *DatasetLoader) LoadMTBench101(
 }
 
 // loadJSONL loads a JSONL file into a slice of entries.
+// Each line in the file should be a separate JSON object.
 func loadJSONL[T any](path string) ([]T, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -90,9 +91,12 @@ func loadJSONL[T any](path string) ([]T, error) {
 
 	var entries []T
 	decoder := json.NewDecoder(file)
-	for decoder.More() {
+	for {
 		var entry T
 		if err := decoder.Decode(&entry); err != nil {
+			if err.Error() == "EOF" {
+				break
+			}
 			return nil, fmt.Errorf("decode entry: %w", err)
 		}
 		entries = append(entries, entry)
