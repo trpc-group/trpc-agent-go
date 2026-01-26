@@ -384,7 +384,8 @@ func newSessionEvent(author string, msg model.Message) event.Event {
 	}
 }
 
-// Test that session summary is inserted as a separate system message after the first system message.
+// Test that session summary is inserted as a separate system message after the
+// last system message.
 func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.T) {
 	// Create session with summary
 	sess := &session.Session{
@@ -470,14 +471,21 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 	p3 := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p3.ProcessRequest(context.Background(), inv3, req3, nil)
 
-	// Should have 5 messages: system1, summary system, system2, user, current request
+	// Should have 5 messages: system1, system2, summary system, user, current
+	// request.
 	require.Equal(t, 5, len(req3.Messages))
 	require.Equal(t, model.RoleSystem, req3.Messages[0].Role)
 	require.Equal(t, "system 1", req3.Messages[0].Content)
 	require.Equal(t, model.RoleSystem, req3.Messages[1].Role)
-	require.Equal(t, NewContentRequestProcessor().formatSummary("Session summary content"), req3.Messages[1].Content)
+	require.Equal(t, "system 2", req3.Messages[1].Content)
 	require.Equal(t, model.RoleSystem, req3.Messages[2].Role)
-	require.Equal(t, "system 2", req3.Messages[2].Content)
+	require.Equal(
+		t,
+		NewContentRequestProcessor().formatSummary(
+			"Session summary content",
+		),
+		req3.Messages[2].Content,
+	)
 	require.Equal(t, model.RoleUser, req3.Messages[3].Role)
 	require.Equal(t, "user question", req3.Messages[3].Content)
 	require.Equal(t, model.RoleUser, req3.Messages[4].Role)
@@ -543,6 +551,45 @@ func TestProcessRequest_SessionSummary_EdgeCases(t *testing.T) {
 	require.Equal(t, NewContentRequestProcessor().formatSummary("Session summary content"), req2.Messages[1].Content)
 	require.Equal(t, model.RoleUser, req2.Messages[2].Role)
 	require.Equal(t, "current request", req2.Messages[2].Content)
+}
+
+func TestContentRequestProcessor_AggregatePrefixSummaries_Sorted(
+	t *testing.T,
+) {
+	p := NewContentRequestProcessor()
+	summaries := map[string]*session.Summary{
+		"app/b": {
+			Summary: "b",
+			UpdatedAt: time.Date(
+				2023, 1, 2, 12, 0, 0, 0, time.UTC,
+			),
+		},
+		"app": {
+			Summary: "root",
+			UpdatedAt: time.Date(
+				2023, 1, 1, 12, 0, 0, 0, time.UTC,
+			),
+		},
+		"app/a": {
+			Summary: "a",
+			UpdatedAt: time.Date(
+				2023, 1, 3, 12, 0, 0, 0, time.UTC,
+			),
+		},
+		"other": {
+			Summary: "ignored",
+			UpdatedAt: time.Date(
+				2023, 1, 4, 12, 0, 0, 0, time.UTC,
+			),
+		},
+	}
+
+	got, updatedAt := p.aggregatePrefixSummaries(summaries, "app")
+	require.Equal(t, "root\n\na\n\nb", got)
+	require.Equal(t,
+		time.Date(2023, 1, 3, 12, 0, 0, 0, time.UTC),
+		updatedAt,
+	)
 }
 
 func newSessionEventWithBranch(author, filterKey, branch string, msg model.Message) event.Event {
