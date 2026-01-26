@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -3050,10 +3051,15 @@ type singleToolCallConfig struct {
 // executeSingleToolCall executes a single tool call with event emission.
 func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (model.Message, error) {
 	id, name := config.ToolCall.ID, config.ToolCall.Function.Name
+	invocation, _ := agent.InvocationFromContext(ctx)
 	t := config.Tools[name]
 	if t == nil {
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", fmt.Sprintf("tool %s not found", name)))
-		return model.Message{}, fmt.Errorf("tool %s not found", name)
+		toolErr := fmt.Errorf("tool %s not found", name)
+		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", toolErr.Error()))
+		if iflow.ContinueOnToolErrorEnabled(invocation, false) {
+			return toolErrorMessage(id, name, toolErr), nil
+		}
+		return model.Message{}, toolErr
 	}
 
 	startTime := time.Now()
@@ -3131,6 +3137,9 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		if interruptErr != nil {
 			return model.Message{}, interruptErr
 		}
+		if iflow.ContinueOnToolErrorEnabled(invocation, false) {
+			return toolErrorMessage(id, name, err), nil
+		}
 		config.Span.RecordError(err)
 		config.Span.SetStatus(codes.Error, err.Error())
 		return model.Message{}, fmt.Errorf("tool %s call failed: %w", name, err)
@@ -3139,12 +3148,20 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	// Marshal result to JSON.
 	content, err := json.Marshal(result)
 	if err != nil {
-		config.Span.RecordError(err)
-		config.Span.SetStatus(codes.Error, err.Error())
-		return model.Message{}, fmt.Errorf("failed to marshal tool result: %w", err)
+		toolErr := fmt.Errorf("failed to marshal tool result: %w", err)
+		if iflow.ContinueOnToolErrorEnabled(invocation, false) {
+			return toolErrorMessage(id, name, toolErr), nil
+		}
+		config.Span.RecordError(toolErr)
+		config.Span.SetStatus(codes.Error, toolErr.Error())
+		return model.Message{}, toolErr
 	}
 
 	return model.NewToolMessage(id, name, string(content)), nil
+}
+
+func toolErrorMessage(toolID, toolName string, err error) model.Message {
+	return model.NewToolMessage(toolID, toolName, err.Error())
 }
 
 // emitToolStartEvent emits a tool execution start event.

@@ -12,6 +12,7 @@ Tool 工具系统是 tRPC-Agent-Go 框架的核心组件，为 Agent 提供了�
 - **🔄 MCP 协议**：完整支持 STDIO、SSE、Streamable HTTP 三种传输方式
 - **🛠️ 配置支持**：提供配置选项和过滤器支持
 - **🧹 参数修复**：可选启用 `agent.WithToolCallArgumentsJSONRepairEnabled(true)`，对 `tool_calls` 的 `arguments` 做一次尽力 JSON 修复，提升工具执行与外部解析的鲁棒性
+- **🧯 错误继续执行**：可选启用 `agent.WithContinueOnToolError(true)`，当工具执行失败时仍继续下一轮，并将错误信息作为对应 `tool_call` 的 tool message 回传给模型
 
 ### 核心概念
 
@@ -905,6 +906,18 @@ ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("..."),
     agent.WithToolCallArgumentsJSONRepairEnabled(true),
 )
 ```
+
+#### 工具错误继续执行
+
+工具在执行时可能因为参数解析失败、工具未注册、工具返回 error / panic 等原因失败。此时你可以通过 `agent.WithContinueOnToolError(true)` 控制框架把失败原因作为对应 `tool_call` 的 tool message 写回，并继续进入下一轮 LLM 调用，让模型有机会自我纠正与重试。
+
+```go
+ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("..."),
+    agent.WithContinueOnToolError(true),
+)
+```
+
+当未显式设置时，`ContinueOnToolError` 为 `nil`，不同执行器会保持各自的历史默认行为。非 GraphAgent 场景默认继续执行。GraphAgent 场景默认停止执行。如需强制工具失败时停止，可显式设置 `agent.WithContinueOnToolError(false)`。
 
 ## 快速开始
 

@@ -3009,11 +3009,279 @@ func TestProcessResponse_StopError_SetsEndInvocation(t *testing.T) {
 	require.True(t, inv.EndInvocation)
 }
 
+func TestProcessResponse_ToolError_StopMode_SetsEndInvocation(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	continueOnToolError := false
+	inv := &agent.Invocation{
+		AgentName:    "test-agent",
+		InvocationID: "inv-tool-err-stop",
+		RunOptions: agent.RunOptions{
+			ContinueOnToolError: &continueOnToolError,
+		},
+	}
+	errTool := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "err"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return nil, errors.New("boom")
+		},
+	}
+	tools := map[string]tool.Tool{"err": errTool}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: []model.ToolCall{{
+			ID: "c1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "err",
+				Arguments: []byte(`{}`),
+			},
+		}}},
+	}}}
+
+	ch := make(chan *event.Event, 2)
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+	require.True(t, inv.EndInvocation)
+}
+
+func TestProcessResponse_ToolError_DefaultContinue_DoesNotSetEndInvocation(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := &agent.Invocation{
+		AgentName:    "test-agent",
+		InvocationID: "inv-tool-err-default",
+	}
+	errTool := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "err"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return nil, errors.New("boom")
+		},
+	}
+	tools := map[string]tool.Tool{"err": errTool}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: []model.ToolCall{{
+			ID: "c1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "err",
+				Arguments: []byte(`{}`),
+			},
+		}}},
+	}}}
+
+	ch := make(chan *event.Event, 2)
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+	require.False(t, inv.EndInvocation)
+}
+
+func TestProcessResponse_ToolError_StopMode_Parallel_SetsEndInvocation(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(true, nil)
+
+	continueOnToolError := false
+	inv := &agent.Invocation{
+		AgentName:    "test-agent",
+		InvocationID: "inv-tool-err-par-stop",
+		RunOptions: agent.RunOptions{
+			ContinueOnToolError: &continueOnToolError,
+		},
+	}
+
+	tools := map[string]tool.Tool{
+		"err": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "err"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return nil, errors.New("boom")
+			},
+		},
+		"ok": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "ok"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]string{"status": "ok"}, nil
+			},
+		},
+	}
+
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: []model.ToolCall{
+			{
+				ID: "c1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "err",
+					Arguments: []byte(`{}`),
+				},
+			},
+			{
+				ID: "c2",
+				Function: model.FunctionDefinitionParam{
+					Name:      "ok",
+					Arguments: []byte(`{}`),
+				},
+			},
+		}},
+	}}}
+
+	ch := make(chan *event.Event, 20)
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+	require.True(t, inv.EndInvocation)
+}
+
+func TestProcessResponse_ToolError_DefaultContinue_Parallel_DoesNotSetEndInvocation(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(true, nil)
+
+	inv := &agent.Invocation{
+		AgentName:    "test-agent",
+		InvocationID: "inv-tool-err-par-default",
+	}
+
+	tools := map[string]tool.Tool{
+		"err": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "err"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return nil, errors.New("boom")
+			},
+		},
+		"ok": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "ok"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]string{"status": "ok"}, nil
+			},
+		},
+	}
+
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: []model.ToolCall{
+			{
+				ID: "c1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "err",
+					Arguments: []byte(`{}`),
+				},
+			},
+			{
+				ID: "c2",
+				Function: model.FunctionDefinitionParam{
+					Name:      "ok",
+					Arguments: []byte(`{}`),
+				},
+			},
+		}},
+	}}}
+
+	ch := make(chan *event.Event, 20)
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+	require.False(t, inv.EndInvocation)
+}
+
+func TestProcessResponse_ToolPanic_StopMode_Parallel_SetsEndInvocationAndEmitsToolMessage(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(true, nil)
+
+	continueOnToolError := false
+	inv := &agent.Invocation{
+		AgentName:    "test-agent",
+		InvocationID: "inv-tool-panic-par-stop",
+		RunOptions: agent.RunOptions{
+			ContinueOnToolError: &continueOnToolError,
+		},
+	}
+
+	tools := map[string]tool.Tool{
+		"panic": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "panic"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				panic("boom")
+			},
+		},
+		"ok": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "ok"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]string{"status": "ok"}, nil
+			},
+		},
+	}
+
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: []model.ToolCall{
+			{
+				ID: "c1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "panic",
+					Arguments: []byte(`{}`),
+				},
+			},
+			{
+				ID: "c2",
+				Function: model.FunctionDefinitionParam{
+					Name:      "ok",
+					Arguments: []byte(`{}`),
+				},
+			},
+		}},
+	}}}
+
+	ch := make(chan *event.Event, 20)
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+	require.True(t, inv.EndInvocation)
+
+	close(ch)
+	found := false
+	for e := range ch {
+		if e == nil || e.Response == nil {
+			continue
+		}
+		for _, choice := range e.Response.Choices {
+			if choice.Message.Role == model.RoleTool &&
+				strings.Contains(choice.Message.Content, "tool execution panic") {
+				found = true
+			}
+		}
+	}
+	require.True(t, found)
+}
+
+func TestCollectParallelToolResults_NonStopError_DoesNotReturnErrorButReportsHadToolError(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(true, nil)
+	ch := make(chan toolResult, 2)
+	ch <- toolResult{index: 0, event: &event.Event{}, err: errors.New("boom")}
+	ch <- toolResult{index: 1, event: &event.Event{}}
+	close(ch)
+
+	evs, hadToolError, err := p.collectParallelToolResults(
+		context.Background(), ch, 2,
+	)
+	require.Len(t, evs, 2)
+	require.True(t, hadToolError)
+	require.NoError(t, err)
+}
+
+func TestCollectParallelToolResults_StopError_ReturnsStopErrorAndReportsHadToolError(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(true, nil)
+	ch := make(chan toolResult, 2)
+	ch <- toolResult{index: 0, event: &event.Event{}, err: errors.New("boom")}
+	ch <- toolResult{index: 1, event: &event.Event{}, err: agent.NewStopError("stop")}
+	close(ch)
+
+	evs, hadToolError, err := p.collectParallelToolResults(
+		context.Background(), ch, 2,
+	)
+	require.Len(t, evs, 2)
+	require.True(t, hadToolError)
+	require.Error(t, err)
+	_, ok := agent.AsStopError(err)
+	require.True(t, ok)
+}
+
 func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
 	p := NewFunctionCallResponseProcessor(true, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	res, err := p.collectParallelToolResults(ctx, make(chan toolResult), 2)
+	res, _, err := p.collectParallelToolResults(ctx, make(chan toolResult), 2)
 	require.NotNil(t, res)
 	require.NoError(t, err)
 }
@@ -3076,7 +3344,7 @@ func TestCollectParallelToolResults_IndexOutOfRange(t *testing.T) {
 	ch <- toolResult{index: 0, event: &event.Event{}}
 	close(ch)
 
-	evs, err := p.collectParallelToolResults(
+	evs, _, err := p.collectParallelToolResults(
 		context.Background(), ch, 1,
 	)
 	require.NoError(t, err)

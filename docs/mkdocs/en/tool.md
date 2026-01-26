@@ -12,6 +12,7 @@ The Tool system is a core component of the tRPC-Agent-Go framework, enabling Age
 - **🔄 MCP Protocol**: Full support for STDIO, SSE, and Streamable HTTP transports.
 - **🛠️ Configuration Support**: Provides configuration options and filter support.
 - **🧹 Arguments Repair**: Optionally enable `agent.WithToolCallArgumentsJSONRepairEnabled(true)` to best-effort repair `tool_calls` `arguments`, improving robustness for tool execution and external parsing.
+- **🧯 Continue on Tool Errors**: Optionally enable `agent.WithContinueOnToolError(true)` to continue the run when a tool fails, and send the error back as a tool message for the corresponding tool call.
 
 ### Core Concepts
 
@@ -914,6 +915,18 @@ ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("..."),
     agent.WithToolCallArgumentsJSONRepairEnabled(true),
 )
 ```
+
+#### Continue on Tool Errors
+
+Tools may fail due to invalid arguments, missing registrations, runtime errors, or panics. With `agent.WithContinueOnToolError(true)`, the framework writes the failure reason back as a tool message for the corresponding tool call and proceeds to the next LLM turn, giving the model a chance to correct and retry.
+
+```go
+ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("..."),
+    agent.WithContinueOnToolError(true),
+)
+```
+
+When unset, `ContinueOnToolError` is `nil` and each executor keeps its historical default behavior. Non-GraphAgent runs default to continue. GraphAgent runs default to stop. To force stopping on tool failures, explicitly set `agent.WithContinueOnToolError(false)`.
 
 ## Quick Start
 

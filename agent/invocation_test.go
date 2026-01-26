@@ -650,6 +650,18 @@ func TestWithGlobalInstruction(t *testing.T) {
 	require.Equal(t, testRunGlobalInstruction, opts.GlobalInstruction)
 }
 
+func TestWithContinueOnToolError(t *testing.T) {
+	opts := &RunOptions{}
+	WithContinueOnToolError(true)(opts)
+	require.NotNil(t, opts.ContinueOnToolError)
+	require.True(t, *opts.ContinueOnToolError)
+
+	opts = &RunOptions{}
+	WithContinueOnToolError(false)(opts)
+	require.NotNil(t, opts.ContinueOnToolError)
+	require.False(t, *opts.ContinueOnToolError)
+}
+
 func TestWithModel_Integration(t *testing.T) {
 	mockModel := &mockModel{name: "custom-model"}
 

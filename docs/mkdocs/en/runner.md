@@ -281,6 +281,10 @@ Some models may emit non-strict JSON arguments for `tool_calls` (for example, un
 
 When `agent.WithToolCallArgumentsJSONRepairEnabled(true)` is enabled in `runner.Run`, the framework will best-effort repair `toolCall.Function.Arguments`. For detailed usage, see [Tool Call Arguments Auto Repair](./runner.md#tool-call-arguments-auto-repair).
 
+#### Continue on Tool Errors
+
+When `agent.WithContinueOnToolError(true)` is enabled in `runner.Run`, tool execution failures (including invalid arguments, missing tools, or tool runtime errors) are returned as tool messages and the next LLM turn continues. When unset, Non-GraphAgent runs default to continue. GraphAgent runs default to stop. To force stopping on tool failures, explicitly set `agent.WithContinueOnToolError(false)`.
+
 #### Provide Conversation History (auto-seed + session reuse)
 
 If your upstream service maintains the conversation and you want the agent to

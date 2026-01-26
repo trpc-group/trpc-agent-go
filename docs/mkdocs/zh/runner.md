@@ -281,6 +281,10 @@ eventChan, err := r.Run(
 
 在 `runner.Run` 中启用 `agent.WithToolCallArgumentsJSONRepairEnabled(true)` 后，框架会对 `toolCall.Function.Arguments` 做一次尽力修复，详细使用方法可参照 [ToolCall参数自动修复](./runner.md#tool-call-参数自动修复)。
 
+#### 工具错误继续执行
+
+在 `runner.Run` 中启用 `agent.WithContinueOnToolError(true)` 后，当工具执行失败时，框架会把错误信息写成对应的 tool message，并继续进入下一轮 LLM 调用。工具执行失败包括参数解析失败、工具未注册、工具返回 error 等情况。当未显式设置时，非 GraphAgent 场景默认继续执行。GraphAgent 场景默认停止执行。如需强制工具失败时停止，可显式设置 `agent.WithContinueOnToolError(false)`。
+
 #### 传入对话历史（auto-seed + 复用 Session）
 
 如果上游服务已经维护了会话历史，并希望让 Agent 看见这些上下文，可以直接传入整段
