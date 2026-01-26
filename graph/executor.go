@@ -1536,10 +1536,8 @@ func (e *Executor) attemptCacheLookup(t *Task) (bool, any) {
 	sanitized := sanitizeForCacheKey(t.Input)
 
 	// Apply optional cache key selector (node-level) to focus on relevant inputs.
-	if node, ok := e.graph.Node(t.NodeID); ok && node != nil && node.cacheKeySelector != nil {
-		if m, ok2 := sanitized.(map[string]any); ok2 {
-			sanitized = node.cacheKeySelector(m)
-		}
+	if node, ok := e.graph.Node(t.NodeID); ok && node != nil {
+		sanitized = applyCacheKeySelector(node.cacheKeySelector, sanitized)
 	}
 
 	keyBytes, kerr := pol.KeyFunc(sanitized)
@@ -1552,6 +1550,23 @@ func (e *Executor) attemptCacheLookup(t *Task) (bool, any) {
 		return true, cached
 	}
 	return false, nil
+}
+
+func applyCacheKeySelector(
+	selector func(map[string]any) any,
+	input any,
+) any {
+	if selector == nil {
+		return input
+	}
+	switch m := input.(type) {
+	case State:
+		return selector(m)
+	case map[string]any:
+		return selector(m)
+	default:
+		return input
+	}
 }
 
 // handleCachedResult processes a cache hit by running callbacks and handling
@@ -1706,10 +1721,11 @@ func (e *Executor) finalizeSuccessfulExecution(
 		if pol := e.getEffectiveCachePolicy(t.NodeID); pol != nil && pol.KeyFunc != nil {
 			// Use the same sanitized input used for lookup (post-callback state copy).
 			sanitized := sanitizeForCacheKey(nodeCtx.stateCopy)
-			if node, ok := e.graph.Node(t.NodeID); ok && node != nil && node.cacheKeySelector != nil {
-				if m, ok2 := sanitized.(map[string]any); ok2 {
-					sanitized = node.cacheKeySelector(m)
-				}
+			if node, ok := e.graph.Node(t.NodeID); ok && node != nil {
+				sanitized = applyCacheKeySelector(
+					node.cacheKeySelector,
+					sanitized,
+				)
 			}
 			if keyBytes, kerr := pol.KeyFunc(sanitized); kerr == nil {
 				ns := e.graph.cacheNamespace(t.NodeID)
