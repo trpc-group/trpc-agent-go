@@ -85,6 +85,19 @@ const (
 	// ADK uses "adk_" prefix for metadata keys like "adk_type", "adk_app_name", "adk_user_id", etc.
 	// This ensures compatibility with ADK's part converter which expects "adk_type" instead of "type".
 	ADKMetadataKeyPrefix = "adk_"
+
+	// MetadataKeyPartial is the base metadata key for partial flag.
+	MetadataKeyPartial = "partial"
+
+	// MetadataKeyInvocationID is the base metadata key for invocation ID.
+	// ADK uses "adk_invocation_id" to identify streaming chunks from the same LLM response.
+	MetadataKeyInvocationID = "invocation_id"
+
+	// MessageMetadataADKPartialValueFalse is the value indicating a complete/cumulative message.
+	MessageMetadataADKPartialValueFalse = "False"
+
+	// MessageMetadataADKPartialValueTrue is the value indicating a partial/incremental message.
+	MessageMetadataADKPartialValueTrue = "True"
 )
 
 // GetADKMetadataKey returns the ADK-compatible metadata key with "adk_" prefix.
