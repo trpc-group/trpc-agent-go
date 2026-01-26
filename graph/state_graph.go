@@ -2128,11 +2128,13 @@ func finalizeAgentNodeOutput(
 			RawStateDelta:    streamRes.rawDelta,
 			StructuredOutput: streamRes.structuredOutput,
 		})
-		if mapped == nil {
-			mapped = State{}
+		if len(mapped) == 0 {
+			return State{}
 		}
 		if _, ok := mapped[userInputKey]; !ok {
-			mapped[userInputKey] = ""
+			copied := mapped.Clone()
+			copied[userInputKey] = ""
+			return copied
 		}
 		return mapped
 	}
