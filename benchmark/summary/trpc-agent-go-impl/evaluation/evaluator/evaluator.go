@@ -1,9 +1,15 @@
 //
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 // Package evaluator provides evaluator extensions for summary benchmark.
 // It reuses types from trpc-agent-go/evaluation/evaluator and adds
 // benchmark-specific extensions like MultiRunEvaluator interface.
-//
-
 package evaluator
 
 import (
