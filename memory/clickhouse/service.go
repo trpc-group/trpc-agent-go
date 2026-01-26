@@ -359,6 +359,9 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 			}
 			records = append(records, rec)
 		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("get memories for clear failed: %w", err)
+		}
 
 		if len(records) > 0 {
 			now := time.Now()
@@ -434,6 +437,9 @@ func (s *Service) ReadMemories(
 		}
 		entries = append(entries, e)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list memories failed: %w", err)
+	}
 	return entries, nil
 }
 
@@ -445,6 +451,11 @@ func (s *Service) SearchMemories(
 ) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
+	}
+
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return []*memory.Entry{}, nil
 	}
 
 	// Get all memories for the user.
@@ -478,6 +489,9 @@ func (s *Service) SearchMemories(
 		if imemory.MatchMemoryEntry(e, query) {
 			results = append(results, e)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
 	return results, nil
 }

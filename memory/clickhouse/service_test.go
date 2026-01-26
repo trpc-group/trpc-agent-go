@@ -133,6 +133,7 @@ type mockRows struct {
 	data     [][]any
 	current  int
 	scanFunc func(dest ...any) error
+	err      error
 }
 
 func (m *mockRows) Next() bool {
@@ -170,7 +171,7 @@ func (m *mockRows) Close() error {
 }
 
 func (m *mockRows) Err() error {
-	return nil
+	return m.err
 }
 
 func (m *mockRows) Columns() []string {
@@ -916,6 +917,41 @@ func TestService_ClearMemories_SoftDelete(t *testing.T) {
 	assert.True(t, batchInsertCalled)
 }
 
+func TestService_ClearMemories_SoftDelete_RowsError(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	batchInsertCalled := false
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{err: errors.New("rows error")}, nil
+		},
+		batchInsertFunc: func(ctx context.Context, query string, fn storage.BatchFn,
+			opts ...driver.PrepareBatchOption) error {
+			batchInsertCalled = true
+			return nil
+		},
+	}
+
+	svc := &Service{
+		opts: ServiceOpts{
+			tableName:  "memories",
+			softDelete: true,
+		},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.ClearMemories(ctx, userKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get memories for clear failed")
+	assert.False(t, batchInsertCalled)
+}
+
 // TestService_ReadMemories_InvalidUserKey tests validation of user key.
 func TestService_ReadMemories_InvalidUserKey(t *testing.T) {
 	svc := &Service{
@@ -958,6 +994,31 @@ func TestService_ReadMemories_WithSoftDelete(t *testing.T) {
 	_, err := svc.ReadMemories(ctx, userKey, 10)
 	require.NoError(t, err)
 	assert.Contains(t, queryCaptured, "deleted_at IS NULL")
+}
+
+func TestService_ReadMemories_RowsError(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{err: errors.New("rows error")}, nil
+		},
+	}
+
+	svc := &Service{
+		opts:        ServiceOpts{tableName: "memories"},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	_, err := svc.ReadMemories(ctx, userKey, 10)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list memories failed")
 }
 
 // TestService_SearchMemories_InvalidUserKey tests validation of user key.
@@ -1017,6 +1078,59 @@ func TestService_SearchMemories_NoMatch(t *testing.T) {
 	entries, err := svc.SearchMemories(ctx, userKey, "dogs")
 	require.NoError(t, err)
 	assert.Len(t, entries, 0)
+}
+
+func TestService_SearchMemories_EmptyQuery(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	queryCalled := false
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			queryCalled = true
+			return &mockRows{}, nil
+		},
+	}
+
+	svc := &Service{
+		opts:        ServiceOpts{tableName: "memories"},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	entries, err := svc.SearchMemories(ctx, userKey, "   ")
+	require.NoError(t, err)
+	assert.Len(t, entries, 0)
+	assert.False(t, queryCalled)
+}
+
+func TestService_SearchMemories_RowsError(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{err: errors.New("rows error")}, nil
+		},
+	}
+
+	svc := &Service{
+		opts:        ServiceOpts{tableName: "memories"},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	_, err := svc.SearchMemories(ctx, userKey, "query")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "search memories failed")
 }
 
 // TestService_AddMemory_CountQueryError tests error handling for count query.
