@@ -915,3 +915,50 @@ func TestCreateSessionSummary_WithSessionTTL(t *testing.T) {
 		})
 	}
 }
+
+func TestRedisService_CreateAndGetSessionSummaryWithKeyPrefix(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	const testPrefix = "test-prefix"
+
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithKeyPrefix(testPrefix),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "prefixed-summary"}),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append an event to make delta non-empty.
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Create summary via public API.
+	err = s.CreateSessionSummary(context.Background(), sess, "", false)
+	require.NoError(t, err)
+
+	// Retrieve the summary via public API to ensure the prefix-aware Get path works.
+	got, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.True(t, ok)
+	require.Equal(t, "prefixed-summary", got)
+
+	// Verify Redis keys: only prefixed key should exist, unprefixed should not.
+	client := buildRedisClient(t, redisURL)
+	prefixedKey := getExpectedSessionSummaryKeyWithPrefix(testPrefix, key)
+	unprefixedKey := getExpectedSessionSummaryKey(key)
+
+	prefixedExists, err := client.HExists(context.Background(), prefixedKey, key.SessionID).Result()
+	require.NoError(t, err)
+	require.True(t, prefixedExists, "prefixed summary key should exist")
+
+	unprefixedExists, err := client.HExists(context.Background(), unprefixedKey, key.SessionID).Result()
+	require.NoError(t, err)
+	require.False(t, unprefixedExists, "unprefixed summary key should not exist")
+}

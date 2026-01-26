@@ -27,29 +27,62 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-// Test helper functions for generating expected redis keys without prefix.
+// Test helper functions for generating expected redis keys with optional prefix.
+
+// prefixedTestKey adds the prefix to the base key if prefix is non-empty.
+func prefixedTestKey(prefix, base string) string {
+	if prefix == "" {
+		return base
+	}
+	return prefix + ":" + base
+}
+
 func getExpectedSessionSummaryKey(key session.Key) string {
-	return fmt.Sprintf("sesssum:{%s}:%s", key.AppName, key.UserID)
+	return getExpectedSessionSummaryKeyWithPrefix("", key)
+}
+
+func getExpectedSessionSummaryKeyWithPrefix(prefix string, key session.Key) string {
+	return prefixedTestKey(prefix, fmt.Sprintf("sesssum:{%s}:%s", key.AppName, key.UserID))
 }
 
 func getExpectedSessionStateKey(key session.Key) string {
-	return fmt.Sprintf("sess:{%s}:%s", key.AppName, key.UserID)
+	return getExpectedSessionStateKeyWithPrefix("", key)
+}
+
+func getExpectedSessionStateKeyWithPrefix(prefix string, key session.Key) string {
+	return prefixedTestKey(prefix, fmt.Sprintf("sess:{%s}:%s", key.AppName, key.UserID))
 }
 
 func getExpectedAppStateKey(appName string) string {
-	return fmt.Sprintf("appstate:{%s}", appName)
+	return getExpectedAppStateKeyWithPrefix("", appName)
+}
+
+func getExpectedAppStateKeyWithPrefix(prefix, appName string) string {
+	return prefixedTestKey(prefix, fmt.Sprintf("appstate:{%s}", appName))
 }
 
 func getExpectedUserStateKey(key session.Key) string {
-	return fmt.Sprintf("userstate:{%s}:%s", key.AppName, key.UserID)
+	return getExpectedUserStateKeyWithPrefix("", key)
+}
+
+func getExpectedUserStateKeyWithPrefix(prefix string, key session.Key) string {
+	return prefixedTestKey(prefix, fmt.Sprintf("userstate:{%s}:%s", key.AppName, key.UserID))
 }
 
 func getExpectedEventKey(key session.Key) string {
-	return fmt.Sprintf("event:{%s}:%s:%s", key.AppName, key.UserID, key.SessionID)
+	return getExpectedEventKeyWithPrefix("", key)
+}
+
+func getExpectedEventKeyWithPrefix(prefix string, key session.Key) string {
+	return prefixedTestKey(prefix, fmt.Sprintf("event:{%s}:%s:%s", key.AppName, key.UserID, key.SessionID))
 }
 
 func getExpectedTrackKey(key session.Key, track session.Track) string {
-	return fmt.Sprintf("track:{%s}:%s:%s:%s", key.AppName, key.UserID, key.SessionID, track)
+	return getExpectedTrackKeyWithPrefix("", key, track)
+}
+
+func getExpectedTrackKeyWithPrefix(prefix string, key session.Key, track session.Track) string {
+	return prefixedTestKey(prefix, fmt.Sprintf("track:{%s}:%s:%s:%s", key.AppName, key.UserID, key.SessionID, track))
 }
 
 func TestNewService(t *testing.T) {

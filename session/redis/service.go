@@ -611,46 +611,37 @@ func (s *Service) Close() error {
 	return nil
 }
 
-func (s *Service) getAppStateKey(appName string) string {
+// prefixedKey adds the configured key prefix to the given base key.
+// If no prefix is configured, returns the base key unchanged.
+func (s *Service) prefixedKey(base string) string {
 	if s.opts.keyPrefix != "" {
-		return fmt.Sprintf("%s:appstate:{%s}", s.opts.keyPrefix, appName)
+		return s.opts.keyPrefix + ":" + base
 	}
-	return fmt.Sprintf("appstate:{%s}", appName)
+	return base
+}
+
+func (s *Service) getAppStateKey(appName string) string {
+	return s.prefixedKey(fmt.Sprintf("appstate:{%s}", appName))
 }
 
 func (s *Service) getUserStateKey(key session.Key) string {
-	if s.opts.keyPrefix != "" {
-		return fmt.Sprintf("%s:userstate:{%s}:%s", s.opts.keyPrefix, key.AppName, key.UserID)
-	}
-	return fmt.Sprintf("userstate:{%s}:%s", key.AppName, key.UserID)
+	return s.prefixedKey(fmt.Sprintf("userstate:{%s}:%s", key.AppName, key.UserID))
 }
 
 func (s *Service) getEventKey(key session.Key) string {
-	if s.opts.keyPrefix != "" {
-		return fmt.Sprintf("%s:event:{%s}:%s:%s", s.opts.keyPrefix, key.AppName, key.UserID, key.SessionID)
-	}
-	return fmt.Sprintf("event:{%s}:%s:%s", key.AppName, key.UserID, key.SessionID)
+	return s.prefixedKey(fmt.Sprintf("event:{%s}:%s:%s", key.AppName, key.UserID, key.SessionID))
 }
 
 func (s *Service) getTrackKey(key session.Key, track session.Track) string {
-	if s.opts.keyPrefix != "" {
-		return fmt.Sprintf("%s:track:{%s}:%s:%s:%s", s.opts.keyPrefix, key.AppName, key.UserID, key.SessionID, track)
-	}
-	return fmt.Sprintf("track:{%s}:%s:%s:%s", key.AppName, key.UserID, key.SessionID, track)
+	return s.prefixedKey(fmt.Sprintf("track:{%s}:%s:%s:%s", key.AppName, key.UserID, key.SessionID, track))
 }
 
 func (s *Service) getSessionStateKey(key session.Key) string {
-	if s.opts.keyPrefix != "" {
-		return fmt.Sprintf("%s:sess:{%s}:%s", s.opts.keyPrefix, key.AppName, key.UserID)
-	}
-	return fmt.Sprintf("sess:{%s}:%s", key.AppName, key.UserID)
+	return s.prefixedKey(fmt.Sprintf("sess:{%s}:%s", key.AppName, key.UserID))
 }
 
 func (s *Service) getSessionSummaryKey(key session.Key) string {
-	if s.opts.keyPrefix != "" {
-		return fmt.Sprintf("%s:sesssum:{%s}:%s", s.opts.keyPrefix, key.AppName, key.UserID)
-	}
-	return fmt.Sprintf("sesssum:{%s}:%s", key.AppName, key.UserID)
+	return s.prefixedKey(fmt.Sprintf("sesssum:{%s}:%s", key.AppName, key.UserID))
 }
 
 func (s *Service) fetchSessionMeta(

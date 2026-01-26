@@ -21,7 +21,7 @@ import (
 
 // luaSummariesSetIfNewer atomically merges one filterKey summary into the stored
 // JSON map only if the incoming UpdatedAt is newer-or-equal.
-// KEYS[1] = sesssum:{app}:{user}
+// KEYS[1] = [prefix:]sesssum:{app}:{user}  (prefix is optional, set via WithKeyPrefix)
 // ARGV[1] = sessionID
 // ARGV[2] = filterKey
 // ARGV[3] = newSummaryJSON -> {"Summary":"...","UpdatedAt":"RFC3339 time"}
