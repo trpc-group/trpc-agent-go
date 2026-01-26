@@ -204,8 +204,11 @@ https://github.com/anthropics/skills
   - `temp:skill:docs:<name>` = "*" 或 JSON 字符串数组
 - 请求处理器读取这些键，把 `SKILL.md` 正文与文档注入到系统消息
 
-说明：可多次调用以新增或替换文档；这些键写在会话状态里，同一会话
-内可跨轮生效（键本身只存技能名/文档名，不存正文）。
+说明：建议采用“渐进式披露”：默认只传 `skill` 加载正文；需要文档时
+先 `skill_list_docs` 再 `skill_select_docs`，只选必要文档；除非确
+实需要全部（或用户明确要求），避免 `include_all_docs=true`。可多
+次调用以新增或替换文档；这些键写在会话状态里，同一会话内可跨轮
+生效（键本身只存技能名/文档名，不存正文）。
 
 ### `skill_select_docs`（选择文档）
 

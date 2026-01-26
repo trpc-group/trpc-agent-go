@@ -151,7 +151,7 @@ AUDIO FILE PROCESSING (CRITICAL - USE WHISPER SKILL):
 - NEVER use read_document on audio files - it will fail and cause token overflow!
 - To transcribe audio: First call skill_load with skill="whisper", then call skill_run with the transcription command
 - Example workflow:
-  1. skill_load(skill="whisper", include_all_docs=true)
+  1. skill_load(skill="whisper")
   2. skill_run(skill="whisper", command="python3 scripts/transcribe.py /path/to/audio.mp3 /tmp/transcript.txt")
   3. Read the transcript file to get the text content
 - *** IMPORTANT: whisper/skill_run is ONLY for audio transcription! ***
