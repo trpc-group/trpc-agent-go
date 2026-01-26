@@ -103,6 +103,42 @@ same report with docs disabled:
 go run . -suite token-report -token-report-all-docs=false
 ```
 
+### What “with skills” vs “without skills” means
+
+This benchmark focuses on **progressive disclosure**:
+- **With skills (Mode A)**: inject only the low-cost overview first, and
+  load skill bodies/docs only when needed.
+- **Without skills (Mode B)**: simulate “inline everything” by forcing
+  the framework to inject all skill content up-front (all `SKILL.md`
+  bodies, and optionally all docs).
+
+This is the practical baseline most people hit when they don’t have
+progressive disclosure and just paste a whole skills repo into the
+prompt.
+
+### Example results (gpt-5)
+
+Scenario: `brand_landing_page` (uses `brand-guidelines` + `frontend-design`).
+
+Full injection = all skills + all docs (`-token-report-all-docs=true`):
+| Mode | Prompt | Completion | Total | Prompt savings |
+| --- | ---: | ---: | ---: | ---: |
+| A: progressive disclosure | 41975 | 4725 | 46700 | 95.04% |
+| B: full injection | 846713 | 2373 | 849086 | - |
+
+Full injection = all skills (SKILL.md only, no docs)
+(`-token-report-all-docs=false`):
+| Mode | Prompt | Completion | Total | Prompt savings |
+| --- | ---: | ---: | ---: | ---: |
+| A: progressive disclosure | 38627 | 2440 | 41067 | 83.79% |
+| B: full injection | 238302 | 5822 | 244124 | - |
+
+Notes:
+- These numbers vary by model/provider and by which scenario you run.
+- The main savings come from **prompt tokens** (input size), because
+  progressive disclosure prevents large skills/docs from being inlined
+  unless the agent actually needs them.
+
 ## Notes
 
 - The tool suite verifies that the staged skill tree is read-only while
