@@ -1,5 +1,2 @@
 # Ignore all dataset files (should be downloaded via download_datasets.sh).
-*
-!.gitignore
-!.gitkeep
-!.gitattributes
+mt-bench-101/
