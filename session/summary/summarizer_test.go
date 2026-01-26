@@ -747,6 +747,78 @@ func (e *emptyResponseModel) GenerateContent(ctx context.Context, req *model.Req
 	return ch, nil
 }
 
+func TestFormatResponseError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      *model.ResponseError
+		expected string
+		isNil    bool
+	}{
+		{
+			name:  "nil error",
+			err:   nil,
+			isNil: true,
+		},
+		{
+			name: "message only",
+			err: &model.ResponseError{
+				Message: "simple error",
+			},
+			expected: "model error during summarization: simple error",
+		},
+		{
+			name: "with type",
+			err: &model.ResponseError{
+				Message: "auth failed",
+				Type:    "authError",
+			},
+			expected: "model error during summarization: [authError] auth failed",
+		},
+		{
+			name: "with type and code",
+			err: &model.ResponseError{
+				Message: "rate limit",
+				Type:    "requestError",
+				Code:    stringPtr("rate_limit_exceeded"),
+			},
+			expected: "model error during summarization: [requestError] rate limit (code: rate_limit_exceeded)",
+		},
+		{
+			name: "with empty code",
+			err: &model.ResponseError{
+				Message: "error message",
+				Type:    "someType",
+				Code:    stringPtr(""),
+			},
+			expected: "model error during summarization: [someType] error message",
+		},
+		{
+			name: "code without type",
+			err: &model.ResponseError{
+				Message: "error message",
+				Code:    stringPtr("error_code"),
+			},
+			expected: "model error during summarization: error message (code: error_code)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatResponseError(tt.err)
+			if tt.isNil {
+				assert.Nil(t, result)
+			} else {
+				require.NotNil(t, result)
+				assert.Equal(t, tt.expected, result.Error())
+			}
+		})
+	}
+}
+
+func stringPtr(s string) *string {
+	return &s
+}
+
 func TestSessionSummarizer_WithSkipRecent(t *testing.T) {
 	t.Run("skipRecentFunc is set when configured", func(t *testing.T) {
 		s := NewSummarizer(&fakeModel{}, WithSkipRecent(func(events []event.Event) int { return 5 }))
