@@ -839,6 +839,8 @@ func TestExecutor_ProcessConditionalResult_SetsStepMark(t *testing.T) {
 	)
 
 	g := New(NewStateSchema())
+	require.NoError(t, g.addNode(&Node{ID: fromNode}))
+	require.NoError(t, g.addNode(&Node{ID: targetNode}))
 	exec := &Executor{graph: g}
 	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
 	condEdge := &ConditionalEdge{

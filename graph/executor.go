@@ -2806,6 +2806,18 @@ func (e *Executor) processConditionalResult(
 		}
 	}
 
+	if target != End {
+		if _, exists := e.graph.Node(target); !exists {
+			return fmt.Errorf(
+				"conditional edge from %s returned %q; "+
+					"target node %q does not exist",
+				condEdge.From,
+				result,
+				target,
+			)
+		}
+	}
+
 	// Create and trigger the target channel.
 	channelName := fmt.Sprintf("%s%s", ChannelBranchPrefix, target)
 	e.graph.addChannel(channelName, channel.BehaviorLastValue)
