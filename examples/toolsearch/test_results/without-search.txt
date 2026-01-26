@@ -1,0 +1,344 @@
+🚀 Tool Search Test: Without Search (Baseline)
+Model: deepseek-v3.2
+Streaming: true
+Tools: 10 (all tools provided to LLM)
+Input file: ./user-message.txt
+============================================================
+✅ Baseline chat ready! Session: baseline-session-1768398500
+⚠️  Note: All 10 tools are provided to LLM without any search
+
+Processing 10 messages from file...
+
+[1/10] Calculate 123 + 456 * 789
+🤖 Assistant: I'll calculate that mathematical expression for you.
+
+I'll calculate that mathematical expression for you.
+
+{"expression":"123 + 456 * 789","result":359907,"message":"Calculation result: 359907"}The result of `123 + 456 * 789` is **359,907**.
+
+According to the order of operations (PEMDAS/BODMAS), multiplication is performed before addition, so:
+1. First: `456 * 789 = 359,784`
+2. Then: `123 + 359,784 = 359,907`The result of `123 + 456 * 789` is **359,907**.
+
+According to the order of operations (PEMDAS/BODMAS), multiplication is performed before addition, so:
+1. First: `456 * 789 = 359,784`
+2. Then: `123 + 359,784 = 359,907`
+📊 Turn 1 Token Usage:
+   Prompt: 2827, Completion: 74, Total: 2901
+   Tools used: calculator
+---
+
+[2/10] What day of the week is today?
+🤖 Assistant: I'll check what day of the week it is today.
+
+I'll check what day of the week it is today.
+
+{"operation":"weekday","result":"Wednesday","timestamp":1768398514}Today is **Wednesday**.Today is **Wednesday**.
+📊 Turn 2 Token Usage:
+   Prompt: 3001, Completion: 6, Total: 3007
+   Tools used: time_tool
+---
+
+[3/10] Convert 'Hello World' to uppercase
+🤖 Assistant: I'll convert "Hello World" to uppercase for you.
+
+
+
+I'll convert "Hello World" to uppercase for you.
+
+
+
+{"original_text":"Hello World","operation":"uppercase","result":"HELLO WORLD","info":"Text converted to uppercase"}"Hello World" converted to uppercase is **"HELLO WORLD"**."Hello World" converted to uppercase is **"HELLO WORLD"**.
+📊 Turn 3 Token Usage:
+   Prompt: 3134, Completion: 17, Total: 3151
+   Tools used: text_tool
+---
+
+[4/10] Convert 100 USD to EUR
+🤖 Assistant: I'll convert 100 USD to EUR for you.
+
+
+
+I'll convert 100 USD to EUR for you.
+
+
+
+{"original_amount":100,"from_currency":"USD","to_currency":"EUR","converted_amount":85,"exchange_rate":0.85,"message":"100.00 USD = 85.00 EUR (rate: 0.8500)"}**100 USD = 85 EUR**
+
+The conversion uses an approximate exchange rate of 0.85 EUR per 1 USD. Please note that actual exchange rates may vary in real-time financial markets.**100 USD = 85 EUR**
+
+The conversion uses an approximate exchange rate of 0.85 EUR per 1 USD. Please note that actual exchange rates may vary in real-time financial markets.
+📊 Turn 4 Token Usage:
+   Prompt: 3316, Completion: 41, Total: 3357
+   Tools used: currency_converter
+---
+
+[5/10] Convert 100 meters to feet
+🤖 Assistant: I'll convert 100 meters to feet for you.
+
+
+
+
+
+I'll convert 100 meters to feet for you.
+
+
+
+
+
+{"original_value":100,"from_unit":"m","to_unit":"foot","converted_value":328.0839895013123,"category":"length","message":"100.0000 m = 328.0840 foot"}**100 meters = 328.08 feet** (approximately 328 feet)
+
+The exact conversion is 328.0839895 feet, since 1 meter equals approximately 3.28084 feet.**100 meters = 328.08 feet** (approximately 328 feet)
+
+The exact conversion is 328.0839895 feet, since 1 meter equals approximately 3.28084 feet.
+📊 Turn 5 Token Usage:
+   Prompt: 3535, Completion: 42, Total: 3577
+   Tools used: unit_converter
+---
+
+[6/10] Generate a secure password with 12 characters
+🤖 Assistant: I'll generate a secure 12-character password for you.
+
+
+
+
+
+I'll generate a secure 12-character password for you.
+
+
+
+
+
+2026-01-14T21:51:11+08:00	[31mERROR[0m	processor/functioncall.go:1267	CallableTool execution failed for password_generator: no character types selected
+2026-01-14T21:51:11+08:00	[33mWARN[0m	processor/functioncall.go:1178	tool execute failed, function name: password_generator, arguments: {"length": 12}, result: <nil>, err: Error: callable tool execution failed: no character types selected
+Error: callable tool execution failed: no character types selectedLet me try again with the default settings (which should include all character types):
+
+
+
+Let me try again with the default settings (which should include all character types):
+
+
+
+{"password":"R60+uN(askYm","length":12,"strength":"Strong","message":"Generated Strong password with length 12"}Here's your secure 12-character password: **R60+uN(askYm**
+
+This password has been generated with:
+- **Length**: 12 characters
+- **Strength**: Strong
+- **Character types**: Uppercase letters, lowercase letters, numbers, and symbols
+
+The password includes a mix of different character types to enhance security. Remember to store this password securely and avoid sharing it with others.Here's your secure 12-character password: **R60+uN(askYm**
+
+This password has been generated with:
+- **Length**: 12 characters
+- **Strength**: Strong
+- **Character types**: Uppercase letters, lowercase letters, numbers, and symbols
+
+The password includes a mix of different character types to enhance security. Remember to store this password securely and avoid sharing it with others.
+📊 Turn 6 Token Usage:
+   Prompt: 3854, Completion: 85, Total: 3939
+   Tools used: password_generator, password_generator
+---
+
+[7/10] Generate MD5 hash of 'hello world'
+🤖 Assistant: I'll generate an MD5 hash of "hello world" for you.
+
+
+
+
+
+
+
+I'll generate an MD5 hash of "hello world" for you.
+
+
+
+
+
+
+
+{"original_text":"hello world","algorithm":"MD5","hash":"5eb63bbbe01eeed093cb22bb8f5acdc3","message":"Generated MD5 hash successfully"}The MD5 hash of "hello world" is: **5eb63bbbe01eeed093cb22bb8f5acdc3**
+
+MD5 is a widely used cryptographic hash function that produces a 128-bit (16-byte) hash value, typically expressed as a 32-character hexadecimal number. Note that MD5 is considered cryptographically broken and unsuitable for further use in security applications, but it's still commonly used for checksums and non-security purposes.The MD5 hash of "hello world" is: **5eb63bbbe01eeed093cb22bb8f5acdc3**
+
+MD5 is a widely used cryptographic hash function that produces a 128-bit (16-byte) hash value, typically expressed as a 32-character hexadecimal number. Note that MD5 is considered cryptographically broken and unsuitable for further use in security applications, but it's still commonly used for checksums and non-security purposes.
+📊 Turn 7 Token Usage:
+   Prompt: 4086, Completion: 97, Total: 4183
+   Tools used: hash_generator
+---
+
+[8/10] Encode 'hello world' to base64
+🤖 Assistant: I'll encode "hello world" to Base64 for you.
+
+
+
+
+
+
+
+I'll encode "hello world" to Base64 for you.
+
+
+
+
+
+
+
+{"original_text":"hello world","operation":"encode","result":"aGVsbG8gd29ybGQ=","message":"Text Base64-encoded"}"hello world" encoded to Base64 is: **aGVsbG8gd29ybGQ=**
+
+Base64 encoding converts binary data into ASCII text format, making it suitable for transmission over text-based protocols. The "=" at the end is padding to make the output length a multiple of 4 characters."hello world" encoded to Base64 is: **aGVsbG8gd29ybGQ=**
+
+Base64 encoding converts binary data into ASCII text format, making it suitable for transmission over text-based protocols. The "=" at the end is padding to make the output length a multiple of 4 characters.
+📊 Turn 8 Token Usage:
+   Prompt: 4321, Completion: 66, Total: 4387
+   Tools used: base64_converter
+---
+
+[9/10] Validate this email: test@example.com
+🤖 Assistant: I'll validate the email address "test@example.com" for you.
+
+
+
+
+
+
+
+
+
+I'll validate the email address "test@example.com" for you.
+
+
+
+
+
+
+
+
+
+{"email":"test@example.com","valid":true,"username":"test","domain":"example.com","message":"Valid email address"}The email address **test@example.com** is **valid**.
+
+**Email breakdown:**
+- **Username**: test
+- **Domain**: example.com
+
+This email address has a proper format with a valid username and domain structure. Note that this validation only checks the format - it doesn't verify whether the email account actually exists or can receive messages.The email address **test@example.com** is **valid**.
+
+**Email breakdown:**
+- **Username**: test
+- **Domain**: example.com
+
+This email address has a proper format with a valid username and domain structure. Note that this validation only checks the format - it doesn't verify whether the email account actually exists or can receive messages.
+📊 Turn 9 Token Usage:
+   Prompt: 4505, Completion: 71, Total: 4576
+   Tools used: email_validator
+---
+
+[10/10] Generate a random number between 1 and 100
+🤖 Assistant: I'll generate a random number between 1 and 100 for you.
+
+
+
+
+
+
+
+
+
+
+
+I'll generate a random number between 1 and 100 for you.
+
+
+
+
+
+
+
+
+
+
+
+{"values":[73],"type":"integer","count":1,"message":"Generated 1 integer random values between 1.00 and 100.00"}Your random number between 1 and 100 is: **73**
+
+This is an integer value generated randomly within the specified range (1-100 inclusive).Your random number between 1 and 100 is: **73**
+
+This is an integer value generated randomly within the specified range (1-100 inclusive).
+📊 Turn 10 Token Usage:
+   Prompt: 4730, Completion: 32, Total: 4762
+   Tools used: random_generator
+---
+
+
+============================================================
+🎯 Final Session Statistics (Without Tool Search):
+
+📊 Session Token Usage Statistics:
+   Total Turns: 10
+   Total Prompt Tokens: 37309
+   Total Completion Tokens: 531
+   Total Tokens: 37840
+   Average Prompt Tokens per Turn: 3730.9
+   Average Completion Tokens per Turn: 53.1
+   Average Total Tokens per Turn: 3784.0
+
+📋 Turn-by-Turn Usage History:
+
+   Turn 1:
+      PromptTokens: 2827
+      CompletionTokens: 74
+      TotalTokens: 2901
+      SelectedTools: calculator
+
+   Turn 2:
+      PromptTokens: 3001
+      CompletionTokens: 6
+      TotalTokens: 3007
+      SelectedTools: time_tool
+
+   Turn 3:
+      PromptTokens: 3134
+      CompletionTokens: 17
+      TotalTokens: 3151
+      SelectedTools: text_tool
+
+   Turn 4:
+      PromptTokens: 3316
+      CompletionTokens: 41
+      TotalTokens: 3357
+      SelectedTools: currency_converter
+
+   Turn 5:
+      PromptTokens: 3535
+      CompletionTokens: 42
+      TotalTokens: 3577
+      SelectedTools: unit_converter
+
+   Turn 6:
+      PromptTokens: 3854
+      CompletionTokens: 85
+      TotalTokens: 3939
+      SelectedTools: password_generator, password_generator
+
+   Turn 7:
+      PromptTokens: 4086
+      CompletionTokens: 97
+      TotalTokens: 4183
+      SelectedTools: hash_generator
+
+   Turn 8:
+      PromptTokens: 4321
+      CompletionTokens: 66
+      TotalTokens: 4387
+      SelectedTools: base64_converter
+
+   Turn 9:
+      PromptTokens: 4505
+      CompletionTokens: 71
+      TotalTokens: 4576
+      SelectedTools: email_validator
+
+   Turn 10:
+      PromptTokens: 4730
+      CompletionTokens: 32
+      TotalTokens: 4762
+      SelectedTools: random_generator
+

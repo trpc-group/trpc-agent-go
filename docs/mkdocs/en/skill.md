@@ -198,6 +198,9 @@ Behavior:
 - Request processor injects `SKILL.md` body and docs into system message
 
 Notes:
+- Prefer progressive disclosure: load only the body first, then list and
+  select only the docs you need. Avoid `include_all_docs` unless you
+  truly need every doc (or the user explicitly asks).
 - Safe to call multiple times to add or replace docs.
 - These keys are stored on the session state and can remain effective
   across turns in the same session until overwritten/cleared or the
