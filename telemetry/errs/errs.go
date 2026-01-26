@@ -4,6 +4,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 
+// Package errs provides helpers to convert between the agent ResponseError
 package errs
 
 import "trpc.group/trpc-go/trpc-agent-go/model"
