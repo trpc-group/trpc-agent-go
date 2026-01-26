@@ -160,6 +160,93 @@ func TestExecutor_CacheHit_UsesCachedResult(t *testing.T) {
 	}
 }
 
+func TestExecutor_CacheKeySelector_IgnoresUnselectedFields(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const (
+		nodeIDWork      = "work"
+		stateFieldNoise = "noise"
+	)
+
+	schema := NewStateSchema()
+	sg := NewStateGraph(schema)
+
+	var runs int32
+	nodeFn := func(ctx context.Context, s State) (any, error) {
+		c := 0
+		if v, ok := s[StateFieldCounter].(int); ok {
+			c = v
+		}
+		runs++
+		return State{StateFieldCounter: c + 1}, nil
+	}
+
+	sg.WithCache(NewInMemoryCache())
+	sg.WithCachePolicy(DefaultCachePolicy())
+	sg.AddNode(
+		nodeIDWork,
+		nodeFn,
+		WithNodeCachePolicy(DefaultCachePolicy()),
+		WithCacheKeyFields(StateFieldCounter),
+	)
+	sg.SetEntryPoint(nodeIDWork).SetFinishPoint(nodeIDWork)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	init1 := State{
+		StateFieldCounter: 0,
+		stateFieldNoise:   1,
+	}
+	ch1, err := exec.Execute(
+		context.Background(),
+		init1,
+		&agent.Invocation{InvocationID: "inv-cachekey-1"},
+	)
+	require.NoError(t, err)
+	drain(ch1)
+	require.Equal(t, int32(1), runs)
+
+	init2 := State{
+		StateFieldCounter: 0,
+		stateFieldNoise:   2,
+	}
+	ch2, err := exec.Execute(
+		context.Background(),
+		init2,
+		&agent.Invocation{InvocationID: "inv-cachekey-2"},
+	)
+	require.NoError(t, err)
+	drain(ch2)
+	require.Equal(t, int32(1), runs)
+}
+
+func TestApplyCacheKeySelector(t *testing.T) {
+	t.Parallel()
+
+	selector := func(m map[string]any) any {
+		return m[StateFieldCounter]
+	}
+
+	stateInput := State{
+		StateFieldCounter: 1,
+	}
+	require.Equal(t, 1, applyCacheKeySelector(selector, stateInput))
+
+	mapInput := map[string]any{
+		StateFieldCounter: 2,
+	}
+	require.Equal(t, 2, applyCacheKeySelector(selector, mapInput))
+
+	require.Equal(t, 3, applyCacheKeySelector(selector, 3))
+	require.Equal(t, 4, applyCacheKeySelector(nil, 4))
+}
+
 // Test TTL expiry: a short TTL should force re-computation after expiration.
 func TestNodeCache_TTLExpires(t *testing.T) {
 	schema := NewStateSchema().
