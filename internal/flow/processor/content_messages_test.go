@@ -11,6 +11,7 @@ package processor
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -590,6 +591,126 @@ func TestContentRequestProcessor_AggregatePrefixSummaries_Sorted(
 		time.Date(2023, 1, 3, 12, 0, 0, 0, time.UTC),
 		updatedAt,
 	)
+}
+
+func TestPromptCachePrefixStability_DynamicSystemTail(t *testing.T) {
+	const (
+		approxRunesPerToken = 4
+		cachePrefixTokens   = 1024
+		stableSysATokens    = 900
+		stableSysBTokens    = 300
+
+		stableSysAChar = "A"
+		stableSysBChar = "B"
+
+		summaryRun1 = "summary-run-1"
+		summaryRun2 = "summary-run-2"
+	)
+
+	cachePrefixRunes := cachePrefixTokens * approxRunesPerToken
+
+	sysA := strings.Repeat(
+		stableSysAChar,
+		stableSysATokens*approxRunesPerToken,
+	)
+	sysB := strings.Repeat(
+		stableSysBChar,
+		stableSysBTokens*approxRunesPerToken,
+	)
+
+	build := func(summaryText string) *model.Request {
+		sess := &session.Session{
+			Summaries: map[string]*session.Summary{
+				"test-agent": {
+					Summary:   summaryText,
+					UpdatedAt: time.Now(),
+				},
+			},
+		}
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(sess),
+			agent.WithInvocationEventFilterKey("test-agent"),
+			agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		)
+		inv.AgentName = "test-agent"
+
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewSystemMessage(sysA),
+				model.NewSystemMessage(sysB),
+			},
+		}
+
+		p := NewContentRequestProcessor(WithAddSessionSummary(true))
+		p.ProcessRequest(context.Background(), inv, req, nil)
+		return req
+	}
+
+	render := func(messages []model.Message) string {
+		var b strings.Builder
+		for _, msg := range messages {
+			b.WriteString(msg.Role.String())
+			b.WriteString(":")
+			b.WriteString(msg.Content)
+			b.WriteString("\n")
+		}
+		return b.String()
+	}
+
+	firstRunes := func(text string, maxRunes int) string {
+		if maxRunes <= 0 {
+			return ""
+		}
+		r := []rune(text)
+		if len(r) <= maxRunes {
+			return text
+		}
+		return string(r[:maxRunes])
+	}
+
+	reqRun1 := build(summaryRun1)
+	reqRun2 := build(summaryRun2)
+
+	prefixRun1 := firstRunes(render(reqRun1.Messages), cachePrefixRunes)
+	prefixRun2 := firstRunes(render(reqRun2.Messages), cachePrefixRunes)
+
+	// New behavior: summary is appended after all stable system messages, so
+	// the cacheable prefix stays stable across runs.
+	require.Equal(t, prefixRun1, prefixRun2)
+	require.NotContains(t, prefixRun1, summaryRun1)
+	require.NotContains(t, prefixRun2, summaryRun2)
+
+	legacyMessages := func(summaryText string) []model.Message {
+		msgs := []model.Message{
+			model.NewSystemMessage(sysA),
+			model.NewSystemMessage(sysB),
+			model.NewUserMessage("hi"),
+		}
+		idx := findSystemMessageIndex(msgs)
+		summaryMsg := model.NewSystemMessage(summaryText)
+		if idx < 0 {
+			return append([]model.Message{summaryMsg}, msgs...)
+		}
+		out := append([]model.Message{}, msgs[:idx+1]...)
+		out = append(out, summaryMsg)
+		out = append(out, msgs[idx+1:]...)
+		return out
+	}
+
+	legacyPrefix1 := firstRunes(
+		render(legacyMessages(summaryRun1)),
+		cachePrefixRunes,
+	)
+	legacyPrefix2 := firstRunes(
+		render(legacyMessages(summaryRun2)),
+		cachePrefixRunes,
+	)
+
+	// Old behavior: summary inserted after the first system message, likely
+	// landing in the first ~1024 tokens and invalidating the cache prefix.
+	require.NotEqual(t, legacyPrefix1, legacyPrefix2)
+	require.Contains(t, legacyPrefix1, summaryRun1)
+	require.Contains(t, legacyPrefix2, summaryRun2)
 }
 
 func newSessionEventWithBranch(author, filterKey, branch string, msg model.Message) event.Event {
