@@ -24,7 +24,7 @@ func ToErrorType(err error, errorType string) string {
 	if e.Type != "" {
 		errorType = e.Type
 	}
-	if e.Code != nil {
+	if e.Code != nil && *e.Code != "" {
 		return fmt.Sprintf("%s_%s", errorType, *e.Code)
 	}
 	return errorType

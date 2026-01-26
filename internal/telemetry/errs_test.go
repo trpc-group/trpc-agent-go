@@ -119,7 +119,7 @@ func TestToErrorType(t *testing.T) {
 					Code:    strPtr(""),
 				}
 			},
-			expected: "validation_error_",
+			expected: "validation_error",
 		},
 	}
 
