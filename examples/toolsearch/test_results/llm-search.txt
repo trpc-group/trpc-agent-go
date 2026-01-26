@@ -1,0 +1,451 @@
+🚀 Tool Search Test: LLM Search
+Model: deepseek-v3.2
+Streaming: true
+Tools: 10 (all tools provided to LLM)
+Input file: ./user-message.txt
+============================================================
+✅ LLM Search chat ready! Session: baseline-session-1768398891
+⚠️  Note: only 3 of 10 tools are provided to LLM without any search
+
+Processing 10 messages from file...
+
+[1/10] Calculate 123 + 456 * 789
+🤖 Assistant: I'll calculate that expression for you. Let me use the calculator tool.
+
+I'll calculate that expression for you. Let me use the calculator tool.
+
+{"expression":"123 + 456 * 789","result":359907,"message":"Calculation result: 359907"}The result of 123 + 456 × 789 is **359,907**.
+
+This calculation follows the order of operations (PEMDAS/BODMAS), where multiplication is performed before addition:
+1. First, 456 × 789 = 359,784
+2. Then, 123 + 359,784 = 359,907The result of 123 + 456 × 789 is **359,907**.
+
+This calculation follows the order of operations (PEMDAS/BODMAS), where multiplication is performed before addition:
+1. First, 456 × 789 = 359,784
+2. Then, 123 + 359,784 = 359,907
+📊 Turn 1 Token Usage:
+   Prompt: 657, Completion: 72, Total: 729
+   Tools used: calculator
+---
+
+[2/10] What day of the week is today?
+🤖 Assistant: I'll check what day of the week it is today.
+
+I'll check what day of the week it is today.
+
+{"operation":"weekday","result":"Wednesday","timestamp":1768398924}Today is **Wednesday**.Today is **Wednesday**.
+📊 Turn 2 Token Usage:
+   Prompt: 767, Completion: 6, Total: 773
+   Tools used: time_tool
+---
+
+[3/10] Convert 'Hello World' to uppercase
+🤖 Assistant: I'll convert 'Hello World' to uppercase for you.
+
+
+
+I'll convert 'Hello World' to uppercase for you.
+
+
+
+{"original_text":"Hello World","operation":"uppercase","result":"HELLO WORLD","info":"Text converted to uppercase"}'Hello World' converted to uppercase is **HELLO WORLD**.'Hello World' converted to uppercase is **HELLO WORLD**.
+📊 Turn 3 Token Usage:
+   Prompt: 940, Completion: 15, Total: 955
+   Tools used: text_tool
+---
+
+[4/10] Convert 100 USD to EUR
+🤖 Assistant: I'll convert 100 USD to EUR for you.
+
+
+
+I'll convert 100 USD to EUR for you.
+
+
+
+{"original_amount":100,"from_currency":"USD","to_currency":"EUR","converted_amount":85,"exchange_rate":0.85,"message":"100.00 USD = 85.00 EUR (rate: 0.8500)"}100 USD converts to **85 EUR** at an approximate exchange rate of 0.85 EUR per USD.
+
+**Note:** This conversion uses approximate rates for demonstration purposes only. For actual currency conversions, please check current exchange rates from reliable financial sources.100 USD converts to **85 EUR** at an approximate exchange rate of 0.85 EUR per USD.
+
+**Note:** This conversion uses approximate rates for demonstration purposes only. For actual currency conversions, please check current exchange rates from reliable financial sources.
+📊 Turn 4 Token Usage:
+   Prompt: 1792, Completion: 51, Total: 1843
+   Tools used: currency_converter
+---
+
+[5/10] Convert 100 meters to feet
+🤖 Assistant: I'll convert 100 meters to feet for you.
+
+I'll convert 100 meters to feet for you.
+
+{"original_value":100,"from_unit":"m","to_unit":"foot","converted_value":328.0839895013123,"category":"length","message":"100.0000 m = 328.0840 foot"}100 meters is equal to approximately **328.08 feet**.
+
+The exact conversion is 328.0839895 feet, since 1 meter = 3.280839895 feet.100 meters is equal to approximately **328.08 feet**.
+
+The exact conversion is 328.0839895 feet, since 1 meter = 3.280839895 feet.
+📊 Turn 5 Token Usage:
+   Prompt: 1705, Completion: 38, Total: 1743
+   Tools used: unit_converter
+---
+
+[6/10] Generate a secure password with 12 characters
+🤖 Assistant: I'll generate a secure password with 12 characters for you.
+
+
+
+I'll generate a secure password with 12 characters for you.
+
+
+
+2026-01-14T21:56:51+08:00	[31mERROR[0m	processor/functioncall.go:1267	CallableTool execution failed for password_generator: no character types selected
+2026-01-14T21:56:51+08:00	[33mWARN[0m	processor/functioncall.go:1178	tool execute failed, function name: password_generator, arguments: {"length": 12}, result: <nil>, err: Error: callable tool execution failed: no character types selected
+Error: callable tool execution failed: no character types selectedLet me try again with the default character types enabled:
+
+
+
+
+
+Let me try again with the default character types enabled:
+
+
+
+
+
+{"password":"VKdTlS{Esp7@","length":12,"strength":"Strong","message":"Generated Strong password with length 12"}I've generated a secure password for you: **VKdTlS{Esp7@**
+
+This password has:
+- **Length:** 12 characters
+- **Strength:** Strong
+- **Character types:** Includes uppercase letters, lowercase letters, numbers, and symbols
+
+**Important security notes:**
+1. This is a randomly generated password - please save it securely
+2. Never share passwords with anyone
+3. Consider using a password manager to store and manage your passwords
+4. Use different passwords for different accounts/servicesI've generated a secure password for you: **VKdTlS{Esp7@**
+
+This password has:
+- **Length:** 12 characters
+- **Strength:** Strong
+- **Character types:** Includes uppercase letters, lowercase letters, numbers, and symbols
+
+**Important security notes:**
+1. This is a randomly generated password - please save it securely
+2. Never share passwords with anyone
+3. Consider using a password manager to store and manage your passwords
+4. Use different passwords for different accounts/services
+📊 Turn 6 Token Usage:
+   Prompt: 2109, Completion: 108, Total: 2217
+   Tools used: password_generator, password_generator
+---
+
+[7/10] Generate MD5 hash of 'hello world'
+🤖 Assistant: I'll generate an MD5 hash of 'hello world' for you.
+
+
+
+
+
+I'll generate an MD5 hash of 'hello world' for you.
+
+
+
+
+
+{"original_text":"hello world","algorithm":"MD5","hash":"5eb63bbbe01eeed093cb22bb8f5acdc3","message":"Generated MD5 hash successfully"}The MD5 hash of 'hello world' is: **5eb63bbbe01eeed093cb22bb8f5acdc3**
+
+**Note about MD5:** While MD5 is useful for checksums and non-cryptographic purposes, it's considered cryptographically broken and should not be used for password hashing or security-sensitive applications. For security purposes, consider using SHA-256 or stronger algorithms.The MD5 hash of 'hello world' is: **5eb63bbbe01eeed093cb22bb8f5acdc3**
+
+**Note about MD5:** While MD5 is useful for checksums and non-cryptographic purposes, it's considered cryptographically broken and should not be used for password hashing or security-sensitive applications. For security purposes, consider using SHA-256 or stronger algorithms.
+📊 Turn 7 Token Usage:
+   Prompt: 2323, Completion: 86, Total: 2409
+   Tools used: hash_generator
+---
+
+[8/10] Encode 'hello world' to base64
+🤖 Assistant: I'll encode 'hello world' to Base64 for you.
+
+
+
+
+
+
+
+I'll encode 'hello world' to Base64 for you.
+
+
+
+
+
+
+
+{"original_text":"hello world","operation":"encode","result":"aGVsbG8gd29ybGQ=","message":"Text Base64-encoded"}'hello world' encoded to Base64 is: **aGVsbG8gd29ybGQ=**
+
+This is the standard Base64 representation of the text "hello world". The equals sign (=) at the end is padding that ensures the encoded string length is a multiple of 4 characters.'hello world' encoded to Base64 is: **aGVsbG8gd29ybGQ=**
+
+This is the standard Base64 representation of the text "hello world". The equals sign (=) at the end is padding that ensures the encoded string length is a multiple of 4 characters.
+📊 Turn 8 Token Usage:
+   Prompt: 2547, Completion: 63, Total: 2610
+   Tools used: base64_converter
+---
+
+[9/10] Validate this email: test@example.com
+🤖 Assistant: I'll validate the email address test@example.com for you.
+
+
+
+
+
+
+
+I'll validate the email address test@example.com for you.
+
+
+
+
+
+
+
+{"email":"test@example.com","valid":true,"username":"test","domain":"example.com","message":"Valid email address"}The email address **test@example.com** is **valid**.
+
+**Email breakdown:**
+- **Username:** test
+- **Domain:** example.com
+
+This email address follows the standard email format (local-part@domain) and appears to be properly structured. However, note that this validation only checks the format - it doesn't verify whether the email actually exists or can receive messages.The email address **test@example.com** is **valid**.
+
+**Email breakdown:**
+- **Username:** test
+- **Domain:** example.com
+
+This email address follows the standard email format (local-part@domain) and appears to be properly structured. However, note that this validation only checks the format - it doesn't verify whether the email actually exists or can receive messages.
+📊 Turn 9 Token Usage:
+   Prompt: 2695, Completion: 78, Total: 2773
+   Tools used: email_validator
+---
+
+[10/10] Generate a random number between 1 and 100
+🤖 Assistant: I'll generate a random number between 1 and 100 for you.
+
+
+
+
+
+
+
+
+
+I'll generate a random number between 1 and 100 for you.
+
+
+
+
+
+
+
+
+
+{"values":[21],"type":"integer","count":1,"message":"Generated 1 integer random values between 1.00 and 100.00"}Your random number between 1 and 100 is: **21**
+
+This is a randomly generated integer within the specified range (1-100 inclusive).Your random number between 1 and 100 is: **21**
+
+This is a randomly generated integer within the specified range (1-100 inclusive).
+📊 Turn 10 Token Usage:
+   Prompt: 3053, Completion: 31, Total: 3084
+   Tools used: random_generator
+---
+
+
+============================================================
+🎯 Final Session Statistics (Without Tool Search):
+
+📊 Session Token Usage Statistics:
+   Total Turns: 10
+   Other Chat Model Total Prompt Tokens: 18588
+   Other Chat Model Total Completion Tokens: 548
+   Other Chat Model Total Tokens: 19136
+   Tool Search Total Prompt Tokens: 10983
+   Tool Search Total Completion Tokens: 392
+   Tool Search Total Tokens: 11375
+   Total Prompt Tokens: 29571
+   Total Completion Tokens: 940
+   Total Tokens: 30511
+   Other Chat Model Average Prompt Tokens per Turn: 1858.8
+   Other Chat Model Average Completion Tokens per Turn: 54.8
+   Other Chat Model Average Total Tokens per Turn: 1913.6
+   Tool Search Average Prompt Tokens per Turn: 523.0
+   Tool Search Average Completion Tokens per Turn: 18.7
+   Tool Search Average Total Tokens per Turn: 541.7
+   Total Average Prompt Tokens per Turn: 2957.1
+   Total Average Completion Tokens per Turn: 94.0
+   Total Average Tokens per Turn: 3051.1
+
+📋 Turn-by-Turn Usage History:
+
+   Turn 1:
+      Other Chat Model PromptTokens: 657
+      Other Chat Model CompletionTokens: 72
+      Other Chat Model TotalTokens: 729
+      SelectedTools: calculator
+
+   Turn 2:
+      Other Chat Model PromptTokens: 767
+      Other Chat Model CompletionTokens: 6
+      Other Chat Model TotalTokens: 773
+      SelectedTools: time_tool
+
+   Turn 3:
+      Other Chat Model PromptTokens: 940
+      Other Chat Model CompletionTokens: 15
+      Other Chat Model TotalTokens: 955
+      SelectedTools: text_tool
+
+   Turn 4:
+      Other Chat Model PromptTokens: 1792
+      Other Chat Model CompletionTokens: 51
+      Other Chat Model TotalTokens: 1843
+      SelectedTools: currency_converter
+
+   Turn 5:
+      Other Chat Model PromptTokens: 1705
+      Other Chat Model CompletionTokens: 38
+      Other Chat Model TotalTokens: 1743
+      SelectedTools: unit_converter
+
+   Turn 6:
+      Other Chat Model PromptTokens: 2109
+      Other Chat Model CompletionTokens: 108
+      Other Chat Model TotalTokens: 2217
+      SelectedTools: password_generator, password_generator
+
+   Turn 7:
+      Other Chat Model PromptTokens: 2323
+      Other Chat Model CompletionTokens: 86
+      Other Chat Model TotalTokens: 2409
+      SelectedTools: hash_generator
+
+   Turn 8:
+      Other Chat Model PromptTokens: 2547
+      Other Chat Model CompletionTokens: 63
+      Other Chat Model TotalTokens: 2610
+      SelectedTools: base64_converter
+
+   Turn 9:
+      Other Chat Model PromptTokens: 2695
+      Other Chat Model CompletionTokens: 78
+      Other Chat Model TotalTokens: 2773
+      SelectedTools: email_validator
+
+   Turn 10:
+      Other Chat Model PromptTokens: 3053
+      Other Chat Model CompletionTokens: 31
+      Other Chat Model TotalTokens: 3084
+      SelectedTools: random_generator
+
+🔍 Tool Search Turn-by-Turn Usage History:
+
+   Turn 0:
+      Tool Search PromptTokens: 524
+      Tool Search CompletionTokens: 10
+      Tool Search TotalTokens: 534
+
+   Turn 1:
+      Tool Search PromptTokens: 524
+      Tool Search CompletionTokens: 10
+      Tool Search TotalTokens: 534
+
+   Turn 2:
+      Tool Search PromptTokens: 523
+      Tool Search CompletionTokens: 21
+      Tool Search TotalTokens: 544
+
+   Turn 3:
+      Tool Search PromptTokens: 523
+      Tool Search CompletionTokens: 12
+      Tool Search TotalTokens: 535
+
+   Turn 4:
+      Tool Search PromptTokens: 522
+      Tool Search CompletionTokens: 12
+      Tool Search TotalTokens: 534
+
+   Turn 5:
+      Tool Search PromptTokens: 522
+      Tool Search CompletionTokens: 12
+      Tool Search TotalTokens: 534
+
+   Turn 6:
+      Tool Search PromptTokens: 521
+      Tool Search CompletionTokens: 20
+      Tool Search TotalTokens: 541
+
+   Turn 7:
+      Tool Search PromptTokens: 521
+      Tool Search CompletionTokens: 20
+      Tool Search TotalTokens: 541
+
+   Turn 8:
+      Tool Search PromptTokens: 521
+      Tool Search CompletionTokens: 15
+      Tool Search TotalTokens: 536
+
+   Turn 9:
+      Tool Search PromptTokens: 521
+      Tool Search CompletionTokens: 15
+      Tool Search TotalTokens: 536
+
+   Turn 10:
+      Tool Search PromptTokens: 523
+      Tool Search CompletionTokens: 23
+      Tool Search TotalTokens: 546
+
+   Turn 11:
+      Tool Search PromptTokens: 523
+      Tool Search CompletionTokens: 22
+      Tool Search TotalTokens: 545
+
+   Turn 12:
+      Tool Search PromptTokens: 523
+      Tool Search CompletionTokens: 23
+      Tool Search TotalTokens: 546
+
+   Turn 13:
+      Tool Search PromptTokens: 524
+      Tool Search CompletionTokens: 23
+      Tool Search TotalTokens: 547
+
+   Turn 14:
+      Tool Search PromptTokens: 524
+      Tool Search CompletionTokens: 23
+      Tool Search TotalTokens: 547
+
+   Turn 15:
+      Tool Search PromptTokens: 524
+      Tool Search CompletionTokens: 23
+      Tool Search TotalTokens: 547
+
+   Turn 16:
+      Tool Search PromptTokens: 524
+      Tool Search CompletionTokens: 23
+      Tool Search TotalTokens: 547
+
+   Turn 17:
+      Tool Search PromptTokens: 523
+      Tool Search CompletionTokens: 22
+      Tool Search TotalTokens: 545
+
+   Turn 18:
+      Tool Search PromptTokens: 523
+      Tool Search CompletionTokens: 23
+      Tool Search TotalTokens: 546
+
+   Turn 19:
+      Tool Search PromptTokens: 525
+      Tool Search CompletionTokens: 20
+      Tool Search TotalTokens: 545
+
+   Turn 20:
+      Tool Search PromptTokens: 525
+      Tool Search CompletionTokens: 20
+      Tool Search TotalTokens: 545
+

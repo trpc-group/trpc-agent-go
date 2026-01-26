@@ -600,6 +600,125 @@ apply to all agents
 - 🛡️ **Smart Protection**: Framework tools (`transfer_to_agent`, `knowledge_search`) automatically preserved, never filtered
 - 🔧 **Flexible Customization**: Support for built-in filters and custom FilterFunc
 
+#### Tool Search (Automatic Tool Selection)
+
+In addition to rule-based filtering (Tool Filter), the framework provides **Tool Search**: before each main model call, it runs a lightweight “tool selection” step to shrink the available tool set to **TopK** (for example, 3 tools), then sends only those tools to the main model. This typically reduces token usage (especially **PromptTokens**) when the full tool list is large.
+
+Trade-offs to keep in mind:
+
+- **Latency**: Tool Search adds extra work (another LLM call and/or embedding + vector search), so end-to-end latency may increase.
+- **Prompt caching**: the tool list can change every turn, which may reduce prompt caching hit rate on some providers.
+
+How it differs from Tool Filter:
+
+- **Tool Filter**: you (or your business logic) decide which tools are allowed/blocked (access control / cost control).
+- **Tool Search**: the framework picks tools automatically based on the current user query (automation / cost optimization).
+
+They can be combined: use Tool Filter for permissions/allow-lists first, then use Tool Search to select TopK from the remaining tools.
+
+**Two strategies:**
+
+- **LLM Search**: put the candidate tool list (name + description) into the prompt and ask an LLM to output the selected tool names.
+  - Pros: no vector store needed; simple to adopt.
+  - Cons: the prompt cost grows roughly linearly with the number/length of tool descriptions, and repeats every turn.
+- **Knowledge Search**: rewrite the query with an LLM, then use embeddings + vector search to find relevant tools.
+  - Pros: you don’t need to send the full tool list to the selection LLM every turn; and **tool embeddings are cached within the same `ToolKnowledge` instance** (so tools are not re-embedded repeatedly).
+  - Note: the query is still embedded each turn (a fixed per-turn cost).
+
+##### Basic Usage (LLM Search)
+
+Tool Search can be used either as a Runner plugin or as a per-agent callback.
+
+**Option A: Runner Plugin**
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+ts, err := toolsearch.New(modelInstance,
+    toolsearch.WithMaxTools(3),
+    toolsearch.WithFailOpen(), // optional: fallback to full tool set on failure
+)
+if err != nil { /* handle */ }
+
+ag := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(allTools), // register full tools; Tool Search picks TopK
+)
+
+r := runner.NewRunner("app", ag,
+    runner.WithPlugins(ts),
+)
+```
+
+**Option B: Per-Agent BeforeModel Callback**
+
+Register Tool Search as a `BeforeModel` callback. It will mutate `req.Tools`
+before the main model call:
+
+```go
+	import (
+	    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+	    "trpc.group/trpc-go/trpc-agent-go/model"
+	)
+
+modelCallbacks := model.NewCallbacks()
+tc, err := toolsearch.New(modelInstance,
+    toolsearch.WithMaxTools(3),
+    toolsearch.WithFailOpen(), // optional: fallback to full tool set on failure
+)
+if err != nil { /* handle */ }
+modelCallbacks.RegisterBeforeModel(tc.Callback())
+
+agent := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(allTools), // register full tools; Tool Search will pick TopK per run
+    llmagent.WithModelCallbacks(modelCallbacks),
+)
+```
+
+##### Basic Usage (Knowledge Search)
+
+Create a `ToolKnowledge` (embedder + vector store) and enable it via `toolsearch.WithToolKnowledge(...)`:
+
+```go
+	import (
+	    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+	    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	    vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
+	)
+
+toolKnowledge, err := toolsearch.NewToolKnowledge(
+    openaiembedder.New(openaiembedder.WithModel(openaiembedder.ModelTextEmbedding3Small)),
+    toolsearch.WithVectorStore(vectorinmemory.New()),
+)
+if err != nil { /* handle */ }
+
+tc, err := toolsearch.New(modelInstance,
+    toolsearch.WithMaxTools(3),
+    toolsearch.WithToolKnowledge(toolKnowledge),
+    toolsearch.WithFailOpen(),
+)
+if err != nil { /* handle */ }
+modelCallbacks.RegisterBeforeModel(tc.Callback())
+```
+
+##### Token Usage (Optional)
+
+Tool Search stores usage in `context.Context`, which you can use for metrics/cost analysis:
+
+```go
+	import "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+
+if usage, ok := toolsearch.ToolSearchUsageFromContext(ctx); ok && usage != nil {
+    // usage.PromptTokens / usage.CompletionTokens / usage.TotalTokens
+}
+```
+
 #### Basic Usage
 
 **1. Exclude Specific Tools (Exclude Filter)**
