@@ -144,7 +144,10 @@ func SummarizeSession(
 
 	// Generate summary.
 	text, err := m.Summarize(ctx, tmp)
-	if err != nil || text == "" {
+	if err != nil {
+		return false, fmt.Errorf("summarize session %s failed: %w", base.ID, err)
+	}
+	if text == "" {
 		return false, nil
 	}
 
