@@ -1922,7 +1922,12 @@ func TestRunTool_skillLinksPresent_ExitCodes(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok)
 
-	r.res = codeexecutor.RunResult{ExitCode: -1}
+	r.err = fmt.Errorf(errRunFail)
+	ok, err = rt.skillLinksPresent(ctx, eng, ws, testSkillName)
+	require.Error(t, err)
+	require.False(t, ok)
+
+	r.res = codeexecutor.RunResult{ExitCode: 0}
 	r.err = fmt.Errorf(errRunFail)
 	ok, err = rt.skillLinksPresent(ctx, eng, ws, testSkillName)
 	require.Error(t, err)

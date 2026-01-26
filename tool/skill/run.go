@@ -585,13 +585,13 @@ func (t *RunTool) skillLinksPresent(
 			Timeout: 5 * time.Second,
 		},
 	)
+	if err != nil {
+		return false, err
+	}
 	if rr.ExitCode == 0 {
 		return true, nil
 	}
-	if rr.ExitCode > 0 {
-		return false, nil
-	}
-	return false, err
+	return false, nil
 }
 
 // linkWorkspaceDirs creates convenience symlinks under the staged
