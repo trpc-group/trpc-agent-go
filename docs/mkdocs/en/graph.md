@@ -676,14 +676,16 @@ func processNodeFunc(ctx context.Context, state graph.State) (any, error) {
 
 ### 2. Using LLM Nodes
 
-LLM nodes implement a fixed three-stage input rule without extra configuration:
+LLM nodes implement a fixed three-stage input rule without extra configuration
+(except an optional input key override):
 
 1. OneShot first:
    - If `one_shot_messages_by_node[<node_id>]` exists, use it as the input for
      this round.
    - Otherwise, if `one_shot_messages` exists, use it as the input for this
      round.
-2. UserInput next: Otherwise, if `user_input` exists, persist once to history.
+2. UserInput next: Otherwise, if the node's user input key exists, persist once
+   to history (default key: `user_input`).
 3. History default: Otherwise, use durable `messages` as input.
 
 ```go
@@ -705,6 +707,9 @@ Important notes:
 - System prompt is only used for this round and is not persisted to state.
 - One-shot keys (`user_input` / `one_shot_messages` / `one_shot_messages_by_node`)
   are automatically cleared after successful execution.
+- You can override the user input key per LLM/Agent node via
+  `graph.WithUserInputKey("my_input")`. This key is treated as one-shot input
+  and is cleared after the node runs.
 - Parallel branches: if multiple branches need different one-shot inputs for
   different LLM nodes in the same step, write `one_shot_messages_by_node`
   instead of `one_shot_messages`. If one upstream node prepares inputs for
@@ -775,6 +780,8 @@ Common approaches:
 
   - When non-empty, the LLM node uses durable `messages` plus this round's user input to call the model. After the call, it writes the user input and assistant reply to `messages` using `MessageOp` (e.g., `AppendMessages`, `ReplaceLastUser`) atomically, and clears `user_input` to avoid repeated appends.
   - Use case: conversational flows where pre-nodes may adjust user input.
+  - By default, the user input key is `StateKeyUserInput`. To read one-shot
+    input from a different key, use `graph.WithUserInputKey(...)` on that node.
 
 - Messages only (just `StateKeyMessages`):
   - Common in tool-call loops. After the first round via `user_input`, routing to tools and back to LLM, since `user_input` is cleared, the LLM uses only `messages` (history). The tail is often a `tool` response, enabling the model to continue reasoning based on tool outputs.

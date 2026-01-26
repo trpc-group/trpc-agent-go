@@ -671,12 +671,13 @@ func processNodeFunc(ctx context.Context, state graph.State) (any, error) {
 
 ### 2. 使用 LLM 节点
 
-LLM 节点实现了固定的三段式输入规则，无需配置：
+LLM 节点实现了固定的三段式输入规则，无需配置（可选：覆盖输入 key）：
 
 1. **OneShot 优先**：
    - 若存在 `one_shot_messages_by_node[<node_id>]`，以它为本轮输入。
    - 否则若存在 `one_shot_messages`，以它为本轮输入。
-2. **UserInput 其次**：否则若存在 `user_input`，自动持久化一次。
+2. **UserInput 其次**：否则若存在节点的用户输入 key，自动持久化一次
+   （默认 key：`user_input`）。
 3. **历史默认**：否则以持久化历史作为输入。
 
 ```go
@@ -698,6 +699,9 @@ stateGraph.AddLLMNode("analyze", model,
 - SystemPrompt 仅用于本次输入，不落持久化状态。
 - 一次性键（`user_input`/`one_shot_messages`/`one_shot_messages_by_node`）
   在成功执行后自动清空。
+- 你可以为单个 LLM/Agent 节点覆盖用户输入 key：
+  `graph.WithUserInputKey("my_input")`。该 key 会被视为一次性输入，并在
+  节点运行后清空。
 - 并行分支：如果需要为不同的 LLM 节点准备不同的一次性输入，优先写
   `one_shot_messages_by_node`，避免多个分支同时写 `one_shot_messages`
   互相覆盖/清空。若由单个上游节点同时为多个 LLM 节点准备输入，推荐使用
@@ -768,6 +772,8 @@ Model，LLM）消息（例如用于用户界面（User Interface，UI）的流�
     `MessageOp`（例如 `AppendMessages`、`ReplaceLastUser`）原子性写入
     到 `messages`，并自动清空 `user_input` 以避免重复追加。
   - 适用场景：普通对话式工作流，允许在前置节点动态调整用户输入。
+  - 默认用户输入 key 为 `StateKeyUserInput`。如果需要从其他一次性 key
+    读取输入，可在该节点上配置 `graph.WithUserInputKey(...)`。
 
 - Messages only（仅 `StateKeyMessages`）：
   - 多用于工具调用回路。当第一轮经由 `user_input` 发起后，路由到工具
