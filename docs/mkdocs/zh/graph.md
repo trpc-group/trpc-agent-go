@@ -951,6 +951,8 @@ graphAgent, err := graphagent.New(
 	graphagent.WithAgentCallbacks(&agent.Callbacks{
 		// Agent 级回调配置
 	}),
+	// 执行器高级配置选项，详见下方"执行器高级配置"章节
+	// graphagent.WithExecutorOptions(...),
 )
 ```
 
@@ -1013,6 +1015,37 @@ ga := graphagent.New(
 - 自定义格式化器应确保摘要可与其他消息清楚地区分开
 - 默认格式设计为与大多数模型和使用场景兼容
 - 当使用 `WithAddSessionSummary(false)` 时，格式化器永远不会被调用
+
+#### 执行器高级配置
+
+`WithExecutorOptions` 允许您直接透传执行器选项，以配置 GraphAgent 底层执行器的行为。这对于需要精细控制执行器行为的场景非常有用，例如：
+
+- **超时控制**：为长时间运行的节点（如 agent tool 节点）设置合适的超时时间
+- **步数限制**：限制图执行的最大步数，防止无限循环
+- **重试策略**：配置默认的重试策略
+
+**使用示例：**
+
+```go
+graphAgent, err := graphagent.New("my-agent", compiledGraph,
+	graphagent.WithDescription("工作流描述"),
+	// 透传执行器选项
+	graphagent.WithExecutorOptions(
+		graph.WithMaxSteps(50),                          // 最大步数限制
+		graph.WithStepTimeout(5*time.Minute),            // 每个步骤的超时时间
+		graph.WithNodeTimeout(2*time.Minute),            // 单个节点的超时时间
+		graph.WithCheckpointSaveTimeout(30*time.Second), // 检查点保存超时
+		graph.WithDefaultRetryPolicy(                    // 默认重试策略
+			graph.WithSimpleRetry(3),
+		),
+	),
+)
+```
+
+**注意事项：**
+
+- `WithExecutorOptions` 中的选项会在映射选项（`ChannelBufferSize`、`MaxConcurrency`、`CheckpointSaver`）之后应用，因此可以覆盖这些映射选项
+- 如果不设置 `WithStepTimeout`，`WithNodeTimeout` 也不会自动推导（默认无超时）
 
 #### 并发使用注意事项
 
