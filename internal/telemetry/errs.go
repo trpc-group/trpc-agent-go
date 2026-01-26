@@ -15,6 +15,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/errs"
 )
 
+// ToErrorType converts an error to an error type.
 func ToErrorType(err error, errorType string) string {
 	e := errs.ToResponseError(err)
 	if e == nil {
