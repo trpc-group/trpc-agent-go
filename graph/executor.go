@@ -1536,8 +1536,13 @@ func (e *Executor) attemptCacheLookup(t *Task) (bool, any) {
 	sanitized := sanitizeForCacheKey(t.Input)
 
 	// Apply optional cache key selector (node-level) to focus on relevant inputs.
-	if node, ok := e.graph.Node(t.NodeID); ok && node != nil && node.cacheKeySelector != nil {
-		if m, ok2 := sanitized.(map[string]any); ok2 {
+	if node, ok := e.graph.Node(t.NodeID); ok &&
+		node != nil &&
+		node.cacheKeySelector != nil {
+		switch m := sanitized.(type) {
+		case State:
+			sanitized = node.cacheKeySelector(m)
+		case map[string]any:
 			sanitized = node.cacheKeySelector(m)
 		}
 	}
@@ -1706,8 +1711,13 @@ func (e *Executor) finalizeSuccessfulExecution(
 		if pol := e.getEffectiveCachePolicy(t.NodeID); pol != nil && pol.KeyFunc != nil {
 			// Use the same sanitized input used for lookup (post-callback state copy).
 			sanitized := sanitizeForCacheKey(nodeCtx.stateCopy)
-			if node, ok := e.graph.Node(t.NodeID); ok && node != nil && node.cacheKeySelector != nil {
-				if m, ok2 := sanitized.(map[string]any); ok2 {
+			if node, ok := e.graph.Node(t.NodeID); ok &&
+				node != nil &&
+				node.cacheKeySelector != nil {
+				switch m := sanitized.(type) {
+				case State:
+					sanitized = node.cacheKeySelector(m)
+				case map[string]any:
 					sanitized = node.cacheKeySelector(m)
 				}
 			}
