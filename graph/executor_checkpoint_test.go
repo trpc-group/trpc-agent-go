@@ -498,6 +498,394 @@ func TestExecutor_ExternalInterruptTimeout_ForcesInterrupt(
 	}
 }
 
+func TestExecutor_ApplyGraphInterruptInputs_MapState(t *testing.T) {
+	const nodeID = "node-a"
+	const key = "k"
+
+	exec := &Executor{}
+	restored := make(State)
+	tuple := &CheckpointTuple{
+		Metadata: &CheckpointMetadata{
+			Extra: map[string]any{
+				CheckpointMetaKeyGraphInterruptInputs: map[string]State{
+					nodeID: {key: "v"},
+					"":     {key: "skip-empty-node"},
+					"b":    nil,
+				},
+			},
+		},
+	}
+	exec.applyGraphInterruptInputs(restored, tuple)
+
+	raw, ok := restored[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	m, ok := raw.(map[string]State)
+	require.True(t, ok)
+	require.Len(t, m, 1)
+	require.Contains(t, m, nodeID)
+}
+
+func TestExecutor_ApplyGraphInterruptInputs_IgnoresInvalidTuples(t *testing.T) {
+	exec := &Executor{}
+	exec.applyGraphInterruptInputs(nil, nil)
+
+	restored := make(State)
+	exec.applyGraphInterruptInputs(restored, nil)
+	exec.applyGraphInterruptInputs(restored, &CheckpointTuple{})
+	exec.applyGraphInterruptInputs(restored, &CheckpointTuple{
+		Metadata: &CheckpointMetadata{},
+	})
+	exec.applyGraphInterruptInputs(restored, &CheckpointTuple{
+		Metadata: &CheckpointMetadata{
+			Extra: map[string]any{},
+		},
+	})
+	require.Empty(t, restored)
+}
+
+func TestGraphInterruptHelpers_NilSafeAndIdempotent(t *testing.T) {
+	var watcher *externalInterruptWatcher
+	watcher.stop()
+	require.False(t, watcher.requested())
+	require.False(t, watcher.forced(nil))
+
+	var state *graphInterruptState
+	require.False(t, state.requested())
+	require.Nil(t, state.timeoutOrNil())
+	require.Nil(t, state.doneCh())
+
+	require.Nil(t, graphInterruptFromContext(nil))
+	require.Nil(t, graphInterruptFromContext(context.Background()))
+
+	wrongType := context.WithValue(
+		context.Background(),
+		graphInterruptKey{},
+		"bad",
+	)
+	require.Nil(t, graphInterruptFromContext(wrongType))
+
+	opt := WithGraphInterruptTimeout(time.Second)
+	opt(nil)
+
+	ctx, interrupt := WithGraphInterrupt(context.Background())
+	st := graphInterruptFromContext(ctx)
+	require.NotNil(t, st)
+
+	require.False(t, st.requested())
+	select {
+	case <-st.doneCh():
+		t.Fatal("unexpected interrupt request")
+	default:
+	}
+
+	interrupt(nil)
+	require.True(t, st.requested())
+	select {
+	case <-st.doneCh():
+	default:
+		t.Fatal("expected interrupt request")
+	}
+	require.Nil(t, st.timeoutOrNil())
+
+	interrupt(WithGraphInterruptTimeout(time.Second))
+	require.Nil(t, st.timeoutOrNil())
+}
+
+func TestExternalInterruptWatcher_StopBeforeInterrupt(t *testing.T) {
+	const timeout = 5 * time.Millisecond
+
+	ctx, interrupt := WithGraphInterrupt(context.Background())
+	state := graphInterruptFromContext(ctx)
+	require.NotNil(t, state)
+
+	runCtx, watcher := newExternalInterruptWatcher(ctx, state)
+	require.NotNil(t, watcher)
+	watcher.stop()
+
+	interrupt(WithGraphInterruptTimeout(timeout))
+
+	select {
+	case <-runCtx.Done():
+		t.Fatalf("unexpected cancellation: %v", context.Cause(runCtx))
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestExternalInterruptWatcher_ZeroTimeoutCancelsImmediately(t *testing.T) {
+	ctx, interrupt := WithGraphInterrupt(context.Background())
+	state := graphInterruptFromContext(ctx)
+	require.NotNil(t, state)
+
+	runCtx, watcher := newExternalInterruptWatcher(ctx, state)
+	require.NotNil(t, watcher)
+	defer watcher.stop()
+
+	interrupt(WithGraphInterruptTimeout(0))
+
+	select {
+	case <-runCtx.Done():
+		require.ErrorIs(t, context.Cause(runCtx), errGraphInterruptTimeout)
+		require.True(t, watcher.forced(runCtx))
+	case <-time.After(time.Second):
+		t.Fatal("expected cancellation")
+	}
+}
+
+func TestExternalInterruptWatcher_StopAfterInterrupt(t *testing.T) {
+	const timeout = time.Second
+
+	ctx, interrupt := WithGraphInterrupt(context.Background())
+	state := graphInterruptFromContext(ctx)
+	require.NotNil(t, state)
+
+	runCtx, watcher := newExternalInterruptWatcher(ctx, state)
+	require.NotNil(t, watcher)
+	defer watcher.stop()
+
+	interrupt(WithGraphInterruptTimeout(timeout))
+	watcher.stop()
+
+	select {
+	case <-runCtx.Done():
+		t.Fatalf("unexpected cancellation: %v", context.Cause(runCtx))
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestExecutor_CreateTask_ConsumesGraphInterruptInputs(t *testing.T) {
+	const nodeA = "a"
+	const key = "k"
+	const value = "v"
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint(nodeA).
+		SetFinishPoint(nodeA).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	stateMap := State{
+		StateKeyGraphInterruptInputs: map[string]State{
+			nodeA: {key: value},
+		},
+	}
+	task := exec.createTask(nodeA, stateMap, 0)
+	require.NotNil(t, task)
+	input, ok := task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, value, input[key])
+	_, ok = stateMap[StateKeyGraphInterruptInputs]
+	require.False(t, ok)
+
+	stateAny := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: map[string]any{
+				key: value,
+			},
+		},
+	}
+	task = exec.createTask(nodeA, stateAny, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, value, input[key])
+	_, ok = stateAny[StateKeyGraphInterruptInputs]
+	require.False(t, ok)
+}
+
+func TestExecutor_PlanTasksForBspStep_ResumedStartStep(t *testing.T) {
+	const nodeA = "a"
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint(nodeA).
+		SetFinishPoint(nodeA).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	execCtx := &ExecutionContext{
+		resumed: true,
+	}
+	tasks, err := exec.planTasksForBspStep(
+		context.Background(),
+		nil,
+		execCtx,
+		1,
+		0,
+	)
+	require.NoError(t, err)
+	require.Empty(t, tasks)
+}
+
+func TestExecutor_PlanTasksForBspStep_WrapsPlanErrors(t *testing.T) {
+	exec := &Executor{
+		graph: &Graph{},
+	}
+	execCtx := &ExecutionContext{
+		InvocationID: "inv",
+		State:        make(State),
+	}
+	_, err := exec.planTasksForBspStep(
+		context.Background(),
+		nil,
+		execCtx,
+		0,
+		0,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "planning failed at step")
+}
+
+func TestExecutor_ShouldForceExternalInterrupt(t *testing.T) {
+	exec := &Executor{}
+	watcher := &externalInterruptWatcher{}
+
+	require.False(t, exec.shouldForceExternalInterrupt(
+		nil,
+		context.Background(),
+		context.Canceled,
+	))
+	require.False(t, exec.shouldForceExternalInterrupt(
+		watcher,
+		context.Background(),
+		context.Canceled,
+	))
+
+	forcedCtx, cancel := context.WithCancelCause(context.Background())
+	cancel(errGraphInterruptTimeout)
+
+	require.False(t, exec.shouldForceExternalInterrupt(
+		watcher,
+		forcedCtx,
+		nil,
+	))
+	require.True(t, exec.shouldForceExternalInterrupt(
+		watcher,
+		forcedCtx,
+		context.Canceled,
+	))
+	require.True(t, exec.shouldForceExternalInterrupt(
+		watcher,
+		forcedCtx,
+		context.DeadlineExceeded,
+	))
+	require.False(t, exec.shouldForceExternalInterrupt(
+		watcher,
+		forcedCtx,
+		errors.New("other"),
+	))
+}
+
+func TestExecutor_ForcedInterruptHelpers(t *testing.T) {
+	const nodeA = "a"
+	const nodeB = "b"
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		AddNode(nodeB, func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		AddEdge(nodeA, nodeB).
+		SetEntryPoint(nodeA).
+		SetFinishPoint(nodeB).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	report := newStepExecutionReport(nil)
+	report.recordInput(nodeB, State{"x": "y"})
+	report.markCompleted(nodeA)
+
+	tasks := []*Task{
+		nil,
+		{NodeID: ""},
+		{NodeID: nodeA},
+		{NodeID: nodeB},
+	}
+	rerun := exec.nodesToRerun(tasks, report)
+	require.NotContains(t, rerun, nodeA)
+	require.Contains(t, rerun, nodeB)
+
+	require.Nil(t, exec.metaExtraForForcedInterrupt(nil, rerun))
+	require.Nil(t, exec.metaExtraForForcedInterrupt(report, nil))
+	require.Nil(t, exec.metaExtraForForcedInterrupt(report,
+		map[string]struct{}{}))
+
+	metaExtra := exec.metaExtraForForcedInterrupt(report, rerun)
+	require.NotNil(t, metaExtra)
+	raw := metaExtra[CheckpointMetaKeyGraphInterruptInputs]
+	_, ok := raw.(map[string]any)
+	require.True(t, ok)
+	require.Nil(t, exec.metaExtraForForcedInterrupt(
+		report,
+		map[string]struct{}{"missing": {}},
+	))
+
+	execCtx := &ExecutionContext{
+		channels: exec.buildChannelManager(),
+	}
+	branchB := ChannelBranchPrefix + nodeB
+	branchEnd := ChannelBranchPrefix + End
+
+	ch, ok := execCtx.channels.GetChannel(branchB)
+	require.True(t, ok)
+	require.True(t, ch.Update([]any{channelUpdateMarker}, 0))
+
+	ch, ok = execCtx.channels.GetChannel(branchEnd)
+	require.True(t, ok)
+	require.True(t, ch.Update([]any{channelUpdateMarker}, 0))
+
+	next := exec.nextNodesForForcedInterrupt(execCtx, rerun)
+	require.Contains(t, next, nodeB)
+	require.NotContains(t, next, End)
+}
+
+func TestStepExecutionReport_RecordsAndSkipsInputs(t *testing.T) {
+	const nodeID = "a"
+
+	var report *stepExecutionReport
+	report.recordInput(nodeID, State{})
+	report.markCompleted(nodeID)
+	require.False(t, report.isCompleted(nodeID))
+	_, ok := report.inputFor(nodeID)
+	require.False(t, ok)
+
+	report = newStepExecutionReport(nil)
+	report.recordInput("", State{})
+	report.recordInput(nodeID, nil)
+
+	orig := State{"x": "y"}
+	report.recordInput(nodeID, orig)
+	report.recordInput(nodeID, State{"x": "ignored"})
+
+	in, ok := report.inputFor("missing")
+	require.False(t, ok)
+	require.Nil(t, in)
+
+	in, ok = report.inputFor(nodeID)
+	require.True(t, ok)
+	require.Equal(t, "y", in["x"])
+
+	report.markCompleted("")
+	report.markCompleted(nodeID)
+	require.True(t, report.isCompleted(nodeID))
+}
+
 func latestInterruptTuple(
 	t *testing.T,
 	saver *mockSaver,

@@ -18,8 +18,12 @@ import (
 )
 
 const (
+	// ExternalInterruptKey identifies interrupts requested via
+	// WithGraphInterrupt.
 	ExternalInterruptKey = "external_interrupt"
 
+	// CheckpointMetaKeyGraphInterruptInputs stores per-node input snapshots that
+	// should be restored when resuming after a forced external interrupt.
 	CheckpointMetaKeyGraphInterruptInputs = "graph_interrupt_inputs"
 )
 
@@ -161,6 +165,8 @@ func (r *stepExecutionReport) inputFor(nodeID string) (State, bool) {
 	return in, ok
 }
 
+// ExternalInterruptPayload is stored in InterruptError.Value for external
+// interrupts requested via WithGraphInterrupt.
 type ExternalInterruptPayload struct {
 	Key    string `json:"key"`
 	Forced bool   `json:"forced"`
