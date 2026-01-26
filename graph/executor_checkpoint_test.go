@@ -2073,6 +2073,29 @@ func TestExecutor_RestoreStateFromCheckpoint_DefaultsAndZero(t *testing.T) {
 	require.True(t, isSlice)
 }
 
+func TestExecutor_RestoreStateFromCheckpoint_OneShotMessages(t *testing.T) {
+	exec := &Executor{graph: New(MessagesStateSchema())}
+	ckpt := &Checkpoint{
+		ID: "ck",
+		ChannelValues: map[string]any{
+			StateKeyOneShotMessages: []model.Message{
+				model.NewUserMessage("hi"),
+			},
+		},
+	}
+	tuple := &CheckpointTuple{Checkpoint: ckpt.Copy()}
+
+	st := exec.restoreStateFromCheckpoint(tuple)
+	raw, ok := st[StateKeyOneShotMessages]
+	require.True(t, ok)
+
+	msgs, ok := raw.([]model.Message)
+	require.True(t, ok)
+	require.Len(t, msgs, 1)
+	require.Equal(t, model.RoleUser, msgs[0].Role)
+	require.Equal(t, "hi", msgs[0].Content)
+}
+
 func TestExecutor_HelperMethods(t *testing.T) {
 	exec := &Executor{graph: New(NewStateSchema())}
 	// getConfigKeys

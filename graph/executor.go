@@ -473,6 +473,11 @@ func (e *Executor) restoreStateFromCheckpoint(tuple *CheckpointTuple) State {
 	for k, v := range tuple.Checkpoint.ChannelValues {
 		restored[k] = v
 	}
+	if raw, ok := restored[StateKeyOneShotMessages]; ok {
+		if msgs, err := decodeMessages(raw); err == nil {
+			restored[StateKeyOneShotMessages] = msgs
+		}
+	}
 	if e.graph.Schema() == nil {
 		return restored
 	}
