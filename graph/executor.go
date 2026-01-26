@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -299,6 +300,12 @@ func (e *Executor) executeGraph(
 	eventChan chan<- *event.Event,
 	startTime time.Time,
 ) error {
+	interruptState := graphInterruptFromContext(ctx)
+	ctx, extInterrupt := newExternalInterruptWatcher(ctx, interruptState)
+	if extInterrupt != nil {
+		defer extInterrupt.stop()
+	}
+
 	execState, checkpointConfig, resumed, resumedStep, lastCkpt, restoredPending :=
 		e.prepareCheckpointAndState(ctx, initialState, invocation)
 
@@ -346,7 +353,14 @@ func (e *Executor) executeGraph(
 		startStep = resumedStep + 1
 	}
 
-	stepsExecuted, err := e.runBspLoop(ctx, invocation, execCtx, &checkpointConfig, startStep)
+	stepsExecuted, err := e.runBspLoop(
+		ctx,
+		invocation,
+		execCtx,
+		&checkpointConfig,
+		startStep,
+		extInterrupt,
+	)
 	if err != nil {
 		return err
 	}
@@ -446,6 +460,7 @@ func (e *Executor) resumeOrInitWithSaver(
 		tuple.Checkpoint.NextChannels,
 	)
 	e.applyExecutableNextNodes(restored, tuple)
+	e.applyGraphInterruptInputs(restored, tuple)
 	return restored, checkpointConfig, true, resumedStep, lastCheckpoint, pending
 }
 
@@ -485,7 +500,10 @@ func (e *Executor) restoreStateFromCheckpoint(tuple *CheckpointTuple) State {
 // not internal (do not start with "_") and not already present in restored.
 // This preserves the previous behavior where pre-populated inputs could be
 // respected when resuming from checkpoints.
-func (e *Executor) mergeInitialStateNonInternal(restored, initial State) State {
+func (e *Executor) mergeInitialStateNonInternal(
+	restored,
+	initial State,
+) State {
 	for key, value := range initial {
 		if _, exists := restored[key]; !exists && !strings.HasPrefix(key, "_") {
 			restored[key] = value
@@ -497,7 +515,10 @@ func (e *Executor) mergeInitialStateNonInternal(restored, initial State) State {
 // applyExecutableNextNodes sets StateKeyNextNodes when suitable.
 // This is important for initial checkpoints (step -1) that have the entry
 // point set, so a forked resume can continue from the beginning.
-func (e *Executor) applyExecutableNextNodes(restored State, tuple *CheckpointTuple) {
+func (e *Executor) applyExecutableNextNodes(
+	restored State,
+	tuple *CheckpointTuple,
+) {
 	if len(tuple.PendingWrites) != 0 || len(tuple.Checkpoint.NextNodes) == 0 {
 		return
 	}
@@ -505,6 +526,47 @@ func (e *Executor) applyExecutableNextNodes(restored State, tuple *CheckpointTup
 		if nodeID != End && nodeID != "" {
 			restored[StateKeyNextNodes] = tuple.Checkpoint.NextNodes
 			return
+		}
+	}
+}
+
+func (e *Executor) applyGraphInterruptInputs(
+	restored State,
+	tuple *CheckpointTuple,
+) {
+	if restored == nil || tuple == nil || tuple.Metadata == nil {
+		return
+	}
+	if tuple.Metadata.Extra == nil {
+		return
+	}
+	raw, ok := tuple.Metadata.Extra[CheckpointMetaKeyGraphInterruptInputs]
+	if !ok || raw == nil {
+		return
+	}
+
+	switch m := raw.(type) {
+	case map[string]State:
+		copied := make(map[string]State, len(m))
+		for nodeID, input := range m {
+			if nodeID == "" || input == nil {
+				continue
+			}
+			copied[nodeID] = input
+		}
+		if len(copied) > 0 {
+			restored[StateKeyGraphInterruptInputs] = copied
+		}
+	case map[string]any:
+		copied := make(map[string]any, len(m))
+		for nodeID, input := range m {
+			if nodeID == "" || input == nil {
+				continue
+			}
+			copied[nodeID] = input
+		}
+		if len(copied) > 0 {
+			restored[StateKeyGraphInterruptInputs] = copied
 		}
 	}
 }
@@ -534,7 +596,8 @@ func (e *Executor) processResumeCommand(execState, initialState State) State {
 	return execState
 }
 
-// restoreVersionsSeen restores per-node versionsSeen from the last checkpoint.
+// restoreVersionsSeen restores per-node versionsSeen from the last
+// checkpoint.
 func (e *Executor) restoreVersionsSeen(
 	resumed bool,
 	lastCheckpoint *Checkpoint,
@@ -659,6 +722,7 @@ func (e *Executor) runBspLoop(
 	execCtx *ExecutionContext,
 	checkpointConfig *map[string]any,
 	startStep int,
+	extInterrupt *externalInterruptWatcher,
 ) (int, error) {
 	var stepsExecuted int
 	for step := startStep; step < e.maxSteps; step++ {
@@ -678,30 +742,134 @@ func (e *Executor) runBspLoop(
 		}
 		if err != nil {
 			stepCancel()
-			return stepsExecuted, fmt.Errorf("planning failed at step %d: %w", step, err)
+			return stepsExecuted, fmt.Errorf(
+				"planning failed at step %d: %w",
+				step,
+				err,
+			)
 		}
 		if len(tasks) == 0 {
 			stepCancel()
 			break
 		}
-		if interrupt := e.maybeStaticInterruptBefore(execCtx, tasks, step); interrupt != nil {
+		if extInterrupt != nil && extInterrupt.requested() {
 			stepCancel()
+			interrupt := newExternalInterruptError(
+				extInterrupt.forced(ctx),
+			)
+			interrupt.NextNodes = uniqueSortedTaskNodes(tasks)
 			return stepsExecuted, e.handleInterrupt(
 				stepCtx,
 				invocation,
 				execCtx,
 				interrupt,
-				step,
+				step-1,
 				*checkpointConfig,
+				nil,
 			)
 		}
-		if err := e.executeStep(stepCtx, invocation, execCtx, tasks, step); err != nil {
+		staticBefore := e.maybeStaticInterruptBefore(execCtx, tasks, step)
+		if staticBefore != nil {
+			stepCancel()
+			return stepsExecuted, e.handleInterrupt(
+				stepCtx,
+				invocation,
+				execCtx,
+				staticBefore,
+				step,
+				*checkpointConfig,
+				nil,
+			)
+		}
+		var report *stepExecutionReport
+		if extInterrupt != nil {
+			var fields map[string]StateField
+			if e.graph != nil && e.graph.Schema() != nil {
+				fields = e.graph.Schema().Fields
+			}
+			report = newStepExecutionReport(fields)
+		}
+		if err := e.executeStep(
+			stepCtx,
+			invocation,
+			execCtx,
+			tasks,
+			step,
+			report,
+		); err != nil {
 			if interrupt, ok := GetInterruptError(err); ok {
 				stepCancel()
-				return stepsExecuted, e.handleInterrupt(stepCtx, invocation, execCtx, interrupt, step, *checkpointConfig)
+				return stepsExecuted, e.handleInterrupt(
+					stepCtx,
+					invocation,
+					execCtx,
+					interrupt,
+					step,
+					*checkpointConfig,
+					nil,
+				)
+			}
+			if extInterrupt != nil && extInterrupt.forced(ctx) &&
+				(errors.Is(err, context.Canceled) ||
+					errors.Is(err, context.DeadlineExceeded)) {
+				rerun := make(map[string]struct{})
+				for _, t := range tasks {
+					if t == nil || t.NodeID == "" {
+						continue
+					}
+					if report != nil && report.isCompleted(t.NodeID) {
+						continue
+					}
+					rerun[t.NodeID] = struct{}{}
+				}
+				next := make(map[string]struct{})
+				for nodeID := range rerun {
+					next[nodeID] = struct{}{}
+				}
+				for _, nodeID := range e.getNextNodes(execCtx) {
+					if nodeID == "" || nodeID == End {
+						continue
+					}
+					next[nodeID] = struct{}{}
+				}
+
+				metaExtra := make(map[string]any)
+				if report != nil && len(rerun) > 0 {
+					inputs := make(map[string]any)
+					for nodeID := range rerun {
+						input, ok := report.inputFor(nodeID)
+						if !ok || input == nil {
+							continue
+						}
+						inputs[nodeID] = input
+					}
+					if len(inputs) > 0 {
+						metaExtra[CheckpointMetaKeyGraphInterruptInputs] = inputs
+					}
+				}
+				if len(metaExtra) == 0 {
+					metaExtra = nil
+				}
+
+				stepCancel()
+				forced := newExternalInterruptError(true)
+				forced.NextNodes = keysOfSet(next)
+				return stepsExecuted, e.handleInterrupt(
+					stepCtx,
+					invocation,
+					execCtx,
+					forced,
+					step,
+					*checkpointConfig,
+					metaExtra,
+				)
 			}
 			stepCancel()
-			return stepsExecuted, fmt.Errorf("execution failed at step %d: %w", step, err)
+			return stepsExecuted, fmt.Errorf(
+				"execution failed at step %d: %w",
+				step,
+				err,
+			)
 		}
 		if err := e.updateChannels(stepCtx, invocation, execCtx, step); err != nil {
 			stepCancel()
@@ -716,6 +884,7 @@ func (e *Executor) runBspLoop(
 				interrupt,
 				step,
 				*checkpointConfig,
+				nil,
 			)
 		}
 		if e.checkpointSaver != nil && *checkpointConfig != nil {
@@ -1225,9 +1394,42 @@ func (e *Executor) createTask(nodeID string, state State, step int) *Task {
 		return nil
 	}
 
+	input := any(state)
+	if state != nil {
+		raw, ok := state[StateKeyGraphInterruptInputs]
+		if ok && raw != nil {
+			switch m := raw.(type) {
+			case map[string]State:
+				if v := m[nodeID]; v != nil {
+					input = v
+					delete(m, nodeID)
+					if len(m) == 0 {
+						delete(state, StateKeyGraphInterruptInputs)
+					}
+				}
+			case map[string]any:
+				v, ok := m[nodeID]
+				if !ok || v == nil {
+					break
+				}
+				if st, ok := v.(State); ok && st != nil {
+					input = st
+				} else if st, ok := v.(map[string]any); ok && st != nil {
+					input = State(st)
+				} else {
+					break
+				}
+				delete(m, nodeID)
+				if len(m) == 0 {
+					delete(state, StateKeyGraphInterruptInputs)
+				}
+			}
+		}
+	}
+
 	return &Task{
 		NodeID:   nodeID,
-		Input:    state,
+		Input:    input,
 		Writes:   node.writers,
 		Triggers: node.triggers,
 		TaskID:   fmt.Sprintf("%s-%d", nodeID, step),
@@ -1242,6 +1444,7 @@ func (e *Executor) executeStep(
 	execCtx *ExecutionContext,
 	tasks []*Task,
 	step int,
+	report *stepExecutionReport,
 ) error {
 	// Emit execution step event.
 	e.emitExecutionStepEvent(ctx, invocation, execCtx, tasks, step)
@@ -1261,6 +1464,7 @@ func (e *Executor) executeStep(
 					execCtx,
 					t,
 					step,
+					report,
 				)
 				if err != nil {
 					results <- err
@@ -1308,6 +1512,7 @@ func (e *Executor) executeStepTask(
 	execCtx *ExecutionContext,
 	t *Task,
 	step int,
+	report *stepExecutionReport,
 ) (err error) {
 	runCtx := agent.CloneContext(ctx)
 	defer func() {
@@ -1328,7 +1533,18 @@ func (e *Executor) executeStepTask(
 		invocation,
 		t,
 	)
-	return e.executeSingleTask(taskCtx, taskInvocation, execCtx, t, step)
+	err = e.executeSingleTask(
+		taskCtx,
+		taskInvocation,
+		execCtx,
+		t,
+		step,
+		report,
+	)
+	if err == nil && report != nil && t != nil {
+		report.markCompleted(t.NodeID)
+	}
+	return err
 }
 
 func (e *Executor) taskInvocationContext(
@@ -1431,9 +1647,13 @@ func (e *Executor) executeSingleTask(
 	execCtx *ExecutionContext,
 	t *Task,
 	step int,
+	report *stepExecutionReport,
 ) error {
 	// Initialize node execution context with retry policies and metadata.
 	nodeCtx := e.initializeNodeContext(ctx, invocation, execCtx, t, step)
+	if report != nil && nodeCtx != nil && t != nil {
+		report.recordInput(t.NodeID, nodeCtx.stateCopy)
+	}
 
 	// Run before node callbacks.
 	if handled, err := e.runBeforeCallbacks(
@@ -1452,7 +1672,15 @@ func (e *Executor) executeSingleTask(
 
 	// Attempt cache lookup; if hit, handle cached result and return.
 	if cacheHit, result := e.attemptCacheLookup(t); cacheHit {
-		return e.handleCachedResult(ctx, invocation, execCtx, t, result, step, nodeCtx)
+		return e.handleCachedResult(
+			ctx,
+			invocation,
+			execCtx,
+			t,
+			result,
+			step,
+			nodeCtx,
+		)
 	}
 
 	// Execute with retry logic (emits completion event downstream on success).
@@ -2846,6 +3074,7 @@ func (e *Executor) handleInterrupt(
 	interrupt *InterruptError,
 	step int,
 	checkpointConfig map[string]any,
+	metaExtra map[string]any,
 ) error {
 	var (
 		interruptCheckpointID  string
@@ -2857,8 +3086,10 @@ func (e *Executor) handleInterrupt(
 		// Set interrupt state in the checkpoint.
 		checkpoint := e.createCheckpointFromState(execCtx.State, step, execCtx)
 
-		// IMPORTANT: Set parent checkpoint ID from current config to maintain proper tree structure
-		if parentCheckpointID := GetCheckpointID(checkpointConfig); parentCheckpointID != "" {
+		// IMPORTANT: Set parent checkpoint ID from current config to maintain
+		// proper tree structure.
+		parentCheckpointID := GetCheckpointID(checkpointConfig)
+		if parentCheckpointID != "" {
 			checkpoint.ParentCheckpointID = parentCheckpointID
 			// Setting parent checkpoint ID for interrupt
 		}
@@ -2874,6 +3105,11 @@ func (e *Executor) handleInterrupt(
 		// Create metadata for the interrupt checkpoint.
 		metadata := NewCheckpointMetadata(CheckpointSourceInterrupt, step)
 		metadata.IsResuming = false
+		if len(metaExtra) > 0 {
+			for k, v := range metaExtra {
+				metadata.Extra[k] = v
+			}
+		}
 
 		// Set next nodes for recovery
 		// IMPORTANT:

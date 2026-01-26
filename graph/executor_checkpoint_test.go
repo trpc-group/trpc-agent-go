@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -360,6 +361,141 @@ func TestExecutor_HandleInterrupt_EmitsCheckpointInterruptWhenEnabled(
 
 	counts := collectObjectCounts(ch)
 	require.Greater(t, counts[ObjectTypeGraphCheckpointInterrupt], 0)
+}
+
+func TestExecutor_ExternalInterrupt_PausesBeforeNextStep(t *testing.T) {
+	const lineageID = "ln-external-interrupt"
+
+	started := make(chan struct{}, 1)
+	unblock := make(chan struct{})
+	var bRuns int
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-unblock
+			return nil, nil
+		}).
+		AddNode("b", func(ctx context.Context, state State) (any, error) {
+			bRuns++
+			return nil, nil
+		}).
+		AddEdge("a", "b").
+		SetEntryPoint("a").
+		SetFinishPoint("b").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{InvocationID: lineageID}
+	agent.WithStreamMode(agent.StreamModeCheckpoints)(&inv.RunOptions)
+
+	ctx, interrupt := WithGraphInterrupt(context.Background())
+	ch, err := exec.Execute(ctx, State{}, inv)
+	require.NoError(t, err)
+
+	<-started
+	interrupt()
+	close(unblock)
+
+	for range ch {
+	}
+
+	require.Zero(t, bRuns)
+	intTuple := latestInterruptTuple(t, saver, lineageID)
+	require.Equal(t, []string{"b"}, intTuple.Checkpoint.NextNodes)
+
+	intState := intTuple.Checkpoint.InterruptState
+	require.NotNil(t, intState)
+	payload, ok := intState.InterruptValue.(ExternalInterruptPayload)
+	require.True(t, ok)
+	require.False(t, payload.Forced)
+}
+
+func TestExecutor_ExternalInterruptTimeout_ForcesInterrupt(
+	t *testing.T,
+) {
+	const lineageID = "ln-external-interrupt-timeout"
+	const timeout = 20 * time.Millisecond
+
+	started := make(chan struct{}, 2)
+	allowComplete := make(chan struct{})
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			select {
+			case <-allowComplete:
+				return nil, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{InvocationID: lineageID}
+	agent.WithStreamMode(agent.StreamModeCheckpoints)(&inv.RunOptions)
+
+	ctx, interrupt := WithGraphInterrupt(context.Background())
+	ch, err := exec.Execute(ctx, State{}, inv)
+	require.NoError(t, err)
+
+	<-started
+	interrupt(WithGraphInterruptTimeout(timeout))
+
+	for range ch {
+	}
+
+	intTuple := latestInterruptTuple(t, saver, lineageID)
+	intState := intTuple.Checkpoint.InterruptState
+	require.NotNil(t, intState)
+	payload, ok := intState.InterruptValue.(ExternalInterruptPayload)
+	require.True(t, ok)
+	require.True(t, payload.Forced)
+
+	require.NotNil(t, intTuple.Metadata)
+	require.NotNil(t, intTuple.Metadata.Extra)
+	raw := intTuple.Metadata.Extra[CheckpointMetaKeyGraphInterruptInputs]
+	require.NotNil(t, raw)
+	switch m := raw.(type) {
+	case map[string]any:
+		_, ok := m["a"]
+		require.True(t, ok)
+	case map[string]State:
+		_, ok := m["a"]
+		require.True(t, ok)
+	default:
+		t.Fatalf("unexpected interrupt inputs type: %T", raw)
+	}
+
+	close(allowComplete)
+	resumeInv := &agent.Invocation{InvocationID: lineageID}
+	agent.WithStreamMode(agent.StreamModeCheckpoints)(&resumeInv.RunOptions)
+
+	resumeState := State{
+		CfgKeyCheckpointID: intTuple.Checkpoint.ID,
+		CfgKeyLineageID:    lineageID,
+	}
+	ch2, err := exec.Execute(context.Background(), resumeState, resumeInv)
+	require.NoError(t, err)
+	for range ch2 {
+	}
 }
 
 func latestInterruptTuple(
