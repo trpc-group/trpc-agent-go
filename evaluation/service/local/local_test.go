@@ -1188,3 +1188,147 @@ func TestLocalEvaluateTraceModeUsesUserContentAsExpected(t *testing.T) {
 	assert.Nil(t, perInvocation.ExpectedInvocation.Tools)
 	assert.Nil(t, perInvocation.ExpectedInvocation.IntermediateResponses)
 }
+
+func TestLocalInferenceParallelBeforeInferenceCaseReceivesIndependentRequest(t *testing.T) {
+	ctx := context.Background()
+	appName := "math-app"
+	evalSetID := "math-set"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, "case-1", "calc add 1 2")))
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, "case-2", "calc add 3 4")))
+
+	runnerStub := &fakeRunner{events: []*event.Event{makeFinalEvent("resp")}}
+	callbacks := &service.Callbacks{}
+	started := make(chan *service.InferenceRequest, 2)
+	release := make(chan struct{})
+	callbacks.Register("probe", &service.Callback{
+		BeforeInferenceCase: func(ctx context.Context, args *service.BeforeInferenceCaseArgs) (*service.BeforeInferenceCaseResult, error) {
+			started <- args.Request
+			<-release
+			return nil, nil
+		},
+	})
+
+	reg := registry.New()
+	resMgr := evalresultinmemory.New()
+	svc, err := New(
+		runnerStub,
+		service.WithEvalSetManager(mgr),
+		service.WithEvalResultManager(resMgr),
+		service.WithRegistry(reg),
+		service.WithCallbacks(callbacks),
+		service.WithEvalCaseParallelInferenceEnabled(true),
+		service.WithEvalCaseParallelism(2),
+	)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	type outcome struct {
+		results []*service.InferenceResult
+		err     error
+	}
+	outCh := make(chan outcome, 1)
+	go func() {
+		results, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
+		outCh <- outcome{results: results, err: err}
+	}()
+
+	var req1, req2 *service.InferenceRequest
+	select {
+	case req1 = <-started:
+	case <-time.After(2 * time.Second):
+		assert.FailNow(t, "timeout waiting for first BeforeInferenceCase callback")
+	}
+	select {
+	case req2 = <-started:
+	case <-time.After(2 * time.Second):
+		assert.FailNow(t, "timeout waiting for second BeforeInferenceCase callback")
+	}
+	assert.NotNil(t, req1)
+	assert.NotNil(t, req2)
+	assert.NotSame(t, req1, req2)
+
+	close(release)
+
+	select {
+	case got := <-outCh:
+		assert.NoError(t, got.err)
+		assert.Len(t, got.results, 2)
+	case <-time.After(2 * time.Second):
+		assert.FailNow(t, "timeout waiting for inference results")
+	}
+}
+
+func TestEvalCaseInferencePoolHandlesNilEvalCase(t *testing.T) {
+	pool, err := createEvalCaseInferencePool(1)
+	assert.NoError(t, err)
+	defer pool.Release()
+
+	results := make([]*service.InferenceResult, 1)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	param := &evalCaseInferenceParam{
+		idx:      0,
+		ctx:      context.Background(),
+		req:      &service.InferenceRequest{AppName: "app", EvalSetID: "set"},
+		svc:      &local{sessionIDSupplier: func(ctx context.Context) string { return "session" }},
+		results:  results,
+		wg:       &wg,
+		evalCase: nil,
+	}
+	assert.NoError(t, pool.Invoke(param))
+	wg.Wait()
+
+	assert.NotNil(t, results[0])
+	assert.Equal(t, status.EvalStatusFailed, results[0].Status)
+	assert.Contains(t, results[0].ErrorMessage, "eval case is nil")
+}
+
+func TestLocalEvaluateAfterEvaluateCaseIncludesInferenceResult(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "calc"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, caseID, "prompt")))
+
+	callbacks := &service.Callbacks{}
+	var got *service.InferenceResult
+	callbacks.Register("probe", &service.Callback{
+		AfterEvaluateCase: func(ctx context.Context, args *service.AfterEvaluateCaseArgs) (*service.AfterEvaluateCaseResult, error) {
+			got = args.InferenceResult
+			return nil, nil
+		},
+	})
+
+	reg := registry.New()
+	resMgr := evalresultinmemory.New()
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(mgr),
+		service.WithEvalResultManager(resMgr),
+		service.WithRegistry(reg),
+		service.WithCallbacks(callbacks),
+	)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	inference := makeInferenceResult(appName, evalSetID, caseID, "session", []*evalset.Invocation{makeActualInvocation("generated", "prompt", "answer")})
+	req := &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{inference},
+		EvaluateConfig:   &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}},
+	}
+	_, err = svc.Evaluate(ctx, req)
+	assert.NoError(t, err)
+	assert.Equal(t, inference, got)
+}

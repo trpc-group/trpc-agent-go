@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/callback"
 	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
@@ -40,6 +41,7 @@ type local struct {
 	evalResultManager                evalresult.Manager
 	registry                         registry.Registry
 	sessionIDSupplier                func(ctx context.Context) string
+	callbacks                        *service.Callbacks
 	evalCaseParallelism              int
 	evalCaseParallelInferenceEnabled bool
 	evalCaseInferencePool            *ants.PoolWithFunc
@@ -73,6 +75,7 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 		evalResultManager:                opts.EvalResultManager,
 		registry:                         opts.Registry,
 		sessionIDSupplier:                opts.SessionIDSupplier,
+		callbacks:                        opts.Callbacks,
 		evalCaseParallelism:              opts.EvalCaseParallelism,
 		evalCaseParallelInferenceEnabled: opts.EvalCaseParallelInferenceEnabled,
 	}
@@ -94,6 +97,68 @@ func (s *local) Close() error {
 	return nil
 }
 
+func (s *local) runBeforeEvaluateSetCallbacks(ctx context.Context, req *service.EvaluateRequest) (context.Context, error) {
+	callbackCtx := ctx
+	beforeResult, callbackErr := callback.RunBeforeEvaluateSet(callbackCtx, s.callbacks, &service.BeforeEvaluateSetArgs{Request: req})
+	if beforeResult != nil && beforeResult.Context != nil {
+		callbackCtx = beforeResult.Context
+	}
+	if callbackErr != nil {
+		return callbackCtx, fmt.Errorf("run before evaluate set callbacks (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, callbackErr)
+	}
+	return callbackCtx, nil
+}
+
+func (s *local) runAfterEvaluateSetCallbacks(ctx context.Context, req *service.EvaluateRequest, result *evalresult.EvalSetResult, err error) error {
+	_, afterErr := callback.RunAfterEvaluateSet(ctx, s.callbacks, &service.AfterEvaluateSetArgs{
+		Request: req,
+		Result:  result,
+		Error:   err,
+	})
+	if afterErr != nil {
+		return fmt.Errorf("run after evaluate set callbacks (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, afterErr)
+	}
+	return nil
+}
+
+func (s *local) runBeforeEvaluateCaseCallbacks(ctx context.Context, req *service.EvaluateRequest, evalCaseID string) (context.Context, error) {
+	caseCtx := ctx
+	beforeResult, callbackErr := callback.RunBeforeEvaluateCase(caseCtx, s.callbacks, &service.BeforeEvaluateCaseArgs{
+		Request:    req,
+		EvalCaseID: evalCaseID,
+	})
+	if beforeResult != nil && beforeResult.Context != nil {
+		caseCtx = beforeResult.Context
+	}
+	if callbackErr != nil {
+		return caseCtx, fmt.Errorf("run before evaluate case callbacks (evalCaseID=%s): %w", evalCaseID, callbackErr)
+	}
+	return caseCtx, nil
+}
+
+func (s *local) runAfterEvaluateCaseCallbacks(
+	ctx context.Context,
+	req *service.EvaluateRequest,
+	inferenceResult *service.InferenceResult,
+	result *evalresult.EvalCaseResult,
+	err error,
+) error {
+	_, afterErr := callback.RunAfterEvaluateCase(ctx, s.callbacks, &service.AfterEvaluateCaseArgs{
+		Request:         req,
+		InferenceResult: inferenceResult,
+		Result:          result,
+		Error:           err,
+	})
+	if afterErr != nil {
+		evalCaseID := ""
+		if inferenceResult != nil {
+			evalCaseID = inferenceResult.EvalCaseID
+		}
+		return fmt.Errorf("run after evaluate case callbacks (evalCaseID=%s): %w", evalCaseID, afterErr)
+	}
+	return nil
+}
+
 // Evaluate runs the evaluation on the inference results and returns the persisted eval set result.
 func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*evalresult.EvalSetResult, error) {
 	if req == nil {
@@ -108,33 +173,76 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*ev
 	if req.EvaluateConfig == nil {
 		return nil, errors.New("evaluate config is nil")
 	}
+
+	callbackCtx, callbackErr := s.runBeforeEvaluateSetCallbacks(ctx, req)
+	if callbackErr != nil {
+		return nil, callbackErr
+	}
+
 	evalCaseResults := make([]*evalresult.EvalCaseResult, 0, len(req.InferenceResults))
 	for _, inferenceResult := range req.InferenceResults {
 		if inferenceResult == nil {
-			return nil, errors.New("inference result is nil")
+			err := errors.New("inference result is nil")
+			if afterErr := s.runAfterEvaluateSetCallbacks(callbackCtx, req, nil, err); afterErr != nil {
+				err = errors.Join(err, afterErr)
+			}
+			return nil, err
 		}
-		if inferenceResult.Status != evalstatus.EvalStatusPassed {
-			evalCaseResults = append(evalCaseResults, s.failedEvalCaseResult(req.EvalSetID, inferenceResult, inferenceResult.ErrorMessage))
-			continue
-		}
-		result, err := s.evaluatePerCase(ctx, inferenceResult, req.EvaluateConfig)
+
+		caseCtx, err := s.runBeforeEvaluateCaseCallbacks(callbackCtx, req, inferenceResult.EvalCaseID)
 		if err != nil {
-			evalCaseResults = append(evalCaseResults, s.failedEvalCaseResult(req.EvalSetID, inferenceResult, err.Error()))
-			continue
+			if afterErr := s.runAfterEvaluateSetCallbacks(callbackCtx, req, nil, err); afterErr != nil {
+				err = errors.Join(err, afterErr)
+			}
+			return nil, err
 		}
-		evalCaseResults = append(evalCaseResults, result)
+
+		var (
+			result  *evalresult.EvalCaseResult
+			caseErr error
+		)
+		if inferenceResult.Status != evalstatus.EvalStatusPassed {
+			caseErr = errors.New(inferenceResult.ErrorMessage)
+			evalCaseResults = append(evalCaseResults, s.failedEvalCaseResult(req.EvalSetID, inferenceResult, inferenceResult.ErrorMessage))
+			result = evalCaseResults[len(evalCaseResults)-1]
+		} else {
+			caseResult, evalErr := s.evaluatePerCase(caseCtx, inferenceResult, req.EvaluateConfig)
+			if evalErr != nil {
+				caseErr = evalErr
+				result = s.failedEvalCaseResult(req.EvalSetID, inferenceResult, evalErr.Error())
+			} else {
+				result = caseResult
+			}
+			evalCaseResults = append(evalCaseResults, result)
+		}
+
+		if err := s.runAfterEvaluateCaseCallbacks(caseCtx, req, inferenceResult, result, caseErr); err != nil {
+			if afterErr := s.runAfterEvaluateSetCallbacks(callbackCtx, req, nil, err); afterErr != nil {
+				err = errors.Join(err, afterErr)
+			}
+			return nil, err
+		}
 	}
 	evalSetResult := &evalresult.EvalSetResult{
 		EvalSetID:         req.EvalSetID,
 		EvalCaseResults:   evalCaseResults,
 		CreationTimestamp: &epochtime.EpochTime{Time: time.Now()},
 	}
-	evalSetResultID, err := s.evalResultManager.Save(ctx, req.AppName, evalSetResult)
+
+	evalSetResultID, err := s.evalResultManager.Save(callbackCtx, req.AppName, evalSetResult)
 	if err != nil {
-		return nil, fmt.Errorf("save eval set result: %w", err)
+		err = fmt.Errorf("save eval set result: %w", err)
+		if afterErr := s.runAfterEvaluateSetCallbacks(callbackCtx, req, nil, err); afterErr != nil {
+			err = errors.Join(err, afterErr)
+		}
+		return nil, err
 	}
 	evalSetResult.EvalSetResultID = evalSetResultID
 	evalSetResult.EvalSetResultName = evalSetResultID
+
+	if afterErr := s.runAfterEvaluateSetCallbacks(callbackCtx, req, evalSetResult, nil); afterErr != nil {
+		return evalSetResult, afterErr
+	}
 	return evalSetResult, nil
 }
 

@@ -28,6 +28,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, opts.EvalResultManager)
 	assert.NotNil(t, opts.Registry)
 	assert.NotNil(t, opts.SessionIDSupplier)
+	assert.Nil(t, opts.Callbacks)
 	assert.Equal(t, runtime.GOMAXPROCS(0), opts.EvalCaseParallelism)
 	assert.False(t, opts.EvalCaseParallelInferenceEnabled)
 
