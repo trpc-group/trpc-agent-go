@@ -63,41 +63,43 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		}
 	}
 	run := &runner{
-		runner:                            r,
-		appName:                           opts.AppName,
-		translatorFactory:                 opts.TranslatorFactory,
-		graphNodeLifecycleActivityEnabled: opts.GraphNodeLifecycleActivityEnabled,
-		graphNodeInterruptActivityEnabled: opts.GraphNodeInterruptActivityEnabled,
-		userIDResolver:                    opts.UserIDResolver,
-		translateCallbacks:                opts.TranslateCallbacks,
-		runAgentInputHook:                 opts.RunAgentInputHook,
-		stateResolver:                     opts.StateResolver,
-		runOptionResolver:                 opts.RunOptionResolver,
-		tracker:                           tracker,
-		running:                           make(map[session.Key]*sessionContext),
-		startSpan:                         opts.StartSpan,
-		timeout:                           opts.Timeout,
+		runner:                                 r,
+		appName:                                opts.AppName,
+		translatorFactory:                      opts.TranslatorFactory,
+		graphNodeLifecycleActivityEnabled:      opts.GraphNodeLifecycleActivityEnabled,
+		graphNodeInterruptActivityEnabled:      opts.GraphNodeInterruptActivityEnabled,
+		graphNodeInterruptActivityTopLevelOnly: opts.GraphNodeInterruptActivityTopLevelOnly,
+		userIDResolver:                         opts.UserIDResolver,
+		translateCallbacks:                     opts.TranslateCallbacks,
+		runAgentInputHook:                      opts.RunAgentInputHook,
+		stateResolver:                          opts.StateResolver,
+		runOptionResolver:                      opts.RunOptionResolver,
+		tracker:                                tracker,
+		running:                                make(map[session.Key]*sessionContext),
+		startSpan:                              opts.StartSpan,
+		timeout:                                opts.Timeout,
 	}
 	return run
 }
 
 // runner is the default implementation of the Runner.
 type runner struct {
-	appName                           string
-	runner                            trunner.Runner
-	translatorFactory                 TranslatorFactory
-	graphNodeLifecycleActivityEnabled bool
-	graphNodeInterruptActivityEnabled bool
-	userIDResolver                    UserIDResolver
-	translateCallbacks                *translator.Callbacks
-	runAgentInputHook                 RunAgentInputHook
-	stateResolver                     StateResolver
-	runOptionResolver                 RunOptionResolver
-	tracker                           track.Tracker
-	runningMu                         sync.Mutex
-	running                           map[session.Key]*sessionContext
-	startSpan                         StartSpan
-	timeout                           time.Duration
+	appName                                string
+	runner                                 trunner.Runner
+	translatorFactory                      TranslatorFactory
+	graphNodeLifecycleActivityEnabled      bool
+	graphNodeInterruptActivityEnabled      bool
+	graphNodeInterruptActivityTopLevelOnly bool
+	userIDResolver                         UserIDResolver
+	translateCallbacks                     *translator.Callbacks
+	runAgentInputHook                      RunAgentInputHook
+	stateResolver                          StateResolver
+	runOptionResolver                      RunOptionResolver
+	tracker                                track.Tracker
+	runningMu                              sync.Mutex
+	running                                map[session.Key]*sessionContext
+	startSpan                              StartSpan
+	timeout                                time.Duration
 }
 
 type sessionContext struct {
@@ -195,6 +197,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		runAgentInput,
 		translator.WithGraphNodeLifecycleActivityEnabled(r.graphNodeLifecycleActivityEnabled),
 		translator.WithGraphNodeInterruptActivityEnabled(r.graphNodeInterruptActivityEnabled),
+		translator.WithGraphNodeInterruptActivityTopLevelOnly(r.graphNodeInterruptActivityTopLevelOnly),
 	)
 	if err != nil {
 		span.End()
@@ -316,14 +319,27 @@ func parseResumeInfo(opt []agent.RunOption) *resumeInfo {
 		return nil
 	}
 	var cmd *graph.Command
+	var resumeCmd *graph.ResumeCommand
 	if rawCmd, ok := state[graph.StateKeyCommand]; ok {
 		cmd, _ = rawCmd.(*graph.Command)
+		if cmd == nil {
+			resumeCmd, _ = rawCmd.(*graph.ResumeCommand)
+		}
 	}
 	var resumeMap map[string]any
 	if cmd != nil && cmd.ResumeMap != nil && len(cmd.ResumeMap) > 0 {
 		resumeMap = cmd.ResumeMap
 	}
-	if resumeMap == nil && (cmd == nil || cmd.ResumeMap == nil) {
+	cmdBindsResumeMap := cmd != nil && cmd.ResumeMap != nil
+	if resumeMap == nil &&
+		resumeCmd != nil &&
+		resumeCmd.ResumeMap != nil &&
+		len(resumeCmd.ResumeMap) > 0 {
+		resumeMap = resumeCmd.ResumeMap
+	}
+	cmdBindsResumeMap = cmdBindsResumeMap ||
+		(resumeCmd != nil && resumeCmd.ResumeMap != nil)
+	if resumeMap == nil && !cmdBindsResumeMap {
 		switch v := state[graph.StateKeyResumeMap].(type) {
 		case map[string]any:
 			if len(v) > 0 {
@@ -341,6 +357,10 @@ func parseResumeInfo(opt []agent.RunOption) *resumeInfo {
 	if cmd != nil && cmd.Resume != nil {
 		resumeSet = true
 		resumeValue = cmd.Resume
+	}
+	if !resumeSet && resumeCmd != nil && resumeCmd.Resume != nil {
+		resumeSet = true
+		resumeValue = resumeCmd.Resume
 	}
 	if !resumeSet {
 		if rawResume, ok := state[graph.ResumeChannel]; ok {

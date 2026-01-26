@@ -16,25 +16,34 @@
 //	go run main.go -memory=redis
 //	go run main.go -memory=mysql
 //	go run main.go -memory=postgres
+//	go run main.go -memory=pgvector
 //
 // Environment variables by memory type (example usage):
 //
 //	redis:
 //		export REDIS_ADDR="localhost:6379"
 //
-//	postgres:
-//		export PG_HOST="localhost"
-//		export PG_PORT="5432"
-//		export PG_USER="postgres"
-//		export PG_PASSWORD="password"
-//		export PG_DATABASE="trpc_agent"
-//
 //	mysql:
 //		export MYSQL_HOST="localhost"
 //		export MYSQL_PORT="3306"
 //		export MYSQL_USER="root"
-//		export MYSQL_PASSWORD="password"
-//		export MYSQL_DATABASE="trpc_agent"
+//		export MYSQL_PASSWORD=""
+//		export MYSQL_DATABASE="trpc_agent_go"
+//
+//	postgres:
+//		export PG_HOST="localhost"
+//		export PG_PORT="5432"
+//		export PG_USER="postgres"
+//		export PG_PASSWORD=""
+//		export PG_DATABASE="trpc_agent_go"
+//
+//	pgvector:
+//		export PGVECTOR_HOST="localhost"
+//		export PGVECTOR_PORT="5432"
+//		export PGVECTOR_USER="postgres"
+//		export PGVECTOR_PASSWORD=""
+//		export PGVECTOR_DATABASE="trpc_agent_go"
+//		export PGVECTOR_EMBEDDER_MODEL="text-embedding-3-small"
 package main
 
 import (
@@ -59,7 +68,7 @@ import (
 
 var (
 	modelName      = flag.String("model", "deepseek-chat", "Name of the model to use")
-	memServiceName = flag.String("memory", "inmemory", "Name of the memory service to use, inmemory / redis / mysql / postgres")
+	memServiceName = flag.String("memory", "inmemory", "Name of the memory service to use, inmemory / redis / mysql / postgres / pgvector")
 	streaming      = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	softDelete     = flag.Bool("soft-delete", false, "Enable soft delete for MySQL/PostgreSQL memory service")
 )

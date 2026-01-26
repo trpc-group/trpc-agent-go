@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -15,19 +16,25 @@ import (
 	"os"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-// replaceContentRequest represents the input for the replace content operation.
+// replaceContentRequest represents the input for the replace content
+// operation.
 type replaceContentRequest struct {
-	FileName        string `json:"file_name" jsonschema:"description=The relative path from the base directory to replace."`
-	OldString       string `json:"old_string" jsonschema:"description=The old string to be replaced."`
-	NewString       string `json:"new_string" jsonschema:"description=The new string to replace with."`
-	NumReplacements int    `json:"num_replacements,omitempty" jsonschema:"description=The maximum number of replacements to perform."`
+	FileName string `json:"file_name"`
+	// OldString is replaced by NewString. It can be multi-line.
+	OldString string `json:"old_string"`
+	// NewString is inserted in place of OldString. It can be multi-line.
+	NewString string `json:"new_string"`
+	// NumReplacements limits replacements (default 1). Negative means all.
+	NumReplacements int `json:"num_replacements,omitempty"`
 }
 
-// replaceContentResponse represents the output from the replace content operation.
+// replaceContentResponse represents the output from the replace content
+// operation.
 type replaceContentResponse struct {
 	BaseDirectory string `json:"base_directory"`
 	FileName      string `json:"file_name"`
@@ -35,10 +42,28 @@ type replaceContentResponse struct {
 }
 
 // replaceContent performs the replace content operation.
-func (f *fileToolSet) replaceContent(_ context.Context, req *replaceContentRequest) (*replaceContentResponse, error) {
+func (f *fileToolSet) replaceContent(
+	_ context.Context,
+	req *replaceContentRequest,
+) (*replaceContentResponse, error) {
 	rsp := &replaceContentResponse{
 		BaseDirectory: f.baseDir,
 		FileName:      req.FileName,
+	}
+	ref, err := fileref.Parse(req.FileName)
+	if err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
+	}
+	if ref.Scheme != "" {
+		rsp.Message = fmt.Sprintf(
+			"Error: replace_content does not support %s:// refs",
+			ref.Scheme,
+		)
+		return rsp, fmt.Errorf(
+			"replace_content does not support %s:// refs",
+			ref.Scheme,
+		)
 	}
 	// Validate old string.
 	if req.OldString == "" {
@@ -46,7 +71,7 @@ func (f *fileToolSet) replaceContent(_ context.Context, req *replaceContentReque
 		return rsp, fmt.Errorf("old_string cannot be empty")
 	}
 	if req.OldString == req.NewString {
-		rsp.Message = "old_string and new_string are the same, no replacements will be made"
+		rsp.Message = "old_string equals new_string; no changes made"
 		return rsp, nil
 	}
 	// Resolve path and ensure it's a regular file.
@@ -57,11 +82,18 @@ func (f *fileToolSet) replaceContent(_ context.Context, req *replaceContentReque
 	}
 	st, err := os.Stat(filePath)
 	if err != nil {
-		rsp.Message = fmt.Sprintf("Error: cannot access file '%s': %v", req.FileName, err)
+		rsp.Message = fmt.Sprintf(
+			"Error: cannot access file '%s': %v",
+			req.FileName,
+			err,
+		)
 		return rsp, fmt.Errorf("accessing file '%s': %w", req.FileName, err)
 	}
 	if st.IsDir() {
-		rsp.Message = fmt.Sprintf("Error: '%s' is a directory, not a file", req.FileName)
+		rsp.Message = fmt.Sprintf(
+			"Error: '%s' is a directory, not a file",
+			req.FileName,
+		)
 		return rsp, fmt.Errorf("target path '%s' is a directory", req.FileName)
 	}
 	// Read file.
@@ -74,7 +106,11 @@ func (f *fileToolSet) replaceContent(_ context.Context, req *replaceContentReque
 	// Check if old string is found.
 	totalCount := strings.Count(content, req.OldString)
 	if totalCount == 0 {
-		rsp.Message = fmt.Sprintf("'%s' not found in '%s'", req.OldString, req.FileName)
+		rsp.Message = fmt.Sprintf(
+			"'%s' not found in '%s'",
+			req.OldString,
+			req.FileName,
+		)
 		return rsp, nil
 	}
 	// Calculate number of replacements.
@@ -86,15 +122,24 @@ func (f *fileToolSet) replaceContent(_ context.Context, req *replaceContentReque
 		numReplacements = totalCount
 	}
 	// Replace old string with new string.
-	newContent := strings.Replace(content, req.OldString, req.NewString, numReplacements)
+	newContent := strings.Replace(
+		content,
+		req.OldString,
+		req.NewString,
+		numReplacements,
+	)
 	// Write back preserving permissions.
 	err = os.WriteFile(filePath, []byte(newContent), st.Mode())
 	if err != nil {
 		rsp.Message = fmt.Sprintf("Error: writing file '%s': %v", req.FileName, err)
 		return rsp, fmt.Errorf("writing file '%s': %w", req.FileName, err)
 	}
-	rsp.Message = fmt.Sprintf("Successfully replaced %d of %d occurrence(s) in '%s'",
-		numReplacements, totalCount, req.FileName)
+	rsp.Message = fmt.Sprintf(
+		"Successfully replaced %d of %d in '%s'",
+		numReplacements,
+		totalCount,
+		req.FileName,
+	)
 	return rsp, nil
 }
 
@@ -103,13 +148,9 @@ func (f *fileToolSet) replaceContentTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		f.replaceContent,
 		function.WithName("replace_content"),
-		function.WithDescription("Replace a specific string in a file to a new string. The tool is designed for "+
-			"precise, targeted modifications and requires sufficient context around old_string to ensure the correct "+
-			"location is modified. "+
-			"The 'file_name' parameter is a relative path from the base directory (e.g., 'subdir/file.txt'). "+
-			"The 'old_string' parameter is the old string to be replaced, support multi-line. "+
-			"The 'new_string' parameter is the new string to replace with, support multi-line. "+
-			"The 'num_replacements' parameter is the maximum number of replacements to perform, "+
-			"defaults to 1. If 'num_replacements' is negative, replace all occurrences."),
+		function.WithDescription(
+			"Replace a string in a file under base_directory. "+
+				"Supports multi-line old_string/new_string.",
+		),
 	)
 }

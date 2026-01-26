@@ -1417,6 +1417,65 @@ func TestGraphNodeInterruptEmitsActivityDelta(t *testing.T) {
 	assert.Equal(t, graphNodeInterruptPatchValue{NodeID: "nodeX", Prompt: "ask"}, delta.Patch[0].Value)
 }
 
+func TestGraphNodeInterruptTopLevelOnlySuppressesNested(t *testing.T) {
+	tr := newTranslatorImplForTest(t,
+		WithGraphNodeInterruptActivityEnabled(true),
+		WithGraphNodeInterruptActivityTopLevelOnly(true),
+	)
+	if tr == nil {
+		return
+	}
+
+	meta := graph.PregelStepMetadata{
+		StepNumber:     3,
+		NodeID:         "nodeX",
+		InterruptValue: "ask",
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:                 "pregel-interrupt-nested",
+		ParentInvocationID: "parent-invocation",
+		Response:           &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyPregel: raw,
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+}
+
+func TestGraphNodeInterruptTopLevelOnlyAllowsTopLevel(t *testing.T) {
+	tr := newTranslatorImplForTest(t,
+		WithGraphNodeInterruptActivityEnabled(true),
+		WithGraphNodeInterruptActivityTopLevelOnly(true),
+	)
+	if tr == nil {
+		return
+	}
+
+	meta := graph.PregelStepMetadata{
+		StepNumber:     3,
+		NodeID:         "nodeX",
+		InterruptValue: "ask",
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "pregel-interrupt-top-level",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyPregel: raw,
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+}
+
 func TestGraphNodeInterruptUnmarshalErrorEmitsRunError(t *testing.T) {
 	tr := newTranslatorImplForTest(t, WithGraphNodeInterruptActivityEnabled(true))
 	if tr == nil {

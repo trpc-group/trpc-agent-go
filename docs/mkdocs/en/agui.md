@@ -666,6 +666,8 @@ server, err := agui.New(
 Here’s an example of usage:
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
 server, err := agui.New(
     runner,
     agui.WithBasePath("/agui"),                // Set the AG-UI prefix route.
@@ -691,6 +693,8 @@ With `GraphAgent`, a single run typically executes multiple nodes along the grap
 This event is disabled by default; enable it via `agui.WithGraphNodeLifecycleActivityEnabled(true)` when constructing the AG-UI server.
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
 server, err := agui.New(
 	runner,
 	agui.WithGraphNodeLifecycleActivityEnabled(true),
@@ -764,6 +768,8 @@ For the node failure end phase (`phase=error`, non-interrupt), it includes an er
 This event is disabled by default; enable it via `agui.WithGraphNodeInterruptActivityEnabled(true)` when constructing the AG-UI server.
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
 server, err := agui.New(
 	runner,
 	agui.WithGraphNodeInterruptActivityEnabled(true),
@@ -793,6 +799,18 @@ server, err := agui.New(
 ```
 
 This event indicates the run is paused at the node. The frontend can render `/interrupt.prompt` as the interrupt UI and use `/interrupt.key` to decide which resume value to provide. `checkpointId` and `lineageId` can be used to resume from the correct checkpoint and correlate runs.
+
+In multi-level GraphAgent setups, subgraph interrupts bubble up and the stream may contain multiple `graph.node.interrupt` events by default. If the client only wants to keep the outermost interrupt used for resuming, enable `agui.WithGraphNodeInterruptActivityTopLevelOnly(true)`; when enabled, only the outermost interrupt event is emitted.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
+server, err := agui.New(
+	runner,
+	agui.WithGraphNodeInterruptActivityEnabled(true),
+	agui.WithGraphNodeInterruptActivityTopLevelOnly(true),
+)
+```
 
 #### Resume ack (`graph.node.interrupt`)
 

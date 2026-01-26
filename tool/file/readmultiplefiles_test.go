@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -16,6 +17,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 )
 
 func TestReadMultipleFiles(t *testing.T) {
@@ -48,7 +53,8 @@ func TestReadMultipleFiles(t *testing.T) {
 	if _, err := os.ReadFile(filepath.Join(base, "noaccess.txt")); err == nil {
 		expectedNoAccess = "data"
 	}
-	// Detect whether the underlying filesystem is case-sensitive within the temp base.
+	// Detect whether the underlying filesystem is case-sensitive within
+	// the temp base.
 	fsCaseSensitive := func(dir string) bool {
 		sub := filepath.Join(dir, "_casesens_check")
 		_ = os.MkdirAll(sub, 0755)
@@ -79,8 +85,16 @@ func TestReadMultipleFiles(t *testing.T) {
 		},
 		{
 			name: "invalid pattern aggregated with valid",
-			// Use exact filenames to avoid unintended matches; plus an invalid pattern.
-			req: readMultipleFilesRequest{Patterns: []string{"[", "a.txt", "foo.txt", "Foo.txt"}},
+			// Use exact filenames to avoid unintended matches; plus
+			// an invalid pattern.
+			req: readMultipleFilesRequest{
+				Patterns: []string{
+					"[",
+					"a.txt",
+					"foo.txt",
+					"Foo.txt",
+				},
+			},
 			expectedContents: map[string]string{
 				"a.txt":   "hello",
 				"foo.txt": "x",
@@ -89,7 +103,10 @@ func TestReadMultipleFiles(t *testing.T) {
 		},
 		{
 			name: "case insensitive",
-			req:  readMultipleFilesRequest{Patterns: []string{"foo*.txt"}, CaseSensitive: false},
+			req: readMultipleFilesRequest{
+				Patterns:      []string{"foo*.txt"},
+				CaseSensitive: false,
+			},
 			expectedContents: map[string]string{
 				"foo.txt": "x",
 				"Foo.txt": "y",
@@ -97,7 +114,10 @@ func TestReadMultipleFiles(t *testing.T) {
 		},
 		{
 			name: "case sensitive",
-			req:  readMultipleFilesRequest{Patterns: []string{"foo*.txt"}, CaseSensitive: true},
+			req: readMultipleFilesRequest{
+				Patterns:      []string{"foo*.txt"},
+				CaseSensitive: true,
+			},
 			expectedContents: map[string]string{
 				"foo.txt": "x",
 			},
@@ -144,8 +164,13 @@ func TestReadMultipleFiles(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// Skip tests that rely on distinct-case filenames when the filesystem is case-insensitive.
-			if (tc.name == "invalid pattern aggregated with valid" || tc.name == "case insensitive" || tc.name == "case sensitive") && !fsCaseSensitive {
+			// Skip tests that rely on distinct-case filenames when
+			// the filesystem is case-insensitive.
+			needsCaseSensitiveFS := tc.name ==
+				"invalid pattern aggregated with valid" ||
+				tc.name == "case insensitive" ||
+				tc.name == "case sensitive"
+			if needsCaseSensitiveFS && !fsCaseSensitive {
 				t.Skip("filesystem is case-insensitive; skipping case-dependent subtest")
 			}
 			opts := []Option{WithBaseDir(base)}
@@ -171,4 +196,147 @@ func TestReadMultipleFiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReadMultipleFiles_WorkspaceRef(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/a.txt",
+			Content:  "a",
+			MIMEType: "text/plain",
+		},
+		{
+			Name:     "out/b.txt",
+			Content:  "b",
+			MIMEType: "text/plain",
+		},
+	})
+
+	rsp, err := fts.readMultipleFiles(ctx, &readMultipleFilesRequest{
+		Patterns: []string{"workspace://out/*.txt"},
+	})
+	assert.NoError(t, err)
+	actual := map[string]string{}
+	for _, f := range rsp.Files {
+		actual[f.FileName] = f.Contents
+	}
+	assert.Equal(t, map[string]string{
+		"workspace://out/a.txt": "a",
+		"workspace://out/b.txt": "b",
+	}, actual)
+
+	rsp, err = fts.readMultipleFiles(ctx, &readMultipleFilesRequest{
+		Patterns: []string{"out/*.txt"},
+	})
+	assert.NoError(t, err)
+	actual = map[string]string{}
+	for _, f := range rsp.Files {
+		actual[f.FileName] = f.Contents
+	}
+	assert.Equal(t, map[string]string{
+		"workspace://out/a.txt": "a",
+		"workspace://out/b.txt": "b",
+	}, actual)
+}
+
+func TestReadMultipleFiles_ArtifactGlobRejected(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	rsp, err := fts.readMultipleFiles(
+		context.Background(),
+		&readMultipleFilesRequest{
+			Patterns: []string{"artifact://x*.txt"},
+		},
+	)
+	assert.NoError(t, err)
+	assert.Empty(t, rsp.Files)
+	assert.Contains(t, rsp.Message, "artifact:// does not support glob")
+}
+
+func TestReadMultipleFiles_ArtifactRef_ReadError(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	rsp, err := fts.readMultipleFiles(
+		context.Background(),
+		&readMultipleFilesRequest{
+			Patterns: []string{"artifact://"},
+		},
+	)
+	assert.NoError(t, err)
+	assert.Len(t, rsp.Files, 1)
+	assert.Equal(t, "artifact://", rsp.Files[0].FileName)
+	assert.Contains(t, rsp.Files[0].Message, "artifact name is empty")
+}
+
+func TestReadMultipleFiles_WorkspacePatternInvalid(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/a.txt",
+			Content:  "a",
+			MIMEType: "text/plain",
+		},
+	})
+
+	rsp, err := fts.readMultipleFiles(ctx, &readMultipleFilesRequest{
+		Patterns: []string{"workspace://["},
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, rsp.Files)
+	assert.Contains(t, rsp.Message, "In finding files matched")
+}
+
+func TestReadMultipleFiles_WorkspaceFileTooLarge(t *testing.T) {
+	set, err := NewToolSet(
+		WithBaseDir(t.TempDir()),
+		WithMaxFileSize(1),
+	)
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/a.txt",
+			Content:  "aa",
+			MIMEType: "text/plain",
+		},
+	})
+
+	rsp, err := fts.readMultipleFiles(ctx, &readMultipleFilesRequest{
+		Patterns: []string{"workspace://out/*.txt"},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, rsp.Files, 1)
+	assert.Equal(t, "workspace://out/a.txt", rsp.Files[0].FileName)
+	assert.Contains(t, rsp.Files[0].Message, "too large")
+}
+
+func TestReadFiles_PathResolveError(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	res := fts.readFiles(
+		context.Background(),
+		[]string{"../evil.txt"},
+	)
+	assert.Len(t, res, 1)
+	assert.Contains(t, res[0].Message, "cannot resolve")
 }

@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -14,16 +15,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 // searchFileRequest represents the input for the search file operation.
 type searchFileRequest struct {
-	Path          string `json:"path" jsonschema:"description=The relative path from the base directory to search in."`
-	Pattern       string `json:"pattern" jsonschema:"description=The pattern to search for."`
-	CaseSensitive bool   `json:"case_sensitive" jsonschema:"description=Whether pattern matching should be case sensitive."`
+	// Path is a relative directory under base_directory.
+	Path string `json:"path"`
+	// Pattern is a glob to match file names.
+	Pattern string `json:"pattern"`
+	// CaseSensitive controls glob case matching.
+	CaseSensitive bool `json:"case_sensitive"`
 }
 
 // searchFileResponse represents the output from the search file operation.
@@ -37,7 +43,10 @@ type searchFileResponse struct {
 }
 
 // searchFile performs the search file operation.
-func (f *fileToolSet) searchFile(_ context.Context, req *searchFileRequest) (*searchFileResponse, error) {
+func (f *fileToolSet) searchFile(
+	ctx context.Context,
+	req *searchFileRequest,
+) (*searchFileResponse, error) {
 	rsp := &searchFileResponse{
 		BaseDirectory: f.baseDir,
 		Path:          req.Path,
@@ -48,8 +57,45 @@ func (f *fileToolSet) searchFile(_ context.Context, req *searchFileRequest) (*se
 		rsp.Message = "Error: pattern cannot be empty"
 		return rsp, fmt.Errorf("pattern cannot be empty")
 	}
+
+	ref, err := fileref.Parse(req.Path)
+	if err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
+	}
+	if ref.Scheme == fileref.SchemeArtifact {
+		rsp.Message = "Error: searching artifact:// is not supported"
+		return rsp, fmt.Errorf("searching artifact:// is not supported")
+	}
+	if ref.Scheme == fileref.SchemeWorkspace {
+		rsp.Path = fileref.WorkspaceRef(ref.Path)
+		files, folders, err := matchWorkspacePaths(
+			ctx,
+			ref.Path,
+			req.Pattern,
+			req.CaseSensitive,
+		)
+		if err != nil {
+			rsp.Message = fmt.Sprintf("Error: %v", err)
+			return rsp, err
+		}
+		rsp.Files = files
+		rsp.Folders = folders
+		rsp.Message = fmt.Sprintf(
+			"Found %d files and %d folders matching pattern "+
+				"'%s' in %s",
+			len(rsp.Files),
+			len(rsp.Folders),
+			req.Pattern,
+			rsp.Path,
+		)
+		return rsp, nil
+	}
+
+	reqPath := strings.TrimSpace(req.Path)
+	rsp.Path = reqPath
 	// Resolve and validate the target path.
-	targetPath, err := f.resolvePath(req.Path)
+	targetPath, err := f.resolvePath(reqPath)
 	if err != nil {
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return rsp, err
@@ -57,13 +103,54 @@ func (f *fileToolSet) searchFile(_ context.Context, req *searchFileRequest) (*se
 	// Check if the target path exists.
 	stat, err := os.Stat(targetPath)
 	if err != nil {
-		rsp.Message = fmt.Sprintf("Error: cannot access path '%s': %v", req.Path, err)
-		return rsp, fmt.Errorf("accessing path '%s': %w", req.Path, err)
+		if os.IsNotExist(err) {
+			wsFiles, wsFolders := listWorkspaceEntries(ctx, reqPath)
+			if len(wsFiles) > 0 || len(wsFolders) > 0 {
+				clean := filepath.Clean(reqPath)
+				if clean == "." {
+					clean = ""
+				}
+				rsp.Path = fileref.WorkspaceRef(clean)
+				files, folders, err := matchWorkspacePaths(
+					ctx,
+					reqPath,
+					req.Pattern,
+					req.CaseSensitive,
+				)
+				if err != nil {
+					rsp.Message = fmt.Sprintf("Error: %v", err)
+					return rsp, err
+				}
+				rsp.Files = files
+				rsp.Folders = folders
+				rsp.Message = fmt.Sprintf(
+					"Found %d files and %d folders matching "+
+						"pattern '%s' in %s",
+					len(rsp.Files),
+					len(rsp.Folders),
+					req.Pattern,
+					rsp.Path,
+				)
+				return rsp, nil
+			}
+		}
+		rsp.Message = fmt.Sprintf(
+			"Error: cannot access path '%s': %v",
+			reqPath,
+			err,
+		)
+		return rsp, fmt.Errorf("accessing path '%s': %w", reqPath, err)
 	}
 	// Check if the target path is a file.
 	if !stat.IsDir() {
-		rsp.Message = fmt.Sprintf("Error: target path '%s' is a file, not a directory", req.Path)
-		return rsp, fmt.Errorf("target path '%s' is a file, not a directory", req.Path)
+		rsp.Message = fmt.Sprintf(
+			"Error: target path '%s' is a file, not a directory",
+			reqPath,
+		)
+		return rsp, fmt.Errorf(
+			"target path '%s' is a file, not a directory",
+			reqPath,
+		)
 	}
 	// Find files matching the pattern.
 	matches, err := f.matchFiles(targetPath, req.Pattern, req.CaseSensitive)
@@ -79,15 +166,20 @@ func (f *fileToolSet) searchFile(_ context.Context, req *searchFileRequest) (*se
 			// Skip entries that can't be stat.
 			continue
 		}
-		relativePath := filepath.Join(req.Path, match)
+		relativePath := filepath.Join(reqPath, match)
 		if stat.IsDir() {
 			rsp.Folders = append(rsp.Folders, relativePath)
 		} else {
 			rsp.Files = append(rsp.Files, relativePath)
 		}
 	}
-	rsp.Message = fmt.Sprintf("Found %d files and %d folders matching pattern '%s' in %s",
-		len(rsp.Files), len(rsp.Folders), req.Pattern, targetPath)
+	rsp.Message = fmt.Sprintf(
+		"Found %d files and %d folders matching '%s' in %s",
+		len(rsp.Files),
+		len(rsp.Folders),
+		req.Pattern,
+		targetPath,
+	)
 	return rsp, nil
 }
 
@@ -96,16 +188,9 @@ func (f *fileToolSet) searchFileTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		f.searchFile,
 		function.WithName("search_file"),
-		function.WithDescription("Searches for files and folders matching the given pattern in a specified directory, "+
-			"and returns separate lists for files and folders. "+
-			"The 'path' parameter specifies the directory to search in, relative to the base directory "+
-			"(e.g., 'subdir', 'subdir/nested'). "+
-			"If 'path' is empty or not provided, searches in the base directory. "+
-			"If 'path' points to a file instead of a directory, returns an error. "+
-			"Supports both recursive ('**') and non-recursive ('*') glob patterns. "+
-			"The 'case_sensitive' parameter controls whether pattern matching is case sensitive, false by default. "+
-			"Pattern examples: '*.txt' (all txt files), 'file*.csv' (csv files starting with 'file'), "+
-			"'subdir/*.go' (go files in subdir), '**/*.go' (all go files recursively), '*data*' (filename or "+
-			"directory containing 'data'). If the pattern is empty or not provided, returns an error."),
+		function.WithDescription(
+			"Find files by glob under base_directory. "+
+				"Supports workspace:// paths.",
+		),
 	)
 }

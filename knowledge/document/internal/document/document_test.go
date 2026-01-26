@@ -16,9 +16,10 @@ import (
 
 func TestGenerateDocumentID(t *testing.T) {
 	name := "My Test Document"
-	id := GenerateDocumentID(name)
+	content := "test content"
+	id := GenerateDocumentID(name, content)
 
-	// Expect name spaces replaced with underscores followed by timestamp.
+	// Expect name spaces replaced with underscores followed by content hash and random bytes.
 	if !strings.HasPrefix(id, "My_Test_Document_") {
 		t.Fatalf("unexpected id prefix: %s", id)
 	}
@@ -26,6 +27,12 @@ func TestGenerateDocumentID(t *testing.T) {
 	// ID should not contain spaces.
 	if strings.Contains(id, " ") {
 		t.Fatalf("id should not contain spaces: %s", id)
+	}
+
+	// Generate another ID with same content - should be different due to random bytes.
+	id2 := GenerateDocumentID(name, content)
+	if id == id2 {
+		t.Fatalf("IDs should be unique even for same content: %s == %s", id, id2)
 	}
 }
 

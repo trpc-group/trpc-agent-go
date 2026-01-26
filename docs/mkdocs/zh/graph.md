@@ -735,6 +735,20 @@ Model，LLM）消息（例如用于用户界面（User Interface，UI）的流�
 `agent.WithStreamMode(...)` 作为统一开关（见下文“事件监控”）。当选择
 `agent.StreamModeMessages` 时，Runner 会为本次运行自动开启 Graph 的最终响应事件输出。
 
+小贴士：解析 JSON/结构化文本（流式）
+
+- 流式分片（`choice.Delta.Content`）是增量输出，在模型调用结束前不保证能组成合法
+  JSON。
+- 如果你需要解析 JSON（或其他结构化文本），请不要对每个分片直接
+  `json.Unmarshal`。推荐先缓存完整字符串，再统一解析。
+
+常见做法：
+
+- **图内解析**：在下游节点从 `node_responses[nodeID]`（或严格串行流程里的
+  `last_response`）读取完整输出后再解析，因为这些值只会在节点完成后才写入状态。
+- **图外解析**（事件消费端）：累计 `Delta.Content`，在看到非 partial 的最终消息
+  （`choice.Message.Content`）或流程结束后再解析。
+
 #### 三种输入范式
 
 - OneShot（`StateKeyOneShotMessages`）：
@@ -937,11 +951,18 @@ graphAgent, err := graphagent.New(
 	graphagent.WithAgentCallbacks(&agent.Callbacks{
 		// Agent 级回调配置
 	}),
+	// 执行器高级配置选项，详见下方"执行器高级配置"章节
+	// graphagent.WithExecutorOptions(...),
 )
 ```
 
 > 模型/工具回调需要在节点级配置，例如 `AddLLMNode(..., graph.WithModelCallbacks(...))`
 > 或 `AddToolsNode(..., graph.WithToolCallbacks(...))`。
+>
+> **回调优先级**：当同时存在节点级和状态级回调时：
+> - 节点配置的回调（通过 `WithModelCallbacks`/`WithToolCallbacks`）优先级更高。
+> - 状态级回调（通过 `StateKeyModelCallbacks`/`StateKeyToolCallbacks`）作为兜底回调使用。
+> 这允许图级配置在需要时覆盖运行时状态。
 
 使用会话摘要的注意事项：
 
@@ -994,6 +1015,37 @@ ga := graphagent.New(
 - 自定义格式化器应确保摘要可与其他消息清楚地区分开
 - 默认格式设计为与大多数模型和使用场景兼容
 - 当使用 `WithAddSessionSummary(false)` 时，格式化器永远不会被调用
+
+#### 执行器高级配置
+
+`WithExecutorOptions` 允许您直接透传执行器选项，以配置 GraphAgent 底层执行器的行为。这对于需要精细控制执行器行为的场景非常有用，例如：
+
+- **超时控制**：为长时间运行的节点（如 agent tool 节点）设置合适的超时时间
+- **步数限制**：限制图执行的最大步数，防止无限循环
+- **重试策略**：配置默认的重试策略
+
+**使用示例：**
+
+```go
+graphAgent, err := graphagent.New("my-agent", compiledGraph,
+	graphagent.WithDescription("工作流描述"),
+	// 透传执行器选项
+	graphagent.WithExecutorOptions(
+		graph.WithMaxSteps(50),                          // 最大步数限制
+		graph.WithStepTimeout(5*time.Minute),            // 每个步骤的超时时间
+		graph.WithNodeTimeout(2*time.Minute),            // 单个节点的超时时间
+		graph.WithCheckpointSaveTimeout(30*time.Second), // 检查点保存超时
+		graph.WithDefaultRetryPolicy(                    // 默认重试策略
+			graph.WithSimpleRetry(3),
+		),
+	),
+)
+```
+
+**注意事项：**
+
+- `WithExecutorOptions` 中的选项会在映射选项（`ChannelBufferSize`、`MaxConcurrency`、`CheckpointSaver`）之后应用，因此可以覆盖这些映射选项
+- 如果不设置 `WithStepTimeout`，`WithNodeTimeout` 也不会自动推导（默认无超时）
 
 #### 并发使用注意事项
 
@@ -1294,6 +1346,8 @@ sg.AddMultiConditionalEdges(
 
 说明：
 
+- 与其他路由一样，扇出的目标节点会在 **下一步** BSP 超步（superstep）才变为可运行
+  （router 节点完成之后）。这会影响端到端延迟，见下文“BSP 超步屏障”。
 - 返回结果会先去重，同一分支键在同一步内只触发一次；
 - 每个分支键的解析优先级与单条件路由一致：
   1. 条件边 `pathMap`；2) 节点 Ends；3) 直接当作节点 ID；
@@ -2322,6 +2376,50 @@ sg.AddJoinEdge([]string{nodeA, nodeB}, nodeJoin)
   无需显式添加这两条边。
 
 常量名：`graph.Start == "__start__"`，`graph.End == "__end__"`。
+
+#### BSP 超步屏障（为什么下游会等待）
+
+Graph 的执行模型是 **BSP 超步（superstep）**：计划（Planning）→ 执行（Execution）
+→ 合并（Update）。在每一个超步中：
+
+- 计划阶段：基于“上一超步”更新过的通道（channel）计算可运行节点集合；
+- 执行阶段：把可运行节点并发执行（并发上限由 `WithMaxConcurrency` 控制）；
+- 合并阶段：合并状态更新（Reducer）并应用路由信号（写通道）。
+
+下一超步只有在“当前超步”的所有节点都执行结束后才会开始。又因为路由信号在合并阶段
+才生效，所以某个下游节点即使在逻辑上“已经 ready”，也只能在 **下一步** 超步才开始
+执行。
+
+这会表现为一种看似“按层执行”的效果：深度更深的节点会等待同一层（同一超步）里的
+其他分支完成，即使它们之间没有依赖关系。
+
+示例图：
+
+```mermaid
+flowchart LR
+    S[split] --> B[branch_b]
+    B --> C[branch_b_next]
+    S --> E[branch_e]
+    S --> F[branch_f]
+```
+
+运行时：
+
+- 超步 0：`split`
+- 超步 1：`branch_b`、`branch_e`、`branch_f` 并行
+- 超步 2：`branch_b_next` 执行（尽管它只依赖 `branch_b`）
+
+实用建议：
+
+- **减少超步数**：若 `X → Y` 永远顺序执行，考虑把它们合并到一个节点里，避免为每一段
+  串行链路额外支付一个超步。
+- **避免额外的 prepare 节点**：如果只是想给某个节点补充输入，优先把准备逻辑挪到该
+  节点内部，或在该节点上使用 `graph.WithPreNodeCallback`。
+- **并行场景下不要从 `last_response` 读取某个分支的输出**：请使用
+  `node_responses[nodeID]`（或自定义独立状态键）来实现稳定的 fan-in/选择逻辑。
+- **选择合适的汇聚语义**：
+  - `AddEdge(from, to)` 适合增量触发（`to` 可能执行多次）；
+  - `AddJoinEdge([...], to)` 适合“等待全部，再执行一次”。
 
 ### 消息可见性选项
 当前Agent可在需要时根据不同场景控制其对其他Agent生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
@@ -3369,6 +3467,54 @@ _ = cm.DeleteLineage(ctx, lineageID)
 
 建议在生产中为 `namespace` 使用稳定的业务标识（如 `svc:prod:flowX`），便于审计与对账。
 
+#### 时间旅行：读取/编辑 State
+
+从检查点恢复可以做“时间旅行”（回到任意 checkpoint 继续跑）。在 HITL 和调试场景里，你通常还需要：在某个 checkpoint 上把 state 改掉，然后从这个点继续跑。
+
+关键点：恢复时，执行器会先用 checkpoint 的 state 还原；`runtime_state` 不会覆盖 checkpoint 里已有的 key，只会补齐缺失且非内部的 key。要改“已有 key”，需要写一个新的 checkpoint。
+
+使用 `graph.TimeTravel`：
+
+```go
+// 如果你使用 GraphAgent：
+tt, _ := ga.TimeTravel()
+// 或者如果你直接拿到 Executor：
+// tt, _ := exec.TimeTravel()
+
+base := graph.CheckpointRef{
+    LineageID:    lineageID,
+    Namespace:    namespace,
+    CheckpointID: checkpointID, // 为空表示 "latest"
+}
+
+// 读取 checkpoint 的 state（会按 schema 还原类型）。
+snap, _ := tt.GetState(ctx, base)
+
+// 基于 base 写一个 "update" checkpoint，并应用 state patch。
+newRef, _ := tt.EditState(ctx, base, graph.State{
+    "counter": 42,
+})
+
+// 从更新后的 checkpoint 恢复（如有需要同时提供 resume 值）。
+cmd := graph.NewResumeCommand().
+    AddResumeValue("review_key", "approved")
+
+rs := newRef.ToRuntimeState()
+rs[graph.StateKeyCommand] = cmd
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(rs),
+)
+```
+
+注意：
+
+- `EditState` 会写入一个新 checkpoint：`Source="update"` 且 `ParentCheckpointID=base`。
+- 默认禁止编辑内部 key；如确有需要再使用 `graph.WithAllowInternalKeys()`。
+- 更新 checkpoint 会写入 metadata key：`graph.CheckpointMetaKeyBaseCheckpointID` 与 `graph.CheckpointMetaKeyUpdatedKeys`。
+
+可运行示例：`examples/graph/time_travel_edit_state`。
+
 ### 默认值与注意事项
 
 - 默认值（Executor）
@@ -3448,14 +3594,15 @@ sg.AddNode(nodeReview, func(ctx context.Context, s graph.State) (any, error) {
 })
 
 // 恢复执行（需要 import agent 包）
+cmd := graph.NewResumeCommand().
+    AddResumeValue(interruptKeyReview, "approved")
+
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
         graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: checkpointID,
-        graph.StateKeyResumeMap: map[string]any{
-            "review_key": "approved",
-        },
+        graph.StateKeyCommand:    cmd,
     }),
 )
 ```

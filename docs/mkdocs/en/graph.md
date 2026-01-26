@@ -743,6 +743,22 @@ Model (LLM) messages, you can enable `agent.WithStreamMode(...)` (see
 "Event Monitoring"). When `agent.StreamModeMessages` is selected, graph LLM
 nodes enable final model responses automatically for that run.
 
+Tip: parsing JSON / structured output from streaming
+
+- Streaming chunks (`choice.Delta.Content`) are incremental and are not
+  guaranteed to form valid JSON until the end of the model call.
+- If you need to parse JSON (or any structured text), do not `json.Unmarshal`
+  per chunk. Buffer and parse once you have the full string.
+
+Common approaches:
+
+- **Inside the graph**: parse in a downstream node from
+  `node_responses[nodeID]` (or `last_response` in strictly serial flows),
+  because those values are only set after the node finishes.
+- **Outside the graph** (event consumer): accumulate `Delta.Content` and parse
+  when you see a non-partial response that carries `choice.Message.Content`
+  (or when the workflow finishes).
+
 #### Three input paradigms
 
 - OneShot (`StateKeyOneShotMessages`):
@@ -871,11 +887,18 @@ graphAgent, err := graphagent.New(
     graphagent.WithAgentCallbacks(&agent.Callbacks{
         // Agent-level callbacks.
     }),
+    // Executor advanced configuration options, see "Executor Advanced Configuration" section below
+    // graphagent.WithExecutorOptions(...),
 )
 ```
 
 > Model/tool callbacks are configured per node, e.g. `AddLLMNode(..., graph.WithModelCallbacks(...))`
 > or `AddToolsNode(..., graph.WithToolCallbacks(...))`.
+>
+> **Callback Precedence**: When both node-level and state-level callbacks are present:
+> - Node-configured callbacks (via `WithModelCallbacks`/`WithToolCallbacks`) take precedence.
+> - State-level callbacks (via `StateKeyModelCallbacks`/`StateKeyToolCallbacks`) are used as a fallback.
+> This allows graph-level configuration to override runtime state when needed.
 
 Session summary notes:
 
@@ -926,6 +949,37 @@ ga := graphagent.New(
 - Custom formatters should ensure that the summary is clearly distinguishable from other messages
 - The default format is designed to be compatible with most models and use cases
 - When `WithAddSessionSummary(false)` is used, the formatter is never invoked
+
+#### Executor Advanced Configuration
+
+`WithExecutorOptions` allows you to pass executor options directly to configure the behavior of the underlying executor. This is useful for scenarios that require fine-grained control over executor behavior, such as:
+
+- **Timeout Control**: Set appropriate timeout durations for long-running nodes (e.g., agent tool nodes)
+- **Step Limits**: Limit the maximum number of steps in graph execution to prevent infinite loops
+- **Retry Policies**: Configure default retry policies
+
+**Usage Example:**
+
+```go
+graphAgent, err := graphagent.New("my-agent", compiledGraph,
+	graphagent.WithDescription("Workflow description"),
+	// Pass executor options directly
+	graphagent.WithExecutorOptions(
+		graph.WithMaxSteps(50),                          // max steps limit
+		graph.WithStepTimeout(5*time.Minute),            // timeout per step
+		graph.WithNodeTimeout(2*time.Minute),            // timeout per node
+		graph.WithCheckpointSaveTimeout(30*time.Second), // checkpoint save timeout
+		graph.WithDefaultRetryPolicy(                    // default retry policy
+			graph.WithSimpleRetry(3),
+		),
+	),
+)
+```
+
+**Notes:**
+
+- Options passed via `WithExecutorOptions` are applied after mapped options (`ChannelBufferSize`, `MaxConcurrency`, `CheckpointSaver`), so they can override those settings if needed
+- If `WithStepTimeout` is not set, `WithNodeTimeout` will not be automatically derived (defaults to no timeout)
 
 #### Concurrency considerations
 
@@ -1244,6 +1298,9 @@ sg.AddMultiConditionalEdges(
 
 Notes:
 
+- Like other routing, targets become runnable in the **next** BSP superstep
+  (after the router node finishes). This can affect latency; see “BSP superstep
+  barrier” below.
 - Results are de‑duplicated before triggering; repeated keys do not trigger a
   target more than once in the same step.
 - Resolution precedence for each branch key mirrors single‑conditional routing:
@@ -2343,6 +2400,54 @@ triggers, so the same join can be reached again in loops.
 
 Reference example: `examples/graph/join_edge`.
 
+#### BSP superstep barrier (why downstream waits)
+
+Graph executes workflows in **BSP supersteps** (Planning → Execution → Update).
+In each superstep:
+
+- Planning computes the runnable frontier from channels updated in the previous
+  superstep.
+- Execution runs all runnable nodes concurrently (up to `WithMaxConcurrency`).
+- Update merges state updates and applies routing signals (channel writes).
+
+The next superstep starts only after **all** nodes in the current superstep
+finish. Because routing signals are applied in Update, a node triggered by an
+upstream completion always becomes runnable in the **next** superstep.
+
+This can look like “depth‑K nodes wait for depth‑(K‑1) nodes”, even across
+independent branches.
+
+Example graph:
+
+```mermaid
+flowchart LR
+    S[split] --> B[branch_b]
+    B --> C[branch_b_next]
+    S --> E[branch_e]
+    S --> F[branch_f]
+```
+
+Runtime behavior:
+
+- Superstep 0: `split`
+- Superstep 1: `branch_b`, `branch_e`, `branch_f` run in parallel
+- Superstep 2: `branch_b_next` runs (even though it only depends on `branch_b`)
+
+Practical tips:
+
+- **Reduce supersteps**: if `X → Y` is always sequential, consider collapsing it
+  into one node so you don’t pay an extra superstep.
+- **Avoid extra “prepare” nodes** when you only need to enrich a single node’s
+  input: move the preparation into the node, or use `graph.WithPreNodeCallback`
+  on that node.
+- **Use stable per-branch outputs** in parallel flows: avoid reading a specific
+  branch from `last_response`; use `node_responses[nodeID]` (or dedicated state
+  keys) so fan-in logic does not depend on scheduling.
+- **Choose the right fan-in**:
+  - Use `AddEdge(from, to)` when `to` should react to incremental updates (it
+    may run multiple times).
+  - Use `AddJoinEdge([...], to)` when you need “wait for all, then run once”.
+
 Tip: setting entry and finish points implicitly connects to virtual Start/End nodes:
 
 - `SetEntryPoint("first")` is equivalent to Start → first.
@@ -2359,11 +2464,11 @@ TIPS:
 - Messages from different sessionIDs are never visible to each other under any circumstances. The following control strategies only apply to messages sharing the same sessionID.
 - Invocation.Message always visible regardless of the configuration.
 - The related configuration only controls the initial value of State[graph.StateKeyMessages].
-- The messages generated by the Agent node have a filterKey corresponding to the subAgent name. As a result, when using IsolatedRequestor IsolatedInvocationfor filtering, these messages are not visible to the current graphAgent.
+- The messages generated by the Agent node have a filterKey corresponding to the subAgent name. As a result, when using `IsolatedRequest` or `IsolatedInvocation` for filtering, these messages are not visible to the current GraphAgent.
 - When the option is not configured, the default value is FullContext.
 
 Config:
-- `llmagent.WithMessageFilterMode(MessageFilterMode)`:
+- `graphagent.WithMessageFilterMode(MessageFilterMode)`:
   - `FullContext`: Includes historical messages and messages generated in the current request, filtered by prefix matching with the filterKey.
   - `RequestContext`: Only includes messages generated in the current request, filtered by prefix matching with the filterKey.
   - `IsolatedRequest`: Only includes messages generated in the current request, filtered by exact matching with the filterKey.
@@ -2773,7 +2878,7 @@ exec, err := graph.NewExecutor(g,
 - Defaults (Executor)
 
   - `ChannelBufferSize = 256`, `MaxSteps = 100`, `MaxConcurrency = GOMAXPROCS(0)`, `CheckpointSaveTimeout = 10s`
-  - Per‑step/node timeouts are available on `Executor` via `WithStepTimeout` / `WithNodeTimeout` (not exposed by `GraphAgent` options yet)
+  - Per‑step/node timeouts are available via `WithExecutorOptions` when creating `GraphAgent` (see "Executor Advanced Configuration" section above), or directly on `Executor` via `WithStepTimeout` / `WithNodeTimeout`
 
 - Sessions
   - Prefer Redis session backend in production; set TTLs and cleanup
@@ -3435,6 +3540,54 @@ _ = cm.DeleteLineage(ctx, lineageID)
 
 Use a stable business identifier for `namespace` in production (e.g., `svc:prod:flowX`) for clear auditing.
 
+#### Time Travel: Read / Edit State
+
+Resuming from a checkpoint gives you "time travel" (rewind to any checkpoint and continue). For HITL and debugging, you often want one extra step: edit the state at a checkpoint and keep running from there.
+
+Important detail: on resume, the executor restores state from the checkpoint first. `runtime_state` does not override existing checkpoint keys; it only fills missing non-internal keys. If you need to change an existing key, you must write a new checkpoint.
+
+Use `graph.TimeTravel`:
+
+```go
+// If you're using GraphAgent:
+tt, _ := ga.TimeTravel()
+// Or if you have a raw executor:
+// tt, _ := exec.TimeTravel()
+
+base := graph.CheckpointRef{
+    LineageID:    lineageID,
+    Namespace:    namespace,
+    CheckpointID: checkpointID, // empty means "latest"
+}
+
+// Read checkpointed state (types restored using the graph schema).
+snap, _ := tt.GetState(ctx, base)
+
+// Write an "update" checkpoint derived from base with patched state.
+newRef, _ := tt.EditState(ctx, base, graph.State{
+    "counter": 42,
+})
+
+// Resume from the updated checkpoint (and provide resume values if needed).
+cmd := graph.NewResumeCommand().
+    AddResumeValue("review_key", "approved")
+
+rs := newRef.ToRuntimeState()
+rs[graph.StateKeyCommand] = cmd
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(rs),
+)
+```
+
+Notes:
+
+- `EditState` writes a new checkpoint with `Source="update"` and `ParentCheckpointID=base`.
+- Internal keys are blocked by default; use `graph.WithAllowInternalKeys()` only if you know what you're doing.
+- Updated checkpoints include metadata keys: `graph.CheckpointMetaKeyBaseCheckpointID` and `graph.CheckpointMetaKeyUpdatedKeys`.
+
+Runnable example: `examples/graph/time_travel_edit_state`.
+
 ### Events at a Glance
 
 - Authors
@@ -3487,14 +3640,15 @@ sg.AddNode(nodeReview, func(ctx context.Context, s graph.State) (any, error) {
 })
 
 // Resume execution (requires the agent package)
+cmd := graph.NewResumeCommand().
+    AddResumeValue(interruptKeyReview, "approved")
+
 eventCh, err := r.Run(ctx, userID, sessionID,
     model.NewUserMessage("resume"),
     agent.WithRuntimeState(map[string]any{
         graph.CfgKeyLineageID:    lineageID,
         graph.CfgKeyCheckpointID: checkpointID,
-        graph.StateKeyResumeMap: map[string]any{
-            "review_key": "approved",
-        },
+        graph.StateKeyCommand:    cmd,
     }),
 )
 ```

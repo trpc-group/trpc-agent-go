@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -318,9 +319,11 @@ func WithNodeCallbacks(callbacks *NodeCallbacks) Option {
 	}
 }
 
-// WithToolCallbacks sets multiple callbacks for this specific node.
-// This allows setting tool callbacks directly on the node.
-// It's effect just for tool node.
+// WithToolCallbacks sets tool callbacks for this specific node.
+// This allows configuring tool callbacks at the node level.
+// When both node-level and state-level callbacks are present, node-level
+// callbacks take precedence.
+// This option is only effective for tool nodes.
 func WithToolCallbacks(callbacks *tool.Callbacks) Option {
 	return func(node *Node) {
 		node.toolCallbacks = callbacks
@@ -404,10 +407,11 @@ func WithSubgraphInputFromLastResponse() Option {
 	}
 }
 
-// WithSubgraphEventScope customizes the child invocation's filter scope segment.
-// Docs note: Scope may be hierarchical (can include '/'). If empty, it
-// defaults to the child agent name. The final filterKey becomes
-// parent/scope/<uuid>.
+// WithSubgraphEventScope customizes the child's event filter scope.
+// Docs note: Scope may be hierarchical (can include '/').
+// If empty, it defaults to the child agent name.
+// The final filterKey becomes parent/scope (no UUID).
+// This keeps the filterKey stable across turns.
 func WithSubgraphEventScope(scope string) Option {
 	return func(node *Node) {
 		node.agentEventScope = scope
@@ -1451,7 +1455,10 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 			config.Response = customResponse
 		}
 	}
-
+	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
+		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+		jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, config.Response)
+	}
 	llmEvent := event.NewResponseEvent(
 		config.InvocationID,
 		modelResponseAuthor(config),
@@ -1591,6 +1598,8 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 	}
 	// Capture whether to execute tools in parallel.
 	parallel := node.enableParallelTools
+	// Capture tool callbacks configured on the node.
+	configuredCallbacks := node.toolCallbacks
 
 	return func(ctx context.Context, state State) (any, error) {
 		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
@@ -1619,6 +1628,12 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			)
 		}
 
+		// Determine which callbacks to use: node-configured takes precedence over state.
+		toolCallbacks := configuredCallbacks
+		if toolCallbacks == nil {
+			toolCallbacks, _ = extractToolCallbacks(state)
+		}
+
 		// Process all tool calls and collect results.
 		newMessages, err := processToolCalls(ctx, toolCallsConfig{
 			ToolCalls:      toolCalls,
@@ -1628,6 +1643,7 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			Span:           span,
 			State:          state,
 			EnableParallel: parallel,
+			ToolCallbacks:  toolCallbacks,
 		})
 		if err != nil {
 			workflow.Error = err
@@ -2401,6 +2417,7 @@ func runBeforeToolPluginCallbacks(
 	ctx context.Context,
 	toolCall model.ToolCall,
 	decl *tool.Declaration,
+	state State,
 ) (context.Context, model.ToolCall, any, error) {
 	invocation, ok := agent.InvocationFromContext(ctx)
 	if !ok || invocation == nil || invocation.Plugins == nil {
@@ -2411,12 +2428,16 @@ func runBeforeToolPluginCallbacks(
 	if callbacks == nil {
 		return ctx, toolCall, nil, nil
 	}
+	resumeValue, _ := GetStateValue[any](state, ResumeChannel)
+	resumeMap, _ := GetStateValue[map[string]any](state, StateKeyResumeMap)
 
 	args := &tool.BeforeToolArgs{
 		ToolCallID:  toolCall.ID,
 		ToolName:    toolCall.Function.Name,
 		Declaration: decl,
 		Arguments:   toolCall.Function.Arguments,
+		ResumeValue: resumeValue,
+		ResumeMap:   resumeMap,
 	}
 	result, err := callbacks.RunBeforeTool(ctx, args)
 
@@ -2445,16 +2466,21 @@ func runBeforeToolCallbacks(
 	toolCall model.ToolCall,
 	decl *tool.Declaration,
 	toolCallbacks *tool.Callbacks,
+	state State,
 ) (context.Context, model.ToolCall, any, error) {
 	if toolCallbacks == nil {
 		return ctx, toolCall, nil, nil
 	}
+	resumeValue, _ := GetStateValue[any](state, ResumeChannel)
+	resumeMap, _ := GetStateValue[map[string]any](state, StateKeyResumeMap)
 
 	args := &tool.BeforeToolArgs{
 		ToolCallID:  toolCall.ID,
 		ToolName:    toolCall.Function.Name,
 		Declaration: decl,
 		Arguments:   toolCall.Function.Arguments,
+		ResumeValue: resumeValue,
+		ResumeMap:   resumeMap,
 	}
 	result, err := toolCallbacks.RunBeforeTool(ctx, args)
 	if result != nil && result.Context != nil {
@@ -2585,15 +2611,19 @@ func runTool(
 	toolCall model.ToolCall,
 	toolCallbacks *tool.Callbacks,
 	t tool.Tool,
+	state State,
 ) (context.Context, any, []byte, error) {
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
-
+	if invocation, ok := agent.InvocationFromContext(ctx); ok && jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
+	}
 	decl := t.Declaration()
 
 	ctx, toolCall, customResult, err := runBeforeToolPluginCallbacks(
 		ctx,
 		toolCall,
 		decl,
+		state,
 	)
 	if err != nil {
 		return ctx, customResult, toolCall.Function.Arguments, err
@@ -2607,6 +2637,7 @@ func runTool(
 		toolCall,
 		decl,
 		toolCallbacks,
+		state,
 	)
 	if err != nil {
 		return ctx, customResult, toolCall.Function.Arguments, err
@@ -2905,11 +2936,18 @@ type toolCallsConfig struct {
 	// EnableParallel controls whether multiple tool calls are executed concurrently.
 	// When false or when there is only one tool call, execution is serial.
 	EnableParallel bool
+	// ToolCallbacks specifies tool callbacks to use.
+	// If nil, callbacks will be extracted from State.
+	ToolCallbacks *tool.Callbacks
 }
 
 // processToolCalls executes all tool calls and returns the resulting messages.
 func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Message, error) {
-	toolCallbacks, _ := extractToolCallbacks(config.State)
+	// Use callbacks from config if provided; otherwise extract from state.
+	toolCallbacks := config.ToolCallbacks
+	if toolCallbacks == nil {
+		toolCallbacks, _ = extractToolCallbacks(config.State)
+	}
 	// Serial path or single tool call.
 	if !config.EnableParallel || len(config.ToolCalls) <= 1 {
 		newMessages := make([]model.Message, 0, len(config.ToolCalls))
@@ -3044,7 +3082,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	// Execute the tool with callbacks and get modified arguments.
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
-	ctx, result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
+	ctx, result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t, config.State)
 
 	// Emit tool execution start event with modified arguments.
 	emitToolStartEvent(
@@ -3058,6 +3096,10 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		if errors.As(err, &interruptErr) {
 			// Do not emit error payload for interrupt so clients treat it as pause.
 			eventErr = nil
+			if result == nil {
+				// Set result to interrupt value when no result is provided.
+				result = interruptErr.Value
+			}
 		}
 	}
 	// Emit tool execution complete event.
