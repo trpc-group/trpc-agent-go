@@ -46,12 +46,17 @@ func main() {
 		flagSuite = flag.String(
 			"suite",
 			suiteAll,
-			"tool | agent | all",
+			"tool | agent | all | token-report",
 		)
 		flagModel = flag.String(
 			"model",
 			defaultModel(),
 			"Model name for agent suite",
+		)
+		flagTokenReportAllDocs = flag.Bool(
+			"token-report-all-docs",
+			true,
+			"In token-report suite, preload all docs for all skills",
 		)
 		flagSkipDocCases = flag.Bool(
 			"skip-doc-cases",
@@ -83,9 +88,13 @@ func main() {
 	workRoot := resolveDefaultUnderParent(*flagWorkRoot, defaultWorkName)
 	toolWorkRoot := filepath.Join(workRoot, suiteTool)
 	agentWorkRoot := filepath.Join(workRoot, suiteAgent)
+	tokenWorkRoot := filepath.Join(workRoot, suiteTokenReport)
 
 	suite := strings.ToLower(strings.TrimSpace(*flagSuite))
-	if suite != suiteTool && suite != suiteAgent && suite != suiteAll {
+	if suite != suiteTool &&
+		suite != suiteAgent &&
+		suite != suiteAll &&
+		suite != suiteTokenReport {
 		must(fmt.Errorf("unknown suite: %q", suite), "flags")
 	}
 
@@ -119,6 +128,25 @@ func main() {
 			),
 			"tool suite",
 		)
+	}
+
+	if suite == suiteTokenReport {
+		must(checkAgentEnv(*flagModel), "agent env")
+		exec := localexec.New(localexec.WithWorkDir(tokenWorkRoot))
+		must(
+			runTokenReportSuite(
+				repo,
+				exec,
+				tokenWorkRoot,
+				*flagModel,
+				*flagTokenReportAllDocs,
+				*flagDebug,
+				progress,
+			),
+			"token report suite",
+		)
+		fmt.Println("PASS")
+		return
 	}
 
 	if suite == suiteAgent || suite == suiteAll {

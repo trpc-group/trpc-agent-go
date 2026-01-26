@@ -17,9 +17,10 @@ const (
 	defaultAppName = "anthropic-skills-bench"
 	defaultUserID  = "bench"
 
-	suiteTool  = "tool"
-	suiteAgent = "agent"
-	suiteAll   = "all"
+	suiteTool        = "tool"
+	suiteAgent       = "agent"
+	suiteAll         = "all"
+	suiteTokenReport = "token-report"
 
 	envModelName     = "MODEL_NAME"
 	fallbackModel    = "gpt-5"

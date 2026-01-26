@@ -28,6 +28,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/planner/react"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	skillrepo "trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
@@ -56,6 +58,14 @@ type runCapture struct {
 	ToolCalls   []toolCall
 	ToolResults []toolResult
 	AnswerText  string
+	Usage       usageTotals
+}
+
+type usageTotals struct {
+	Steps            int
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
 }
 
 func checkAgentEnv(modelName string) error {
@@ -150,6 +160,142 @@ func runAgentSuite(
 	}
 	progressf(progress, "✅ Agent Suite PASS")
 	return nil
+}
+
+const (
+	stateValueLoaded  = "1"
+	stateValueAllDocs = "*"
+)
+
+func runTokenReportSuite(
+	repo skillrepo.Repository,
+	exec codeexecutor.CodeExecutor,
+	workRoot string,
+	modelName string,
+	allDocs bool,
+	debug bool,
+	progress bool,
+) error {
+	agt := newBenchAgent(repo, exec, modelName)
+	svc := inmemory.NewSessionService()
+	r := runner.NewRunner(
+		defaultAppName,
+		agt,
+		runner.WithSessionService(svc),
+	)
+	defer r.Close()
+
+	progressf(progress, "📊 Token Report Suite")
+	progressf(progress, "  Model: %s", modelName)
+	progressf(progress, "  Scenario: %s", scenarioBrandLanding)
+	progressf(progress, "  Full injection docs: %t", allDocs)
+
+	progressf(progress, "  Mode A: progressive disclosure")
+	progressiveSession := agentSessionPrefix + "token-a-" +
+		scenarioBrandLanding
+	a, err := runBrandLandingForTokenReport(
+		r,
+		repo,
+		workRoot,
+		progressiveSession,
+		debug,
+		progress,
+	)
+	if err != nil {
+		return fmt.Errorf("progressive: %w", err)
+	}
+
+	progressf(progress, "  Mode B: full injection (all skills)")
+	fullSession := agentSessionPrefix + "token-b-" +
+		scenarioBrandLanding
+	if err := createAllSkillsSession(
+		svc,
+		fullSession,
+		repo,
+		allDocs,
+	); err != nil {
+		return fmt.Errorf("full injection: %w", err)
+	}
+	b, err := runBrandLandingForTokenReport(
+		r,
+		repo,
+		workRoot,
+		fullSession,
+		debug,
+		progress,
+	)
+	if err != nil {
+		return fmt.Errorf("full injection: %w", err)
+	}
+
+	printTokenComparison(a.Usage, b.Usage, progress)
+	return nil
+}
+
+func createAllSkillsSession(
+	svc session.Service,
+	sessionID string,
+	repo skillrepo.Repository,
+	allDocs bool,
+) error {
+	if svc == nil {
+		return fmt.Errorf("nil session service")
+	}
+	if repo == nil {
+		return fmt.Errorf("nil repo")
+	}
+	state := make(session.StateMap)
+	for _, s := range repo.Summaries() {
+		state[skillrepo.StateKeyLoadedPrefix+s.Name] = []byte(
+			stateValueLoaded,
+		)
+		if allDocs {
+			state[skillrepo.StateKeyDocsPrefix+s.Name] = []byte(
+				stateValueAllDocs,
+			)
+		}
+	}
+	key := session.Key{
+		AppName:   defaultAppName,
+		UserID:    defaultUserID,
+		SessionID: sessionID,
+	}
+	_, err := svc.CreateSession(context.Background(), key, state)
+	return err
+}
+
+func printTokenComparison(a usageTotals, b usageTotals, progress bool) {
+	progressf(progress, "  📊 Token Summary (sum across model calls)")
+	progressf(
+		progress,
+		"    A prompt=%d completion=%d total=%d steps=%d",
+		a.PromptTokens,
+		a.CompletionTokens,
+		a.TotalTokens,
+		a.Steps,
+	)
+	progressf(
+		progress,
+		"    B prompt=%d completion=%d total=%d steps=%d",
+		b.PromptTokens,
+		b.CompletionTokens,
+		b.TotalTokens,
+		b.Steps,
+	)
+
+	if b.TotalTokens <= 0 || b.PromptTokens <= 0 {
+		return
+	}
+	totalSavings := 100.0 * (1.0 -
+		float64(a.TotalTokens)/float64(b.TotalTokens))
+	promptSavings := 100.0 * (1.0 -
+		float64(a.PromptTokens)/float64(b.PromptTokens))
+	progressf(
+		progress,
+		"    Savings: total=%.2f%% prompt=%.2f%%",
+		totalSavings,
+		promptSavings,
+	)
 }
 
 func newBenchAgent(
@@ -715,6 +861,7 @@ func collect(
 ) (runCapture, error) {
 	var out runCapture
 	var runErr error
+	seenUsage := make(map[string]struct{})
 	for ev := range events {
 		if ev == nil || ev.Response == nil {
 			if ev != nil {
@@ -729,6 +876,7 @@ func collect(
 				strings.TrimSpace(ev.Error.Message),
 			)
 		}
+		accumulateUsage(&out.Usage, ev.Response, seenUsage)
 		for _, ch := range ev.Choices {
 			out = mergeChoice(out, ch.Message)
 			out = mergeChoice(out, ch.Delta)
@@ -747,6 +895,27 @@ func collect(
 		return out, runErr
 	}
 	return out, nil
+}
+
+func accumulateUsage(
+	totals *usageTotals,
+	resp *model.Response,
+	seen map[string]struct{},
+) {
+	if totals == nil || resp == nil || resp.Usage == nil {
+		return
+	}
+	id := strings.TrimSpace(resp.ID)
+	if id != "" {
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+	}
+	totals.Steps++
+	totals.PromptTokens += resp.Usage.PromptTokens
+	totals.CompletionTokens += resp.Usage.CompletionTokens
+	totals.TotalTokens += resp.Usage.TotalTokens
 }
 
 func mergeChoice(out runCapture, m model.Message) runCapture {
@@ -903,6 +1072,43 @@ func runScenarioBrandLanding(
 		return fmt.Errorf("scenario brand-landing: %w", err)
 	}
 	return nil
+}
+
+func runBrandLandingForTokenReport(
+	r runner.Runner,
+	repo skillrepo.Repository,
+	workRoot string,
+	sessionID string,
+	debug bool,
+	progress bool,
+) (runCapture, error) {
+	msg := model.NewUserMessage(brandLandingPrompt())
+	cap, err := runOnce(r, defaultUserID, sessionID, msg, debug, progress)
+	if err != nil {
+		return cap, err
+	}
+	if err := requireSuccessfulSkillRun(
+		cap,
+		skillBrandGuide,
+		debug,
+	); err != nil {
+		return cap, err
+	}
+	if err := requireSuccessfulSkillRun(
+		cap,
+		skillFrontendDesign,
+		debug,
+	); err != nil {
+		return cap, err
+	}
+	wsDir, err := latestWorkspaceDir(workRoot, sessionID)
+	if err != nil {
+		return cap, err
+	}
+	if err := verifyBrandLandingOutputs(repo, wsDir); err != nil {
+		return cap, err
+	}
+	return cap, nil
 }
 
 func runScenarioLaunchKit(

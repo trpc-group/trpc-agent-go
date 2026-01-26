@@ -65,10 +65,12 @@ If you see a clang "missing sysroot" error (macOS), run Go with
   - `tool`: deterministic `skill_run` checks only
   - `agent`: LLM-based checks (`skill_load` + `skill_list_docs`)
   - `all`: run both (default)
+  - `token-report`: compare token usage between progressive disclosure and full injection
 - `-model`: model name for agent suite (default: `$MODEL_NAME` or `gpt-5`)
 - `-with-exec`: run extra exec cases (default: true)
 - `-only-skill`: run a single skill name (optional)
 - `-debug`: include tool/answer details on failures
+- `-token-report-all-docs`: for `token-report`, preload all docs (default: true)
 
 ## Fast Smoke Runs
 
@@ -76,6 +78,29 @@ If you see a clang "missing sysroot" error (macOS), run Go with
 cd benchmark/anthropic_skills/trpc-agent-go-impl
 go run . -suite tool -with-exec=false
 go run . -suite agent -with-exec=false -only-skill webapp-testing
+```
+
+## Token Report
+
+The token report suite measures **actual** model token usage for the
+same composed scenario under two modes:
+- Mode A: progressive disclosure (overview only; skills loaded on demand)
+- Mode B: full injection (preload all skills into context)
+
+It prints token usage from model responses (`usage.prompt_tokens`,
+`usage.completion_tokens`, `usage.total_tokens`) aggregated across all
+model calls.
+
+```bash
+cd benchmark/anthropic_skills/trpc-agent-go-impl
+go run . -suite token-report -model gpt-5
+```
+
+If your model cannot fit all skill docs in its context window, run the
+same report with docs disabled:
+
+```bash
+go run . -suite token-report -token-report-all-docs=false
 ```
 
 ## Notes
