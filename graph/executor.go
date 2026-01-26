@@ -547,68 +547,110 @@ func (e *Executor) applyGraphInterruptInputs(
 
 	switch m := raw.(type) {
 	case map[string]State:
-		copied := make(map[string]State, len(m))
-		for nodeID, input := range m {
-			if nodeID == "" || input == nil {
-				continue
-			}
-			copied[nodeID] = input
-		}
+		copied := copyGraphInterruptInputsState(m)
 		if len(copied) > 0 {
 			restored[StateKeyGraphInterruptInputs] = copied
 		}
 	case map[string]any:
-		copied := make(map[string]any, len(m))
-		for nodeID, input := range m {
-			if nodeID == "" || input == nil {
-				continue
-			}
-			copied[nodeID] = input
-		}
+		copied := copyGraphInterruptInputsAny(m)
 		if len(copied) > 0 {
 			restored[StateKeyGraphInterruptInputs] = copied
 		}
 	case map[string][]any:
-		copied := make(map[string]any, len(m))
-		for nodeID, inputs := range m {
-			if nodeID == "" || len(inputs) == 0 {
-				continue
-			}
-			cleaned := make([]any, 0, len(inputs))
-			for _, input := range inputs {
-				if input == nil {
-					continue
-				}
-				cleaned = append(cleaned, input)
-			}
-			if len(cleaned) > 0 {
-				copied[nodeID] = cleaned
-			}
-		}
+		copied := copyGraphInterruptInputsAnySlice(m)
 		if len(copied) > 0 {
 			restored[StateKeyGraphInterruptInputs] = copied
 		}
 	case map[string][]State:
-		copied := make(map[string]any, len(m))
-		for nodeID, inputs := range m {
-			if nodeID == "" || len(inputs) == 0 {
-				continue
-			}
-			cleaned := make([]any, 0, len(inputs))
-			for _, input := range inputs {
-				if input == nil {
-					continue
-				}
-				cleaned = append(cleaned, input)
-			}
-			if len(cleaned) > 0 {
-				copied[nodeID] = cleaned
-			}
-		}
+		copied := copyGraphInterruptInputsStateSlice(m)
 		if len(copied) > 0 {
 			restored[StateKeyGraphInterruptInputs] = copied
 		}
 	}
+}
+
+func copyGraphInterruptInputsState(
+	inputs map[string]State,
+) map[string]State {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	copied := make(map[string]State, len(inputs))
+	for nodeID, input := range inputs {
+		if nodeID == "" || input == nil {
+			continue
+		}
+		copied[nodeID] = input
+	}
+	return copied
+}
+
+func copyGraphInterruptInputsAny(inputs map[string]any) map[string]any {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	copied := make(map[string]any, len(inputs))
+	for nodeID, input := range inputs {
+		if nodeID == "" || input == nil {
+			continue
+		}
+		copied[nodeID] = input
+	}
+	return copied
+}
+
+func copyGraphInterruptInputsAnySlice(
+	inputs map[string][]any,
+) map[string]any {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	copied := make(map[string]any, len(inputs))
+	for nodeID, values := range inputs {
+		if nodeID == "" || len(values) == 0 {
+			continue
+		}
+		cleaned := make([]any, 0, len(values))
+		for _, input := range values {
+			if input == nil {
+				continue
+			}
+			cleaned = append(cleaned, input)
+		}
+		if len(cleaned) > 0 {
+			copied[nodeID] = cleaned
+		}
+	}
+	return copied
+}
+
+func copyGraphInterruptInputsStateSlice(
+	inputs map[string][]State,
+) map[string]any {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	copied := make(map[string]any, len(inputs))
+	for nodeID, values := range inputs {
+		if nodeID == "" || len(values) == 0 {
+			continue
+		}
+		cleaned := make([]any, 0, len(values))
+		for _, input := range values {
+			if input == nil {
+				continue
+			}
+			cleaned = append(cleaned, input)
+		}
+		if len(cleaned) > 0 {
+			copied[nodeID] = cleaned
+		}
+	}
+	return copied
 }
 
 // processResumeCommand applies resume-related fields from the initial state.
