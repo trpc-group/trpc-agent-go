@@ -84,7 +84,7 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return fmt.Errorf("marshal summary failed: %w", err)
 	}
 
-	sumKey := getSessionSummaryKey(key)
+	sumKey := s.getSessionSummaryKey(key)
 	if _, err := luaSummariesSetIfNewer.Run(
 		ctx, s.redisClient, []string{sumKey}, sess.ID, filterKey, string(payload),
 	).Result(); err != nil {
@@ -120,7 +120,7 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 	}
 
 	// Fall back to Redis-stored summaries.
-	bytes, err := s.redisClient.HGet(ctx, getSessionSummaryKey(key), key.SessionID).Bytes()
+	bytes, err := s.redisClient.HGet(ctx, s.getSessionSummaryKey(key), key.SessionID).Bytes()
 	if err != nil || len(bytes) == 0 {
 		return "", false
 	}

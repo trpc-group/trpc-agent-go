@@ -27,6 +27,31 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+// Test helper functions for generating expected redis keys without prefix.
+func getExpectedSessionSummaryKey(key session.Key) string {
+	return fmt.Sprintf("sesssum:{%s}:%s", key.AppName, key.UserID)
+}
+
+func getExpectedSessionStateKey(key session.Key) string {
+	return fmt.Sprintf("sess:{%s}:%s", key.AppName, key.UserID)
+}
+
+func getExpectedAppStateKey(appName string) string {
+	return fmt.Sprintf("appstate:{%s}", appName)
+}
+
+func getExpectedUserStateKey(key session.Key) string {
+	return fmt.Sprintf("userstate:{%s}:%s", key.AppName, key.UserID)
+}
+
+func getExpectedEventKey(key session.Key) string {
+	return fmt.Sprintf("event:{%s}:%s:%s", key.AppName, key.UserID, key.SessionID)
+}
+
+func getExpectedTrackKey(key session.Key, track session.Track) string {
+	return fmt.Sprintf("track:{%s}:%s:%s:%s", key.AppName, key.UserID, key.SessionID, track)
+}
+
 func TestNewService(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -876,8 +901,8 @@ func TestService_Atomicity(t *testing.T) {
 				assert.Equal(t, "event123", finalSess.Events[0].ID)
 
 				// Verify Redis state consistency
-				sessStateKey := getSessionStateKey(sessionKey)
-				eventKey := getEventKey(sessionKey)
+				sessStateKey := getExpectedSessionStateKey(sessionKey)
+				eventKey := getExpectedEventKey(sessionKey)
 
 				// Check session state in Redis
 				sessStateData, err := client.HGet(context.Background(), sessStateKey, sessionKey.SessionID).Result()
@@ -919,7 +944,7 @@ func TestService_Atomicity(t *testing.T) {
 				assert.Nil(t, sess)
 
 				// Verify events are also deleted
-				eventKey := getEventKey(sessionKey)
+				eventKey := getExpectedEventKey(sessionKey)
 				count, err := client.ZCard(context.Background(), eventKey).Result()
 				require.NoError(t, err)
 				assert.Equal(t, int64(0), count)
@@ -988,13 +1013,13 @@ func TestService_SessionTTL(t *testing.T) {
 			},
 			validate: func(t *testing.T, client *redis.Client, sessionKey session.Key) {
 				// Check session state TTL
-				sessionStateKey := getSessionStateKey(sessionKey)
+				sessionStateKey := getExpectedSessionStateKey(sessionKey)
 				ttl := client.TTL(context.Background(), sessionStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "Session state TTL should be set and close to 5 seconds, got: %v", ttl.Val())
 
 				// Check event list TTL
-				eventKey := getEventKey(sessionKey)
+				eventKey := getExpectedEventKey(sessionKey)
 				ttl = client.TTL(context.Background(), eventKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "Event list TTL should be set and close to 5 seconds, got: %v", ttl.Val())
@@ -1037,12 +1062,12 @@ func TestService_SessionTTL(t *testing.T) {
 			},
 			validate: func(t *testing.T, client *redis.Client, sessionKey session.Key) {
 				// Check that TTL was refreshed (should be close to 5 seconds again)
-				sessionStateKey := getSessionStateKey(sessionKey)
+				sessionStateKey := getExpectedSessionStateKey(sessionKey)
 				ttl := client.TTL(context.Background(), sessionStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 3*time.Second, "Session state TTL should be refreshed, got: %v", ttl.Val())
 
-				eventKey := getEventKey(sessionKey)
+				eventKey := getExpectedEventKey(sessionKey)
 				ttl = client.TTL(context.Background(), eventKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 3*time.Second, "Event list TTL should be refreshed, got: %v", ttl.Val())
@@ -1101,7 +1126,7 @@ func TestService_getSessionSummaryTTL(t *testing.T) {
 	require.NoError(t, err)
 
 	client := buildRedisClient(t, redisURL)
-	summaryKey := getSessionSummaryKey(key)
+	summaryKey := getExpectedSessionSummaryKey(key)
 	err = client.HSet(ctx, summaryKey, key.SessionID, summaryBytes).Err()
 	require.NoError(t, err)
 
@@ -1129,7 +1154,7 @@ func TestService_AppStateTTL(t *testing.T) {
 				return appName
 			},
 			validate: func(t *testing.T, client *redis.Client, appName string) {
-				appStateKey := getAppStateKey(appName)
+				appStateKey := getExpectedAppStateKey(appName)
 				ttl := client.TTL(context.Background(), appStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "App state TTL should be set and close to 5 seconds, got: %v", ttl.Val())
@@ -1162,7 +1187,7 @@ func TestService_AppStateTTL(t *testing.T) {
 			},
 			validate: func(t *testing.T, client *redis.Client, appName string) {
 				// Check that TTL was refreshed (should be close to 5 seconds again)
-				appStateKey := getAppStateKey(appName)
+				appStateKey := getExpectedAppStateKey(appName)
 				ttl := client.TTL(context.Background(), appStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 3*time.Second, "App state TTL should be refreshed, got: %v", ttl.Val())
@@ -1209,7 +1234,7 @@ func TestService_UserStateTTL(t *testing.T) {
 				return userKey
 			},
 			validate: func(t *testing.T, client *redis.Client, userKey session.UserKey) {
-				userStateKey := getUserStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})
+				userStateKey := getExpectedUserStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})
 				ttl := client.TTL(context.Background(), userStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "User state TTL should be set and close to 5 seconds, got: %v", ttl.Val())
@@ -1245,7 +1270,7 @@ func TestService_UserStateTTL(t *testing.T) {
 			},
 			validate: func(t *testing.T, client *redis.Client, userKey session.UserKey) {
 				// Check that TTL was refreshed (should be close to 5 seconds again)
-				userStateKey := getUserStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})
+				userStateKey := getExpectedUserStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})
 				ttl := client.TTL(context.Background(), userStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 3*time.Second, "User state TTL should be refreshed, got: %v", ttl.Val())
@@ -2156,7 +2181,7 @@ func TestService_GetSession_AttachSummaries(t *testing.T) {
 	require.NoError(t, err)
 	client := buildRedisClient(t, redisURL)
 	err = client.HSet(
-		ctx, getSessionSummaryKey(key), key.SessionID, string(payload),
+		ctx, getExpectedSessionSummaryKey(key), key.SessionID, string(payload),
 	).Err()
 	require.NoError(t, err)
 
@@ -2313,7 +2338,7 @@ func TestService_ProcessStateCmd_Errors(t *testing.T) {
 
 	// Manually corrupt the data in Redis to trigger unmarshal error
 	client := buildRedisClient(t, redisURL)
-	sessKey := getSessionStateKey(key)
+	sessKey := getExpectedSessionStateKey(key)
 	err = client.HSet(ctx, sessKey, key.SessionID, "invalid json").Err()
 	require.NoError(t, err)
 
@@ -2754,7 +2779,7 @@ func TestService_CorruptedData_AppState(t *testing.T) {
 
 	// Manually corrupt app state data in Redis
 	client := buildRedisClient(t, redisURL)
-	appStateKey := getAppStateKey(key.AppName)
+	appStateKey := getExpectedAppStateKey(key.AppName)
 	// Set invalid data that can't be converted to bytes properly
 	// This tests the error path in processStateCmd
 	err = client.HSet(ctx, appStateKey, "corrupted_key", string([]byte{0xff, 0xfe, 0xfd})).Err()
@@ -2787,7 +2812,7 @@ func TestService_CorruptedData_Events(t *testing.T) {
 
 	// Manually corrupt event data in Redis by setting the event key to a hash instead of a list
 	client := buildRedisClient(t, redisURL)
-	eventKey := getEventKey(key)
+	eventKey := getExpectedEventKey(key)
 	// Delete the existing list and create a hash with the same key
 	err = client.Del(ctx, eventKey).Err()
 	require.NoError(t, err)
@@ -3061,7 +3086,7 @@ func TestService_getTrackEventsLimitAndTTL(t *testing.T) {
 	require.Len(t, alpha, 1)
 	assert.Equal(t, json.RawMessage(`"new"`), alpha[0].Payload)
 
-	trackTTL := client.TTL(ctx, getTrackKey(key, "alpha")).Val()
+	trackTTL := client.TTL(ctx, getExpectedTrackKey(key, "alpha")).Val()
 	require.Greater(t, trackTTL, time.Duration(0))
 	require.LessOrEqual(t, trackTTL, ttl)
 }
@@ -3259,7 +3284,7 @@ func Test_collectTrackQueryResultsSkipNil(t *testing.T) {
 
 func fetchSessionState(t *testing.T, ctx context.Context, client *redis.Client, key session.Key) *SessionState {
 	t.Helper()
-	raw, err := client.HGet(ctx, getSessionStateKey(key), key.SessionID).Bytes()
+	raw, err := client.HGet(ctx, getExpectedSessionStateKey(key), key.SessionID).Bytes()
 	require.NoError(t, err)
 	var state SessionState
 	require.NoError(t, json.Unmarshal(raw, &state))
