@@ -50,6 +50,8 @@ func (t *LoadTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "skill_load",
 		Description: "Load a skill body and optional docs. " +
+			"Prefer progressive disclosure: load SKILL.md first, " +
+			"then load only needed docs. " +
 			"Safe to call multiple times to add or replace docs. " +
 			"Do not call this to list skills; names and descriptions " +
 			"are already in context. Use when a task needs a skill's " +
@@ -67,11 +69,11 @@ func (t *LoadTool) Declaration() *tool.Declaration {
 					Items: &tool.Schema{
 						Type: "string",
 					},
-					Description: "Optional doc names to include",
+					Description: "Optional doc names to include (prefer few)",
 				},
 				"include_all_docs": {
 					Type:        "boolean",
-					Description: "Include all docs if true",
+					Description: "Include all docs if true (use sparingly)",
 				},
 			},
 		},
