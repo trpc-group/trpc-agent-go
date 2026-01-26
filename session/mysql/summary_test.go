@@ -205,13 +205,13 @@ func TestCreateSessionSummary_GenerateError(t *testing.T) {
 		AppName:   "test-app",
 		UserID:    "user-456",
 		UpdatedAt: time.Now(),
-		Events:    []event.Event{{Timestamp: time.Now()}}, // Add event to trigger summary
+		Events:    []event.Event{{Timestamp: time.Now()}}, // Add event to trigger summary.
 	}
 
-	// Should return error from summarizer
+	// Should return error from summarizer.
 	err = s.CreateSessionSummary(ctx, sess, "", false)
-	assert.NoError(t, err)
-	// assert.Contains(t, err.Error(), "summarize and persist failed")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "summarization error")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

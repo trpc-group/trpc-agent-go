@@ -308,6 +308,27 @@ func TestSessionSummarizer_GenerateSummary_ResponseError(t *testing.T) {
 	assert.Contains(t, err.Error(), "model error during summarization")
 }
 
+func TestSessionSummarizer_GenerateSummary_ResponseErrorWithDetails(t *testing.T) {
+	// Test that error messages include Type and Code when available.
+	responseErrorModel := &responseErrorModelWithDetails{}
+	s := NewSummarizer(responseErrorModel)
+
+	sess := &session.Session{
+		ID: "test-detailed-error",
+		Events: []event.Event{
+			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "test"}}}}, Timestamp: time.Now()},
+		},
+	}
+
+	_, err := s.Summarize(context.Background(), sess)
+	require.Error(t, err)
+	// Verify error message includes type and code.
+	assert.Contains(t, err.Error(), "model error during summarization")
+	assert.Contains(t, err.Error(), "[requestAuthError]")
+	assert.Contains(t, err.Error(), "API key rate limit exceeded")
+	assert.Contains(t, err.Error(), "(code: rate_limit_exceeded)")
+}
+
 func TestSessionSummarizer_GenerateSummary_EmptyResponse(t *testing.T) {
 	emptyModel := &emptyResponseModel{}
 	s := NewSummarizer(emptyModel)
@@ -680,7 +701,7 @@ func (e *errorModel) GenerateContent(ctx context.Context, req *model.Request) (<
 	return nil, fmt.Errorf("model error")
 }
 
-// responseErrorModel returns a response with an error
+// responseErrorModel returns a response with an error.
 type responseErrorModel struct{}
 
 func (r *responseErrorModel) Info() model.Info { return model.Info{Name: "response-error"} }
@@ -694,7 +715,28 @@ func (r *responseErrorModel) GenerateContent(ctx context.Context, req *model.Req
 	return ch, nil
 }
 
-// emptyResponseModel returns an empty response
+// responseErrorModelWithDetails returns a response with detailed error info.
+type responseErrorModelWithDetails struct{}
+
+func (r *responseErrorModelWithDetails) Info() model.Info {
+	return model.Info{Name: "response-error-detailed"}
+}
+func (r *responseErrorModelWithDetails) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	code := "rate_limit_exceeded"
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Error: &model.ResponseError{
+			Message: "API key rate limit exceeded",
+			Type:    "requestAuthError",
+			Code:    &code,
+		},
+	}
+	close(ch)
+	return ch, nil
+}
+
+// emptyResponseModel returns an empty response.
 type emptyResponseModel struct{}
 
 func (e *emptyResponseModel) Info() model.Info { return model.Info{Name: "empty"} }
@@ -703,6 +745,78 @@ func (e *emptyResponseModel) GenerateContent(ctx context.Context, req *model.Req
 	ch <- &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Content: ""}}}}
 	close(ch)
 	return ch, nil
+}
+
+func TestFormatResponseError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      *model.ResponseError
+		expected string
+		isNil    bool
+	}{
+		{
+			name:  "nil error",
+			err:   nil,
+			isNil: true,
+		},
+		{
+			name: "message only",
+			err: &model.ResponseError{
+				Message: "simple error",
+			},
+			expected: "model error during summarization: simple error",
+		},
+		{
+			name: "with type",
+			err: &model.ResponseError{
+				Message: "auth failed",
+				Type:    "authError",
+			},
+			expected: "model error during summarization: [authError] auth failed",
+		},
+		{
+			name: "with type and code",
+			err: &model.ResponseError{
+				Message: "rate limit",
+				Type:    "requestError",
+				Code:    stringPtr("rate_limit_exceeded"),
+			},
+			expected: "model error during summarization: [requestError] rate limit (code: rate_limit_exceeded)",
+		},
+		{
+			name: "with empty code",
+			err: &model.ResponseError{
+				Message: "error message",
+				Type:    "someType",
+				Code:    stringPtr(""),
+			},
+			expected: "model error during summarization: [someType] error message",
+		},
+		{
+			name: "code without type",
+			err: &model.ResponseError{
+				Message: "error message",
+				Code:    stringPtr("error_code"),
+			},
+			expected: "model error during summarization: error message (code: error_code)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatResponseError(tt.err)
+			if tt.isNil {
+				assert.Nil(t, result)
+			} else {
+				require.NotNil(t, result)
+				assert.Equal(t, tt.expected, result.Error())
+			}
+		})
+	}
+}
+
+func stringPtr(s string) *string {
+	return &s
 }
 
 func TestSessionSummarizer_WithSkipRecent(t *testing.T) {

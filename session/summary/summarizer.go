@@ -50,6 +50,21 @@ const (
 	authorUnknown = "unknown"
 )
 
+// formatResponseError formats a model.ResponseError into a human-readable error.
+func formatResponseError(e *model.ResponseError) error {
+	if e == nil {
+		return nil
+	}
+	msg := e.Message
+	if e.Type != "" {
+		msg = fmt.Sprintf("[%s] %s", e.Type, msg)
+	}
+	if e.Code != nil && *e.Code != "" {
+		msg = fmt.Sprintf("%s (code: %s)", msg, *e.Code)
+	}
+	return fmt.Errorf("model error during summarization: %s", msg)
+}
+
 // ToolCallFormatter formats a tool call for inclusion in the summary input.
 // It receives the tool call and returns a formatted string.
 // Return empty string to exclude this tool call from the summary.
@@ -414,16 +429,16 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, conversationTex
 	}
 
 	// Collect the response.
-	var summary string
+	var summary strings.Builder
 	for response := range responseChan {
 		if response.Error != nil {
-			return "", fmt.Errorf("model error during summarization: %s", response.Error.Message)
+			return "", formatResponseError(response.Error)
 		}
 
 		if len(response.Choices) > 0 {
 			content := response.Choices[0].Message.Content
 			if content != "" {
-				summary += content
+				summary.WriteString(content)
 			}
 		}
 
@@ -433,10 +448,10 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, conversationTex
 	}
 
 	// Clean up the summary.
-	summary = strings.TrimSpace(summary)
-	if summary == "" {
+	summaryText := strings.TrimSpace(summary.String())
+	if summaryText == "" {
 		return "", fmt.Errorf("generated empty summary (input_chars=%d)", len(conversationText))
 	}
 
-	return summary, nil
+	return summaryText, nil
 }
