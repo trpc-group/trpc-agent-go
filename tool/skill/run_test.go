@@ -212,6 +212,67 @@ func TestRunTool_AutoPrependsVenvBinToPATH(t *testing.T) {
 	require.Contains(t, out.Stdout, "OK")
 }
 
+func TestVenvRelPaths_FromSkillRoot(t *testing.T) {
+	cwd := path.Join(codeexecutor.DirSkills, testSkillName)
+	venvRel, venvBinRel := venvRelPaths(cwd, testSkillName)
+	require.Equal(t, skillDirVenv, venvRel)
+	require.Equal(t, path.Join(skillDirVenv, "bin"), venvBinRel)
+}
+
+func TestVenvRelPaths_FromChildDir(t *testing.T) {
+	cwd := path.Join(codeexecutor.DirSkills, testSkillName, scriptsDir)
+	venvRel, venvBinRel := venvRelPaths(cwd, testSkillName)
+	require.Equal(t, path.Join("..", skillDirVenv), venvRel)
+	require.Equal(t, path.Join("..", skillDirVenv, "bin"), venvBinRel)
+}
+
+func TestInjectVenvEnv_PrependsPATHAndSetsVirtualEnv(t *testing.T) {
+	env := map[string]string{
+		envPath: "/usr/bin",
+	}
+	venv := path.Join(skillDirVenv)
+	venvBin := path.Join(skillDirVenv, "bin")
+
+	injectVenvEnv(env, venv, venvBin)
+
+	require.Equal(t, venv, env[envVirtualEnv])
+	sep := string(os.PathListSeparator)
+	require.Equal(t, venvBin+sep+"/usr/bin", env[envPath])
+}
+
+func TestInjectVenvEnv_DoesNotOverrideVirtualEnv(t *testing.T) {
+	const existing = "already"
+	env := map[string]string{
+		envVirtualEnv: existing,
+		envPath:       "/bin",
+	}
+	venv := path.Join(skillDirVenv)
+	venvBin := path.Join(skillDirVenv, "bin")
+
+	injectVenvEnv(env, venv, venvBin)
+
+	require.Equal(t, existing, env[envVirtualEnv])
+	require.Contains(t, env[envPath], venvBin)
+}
+
+func TestInjectVenvEnv_EmptyPATHUsesVenvOnly(t *testing.T) {
+	t.Setenv(envPath, "")
+	env := map[string]string{}
+	venv := path.Join(skillDirVenv)
+	venvBin := path.Join(skillDirVenv, "bin")
+
+	injectVenvEnv(env, venv, venvBin)
+
+	require.Equal(t, venv, env[envVirtualEnv])
+	require.Equal(t, venvBin, env[envPath])
+}
+
+func TestWrapWithVenvPrefix_BuildsExports(t *testing.T) {
+	cmd := wrapWithVenvPrefix(cmdEcho, "VENV", "VENV/bin")
+	require.Contains(t, cmd, "export "+envPath+"='VENV/bin'")
+	require.Contains(t, cmd, "export "+envVirtualEnv+"='VENV'")
+}
+
 func TestRunTool_PrimaryOutput_SelectsByName(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
