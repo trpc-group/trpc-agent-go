@@ -1245,7 +1245,7 @@ func TestRunTool_Call_InvalidInputSpec_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRunTool_stageSkill_EnsureLayoutError(t *testing.T) {
+func TestRunTool_stageSkill_WorkspaceRootFileError(t *testing.T) {
 	root := t.TempDir()
 	dir := writeSkill(t, root, testSkillName)
 	repo, err := skill.NewFSRepository(root)
@@ -1253,7 +1253,7 @@ func TestRunTool_stageSkill_EnsureLayoutError(t *testing.T) {
 	rt := NewRunTool(repo, localexec.New())
 	eng := localexec.New().Engine()
 
-	// Workspace path points to a file; EnsureLayout should fail.
+	// Workspace path points to a file; staging should fail.
 	tmpf := filepath.Join(t.TempDir(), "asfile")
 	require.NoError(t, os.WriteFile(tmpf, []byte("x"), 0o644))
 	ws := codeexecutor.Workspace{ID: "bad", Path: tmpf}
@@ -1364,7 +1364,7 @@ func TestRunTool_stageSkill_LoadMetadataError(t *testing.T) {
 	))
 
 	rt := &RunTool{}
-	eng := &fakeEngine{}
+	eng := localexec.New().Engine()
 	err = rt.stageSkill(context.Background(), eng, ws, dir,
 		testSkillName,
 	)
@@ -1716,14 +1716,17 @@ func TestRunTool_WorkspacePersistsAcrossCalls(t *testing.T) {
 }
 
 func TestSkillStagingHelpers_EarlyReturns(t *testing.T) {
-	require.False(t, skillLinksPresent("", "a"))
-	require.False(t, skillLinksPresent("a", ""))
-
-	require.False(t, isSymlink(filepath.Join(t.TempDir(), "missing")))
-
 	rt := &RunTool{}
 	ctx := context.Background()
 	ws := codeexecutor.Workspace{}
+
+	ok, err := rt.skillLinksPresent(ctx, nil, ws, "")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	ok, err = rt.skillLinksPresent(ctx, nil, ws, "demo")
+	require.Error(t, err)
+	require.False(t, ok)
 
 	require.NoError(t, rt.removeWorkspacePath(ctx, nil, ws, ""))
 	require.NoError(t, rt.removeWorkspacePath(ctx, nil, ws, "skills/demo"))
