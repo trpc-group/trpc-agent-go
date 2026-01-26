@@ -92,21 +92,21 @@ go run . -resume
 
 ### MT-Bench-101 Task Codes
 
-| Code | Description |
-|------|-------------|
-| AR | Arithmetic Reasoning |
-| CC | Code Completion |
-| CM | Commonsense |
-| CR | Creative Writing |
-| FR | Factual Reasoning |
-| GR | Grammar |
-| IC | Information Comprehension |
-| MR | Mathematical Reasoning |
-| PI | Personal Information |
-| SA | Sentiment Analysis |
-| SC | Science |
-| SI | Social Interaction |
-| TS | Task-Specific |
+| Code | Full Name | Description |
+|------|-----------|-------------|
+| AR | Anaphora Resolution | Identify pronoun referents throughout a multi-turn dialogue. |
+| CC | Content Confusion | Avoid interference from similar-looking queries with distinct meanings. |
+| CM | Context Memory | Recall early dialogue details to address the user's current question. |
+| CR | Content Rephrasing | Rephrase the content of the last response per user's requirement. |
+| FR | Format Rephrasing | Rephrase the format of the last response per user's requirement. |
+| GR | General Reasoning | Collaboratively solve complex reasoning problems across turns. |
+| IC | Instruction Clarification | Seek clarification by asking further questions on ambiguous queries. |
+| MR | Mathematical Reasoning | Collaboratively solve complex mathematical problems across turns. |
+| PI | Proactive Interaction | Propose questions to spark user's interest to continue the dialogue. |
+| SA | Self-affirmation | Preserve the last response against inaccurate user feedback. |
+| SC | Self-correction | Recorrect the last response according to user feedback. |
+| SI | Separate Input | First turn outlines task requirements, following turns specify input. |
+| TS | Topic Shift | Recognize and focus on new topic when users switch topics. |
 
 ## Output Format
 
@@ -131,4 +131,5 @@ Results are saved in JSON format:
 
 - [MT-Bench-101 Paper (ACL 2024)](https://arxiv.org/abs/2402.14762)
 - [τ-bench Paper](https://arxiv.org/abs/2406.12045)
+- [τ²-bench Paper](https://arxiv.org/abs/2506.07982)
 - [trpc-agent-go GitHub](https://github.com/trpc-group/trpc-agent-go)
