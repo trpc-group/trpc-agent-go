@@ -272,8 +272,9 @@ func (e *RetentionEvaluator) llmEvaluateRetention(
 		result.PerTurnRetention = append(result.PerTurnRetention, turnRetention)
 		result.MissingInfo = append(result.MissingInfo, missing...)
 		// Estimate key info count (LLM doesn't give exact count).
-		result.KeyInfoCount += 5
-		result.RetainedCount += int(turnRetention * 5)
+		const estimatedKeyInfoPerTurn = 5
+		result.KeyInfoCount += estimatedKeyInfoPerTurn
+		result.RetainedCount += int(turnRetention * estimatedKeyInfoPerTurn)
 	}
 	// Handle missing turns.
 	if len(test) < len(baseline) {
@@ -281,7 +282,8 @@ func (e *RetentionEvaluator) llmEvaluateRetention(
 			result.PerTurnRetention = append(result.PerTurnRetention, 0.0)
 			result.MissingInfo = append(result.MissingInfo,
 				fmt.Sprintf("Turn %d: entire response missing", i+1))
-			result.KeyInfoCount += 5
+			const estimatedKeyInfoPerTurn = 5
+			result.KeyInfoCount += estimatedKeyInfoPerTurn
 		}
 	}
 	// Calculate overall retention rate.
@@ -357,8 +359,9 @@ func parseRetentionResponse(
 	content string,
 	turnNum int,
 ) (float64, []string, error) {
+	const defaultRate = 0.8
 	lines := strings.Split(content, "\n")
-	rate := 0.8
+	rate := defaultRate
 	var missing []string
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -394,24 +397,27 @@ func extractKeyInformation(text string) []string {
 	// Extract numbers (dates, amounts, etc.).
 	numberPattern := regexp.MustCompile(`\b\d+[\d,\.]*\b`)
 	numbers := numberPattern.FindAllString(text, -1)
+	const minNumberLength = 2
 	for _, n := range numbers {
-		if len(n) >= 2 {
+		if len(n) >= minNumberLength {
 			info = append(info, n)
 		}
 	}
 	// Extract quoted content.
 	quotePattern := regexp.MustCompile(`["']([^"']+)["']`)
 	quotes := quotePattern.FindAllStringSubmatch(text, -1)
+	const minQuoteLength = 3
 	for _, q := range quotes {
-		if len(q) > 1 && len(q[1]) >= 3 {
+		if len(q) > 1 && len(q[1]) >= minQuoteLength {
 			info = append(info, q[1])
 		}
 	}
 	// Extract capitalized proper nouns (simple heuristic).
 	properNounPattern := regexp.MustCompile(`\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b`)
 	nouns := properNounPattern.FindAllString(text, -1)
+	const minNounLength = 3
 	for _, n := range nouns {
-		if len(n) >= 3 && !isCommonWord(n) {
+		if len(n) >= minNounLength && !isCommonWord(n) {
 			info = append(info, n)
 		}
 	}
@@ -500,12 +506,12 @@ func parseFloat(s string) (float64, error) {
 	return f, err
 }
 
-func clamp(v, min, max float64) float64 {
-	if v < min {
-		return min
+func clamp(v, minVal, maxVal float64) float64 {
+	if v < minVal {
+		return minVal
 	}
-	if v > max {
-		return max
+	if v > maxVal {
+		return maxVal
 	}
 	return v
 }
