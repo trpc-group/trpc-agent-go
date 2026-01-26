@@ -109,8 +109,8 @@ func (w *externalInterruptWatcher) forced(ctx context.Context) bool {
 type stepExecutionReport struct {
 	mu sync.Mutex
 
-	completed map[string]bool
-	inputs    map[string]State
+	completed map[*Task]bool
+	inputs    map[*Task]State
 	fields    map[string]StateField
 }
 
@@ -118,50 +118,50 @@ func newStepExecutionReport(
 	fields map[string]StateField,
 ) *stepExecutionReport {
 	return &stepExecutionReport{
-		completed: make(map[string]bool),
-		inputs:    make(map[string]State),
+		completed: make(map[*Task]bool),
+		inputs:    make(map[*Task]State),
 		fields:    fields,
 	}
 }
 
-func (r *stepExecutionReport) recordInput(nodeID string, input State) {
-	if r == nil || nodeID == "" || input == nil {
+func (r *stepExecutionReport) recordInput(task *Task, input State) {
+	if r == nil || task == nil || task.NodeID == "" || input == nil {
 		return
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, exists := r.inputs[nodeID]; exists {
+	if _, exists := r.inputs[task]; exists {
 		return
 	}
-	r.inputs[nodeID] = input.deepCopy(false, r.fields)
+	r.inputs[task] = input.deepCopy(false, r.fields)
 }
 
-func (r *stepExecutionReport) markCompleted(nodeID string) {
-	if r == nil || nodeID == "" {
+func (r *stepExecutionReport) markCompleted(task *Task) {
+	if r == nil || task == nil {
 		return
 	}
 	r.mu.Lock()
-	r.completed[nodeID] = true
+	r.completed[task] = true
 	r.mu.Unlock()
 }
 
-func (r *stepExecutionReport) isCompleted(nodeID string) bool {
-	if r == nil || nodeID == "" {
+func (r *stepExecutionReport) isCompleted(task *Task) bool {
+	if r == nil || task == nil {
 		return false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.completed[nodeID]
+	return r.completed[task]
 }
 
-func (r *stepExecutionReport) inputFor(nodeID string) (State, bool) {
-	if r == nil || nodeID == "" {
+func (r *stepExecutionReport) inputFor(task *Task) (State, bool) {
+	if r == nil || task == nil {
 		return nil, false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	in, ok := r.inputs[nodeID]
+	in, ok := r.inputs[task]
 	return in, ok
 }
 

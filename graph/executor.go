@@ -568,6 +568,46 @@ func (e *Executor) applyGraphInterruptInputs(
 		if len(copied) > 0 {
 			restored[StateKeyGraphInterruptInputs] = copied
 		}
+	case map[string][]any:
+		copied := make(map[string]any, len(m))
+		for nodeID, inputs := range m {
+			if nodeID == "" || len(inputs) == 0 {
+				continue
+			}
+			cleaned := make([]any, 0, len(inputs))
+			for _, input := range inputs {
+				if input == nil {
+					continue
+				}
+				cleaned = append(cleaned, input)
+			}
+			if len(cleaned) > 0 {
+				copied[nodeID] = cleaned
+			}
+		}
+		if len(copied) > 0 {
+			restored[StateKeyGraphInterruptInputs] = copied
+		}
+	case map[string][]State:
+		copied := make(map[string]any, len(m))
+		for nodeID, inputs := range m {
+			if nodeID == "" || len(inputs) == 0 {
+				continue
+			}
+			cleaned := make([]any, 0, len(inputs))
+			for _, input := range inputs {
+				if input == nil {
+					continue
+				}
+				cleaned = append(cleaned, input)
+			}
+			if len(cleaned) > 0 {
+				copied[nodeID] = cleaned
+			}
+		}
+		if len(copied) > 0 {
+			restored[StateKeyGraphInterruptInputs] = copied
+		}
 	}
 }
 
@@ -871,6 +911,74 @@ func (e *Executor) planTasksForBspStep(
 	return tasks, nil
 }
 
+func nextNodesFromTasks(tasks []*Task) []string {
+	if len(tasks) == 0 {
+		return nil
+	}
+	next := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		if task == nil || task.NodeID == "" || task.NodeID == End {
+			continue
+		}
+		next = append(next, task.NodeID)
+	}
+	return next
+}
+
+func (e *Executor) metaExtraForPlannedExternalInterrupt(
+	tasks []*Task,
+) map[string]any {
+	if len(tasks) == 0 {
+		return nil
+	}
+	fields := e.stateFields()
+	inputs := make(map[string][]any)
+	for _, task := range tasks {
+		if task == nil || task.NodeID == "" {
+			continue
+		}
+		in, ok := stateFromAny(task.Input)
+		if !ok || in == nil {
+			continue
+		}
+		snapshot := in.deepCopy(false, fields)
+		if snapshot == nil {
+			continue
+		}
+		inputs[task.NodeID] = append(inputs[task.NodeID], snapshot)
+	}
+	if len(inputs) == 0 {
+		return nil
+	}
+	return map[string]any{
+		CheckpointMetaKeyGraphInterruptInputs: inputs,
+	}
+}
+
+func (e *Executor) stateFields() map[string]StateField {
+	if e.graph == nil {
+		return nil
+	}
+	schema := e.graph.Schema()
+	if schema == nil {
+		return nil
+	}
+	return schema.Fields
+}
+
+func stateFromAny(v any) (State, bool) {
+	if v == nil {
+		return nil, false
+	}
+	if st, ok := v.(State); ok && st != nil {
+		return st, true
+	}
+	if st, ok := v.(map[string]any); ok && st != nil {
+		return State(st), true
+	}
+	return nil, false
+}
+
 func (e *Executor) maybeHandleExternalInterruptBeforeStep(
 	ctx context.Context,
 	stepCtx context.Context,
@@ -891,7 +999,8 @@ func (e *Executor) maybeHandleExternalInterruptBeforeStep(
 	}
 
 	interrupt := newExternalInterruptError(extInterrupt.forced(ctx))
-	interrupt.NextNodes = uniqueSortedTaskNodes(tasks)
+	interrupt.NextNodes = nextNodesFromTasks(tasks)
+	metaExtra := e.metaExtraForPlannedExternalInterrupt(tasks)
 	return true, e.handleInterrupt(
 		stepCtx,
 		invocation,
@@ -899,7 +1008,7 @@ func (e *Executor) maybeHandleExternalInterruptBeforeStep(
 		interrupt,
 		step-1,
 		config,
-		nil,
+		metaExtra,
 	)
 }
 
@@ -1059,12 +1168,12 @@ func (e *Executor) handleForcedExternalInterrupt(
 	checkpointConfig map[string]any,
 	report *stepExecutionReport,
 ) error {
-	rerun := e.nodesToRerun(tasks, report)
-	next := e.nextNodesForForcedInterrupt(execCtx, rerun)
+	rerun := e.tasksToRerun(tasks, report)
+	nextNodes := e.nextNodesForForcedInterrupt(execCtx, rerun)
 	metaExtra := e.metaExtraForForcedInterrupt(report, rerun)
 
 	interrupt := newExternalInterruptError(true)
-	interrupt.NextNodes = keysOfSet(next)
+	interrupt.NextNodes = nextNodes
 	return e.handleInterrupt(
 		ctx,
 		invocation,
@@ -1076,57 +1185,79 @@ func (e *Executor) handleForcedExternalInterrupt(
 	)
 }
 
-func (e *Executor) nodesToRerun(
+func (e *Executor) tasksToRerun(
 	tasks []*Task,
 	report *stepExecutionReport,
-) map[string]struct{} {
-	rerun := make(map[string]struct{})
-	for _, t := range tasks {
-		if t == nil || t.NodeID == "" {
+) []*Task {
+	if len(tasks) == 0 {
+		return nil
+	}
+
+	rerun := make([]*Task, 0, len(tasks))
+	for _, task := range tasks {
+		if task == nil || task.NodeID == "" {
 			continue
 		}
-		if report != nil {
-			if report.isCompleted(t.NodeID) {
-				continue
-			}
+		if report != nil && report.isCompleted(task) {
+			continue
 		}
-		rerun[t.NodeID] = struct{}{}
+		rerun = append(rerun, task)
 	}
 	return rerun
 }
 
 func (e *Executor) nextNodesForForcedInterrupt(
 	execCtx *ExecutionContext,
-	rerun map[string]struct{},
-) map[string]struct{} {
-	next := make(map[string]struct{}, len(rerun))
-	for nodeID := range rerun {
-		next[nodeID] = struct{}{}
+	rerun []*Task,
+) []string {
+	var nextNodes []string
+	seen := make(map[string]struct{})
+	for _, task := range rerun {
+		if task == nil || task.NodeID == "" || task.NodeID == End {
+			continue
+		}
+		nextNodes = append(nextNodes, task.NodeID)
+		seen[task.NodeID] = struct{}{}
 	}
+
 	for _, nodeID := range e.getNextNodes(execCtx) {
 		if nodeID == "" || nodeID == End {
 			continue
 		}
-		next[nodeID] = struct{}{}
+		if _, ok := seen[nodeID]; ok {
+			continue
+		}
+		nextNodes = append(nextNodes, nodeID)
 	}
-	return next
+	return nextNodes
 }
 
 func (e *Executor) metaExtraForForcedInterrupt(
 	report *stepExecutionReport,
-	rerun map[string]struct{},
+	rerun []*Task,
 ) map[string]any {
 	if report == nil || len(rerun) == 0 {
 		return nil
 	}
 
-	inputs := make(map[string]any)
-	for nodeID := range rerun {
-		input, ok := report.inputFor(nodeID)
-		if !ok || input == nil {
+	fields := e.stateFields()
+	inputs := make(map[string][]any)
+	for _, task := range rerun {
+		if task == nil || task.NodeID == "" {
 			continue
 		}
-		inputs[nodeID] = input
+		input, ok := report.inputFor(task)
+		if !ok || input == nil {
+			fallback, ok := stateFromAny(task.Input)
+			if !ok || fallback == nil {
+				continue
+			}
+			input = fallback.deepCopy(false, fields)
+			if input == nil {
+				continue
+			}
+		}
+		inputs[task.NodeID] = append(inputs[task.NodeID], input)
 	}
 	if len(inputs) == 0 {
 		return nil
@@ -1688,36 +1819,8 @@ func (e *Executor) createTask(nodeID string, state State, step int) *Task {
 	}
 
 	input := any(state)
-	if state != nil {
-		raw, ok := state[StateKeyGraphInterruptInputs]
-		if ok && raw != nil {
-			switch m := raw.(type) {
-			case map[string]State:
-				if v := m[nodeID]; v != nil {
-					input = v
-					delete(m, nodeID)
-					if len(m) == 0 {
-						delete(state, StateKeyGraphInterruptInputs)
-					}
-				}
-			case map[string]any:
-				v, ok := m[nodeID]
-				if !ok || v == nil {
-					break
-				}
-				if st, ok := v.(State); ok && st != nil {
-					input = st
-				} else if st, ok := v.(map[string]any); ok && st != nil {
-					input = State(st)
-				} else {
-					break
-				}
-				delete(m, nodeID)
-				if len(m) == 0 {
-					delete(state, StateKeyGraphInterruptInputs)
-				}
-			}
-		}
+	if override, ok := consumeGraphInterruptInput(state, nodeID); ok {
+		input = override
 	}
 
 	return &Task{
@@ -1727,6 +1830,169 @@ func (e *Executor) createTask(nodeID string, state State, step int) *Task {
 		Triggers: node.triggers,
 		TaskID:   fmt.Sprintf("%s-%d", nodeID, step),
 		TaskPath: []string{nodeID},
+	}
+}
+
+func consumeGraphInterruptInput(state State, nodeID string) (State, bool) {
+	if state == nil || nodeID == "" {
+		return nil, false
+	}
+	raw, ok := state[StateKeyGraphInterruptInputs]
+	if !ok || raw == nil {
+		return nil, false
+	}
+	switch m := raw.(type) {
+	case map[string]State:
+		return consumeGraphInterruptInputState(state, m, nodeID)
+	case map[string][]State:
+		return consumeGraphInterruptInputStates(state, m, nodeID)
+	case map[string]any:
+		return consumeGraphInterruptInputAny(state, m, nodeID)
+	case map[string][]any:
+		return consumeGraphInterruptInputAnySlice(state, m, nodeID)
+	default:
+		return nil, false
+	}
+}
+
+func consumeGraphInterruptInputState(
+	state State,
+	inputs map[string]State,
+	nodeID string,
+) (State, bool) {
+	input := inputs[nodeID]
+	if input == nil {
+		return nil, false
+	}
+	delete(inputs, nodeID)
+	if len(inputs) == 0 {
+		delete(state, StateKeyGraphInterruptInputs)
+	}
+	return input, true
+}
+
+func consumeGraphInterruptInputStates(
+	state State,
+	inputs map[string][]State,
+	nodeID string,
+) (State, bool) {
+	values, ok := inputs[nodeID]
+	if !ok || len(values) == 0 {
+		return nil, false
+	}
+	input := values[0]
+	if input == nil {
+		return nil, false
+	}
+	if len(values) == 1 {
+		delete(inputs, nodeID)
+	} else {
+		inputs[nodeID] = values[1:]
+	}
+	if len(inputs) == 0 {
+		delete(state, StateKeyGraphInterruptInputs)
+	}
+	return input, true
+}
+
+func consumeGraphInterruptInputAny(
+	state State,
+	inputs map[string]any,
+	nodeID string,
+) (State, bool) {
+	value, ok := inputs[nodeID]
+	if !ok || value == nil {
+		return nil, false
+	}
+
+	switch v := value.(type) {
+	case State:
+		if v == nil {
+			return nil, false
+		}
+		delete(inputs, nodeID)
+		cleanupGraphInterruptInputs(state, inputs)
+		return v, true
+	case map[string]any:
+		if v == nil {
+			return nil, false
+		}
+		delete(inputs, nodeID)
+		cleanupGraphInterruptInputs(state, inputs)
+		return State(v), true
+	case []State:
+		input, ok := consumeStateFromStateSlice(v)
+		if !ok {
+			return nil, false
+		}
+		if len(v) == 1 {
+			delete(inputs, nodeID)
+		} else {
+			inputs[nodeID] = v[1:]
+		}
+		cleanupGraphInterruptInputs(state, inputs)
+		return input, true
+	case []any:
+		input, ok := consumeStateFromAnySlice(v)
+		if !ok {
+			return nil, false
+		}
+		if len(v) == 1 {
+			delete(inputs, nodeID)
+		} else {
+			inputs[nodeID] = v[1:]
+		}
+		cleanupGraphInterruptInputs(state, inputs)
+		return input, true
+	default:
+		return nil, false
+	}
+}
+
+func consumeGraphInterruptInputAnySlice(
+	state State,
+	inputs map[string][]any,
+	nodeID string,
+) (State, bool) {
+	values, ok := inputs[nodeID]
+	if !ok || len(values) == 0 {
+		return nil, false
+	}
+	input, ok := consumeStateFromAnySlice(values)
+	if !ok {
+		return nil, false
+	}
+	if len(values) == 1 {
+		delete(inputs, nodeID)
+	} else {
+		inputs[nodeID] = values[1:]
+	}
+	if len(inputs) == 0 {
+		delete(state, StateKeyGraphInterruptInputs)
+	}
+	return input, true
+}
+
+func consumeStateFromStateSlice(values []State) (State, bool) {
+	if len(values) == 0 {
+		return nil, false
+	}
+	if values[0] == nil {
+		return nil, false
+	}
+	return values[0], true
+}
+
+func consumeStateFromAnySlice(values []any) (State, bool) {
+	if len(values) == 0 {
+		return nil, false
+	}
+	return stateFromAny(values[0])
+}
+
+func cleanupGraphInterruptInputs(state State, inputs map[string]any) {
+	if len(inputs) == 0 {
+		delete(state, StateKeyGraphInterruptInputs)
 	}
 }
 
@@ -1835,7 +2101,7 @@ func (e *Executor) executeStepTask(
 		report,
 	)
 	if err == nil && report != nil && t != nil {
-		report.markCompleted(t.NodeID)
+		report.markCompleted(t)
 	}
 	return err
 }
@@ -1945,7 +2211,7 @@ func (e *Executor) executeSingleTask(
 	// Initialize node execution context with retry policies and metadata.
 	nodeCtx := e.initializeNodeContext(ctx, invocation, execCtx, t, step)
 	if report != nil && nodeCtx != nil && t != nil {
-		report.recordInput(t.NodeID, nodeCtx.stateCopy)
+		report.recordInput(t, nodeCtx.stateCopy)
 	}
 
 	// Run before node callbacks.
