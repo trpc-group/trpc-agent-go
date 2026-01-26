@@ -14,7 +14,9 @@
 package processor
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -323,6 +325,8 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			invocation.Message.Role,
 		)
 	}
+
+	req.Messages = sanitizeToolCallMessages(req.Messages, p.AddContextPrefix)
 
 	// Send a preprocessing event.
 	agent.EmitEvent(ctx, invocation, ch, event.New(
@@ -680,6 +684,175 @@ func (p *ContentRequestProcessor) mergeUserMessages(
 		return messages
 	}
 	return merged
+}
+
+// collectFollowingToolMessages collects contiguous tool messages after startIndex.
+// It returns the collected messages and the next non-tool index.
+func collectFollowingToolMessages(messages []model.Message, startIndex int) ([]model.Message, int) {
+	j := startIndex
+	var toolMessages []model.Message
+	for j < len(messages) && messages[j].Role == model.RoleTool {
+		// Tool responses without a ToolID cannot be matched to a specific tool call.
+		if messages[j].ToolID != "" {
+			toolMessages = append(toolMessages, messages[j])
+		}
+		j++
+	}
+	return toolMessages, j
+}
+
+// filterToolCallsWithToolMessages keeps only the tool calls that have corresponding tool responses.
+func filterToolCallsWithToolMessages(toolCalls []model.ToolCall, toolMessages []model.Message) []model.ToolCall {
+	responded := make(map[string]struct{}, len(toolMessages))
+	for _, tm := range toolMessages {
+		if tm.ToolID == "" {
+			continue
+		}
+		responded[tm.ToolID] = struct{}{}
+	}
+	kept := make([]model.ToolCall, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		if tc.ID == "" {
+			continue
+		}
+		if _, ok := responded[tc.ID]; ok {
+			kept = append(kept, tc)
+		}
+	}
+	return kept
+}
+
+// splitToolCallsByValidJSONArguments partitions tool calls by whether their arguments are valid JSON.
+func splitToolCallsByValidJSONArguments(toolCalls []model.ToolCall) ([]model.ToolCall, []model.ToolCall) {
+	valid := make([]model.ToolCall, 0, len(toolCalls))
+	var invalid []model.ToolCall
+	for _, tc := range toolCalls {
+		trimmed := bytes.TrimSpace(tc.Function.Arguments)
+		if len(trimmed) > 0 && !json.Valid(trimmed) {
+			invalid = append(invalid, tc)
+			continue
+		}
+		valid = append(valid, tc)
+	}
+	return valid, invalid
+}
+
+// toolMessagesForToolCalls returns tool messages that correspond to toolCalls.
+func toolMessagesForToolCalls(toolMessages []model.Message, toolCalls []model.ToolCall) []model.Message {
+	toolCallIDs := make(map[string]struct{}, len(toolCalls))
+	for _, tc := range toolCalls {
+		if tc.ID == "" {
+			continue
+		}
+		toolCallIDs[tc.ID] = struct{}{}
+	}
+	kept := make([]model.Message, 0, len(toolMessages))
+	for _, tm := range toolMessages {
+		if _, ok := toolCallIDs[tm.ToolID]; ok {
+			kept = append(kept, tm)
+		}
+	}
+	return kept
+}
+
+// buildInvalidToolCallContextMessage builds a user context message that explains why tool calls were dropped.
+func buildInvalidToolCallContextMessage(
+	invalidToolCalls []model.ToolCall,
+	toolMessages []model.Message,
+	addContextPrefix bool,
+) (model.Message, bool) {
+	if len(invalidToolCalls) == 0 {
+		return model.Message{}, false
+	}
+	parts := make([]string, 0, 4+len(invalidToolCalls)*3)
+	if addContextPrefix {
+		parts = append(parts, contextPrefix)
+	}
+	parts = append(parts, "One or more previous tool calls could not be replayed because their arguments were not valid JSON.")
+	for _, tc := range invalidToolCalls {
+		parts = append(parts, fmt.Sprintf(
+			"Tool `%s` id `%s` raw arguments: %s",
+			tc.Function.Name,
+			tc.ID,
+			string(tc.Function.Arguments),
+		))
+		for _, tm := range toolMessages {
+			if tm.ToolID != tc.ID {
+				continue
+			}
+			toolName := tm.ToolName
+			if toolName == "" {
+				toolName = tc.Function.Name
+			}
+			if tm.Content != "" {
+				parts = append(parts, fmt.Sprintf(
+					"Tool `%s` id `%s` message: %s",
+					toolName,
+					tm.ToolID,
+					tm.Content,
+				))
+				continue
+			}
+			parts = append(parts, fmt.Sprintf(
+				"Tool `%s` id `%s` returned an empty message.",
+				toolName,
+				tm.ToolID,
+			))
+		}
+	}
+	return model.Message{
+		Role:    model.RoleUser,
+		Content: strings.Join(parts, "\n"),
+	}, true
+}
+
+// sanitizeToolCallMessages normalizes tool call sequences in message history.
+// It trims assistant tool calls to those that have a matching tool response message.
+// It also drops tool response messages that cannot be paired with the remaining tool calls.
+func sanitizeToolCallMessages(messages []model.Message, addContextPrefix bool) []model.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	out := make([]model.Message, 0, len(messages))
+	for i := 0; i < len(messages); {
+		msg := messages[i]
+		if msg.Role != model.RoleAssistant || len(msg.ToolCalls) == 0 {
+			out = append(out, msg)
+			i++
+			continue
+		}
+		toolMessages, j := collectFollowingToolMessages(messages, i+1)
+		keptToolCalls := filterToolCallsWithToolMessages(msg.ToolCalls, toolMessages)
+		if len(keptToolCalls) == 0 {
+			// If no tool calls are matched, drop tool calls from the assistant message.
+			// Keep the assistant message only if it still contains meaningful content.
+			cleaned := msg
+			cleaned.ToolCalls = nil
+			if cleaned.Content != "" || cleaned.ReasoningContent != "" || len(cleaned.ContentParts) > 0 {
+				out = append(out, cleaned)
+			}
+			i = j
+			continue
+		}
+
+		// Some providers validate tool_calls arguments as strict JSON and reject
+		// requests that replay invalid arguments from history. When this happens,
+		// rewrite the affected tool calls and tool responses into a user context
+		// message so the model can recover and retry.
+		validToolCalls, invalidToolCalls := splitToolCallsByValidJSONArguments(keptToolCalls)
+		if len(validToolCalls) > 0 {
+			msg.ToolCalls = validToolCalls
+			out = append(out, msg)
+			out = append(out, toolMessagesForToolCalls(toolMessages, validToolCalls)...)
+		}
+		if len(invalidToolCalls) > 0 {
+			if contextMessage, ok := buildInvalidToolCallContextMessage(invalidToolCalls, toolMessages, addContextPrefix); ok {
+				out = append(out, contextMessage)
+			}
+		}
+		i = j
+	}
+	return out
 }
 
 func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent.Invocation, filter string,
