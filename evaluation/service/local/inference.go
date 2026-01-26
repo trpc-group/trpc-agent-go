@@ -194,11 +194,12 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 	if req == nil {
 		return &service.InferenceResult{
 			Status:       status.EvalStatusFailed,
-			ErrorMessage: "inference request is nil",
+			ErrorMessage: "inference eval case: inference request is nil",
 		}
 	}
 	sessionID := s.sessionIDSupplier(ctx)
 	if evalCase == nil {
+		runErr := fmt.Errorf("inference eval case (sessionID=%s): eval case is nil", sessionID)
 		return newFailedInferenceResult(&service.InferenceResult{
 			AppName:    req.AppName,
 			EvalSetID:  req.EvalSetID,
@@ -206,7 +207,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 			EvalCaseID: "",
 			EvalMode:   evalset.EvalModeDefault,
 			UserID:     "",
-		}, errors.New("eval case is nil"))
+		}, runErr)
 	}
 
 	caseReq := cloneInferenceRequest(req)
@@ -226,10 +227,10 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 		runErr = fmt.Errorf("run before inference case callbacks (evalCaseID=%s, sessionID=%s): %w", evalCase.EvalID, sessionID, callbackErr)
 		newFailedInferenceResult(result, runErr)
 	} else if evalCase.SessionInput == nil {
-		runErr = errors.New("session input is nil")
+		runErr = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): session input is nil", evalCase.EvalID, sessionID)
 		newFailedInferenceResult(result, runErr)
 	} else if len(evalCase.Conversation) == 0 {
-		runErr = errors.New("invocations are empty")
+		runErr = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): invocations are empty", evalCase.EvalID, sessionID)
 		newFailedInferenceResult(result, runErr)
 	} else if evalCase.EvalMode == evalset.EvalModeTrace {
 		result.Inferences = evalCase.Conversation
@@ -244,8 +245,8 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 			evalCase.ContextMessages,
 		)
 		if err != nil {
-			runErr = err
-			newFailedInferenceResult(result, err)
+			runErr = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): %w", evalCase.EvalID, sessionID, err)
+			newFailedInferenceResult(result, runErr)
 		} else {
 			result.Inferences = inferences
 			result.Status = status.EvalStatusPassed

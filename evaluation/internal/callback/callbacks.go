@@ -104,7 +104,7 @@ func RunBeforeInferenceSet(ctx context.Context, callbacks *service.Callbacks, ar
 		},
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("execute BeforeInferenceSet callbacks: %w", err)
 	}
 	if result != nil && result.Context == nil {
 		return nil, nil
@@ -126,7 +126,7 @@ func RunAfterInferenceSet(ctx context.Context, callbacks *service.Callbacks, arg
 		},
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("execute AfterInferenceSet callbacks: %w", err)
 	}
 	if result != nil && result.Context == nil {
 		return nil, nil
@@ -148,7 +148,7 @@ func RunBeforeInferenceCase(ctx context.Context, callbacks *service.Callbacks, a
 		},
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("execute BeforeInferenceCase callbacks: %w", err)
 	}
 	if result != nil && result.Context == nil {
 		return nil, nil
@@ -170,7 +170,7 @@ func RunAfterInferenceCase(ctx context.Context, callbacks *service.Callbacks, ar
 		},
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("execute AfterInferenceCase callbacks: %w", err)
 	}
 	if result != nil && result.Context == nil {
 		return nil, nil
@@ -192,7 +192,7 @@ func RunBeforeEvaluateSet(ctx context.Context, callbacks *service.Callbacks, arg
 		},
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("execute BeforeEvaluateSet callbacks: %w", err)
 	}
 	if result != nil && result.Context == nil {
 		return nil, nil
@@ -214,7 +214,7 @@ func RunAfterEvaluateSet(ctx context.Context, callbacks *service.Callbacks, args
 		},
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("execute AfterEvaluateSet callbacks: %w", err)
 	}
 	if result != nil && result.Context == nil {
 		return nil, nil
@@ -236,7 +236,7 @@ func RunBeforeEvaluateCase(ctx context.Context, callbacks *service.Callbacks, ar
 		},
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("execute BeforeEvaluateCase callbacks: %w", err)
 	}
 	if result != nil && result.Context == nil {
 		return nil, nil
@@ -258,7 +258,7 @@ func RunAfterEvaluateCase(ctx context.Context, callbacks *service.Callbacks, arg
 		},
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("execute AfterEvaluateCase callbacks: %w", err)
 	}
 	if result != nil && result.Context == nil {
 		return nil, nil

@@ -186,7 +186,7 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*ev
 			if afterErr := s.runAfterEvaluateSetCallbacks(callbackCtx, req, nil, err); afterErr != nil {
 				err = errors.Join(err, afterErr)
 			}
-			return nil, err
+			return nil, fmt.Errorf("evaluate (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
 		}
 
 		caseCtx, err := s.runBeforeEvaluateCaseCallbacks(callbackCtx, req, inferenceResult.EvalCaseID)
@@ -194,7 +194,7 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*ev
 			if afterErr := s.runAfterEvaluateSetCallbacks(callbackCtx, req, nil, err); afterErr != nil {
 				err = errors.Join(err, afterErr)
 			}
-			return nil, err
+			return nil, fmt.Errorf("evaluate (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
 		}
 
 		var (
@@ -220,7 +220,7 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*ev
 			if afterErr := s.runAfterEvaluateSetCallbacks(callbackCtx, req, nil, err); afterErr != nil {
 				err = errors.Join(err, afterErr)
 			}
-			return nil, err
+			return nil, fmt.Errorf("evaluate (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
 		}
 	}
 	evalSetResult := &evalresult.EvalSetResult{
@@ -235,7 +235,7 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*ev
 		if afterErr := s.runAfterEvaluateSetCallbacks(callbackCtx, req, nil, err); afterErr != nil {
 			err = errors.Join(err, afterErr)
 		}
-		return nil, err
+		return nil, fmt.Errorf("evaluate (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
 	}
 	evalSetResult.EvalSetResultID = evalSetResultID
 	evalSetResult.EvalSetResultName = evalSetResultID
@@ -261,10 +261,10 @@ func (s *local) failedEvalCaseResult(evalSetID string, inferenceResult *service.
 func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.InferenceResult,
 	evaluateConfig *service.EvaluateConfig) (*evalresult.EvalCaseResult, error) {
 	if inferenceResult == nil {
-		return nil, errors.New("inference result is nil")
+		return nil, fmt.Errorf("evaluate per case: inference result is nil")
 	}
 	if evaluateConfig == nil {
-		return nil, errors.New("evaluate config is nil")
+		return nil, fmt.Errorf("evaluate per case (evalCaseID=%s): evaluate config is nil", inferenceResult.EvalCaseID)
 	}
 	evalCase, err := s.evalSetManager.GetCase(ctx,
 		inferenceResult.AppName,
@@ -272,11 +272,17 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		inferenceResult.EvalCaseID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("get eval case: %w", err)
+		return nil, fmt.Errorf(
+			"get eval case (app=%s, evalSetID=%s, evalCaseID=%s): %w",
+			inferenceResult.AppName,
+			inferenceResult.EvalSetID,
+			inferenceResult.EvalCaseID,
+			err,
+		)
 	}
 	inputs, err := prepareCaseEvaluationInputs(inferenceResult, evalCase)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("prepare case evaluation inputs (evalCaseID=%s): %w", inferenceResult.EvalCaseID, err)
 	}
 	// overallMetricResults collects the metric results for the entire eval case.
 	overallMetricResults := make([]*evalresult.EvalMetricResult, 0, len(evaluateConfig.EvalMetrics))
