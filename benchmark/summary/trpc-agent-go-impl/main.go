@@ -890,6 +890,9 @@ func loadFromDataset(
 	numCases int,
 	taskFilters []string,
 ) ([]*evalset.EvalCase, error) {
+	// Clean the path to remove trailing slashes for consistent filepath operations.
+	datasetPath = filepath.Clean(datasetPath)
+
 	info, err := os.Stat(datasetPath)
 	if err != nil {
 		return nil, fmt.Errorf("dataset path does not exist: %w", err)
