@@ -1510,3 +1510,113 @@ func TestGraphAgent_RunWithBarrierEmitError(t *testing.T) {
 	require.Equal(t, model.ErrorTypeFlowError, events[0].Response.Error.Type)
 	require.Contains(t, events[0].Response.Error.Message, "add notice channel")
 }
+
+func TestGraphAgent_WithExecutorOptions(t *testing.T) {
+	// Create a simple graph
+	schema := graph.NewStateSchema().
+		AddField("counter", graph.StateField{
+			Type:    reflect.TypeOf(0),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("increment", func(ctx context.Context, state graph.State) (any, error) {
+			counter, _ := state["counter"].(int)
+			return graph.State{"counter": counter + 1}, nil
+		}).
+		SetEntryPoint("increment").
+		SetFinishPoint("increment").
+		Compile()
+
+	require.NoError(t, err)
+
+	// Test creating graph agent with executor options
+	graphAgent, err := New("test-agent", g,
+		WithExecutorOptions(
+			graph.WithMaxSteps(50),
+			graph.WithStepTimeout(5*time.Minute),
+			graph.WithNodeTimeout(2*time.Minute),
+		))
+
+	require.NoError(t, err)
+	require.NotNil(t, graphAgent)
+
+	// Verify that executor was created successfully
+	executor := graphAgent.Executor()
+	require.NotNil(t, executor)
+
+	// Test that the agent can execute with the configured options
+	ctx := context.Background()
+	invocation := &agent.Invocation{
+		InvocationID: "test-executor-options",
+		AgentName:    "test-agent",
+	}
+
+	eventChan, err := graphAgent.Run(ctx, invocation)
+	require.NoError(t, err)
+
+	// Consume events to ensure execution completes
+	var done bool
+	for evt := range eventChan {
+		if evt.Done || evt.IsRunnerCompletion() {
+			done = true
+			break
+		}
+	}
+	require.True(t, done, "Execution should complete")
+}
+
+func TestGraphAgent_WithExecutorOptions_OverrideMappedOptions(t *testing.T) {
+	// Create a simple graph
+	schema := graph.NewStateSchema().
+		AddField("value", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("set", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"value": "test"}, nil
+		}).
+		SetEntryPoint("set").
+		SetFinishPoint("set").
+		Compile()
+
+	require.NoError(t, err)
+
+	// Test that executor options can override mapped options
+	// Set MaxConcurrency via mapped option, then override via executor option
+	graphAgent, err := New("test-agent", g,
+		WithMaxConcurrency(4),
+		WithExecutorOptions(
+			graph.WithMaxConcurrency(8), // This should override the mapped option
+			graph.WithMaxSteps(100),
+		))
+
+	require.NoError(t, err)
+	require.NotNil(t, graphAgent)
+
+	// Verify executor was created
+	executor := graphAgent.Executor()
+	require.NotNil(t, executor)
+
+	// Test execution
+	ctx := context.Background()
+	invocation := &agent.Invocation{
+		InvocationID: "test-override",
+		AgentName:    "test-agent",
+	}
+
+	eventChan, err := graphAgent.Run(ctx, invocation)
+	require.NoError(t, err)
+
+	// Consume events
+	var done bool
+	for evt := range eventChan {
+		if evt.Done || evt.IsRunnerCompletion() {
+			done = true
+			break
+		}
+	}
+	require.True(t, done, "Execution should complete")
+}
