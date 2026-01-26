@@ -42,15 +42,16 @@ truncation and include extra debug fields.
 ## LLM Setup (Agent Suite)
 
 The agent suite requires a model endpoint via `OPENAI_API_KEY` (and
-optionally `OPENAI_BASE_URL`). In this repo's environment, you can run:
+optionally `OPENAI_BASE_URL`).
 
 ```bash
-source ~/.zshrc
-gpt5
+export OPENAI_API_KEY="..."
+export OPENAI_BASE_URL="https://api.openai.com/v1"  # optional
+export MODEL_NAME="gpt-5"                           # optional
 ```
 
-If you see a clang "missing sysroot" error after sourcing `~/.zshrc`,
-run Go with `CGO_ENABLED=0` or `unset SDKROOT` before `go run`.
+If you see a clang "missing sysroot" error (macOS), run Go with
+`CGO_ENABLED=0` or `unset SDKROOT` before `go run`.
 
 ## Common Flags
 
