@@ -49,7 +49,18 @@ const (
 	cmdEcho         = "echo"
 	cmdLS           = "ls"
 	cmdEchoThenLS   = "echo ok; ls"
+
+	errCollectFail     = "collect-fail"
+	errPutFail         = "put-fail"
+	errRunFail         = "run-fail"
+	metadataWhitespace = " "
 )
+
+const metadataZeroValuesJSON = `{
+  "version": 0,
+  "created_at": "0001-01-01T00:00:00Z",
+  "skills": null
+}`
 
 // writeSkill creates a minimal skill folder.
 func writeSkill(t *testing.T, root, name string) string {
@@ -1245,7 +1256,7 @@ func TestRunTool_Call_InvalidInputSpec_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRunTool_stageSkill_EnsureLayoutError(t *testing.T) {
+func TestRunTool_stageSkill_WorkspaceRootFileError(t *testing.T) {
 	root := t.TempDir()
 	dir := writeSkill(t, root, testSkillName)
 	repo, err := skill.NewFSRepository(root)
@@ -1253,7 +1264,7 @@ func TestRunTool_stageSkill_EnsureLayoutError(t *testing.T) {
 	rt := NewRunTool(repo, localexec.New())
 	eng := localexec.New().Engine()
 
-	// Workspace path points to a file; EnsureLayout should fail.
+	// Workspace path points to a file; staging should fail.
 	tmpf := filepath.Join(t.TempDir(), "asfile")
 	require.NoError(t, os.WriteFile(tmpf, []byte("x"), 0o644))
 	ws := codeexecutor.Workspace{ID: "bad", Path: tmpf}
@@ -1364,7 +1375,7 @@ func TestRunTool_stageSkill_LoadMetadataError(t *testing.T) {
 	))
 
 	rt := &RunTool{}
-	eng := &fakeEngine{}
+	eng := localexec.New().Engine()
 	err = rt.stageSkill(context.Background(), eng, ws, dir,
 		testSkillName,
 	)
@@ -1716,15 +1727,209 @@ func TestRunTool_WorkspacePersistsAcrossCalls(t *testing.T) {
 }
 
 func TestSkillStagingHelpers_EarlyReturns(t *testing.T) {
-	require.False(t, skillLinksPresent("", "a"))
-	require.False(t, skillLinksPresent("a", ""))
-
-	require.False(t, isSymlink(filepath.Join(t.TempDir(), "missing")))
-
 	rt := &RunTool{}
 	ctx := context.Background()
 	ws := codeexecutor.Workspace{}
 
+	ok, err := rt.skillLinksPresent(ctx, nil, ws, "")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	ok, err = rt.skillLinksPresent(ctx, nil, ws, testSkillName)
+	require.Error(t, err)
+	require.False(t, ok)
+
 	require.NoError(t, rt.removeWorkspacePath(ctx, nil, ws, ""))
-	require.NoError(t, rt.removeWorkspacePath(ctx, nil, ws, "skills/demo"))
+	require.NoError(t, rt.removeWorkspacePath(
+		ctx,
+		nil,
+		ws,
+		path.Join(codeexecutor.DirSkills, testSkillName),
+	))
+}
+
+type stubFS struct {
+	collectFiles []codeexecutor.File
+	collectErr   error
+
+	putErr   error
+	putCalls int
+	putFiles []codeexecutor.PutFile
+}
+
+func (s *stubFS) PutFiles(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	files []codeexecutor.PutFile,
+) error {
+	s.putCalls++
+	s.putFiles = append(s.putFiles, files...)
+	return s.putErr
+}
+
+func (*stubFS) StageDirectory(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	_ string,
+	_ string,
+	_ codeexecutor.StageOptions,
+) error {
+	return nil
+}
+
+func (s *stubFS) Collect(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	_ []string,
+) ([]codeexecutor.File, error) {
+	if s.collectErr != nil {
+		return nil, s.collectErr
+	}
+	return s.collectFiles, nil
+}
+
+func (*stubFS) StageInputs(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	_ []codeexecutor.InputSpec,
+) error {
+	return nil
+}
+
+func (*stubFS) CollectOutputs(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	_ codeexecutor.OutputSpec,
+) (codeexecutor.OutputManifest, error) {
+	return codeexecutor.OutputManifest{}, nil
+}
+
+type stubRunner struct {
+	res      codeexecutor.RunResult
+	err      error
+	calls    int
+	lastSpec codeexecutor.RunProgramSpec
+}
+
+func (r *stubRunner) RunProgram(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	r.calls++
+	r.lastSpec = spec
+	return r.res, r.err
+}
+
+type stubEngine struct {
+	f codeexecutor.WorkspaceFS
+	r codeexecutor.ProgramRunner
+}
+
+func (*stubEngine) Manager() codeexecutor.WorkspaceManager { return nil }
+func (e *stubEngine) FS() codeexecutor.WorkspaceFS         { return e.f }
+func (e *stubEngine) Runner() codeexecutor.ProgramRunner   { return e.r }
+
+func (*stubEngine) Describe() codeexecutor.Capabilities {
+	return codeexecutor.Capabilities{}
+}
+
+func TestRunTool_loadWorkspaceMetadata_CoversBranches(t *testing.T) {
+	rt := &RunTool{}
+	ctx := context.Background()
+	ws := codeexecutor.Workspace{}
+
+	_, err := rt.loadWorkspaceMetadata(ctx, nil, ws)
+	require.Error(t, err)
+
+	fs := &stubFS{collectErr: fmt.Errorf(errCollectFail)}
+	eng := &stubEngine{f: fs}
+	_, err = rt.loadWorkspaceMetadata(ctx, eng, ws)
+	require.Error(t, err)
+
+	fs.collectErr = nil
+	md, err := rt.loadWorkspaceMetadata(ctx, eng, ws)
+	require.NoError(t, err)
+	require.Equal(t, 1, md.Version)
+	require.NotNil(t, md.Skills)
+
+	fs.collectFiles = []codeexecutor.File{{
+		Name:    codeexecutor.MetaFileName,
+		Content: metadataWhitespace,
+	}}
+	md, err = rt.loadWorkspaceMetadata(ctx, eng, ws)
+	require.NoError(t, err)
+	require.Equal(t, 1, md.Version)
+	require.NotNil(t, md.Skills)
+
+	fs.collectFiles = []codeexecutor.File{{
+		Name:    codeexecutor.MetaFileName,
+		Content: metadataZeroValuesJSON,
+	}}
+	start := time.Now()
+	md, err = rt.loadWorkspaceMetadata(ctx, eng, ws)
+	require.NoError(t, err)
+	require.Equal(t, 1, md.Version)
+	require.NotNil(t, md.Skills)
+	require.False(t, md.CreatedAt.IsZero())
+	require.False(t, md.CreatedAt.Before(start))
+}
+
+func TestRunTool_saveWorkspaceMetadata_CoversBranches(t *testing.T) {
+	rt := &RunTool{}
+	ctx := context.Background()
+	ws := codeexecutor.Workspace{ID: "x", Path: t.TempDir()}
+	md := codeexecutor.WorkspaceMetadata{}
+
+	err := rt.saveWorkspaceMetadata(ctx, nil, ws, md)
+	require.Error(t, err)
+
+	fs := &stubFS{}
+	eng := &stubEngine{f: fs}
+	err = rt.saveWorkspaceMetadata(ctx, eng, ws, md)
+	require.Error(t, err)
+
+	r := &stubRunner{}
+	eng.r = r
+	fs.putErr = fmt.Errorf(errPutFail)
+	err = rt.saveWorkspaceMetadata(ctx, eng, ws, md)
+	require.Error(t, err)
+	require.Equal(t, 1, fs.putCalls)
+	require.Equal(t, 0, r.calls)
+	require.Equal(t, workspaceMetadataTmpFile, fs.putFiles[0].Path)
+	require.Equal(t, workspaceMetadataFileMode, fs.putFiles[0].Mode)
+
+	fs.putErr = nil
+	r.err = fmt.Errorf(errRunFail)
+	err = rt.saveWorkspaceMetadata(ctx, eng, ws, md)
+	require.Error(t, err)
+	require.Equal(t, 2, fs.putCalls)
+	require.Equal(t, 1, r.calls)
+	require.Equal(t, "bash", r.lastSpec.Cmd)
+	require.Len(t, r.lastSpec.Args, 2)
+	require.Contains(t, r.lastSpec.Args[1], "mv -f")
+}
+
+func TestRunTool_skillLinksPresent_ExitCodes(t *testing.T) {
+	rt := &RunTool{}
+	ctx := context.Background()
+	ws := codeexecutor.Workspace{}
+
+	r := &stubRunner{res: codeexecutor.RunResult{ExitCode: 1}}
+	eng := &stubEngine{r: r}
+
+	ok, err := rt.skillLinksPresent(ctx, eng, ws, testSkillName)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	r.err = fmt.Errorf(errRunFail)
+	ok, err = rt.skillLinksPresent(ctx, eng, ws, testSkillName)
+	require.Error(t, err)
+	require.False(t, ok)
+
+	r.res = codeexecutor.RunResult{ExitCode: 0}
+	r.err = fmt.Errorf(errRunFail)
+	ok, err = rt.skillLinksPresent(ctx, eng, ws, testSkillName)
+	require.Error(t, err)
+	require.False(t, ok)
 }
