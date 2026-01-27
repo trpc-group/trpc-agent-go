@@ -1750,6 +1750,43 @@ Resuming:
 
 See `examples/graph/static_interrupt` for an end-to-end runnable demo.
 
+### 3. External Interrupt (Pause Button)
+
+Sometimes you want to pause a running graph from *outside* the graph (for
+example, a UI pause button, an admin API, or a service shutdown hook), without
+adding `graph.Interrupt(...)` calls inside node logic.
+
+Use `graph.WithGraphInterrupt` to create a context + a function that can
+request an interrupt:
+
+```go
+ctx, interrupt := graph.WithGraphInterrupt(context.Background())
+
+// Run the graph with ctx (GraphAgent + Runner example).
+events, _ := app.Run(ctx, userID, sessionID, model.NewUserMessage("hi"))
+
+// From another goroutine / handler:
+interrupt() // graceful: wait current step finishes, then pause
+
+// Or force after a max wait:
+interrupt(graph.WithGraphInterruptTimeout(2 * time.Second))
+```
+
+Behavior:
+
+- By default, the executor waits for the current step's tasks to finish and
+  interrupts before starting the next step.
+- With `WithGraphInterruptTimeout`, the executor cancels in-flight tasks after
+  the timeout and interrupts as soon as it can. Nodes that were canceled are
+  re-run when resuming.
+
+Resuming:
+
+- You still resume via checkpoints: run again with the same `lineage_id` and
+  the `checkpoint_id` from the interrupt event (same as static interrupts).
+- Checkpointing must be enabled (configure a `CheckpointSaver`) for resume to
+  work.
+
 ### Execution
 
 - Wrap the compiled graph with `graphagent.New` (as a generic `agent.Agent`) and hand it to `runner.Runner` to manage sessions and streaming events.

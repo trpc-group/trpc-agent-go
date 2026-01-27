@@ -1726,6 +1726,41 @@ sg.WithInterruptAfterNodes("my_node")
 
 可参考 `examples/graph/static_interrupt` 的完整可运行示例。
 
+### 3. 外部中断（暂停按钮）
+
+有时你希望从图**外部**暂停一个正在运行的图（例如 UI 的暂停按钮、管理端
+API、服务优雅下线钩子），并且不想在节点代码里显式写
+`graph.Interrupt(...)`。
+
+可以使用 `graph.WithGraphInterrupt` 创建一个上下文和一个 `interrupt`
+函数，通过调用该函数来请求中断：
+
+```go
+ctx, interrupt := graph.WithGraphInterrupt(context.Background())
+
+// 用 ctx 来运行图（GraphAgent + Runner 示例）
+events, _ := app.Run(ctx, userID, sessionID, model.NewUserMessage("hi"))
+
+// 在另一个 goroutine / handler 中触发：
+interrupt() // 优雅中断：等待当前 step 的任务结束后暂停
+
+// 或者设置最大等待时间，超时后强制中断：
+interrupt(graph.WithGraphInterruptTimeout(2 * time.Second))
+```
+
+行为说明：
+
+- 默认情况下，执行器会等待当前 step 的任务执行完成，然后在开始下一步
+  之前中断。
+- 使用 `WithGraphInterruptTimeout` 时，执行器会在超时后取消正在运行的任务，
+  并尽快中断；被取消的节点会在恢复时重新执行。
+
+恢复方式：
+
+- 仍然是通过 checkpoint 恢复：用相同的 `lineage_id` + 中断事件里的
+  `checkpoint_id` 重新运行（与静态中断一致）。
+- 需要开启 checkpoint（配置 `CheckpointSaver`）才能恢复。
+
 ### 执行方式
 
 - 用 `graphagent.New` 包装成通用 `agent.Agent`，交给 `runner.Runner` 管理会话与事件流。

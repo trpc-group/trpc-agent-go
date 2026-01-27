@@ -122,6 +122,20 @@ func TestFSRepository_Summaries_And_Get_WithDocs(t *testing.T) {
 	require.False(t, names["img.bin"])
 }
 
+func TestFSRepository_Summaries_SortedByName(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "b")
+	writeSkill(t, root, "a")
+
+	repo, err := NewFSRepository(root)
+	require.NoError(t, err)
+
+	sums := repo.Summaries()
+	require.Len(t, sums, 2)
+	require.Equal(t, "a", sums[0].Name)
+	require.Equal(t, "b", sums[1].Name)
+}
+
 func TestFSRepository_Get_IncludesNestedDocs(t *testing.T) {
 	const (
 		skillName   = "one"
