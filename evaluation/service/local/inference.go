@@ -33,11 +33,10 @@ func (s *local) Inference(ctx context.Context, req *service.InferenceRequest) (r
 			req.AppName, req.EvalSetID, err)
 	}
 	defer func() {
-		err = s.runAfterInferenceSetCallbacks(ctx, req, results, err)
-		if err != nil {
+		afterErr := s.runAfterInferenceSetCallbacks(ctx, req, results, err)
+		if afterErr != nil {
 			results = nil
-			err = fmt.Errorf("run after inference set callbacks (app=%s, evalSetID=%s): %w",
-				req.AppName, req.EvalSetID, err)
+			err = afterErr
 		}
 	}()
 	evalCases, err := s.loadInferenceEvalCases(ctx, req)
@@ -78,6 +77,46 @@ func (s *local) runAfterInferenceSetCallbacks(
 	})
 	if err != nil {
 		return fmt.Errorf("run after inference set callbacks (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
+	}
+	return nil
+}
+
+func (s *local) runBeforeInferenceCaseCallbacks(
+	ctx context.Context,
+	req *service.InferenceRequest,
+	evalCaseID string,
+	sessionID string,
+) (context.Context, error) {
+	result, err := callback.RunBeforeInferenceCase(ctx, s.callbacks, &service.BeforeInferenceCaseArgs{
+		Request:    req,
+		EvalCaseID: evalCaseID,
+		SessionID:  sessionID,
+	})
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if err != nil {
+		return ctx, fmt.Errorf("run before inference case callbacks (app=%s, evalSetID=%s, evalCaseID=%s, sessionID=%s): %w",
+			req.AppName, req.EvalSetID, evalCaseID, sessionID, err)
+	}
+	return ctx, nil
+}
+
+func (s *local) runAfterInferenceCaseCallbacks(
+	ctx context.Context,
+	req *service.InferenceRequest,
+	evalCaseID string,
+	result *service.InferenceResult,
+	err error,
+) error {
+	_, afterErr := callback.RunAfterInferenceCase(ctx, s.callbacks, &service.AfterInferenceCaseArgs{
+		Request: req,
+		Result:  result,
+		Error:   err,
+	})
+	if afterErr != nil {
+		return fmt.Errorf("run after inference case callbacks (app=%s, evalSetID=%s, evalCaseID=%s): %w",
+			req.AppName, req.EvalSetID, evalCaseID, afterErr)
 	}
 	return nil
 }
@@ -188,7 +227,7 @@ func (s *local) inferEvalCasesParallel(ctx context.Context, req *service.Inferen
 	return results, nil
 }
 
-func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceRequest, evalCase *evalset.EvalCase) *service.InferenceResult {
+func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceRequest, evalCase *evalset.EvalCase) (result *service.InferenceResult) {
 	if req == nil {
 		return &service.InferenceResult{
 			Status:       status.EvalStatusFailed,
@@ -207,58 +246,52 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 			UserID:     "",
 		}, runErr)
 	}
-
-	caseCtx := ctx
-	beforeResult, callbackErr := callback.RunBeforeInferenceCase(caseCtx, s.callbacks, &service.BeforeInferenceCaseArgs{
-		Request:    req,
-		EvalCaseID: evalCase.EvalID,
-		SessionID:  sessionID,
-	})
-	if beforeResult != nil && beforeResult.Context != nil {
-		caseCtx = beforeResult.Context
+	ctx, err := s.runBeforeInferenceCaseCallbacks(ctx, req, evalCase.EvalID, sessionID)
+	if err != nil {
+		return newFailedInferenceResult(&service.InferenceResult{
+			AppName:    req.AppName,
+			EvalSetID:  req.EvalSetID,
+			SessionID:  sessionID,
+			EvalCaseID: "",
+			EvalMode:   evalset.EvalModeDefault,
+			UserID:     "",
+		}, err)
 	}
-
-	result := newInferenceResult(req.AppName, req.EvalSetID, sessionID, evalCase)
+	defer func() {
+		afterErr := s.runAfterInferenceCaseCallbacks(ctx, req, evalCase.EvalID, result, nil)
+		if afterErr != nil {
+			result = newFailedInferenceResult(result, errors.Join(nil, afterErr))
+		}
+	}()
+	result = newInferenceResult(req.AppName, req.EvalSetID, sessionID, evalCase)
 	var runErr error
-	if callbackErr != nil {
-		runErr = fmt.Errorf("run before inference case callbacks (evalCaseID=%s, sessionID=%s): %w", evalCase.EvalID, sessionID, callbackErr)
-		newFailedInferenceResult(result, runErr)
-	} else if evalCase.SessionInput == nil {
+	if evalCase.SessionInput == nil {
 		runErr = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): session input is nil", evalCase.EvalID, sessionID)
-		newFailedInferenceResult(result, runErr)
-	} else if len(evalCase.Conversation) == 0 {
+		return newFailedInferenceResult(result, runErr)
+	}
+	if len(evalCase.Conversation) == 0 {
 		runErr = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): invocations are empty", evalCase.EvalID, sessionID)
-		newFailedInferenceResult(result, runErr)
-	} else if evalCase.EvalMode == evalset.EvalModeTrace {
+		return newFailedInferenceResult(result, runErr)
+	}
+	if evalCase.EvalMode == evalset.EvalModeTrace {
 		result.Inferences = evalCase.Conversation
 		result.Status = status.EvalStatusPassed
-	} else {
-		inferences, err := inference.Inference(
-			caseCtx,
-			s.runner,
-			evalCase.Conversation,
-			evalCase.SessionInput,
-			sessionID,
-			evalCase.ContextMessages,
-		)
-		if err != nil {
-			runErr = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): %w", evalCase.EvalID, sessionID, err)
-			newFailedInferenceResult(result, runErr)
-		} else {
-			result.Inferences = inferences
-			result.Status = status.EvalStatusPassed
-		}
+		return result
 	}
-
-	_, afterErr := callback.RunAfterInferenceCase(caseCtx, s.callbacks, &service.AfterInferenceCaseArgs{
-		Request: req,
-		Result:  result,
-		Error:   runErr,
-	})
-	if afterErr != nil {
-		afterErr = fmt.Errorf("run after inference case callbacks (evalCaseID=%s): %w", evalCase.EvalID, afterErr)
-		newFailedInferenceResult(result, errors.Join(runErr, afterErr))
+	inferences, err := inference.Inference(
+		ctx,
+		s.runner,
+		evalCase.Conversation,
+		evalCase.SessionInput,
+		sessionID,
+		evalCase.ContextMessages,
+	)
+	if err != nil {
+		runErr = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): %w", evalCase.EvalID, sessionID, err)
+		return newFailedInferenceResult(result, runErr)
 	}
+	result.Inferences = inferences
+	result.Status = status.EvalStatusPassed
 	return result
 }
 
