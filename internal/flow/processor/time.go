@@ -133,13 +133,18 @@ func (p *TimeRequestProcessor) getCurrentTime() string {
 // addTimeToSystemMessage adds time information to the system message.
 func (p *TimeRequestProcessor) addTimeToSystemMessage(req *model.Request, timeContent string) {
 	// Find existing system message or create new one.
-	systemMsgIndex := findSystemMessageIndex(req.Messages)
+	systemMsgIndex := findLastSystemMessageIndex(req.Messages)
 
 	if systemMsgIndex >= 0 {
 		// There's already a system message, check if it contains time info.
 		if !containsTimeInfo(req.Messages[systemMsgIndex].Content, timeContent) {
 			// Append time info to existing system message.
-			req.Messages[systemMsgIndex].Content += "\n\n" + timeContent
+			if req.Messages[systemMsgIndex].Content == "" {
+				req.Messages[systemMsgIndex].Content = timeContent
+			} else {
+				req.Messages[systemMsgIndex].Content += "\n\n" +
+					timeContent
+			}
 		}
 	} else {
 		// No existing system message, create new one.

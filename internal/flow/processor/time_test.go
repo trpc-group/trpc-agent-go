@@ -164,6 +164,75 @@ func TestTimeRequestProcessor_ProcessRequest_WithExistingSystemMessage(t *testin
 	}
 }
 
+func TestTimeRequestProcessor_ProcessRequest_AppendsToLastSystem(
+	t *testing.T,
+) {
+	processor := NewTimeRequestProcessor(WithAddCurrentTime(true))
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system 1"),
+			model.NewSystemMessage("system 2"),
+			model.NewUserMessage("hello"),
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	processor.ProcessRequest(context.Background(), nil, req, ch)
+
+	if len(req.Messages) != 3 {
+		t.Errorf("Expected 3 messages, got %d", len(req.Messages))
+	}
+
+	if strings.Contains(req.Messages[0].Content, "The current time is:") {
+		t.Errorf(
+			"Expected time appended to last system message, got: %s",
+			req.Messages[0].Content,
+		)
+	}
+	if !strings.Contains(req.Messages[1].Content, "The current time is:") {
+		t.Errorf(
+			"Expected time appended to last system message, got: %s",
+			req.Messages[1].Content,
+		)
+	}
+}
+
+func TestTimeRequestProcessor_ProcessRequest_SetsEmptyLastSystem(
+	t *testing.T,
+) {
+	processor := NewTimeRequestProcessor(WithAddCurrentTime(true))
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system 1"),
+			model.NewSystemMessage(""),
+			model.NewUserMessage("hello"),
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	processor.ProcessRequest(context.Background(), nil, req, ch)
+
+	if len(req.Messages) != 3 {
+		t.Errorf("Expected 3 messages, got %d", len(req.Messages))
+	}
+
+	if strings.Contains(req.Messages[0].Content, "The current time is:") {
+		t.Errorf(
+			"Expected time set on last system message, got: %s",
+			req.Messages[0].Content,
+		)
+	}
+	if !strings.HasPrefix(
+		req.Messages[1].Content,
+		"The current time is:",
+	) {
+		t.Errorf(
+			"Expected time set on last system message, got: %s",
+			req.Messages[1].Content,
+		)
+	}
+}
+
 func TestTimeRequestProcessor_ProcessRequest_WithTimezone(t *testing.T) {
 	processor := NewTimeRequestProcessor(
 		WithAddCurrentTime(true),

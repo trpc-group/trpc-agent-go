@@ -155,6 +155,9 @@ func (r *FSRepository) Summaries() []Summary {
 		}
 		out = append(out, s)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
 	return out
 }
 
