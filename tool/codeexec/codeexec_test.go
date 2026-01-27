@@ -43,9 +43,15 @@ func TestNewTool(t *testing.T) {
 
 		assert.Equal(t, "execute_code", decl.Name)
 		assert.Contains(t, decl.Description, "Execute code")
-		assert.Equal(t, []string{"language", "code"}, decl.InputSchema.Required)
+		assert.Equal(t, []string{"code_blocks"}, decl.InputSchema.Required)
 
-		langSchema := decl.InputSchema.Properties["language"]
+		cbSchema := decl.InputSchema.Properties["code_blocks"]
+		require.NotNil(t, cbSchema)
+		assert.Equal(t, "array", cbSchema.Type)
+		require.NotNil(t, cbSchema.Items)
+		assert.Equal(t, "object", cbSchema.Items.Type)
+
+		langSchema := cbSchema.Items.Properties["language"]
 		assert.Equal(t, "string", langSchema.Type)
 		assert.Equal(t, []any{"python", "bash"}, langSchema.Enum)
 
@@ -53,7 +59,6 @@ func TestNewTool(t *testing.T) {
 		assert.Equal(t, "object", decl.OutputSchema.Type)
 		assert.Equal(t, []string{"output"}, decl.OutputSchema.Required)
 		assert.Equal(t, "string", decl.OutputSchema.Properties["output"].Type)
-		assert.Equal(t, "string", decl.OutputSchema.Properties["error"].Type)
 	})
 
 	t.Run("with custom name", func(t *testing.T) {
@@ -74,7 +79,10 @@ func TestNewTool(t *testing.T) {
 		ct := NewTool(exec, WithLanguages("python", "javascript", "go"))
 		decl := ct.Declaration()
 
-		langSchema := decl.InputSchema.Properties["language"]
+		cbSchema := decl.InputSchema.Properties["code_blocks"]
+		require.NotNil(t, cbSchema)
+		require.NotNil(t, cbSchema.Items)
+		langSchema := cbSchema.Items.Properties["language"]
 		assert.Equal(t, []any{"python", "javascript", "go"}, langSchema.Enum)
 	})
 
@@ -88,7 +96,12 @@ func TestNewTool(t *testing.T) {
 
 		assert.Equal(t, "custom_exec", decl.Name)
 		assert.Equal(t, "My code executor", decl.Description)
-		assert.Equal(t, []any{"python"}, decl.InputSchema.Properties["language"].Enum)
+		cbSchema := decl.InputSchema.Properties["code_blocks"]
+		require.NotNil(t, cbSchema)
+		require.NotNil(t, cbSchema.Items)
+		langSchema := cbSchema.Items.Properties["language"]
+		require.NotNil(t, langSchema)
+		assert.Equal(t, []any{"python"}, langSchema.Enum)
 	})
 
 }
@@ -102,19 +115,20 @@ func TestExecuteCodeTool_Call(t *testing.T) {
 		}
 		ct := NewTool(exec)
 
-		input := ExecuteCodeInput{
-			Language: "python",
-			Code:     "print('Hello, World!')",
+		input := codeexecutor.CodeExecutionInput{
+			CodeBlocks: []codeexecutor.CodeBlock{{
+				Language: "python",
+				Code:     "print('Hello, World!')",
+			}},
 		}
 		args, _ := json.Marshal(input)
 
 		result, err := ct.Call(context.Background(), args)
 
 		require.NoError(t, err)
-		output, ok := result.(ExecuteCodeOutput)
+		output, ok := result.(codeexecutor.CodeExecutionResult)
 		require.True(t, ok)
 		assert.Equal(t, "Hello, World!\n", output.Output)
-		assert.Empty(t, output.Error)
 	})
 
 	t.Run("execution with error", func(t *testing.T) {
@@ -126,19 +140,21 @@ func TestExecuteCodeTool_Call(t *testing.T) {
 		}
 		ct := NewTool(exec)
 
-		input := ExecuteCodeInput{
-			Language: "python",
-			Code:     "print('unclosed",
+		input := codeexecutor.CodeExecutionInput{
+			CodeBlocks: []codeexecutor.CodeBlock{{
+				Language: "python",
+				Code:     "print('unclosed",
+			}},
 		}
 		args, _ := json.Marshal(input)
 
 		result, err := ct.Call(context.Background(), args)
 
-		require.NoError(t, err) // Call itself doesn't return error
-		output, ok := result.(ExecuteCodeOutput)
+		require.Error(t, err)
+		assert.Equal(t, "execution failed: syntax error", err.Error())
+		output, ok := result.(codeexecutor.CodeExecutionResult)
 		require.True(t, ok)
 		assert.Equal(t, "partial output", output.Output)
-		assert.Equal(t, "execution failed: syntax error", output.Error)
 	})
 
 	t.Run("invalid JSON input", func(t *testing.T) {
@@ -154,19 +170,20 @@ func TestExecuteCodeTool_Call(t *testing.T) {
 		exec := &mockCodeExecutor{}
 		ct := NewTool(exec) // default languages: python, bash
 
-		input := ExecuteCodeInput{
-			Language: "javascript",
-			Code:     "console.log('hi')",
+		input := codeexecutor.CodeExecutionInput{
+			CodeBlocks: []codeexecutor.CodeBlock{{
+				Language: "javascript",
+				Code:     "console.log('hi')",
+			}},
 		}
 		args, _ := json.Marshal(input)
 
 		result, err := ct.Call(context.Background(), args)
 		require.NoError(t, err)
 
-		output, ok := result.(ExecuteCodeOutput)
+		output, ok := result.(codeexecutor.CodeExecutionResult)
 		require.True(t, ok)
-		assert.Empty(t, output.Output)
-		assert.Equal(t, "unsupported language", output.Error)
+		assert.Equal(t, "Error: unsupported language: 0: javascript", output.Output)
 	})
 
 	t.Run("bash execution", func(t *testing.T) {
@@ -177,18 +194,35 @@ func TestExecuteCodeTool_Call(t *testing.T) {
 		}
 		ct := NewTool(exec)
 
-		input := ExecuteCodeInput{
-			Language: "bash",
-			Code:     "ls -la",
+		input := codeexecutor.CodeExecutionInput{
+			CodeBlocks: []codeexecutor.CodeBlock{{
+				Language: "bash",
+				Code:     "ls -la",
+			}},
 		}
 		args, _ := json.Marshal(input)
 
 		result, err := ct.Call(context.Background(), args)
 
 		require.NoError(t, err)
-		output, ok := result.(ExecuteCodeOutput)
+		output, ok := result.(codeexecutor.CodeExecutionResult)
 		require.True(t, ok)
 		assert.Contains(t, output.Output, "file1.txt")
+	})
+
+	t.Run("missing code_blocks", func(t *testing.T) {
+		exec := &mockCodeExecutor{}
+		ct := NewTool(exec)
+
+		input := codeexecutor.CodeExecutionInput{}
+		args, _ := json.Marshal(input)
+
+		result, err := ct.Call(context.Background(), args)
+		require.NoError(t, err)
+
+		output, ok := result.(codeexecutor.CodeExecutionResult)
+		require.True(t, ok)
+		assert.Equal(t, "Error: missing code_blocks", output.Output)
 	})
 }
 
@@ -208,18 +242,23 @@ func TestExecuteCodeTool_Declaration(t *testing.T) {
 	})
 
 	t.Run("has required fields", func(t *testing.T) {
-		assert.Contains(t, decl.InputSchema.Required, "language")
-		assert.Contains(t, decl.InputSchema.Required, "code")
+		assert.Contains(t, decl.InputSchema.Required, "code_blocks")
 	})
 
 	t.Run("language property has enum", func(t *testing.T) {
-		langProp := decl.InputSchema.Properties["language"]
+		cbSchema := decl.InputSchema.Properties["code_blocks"]
+		require.NotNil(t, cbSchema)
+		require.NotNil(t, cbSchema.Items)
+		langProp := cbSchema.Items.Properties["language"]
 		assert.NotNil(t, langProp)
 		assert.NotEmpty(t, langProp.Enum)
 	})
 
-	t.Run("code property is string", func(t *testing.T) {
-		codeProp := decl.InputSchema.Properties["code"]
+	t.Run("code_blocks items has code property", func(t *testing.T) {
+		cbSchema := decl.InputSchema.Properties["code_blocks"]
+		require.NotNil(t, cbSchema)
+		require.NotNil(t, cbSchema.Items)
+		codeProp := cbSchema.Items.Properties["code"]
 		assert.NotNil(t, codeProp)
 		assert.Equal(t, "string", codeProp.Type)
 	})
