@@ -55,8 +55,8 @@ type SkillsRequestProcessorOption func(*skillsRequestProcessorOptions)
 // available in the system prompt.
 //
 // Supported modes:
-//   - SkillLoadModeOnce (default)
-//   - SkillLoadModeTurn
+//   - SkillLoadModeTurn (default)
+//   - SkillLoadModeOnce
 //   - SkillLoadModeSession (legacy)
 func WithSkillLoadMode(mode string) SkillsRequestProcessorOption {
 	return func(o *skillsRequestProcessorOptions) {

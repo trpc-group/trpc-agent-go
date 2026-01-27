@@ -416,8 +416,8 @@ func WithSkills(repo skill.Repository) Option {
 // remain available in the system prompt.
 //
 // Supported modes:
-//   - SkillLoadModeOnce (default)
-//   - SkillLoadModeTurn
+//   - SkillLoadModeTurn (default)
+//   - SkillLoadModeOnce
 //   - SkillLoadModeSession (legacy)
 func WithSkillLoadMode(mode string) Option {
 	return func(opts *Options) {
