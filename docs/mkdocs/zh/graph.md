@@ -735,6 +735,20 @@ Model，LLM）消息（例如用于用户界面（User Interface，UI）的流�
 `agent.WithStreamMode(...)` 作为统一开关（见下文“事件监控”）。当选择
 `agent.StreamModeMessages` 时，Runner 会为本次运行自动开启 Graph 的最终响应事件输出。
 
+小贴士：解析 JSON/结构化文本（流式）
+
+- 流式分片（`choice.Delta.Content`）是增量输出，在模型调用结束前不保证能组成合法
+  JSON。
+- 如果你需要解析 JSON（或其他结构化文本），请不要对每个分片直接
+  `json.Unmarshal`。推荐先缓存完整字符串，再统一解析。
+
+常见做法：
+
+- **图内解析**：在下游节点从 `node_responses[nodeID]`（或严格串行流程里的
+  `last_response`）读取完整输出后再解析，因为这些值只会在节点完成后才写入状态。
+- **图外解析**（事件消费端）：累计 `Delta.Content`，在看到非 partial 的最终消息
+  （`choice.Message.Content`）或流程结束后再解析。
+
 #### 三种输入范式
 
 - OneShot（`StateKeyOneShotMessages`）：
@@ -937,6 +951,8 @@ graphAgent, err := graphagent.New(
 	graphagent.WithAgentCallbacks(&agent.Callbacks{
 		// Agent 级回调配置
 	}),
+	// 执行器高级配置选项，详见下方"执行器高级配置"章节
+	// graphagent.WithExecutorOptions(...),
 )
 ```
 
@@ -999,6 +1015,37 @@ ga := graphagent.New(
 - 自定义格式化器应确保摘要可与其他消息清楚地区分开
 - 默认格式设计为与大多数模型和使用场景兼容
 - 当使用 `WithAddSessionSummary(false)` 时，格式化器永远不会被调用
+
+#### 执行器高级配置
+
+`WithExecutorOptions` 允许您直接透传执行器选项，以配置 GraphAgent 底层执行器的行为。这对于需要精细控制执行器行为的场景非常有用，例如：
+
+- **超时控制**：为长时间运行的节点（如 agent tool 节点）设置合适的超时时间
+- **步数限制**：限制图执行的最大步数，防止无限循环
+- **重试策略**：配置默认的重试策略
+
+**使用示例：**
+
+```go
+graphAgent, err := graphagent.New("my-agent", compiledGraph,
+	graphagent.WithDescription("工作流描述"),
+	// 透传执行器选项
+	graphagent.WithExecutorOptions(
+		graph.WithMaxSteps(50),                          // 最大步数限制
+		graph.WithStepTimeout(5*time.Minute),            // 每个步骤的超时时间
+		graph.WithNodeTimeout(2*time.Minute),            // 单个节点的超时时间
+		graph.WithCheckpointSaveTimeout(30*time.Second), // 检查点保存超时
+		graph.WithDefaultRetryPolicy(                    // 默认重试策略
+			graph.WithSimpleRetry(3),
+		),
+	),
+)
+```
+
+**注意事项：**
+
+- `WithExecutorOptions` 中的选项会在映射选项（`ChannelBufferSize`、`MaxConcurrency`、`CheckpointSaver`）之后应用，因此可以覆盖这些映射选项
+- 如果不设置 `WithStepTimeout`，`WithNodeTimeout` 也不会自动推导（默认无超时）
 
 #### 并发使用注意事项
 
@@ -1299,6 +1346,8 @@ sg.AddMultiConditionalEdges(
 
 说明：
 
+- 与其他路由一样，扇出的目标节点会在 **下一步** BSP 超步（superstep）才变为可运行
+  （router 节点完成之后）。这会影响端到端延迟，见下文“BSP 超步屏障”。
 - 返回结果会先去重，同一分支键在同一步内只触发一次；
 - 每个分支键的解析优先级与单条件路由一致：
   1. 条件边 `pathMap`；2) 节点 Ends；3) 直接当作节点 ID；
@@ -1676,6 +1725,41 @@ sg.WithInterruptAfterNodes("my_node")
 - 因为节点没有调用 `graph.Interrupt(...)`，所以不需要 resume 输入。
 
 可参考 `examples/graph/static_interrupt` 的完整可运行示例。
+
+### 3. 外部中断（暂停按钮）
+
+有时你希望从图**外部**暂停一个正在运行的图（例如 UI 的暂停按钮、管理端
+API、服务优雅下线钩子），并且不想在节点代码里显式写
+`graph.Interrupt(...)`。
+
+可以使用 `graph.WithGraphInterrupt` 创建一个上下文和一个 `interrupt`
+函数，通过调用该函数来请求中断：
+
+```go
+ctx, interrupt := graph.WithGraphInterrupt(context.Background())
+
+// 用 ctx 来运行图（GraphAgent + Runner 示例）
+events, _ := app.Run(ctx, userID, sessionID, model.NewUserMessage("hi"))
+
+// 在另一个 goroutine / handler 中触发：
+interrupt() // 优雅中断：等待当前 step 的任务结束后暂停
+
+// 或者设置最大等待时间，超时后强制中断：
+interrupt(graph.WithGraphInterruptTimeout(2 * time.Second))
+```
+
+行为说明：
+
+- 默认情况下，执行器会等待当前 step 的任务执行完成，然后在开始下一步
+  之前中断。
+- 使用 `WithGraphInterruptTimeout` 时，执行器会在超时后取消正在运行的任务，
+  并尽快中断；被取消的节点会在恢复时重新执行。
+
+恢复方式：
+
+- 仍然是通过 checkpoint 恢复：用相同的 `lineage_id` + 中断事件里的
+  `checkpoint_id` 重新运行（与静态中断一致）。
+- 需要开启 checkpoint（配置 `CheckpointSaver`）才能恢复。
 
 ### 执行方式
 
@@ -2327,6 +2411,50 @@ sg.AddJoinEdge([]string{nodeA, nodeB}, nodeJoin)
   无需显式添加这两条边。
 
 常量名：`graph.Start == "__start__"`，`graph.End == "__end__"`。
+
+#### BSP 超步屏障（为什么下游会等待）
+
+Graph 的执行模型是 **BSP 超步（superstep）**：计划（Planning）→ 执行（Execution）
+→ 合并（Update）。在每一个超步中：
+
+- 计划阶段：基于“上一超步”更新过的通道（channel）计算可运行节点集合；
+- 执行阶段：把可运行节点并发执行（并发上限由 `WithMaxConcurrency` 控制）；
+- 合并阶段：合并状态更新（Reducer）并应用路由信号（写通道）。
+
+下一超步只有在“当前超步”的所有节点都执行结束后才会开始。又因为路由信号在合并阶段
+才生效，所以某个下游节点即使在逻辑上“已经 ready”，也只能在 **下一步** 超步才开始
+执行。
+
+这会表现为一种看似“按层执行”的效果：深度更深的节点会等待同一层（同一超步）里的
+其他分支完成，即使它们之间没有依赖关系。
+
+示例图：
+
+```mermaid
+flowchart LR
+    S[split] --> B[branch_b]
+    B --> C[branch_b_next]
+    S --> E[branch_e]
+    S --> F[branch_f]
+```
+
+运行时：
+
+- 超步 0：`split`
+- 超步 1：`branch_b`、`branch_e`、`branch_f` 并行
+- 超步 2：`branch_b_next` 执行（尽管它只依赖 `branch_b`）
+
+实用建议：
+
+- **减少超步数**：若 `X → Y` 永远顺序执行，考虑把它们合并到一个节点里，避免为每一段
+  串行链路额外支付一个超步。
+- **避免额外的 prepare 节点**：如果只是想给某个节点补充输入，优先把准备逻辑挪到该
+  节点内部，或在该节点上使用 `graph.WithPreNodeCallback`。
+- **并行场景下不要从 `last_response` 读取某个分支的输出**：请使用
+  `node_responses[nodeID]`（或自定义独立状态键）来实现稳定的 fan-in/选择逻辑。
+- **选择合适的汇聚语义**：
+  - `AddEdge(from, to)` 适合增量触发（`to` 可能执行多次）；
+  - `AddJoinEdge([...], to)` 适合“等待全部，再执行一次”。
 
 ### 消息可见性选项
 当前Agent可在需要时根据不同场景控制其对其他Agent生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。

@@ -78,7 +78,17 @@ const (
 
 const (
 	skillDirInputs = "inputs"
+	skillDirVenv   = ".venv"
 )
+
+const (
+	envPath       = "PATH"
+	envVirtualEnv = "VIRTUAL_ENV"
+)
+
+const workspaceMetadataFileMode uint32 = 0o600
+
+const workspaceMetadataTmpFile = ".metadata.tmp"
 
 // WithAllowedCommands restricts skill_run to a single program execution
 // whose command name is in the allowlist.
@@ -408,23 +418,22 @@ func (t *RunTool) stageSkill(
 	if err != nil {
 		return err
 	}
-	// Ensure layout + load metadata to decide if staging is needed.
-	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
-		return err
-	}
-	md, err := codeexecutor.LoadMetadata(ws.Path)
+	md, err := t.loadWorkspaceMetadata(ctx, eng, ws)
 	if err != nil {
 		return err
-	}
-	if md.Skills == nil {
-		md.Skills = map[string]codeexecutor.SkillMeta{}
 	}
 	// Stage into /skills/<name> inside workspace.
 	dest := path.Join(codeexecutor.DirSkills, name)
 	// If metadata has same digest, skip staging.
-	if s, ok := md.Skills[name]; ok && s.Digest == dg &&
-		s.Mounted && skillLinksPresent(ws.Path, name) {
-		return nil
+	if s, ok := md.Skills[name]; ok &&
+		s.Digest == dg && s.Mounted {
+		ok, err := t.skillLinksPresent(ctx, eng, ws, name)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
 	}
 	if err := t.removeWorkspacePath(ctx, eng, ws, dest); err != nil {
 		return err
@@ -456,7 +465,139 @@ func (t *RunTool) stageSkill(
 		Mounted:  true,
 		StagedAt: time.Now(),
 	}
-	return codeexecutor.SaveMetadata(ws.Path, md)
+	return t.saveWorkspaceMetadata(ctx, eng, ws, md)
+}
+
+func (t *RunTool) loadWorkspaceMetadata(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+) (codeexecutor.WorkspaceMetadata, error) {
+	now := time.Now()
+	md := codeexecutor.WorkspaceMetadata{
+		Version:    1,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		LastAccess: now,
+		Skills:     map[string]codeexecutor.SkillMeta{},
+	}
+	if eng == nil || eng.FS() == nil {
+		return md, fmt.Errorf("workspace fs is not configured")
+	}
+	files, err := eng.FS().Collect(
+		ctx, ws, []string{codeexecutor.MetaFileName},
+	)
+	if err != nil {
+		return md, err
+	}
+	if len(files) == 0 || strings.TrimSpace(files[0].Content) == "" {
+		return md, nil
+	}
+	if err := json.Unmarshal([]byte(files[0].Content), &md); err != nil {
+		return codeexecutor.WorkspaceMetadata{}, err
+	}
+	if md.Version == 0 {
+		md.Version = 1
+	}
+	if md.CreatedAt.IsZero() {
+		md.CreatedAt = now
+	}
+	md.LastAccess = now
+	if md.Skills == nil {
+		md.Skills = map[string]codeexecutor.SkillMeta{}
+	}
+	return md, nil
+}
+
+func (t *RunTool) saveWorkspaceMetadata(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	md codeexecutor.WorkspaceMetadata,
+) error {
+	if eng == nil || eng.FS() == nil {
+		return fmt.Errorf("workspace fs is not configured")
+	}
+	if eng.Runner() == nil {
+		return fmt.Errorf("workspace runner is not configured")
+	}
+	if md.Version == 0 {
+		md.Version = 1
+	}
+	now := time.Now()
+	if md.CreatedAt.IsZero() {
+		md.CreatedAt = now
+	}
+	md.UpdatedAt = now
+	md.LastAccess = now
+	if md.Skills == nil {
+		md.Skills = map[string]codeexecutor.SkillMeta{}
+	}
+	buf, err := json.MarshalIndent(md, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := eng.FS().PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    workspaceMetadataTmpFile,
+		Content: buf,
+		Mode:    workspaceMetadataFileMode,
+	}}); err != nil {
+		return err
+	}
+	var sb strings.Builder
+	sb.WriteString("set -e; mv -f ")
+	sb.WriteString(shellQuote(workspaceMetadataTmpFile))
+	sb.WriteString(" ")
+	sb.WriteString(shellQuote(codeexecutor.MetaFileName))
+	_, err = eng.Runner().RunProgram(
+		ctx, ws, codeexecutor.RunProgramSpec{
+			Cmd:     "bash",
+			Args:    []string{"-lc", sb.String()},
+			Env:     map[string]string{},
+			Cwd:     ".",
+			Timeout: 5 * time.Second,
+		},
+	)
+	return err
+}
+
+func (t *RunTool) skillLinksPresent(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	name string,
+) (bool, error) {
+	skillName := strings.TrimSpace(name)
+	if skillName == "" {
+		return false, nil
+	}
+	if eng == nil || eng.Runner() == nil {
+		return false, fmt.Errorf("workspace runner is not configured")
+	}
+	base := path.Join(codeexecutor.DirSkills, skillName)
+	var sb strings.Builder
+	sb.WriteString("test -L ")
+	sb.WriteString(shellQuote(path.Join(base, codeexecutor.DirOut)))
+	sb.WriteString(" && test -L ")
+	sb.WriteString(shellQuote(path.Join(base, codeexecutor.DirWork)))
+	sb.WriteString(" && test -L ")
+	sb.WriteString(shellQuote(path.Join(base, skillDirInputs)))
+	rr, err := eng.Runner().RunProgram(
+		ctx, ws, codeexecutor.RunProgramSpec{
+			Cmd:     "bash",
+			Args:    []string{"-lc", sb.String()},
+			Env:     map[string]string{},
+			Cwd:     ".",
+			Timeout: 5 * time.Second,
+		},
+	)
+	if err != nil {
+		return false, err
+	}
+	if rr.ExitCode == 0 {
+		return true, nil
+	}
+	return false, nil
 }
 
 // linkWorkspaceDirs creates convenience symlinks under the staged
@@ -477,9 +618,12 @@ func (t *RunTool) linkWorkspaceDirs(
 	var sb strings.Builder
 	sb.WriteString("set -e; cd ")
 	sb.WriteString(shellQuote(skillRoot))
-	sb.WriteString("; rm -rf out work inputs")
+	sb.WriteString("; rm -rf out work inputs ")
+	sb.WriteString(shellQuote(skillDirVenv))
 	sb.WriteString("; mkdir -p ")
 	sb.WriteString(shellQuote(toInputs))
+	sb.WriteString(" ")
+	sb.WriteString(shellQuote(skillDirVenv))
 	sb.WriteString("; ln -sfn ")
 	sb.WriteString(shellQuote(toOut))
 	sb.WriteString(" out; ln -sfn ")
@@ -497,26 +641,6 @@ func (t *RunTool) linkWorkspaceDirs(
 		},
 	)
 	return err
-}
-
-func skillLinksPresent(wsRoot string, name string) bool {
-	root := strings.TrimSpace(wsRoot)
-	skillName := strings.TrimSpace(name)
-	if root == "" || skillName == "" {
-		return false
-	}
-	base := filepath.Join(root, codeexecutor.DirSkills, skillName)
-	return isSymlink(filepath.Join(base, codeexecutor.DirOut)) &&
-		isSymlink(filepath.Join(base, codeexecutor.DirWork)) &&
-		isSymlink(filepath.Join(base, skillDirInputs))
-}
-
-func isSymlink(path string) bool {
-	st, err := os.Lstat(path)
-	if err != nil {
-		return false
-	}
-	return st.Mode()&os.ModeSymlink != 0
 }
 
 func (t *RunTool) removeWorkspacePath(
@@ -565,11 +689,14 @@ func (t *RunTool) readOnlyExceptSymlinks(
 	ctx context.Context, eng codeexecutor.Engine,
 	ws codeexecutor.Workspace, dest string,
 ) error {
+	venv := path.Join(dest, skillDirVenv)
 	var sb strings.Builder
 	// Use find to skip symlinks and chmod others.
 	sb.WriteString("set -e; find ")
 	sb.WriteString(shellQuote(dest))
-	sb.WriteString(" -type l -prune -o -exec chmod a-w {} +")
+	sb.WriteString(" -path ")
+	sb.WriteString(shellQuote(venv))
+	sb.WriteString(" -prune -o -type l -prune -o -exec chmod a-w {} +")
 	_, err := eng.Runner().RunProgram(
 		ctx, ws, codeexecutor.RunProgramSpec{
 			Cmd:     "bash",
@@ -690,7 +817,11 @@ func (t *RunTool) runProgram(
 	if _, ok := env[codeexecutor.EnvSkillName]; !ok {
 		env[codeexecutor.EnvSkillName] = in.Skill
 	}
+
+	venvRel, venvBinRel := venvRelPaths(cwd, in.Skill)
+
 	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
+		injectVenvEnv(env, venvRel, venvBinRel)
 		argv, err := splitCommandLine(in.Command)
 		if err != nil {
 			return codeexecutor.RunResult{}, err
@@ -718,15 +849,110 @@ func (t *RunTool) runProgram(
 			},
 		)
 	}
+
+	cmd := wrapWithVenvPrefix(in.Command, venvRel, venvBinRel)
 	return eng.Runner().RunProgram(
 		ctx, ws, codeexecutor.RunProgramSpec{
 			Cmd:     "bash",
-			Args:    []string{"-c", in.Command},
+			Args:    []string{"-c", cmd},
 			Env:     env,
 			Cwd:     cwd,
 			Timeout: timeout,
 		},
 	)
+}
+
+func venvRelPaths(cwd string, skillName string) (string, string) {
+	base := path.Clean(strings.TrimSpace(cwd))
+	if base == "" {
+		base = "."
+	}
+	skillRoot := path.Join(codeexecutor.DirSkills, skillName)
+	venv := path.Join(skillRoot, skillDirVenv)
+	venvBin := path.Join(venv, "bin")
+
+	relVenv := slashRel(base, venv)
+	relBin := slashRel(base, venvBin)
+	return relVenv, relBin
+}
+
+func slashRel(base string, target string) string {
+	base = strings.TrimPrefix(path.Clean(base), "/")
+	target = strings.TrimPrefix(path.Clean(target), "/")
+	if base == "." {
+		base = ""
+	}
+	if target == "." {
+		target = ""
+	}
+	if base == target {
+		return "."
+	}
+
+	var bParts []string
+	if base != "" {
+		bParts = strings.Split(base, "/")
+	}
+	var tParts []string
+	if target != "" {
+		tParts = strings.Split(target, "/")
+	}
+
+	i := 0
+	for i < len(bParts) && i < len(tParts) && bParts[i] == tParts[i] {
+		i++
+	}
+	var out []string
+	for j := i; j < len(bParts); j++ {
+		if bParts[j] == "" || bParts[j] == "." {
+			continue
+		}
+		out = append(out, "..")
+	}
+	out = append(out, tParts[i:]...)
+	if len(out) == 0 {
+		return "."
+	}
+	return strings.Join(out, "/")
+}
+
+func injectVenvEnv(env map[string]string, venv string, venvBin string) {
+	if env == nil {
+		return
+	}
+	if _, ok := env[envVirtualEnv]; !ok && strings.TrimSpace(venv) != "" {
+		env[envVirtualEnv] = venv
+	}
+	basePATH := strings.TrimSpace(env[envPath])
+	if basePATH == "" {
+		basePATH = strings.TrimSpace(os.Getenv(envPath))
+	}
+	sep := string(os.PathListSeparator)
+	if basePATH == "" {
+		env[envPath] = venvBin
+		return
+	}
+	env[envPath] = venvBin + sep + basePATH
+}
+
+func wrapWithVenvPrefix(cmd string, venv string, venvBin string) string {
+	var sb strings.Builder
+	sb.WriteString("export ")
+	sb.WriteString(envPath)
+	sb.WriteString("=")
+	sb.WriteString(shellQuote(venvBin))
+	sb.WriteString(":\"$")
+	sb.WriteString(envPath)
+	sb.WriteString("\"; ")
+	sb.WriteString("if [ -z \"$")
+	sb.WriteString(envVirtualEnv)
+	sb.WriteString("\" ]; then export ")
+	sb.WriteString(envVirtualEnv)
+	sb.WriteString("=")
+	sb.WriteString(shellQuote(venv))
+	sb.WriteString("; fi; ")
+	sb.WriteString(cmd)
+	return sb.String()
 }
 
 const disallowedShellMeta = "\n\r;&|<>"

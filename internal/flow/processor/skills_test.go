@@ -85,6 +85,8 @@ func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 	require.Contains(t, sys, skillsOverviewHeader)
 	require.Contains(t, sys, "- calc: math ops")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
+	require.Contains(t, sys, ".venv/")
+	require.Contains(t, sys, "Avoid include_all_docs")
 	require.Contains(t, sys, "[Loaded] calc")
 	require.Contains(t, sys, "Calc body")
 	require.Contains(t, sys, "[Doc] USAGE.md")

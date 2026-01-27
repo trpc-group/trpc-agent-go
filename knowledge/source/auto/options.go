@@ -13,6 +13,7 @@ package auto
 import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
@@ -88,5 +89,19 @@ func WithOCRExtractor(extractor ocr.Extractor) Option {
 func WithTransformers(transformers ...transform.Transformer) Option {
 	return func(s *Source) {
 		s.transformers = append(s.transformers, transformers...)
+	}
+}
+
+// WithFileReaderType sets the file type to use for text input processing.
+// This is useful when you want to control which reader is used for text content.
+// Use predefined constants from source package for type safety.
+// This only affects direct text content processing, not file/URL/directory sources.
+//
+// Example:
+//
+//	source := auto.New([]string{"# Title\nContent"}, auto.WithFileReaderType(source.FileReaderTypeMarkdown))
+func WithFileReaderType(fileType source.FileReaderType) Option {
+	return func(s *Source) {
+		s.fileReaderType = fileType
 	}
 }
