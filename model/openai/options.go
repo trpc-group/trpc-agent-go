@@ -124,7 +124,7 @@ var (
 			OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
 			MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
 		},
-		OptimizeForCache: true,
+		OptimizeForCache: false,
 	}
 )
 
