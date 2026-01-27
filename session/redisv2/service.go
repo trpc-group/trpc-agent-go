@@ -22,22 +22,37 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
+
+// sessionEventPair holds session key and event for async persistence.
+type sessionEventPair struct {
+	key session.Key
+	evt *event.Event
+}
 
 // Service is the redis session service V2.
 // Storage structure:
 //   - meta:{app:user:sess}           -> String (session metadata JSON)
 //   - evtdata:{app:user:sess}        -> Hash (eventID -> eventJSON)
 //   - evtidx:time:{app:user:sess}    -> ZSet (timestamp -> eventID)
-//   - evtidx:req:{app:user:sess}     -> Hash (requestID -> eventIDs JSON array)
+//   - evtidx:custom:{app:user:sess}  -> Hash (indexName:value -> eventIDs JSON array)
 //   - appstate:{appName}             -> Hash (key -> value)
 //   - userstate:{appName}:{userID}   -> Hash (key -> value)
 type Service struct {
 	opts        serviceOpts
 	redisClient redis.UniversalClient
 	once        sync.Once
+
+	// async persist
+	eventPairChans []chan *sessionEventPair
+
+	// async summary
+	asyncWorker *isummary.AsyncSummaryWorker
 }
 
 // NewService creates a new Service instance.
@@ -63,12 +78,41 @@ func NewService(opts ...Option) (*Service, error) {
 		return nil, fmt.Errorf("create redis client failed: %w", err)
 	}
 
-	return &Service{opts: o, redisClient: redisClient}, nil
+	svc := &Service{opts: o, redisClient: redisClient}
+
+	// Start async persist workers if enabled
+	if o.enableAsyncPersist {
+		svc.startAsyncPersistWorker()
+	}
+
+	// Start async summary workers if summarizer is configured
+	if o.summarizer != nil && o.asyncSummaryNum > 0 {
+		svc.asyncWorker = isummary.NewAsyncSummaryWorker(isummary.AsyncSummaryConfig{
+			Summarizer:        o.summarizer,
+			AsyncSummaryNum:   o.asyncSummaryNum,
+			SummaryQueueSize:  o.summaryQueueSize,
+			SummaryJobTimeout: o.summaryJobTimeout,
+			CreateSummaryFunc: svc.CreateSessionSummary,
+		})
+		svc.asyncWorker.Start()
+	}
+
+	return svc, nil
 }
 
 // Close closes the service.
 func (s *Service) Close() error {
 	s.once.Do(func() {
+		// Stop async persist workers
+		if s.eventPairChans != nil {
+			for _, ch := range s.eventPairChans {
+				close(ch)
+			}
+		}
+		// Stop async summary worker
+		if s.asyncWorker != nil {
+			s.asyncWorker.Stop()
+		}
 		if s.redisClient != nil {
 			s.redisClient.Close()
 		}
@@ -107,7 +151,7 @@ func (s *Service) CreateSession(ctx context.Context, key session.Key, state sess
 		return nil, fmt.Errorf("marshal session meta: %w", err)
 	}
 
-	if err := s.redisClient.Set(ctx, metaKey(key), metaJSON, s.opts.sessionTTL).Err(); err != nil {
+	if err := s.redisClient.Set(ctx, sessionMetaKey(key), metaJSON, s.opts.sessionTTL).Err(); err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
 
@@ -125,7 +169,20 @@ func (s *Service) GetSession(ctx context.Context, key session.Key, options ...se
 		opt(&opts)
 	}
 
-	metaJSON, err := s.redisClient.Get(ctx, metaKey(key)).Bytes()
+	hctx := &session.GetSessionContext{
+		Context: ctx,
+		Key:     key,
+		Options: &opts,
+	}
+	final := func(c *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+		return s.getSession(c.Context, c.Key, c.Options)
+	}
+	return hook.RunGetSessionHooks(s.opts.getSessionHooks, hctx, final)
+}
+
+// getSession is the internal implementation of GetSession.
+func (s *Service) getSession(ctx context.Context, key session.Key, opts *session.Options) (*session.Session, error) {
+	metaJSON, err := s.redisClient.Get(ctx, sessionMetaKey(key)).Bytes()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, nil // session not found
@@ -145,13 +202,19 @@ func (s *Service) GetSession(ctx context.Context, key session.Key, options ...se
 
 	// Load events
 	limit := int64(-1)
-	if opts.EventNum > 0 {
+	if opts != nil && opts.EventNum > 0 {
 		limit = int64(opts.EventNum)
 	}
 
+	ttlSeconds := int64(0)
+	if s.opts.sessionTTL > 0 {
+		ttlSeconds = int64(s.opts.sessionTTL.Seconds())
+	}
+
+	// reverse=0 means oldest first (chronological order)
 	result, err := luaLoadEvents.Run(ctx, s.redisClient,
-		[]string{eventDataKey(key), eventTimeIndexKey(key)},
-		0, limit,
+		[]string{eventDataKey(key), eventTimeIndexKey(key), sessionMetaKey(key), eventCustomIndexKey(key)},
+		0, limit, ttlSeconds, 0,
 	).StringSlice()
 	if err != nil && err != redis.Nil {
 		return nil, fmt.Errorf("load events: %w", err)
@@ -171,11 +234,11 @@ func (s *Service) GetSession(ctx context.Context, key session.Key, options ...se
 // DeleteSession deletes a session.
 func (s *Service) DeleteSession(ctx context.Context, key session.Key, options ...session.Option) error {
 	keys := []string{
-		metaKey(key),
+		sessionMetaKey(key),
 		eventDataKey(key),
 		eventTimeIndexKey(key),
-		eventReqIndexKey(key),
 		summaryKey(key),
+		eventCustomIndexKey(key),
 	}
 	if _, err := luaDeleteSession.Run(ctx, s.redisClient, keys).Result(); err != nil {
 		return fmt.Errorf("delete session: %w", err)
@@ -225,63 +288,36 @@ func (s *Service) AppendEvent(ctx context.Context, sess *session.Session, evt *e
 
 	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
 
-	evtJSON, err := json.Marshal(evt)
-	if err != nil {
-		return fmt.Errorf("marshal event: %w", err)
+	hctx := &session.AppendEventContext{
+		Context: ctx,
+		Session: sess,
+		Event:   evt,
+		Key:     key,
 	}
+	final := func(c *session.AppendEventContext, next func() error) error {
+		return s.appendEvent(c.Context, c.Session, c.Event, c.Key)
+	}
+	return hook.RunAppendEventHooks(s.opts.appendEventHooks, hctx, final)
+}
 
-	ttlSeconds := int64(0)
-	if s.opts.sessionTTL > 0 {
-		ttlSeconds = int64(s.opts.sessionTTL.Seconds())
-	}
+// appendEvent is the internal implementation of AppendEvent.
+func (s *Service) appendEvent(ctx context.Context, sess *session.Session, evt *event.Event, key session.Key) error {
+	// Update in-memory session
+	sess.UpdateUserSession(evt)
 
-	keys := []string{
-		metaKey(key),
-		eventDataKey(key),
-		eventTimeIndexKey(key),
-		eventReqIndexKey(key),
-	}
-	args := []interface{}{
-		evt.ID,
-		string(evtJSON),
-		evt.Timestamp.UnixNano(),
-		evt.RequestID,
-		ttlSeconds,
-		s.opts.maxEventsPerSession,
-		s.opts.evictionBatchSize,
-	}
-
-	if _, err := luaAppendEvent.Run(ctx, s.redisClient, keys, args...).Result(); err != nil {
-		return fmt.Errorf("append event: %w", err)
-	}
-
-	// Update session state if event has state delta
-	if len(evt.StateDelta) > 0 {
-		sess.EventMu.Lock()
-		for k, v := range evt.StateDelta {
-			sess.State[k] = v
+	// Async persist if enabled
+	if s.opts.enableAsyncPersist && len(s.eventPairChans) > 0 {
+		idx := sess.Hash % len(s.eventPairChans)
+		select {
+		case s.eventPairChans[idx] <- &sessionEventPair{key: key, evt: evt}:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		sess.EventMu.Unlock()
-
-		// Update meta in Redis
-		now := time.Now()
-		meta := sessionMeta{
-			ID:        sess.ID,
-			AppName:   sess.AppName,
-			UserID:    sess.UserID,
-			State:     sess.State,
-			CreatedAt: sess.CreatedAt,
-			UpdatedAt: now,
-		}
-		metaJSON, _ := json.Marshal(meta)
-		s.redisClient.Set(ctx, metaKey(key), metaJSON, s.opts.sessionTTL)
+		return nil
 	}
 
-	sess.EventMu.Lock()
-	sess.Events = append(sess.Events, *evt)
-	sess.EventMu.Unlock()
-
-	return nil
+	// Sync persist
+	return s.persistEvent(ctx, key, evt)
 }
 
 // UpdateAppState updates the app-level state.
@@ -398,7 +434,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		return err
 	}
 
-	metaJSON, err := s.redisClient.Get(ctx, metaKey(key)).Bytes()
+	metaJSON, err := s.redisClient.Get(ctx, sessionMetaKey(key)).Bytes()
 	if err != nil {
 		if err == redis.Nil {
 			return fmt.Errorf("session not found")
@@ -424,7 +460,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		return fmt.Errorf("marshal session meta: %w", err)
 	}
 
-	if err := s.redisClient.Set(ctx, metaKey(key), updatedJSON, s.opts.sessionTTL).Err(); err != nil {
+	if err := s.redisClient.Set(ctx, sessionMetaKey(key), updatedJSON, s.opts.sessionTTL).Err(); err != nil {
 		return fmt.Errorf("update session state: %w", err)
 	}
 	return nil
@@ -447,7 +483,7 @@ func (s *Service) TrimConversations(ctx context.Context, key session.Key, count 
 	keys := []string{
 		eventDataKey(key),
 		eventTimeIndexKey(key),
-		eventReqIndexKey(key),
+		eventCustomIndexKey(key),
 	}
 
 	result, err := luaTrimConversations.Run(ctx, s.redisClient, keys, count).StringSlice()
@@ -466,24 +502,51 @@ func (s *Service) TrimConversations(ctx context.Context, key session.Key, count 
 	return events, nil
 }
 
-// GetEventsByRequestID retrieves all events for a given RequestID.
+// DeleteEvent deletes a single event from the session.
 // This is a V2-specific extension method not part of session.Service interface.
-func (s *Service) GetEventsByRequestID(ctx context.Context, key session.Key, requestID string) ([]event.Event, error) {
+func (s *Service) DeleteEvent(ctx context.Context, key session.Key, eventID string) error {
 	if err := key.CheckSessionKey(); err != nil {
-		return nil, err
+		return err
 	}
-	if requestID == "" {
-		return nil, fmt.Errorf("requestID is required")
+	if eventID == "" {
+		return fmt.Errorf("eventID is required")
 	}
 
 	keys := []string{
 		eventDataKey(key),
-		eventReqIndexKey(key),
+		eventTimeIndexKey(key),
+		eventCustomIndexKey(key),
 	}
 
-	result, err := luaGetEventsByRequestID.Run(ctx, s.redisClient, keys, requestID).StringSlice()
-	if err != nil {
-		return nil, fmt.Errorf("get events by request id: %w", err)
+	if _, err := luaDeleteEvent.Run(ctx, s.redisClient, keys, eventID).Result(); err != nil {
+		return fmt.Errorf("delete event: %w", err)
+	}
+	return nil
+}
+
+// GetLatestEvents retrieves the latest N events from a session.
+// This is a V2-specific extension method not part of session.Service interface.
+// Events are returned in reverse chronological order (newest first).
+func (s *Service) GetLatestEvents(ctx context.Context, key session.Key, limit int) ([]event.Event, error) {
+	if err := key.CheckSessionKey(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	ttlSeconds := int64(0)
+	if s.opts.sessionTTL > 0 {
+		ttlSeconds = int64(s.opts.sessionTTL.Seconds())
+	}
+
+	// reverse=1 means latest first
+	result, err := luaLoadEvents.Run(ctx, s.redisClient,
+		[]string{eventDataKey(key), eventTimeIndexKey(key), sessionMetaKey(key), eventCustomIndexKey(key)},
+		0, int64(limit), ttlSeconds, 1,
+	).StringSlice()
+	if err != nil && err != redis.Nil {
+		return nil, fmt.Errorf("load latest events: %w", err)
 	}
 
 	var events []event.Event
@@ -497,24 +560,70 @@ func (s *Service) GetEventsByRequestID(ctx context.Context, key session.Key, req
 	return events, nil
 }
 
-// DeleteEvent deletes a single event from the session.
-// This is a V2-specific extension method not part of session.Service interface.
-func (s *Service) DeleteEvent(ctx context.Context, key session.Key, eventID string, requestID string) error {
-	if err := key.CheckSessionKey(); err != nil {
-		return err
+// startAsyncPersistWorker starts async persist workers.
+func (s *Service) startAsyncPersistWorker() {
+	num := s.opts.asyncPersisterNum
+	s.eventPairChans = make([]chan *sessionEventPair, num)
+	for i := 0; i < num; i++ {
+		s.eventPairChans[i] = make(chan *sessionEventPair, defaultChanBufferSize)
 	}
-	if eventID == "" {
-		return fmt.Errorf("eventID is required")
+
+	for _, ch := range s.eventPairChans {
+		go func(eventPairChan chan *sessionEventPair) {
+			for pair := range eventPairChan {
+				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
+				if err := s.persistEvent(ctx, pair.key, pair.evt); err != nil {
+					log.ErrorfContext(ctx, "async persist event failed: %v", err)
+				}
+				cancel()
+			}
+		}(ch)
+	}
+}
+
+// persistEvent persists an event to Redis.
+func (s *Service) persistEvent(ctx context.Context, key session.Key, evt *event.Event) error {
+	evtJSON, err := json.Marshal(evt)
+	if err != nil {
+		return fmt.Errorf("marshal event: %w", err)
+	}
+
+	// Extract custom indexes
+	indexData := make(map[string]string)
+	for _, idx := range s.opts.indexes {
+		if v := idx.ExtractKey(evt); v != "" {
+			indexData[idx.Name()] = v
+		}
+	}
+	indexJSON := ""
+	if len(indexData) > 0 {
+		b, _ := json.Marshal(indexData)
+		indexJSON = string(b)
+	}
+
+	ttlSeconds := int64(0)
+	if s.opts.sessionTTL > 0 {
+		ttlSeconds = int64(s.opts.sessionTTL.Seconds())
 	}
 
 	keys := []string{
+		sessionMetaKey(key),
 		eventDataKey(key),
 		eventTimeIndexKey(key),
-		eventReqIndexKey(key),
+		eventCustomIndexKey(key),
+	}
+	args := []any{
+		evt.ID,
+		string(evtJSON),
+		evt.Timestamp.UnixNano(),
+		ttlSeconds,
+		s.opts.maxEventsPerSession,
+		s.opts.evictionBatchSize,
+		indexJSON,
 	}
 
-	if _, err := luaDeleteEvent.Run(ctx, s.redisClient, keys, eventID, requestID).Result(); err != nil {
-		return fmt.Errorf("delete event: %w", err)
+	if _, err := luaAppendEvent.Run(ctx, s.redisClient, keys, args...).Result(); err != nil {
+		return fmt.Errorf("append event: %w", err)
 	}
 	return nil
 }
