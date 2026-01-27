@@ -11,136 +11,152 @@ package redisv2
 
 import "github.com/redis/go-redis/v9"
 
-// luaAppendEvent appends an event and updates indexes.
-// KEYS[1] = meta key, KEYS[2] = evtdata key, KEYS[3] = evtidx:time key, KEYS[4] = evtidx:req key
-// ARGV[1] = eventID, ARGV[2] = eventJSON, ARGV[3] = timestamp, ARGV[4] = requestID
-// ARGV[5] = TTL (0=no expire), ARGV[6] = maxEvents (0=no limit), ARGV[7] = evictBatchSize
+// luaAppendEvent appends an event and updates custom indexes.
+// KEYS[1] = sessionMeta key, KEYS[2] = evtdata key, KEYS[3] = evtidx:time key, KEYS[4] = evtidx:custom key
+// ARGV[1] = eventID, ARGV[2] = eventJSON, ARGV[3] = timestamp
+// ARGV[4] = TTL (seconds), ARGV[5] = maxEvents, ARGV[6] = evictBatchSize, ARGV[7] = indexJSON
 var luaAppendEvent = redis.NewScript(`
-local metaKey = KEYS[1]
+local sessionMetaKey = KEYS[1]
 local evtDataKey = KEYS[2]
 local evtTimeKey = KEYS[3]
-local evtReqKey = KEYS[4]
+local evtCustomIdxKey = KEYS[4]
 
 local eventID = ARGV[1]
 local eventJSON = ARGV[2]
 local timestamp = tonumber(ARGV[3])
-local requestID = ARGV[4]
-local ttl = tonumber(ARGV[5])
-local maxEvents = tonumber(ARGV[6])
-local evictBatch = tonumber(ARGV[7])
+local ttl = tonumber(ARGV[4])
+local maxEvents = tonumber(ARGV[5])
+local evictBatch = tonumber(ARGV[6])
+local indexJSON = ARGV[7]
 
-redis.call('HSET', evtDataKey, eventID, eventJSON)
-redis.call('ZADD', evtTimeKey, timestamp, eventID)
-
-if requestID ~= '' then
-    local reqEvents = redis.call('HGET', evtReqKey, requestID)
-    local eventList = {}
-    if reqEvents then
-        eventList = cjson.decode(reqEvents)
+-- Helper: remove eventID from custom index
+local function removeFromCustomIndex(eid)
+    local fields = redis.call('HKEYS', evtCustomIdxKey)
+    for _, field in ipairs(fields) do
+        local idsJSON = redis.call('HGET', evtCustomIdxKey, field)
+        if idsJSON then
+            local ids = cjson.decode(idsJSON)
+            local newIds = {}
+            for _, id in ipairs(ids) do
+                if id ~= eid then table.insert(newIds, id) end
+            end
+            if #newIds == 0 then
+                redis.call('HDEL', evtCustomIdxKey, field)
+            elseif #newIds < #ids then
+                redis.call('HSET', evtCustomIdxKey, field, cjson.encode(newIds))
+            end
+        end
     end
-    table.insert(eventList, eventID)
-    redis.call('HSET', evtReqKey, requestID, cjson.encode(eventList))
 end
 
+-- 1. Store event data
+redis.call('HSET', evtDataKey, eventID, eventJSON)
+
+-- 2. Update time index
+redis.call('ZADD', evtTimeKey, timestamp, eventID)
+
+-- 3. Update custom indexes
+if indexJSON and indexJSON ~= '' then
+    local indexes = cjson.decode(indexJSON)
+    for name, value in pairs(indexes) do
+        local field = name .. ":" .. value
+        local current = redis.call('HGET', evtCustomIdxKey, field)
+        local ids = current and cjson.decode(current) or {}
+        table.insert(ids, eventID)
+        redis.call('HSET', evtCustomIdxKey, field, cjson.encode(ids))
+    end
+end
+
+-- 4. Eviction (with custom index cleanup)
 if maxEvents > 0 then
     local count = redis.call('ZCARD', evtTimeKey)
     if count > maxEvents then
         local toEvict = redis.call('ZRANGE', evtTimeKey, 0, evictBatch - 1)
-        for _, oldEventID in ipairs(toEvict) do
-            local oldEventJSON = redis.call('HGET', evtDataKey, oldEventID)
-            if oldEventJSON then
-                local oldEvent = cjson.decode(oldEventJSON)
-                local oldReqID = oldEvent.requestID or ''
-                if oldReqID ~= '' then
-                    local oldReqEvents = redis.call('HGET', evtReqKey, oldReqID)
-                    if oldReqEvents then
-                        local oldList = cjson.decode(oldReqEvents)
-                        local newList = {}
-                        for _, eid in ipairs(oldList) do
-                            if eid ~= oldEventID then
-                                table.insert(newList, eid)
-                            end
-                        end
-                        if #newList > 0 then
-                            redis.call('HSET', evtReqKey, oldReqID, cjson.encode(newList))
-                        else
-                            redis.call('HDEL', evtReqKey, oldReqID)
-                        end
-                    end
-                end
-                redis.call('HDEL', evtDataKey, oldEventID)
-            end
-            redis.call('ZREM', evtTimeKey, oldEventID)
+        for _, oldID in ipairs(toEvict) do
+            redis.call('HDEL', evtDataKey, oldID)
+            redis.call('ZREM', evtTimeKey, oldID)
+            removeFromCustomIndex(oldID)
         end
     end
 end
 
+-- 5. Unified TTL refresh
 if ttl > 0 then
-    redis.call('EXPIRE', metaKey, ttl)
+    redis.call('EXPIRE', sessionMetaKey, ttl)
     redis.call('EXPIRE', evtDataKey, ttl)
     redis.call('EXPIRE', evtTimeKey, ttl)
-    redis.call('EXPIRE', evtReqKey, ttl)
+    redis.call('EXPIRE', evtCustomIdxKey, ttl)
 end
 
 return 1
 `)
 
-// luaLoadEvents loads events by time range.
-// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key
-// ARGV[1] = offset, ARGV[2] = limit (-1 for all)
+// luaLoadEvents loads events by time range and refreshes TTL.
+// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key, KEYS[3] = sessionMeta key, KEYS[4] = evtidx:custom key
+// ARGV[1] = offset, ARGV[2] = limit, ARGV[3] = TTL, ARGV[4] = reverse (1=latest first, 0=oldest first)
 var luaLoadEvents = redis.NewScript(`
 local evtDataKey = KEYS[1]
 local evtTimeKey = KEYS[2]
+local sessionMetaKey = KEYS[3]
+local evtCustomIdxKey = KEYS[4]
 local offset = tonumber(ARGV[1])
 local limit = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+local reverse = tonumber(ARGV[4]) == 1
 
-local endIdx
-if limit < 0 then
-    endIdx = -1
+local endIdx = limit < 0 and -1 or offset + limit - 1
+local eventIDs
+if reverse then
+    eventIDs = redis.call('ZREVRANGE', evtTimeKey, offset, endIdx)
 else
-    endIdx = offset + limit - 1
+    eventIDs = redis.call('ZRANGE', evtTimeKey, offset, endIdx)
 end
 
-local eventIDs = redis.call('ZRANGE', evtTimeKey, offset, endIdx)
-local events = {}
-
-for _, eventID in ipairs(eventIDs) do
-    local eventJSON = redis.call('HGET', evtDataKey, eventID)
-    if eventJSON then
-        table.insert(events, eventJSON)
+local result = {}
+if #eventIDs > 0 then
+    local dataList = redis.call('HMGET', evtDataKey, unpack(eventIDs))
+    for _, data in ipairs(dataList) do
+        if data then table.insert(result, data) end
     end
 end
 
-return events
+-- Refresh TTL
+if ttl > 0 then
+    redis.call('EXPIRE', sessionMetaKey, ttl)
+    redis.call('EXPIRE', evtDataKey, ttl)
+    redis.call('EXPIRE', evtTimeKey, ttl)
+    redis.call('EXPIRE', evtCustomIdxKey, ttl)
+end
+
+return result
 `)
 
-// luaDeleteEvent deletes an event and updates indexes.
-// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key, KEYS[3] = evtidx:req key
-// ARGV[1] = eventID, ARGV[2] = requestID
+// luaDeleteEvent deletes an event and its basic indexes.
+// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key, KEYS[3] = evtidx:custom key
+// ARGV[1] = eventID
 var luaDeleteEvent = redis.NewScript(`
 local evtDataKey = KEYS[1]
 local evtTimeKey = KEYS[2]
-local evtReqKey = KEYS[3]
+local evtCustomIdxKey = KEYS[3]
 local eventID = ARGV[1]
-local requestID = ARGV[2]
 
 redis.call('HDEL', evtDataKey, eventID)
 redis.call('ZREM', evtTimeKey, eventID)
 
-if requestID ~= '' then
-    local reqEvents = redis.call('HGET', evtReqKey, requestID)
-    if reqEvents then
-        local eventList = cjson.decode(reqEvents)
-        local newList = {}
-        for _, eid in ipairs(eventList) do
-            if eid ~= eventID then
-                table.insert(newList, eid)
-            end
+-- Clean up custom index
+local fields = redis.call('HKEYS', evtCustomIdxKey)
+for _, field in ipairs(fields) do
+    local idsJSON = redis.call('HGET', evtCustomIdxKey, field)
+    if idsJSON then
+        local ids = cjson.decode(idsJSON)
+        local newIds = {}
+        for _, id in ipairs(ids) do
+            if id ~= eventID then table.insert(newIds, id) end
         end
-        if #newList > 0 then
-            redis.call('HSET', evtReqKey, requestID, cjson.encode(newList))
-        else
-            redis.call('HDEL', evtReqKey, requestID)
+        if #newIds == 0 then
+            redis.call('HDEL', evtCustomIdxKey, field)
+        elseif #newIds < #ids then
+            redis.call('HSET', evtCustomIdxKey, field, cjson.encode(newIds))
         end
     end
 end
@@ -148,14 +164,33 @@ end
 return 1
 `)
 
-// luaTrimConversations trims the most recent N conversations.
-// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key, KEYS[3] = evtidx:req key
-// ARGV[1] = count (number of conversations to trim)
+// luaTrimConversations trims the most recent N conversations (by RequestID).
+// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key, KEYS[3] = evtidx:custom key
 var luaTrimConversations = redis.NewScript(`
 local evtDataKey = KEYS[1]
 local evtTimeKey = KEYS[2]
-local evtReqKey = KEYS[3]
+local evtCustomIdxKey = KEYS[3]
 local count = tonumber(ARGV[1])
+
+-- Helper: remove eventID from custom index
+local function removeFromCustomIndex(eid)
+    local fields = redis.call('HKEYS', evtCustomIdxKey)
+    for _, field in ipairs(fields) do
+        local idsJSON = redis.call('HGET', evtCustomIdxKey, field)
+        if idsJSON then
+            local ids = cjson.decode(idsJSON)
+            local newIds = {}
+            for _, id in ipairs(ids) do
+                if id ~= eid then table.insert(newIds, id) end
+            end
+            if #newIds == 0 then
+                redis.call('HDEL', evtCustomIdxKey, field)
+            elseif #newIds < #ids then
+                redis.call('HSET', evtCustomIdxKey, field, cjson.encode(newIds))
+            end
+        end
+    end
+end
 
 local targetReqIDs = {}
 local targetReqCount = 0
@@ -167,20 +202,18 @@ while targetReqCount < count do
     local eventIDs = redis.call('ZREVRANGE', evtTimeKey, offset, offset + batchSize - 1)
     if #eventIDs == 0 then break end
 
-    for _, eventID in ipairs(eventIDs) do
-        local eventJSON = redis.call('HGET', evtDataKey, eventID)
-        if eventJSON then
-            local evt = cjson.decode(eventJSON)
-            local reqID = evt.requestID or ''
-            if reqID ~= '' then
-                if not targetReqIDs[reqID] then
+    for _, eid in ipairs(eventIDs) do
+        local data = redis.call('HGET', evtDataKey, eid)
+        if data then
+            local evt = cjson.decode(data)
+            local rid = evt.requestID or ''
+            if rid ~= '' then
+                if not targetReqIDs[rid] then
                     if targetReqCount >= count then break end
-                    targetReqIDs[reqID] = true
+                    targetReqIDs[rid] = true
                     targetReqCount = targetReqCount + 1
                 end
-                if targetReqIDs[reqID] then
-                    table.insert(toDelete, {id = eventID, json = eventJSON})
-                end
+                if targetReqIDs[rid] then table.insert(toDelete, eid) end
             end
         end
     end
@@ -188,49 +221,22 @@ while targetReqCount < count do
     offset = offset + batchSize
 end
 
-local deleted = {}
-for _, item in ipairs(toDelete) do
-    redis.call('HDEL', evtDataKey, item.id)
-    redis.call('ZREM', evtTimeKey, item.id)
-    table.insert(deleted, item.json)
-end
-
-for reqID, _ in pairs(targetReqIDs) do
-    redis.call('HDEL', evtReqKey, reqID)
-end
-
 local result = {}
-for i = #deleted, 1, -1 do
-    table.insert(result, deleted[i])
+for _, eid in ipairs(toDelete) do
+    local data = redis.call('HGET', evtDataKey, eid)
+    table.insert(result, data)
+    redis.call('HDEL', evtDataKey, eid)
+    redis.call('ZREM', evtTimeKey, eid)
+    removeFromCustomIndex(eid)
 end
-return result
-`)
 
-// luaGetEventsByRequestID gets all events for a RequestID.
-// KEYS[1] = evtdata key, KEYS[2] = evtidx:req key
-// ARGV[1] = requestID
-var luaGetEventsByRequestID = redis.NewScript(`
-local evtDataKey = KEYS[1]
-local evtReqKey = KEYS[2]
-local requestID = ARGV[1]
-
-local reqEvents = redis.call('HGET', evtReqKey, requestID)
-if not reqEvents then return {} end
-
-local eventIDs = cjson.decode(reqEvents)
-local events = {}
-for _, eventID in ipairs(eventIDs) do
-    local eventJSON = redis.call('HGET', evtDataKey, eventID)
-    if eventJSON then
-        table.insert(events, eventJSON)
-    end
-end
-return events
+local reversed = {}
+for i = #result, 1, -1 do table.insert(reversed, result[i]) end
+return reversed
 `)
 
 // luaDeleteSession deletes all session data.
-// KEYS[1] = meta key, KEYS[2] = evtdata key, KEYS[3] = evtidx:time key
-// KEYS[4] = evtidx:req key, KEYS[5] = summary key
+// KEYS[1] = sessionMeta, KEYS[2] = evtdata, KEYS[3] = evtidx:time, KEYS[4] = summary, KEYS[5] = evtidx:custom
 var luaDeleteSession = redis.NewScript(`
 redis.call('DEL', KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5])
 return 1
