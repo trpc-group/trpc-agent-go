@@ -23,34 +23,33 @@ import (
 )
 
 // Inference runs the agent for the requested eval cases and returns the inference results for each case.
-func (s *local) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
+func (s *local) Inference(ctx context.Context, req *service.InferenceRequest) (results []*service.InferenceResult, err error) {
 	if err := s.validateInferenceRequest(req); err != nil {
 		return nil, fmt.Errorf("validate inference request: %w", err)
 	}
 	callbackCtx, callbackErr := s.runBeforeInferenceSetCallbacks(ctx, req)
 	if callbackErr != nil {
-		return nil, callbackErr
+		return nil, fmt.Errorf("run before inference set callbacks (app=%s, evalSetID=%s): %w",
+			req.AppName, req.EvalSetID, callbackErr)
 	}
-
-	var (
-		results  []*service.InferenceResult
-		inferErr error
-	)
+	defer func() {
+		afterErr := s.runAfterInferenceSetCallbacks(callbackCtx, req, results, err)
+		if afterErr != nil {
+			results = nil
+			err = fmt.Errorf("run after inference set callbacks (app=%s, evalSetID=%s): %w",
+				req.AppName, req.EvalSetID, afterErr)
+		}
+	}()
 	evalCases, err := s.loadInferenceEvalCases(callbackCtx, req)
 	if err != nil {
-		inferErr = fmt.Errorf("load inference eval cases: %w", err)
-	} else if len(evalCases) == 0 {
-		results = []*service.InferenceResult{}
-	} else {
-		results, inferErr = s.inferEvalCases(callbackCtx, req, evalCases)
+		return nil, fmt.Errorf("load inference eval cases: %w", err)
 	}
-
-	afterErr := s.runAfterInferenceSetCallbacks(callbackCtx, req, results, inferErr)
-	if afterErr != nil {
-		inferErr = errors.Join(inferErr, afterErr)
+	if len(evalCases) == 0 {
+		return []*service.InferenceResult{}, nil
 	}
-	if inferErr != nil {
-		return results, inferErr
+	results, err = s.inferEvalCases(callbackCtx, req, evalCases)
+	if err != nil {
+		return nil, fmt.Errorf("infer eval cases: %w", err)
 	}
 	return results, nil
 }
@@ -210,10 +209,9 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 		}, runErr)
 	}
 
-	caseReq := cloneInferenceRequest(req)
 	caseCtx := ctx
 	beforeResult, callbackErr := callback.RunBeforeInferenceCase(caseCtx, s.callbacks, &service.BeforeInferenceCaseArgs{
-		Request:    caseReq,
+		Request:    req,
 		EvalCaseID: evalCase.EvalID,
 		SessionID:  sessionID,
 	})
@@ -221,7 +219,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 		caseCtx = beforeResult.Context
 	}
 
-	result := newInferenceResult(caseReq.AppName, caseReq.EvalSetID, sessionID, evalCase)
+	result := newInferenceResult(req.AppName, req.EvalSetID, sessionID, evalCase)
 	var runErr error
 	if callbackErr != nil {
 		runErr = fmt.Errorf("run before inference case callbacks (evalCaseID=%s, sessionID=%s): %w", evalCase.EvalID, sessionID, callbackErr)
@@ -254,7 +252,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 	}
 
 	_, afterErr := callback.RunAfterInferenceCase(caseCtx, s.callbacks, &service.AfterInferenceCaseArgs{
-		Request: caseReq,
+		Request: req,
 		Result:  result,
 		Error:   runErr,
 	})
@@ -285,15 +283,4 @@ func newFailedInferenceResult(result *service.InferenceResult, err error) *servi
 	result.ErrorMessage = err.Error()
 	result.Inferences = nil
 	return result
-}
-
-func cloneInferenceRequest(req *service.InferenceRequest) *service.InferenceRequest {
-	if req == nil {
-		return nil
-	}
-	clone := *req
-	if req.EvalCaseIDs != nil {
-		clone.EvalCaseIDs = append([]string(nil), req.EvalCaseIDs...)
-	}
-	return &clone
 }

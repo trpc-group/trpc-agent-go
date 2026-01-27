@@ -1263,6 +1263,39 @@ func TestLocalInferenceParallelBeforeInferenceCaseReceivesIndependentRequest(t *
 	}
 }
 
+func TestLocalInferenceAfterInferenceSetCallbackErrorOverridesInferenceError(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "missing"
+	mgr := evalsetinmemory.New()
+
+	callbacks := &service.Callbacks{}
+	callbacks.Register("probe", &service.Callback{
+		AfterInferenceSet: func(ctx context.Context, args *service.AfterInferenceSetArgs) (*service.AfterInferenceSetResult, error) {
+			return nil, errors.New("after inference set failed")
+		},
+	})
+
+	reg := registry.New()
+	resMgr := evalresultinmemory.New()
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(mgr),
+		service.WithEvalResultManager(resMgr),
+		service.WithRegistry(reg),
+		service.WithCallbacks(callbacks),
+	)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	_, err = svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "after inference set failed")
+	assert.NotContains(t, err.Error(), "load inference eval cases")
+}
+
 func TestEvalCaseInferencePoolHandlesNilEvalCase(t *testing.T) {
 	pool, err := createEvalCaseInferencePool(1)
 	assert.NoError(t, err)
@@ -1286,6 +1319,44 @@ func TestEvalCaseInferencePoolHandlesNilEvalCase(t *testing.T) {
 	assert.NotNil(t, results[0])
 	assert.Equal(t, status.EvalStatusFailed, results[0].Status)
 	assert.Contains(t, results[0].ErrorMessage, "eval case is nil")
+}
+
+func TestLocalEvaluateAfterEvaluateSetCallbackErrorOverridesOriginalError(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	mgr := evalsetinmemory.New()
+
+	callbacks := &service.Callbacks{}
+	callbacks.Register("probe", &service.Callback{
+		AfterEvaluateSet: func(ctx context.Context, args *service.AfterEvaluateSetArgs) (*service.AfterEvaluateSetResult, error) {
+			return nil, errors.New("after evaluate set failed")
+		},
+	})
+
+	reg := registry.New()
+	resMgr := evalresultinmemory.New()
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(mgr),
+		service.WithEvalResultManager(resMgr),
+		service.WithRegistry(reg),
+		service.WithCallbacks(callbacks),
+	)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	_, err = svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{nil},
+		EvaluateConfig:   &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}},
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "after evaluate set failed")
+	assert.NotContains(t, err.Error(), "inference result is nil")
 }
 
 func TestLocalEvaluateAfterEvaluateCaseIncludesInferenceResult(t *testing.T) {

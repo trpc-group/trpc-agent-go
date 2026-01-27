@@ -160,7 +160,7 @@ func (s *local) runAfterEvaluateCaseCallbacks(
 }
 
 // Evaluate runs the evaluation on the inference results and returns the persisted eval set result.
-func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*evalresult.EvalSetResult, error) {
+func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (evalSetResult *evalresult.EvalSetResult, err error) {
 	if req == nil {
 		return nil, errors.New("evaluate request is nil")
 	}
@@ -173,77 +173,71 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*ev
 	if req.EvaluateConfig == nil {
 		return nil, errors.New("evaluate config is nil")
 	}
-
-	callbackCtx, callbackErr := s.runBeforeEvaluateSetCallbacks(ctx, req)
-	if callbackErr != nil {
-		return nil, callbackErr
+	ctx, err = s.runBeforeEvaluateSetCallbacks(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("run before evaluate set callbacks (app=%s, evalSetID=%s): %w",
+			req.AppName, req.EvalSetID, err)
 	}
-
+	defer func() {
+		err = s.runAfterEvaluateSetCallbacks(ctx, req, evalSetResult, err)
+		if err != nil {
+			evalSetResult = nil
+			err = fmt.Errorf("run after evaluate set callbacks (app=%s, evalSetID=%s): %w",
+				req.AppName, req.EvalSetID, err)
+		}
+	}()
 	evalCaseResults := make([]*evalresult.EvalCaseResult, 0, len(req.InferenceResults))
 	for _, inferenceResult := range req.InferenceResults {
-		if inferenceResult == nil {
-			err := errors.New("inference result is nil")
-			if afterErr := s.runAfterEvaluateSetCallbacks(callbackCtx, req, nil, err); afterErr != nil {
-				err = errors.Join(err, afterErr)
-			}
-			return nil, fmt.Errorf("evaluate (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
-		}
-
-		caseCtx, err := s.runBeforeEvaluateCaseCallbacks(callbackCtx, req, inferenceResult.EvalCaseID)
+		caseResult, err := s.evaluateCase(ctx, req, inferenceResult)
 		if err != nil {
-			if afterErr := s.runAfterEvaluateSetCallbacks(callbackCtx, req, nil, err); afterErr != nil {
-				err = errors.Join(err, afterErr)
-			}
-			return nil, fmt.Errorf("evaluate (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
+			return nil, fmt.Errorf("evaluate case (app=%s, evalSetID=%s, evalCaseID=%s): %w",
+				req.AppName, req.EvalSetID, inferenceResult.EvalCaseID, err)
 		}
-
-		var (
-			result  *evalresult.EvalCaseResult
-			caseErr error
-		)
-		if inferenceResult.Status != evalstatus.EvalStatusPassed {
-			caseErr = errors.New(inferenceResult.ErrorMessage)
-			evalCaseResults = append(evalCaseResults, s.failedEvalCaseResult(req.EvalSetID, inferenceResult, inferenceResult.ErrorMessage))
-			result = evalCaseResults[len(evalCaseResults)-1]
-		} else {
-			caseResult, evalErr := s.evaluatePerCase(caseCtx, inferenceResult, req.EvaluateConfig)
-			if evalErr != nil {
-				caseErr = evalErr
-				result = s.failedEvalCaseResult(req.EvalSetID, inferenceResult, evalErr.Error())
-			} else {
-				result = caseResult
-			}
-			evalCaseResults = append(evalCaseResults, result)
-		}
-
-		if err := s.runAfterEvaluateCaseCallbacks(caseCtx, req, inferenceResult, result, caseErr); err != nil {
-			if afterErr := s.runAfterEvaluateSetCallbacks(callbackCtx, req, nil, err); afterErr != nil {
-				err = errors.Join(err, afterErr)
-			}
-			return nil, fmt.Errorf("evaluate (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
-		}
+		evalCaseResults = append(evalCaseResults, caseResult)
 	}
-	evalSetResult := &evalresult.EvalSetResult{
+	evalSetResult = &evalresult.EvalSetResult{
 		EvalSetID:         req.EvalSetID,
 		EvalCaseResults:   evalCaseResults,
 		CreationTimestamp: &epochtime.EpochTime{Time: time.Now()},
 	}
-
-	evalSetResultID, err := s.evalResultManager.Save(callbackCtx, req.AppName, evalSetResult)
+	evalSetResultID, err := s.evalResultManager.Save(ctx, req.AppName, evalSetResult)
 	if err != nil {
-		err = fmt.Errorf("save eval set result: %w", err)
-		if afterErr := s.runAfterEvaluateSetCallbacks(callbackCtx, req, nil, err); afterErr != nil {
-			err = errors.Join(err, afterErr)
-		}
-		return nil, fmt.Errorf("evaluate (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
+		return nil, fmt.Errorf("save eval set result (app=%s, evalSetID=%s): %w",
+			req.AppName, req.EvalSetID, err)
 	}
 	evalSetResult.EvalSetResultID = evalSetResultID
 	evalSetResult.EvalSetResultName = evalSetResultID
-
-	if afterErr := s.runAfterEvaluateSetCallbacks(callbackCtx, req, evalSetResult, nil); afterErr != nil {
-		return evalSetResult, afterErr
-	}
 	return evalSetResult, nil
+}
+
+func (s *local) evaluateCase(ctx context.Context, req *service.EvaluateRequest, inferenceResult *service.InferenceResult) (result *evalresult.EvalCaseResult, err error) {
+	if inferenceResult == nil {
+		return nil, errors.New("inference result is nil")
+	}
+	ctx, err = s.runBeforeEvaluateCaseCallbacks(ctx, req, inferenceResult.EvalCaseID)
+	if err != nil {
+		return nil, fmt.Errorf("run before evaluate case callbacks (app=%s, evalSetID=%s, evalCaseID=%s): %w",
+			req.AppName, req.EvalSetID, inferenceResult.EvalCaseID, err)
+	}
+	defer func() {
+		err = s.runAfterEvaluateCaseCallbacks(ctx, req, inferenceResult, result, err)
+		if err != nil {
+			result = nil
+			err = fmt.Errorf("run after evaluate case callbacks (app=%s, evalSetID=%s, evalCaseID=%s): %w",
+				req.AppName, req.EvalSetID, inferenceResult.EvalCaseID, err)
+		}
+	}()
+	if inferenceResult.Status != evalstatus.EvalStatusPassed {
+		err = errors.New(inferenceResult.ErrorMessage)
+		result = s.failedEvalCaseResult(req.EvalSetID, inferenceResult, inferenceResult.ErrorMessage)
+		return result, err
+	}
+	caseResult, err := s.evaluatePerCase(ctx, inferenceResult, req.EvaluateConfig)
+	if err != nil {
+		result = s.failedEvalCaseResult(req.EvalSetID, inferenceResult, err.Error())
+		return result, err
+	}
+	return caseResult, nil
 }
 
 func (s *local) failedEvalCaseResult(evalSetID string, inferenceResult *service.InferenceResult, errorMessage string) *evalresult.EvalCaseResult {
