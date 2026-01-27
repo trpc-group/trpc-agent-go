@@ -488,6 +488,7 @@ sessionService := inmemory.NewSessionService(
 - **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
 - **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
+- **`WithKeyPrefix(prefix string)`**：设置 Redis key 前缀。所有 key 将以 `prefix:` 开头。默认无前缀。
 - **`WithExtraOptions(extraOptions ...interface{})`**：为 Redis 客户端设置额外选项。
 
 ### 基础配置示例
