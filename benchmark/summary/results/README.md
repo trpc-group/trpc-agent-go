@@ -14,7 +14,6 @@ This directory stores session summarization benchmark evaluation results.
 **Configuration**:
 - Model: deepseek-v3.2
 - Summary Trigger: Every 2 turns (`-events 2`)
-- Evaluation Period: 2026-01-23 to 2026-01-26
 - Total Cases: 917 (9 tasks)
 
 **Key Results**:
@@ -39,21 +38,6 @@ This directory stores session summarization benchmark evaluation results.
 1. Summarization works well for long dialogues (≥4 turns) with long prompts (>2000 tokens).
 2. Summarization harms short dialogues (≤2 turns) due to overhead > compression gains.
 3. Current `-events 2` setting is too aggressive for short dialogues.
-
-## Directory Structure
-
-```
-results/
-├── README.md               # This file
-├── REPORT.md               # English report
-├── REPORT.zh_CN.md         # Chinese report
-├── analyze_mtbench101.py   # Statistics generator
-└── mt-bench-101/
-    ├── result_summary.json # Aggregated statistics
-    └── <TASK>/
-        ├── results.json    # Per-case results
-        └── checkpoint.json
-```
 
 ## Regenerate Statistics
 

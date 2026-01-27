@@ -1,2 +1,2 @@
 # Ignore all dataset files (should be downloaded via download_datasets.sh).
-mtbench101.jsonl
+mt-bench-101/
