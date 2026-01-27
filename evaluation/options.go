@@ -32,6 +32,7 @@ type options struct {
 	metricManager                    metric.Manager
 	registry                         registry.Registry
 	evalService                      service.Service
+	callbacks                        *service.Callbacks
 	numRuns                          int
 	evalCaseParallelism              int
 	evalCaseParallelInferenceEnabled bool
@@ -91,6 +92,13 @@ func WithRegistry(r registry.Registry) Option {
 func WithEvaluationService(s service.Service) Option {
 	return func(o *options) {
 		o.evalService = s
+	}
+}
+
+// WithCallbacks sets evaluation callbacks for evaluation service.
+func WithCallbacks(c *service.Callbacks) Option {
+	return func(o *options) {
+		o.callbacks = c
 	}
 }
 
