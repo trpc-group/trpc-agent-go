@@ -237,7 +237,7 @@ func TestHandleInterrupt_EmitsEvent_WithCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := exec.handleInterrupt(ctx, inv, execCtx, intr, 7, nil)
+	err := exec.handleInterrupt(ctx, inv, execCtx, intr, 7, nil, nil)
 	require.True(t, IsInterruptError(err))
 	// Same interrupt should be propagated.
 	require.Same(t, intr, err)
@@ -3048,6 +3048,7 @@ func TestExecutor_executeStepTask_RecoversFromPanic(t *testing.T) {
 		nil,
 		task,
 		step,
+		nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "task panic")
