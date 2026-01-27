@@ -478,6 +478,7 @@ Suitable for production environments and distributed applications, provides high
 - **`WithSummarizer(s summary.SessionSummarizer)`**: Inject session summarizer.
 - **`WithAsyncSummaryNum(num int)`**: Set number of summary processing workers. Default is 3.
 - **`WithSummaryQueueSize(size int)`**: Set summary task queue size. Default is 100.
+- **`WithKeyPrefix(prefix string)`**: Set Redis key prefix. All keys will be prefixed with `prefix:`. Default is empty (no prefix).
 - **`WithExtraOptions(extraOptions ...interface{})`**: Set extra options for Redis client.
 
 ### Basic Configuration Example
