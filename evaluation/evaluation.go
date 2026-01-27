@@ -65,6 +65,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 			service.WithEvalSetManager(a.evalSetManager),
 			service.WithEvalResultManager(a.evalResultManager),
 			service.WithRegistry(a.registry),
+			service.WithCallbacks(opts.callbacks),
 			service.WithEvalCaseParallelism(opts.evalCaseParallelism),
 			service.WithEvalCaseParallelInferenceEnabled(opts.evalCaseParallelInferenceEnabled),
 		)

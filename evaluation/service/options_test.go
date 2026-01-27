@@ -28,6 +28,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, opts.EvalResultManager)
 	assert.NotNil(t, opts.Registry)
 	assert.NotNil(t, opts.SessionIDSupplier)
+	assert.Nil(t, opts.Callbacks)
 	assert.Equal(t, runtime.GOMAXPROCS(0), opts.EvalCaseParallelism)
 	assert.False(t, opts.EvalCaseParallelInferenceEnabled)
 
@@ -66,6 +67,14 @@ func TestWithSessionIDSupplier(t *testing.T) {
 	opts := NewOptions(WithSessionIDSupplier(supplier))
 	assert.Equal(t, "session-custom", opts.SessionIDSupplier(context.Background()))
 	assert.True(t, called)
+}
+
+func TestWithCallbacks(t *testing.T) {
+	callbacks := &Callbacks{}
+
+	opts := NewOptions(WithCallbacks(callbacks))
+
+	assert.Same(t, callbacks, opts.Callbacks)
 }
 
 func TestWithEvalCaseParallelism(t *testing.T) {
