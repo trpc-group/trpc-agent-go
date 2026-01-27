@@ -98,42 +98,40 @@ func (s *local) Close() error {
 }
 
 func (s *local) runBeforeEvaluateSetCallbacks(ctx context.Context, req *service.EvaluateRequest) (context.Context, error) {
-	callbackCtx := ctx
-	beforeResult, callbackErr := callback.RunBeforeEvaluateSet(callbackCtx, s.callbacks, &service.BeforeEvaluateSetArgs{Request: req})
-	if beforeResult != nil && beforeResult.Context != nil {
-		callbackCtx = beforeResult.Context
+	result, err := callback.RunBeforeEvaluateSet(ctx, s.callbacks, &service.BeforeEvaluateSetArgs{Request: req})
+	if result != nil && result.Context != nil {
+		ctx = result.Context
 	}
-	if callbackErr != nil {
-		return callbackCtx, fmt.Errorf("run before evaluate set callbacks (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, callbackErr)
+	if err != nil {
+		return ctx, fmt.Errorf("run before evaluate set callbacks (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
 	}
-	return callbackCtx, nil
+	return ctx, nil
 }
 
 func (s *local) runAfterEvaluateSetCallbacks(ctx context.Context, req *service.EvaluateRequest, result *evalresult.EvalSetResult, err error) error {
-	_, afterErr := callback.RunAfterEvaluateSet(ctx, s.callbacks, &service.AfterEvaluateSetArgs{
+	_, err = callback.RunAfterEvaluateSet(ctx, s.callbacks, &service.AfterEvaluateSetArgs{
 		Request: req,
 		Result:  result,
 		Error:   err,
 	})
-	if afterErr != nil {
-		return fmt.Errorf("run after evaluate set callbacks (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, afterErr)
+	if err != nil {
+		return fmt.Errorf("run after evaluate set callbacks (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
 	}
 	return nil
 }
 
 func (s *local) runBeforeEvaluateCaseCallbacks(ctx context.Context, req *service.EvaluateRequest, evalCaseID string) (context.Context, error) {
-	caseCtx := ctx
-	beforeResult, callbackErr := callback.RunBeforeEvaluateCase(caseCtx, s.callbacks, &service.BeforeEvaluateCaseArgs{
+	result, err := callback.RunBeforeEvaluateCase(ctx, s.callbacks, &service.BeforeEvaluateCaseArgs{
 		Request:    req,
 		EvalCaseID: evalCaseID,
 	})
-	if beforeResult != nil && beforeResult.Context != nil {
-		caseCtx = beforeResult.Context
+	if result != nil && result.Context != nil {
+		ctx = result.Context
 	}
-	if callbackErr != nil {
-		return caseCtx, fmt.Errorf("run before evaluate case callbacks (evalCaseID=%s): %w", evalCaseID, callbackErr)
+	if err != nil {
+		return ctx, fmt.Errorf("run before evaluate case callbacks (evalCaseID=%s): %w", evalCaseID, err)
 	}
-	return caseCtx, nil
+	return ctx, nil
 }
 
 func (s *local) runAfterEvaluateCaseCallbacks(
@@ -143,18 +141,18 @@ func (s *local) runAfterEvaluateCaseCallbacks(
 	result *evalresult.EvalCaseResult,
 	err error,
 ) error {
-	_, afterErr := callback.RunAfterEvaluateCase(ctx, s.callbacks, &service.AfterEvaluateCaseArgs{
+	_, err = callback.RunAfterEvaluateCase(ctx, s.callbacks, &service.AfterEvaluateCaseArgs{
 		Request:         req,
 		InferenceResult: inferenceResult,
 		Result:          result,
 		Error:           err,
 	})
-	if afterErr != nil {
+	if err != nil {
 		evalCaseID := ""
 		if inferenceResult != nil {
 			evalCaseID = inferenceResult.EvalCaseID
 		}
-		return fmt.Errorf("run after evaluate case callbacks (evalCaseID=%s): %w", evalCaseID, afterErr)
+		return fmt.Errorf("run after evaluate case callbacks (evalCaseID=%s): %w", evalCaseID, err)
 	}
 	return nil
 }
