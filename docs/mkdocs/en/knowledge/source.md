@@ -225,7 +225,7 @@ recursiveChunking := chunking.NewRecursiveChunking(
     chunking.WithRecursiveChunkSize(512),   // Max chunk size
     chunking.WithRecursiveOverlap(64),      // Overlap between chunks
     // Custom separator priority (optional)
-    chunking.WithRecursiveSeparators([]string{"\n\n", "\n", ". ", " ", ""}),
+    chunking.WithRecursiveSeparators([]string{"\n\n", "\n", ". ", " "}),
 )
 
 fileSrc := filesource.New(
@@ -240,9 +240,8 @@ fileSrc := filesource.New(
 2. `\n` - Then split by line
 3. `. ` - Then split by sentence
 4. ` ` - Split by space
-5. `` - Split by character (fallback)
 
-Recursive chunking attempts to use higher priority separators, only using the next level separator when chunks still exceed the maximum size.
+Recursive chunking attempts to use higher priority separators, only using the next level separator when chunks still exceed the maximum size. If all separators fail to split text within chunkSize, it will force split by chunkSize.
 
 ## Configuring Metadata
 

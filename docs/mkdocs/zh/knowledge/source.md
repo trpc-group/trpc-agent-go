@@ -266,7 +266,7 @@ recursiveChunking := chunking.NewRecursiveChunking(
     chunking.WithRecursiveChunkSize(512),   // 最大块大小
     chunking.WithRecursiveOverlap(64),      // 块间重叠
     // 自定义分隔符优先级（可选）
-    chunking.WithRecursiveSeparators([]string{"\n\n", "\n", ". ", " ", ""}),
+    chunking.WithRecursiveSeparators([]string{"\n\n", "\n", ". ", " "}),
 )
 
 fileSrc := filesource.New(
@@ -281,9 +281,8 @@ fileSrc := filesource.New(
 2. `\n` - 其次按行分割
 3. `. ` - 再按句子分割
 4. ` ` - 按空格分割
-5. `` - 按字符分割（兜底）
 
-递归分块会尝试使用更高优先级的分隔符，仅当分块仍超过最大大小时才使用下一级分隔符。
+递归分块会尝试使用更高优先级的分隔符，仅当分块仍超过最大大小时才使用下一级分隔符。若所有分隔符都无法将文本切分到 chunkSize 以内，则按 chunkSize 强制切分。
 
 
 

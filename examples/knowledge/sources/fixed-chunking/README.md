@@ -6,14 +6,14 @@ Demonstrates how to use fixed-size chunking strategy for document splitting.
 
 - Fixed-size text chunking with configurable chunk size
 - Configurable overlap between consecutive chunks
-- Preview of chunking results before loading to knowledge base
+- Preview of chunking results before loading to the knowledge base
 - UTF-8 safe text splitting
 
 ## Chunking Strategy
 
 `FixedSizeChunking` splits text into fixed-size chunks:
-- `WithChunkSize(512)`: Maximum 512 characters per chunk
-- `WithOverlap(64)`: 64 characters overlap between chunks
+- `WithChunkSize(100)`: Maximum 100 characters per chunk
+- `WithOverlap(10)`: 10 characters overlap between chunks
 
 ## Run
 

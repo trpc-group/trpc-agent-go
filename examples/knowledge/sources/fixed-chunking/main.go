@@ -61,8 +61,8 @@ func main() {
 	// Create fixed-size chunking strategy with custom chunk size and overlap
 	// FixedSizeChunking splits text into fixed-size chunks with optional overlap
 	fixedChunking := chunking.NewFixedSizeChunking(
-		chunking.WithChunkSize(100), // Each chunk will be at most 512 characters
-		chunking.WithOverlap(10),    // 64 characters overlap between consecutive chunks
+		chunking.WithChunkSize(100), // Each chunk will be at most 100 characters
+		chunking.WithOverlap(10),    // 10 characters overlap between consecutive chunks
 	)
 
 	// Demonstrate chunking result before loading to knowledge base
@@ -114,7 +114,7 @@ func main() {
 		log.Fatalf("Failed to create vector store: %v", err)
 	}
 	fmt.Printf("Vector Store: %s\n", storeType)
-	fmt.Printf("Chunk Size: 512, Overlap: 64\n")
+	fmt.Printf("Chunk Size: 100, Overlap: 10\n")
 
 	kb := knowledge.New(
 		knowledge.WithVectorStore(vs),

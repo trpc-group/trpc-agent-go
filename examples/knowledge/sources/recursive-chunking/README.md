@@ -7,14 +7,14 @@ Demonstrates how to use recursive chunking strategy for intelligent document spl
 - Recursive text chunking with separator hierarchy
 - Configurable chunk size and overlap
 - Custom separators for intelligent text splitting
-- Preview of chunking results before loading to knowledge base
+- Preview of chunking results before loading to the knowledge base
 
 ## Chunking Strategy
 
 `RecursiveChunking` uses a hierarchy of separators to split text intelligently:
-- `WithRecursiveChunkSize(512)`: Maximum 512 characters per chunk
-- `WithRecursiveOverlap(64)`: 64 characters overlap between chunks
-- `WithRecursiveSeparators([]string{"\n\n", "\n", ". ", " ", ""})`: Split priority
+- `WithRecursiveChunkSize(1000)`: Maximum 1000 characters per chunk
+- `WithRecursiveOverlap(0)`: No overlap between chunks
+- `WithRecursiveSeparators([]string{"\n\n", "\n", ". ", " "})`: Split priority
 
 ### Separator Priority
 
@@ -22,9 +22,8 @@ Demonstrates how to use recursive chunking strategy for intelligent document spl
 2. `\n` - Split by line
 3. `. ` - Split by sentence
 4. ` ` - Split by space
-5. `` - Split by character (fallback)
 
-This ensures text is split at natural boundaries when possible.
+If text still exceeds chunkSize after all separators, it will be force split by chunkSize.
 
 ## Run
 

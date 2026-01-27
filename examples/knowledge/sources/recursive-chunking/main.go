@@ -63,11 +63,12 @@ func main() {
 	// It tries to split by paragraph first, then by line, then by space, then by character
 	recursiveChunking := chunking.NewRecursiveChunking(
 		chunking.WithRecursiveChunkSize(1000), // Maximum chunk size
-		chunking.WithRecursiveOverlap(0),      // Overlap between chunks
+		chunking.WithRecursiveOverlap(0),      // No overlap between chunks
 		// Custom separators (optional, defaults are used if not specified):
 		// Default separators: ["\n\n", "\n", " ", ""]
-		// This means: split by paragraph -> line -> space -> character
-		chunking.WithRecursiveSeparators([]string{"\n\n", "\n", ". ", " ", ""}),
+		// This means: split by paragraph -> line -> sentence -> space
+		// If still exceeds chunkSize, force split by chunkSize
+		chunking.WithRecursiveSeparators([]string{"\n\n", "\n", ". ", " "}),
 	)
 
 	// Demonstrate chunking result before loading to knowledge base
@@ -126,7 +127,7 @@ func main() {
 		log.Fatalf("Failed to create vector store: %v", err)
 	}
 	fmt.Printf("Vector Store: %s\n", storeType)
-	fmt.Printf("Chunk Size: 512, Overlap: 64\n")
+	fmt.Printf("Chunk Size: 1000, Overlap: 0\n")
 	fmt.Printf("Separators: [paragraph, line, sentence, space, char]\n")
 
 	kb := knowledge.New(
