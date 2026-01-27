@@ -131,6 +131,12 @@ func TestRunCallbackPoints_ContextPropagationAndEmptyLastResult(t *testing.T) {
 		callbacks.Register("second", &service.Callback{
 			AfterInferenceSet: func(ctx context.Context, args *service.AfterInferenceSetArgs) (*service.AfterInferenceSetResult, error) {
 				assert.Equal(t, want, ctx.Value(ctxKey{}))
+				return nil, nil
+			},
+		})
+		callbacks.Register("third", &service.Callback{
+			AfterInferenceSet: func(ctx context.Context, args *service.AfterInferenceSetArgs) (*service.AfterInferenceSetResult, error) {
+				assert.Equal(t, want, ctx.Value(ctxKey{}))
 				return &service.AfterInferenceSetResult{}, nil
 			},
 		})
@@ -156,6 +162,12 @@ func TestRunCallbackPoints_ContextPropagationAndEmptyLastResult(t *testing.T) {
 			},
 		})
 		callbacks.Register("second", &service.Callback{
+			BeforeInferenceCase: func(ctx context.Context, args *service.BeforeInferenceCaseArgs) (*service.BeforeInferenceCaseResult, error) {
+				assert.Equal(t, want, ctx.Value(ctxKey{}))
+				return nil, nil
+			},
+		})
+		callbacks.Register("third", &service.Callback{
 			BeforeInferenceCase: func(ctx context.Context, args *service.BeforeInferenceCaseArgs) (*service.BeforeInferenceCaseResult, error) {
 				assert.Equal(t, want, ctx.Value(ctxKey{}))
 				return &service.BeforeInferenceCaseResult{}, nil
@@ -186,6 +198,12 @@ func TestRunCallbackPoints_ContextPropagationAndEmptyLastResult(t *testing.T) {
 		callbacks.Register("second", &service.Callback{
 			AfterInferenceCase: func(ctx context.Context, args *service.AfterInferenceCaseArgs) (*service.AfterInferenceCaseResult, error) {
 				assert.Equal(t, want, ctx.Value(ctxKey{}))
+				return nil, nil
+			},
+		})
+		callbacks.Register("third", &service.Callback{
+			AfterInferenceCase: func(ctx context.Context, args *service.AfterInferenceCaseArgs) (*service.AfterInferenceCaseResult, error) {
+				assert.Equal(t, want, ctx.Value(ctxKey{}))
 				return &service.AfterInferenceCaseResult{}, nil
 			},
 		})
@@ -211,6 +229,12 @@ func TestRunCallbackPoints_ContextPropagationAndEmptyLastResult(t *testing.T) {
 			},
 		})
 		callbacks.Register("second", &service.Callback{
+			BeforeEvaluateSet: func(ctx context.Context, args *service.BeforeEvaluateSetArgs) (*service.BeforeEvaluateSetResult, error) {
+				assert.Equal(t, want, ctx.Value(ctxKey{}))
+				return nil, nil
+			},
+		})
+		callbacks.Register("third", &service.Callback{
 			BeforeEvaluateSet: func(ctx context.Context, args *service.BeforeEvaluateSetArgs) (*service.BeforeEvaluateSetResult, error) {
 				assert.Equal(t, want, ctx.Value(ctxKey{}))
 				return &service.BeforeEvaluateSetResult{}, nil
@@ -240,6 +264,12 @@ func TestRunCallbackPoints_ContextPropagationAndEmptyLastResult(t *testing.T) {
 		callbacks.Register("second", &service.Callback{
 			AfterEvaluateSet: func(ctx context.Context, args *service.AfterEvaluateSetArgs) (*service.AfterEvaluateSetResult, error) {
 				assert.Equal(t, want, ctx.Value(ctxKey{}))
+				return nil, nil
+			},
+		})
+		callbacks.Register("third", &service.Callback{
+			AfterEvaluateSet: func(ctx context.Context, args *service.AfterEvaluateSetArgs) (*service.AfterEvaluateSetResult, error) {
+				assert.Equal(t, want, ctx.Value(ctxKey{}))
 				return &service.AfterEvaluateSetResult{}, nil
 			},
 		})
@@ -265,6 +295,12 @@ func TestRunCallbackPoints_ContextPropagationAndEmptyLastResult(t *testing.T) {
 			},
 		})
 		callbacks.Register("second", &service.Callback{
+			BeforeEvaluateCase: func(ctx context.Context, args *service.BeforeEvaluateCaseArgs) (*service.BeforeEvaluateCaseResult, error) {
+				assert.Equal(t, want, ctx.Value(ctxKey{}))
+				return nil, nil
+			},
+		})
+		callbacks.Register("third", &service.Callback{
 			BeforeEvaluateCase: func(ctx context.Context, args *service.BeforeEvaluateCaseArgs) (*service.BeforeEvaluateCaseResult, error) {
 				assert.Equal(t, want, ctx.Value(ctxKey{}))
 				return &service.BeforeEvaluateCaseResult{}, nil
@@ -299,6 +335,12 @@ func TestRunCallbackPoints_ContextPropagationAndEmptyLastResult(t *testing.T) {
 			},
 		})
 		callbacks.Register("second", &service.Callback{
+			AfterEvaluateCase: func(ctx context.Context, args *service.AfterEvaluateCaseArgs) (*service.AfterEvaluateCaseResult, error) {
+				assert.Equal(t, want, ctx.Value(ctxKey{}))
+				return nil, nil
+			},
+		})
+		callbacks.Register("third", &service.Callback{
 			AfterEvaluateCase: func(ctx context.Context, args *service.AfterEvaluateCaseArgs) (*service.AfterEvaluateCaseResult, error) {
 				assert.Equal(t, want, ctx.Value(ctxKey{}))
 				return &service.AfterEvaluateCaseResult{}, nil

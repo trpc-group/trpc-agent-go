@@ -20,4 +20,3 @@ func TestCreateEvalCaseInferencePoolRejectsNonPositiveSize(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "pool size must be greater than 0")
 }
-

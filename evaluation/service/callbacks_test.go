@@ -98,4 +98,3 @@ func TestCallbacksRegisterPreservesOrder(t *testing.T) {
 	assert.Equal(t, "first", callbacks.BeforeInferenceSet[0].Name)
 	assert.Equal(t, "second", callbacks.BeforeInferenceSet[1].Name)
 }
-
