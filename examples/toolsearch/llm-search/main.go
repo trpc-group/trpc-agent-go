@@ -35,6 +35,7 @@ var (
 	modelName = flag.String("model", "deepseek-chat", "Name of model to use")
 	streaming = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	inputFile = flag.String("input", "", "Input file with messages (one per line)")
+	maxTools  = flag.Int("max-tools", 3, "Maximum number of tools to provide to LLM")
 )
 
 func main() {
@@ -123,30 +124,29 @@ func (c *baselineChat) setup(_ context.Context) error {
 		Stream: c.streaming,
 	}
 
-	maxTools := 3
 	var SearchToolTurnNumber int
 	var SearchToolTurnNumberMutex sync.Mutex
 
 	modelCallbacks := model.NewCallbacks()
-	if tc, err := toolsearch.New(modelInstance, toolsearch.WithMaxTools(maxTools)); err != nil {
+	tc, err := toolsearch.New(modelInstance, toolsearch.WithMaxTools(*maxTools))
+	if err != nil {
 		return fmt.Errorf("failed to create tool selector: %w", err)
-	} else {
-		modelCallbacks.RegisterBeforeModel(tc.Callback()).RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (res *model.BeforeModelResult, err error) {
-			if usage, ok := toolsearch.ToolSearchUsageFromContext(ctx); ok && usage != nil {
-
-				SearchToolTurnNumberMutex.Lock()
-				defer SearchToolTurnNumberMutex.Unlock()
-				c.addToolSearchTurnUsage(TurnUsage{
-					TurnNumber:       SearchToolTurnNumber,
-					PromptTokens:     usage.PromptTokens,
-					CompletionTokens: usage.CompletionTokens,
-					TotalTokens:      usage.TotalTokens})
-				ctx = toolsearch.SetToolSearchUsage(ctx, &model.Usage{})
-				SearchToolTurnNumber++
-			}
-			return nil, nil
-		})
 	}
+	modelCallbacks.RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (res *model.BeforeModelResult, err error) {
+		if usage, ok := toolsearch.ToolSearchUsageFromContext(ctx); ok && usage != nil {
+
+			SearchToolTurnNumberMutex.Lock()
+			defer SearchToolTurnNumberMutex.Unlock()
+			c.addToolSearchTurnUsage(TurnUsage{
+				TurnNumber:       SearchToolTurnNumber,
+				PromptTokens:     usage.PromptTokens,
+				CompletionTokens: usage.CompletionTokens,
+				TotalTokens:      usage.TotalTokens})
+			ctx = toolsearch.SetToolSearchUsage(ctx, &model.Usage{})
+			SearchToolTurnNumber++
+		}
+		return nil, nil
+	})
 
 	agentName := "baseline-assistant"
 	llmAgent := llmagent.New(
@@ -165,6 +165,7 @@ func (c *baselineChat) setup(_ context.Context) error {
 		appName,
 		llmAgent,
 		runner.WithSessionService(sessionService),
+		runner.WithPlugins(tc),
 	)
 
 	c.userID = "user"
@@ -174,7 +175,7 @@ func (c *baselineChat) setup(_ context.Context) error {
 	}
 
 	fmt.Printf("✅ LLM Search chat ready! Session: %s\n", c.sessionID)
-	fmt.Printf("⚠️  Note: only %d of 10 tools are provided to LLM without any search\n\n", maxTools)
+	fmt.Printf("⚠️  Note: only %d of 10 tools are provided to LLM without any search\n\n", *maxTools)
 
 	return nil
 }
