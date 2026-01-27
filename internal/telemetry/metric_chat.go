@@ -84,7 +84,7 @@ func (a chatAttributes) toAttributes() []attribute.KeyValue {
 	if a.ErrorType != "" {
 		attrs = append(attrs, attribute.String(KeyErrorType, a.ErrorType))
 	} else if a.Error != nil {
-		attrs = append(attrs, attribute.String(KeyErrorType, ValueDefaultErrorType))
+		attrs = append(attrs, attribute.String(KeyErrorType, ToErrorType(a.Error, ValueDefaultErrorType)))
 	}
 	if a.AgentName != "" {
 		attrs = append(attrs, attribute.String(KeyGenAIAgentName, a.AgentName))
