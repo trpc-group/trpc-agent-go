@@ -69,6 +69,14 @@ func TestWithSessionIDSupplier(t *testing.T) {
 	assert.True(t, called)
 }
 
+func TestWithCallbacks(t *testing.T) {
+	callbacks := &Callbacks{}
+
+	opts := NewOptions(WithCallbacks(callbacks))
+
+	assert.Same(t, callbacks, opts.Callbacks)
+}
+
 func TestWithEvalCaseParallelism(t *testing.T) {
 	opts := NewOptions(WithEvalCaseParallelism(3))
 	assert.Equal(t, 3, opts.EvalCaseParallelism)

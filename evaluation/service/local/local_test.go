@@ -1189,7 +1189,7 @@ func TestLocalEvaluateTraceModeUsesUserContentAsExpected(t *testing.T) {
 	assert.Nil(t, perInvocation.ExpectedInvocation.IntermediateResponses)
 }
 
-func TestLocalInferenceParallelBeforeInferenceCaseReceivesIndependentRequest(t *testing.T) {
+func TestLocalInferenceParallelBeforeInferenceCaseReceivesSharedRequest(t *testing.T) {
 	ctx := context.Background()
 	appName := "math-app"
 	evalSetID := "math-set"
@@ -1250,7 +1250,7 @@ func TestLocalInferenceParallelBeforeInferenceCaseReceivesIndependentRequest(t *
 	}
 	assert.NotNil(t, req1)
 	assert.NotNil(t, req2)
-	assert.NotSame(t, req1, req2)
+	assert.Same(t, req1, req2)
 
 	close(release)
 

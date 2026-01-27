@@ -47,6 +47,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, opts.metricManager)
 	assert.NotNil(t, opts.registry)
 	assert.Nil(t, opts.evalService)
+	assert.Nil(t, opts.callbacks)
 	assert.Equal(t, runtime.GOMAXPROCS(0), opts.evalCaseParallelism)
 	assert.False(t, opts.evalCaseParallelInferenceEnabled)
 }
@@ -84,6 +85,13 @@ func TestWithEvaluationService(t *testing.T) {
 	opts := newOptions(WithEvaluationService(custom))
 
 	assert.Equal(t, custom, opts.evalService)
+}
+
+func TestWithCallbacks(t *testing.T) {
+	custom := &service.Callbacks{}
+	opts := newOptions(WithCallbacks(custom))
+
+	assert.Same(t, custom, opts.callbacks)
 }
 
 func TestWithNumRuns(t *testing.T) {
