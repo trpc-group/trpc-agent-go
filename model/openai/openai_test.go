@@ -6113,10 +6113,23 @@ func TestWithOptimizeForCache(t *testing.T) {
 	}
 }
 
-// TestOptimizeForCache_DefaultDisabled tests that cache optimization is disabled by default.
-func TestOptimizeForCache_DefaultDisabled(t *testing.T) {
+// TestOptimizeForCache_DefaultEnabled_OpenAI tests the default for OpenAI.
+func TestOptimizeForCache_DefaultEnabled_OpenAI(t *testing.T) {
 	m := New("gpt-4o", WithAPIKey("test-key"))
-	assert.False(t, m.optimizeForCache, "cache optimization should be disabled by default")
+	assert.True(t, m.optimizeForCache, "cache optimization should be enabled by default")
+}
+
+func TestOptimizeForCache_DefaultDisabled_NonOpenAI(t *testing.T) {
+	m := New(
+		"deepseek-chat",
+		WithAPIKey("test-key"),
+		WithVariant(VariantDeepSeek),
+	)
+	require.False(
+		t,
+		m.optimizeForCache,
+		"cache optimization should be disabled by default",
+	)
 }
 
 // TestOptimizeMessagesForCache tests the optimizeMessagesForCache function.
@@ -6261,13 +6274,13 @@ func TestGenerateContent_OptimizeForCache(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Test with cache optimization enabled (default)
+	// Test with cache optimization enabled (default for OpenAI)
 	m := New("gpt-4o", WithBaseURL(server.URL), WithAPIKey("test-key"))
 
 	req := &model.Request{
 		Messages: []model.Message{
-			{Role: model.RoleSystem, Content: "You are helpful"},
 			{Role: model.RoleUser, Content: "Hello"},
+			{Role: model.RoleSystem, Content: "You are helpful"},
 			{Role: model.RoleAssistant, Content: "Hi"},
 		},
 	}
@@ -6281,7 +6294,7 @@ func TestGenerateContent_OptimizeForCache(t *testing.T) {
 	}
 
 	// Verify system message was moved to front
-	assert.Equal(t, "system", capturedRoles[0], "system message should be first")
+	assert.Equal(t, []string{"system", "user", "assistant"}, capturedRoles)
 }
 
 // TestGenerateContent_OptimizeForCache_Disabled tests that messages are not reordered when disabled.
