@@ -47,8 +47,7 @@ func main() {
 	metricManager := metriclocal.New(metric.WithBaseDir(*dataDir))
 	evalResultManager := evalresultlocal.New(evalresult.WithBaseDir(*outputDir))
 	registry := registry.New()
-	callbacks := &service.Callbacks{}
-	callbacks.Register("logger", newLoggingCallback())
+	callbacks := service.NewCallbacks().Register("logger", newLoggingCallback())
 	agentEvaluator, err := evaluation.New(
 		appName,
 		runner,

@@ -87,6 +87,18 @@ type Callbacks struct {
 	AfterEvaluateCase []NamedCallback[AfterEvaluateCaseCallback]
 }
 
+// CallbacksOption configures Callbacks behavior.
+type CallbacksOption func(*Callbacks)
+
+// NewCallbacks creates a new Callbacks instance for evaluation callbacks.
+func NewCallbacks(opts ...CallbacksOption) *Callbacks {
+	c := &Callbacks{}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
 // Register adds a callback component with the provided name.
 func (c *Callbacks) Register(name string, callback *Callback) *Callbacks {
 	if callback == nil {
@@ -117,6 +129,46 @@ func (c *Callbacks) Register(name string, callback *Callback) *Callbacks {
 		c.AfterEvaluateCase = append(c.AfterEvaluateCase, NamedCallback[AfterEvaluateCaseCallback]{Name: name, Callback: callback.AfterEvaluateCase})
 	}
 	return c
+}
+
+// RegisterBeforeInferenceSet registers a before inference set callback with the provided name.
+func (c *Callbacks) RegisterBeforeInferenceSet(name string, fn BeforeInferenceSetCallback) *Callbacks {
+	return c.Register(name, &Callback{BeforeInferenceSet: fn})
+}
+
+// RegisterAfterInferenceSet registers an after inference set callback with the provided name.
+func (c *Callbacks) RegisterAfterInferenceSet(name string, fn AfterInferenceSetCallback) *Callbacks {
+	return c.Register(name, &Callback{AfterInferenceSet: fn})
+}
+
+// RegisterBeforeInferenceCase registers a before inference case callback with the provided name.
+func (c *Callbacks) RegisterBeforeInferenceCase(name string, fn BeforeInferenceCaseCallback) *Callbacks {
+	return c.Register(name, &Callback{BeforeInferenceCase: fn})
+}
+
+// RegisterAfterInferenceCase registers an after inference case callback with the provided name.
+func (c *Callbacks) RegisterAfterInferenceCase(name string, fn AfterInferenceCaseCallback) *Callbacks {
+	return c.Register(name, &Callback{AfterInferenceCase: fn})
+}
+
+// RegisterBeforeEvaluateSet registers a before evaluate set callback with the provided name.
+func (c *Callbacks) RegisterBeforeEvaluateSet(name string, fn BeforeEvaluateSetCallback) *Callbacks {
+	return c.Register(name, &Callback{BeforeEvaluateSet: fn})
+}
+
+// RegisterAfterEvaluateSet registers an after evaluate set callback with the provided name.
+func (c *Callbacks) RegisterAfterEvaluateSet(name string, fn AfterEvaluateSetCallback) *Callbacks {
+	return c.Register(name, &Callback{AfterEvaluateSet: fn})
+}
+
+// RegisterBeforeEvaluateCase registers a before evaluate case callback with the provided name.
+func (c *Callbacks) RegisterBeforeEvaluateCase(name string, fn BeforeEvaluateCaseCallback) *Callbacks {
+	return c.Register(name, &Callback{BeforeEvaluateCase: fn})
+}
+
+// RegisterAfterEvaluateCase registers an after evaluate case callback with the provided name.
+func (c *Callbacks) RegisterAfterEvaluateCase(name string, fn AfterEvaluateCaseCallback) *Callbacks {
+	return c.Register(name, &Callback{AfterEvaluateCase: fn})
 }
 
 // BeforeInferenceSetArgs contains parameters for before inference set callbacks.
