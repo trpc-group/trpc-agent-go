@@ -188,6 +188,102 @@ func TestRunTool_DoesNotUseLoginShell(t *testing.T) {
 	require.Equal(t, "\n", out.Stdout)
 }
 
+func TestRunTool_AutoPrependsVenvBinToPATH(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	cmd := strings.Join([]string{
+		"set -e",
+		"mkdir -p .venv/bin",
+		"printf '%s\\n' '#!/usr/bin/env bash' 'echo OK' " +
+			"> .venv/bin/hello",
+		"chmod +x .venv/bin/hello",
+		"hello",
+	}, "; ")
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: cmd,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Contains(t, out.Stdout, "OK")
+}
+
+func TestVenvRelPaths_FromSkillRoot(t *testing.T) {
+	cwd := path.Join(codeexecutor.DirSkills, testSkillName)
+	venvRel, venvBinRel := venvRelPaths(cwd, testSkillName)
+	require.Equal(t, skillDirVenv, venvRel)
+	require.Equal(t, path.Join(skillDirVenv, "bin"), venvBinRel)
+}
+
+func TestVenvRelPaths_FromChildDir(t *testing.T) {
+	cwd := path.Join(codeexecutor.DirSkills, testSkillName, scriptsDir)
+	venvRel, venvBinRel := venvRelPaths(cwd, testSkillName)
+	require.Equal(t, path.Join("..", skillDirVenv), venvRel)
+	require.Equal(t, path.Join("..", skillDirVenv, "bin"), venvBinRel)
+}
+
+func TestInjectVenvEnv_PrependsPATHAndSetsVirtualEnv(t *testing.T) {
+	env := map[string]string{
+		envPath: "/usr/bin",
+	}
+	venv := path.Join(skillDirVenv)
+	venvBin := path.Join(skillDirVenv, "bin")
+
+	injectVenvEnv(env, venv, venvBin)
+
+	require.Equal(t, venv, env[envVirtualEnv])
+	sep := string(os.PathListSeparator)
+	require.Equal(t, venvBin+sep+"/usr/bin", env[envPath])
+}
+
+func TestInjectVenvEnv_DoesNotOverrideVirtualEnv(t *testing.T) {
+	const existing = "already"
+	env := map[string]string{
+		envVirtualEnv: existing,
+		envPath:       "/bin",
+	}
+	venv := path.Join(skillDirVenv)
+	venvBin := path.Join(skillDirVenv, "bin")
+
+	injectVenvEnv(env, venv, venvBin)
+
+	require.Equal(t, existing, env[envVirtualEnv])
+	require.Contains(t, env[envPath], venvBin)
+}
+
+func TestInjectVenvEnv_EmptyPATHUsesVenvOnly(t *testing.T) {
+	t.Setenv(envPath, "")
+	env := map[string]string{}
+	venv := path.Join(skillDirVenv)
+	venvBin := path.Join(skillDirVenv, "bin")
+
+	injectVenvEnv(env, venv, venvBin)
+
+	require.Equal(t, venv, env[envVirtualEnv])
+	require.Equal(t, venvBin, env[envPath])
+}
+
+func TestWrapWithVenvPrefix_BuildsExports(t *testing.T) {
+	cmd := wrapWithVenvPrefix(cmdEcho, "VENV", "VENV/bin")
+	require.Contains(t, cmd, "export "+envPath+"='VENV/bin'")
+	require.Contains(t, cmd, "export "+envVirtualEnv+"='VENV'")
+}
+
 func TestRunTool_PrimaryOutput_SelectsByName(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -1420,6 +1516,23 @@ func TestRunTool_stageSkill_CreatesInputsDir(t *testing.T) {
 	info, err := os.Stat(inputsPath)
 	require.NoError(t, err)
 	require.True(t, info.IsDir())
+
+	venvPath := filepath.Join(
+		ws.Path,
+		codeexecutor.DirSkills,
+		testSkillName,
+		skillDirVenv,
+	)
+	info, err = os.Stat(venvPath)
+	require.NoError(t, err)
+	require.True(t, info.IsDir())
+
+	err = os.WriteFile(
+		filepath.Join(venvPath, "writable.txt"),
+		[]byte("ok"),
+		0o644,
+	)
+	require.NoError(t, err)
 }
 
 func makeTreeWritable(root string) {
