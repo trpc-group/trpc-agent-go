@@ -367,6 +367,15 @@ func findSystemMessageIndex(messages []model.Message) int {
 	return -1
 }
 
+func findLastSystemMessageIndex(messages []model.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == model.RoleSystem {
+			return i
+		}
+	}
+	return -1
+}
+
 // containsInstruction checks if the given content already contains the instruction.
 func containsInstruction(content, instruction string) bool {
 	// strings.Contains handles both exact match and substring cases

@@ -16,6 +16,7 @@ package processor
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -266,38 +267,43 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	if invocation.Session != nil {
 		var messages []model.Message
 		var summaryUpdatedAt time.Time
+		var summaryMsg *model.Message
 		// Skip session summary when include_contents=none, but still get current
 		// invocation's events (tool calls/results) to maintain ReAct loop context.
 		if !skipHistory && p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
-			// Add session summary as a system message if enabled and available.
-			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
-			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
-				// Insert summary as a separate system message after the first system message.
-				systemMsgIndex := findSystemMessageIndex(req.Messages)
-				if systemMsgIndex >= 0 {
-					// Insert summary as a new system message after the first system message.
-					req.Messages = append(req.Messages[:systemMsgIndex+1],
-						append([]model.Message{*msg}, req.Messages[systemMsgIndex+1:]...)...)
-				} else {
-					// No system message exists, prepend new system message.
-					req.Messages = append([]model.Message{*msg}, req.Messages...)
-				}
-				summaryUpdatedAt = updatedAt
-			}
+			// Fetch session summary early so we can insert it after other
+			// semi-stable system blocks (for example, preloaded memories).
+			summaryMsg, summaryUpdatedAt =
+				p.getSessionSummaryMessage(invocation)
 		}
 
 		// Preload memories into system prompt if configured.
 		// PreloadMemory: 0 = disabled, -1 = all, N > 0 = most recent N.
 		if p.PreloadMemory != 0 && invocation.MemoryService != nil {
 			if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
-				// Insert memory as a system message after the first system message.
-				systemMsgIndex := findSystemMessageIndex(req.Messages)
+				// Insert memory as a system message after the last system
+				// message to keep stable instructions cacheable.
+				systemMsgIndex := findLastSystemMessageIndex(
+					req.Messages,
+				)
 				if systemMsgIndex >= 0 {
 					req.Messages = append(req.Messages[:systemMsgIndex+1],
 						append([]model.Message{*memMsg}, req.Messages[systemMsgIndex+1:]...)...)
 				} else {
 					req.Messages = append([]model.Message{*memMsg}, req.Messages...)
 				}
+			}
+		}
+
+		if summaryMsg != nil {
+			// Insert summary as a separate system message after the last
+			// system message to keep stable instructions cacheable.
+			systemMsgIndex := findLastSystemMessageIndex(req.Messages)
+			if systemMsgIndex >= 0 {
+				req.Messages = append(req.Messages[:systemMsgIndex+1],
+					append([]model.Message{*summaryMsg}, req.Messages[systemMsgIndex+1:]...)...)
+			} else {
+				req.Messages = append([]model.Message{*summaryMsg}, req.Messages...)
 			}
 		}
 
@@ -394,7 +400,14 @@ func (p *ContentRequestProcessor) aggregatePrefixSummaries(
 	var latestTime time.Time
 	filterPrefix := prefix + agent.EventFilterKeyDelimiter
 
-	for key, sum := range summaries {
+	keys := make([]string, 0, len(summaries))
+	for key := range summaries {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		sum := summaries[key]
 		if sum == nil || sum.Summary == "" {
 			continue
 		}
