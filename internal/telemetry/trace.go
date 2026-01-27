@@ -112,7 +112,7 @@ func TraceWorkflow(span trace.Span, workflow *Workflow) {
 		}
 	}
 	if workflow.Error != nil {
-		span.SetAttributes(attribute.String(KeyErrorType, ValueDefaultErrorType))
+		span.SetAttributes(attribute.String(KeyErrorType, ToErrorType(workflow.Error, ValueDefaultErrorType)))
 		span.SetStatus(codes.Error, workflow.Error.Error())
 		span.RecordError(workflow.Error)
 	}
@@ -223,7 +223,7 @@ func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Dec
 			span.SetAttributes(attribute.String(KeyErrorType, e.Type), attribute.String(KeyErrorMessage, e.Message))
 		} else if err != nil {
 			span.SetStatus(codes.Error, err.Error())
-			span.SetAttributes(attribute.String(KeyErrorType, ValueDefaultErrorType), attribute.String(KeyErrorMessage, err.Error()))
+			span.SetAttributes(attribute.String(KeyErrorType, ToErrorType(err, ValueDefaultErrorType)), attribute.String(KeyErrorMessage, err.Error()))
 		}
 
 		if callIDs := rspEvent.Response.GetToolCallIDs(); len(callIDs) > 0 {

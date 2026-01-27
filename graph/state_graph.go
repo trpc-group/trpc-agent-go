@@ -1879,7 +1879,7 @@ func finalizeInvokeAgentSpan(span oteltrace.Span, errp *error) {
 	span.SetStatus(codes.Error, err.Error())
 	span.SetAttributes(attribute.String(
 		itelemetry.KeyErrorType,
-		itelemetry.ValueDefaultErrorType,
+		itelemetry.ToErrorType(err, itelemetry.ValueDefaultErrorType),
 	))
 	span.End()
 }
