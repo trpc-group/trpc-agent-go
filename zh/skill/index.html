@@ -890,6 +890,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#token" class="md-nav__link">
+    <span class="md-ellipsis">
+      Token 成本（为什么要渐进披露）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#_4" class="md-nav__link">
     <span class="md-ellipsis">
       目录结构
@@ -1817,6 +1826,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#token" class="md-nav__link">
+    <span class="md-ellipsis">
+      Token 成本（为什么要渐进披露）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#_4" class="md-nav__link">
     <span class="md-ellipsis">
       目录结构
@@ -2043,6 +2061,13 @@
    - 关联文档按需选择（<code>docs</code> 或 <code>include_all_docs</code>），仅把文本
      内容注入；脚本不会被内联到提示词，而是在工作区中执行，并
      回传结果与输出文件。</p>
+<h3 id="token">Token 成本（为什么要渐进披露）</h3>
+<p>如果把一个技能仓库的全部内容（所有 <code>SKILL.md</code> 正文与 docs）
+一股脑塞进提示词，往往会让 prompt token 占用变得非常高，甚至
+直接超过模型上下文窗口。</p>
+<p>想要<strong>可复现、基于真实运行</strong>的 token 对比（渐进披露 vs 全量注入），
+可参考 <code>benchmark/anthropic_skills/README.md</code>，并按其中说明运行
+<code>token-report</code> 套件。</p>
 <h3 id="_4">目录结构</h3>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
 <span class="normal"><a href="#__codelineno-0-2">2</a></span>
@@ -2329,6 +2354,8 @@ https://github.com/anthropics/skills</p>
   - <code>SKILL_NAME</code>（由工具注入）
 - 便捷符号链接：在技能根目录下自动创建 <code>out/</code>、<code>work/</code>、
   <code>inputs/</code> 链接到工作区对应目录，方便按文档中的相对路径使用。
+- <code>.venv/</code>：技能根目录下的可写目录，用于安装技能依赖
+  （例如 <code>python -m venv .venv</code> + <code>pip install ...</code>）。
 - 文件工具在 base directory 下不存在真实 <code>inputs/</code> 目录时，会将
   <code>inputs/&lt;path&gt;</code> 视为 <code>&lt;path&gt;</code> 的别名</p>
 <h2 id="_6">执行器</h2>
@@ -2414,7 +2441,7 @@ https://github.com/anthropics/skills</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月26日 07:22:38 UTC">2026-01-26 07:22:38</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月27日 03:22:11 UTC">2026-01-27 03:22:11</span>
   </span>
 
     
