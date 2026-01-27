@@ -244,6 +244,10 @@ func New(name string, opts ...Option) *Model {
 		opt(&o)
 	}
 
+	if !o.optimizeForCacheSet && o.Variant != VariantOpenAI {
+		o.OptimizeForCache = false
+	}
+
 	// Set default API key and base URL if not specified.
 	if cfg, ok := variantConfigs[o.Variant]; ok {
 		if val, ok := os.LookupEnv(cfg.apiKeyName); ok && o.APIKey == "" {
