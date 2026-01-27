@@ -14,20 +14,27 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -1619,4 +1626,162 @@ func TestGraphAgent_WithExecutorOptions_OverrideMappedOptions(t *testing.T) {
 		}
 	}
 	require.True(t, done, "Execution should complete")
+}
+
+// recordingSpanForEmitError captures span operations for testing emit error handling.
+type recordingSpanForEmitError struct {
+	oteltrace.Span
+	mu         sync.Mutex
+	statusCode codes.Code
+	statusDesc string
+	attributes []attribute.KeyValue
+}
+
+func (s *recordingSpanForEmitError) SetStatus(code codes.Code, description string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.statusCode = code
+	s.statusDesc = description
+	s.Span.SetStatus(code, description)
+}
+
+func (s *recordingSpanForEmitError) SetAttributes(kv ...attribute.KeyValue) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.attributes = append(s.attributes, kv...)
+	s.Span.SetAttributes(kv...)
+}
+
+func (s *recordingSpanForEmitError) getStatus() (codes.Code, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.statusCode, s.statusDesc
+}
+
+func (s *recordingSpanForEmitError) getAttributes() []attribute.KeyValue {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]attribute.KeyValue, len(s.attributes))
+	copy(result, s.attributes)
+	return result
+}
+
+// recordingTracerForEmitError returns a tracer that creates recording spans.
+type recordingTracerForEmitError struct {
+	oteltrace.Tracer
+	mu    sync.Mutex
+	spans []*recordingSpanForEmitError
+}
+
+func newRecordingTracerForEmitError() *recordingTracerForEmitError {
+	baseTracer := noop.NewTracerProvider().Tracer("test")
+	return &recordingTracerForEmitError{Tracer: baseTracer}
+}
+
+func (t *recordingTracerForEmitError) Start(ctx context.Context, spanName string, opts ...oteltrace.SpanStartOption) (context.Context, oteltrace.Span) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, baseSpan := t.Tracer.Start(ctx, spanName, opts...)
+	recordingSpan := &recordingSpanForEmitError{Span: baseSpan}
+	t.spans = append(t.spans, recordingSpan)
+	return ctx, recordingSpan
+}
+
+func TestGraphAgent_RunWithBarrier_EmitEventError(t *testing.T) {
+	// Save original tracer
+	originalTracer := trace.Tracer
+	defer func() {
+		trace.Tracer = originalTracer
+	}()
+
+	// Create recording tracer
+	recordingTracer := newRecordingTracerForEmitError()
+	trace.Tracer = recordingTracer
+
+	// Create a simple graph that produces events
+	schema := graph.NewStateSchema().
+		AddField("output", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"output": "result"}, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	ga, err := New("emit-error-test", g)
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		AgentName:    "emit-error-test",
+		InvocationID: "inv-emit-error",
+		Message:      model.NewUserMessage("test"),
+	}
+
+	// Create output channel with buffer size 0 to make EmitEvent block
+	out := make(chan *event.Event, 0)
+
+	// Create a context that will be canceled to cause EmitEvent to fail
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start runWithBarrier in a goroutine
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ga.runWithBarrier(ctx, inv, out)
+	}()
+
+	// Wait a bit for the graph to start executing and produce an event
+	// The event will try to be emitted but will block on the unbuffered channel
+	time.Sleep(100 * time.Millisecond)
+
+	// Cancel the context to cause EmitEvent to fail with context.Canceled
+	cancel()
+
+	// Wait for the goroutine to finish
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for runWithBarrier to complete")
+	}
+
+	// Verify that span operations were called
+	recordingTracer.mu.Lock()
+	spans := recordingTracer.spans
+	recordingTracer.mu.Unlock()
+
+	require.NotEmpty(t, spans, "expected at least one span to be created")
+
+	// Find the span for the agent invocation
+	var agentSpan *recordingSpanForEmitError
+	for _, span := range spans {
+		// The span name should contain the operation and agent name
+		agentSpan = span
+		break
+	}
+
+	require.NotNil(t, agentSpan, "expected agent span to be created")
+
+	// Verify SetStatus was called with Error code
+	statusCode, statusDesc := agentSpan.getStatus()
+	require.Equal(t, codes.Error, statusCode, "expected span status to be Error")
+	require.NotEmpty(t, statusDesc, "expected span status description to be set")
+
+	// Verify SetAttributes was called with error type
+	attrs := agentSpan.getAttributes()
+	var errorTypeAttr *attribute.KeyValue
+	for i := range attrs {
+		if string(attrs[i].Key) == string(itelemetry.KeyErrorType) {
+			errorTypeAttr = &attrs[i]
+			break
+		}
+	}
+	require.NotNil(t, errorTypeAttr, "expected error type attribute to be set")
+	errorTypeValue := errorTypeAttr.Value.AsString()
+	require.Equal(t, model.ErrorTypeFlowError, errorTypeValue, "expected error type to be FlowError")
 }
