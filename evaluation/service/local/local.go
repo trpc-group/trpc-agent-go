@@ -254,7 +254,7 @@ func (s *local) failedEvalCaseResult(evalSetID string, inferenceResult *service.
 func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.InferenceResult,
 	evaluateConfig *service.EvaluateConfig) (*evalresult.EvalCaseResult, error) {
 	if inferenceResult == nil {
-		return nil, fmt.Errorf("evaluate per case: inference result is nil")
+		return nil, errors.New("inference result is nil")
 	}
 	if evaluateConfig == nil {
 		return nil, fmt.Errorf("evaluate per case (evalCaseID=%s): evaluate config is nil", inferenceResult.EvalCaseID)
