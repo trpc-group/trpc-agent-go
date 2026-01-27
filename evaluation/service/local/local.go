@@ -189,8 +189,12 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (eva
 	for _, inferenceResult := range req.InferenceResults {
 		caseResult, err := s.evaluateCase(ctx, req, inferenceResult)
 		if err != nil {
+			evalCaseID := ""
+			if inferenceResult != nil {
+				evalCaseID = inferenceResult.EvalCaseID
+			}
 			return nil, fmt.Errorf("evaluate case (app=%s, evalSetID=%s, evalCaseID=%s): %w",
-				req.AppName, req.EvalSetID, inferenceResult.EvalCaseID, err)
+				req.AppName, req.EvalSetID, evalCaseID, err)
 		}
 		evalCaseResults = append(evalCaseResults, caseResult)
 	}
@@ -219,22 +223,20 @@ func (s *local) evaluateCase(ctx context.Context, req *service.EvaluateRequest, 
 			req.AppName, req.EvalSetID, inferenceResult.EvalCaseID, err)
 	}
 	defer func() {
-		err = s.runAfterEvaluateCaseCallbacks(ctx, req, inferenceResult, result, err)
-		if err != nil {
+		afterErr := s.runAfterEvaluateCaseCallbacks(ctx, req, inferenceResult, result, err)
+		if afterErr != nil {
 			result = nil
-			err = fmt.Errorf("run after evaluate case callbacks (app=%s, evalSetID=%s, evalCaseID=%s): %w",
-				req.AppName, req.EvalSetID, inferenceResult.EvalCaseID, err)
+			err = afterErr
 		}
 	}()
 	if inferenceResult.Status != evalstatus.EvalStatusPassed {
-		err = errors.New(inferenceResult.ErrorMessage)
 		result = s.failedEvalCaseResult(req.EvalSetID, inferenceResult, inferenceResult.ErrorMessage)
-		return result, err
+		return result, nil
 	}
 	caseResult, err := s.evaluatePerCase(ctx, inferenceResult, req.EvaluateConfig)
 	if err != nil {
 		result = s.failedEvalCaseResult(req.EvalSetID, inferenceResult, err.Error())
-		return result, err
+		return result, nil
 	}
 	return caseResult, nil
 }
