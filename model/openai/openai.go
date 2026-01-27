@@ -107,6 +107,10 @@ type variantConfig struct {
 	thinkingEnabledKey string
 	// thinkingValueConvertor converts ThinkingEnabled to variant-specific format.
 	thinkingValueConvertor thinkingValueConvertor
+
+	// defaultOptimizeForCache controls the default value for cache optimization
+	// when WithOptimizeForCache is not explicitly set.
+	defaultOptimizeForCache bool
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
@@ -127,6 +131,7 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		thinkingEnabledKey:        model.ThinkingEnabledKey,
 		thinkingValueConvertor:    defaultThinkingValueConvertor,
+		defaultOptimizeForCache:   true,
 	},
 	VariantDeepSeek: {
 		fileUploadPath:            "/openapi/v1/files",
@@ -244,8 +249,13 @@ func New(name string, opts ...Option) *Model {
 		opt(&o)
 	}
 
+	cfg, cfgOK := variantConfigs[o.Variant]
+	if !o.optimizeForCacheSet {
+		o.OptimizeForCache = cfgOK && cfg.defaultOptimizeForCache
+	}
+
 	// Set default API key and base URL if not specified.
-	if cfg, ok := variantConfigs[o.Variant]; ok {
+	if cfgOK {
 		if val, ok := os.LookupEnv(cfg.apiKeyName); ok && o.APIKey == "" {
 			o.APIKey = val
 		}

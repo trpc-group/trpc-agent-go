@@ -40,6 +40,16 @@ Background references:
    - Docs are included only when requested; scripts are not inlined but
      executed inside a workspace, returning results and output files.
 
+### Token Cost (Why Progressive Disclosure Matters)
+
+If you inline a full skills repo (all `SKILL.md` bodies and docs) into
+the prompt up-front, it can dominate your prompt-token budget and even
+exceed the model context window.
+
+For a reproducible, **runtime** token comparison (progressive disclosure
+vs full injection), see `benchmark/anthropic_skills/README.md` and run
+the `token-report` suite described there.
+
 ### File Layout
 
 ```
@@ -198,6 +208,9 @@ Behavior:
 - Request processor injects `SKILL.md` body and docs into system message
 
 Notes:
+- Prefer progressive disclosure: load only the body first, then list and
+  select only the docs you need. Avoid `include_all_docs` unless you
+  truly need every doc (or the user explicitly asks).
 - Safe to call multiple times to add or replace docs.
 - These keys are stored on the session state and can remain effective
   across turns in the same session until overwritten/cleared or the
@@ -324,6 +337,8 @@ Environment and CWD:
   `OUTPUT_DIR`, `RUN_DIR`; the tool injects `SKILL_NAME`
 - Convenience symlinks are created under the skill root: `out/`,
   `work/`, and `inputs/` point to workspace‑level dirs
+- `.venv/` is a writable directory under the skill root for per-skill
+  dependencies (for example, `python -m venv .venv` + `pip install ...`)
 - File tools accept `inputs/<path>` as an alias to `<path>` when the
   configured base directory does not contain a real `inputs/` folder
 

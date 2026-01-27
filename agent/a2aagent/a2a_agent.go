@@ -164,7 +164,8 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 
 	if r.a2aClient == nil {
 		span.SetStatus(codes.Error, "A2A client is nil")
-		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
 		span.End()
 		return nil, fmt.Errorf("A2A client is nil")
 	}
@@ -172,7 +173,7 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	// Validate A2A request options early
 	if err := r.validateA2ARequestOptions(invocation); err != nil {
 		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
 		span.End()
 		return nil, err
 	}
@@ -187,7 +188,7 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	}
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
 		span.End()
 		return nil, err
 	}
