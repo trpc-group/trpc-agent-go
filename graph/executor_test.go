@@ -237,7 +237,7 @@ func TestHandleInterrupt_EmitsEvent_WithCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := exec.handleInterrupt(ctx, inv, execCtx, intr, 7, nil)
+	err := exec.handleInterrupt(ctx, inv, execCtx, intr, 7, nil, nil)
 	require.True(t, IsInterruptError(err))
 	// Same interrupt should be propagated.
 	require.Same(t, intr, err)
@@ -2289,6 +2289,56 @@ func TestProcessConditionalEdges_Multi_SkipEmpty(t *testing.T) {
 	require.False(t, okEmpty, "expected no channel for empty branch key")
 }
 
+func TestExecutor_ConditionalUnknownTarget_ReturnsError(t *testing.T) {
+	const (
+		nodeStart    = "start"
+		unknownRoute = "missing_node"
+		invID        = "inv-unknown-target"
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeStart, func(ctx context.Context, s State) (any, error) {
+		return s, nil
+	})
+	sg.SetEntryPoint(nodeStart)
+	sg.AddConditionalEdges(
+		nodeStart,
+		func(ctx context.Context, s State) (string, error) {
+			return unknownRoute, nil
+		},
+		nil,
+	)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	events, err := exec.Execute(
+		context.Background(),
+		State{},
+		&agent.Invocation{InvocationID: invID},
+	)
+	require.NoError(t, err)
+
+	var gotErr *model.ResponseError
+	for ev := range events {
+		if ev.Error != nil {
+			gotErr = ev.Error
+		}
+	}
+	require.NotNil(t, gotErr)
+	require.Contains(t, gotErr.Message, unknownRoute)
+
+	channelName := ChannelBranchPrefix + unknownRoute
+	_, channelExists := g.getChannel(channelName)
+	require.False(t, channelExists)
+	triggerToNodes := g.getTriggerToNodes()
+	_, triggerExists := triggerToNodes[channelName]
+	require.False(t, triggerExists)
+}
+
 // minimalNoopNode returns a trivial node function for building test graphs.
 func minimalNoopNode(_ context.Context, _ State) (any, error) { return nil, nil }
 
@@ -3048,6 +3098,7 @@ func TestExecutor_executeStepTask_RecoversFromPanic(t *testing.T) {
 		nil,
 		task,
 		step,
+		nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "task panic")
