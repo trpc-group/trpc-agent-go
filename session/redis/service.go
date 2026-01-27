@@ -629,7 +629,7 @@ func (s *Service) TrimConversations(
 		opt.ConversationCount = 1
 	}
 
-	eventKey := getEventKey(key)
+	eventKey := s.getEventKey(key)
 	targetReqIDs := make(map[string]struct{})
 	var toDelete []any
 	var deletedEvents []event.Event
@@ -685,10 +685,10 @@ func (s *Service) TrimConversations(
 	pipe := s.redisClient.TxPipeline()
 	pipe.ZRem(ctx, eventKey, toDelete...)
 	// Refresh TTL for all session-related keys to keep them consistent.
-	sessKey := getSessionStateKey(key)
-	sumKey := getSessionSummaryKey(key)
-	appStateKey := getAppStateKey(key.AppName)
-	userStateKey := getUserStateKey(key)
+	sessKey := s.getSessionStateKey(key)
+	sumKey := s.getSessionSummaryKey(key)
+	appStateKey := s.getAppStateKey(key.AppName)
+	userStateKey := s.getUserStateKey(key)
 	s.appendSessionTTL(ctx, pipe, key, sessKey, sumKey, appStateKey, userStateKey)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return nil, fmt.Errorf("trim events: remove events: %w", err)
