@@ -3945,8 +3945,8 @@ func TestService_TrimConversations_TTLRefresh(t *testing.T) {
 	client := buildRedisClient(t, redisURL)
 	defer client.Close()
 
-	eventKey := getEventKey(key)
-	sessKey := getSessionStateKey(key)
+	eventKey := service.getEventKey(key)
+	sessKey := service.getSessionStateKey(key)
 
 	eventTTL := client.TTL(ctx, eventKey).Val()
 	sessTTL := client.TTL(ctx, sessKey).Val()
