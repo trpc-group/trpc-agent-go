@@ -2009,6 +2009,82 @@ evalMetric := &metric.EvalMetric{
 
 该评估器要求 Agent 的工具调用返回检索结果，完整示例参见 [examples/evaluation/llm/knowledgerecall](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/knowledgerecall)。
 
+### Callback 回调
+
+Evaluation 支持在评估流程的关键节点注册回调，用于观测/埋点、上下文传递以及调整请求参数。
+
+通过 `service.NewCallbacks()` 创建回调注册表，注册回调组件后在创建 `AgentEvaluator` 时使用 `evaluation.WithCallbacks` 传入，代码示例如下。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+)
+
+callbacks := service.NewCallbacks()
+callbacks.Register("noop", &service.Callback{
+	BeforeInferenceSet: func(ctx context.Context, args *service.BeforeInferenceSetArgs) (*service.BeforeInferenceSetResult, error) {
+		return nil, nil
+	},
+	AfterInferenceSet: func(ctx context.Context, args *service.AfterInferenceSetArgs) (*service.AfterInferenceSetResult, error) {
+		return nil, nil
+	},
+	BeforeInferenceCase: func(ctx context.Context, args *service.BeforeInferenceCaseArgs) (*service.BeforeInferenceCaseResult, error) {
+		return nil, nil
+	},
+	AfterInferenceCase: func(ctx context.Context, args *service.AfterInferenceCaseArgs) (*service.AfterInferenceCaseResult, error) {
+		return nil, nil
+	},
+	BeforeEvaluateSet: func(ctx context.Context, args *service.BeforeEvaluateSetArgs) (*service.BeforeEvaluateSetResult, error) {
+		return nil, nil
+	},
+	AfterEvaluateSet: func(ctx context.Context, args *service.AfterEvaluateSetArgs) (*service.AfterEvaluateSetResult, error) {
+		return nil, nil
+	},
+	BeforeEvaluateCase: func(ctx context.Context, args *service.BeforeEvaluateCaseArgs) (*service.BeforeEvaluateCaseResult, error) {
+		return nil, nil
+	},
+	AfterEvaluateCase: func(ctx context.Context, args *service.AfterEvaluateCaseArgs) (*service.AfterEvaluateCaseResult, error) {
+		return nil, nil
+	},
+})
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithCallbacks(callbacks),
+)
+```
+
+如果只需要注册单个回调点，也可以使用对应回调点的注册方法，例如 `callbacks.RegisterBeforeInferenceSet(name, fn)`。
+
+完整示例参见 [examples/evaluation/callbacks](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/callbacks)。
+
+回调点说明如下表所示。
+
+| 回调点 | 触发时机 |
+| --- | --- |
+| `BeforeInferenceSet` | Inference 阶段开始前，每个 EvalSet 触发一次 |
+| `AfterInferenceSet` | Inference 阶段结束后，每个 EvalSet 触发一次 |
+| `BeforeInferenceCase` | 单个 EvalCase 推理开始前，每个 EvalCase 触发一次 |
+| `AfterInferenceCase` | 单个 EvalCase 推理结束后，每个 EvalCase 触发一次 |
+| `BeforeEvaluateSet` | Evaluate 阶段开始前，每个 EvalSet 触发一次 |
+| `AfterEvaluateSet` | Evaluate 阶段结束后，每个 EvalSet 触发一次 |
+| `BeforeEvaluateCase` | 单个 EvalCase 评估开始前，每个 EvalCase 触发一次 |
+| `AfterEvaluateCase` | 单个 EvalCase 评估结束后，每个 EvalCase 触发一次 |
+
+同一回调点的多个回调会按注册顺序依次执行。任一回调返回 `error` 会立即中断该回调点，错误信息会携带回调点、序号与组件名。
+
+回调的返回值由 `Result` 与 `error` 两部分组成。`Result` 是可选的，用于在同一回调点内以及后续阶段传递更新后的 `Context`；`error` 用于中断流程并向上返回。常见返回形式含义如下：
+
+- `return nil, nil`：继续沿用当前 `ctx` 执行后续回调；如果同一回调点内前序回调已经通过 `Result.Context` 更新过 `ctx`，该返回方式不会覆盖它。
+- `return result, nil`：将 `ctx` 更新为 `result.Context`，后续回调与后续阶段使用更新后的 `ctx`。
+- `return nil, err`：中断当前回调点并向上返回错误。
+
+通过 `evaluation.WithEvalCaseParallelInferenceEnabled(true)` 开启并行推理后，case 级回调可能并发执行，由于 `args.Request` 指向同一份 `*InferenceRequest`，因此建议只读；如需改写请求，可以在 set 级回调中完成。
+
+单个 EvalCase 的推理或评估失败通常不会通过 `error` 向上传递，而是写入 `Result.Status` 与 `Result.ErrorMessage`，因此 `After*CaseArgs.Error` 不用于承载单个用例失败原因，需要判断失败可以查看 `args.Result.Status` 与 `args.Result.ErrorMessage`。
+
 ## 最佳实践
 
 ### 上下文注入

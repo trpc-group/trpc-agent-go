@@ -21,21 +21,19 @@ import (
 )
 
 type evalCaseInferenceParam struct {
-	idx       int
-	ctx       context.Context
-	appName   string
-	evalSetID string
-	evalCase  *evalset.EvalCase
-	svc       *local
-	results   []*service.InferenceResult
-	wg        *sync.WaitGroup
+	idx      int
+	ctx      context.Context
+	req      *service.InferenceRequest
+	evalCase *evalset.EvalCase
+	svc      *local
+	results  []*service.InferenceResult
+	wg       *sync.WaitGroup
 }
 
 func (p *evalCaseInferenceParam) reset() {
 	p.idx = 0
 	p.ctx = nil
-	p.appName = ""
-	p.evalSetID = ""
+	p.req = nil
 	p.evalCase = nil
 	p.svc = nil
 	p.results = nil
@@ -61,7 +59,7 @@ func createEvalCaseInferencePool(size int) (*ants.PoolWithFunc, error) {
 			param.reset()
 			evalCaseInferenceParamPool.Put(param)
 		}()
-		param.results[param.idx] = param.svc.inferenceEvalCase(param.ctx, param.appName, param.evalSetID, param.evalCase)
+		param.results[param.idx] = param.svc.inferenceEvalCase(param.ctx, param.req, param.evalCase)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create eval case inference pool: %w", err)
