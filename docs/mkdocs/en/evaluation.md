@@ -2025,15 +2025,16 @@ This evaluator requires the Agent’s tool calls to return retrieval results. Se
 
 Evaluation supports registering callbacks at key points in the evaluation flow. Callbacks can be used for observability and instrumentation, passing `Context`, and adjusting request parameters.
 
-Register callback components via `service.Callbacks`, then pass them into `evaluation.New` using `evaluation.WithCallbacks`:
+Create a callback registry with `service.NewCallbacks()`, register callback components, then pass it into `evaluation.New` using `evaluation.WithCallbacks`:
 
 ```go
 import (
+	"context"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 )
 
-callbacks := &service.Callbacks{}
+callbacks := service.NewCallbacks()
 callbacks.Register("noop", &service.Callback{
 	BeforeInferenceSet: func(ctx context.Context, args *service.BeforeInferenceSetArgs) (*service.BeforeInferenceSetResult, error) {
 		return nil, nil
@@ -2067,6 +2068,8 @@ agentEvaluator, err := evaluation.New(
 	evaluation.WithCallbacks(callbacks),
 )
 ```
+
+For registering a single callback point, you can also use point-specific registration methods such as `callbacks.RegisterBeforeInferenceSet(name, fn)`.
 
 For a complete example, see [examples/evaluation/callbacks](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/callbacks).
 

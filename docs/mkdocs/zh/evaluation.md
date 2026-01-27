@@ -2013,7 +2013,7 @@ evalMetric := &metric.EvalMetric{
 
 Evaluation 支持在评估流程的关键节点注册回调，用于观测/埋点、上下文传递以及调整请求参数。
 
-通过 `service.Callbacks` 注册回调组件，并在创建 `AgentEvaluator` 时使用 `evaluation.WithCallbacks` 传入，代码示例如下。
+通过 `service.NewCallbacks()` 创建回调注册表，注册回调组件后在创建 `AgentEvaluator` 时使用 `evaluation.WithCallbacks` 传入，代码示例如下。
 
 ```go
 import (
@@ -2021,7 +2021,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 )
 
-callbacks := &service.Callbacks{}
+callbacks := service.NewCallbacks()
 callbacks.Register("noop", &service.Callback{
 	BeforeInferenceSet: func(ctx context.Context, args *service.BeforeInferenceSetArgs) (*service.BeforeInferenceSetResult, error) {
 		return nil, nil
@@ -2055,6 +2055,8 @@ agentEvaluator, err := evaluation.New(
 	evaluation.WithCallbacks(callbacks),
 )
 ```
+
+如果只需要注册单个回调点，也可以使用对应回调点的注册方法，例如 `callbacks.RegisterBeforeInferenceSet(name, fn)`。
 
 完整示例参见 [examples/evaluation/callbacks](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/callbacks)。
 
