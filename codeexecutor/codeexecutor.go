@@ -30,14 +30,14 @@ type CodeExecutor interface {
 
 // CodeExecutionInput is the input for code execution.
 type CodeExecutionInput struct {
-	CodeBlocks  []CodeBlock
-	ExecutionID string
+	CodeBlocks  []CodeBlock `json:"code_blocks"`
+	ExecutionID string      `json:"execution_id,omitempty"`
 }
 
 // CodeExecutionResult is the result of code execution including files.
 type CodeExecutionResult struct {
-	Output      string
-	OutputFiles []File
+	Output      string `json:"output"`
+	OutputFiles []File `json:"output_files,omitempty"`
 }
 
 // String formats a human-readable result.
@@ -59,14 +59,14 @@ func (r CodeExecutionResult) String() string {
 // File represents a file generated during code execution.
 type File struct {
 	Name     string `json:"name"`
-	Content  string `json:"content"`
-	MIMEType string `json:"mime_type"`
+	Content  string `json:"content,omitempty"`
+	MIMEType string `json:"mime_type,omitempty"`
 }
 
 // CodeBlock represents a single block of code to be executed.
 type CodeBlock struct {
-	Code     string
-	Language string
+	Code     string `json:"code"`
+	Language string `json:"language"`
 }
 
 // CodeBlockDelimiter defines the start and end delimiters for code blocks.
