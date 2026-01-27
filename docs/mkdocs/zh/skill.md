@@ -40,6 +40,16 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
      内容注入；脚本不会被内联到提示词，而是在工作区中执行，并
      回传结果与输出文件。
 
+### Token 成本（为什么要渐进披露）
+
+如果把一个技能仓库的全部内容（所有 `SKILL.md` 正文与 docs）
+一股脑塞进提示词，往往会让 prompt token 占用变得非常高，甚至
+直接超过模型上下文窗口。
+
+想要**可复现、基于真实运行**的 token 对比（渐进披露 vs 全量注入），
+可参考 `benchmark/anthropic_skills/README.md`，并按其中说明运行
+`token-report` 套件。
+
 ### 目录结构
 
 ```
@@ -328,6 +338,8 @@ https://github.com/anthropics/skills
   - `SKILL_NAME`（由工具注入）
 - 便捷符号链接：在技能根目录下自动创建 `out/`、`work/`、
   `inputs/` 链接到工作区对应目录，方便按文档中的相对路径使用。
+- `.venv/`：技能根目录下的可写目录，用于安装技能依赖
+  （例如 `python -m venv .venv` + `pip install ...`）。
 - 文件工具在 base directory 下不存在真实 `inputs/` 目录时，会将
   `inputs/<path>` 视为 `<path>` 的别名
 
