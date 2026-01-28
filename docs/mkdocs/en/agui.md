@@ -99,6 +99,41 @@ If you want to interrupt a running real-time conversation, enable the cancel rou
 
 The cancel route uses the same request body as the real-time conversation route. To cancel successfully, you must provide the same `SessionKey` (`AppName` + `userID` + `sessionID`) as the corresponding real-time conversation request.
 
+#### What does cancel actually stop?
+
+Cancel stops the backend **run** that is currently executing for the same
+`SessionKey` (same `AppName`, resolved `userID`, and `threadId`).
+
+This is useful when:
+
+- The user clicks a “Stop” button in the UI.
+- The SSE connection drops but you still want to stop the backend.
+- You want to enforce server-side budgets (time, cost) and interrupt runaway
+  runs.
+
+#### Minimal cancel request
+
+In most setups, you only need:
+
+- `threadId` (maps to `sessionID`)
+- Whatever fields your `UserIDResolver` reads (often `forwardedProps.userId`)
+
+You can also just resend the same JSON payload you used for the real-time run.
+
+Example:
+
+```bash
+curl -X POST http://localhost:8080/cancel \
+  -H 'Content-Type: application/json' \
+  -d '{"threadId":"thread-id","runId":"run-id","forwardedProps":{"userId":"alice"}}'
+```
+
+Typical responses:
+
+- `200 OK`: cancelled
+- `404 Not Found`: no running run found for that `SessionKey` (already finished
+  or wrong identifiers)
+
 ### Message Snapshot route
 
 Message snapshots restore conversation history when a page is initialised or after a reconnect. The feature is controlled by `agui.WithMessagesSnapshotEnabled(true)` and is disabled by default. The default route is `/history`, can be customised with `WithMessagesSnapshotPath`, and returns the event stream `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED`.

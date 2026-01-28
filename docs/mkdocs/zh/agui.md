@@ -99,6 +99,39 @@ type RunAgentInput struct {
 
 取消路由的请求体与实时对话请求一致，要成功取消，需要传入与实时对话路由相同的 `SessionKey`(`AppName`+`userID`+`sessionID`)。
 
+#### 取消路由到底会停止什么？
+
+取消路由会停止同一 `SessionKey` 下正在运行的后端 **run**（同一 `AppName`、解析
+出来的 `userID`、以及相同的 `threadId`）。
+
+它通常用于：
+
+- 前端有“停止生成”按钮，需要中断后端执行。
+- SSE 连接断开了，但仍希望停止后端（避免白白消耗模型/工具资源）。
+- 你希望做服务端预算控制（时间/成本），及时中断异常 run。
+
+#### 最小取消请求
+
+大多数情况下，你只需要：
+
+- `threadId`（映射到 `sessionID`）
+- 以及 `UserIDResolver` 需要读取的字段（通常是 `forwardedProps.userId`）
+
+当然，你也可以直接把实时对话请求的 JSON 原样再发一遍。
+
+示例：
+
+```bash
+curl -X POST http://localhost:8080/cancel \
+  -H 'Content-Type: application/json' \
+  -d '{"threadId":"thread-id","runId":"run-id","forwardedProps":{"userId":"alice"}}'
+```
+
+典型返回：
+
+- `200 OK`：取消成功
+- `404 Not Found`：没有找到对应 `SessionKey` 的运行中任务（可能已结束，或标识不匹配）
+
 ### 消息快照路由
 
 消息快照用于在页面初始化或断线重连时恢复历史对话，通过 `agui.WithMessagesSnapshotEnabled(true)` 控制功能是否开启，默认关闭。该路由默认是 `/history`， 可通过 `WithMessagesSnapshotPath` 自定义，负责返回 `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED` 的事件流。
