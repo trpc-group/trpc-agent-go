@@ -181,6 +181,112 @@ sources := []source.Source{
 }
 ```
 
+## 分块策略 (Chunking Strategy)
+
+> **示例代码**: [fixed-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/fixed-chunking) | [recursive-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/recursive-chunking)
+
+分块（Chunking）是将长文档拆分为较小片段的过程，这对于向量检索至关重要。框架提供了多种内置分块策略，同时支持自定义分块策略。
+
+### 内置分块策略
+
+| 策略 | 说明 | 适用场景 |
+|-----|------|---------|
+| **FixedSizeChunking** | 固定大小分块 | 通用文本，简单快速 |
+| **RecursiveChunking** | 递归分块，按分隔符层级拆分 | 保持语义完整性 |
+| **MarkdownChunking** | 按 Markdown 结构分块 | Markdown 文档（默认） |
+| **JSONChunking** | 按 JSON 结构分块 | JSON 文件（默认） |
+
+### 默认行为
+
+每种文件类型都有相关的分块策略：
+
+- `.md` 文件 → MarkdownChunking（按标题层级 H1→H6→段落→固定大小 递归分块）
+- `.json` 文件 → JSONChunking（按 JSON 结构分块）
+- `.txt/.csv/.docx` 等 → FixedSizeChunking
+
+**默认参数**：
+
+| 参数 | 默认值 | 说明 |
+|-----|-------|------|
+| ChunkSize | 1024 | 每个分块的最大字符数 |
+| Overlap | 128 | 相邻分块之间的重叠字符数 |
+
+> 默认的分块策略都受 `chunkSize` 参数影响。`overlap` 参数仅对 FixedSizeChunking、RecursiveChunking、MarkdownChunking 生效，JSONChunking 不支持 overlap。
+
+可通过 `WithChunkSize` 和 `WithChunkOverlap` 调整默认策略的参数：
+
+```go
+fileSrc := filesource.New(
+    []string{"./data/document.txt"},
+    filesource.WithChunkSize(512),     // 分块大小（字符数）
+    filesource.WithChunkOverlap(64),   // 分块重叠（字符数）
+)
+```
+
+### 自定义分块策略
+
+使用 `WithCustomChunkingStrategy` 可覆盖默认分块策略。
+
+> **注意**：自定义分块策略会完全覆盖 `WithChunkSize` 和 `WithChunkOverlap` 的配置，分块参数需在自定义策略内部设置。
+
+#### FixedSizeChunking - 固定大小分块
+
+将文本按固定字符数分割，支持重叠：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+)
+
+// 创建固定大小分块策略
+fixedChunking := chunking.NewFixedSizeChunking(
+    chunking.WithChunkSize(512),   // 每块最大 512 字符
+    chunking.WithOverlap(64),      // 块间重叠 64 字符
+)
+
+fileSrc := filesource.New(
+    []string{"./data/document.md"},
+    filesource.WithCustomChunkingStrategy(fixedChunking),
+)
+```
+
+#### RecursiveChunking - 递归分块
+
+按分隔符层级递归拆分，尽量在自然边界处分割：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+)
+
+// 创建递归分块策略
+recursiveChunking := chunking.NewRecursiveChunking(
+    chunking.WithRecursiveChunkSize(512),   // 最大块大小
+    chunking.WithRecursiveOverlap(64),      // 块间重叠
+    // 自定义分隔符优先级（可选）
+    chunking.WithRecursiveSeparators([]string{"\n\n", "\n", ". ", " "}),
+)
+
+fileSrc := filesource.New(
+    []string{"./data/article.txt"},
+    filesource.WithCustomChunkingStrategy(recursiveChunking),
+)
+```
+
+**分隔符优先级说明**：
+
+1. `\n\n` - 优先按段落分割
+2. `\n` - 其次按行分割
+3. `. ` - 再按句子分割
+4. ` ` - 按空格分割
+
+递归分块会尝试使用更高优先级的分隔符，仅当分块仍超过最大大小时才使用下一级分隔符。若所有分隔符都无法将文本切分到 chunkSize 以内，则按 chunkSize 强制切分。
+
+
+
+
 ## 内容转换器 (Transformer)
 
 > **示例代码**: [examples/knowledge/features/transform](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/transform)
