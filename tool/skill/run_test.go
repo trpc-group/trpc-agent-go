@@ -1853,7 +1853,7 @@ func TestSkillStagingHelpers_EarlyReturns(t *testing.T) {
 	require.False(t, ok)
 
 	require.NoError(t, rt.removeWorkspacePath(ctx, nil, ws, ""))
-	require.NoError(t, rt.removeWorkspacePath(
+	require.Error(t, rt.removeWorkspacePath(
 		ctx,
 		nil,
 		ws,
