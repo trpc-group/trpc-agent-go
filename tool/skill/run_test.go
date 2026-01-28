@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -433,7 +435,7 @@ func TestRunTool_SaveAsArtifacts_NoArtifactService(t *testing.T) {
 	require.Len(t, out.Warnings, 1)
 	require.Contains(t, out.Warnings[0], "artifact service")
 	require.Len(t, out.OutputFiles, 1)
-	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+	require.Equal(t, "", out.OutputFiles[0].Content)
 }
 
 func TestRunTool_SaveAsArtifacts_NoInvocation(t *testing.T) {
@@ -464,7 +466,7 @@ func TestRunTool_SaveAsArtifacts_NoInvocation(t *testing.T) {
 	out := res.(runOutput)
 	require.Equal(t, 0, out.ExitCode)
 	require.Empty(t, out.ArtifactFiles)
-	require.Len(t, out.Warnings, 1)
+	require.Len(t, out.Warnings, 2)
 	require.Contains(t, out.Warnings[0], reasonNoInvocation)
 	require.Len(t, out.OutputFiles, 1)
 	require.Contains(t, out.OutputFiles[0].Content, contentHi)
@@ -506,7 +508,7 @@ func TestRunTool_SaveAsArtifacts_NoSession(t *testing.T) {
 	require.Len(t, out.Warnings, 1)
 	require.Contains(t, out.Warnings[0], reasonNoSession)
 	require.Len(t, out.OutputFiles, 1)
-	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+	require.Equal(t, "", out.OutputFiles[0].Content)
 }
 
 func TestRunTool_SaveAsArtifacts_SessionMissingIDs(t *testing.T) {
@@ -548,6 +550,103 @@ func TestRunTool_SaveAsArtifacts_SessionMissingIDs(t *testing.T) {
 	require.Empty(t, out.ArtifactFiles)
 	require.Len(t, out.Warnings, 1)
 	require.Contains(t, out.Warnings[0], reasonNoSessionIDs)
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, "", out.OutputFiles[0].Content)
+}
+
+func TestRunTool_OmitInlineContent_AllowsReadByRef(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		OutputFiles: []string{outGlobTxt},
+		Timeout:     timeoutSecSmall,
+		OmitInline:  true,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, "", out.OutputFiles[0].Content)
+	require.False(t, out.OutputFiles[0].Truncated)
+	require.NotZero(t, out.OutputFiles[0].SizeBytes)
+
+	got, _, handled, err := fileref.TryRead(ctx, out.OutputFiles[0].Ref)
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.Contains(t, got, contentHi)
+}
+
+func TestRunTool_OmitInlineContent_IncludesFileSize(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	const bytes5MiB = 5 * 1024 * 1024
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; " +
+			"head -c " + strconv.Itoa(bytes5MiB) +
+			" /dev/zero > " + outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+		OmitInline:  true,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, "", out.OutputFiles[0].Content)
+	require.Equal(t, int64(bytes5MiB), out.OutputFiles[0].SizeBytes)
+	require.True(t, out.OutputFiles[0].Truncated)
+}
+
+func TestRunTool_OutputsSpec_AcceptsSnakeCaseJSON(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	args := map[string]any{
+		"skill": testSkillName,
+		"command": "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		"outputs": map[string]any{
+			"globs":         []string{"$OUTPUT_DIR/*.txt"},
+			"inline":        true,
+			"save":          false,
+			"max_files":     10,
+			"name_template": "pref/",
+		},
+		"timeout": timeoutSecSmall,
+	}
+	enc, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
 	require.Len(t, out.OutputFiles, 1)
 	require.Contains(t, out.OutputFiles[0].Content, contentHi)
 }

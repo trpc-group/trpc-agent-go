@@ -508,10 +508,14 @@ func (r *Runtime) Collect(
 				span.SetStatus(codes.Error, err.Error())
 				return nil, err
 			}
+			sizeBytes := st.Size()
+			truncated := sizeBytes > int64(len(content))
 			out = append(out, codeexecutor.File{
-				Name:     name,
-				Content:  string(content),
-				MIMEType: mime,
+				Name:      name,
+				Content:   string(content),
+				MIMEType:  mime,
+				SizeBytes: sizeBytes,
+				Truncated: truncated,
 			})
 		}
 	}
@@ -688,8 +692,10 @@ func (r *Runtime) CollectOutputs(
 			leftTotal -= int64(len(data))
 			count++
 			ref := codeexecutor.FileRef{
-				Name:     name,
-				MIMEType: mime,
+				Name:      name,
+				MIMEType:  mime,
+				SizeBytes: st.Size(),
+				Truncated: st.Size() > int64(len(data)),
 			}
 			if spec.Inline {
 				ref.Content = string(data)
