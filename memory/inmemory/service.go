@@ -317,7 +317,9 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 // In agentic mode, all enabled tools are returned.
 // The tools list is pre-computed at service creation time.
 func (s *MemoryService) Tools() []tool.Tool {
-	return s.precomputedTools
+	result := make([]tool.Tool, len(s.precomputedTools))
+	copy(result, s.precomputedTools)
+	return result
 }
 
 // EnqueueAutoMemoryJob enqueues an auto memory extraction job for async
