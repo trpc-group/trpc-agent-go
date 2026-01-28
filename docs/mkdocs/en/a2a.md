@@ -105,6 +105,57 @@ func main() {
 }
 ```
 
+### Hosting multiple A2A agents on one HTTP port (base paths)
+
+Sometimes you want **one service (one port)** to expose multiple A2A Agents.
+The idiomatic A2A approach is to give each Agent its own **base URL**, and let
+the client select the Agent by choosing the URL (not by passing an `agent_name`
+parameter).
+
+In tRPC-Agent-Go, `a2a.WithHost(...)` supports URLs with a path segment.
+When the host URL contains a path (for example `http://localhost:8888/agents/math`),
+the A2A server will automatically use that path as its **base path** for routing.
+
+Key idea:
+
+- Create **one** A2A server per Agent (each with a different base path)
+- Mount all A2A servers onto **one** shared `http.Server` via `server.Handler()`
+
+Example:
+
+```go
+mathServer, err := a2a.New(
+	a2a.WithHost("http://localhost:8888/agents/math"),
+	a2a.WithAgent(mathAgent, false),
+)
+if err != nil {
+	panic(err)
+}
+
+weatherServer, err := a2a.New(
+	a2a.WithHost("http://localhost:8888/agents/weather"),
+	a2a.WithAgent(weatherAgent, false),
+)
+if err != nil {
+	panic(err)
+}
+
+mux := http.NewServeMux()
+mux.Handle("/agents/math/", mathServer.Handler())
+mux.Handle("/agents/weather/", weatherServer.Handler())
+
+if err := http.ListenAndServe(":8888", mux); err != nil {
+	panic(err)
+}
+```
+
+After the server starts, each Agent has its own AgentCard endpoint:
+
+- `http://localhost:8888/agents/math/.well-known/agent-card.json`
+- `http://localhost:8888/agents/weather/.well-known/agent-card.json`
+
+Full runnable example: `examples/a2amultipath`.
+
 ## A2AAgent: Calling Remote A2A Services
 
 Corresponding to A2A Server, tRPC-Agent-Go also provides `A2AAgent` for calling remote A2A services, enabling communication between Agents.
