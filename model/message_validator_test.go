@@ -29,6 +29,22 @@ func TestValidateAndFixMessageSequence_TrailingSystemRemoved(t *testing.T) {
 	require.Equal(t, "q", out[len(out)-1].Content)
 }
 
+func TestRemoveInvalidRoleMessages_Filters(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+		{Role: Role("bad"), Content: "x"},
+		NewUserMessage("q"),
+		{Role: Role("custom"), Content: "y"},
+		NewAssistantMessage("a"),
+	}
+
+	out := removeInvalidRoleMessages(messages)
+	require.Len(t, out, 3)
+	require.Equal(t, RoleSystem, out[0].Role)
+	require.Equal(t, RoleUser, out[1].Role)
+	require.Equal(t, RoleAssistant, out[2].Role)
+}
+
 func TestValidateAndFixMessageSequence_FillsEmptyContentWhenPayloadExists(t *testing.T) {
 	messages := []Message{
 		NewSystemMessage("sys"),
@@ -65,6 +81,16 @@ func TestValidateAndFixMessageSequence_FillsEmptyContentWhenPayloadExists(t *tes
 	require.NotEmpty(t, out[assistantIdx].Content)
 }
 
+func TestEnsureNonEmptyContent_PreservesNonEmpty(t *testing.T) {
+	messages := []Message{
+		NewUserMessage("q"),
+	}
+
+	out := ensureNonEmptyContent(messages)
+	require.Len(t, out, 1)
+	require.Equal(t, "q", out[0].Content)
+}
+
 func TestValidateAndFixMessageSequence_DropsOrphanPrefix(t *testing.T) {
 	messages := []Message{
 		NewAssistantMessage("orphan"),
@@ -73,6 +99,65 @@ func TestValidateAndFixMessageSequence_DropsOrphanPrefix(t *testing.T) {
 
 	out := validateAndFixMessageSequence(messages)
 	require.NotEmpty(t, out)
+	require.Equal(t, RoleUser, out[0].Role)
+	require.Equal(t, "q", out[0].Content)
+}
+
+func TestSplitIntoUserAnchoredRounds_NoNonSystem(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewSystemMessage("sys2"),
+	}
+
+	prefix, rounds := splitIntoUserAnchoredRounds(messages)
+	require.Len(t, prefix, 2)
+	require.Empty(t, rounds)
+}
+
+func TestSplitIntoUserAnchoredRounds_SystemInsideRound(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("q"),
+		NewSystemMessage("mid"),
+		NewAssistantMessage("a"),
+	}
+
+	prefix, rounds := splitIntoUserAnchoredRounds(messages)
+	require.Len(t, prefix, 1)
+	require.Len(t, rounds, 1)
+	require.Len(t, rounds[0], 3)
+	require.Equal(t, RoleUser, rounds[0][0].Role)
+	require.Equal(t, RoleSystem, rounds[0][1].Role)
+	require.Equal(t, RoleAssistant, rounds[0][2].Role)
+}
+
+func TestIsRoundValid_UnknownRole(t *testing.T) {
+	round := []Message{
+		NewUserMessage("q"),
+		{Role: Role("bad"), Content: "x"},
+	}
+
+	require.False(t, isRoundValid(round))
+}
+
+func TestEnsureLastMessageIsUserOrTool_AllSystem(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+	}
+
+	out := ensureLastMessageIsUserOrTool(messages)
+	require.Nil(t, out)
+}
+
+func TestEnsureLastMessageIsUserOrTool_TrailingAssistantRemoved(t *testing.T) {
+	messages := []Message{
+		NewUserMessage("q"),
+		NewAssistantMessage("a1"),
+		NewAssistantMessage("a2"),
+	}
+
+	out := ensureLastMessageIsUserOrTool(messages)
+	require.Len(t, out, 1)
 	require.Equal(t, RoleUser, out[0].Role)
 	require.Equal(t, "q", out[0].Content)
 }

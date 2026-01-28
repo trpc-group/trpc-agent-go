@@ -1513,6 +1513,24 @@ func TestBuildUserAnchoredRounds_AssistantGroupsUsers(t *testing.T) {
 	require.Equal(t, 5, rounds[1].end)
 }
 
+func TestBuildUserAnchoredRounds_SystemInsideRound(t *testing.T) {
+	const preservedHead = 1
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("u1"),
+		NewSystemMessage("mid"),
+		NewAssistantMessage("a1"),
+		NewUserMessage("u2"),
+	}
+
+	rounds := buildUserAnchoredRounds(messages, preservedHead)
+	require.Len(t, rounds, 2)
+	require.Equal(t, 1, rounds[0].start)
+	require.Equal(t, 4, rounds[0].end)
+	require.Equal(t, 4, rounds[1].start)
+	require.Equal(t, 5, rounds[1].end)
+}
+
 func TestCountTokensWithPrefixSumBounds(t *testing.T) {
 	prefixSum := []int{0, 2, 5, 9}
 
@@ -1530,6 +1548,35 @@ func TestCountTokensForRoundsSkips(t *testing.T) {
 	keep := []bool{true, false}
 
 	require.Equal(t, 3, countTokensForRounds(prefixSum, rounds, keep))
+}
+
+func TestShouldReturnOriginal_MaxTokensZero(t *testing.T) {
+	counter := NewSimpleTokenCounter()
+	messages := []Message{
+		NewUserMessage("q"),
+	}
+
+	done, out := shouldReturnOriginal(context.Background(), counter, messages, 0)
+	require.True(t, done)
+	require.Nil(t, out)
+}
+
+func TestShouldReturnOriginal_CountTokensError(t *testing.T) {
+	counter := &mockErrorTokenCounter{}
+	messages := []Message{
+		NewUserMessage("q"),
+	}
+
+	done, out := shouldReturnOriginal(context.Background(), counter, messages, 10)
+	require.True(t, done)
+	require.Len(t, out, 1)
+}
+
+func TestFitsWithinBudget_Empty(t *testing.T) {
+	counter := NewSimpleTokenCounter()
+
+	ok := fitsWithinBudget(context.Background(), counter, nil, 10)
+	require.False(t, ok)
 }
 
 func TestBuildMinimalSuffixCandidates_NoNonSystem(t *testing.T) {
@@ -1564,6 +1611,41 @@ func TestBuildMinimalSuffixCandidates_ToolOnly(t *testing.T) {
 	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, 0)
 	require.Nil(t, withSystem)
 	require.Nil(t, withoutSystem)
+}
+
+func TestLastNonSystemIndex_AllSystem(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewSystemMessage("sys2"),
+	}
+
+	require.Equal(t, -1, lastNonSystemIndex(messages))
+}
+
+func TestTrimTrailingAssistant(t *testing.T) {
+	messages := []Message{
+		NewUserMessage("q"),
+		NewAssistantMessage("a1"),
+		NewAssistantMessage("a2"),
+	}
+
+	require.Equal(t, 0, trimTrailingAssistant(messages, len(messages)-1))
+}
+
+func TestStartOfUserToolGroup_LastIsUser(t *testing.T) {
+	messages := []Message{
+		NewUserMessage("q"),
+	}
+
+	require.Equal(t, 0, startOfUserToolGroup(messages, 0))
+}
+
+func TestStartOfUserToolGroup_ToolWithoutUser(t *testing.T) {
+	messages := []Message{
+		NewToolMessage("tool_1", "search", "result"),
+	}
+
+	require.Equal(t, -1, startOfUserToolGroup(messages, 0))
 }
 
 func TestEnsureTailoredWithinBudget_CountTokensError(t *testing.T) {
