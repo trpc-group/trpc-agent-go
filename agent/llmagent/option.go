@@ -60,6 +60,17 @@ const (
 	// ReasoningContentModeDiscardAll discards all reasoning_content from history.
 	// Use this for maximum bandwidth savings when reasoning history is not needed.
 	ReasoningContentModeDiscardAll = processor.ReasoningContentModeDiscardAll
+
+	// SkillLoadModeOnce injects loaded skill content for the next model
+	// request, then offloads it from session state.
+	SkillLoadModeOnce = processor.SkillLoadModeOnce
+	// SkillLoadModeTurn keeps loaded skill content available for all model
+	// requests within the current invocation, and offloads it when the next
+	// invocation begins.
+	SkillLoadModeTurn = processor.SkillLoadModeTurn
+	// SkillLoadModeSession keeps loaded skill content available across
+	// invocations until cleared or the session expires.
+	SkillLoadModeSession = processor.SkillLoadModeSession
 )
 
 // MessageFilterMode is the mode for filtering messages.
@@ -97,6 +108,8 @@ var (
 		//     and API costs, especially for users with many stored memories.
 		//     Consider using a positive limit (e.g., 10-50) for production use.
 		PreloadMemory: 0,
+
+		SkillLoadMode: SkillLoadModeTurn,
 	}
 )
 
@@ -235,6 +248,10 @@ type Options struct {
 	// construction time. When true, the agent will call ToolSet.Tools
 	// again when building the tools list for each invocation.
 	RefreshToolSetsOnRun bool
+
+	// SkillLoadMode controls how long loaded skill bodies/docs remain
+	// available in the system prompt.
+	SkillLoadMode string
 
 	// skillsRepository enables agent skills when non-nil.
 	skillsRepository skill.Repository
@@ -392,6 +409,19 @@ func WithRefreshToolSetsOnRun(refresh bool) Option {
 func WithSkills(repo skill.Repository) Option {
 	return func(opts *Options) {
 		opts.skillsRepository = repo
+	}
+}
+
+// WithSkillLoadMode sets how long skill bodies/docs loaded via skill_load
+// remain available in the system prompt.
+//
+// Supported modes:
+//   - SkillLoadModeTurn (default)
+//   - SkillLoadModeOnce
+//   - SkillLoadModeSession (legacy)
+func WithSkillLoadMode(mode string) Option {
+	return func(opts *Options) {
+		opts.SkillLoadMode = mode
 	}
 }
 
