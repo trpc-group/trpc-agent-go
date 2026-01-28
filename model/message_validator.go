@@ -253,4 +253,3 @@ func ensureLastMessageIsUserOrTool(messages []Message) []Message {
 	}
 	return nil
 }
-

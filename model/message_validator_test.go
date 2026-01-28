@@ -123,4 +123,3 @@ func TestTokenTailor_PreservesToolCallRoundAtomically(t *testing.T) {
 		require.NotContains(t, msg.Content, "R1")
 	}
 }
-
