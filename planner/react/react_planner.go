@@ -44,6 +44,13 @@ const (
 	FinalAnswerTag = "/*FINAL_ANSWER*/"
 )
 
+const (
+	actionTagPrefix     = "/*ACTION"
+	planningTagPrefix   = "/*PLANNING"
+	replanningTagPrefix = "/*REPLANNING"
+	finalAnswerPrefix   = "FINAL ANSWER:"
+)
+
 // Verify that Planner implements the planner.Planner interface.
 var _ planner.Planner = (*Planner)(nil)
 
@@ -92,8 +99,8 @@ func (p *Planner) BuildPlanningInstruction(
 //
 // This method:
 //   - Filters out tool calls with empty function names
-//   - Detects intent descriptions (e.g., "I will...") without actual tool calls
-//     and marks them as non-final to prevent premature termination
+//   - Detects intent descriptions (e.g., "I will...") without actual tool
+//     calls and marks them as non-final to prevent premature termination
 //   - Preserves all other response content unchanged
 func (p *Planner) ProcessPlanningResponse(
 	ctx context.Context,
@@ -132,9 +139,18 @@ func (p *Planner) ProcessPlanningResponse(
 		firstChoice := processedResponse.Choices[0]
 		if len(firstChoice.Message.ToolCalls) == 0 {
 			content := firstChoice.Message.Content
-			if p.isIntentDescription(content) && !p.hasFinalAnswerTag(content) {
-				// This is an intent description without FINAL_ANSWER tag,
-				// likely a malformed response. Mark as not done to continue the loop.
+			hasFinalAnswer := p.hasFinalAnswer(content)
+			containsFinalAnswerTag := strings.Contains(
+				content,
+				FinalAnswerTag,
+			)
+			if (p.isIntentDescription(content) ||
+				containsFinalAnswerTag) &&
+				!hasFinalAnswer {
+				// The model appears to be in an intermediate state (e.g.,
+				// planning/action tags or an empty FINAL_ANSWER section) without
+				// actually providing a final answer. Mark as not done to
+				// continue the loop.
 				processedResponse.Done = false
 			}
 		}
@@ -164,36 +180,39 @@ func (p *Planner) getResponseContent(response *model.Response) string {
 	return response.Choices[0].Message.Content
 }
 
-// isIntentDescription checks if the content appears to be an intent description
-// rather than a final answer. Intent descriptions typically indicate the agent
-// wants to take an action but hasn't properly formed the tool call.
+// isIntentDescription checks if the content appears to be an intent
+// description rather than a final answer. Intent descriptions typically
+// indicate the agent wants to take an action but hasn't properly formed
+// the tool call.
 //
-// To avoid false positives (e.g., "Let me know if you have questions" in a valid
-// final answer), this function uses a conservative heuristic:
-//  1. Action-related tags (/*ACTION*/, /*PLANNING*/, /*REPLANNING*/) are always
-//     considered intent descriptions since they explicitly indicate ongoing planning.
-//  2. Natural language intent patterns ("I will", "I'll", etc.) are only considered
-//     intent descriptions if they appear at the start of content or a line,
-//     suggesting the agent is declaring its next action rather than using these
-//     phrases incidentally.
+// To avoid false positives (e.g., "Let me know if you have questions" in a
+// valid final answer), this function uses a conservative heuristic:
+//  1. Action-related tags (/*ACTION*/, /*PLANNING*/, /*REPLANNING*/) are
+//     considered intent descriptions since they explicitly indicate
+//     ongoing planning.
+//  2. Natural language intent patterns ("I will", "I'll", etc.) are only
+//     considered intent descriptions if they appear at the start of
+//     content, suggesting the agent is declaring its next action rather
+//     than using these phrases incidentally.
 func (p *Planner) isIntentDescription(content string) bool {
 	if content == "" {
 		return false
 	}
 
-	// Action-related tags explicitly indicate ongoing planning - always match these.
-	actionTags := []string{
-		ActionTag,     // /*ACTION*/ tag without actual tool call
-		PlanningTag,   // /*PLANNING*/ tag indicates still planning
-		ReplanningTag, // /*REPLANNING*/ tag indicates replanning
+	// Action-related tags explicitly indicate ongoing planning.
+	actionTagPrefixes := []string{
+		actionTagPrefix,
+		planningTagPrefix,
+		replanningTagPrefix,
 	}
-	for _, tag := range actionTags {
-		if strings.Contains(content, tag) {
+	for _, prefix := range actionTagPrefixes {
+		if strings.Contains(content, prefix) {
 			return true
 		}
 	}
 
-	// Natural language intent patterns - only match at the very beginning of content.
+	// Natural language intent patterns only match at the beginning of
+	// content.
 	// This avoids false positives like "Let me know if I'll need to..." or
 	// "I should also mention that I will...".
 	intentPrefixes := []string{
@@ -214,9 +233,40 @@ func (p *Planner) isIntentDescription(content string) bool {
 	return false
 }
 
-// hasFinalAnswerTag checks if the content contains the FINAL_ANSWER tag.
+// hasFinalAnswer reports whether the content contains a valid final answer
+// marker (either a non-empty FINAL_ANSWER section or a "FINAL ANSWER:" line).
+func (p *Planner) hasFinalAnswer(content string) bool {
+	if p.hasFinalAnswerTag(content) {
+		return true
+	}
+	upper := strings.ToUpper(content)
+	return strings.Contains(upper, finalAnswerPrefix)
+}
+
+// hasFinalAnswerTag checks if the content contains a non-empty FINAL_ANSWER
+// section. A bare tag with no answer does not count as final.
 func (p *Planner) hasFinalAnswerTag(content string) bool {
-	return strings.Contains(content, FinalAnswerTag)
+	idx := strings.LastIndex(content, FinalAnswerTag)
+	if idx == -1 {
+		return false
+	}
+	rest := strings.TrimSpace(content[idx+len(FinalAnswerTag):])
+	if rest == "" {
+		return false
+	}
+
+	tagPrefixes := []string{
+		actionTagPrefix,
+		planningTagPrefix,
+		replanningTagPrefix,
+		ReasoningTag,
+	}
+	for _, prefix := range tagPrefixes {
+		if strings.HasPrefix(rest, prefix) {
+			return false
+		}
+	}
+	return true
 }
 
 // splitByLastPattern splits text by the last occurrence of a separator.
@@ -239,6 +289,8 @@ func (p *Planner) buildPlannerInstruction() string {
 	highLevelPreamble := strings.Join([]string{
 		"When answering the question, try to leverage the available tools " +
 			"to gather the information instead of your memorized knowledge.",
+		"Each assistant message must end with either a tool call or the " +
+			FinalAnswerTag + ". Do not stop after planning.",
 		"",
 		"Follow this process when answering the question: (1) first come up " +
 			"with a plan in natural language text format; (2) Then use tools to " +
@@ -273,12 +325,10 @@ func (p *Planner) buildPlannerInstruction() string {
 
 	actionPreamble := strings.Join([]string{
 		"Below are the requirements for the action:",
-		"If no tool is needed, explicitly state your next action in " +
-			"the first person ('I will...').",
+		"If no tool is needed, go directly to " + FinalAnswerTag + ".",
 		"If a tool is needed, call it using tool calling (not plain text). " +
 			"You may omit the 'I will...' sentence when calling tools.",
-		"Do not write fake tool invocations like `functions.web_fetch` or " +
-			"`web_fetch({...})` in your message content.",
+		"Do not write tool calls in plain text.",
 		"Do not output JSON/code intended to represent a tool call.",
 		"After a tool call, wait for the tool result message before " +
 			"continuing.",
@@ -311,8 +361,8 @@ func (p *Planner) buildPlannerInstruction() string {
 		"- Do not output a JSON object that 'looks like' a tool call.",
 		"- Use only tool names and parameters that are explicitly defined " +
 			"in the provided tool schemas.",
-		"- Never output tool-call placeholders like `functions.<tool>` in " +
-			"the assistant message content.",
+		"- Never output tool-call placeholders or routing markers in the " +
+			"assistant message content.",
 		"- If you cannot call a tool, do not pretend you did; ask for " +
 			"clarification or proceed without it.",
 	}, "\n")

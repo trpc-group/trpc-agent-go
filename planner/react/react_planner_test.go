@@ -383,6 +383,38 @@ func TestPlanner_IntentDescriptionDetection(t *testing.T) {
 			description:  "Content with FINAL_ANSWER tag should be final",
 		},
 		{
+			name:         "empty_final_answer_tag",
+			content:      FinalAnswerTag,
+			done:         true,
+			expectedDone: false,
+			description:  "Empty FINAL_ANSWER tag should not be final",
+		},
+		{
+			name: "final_answer_tag_then_action",
+			content: strings.Join(
+				[]string{FinalAnswerTag, ActionTag},
+				"\n\n",
+			),
+			done:         true,
+			expectedDone: false,
+			description: "FINAL_ANSWER tag without answer should not " +
+				"be final",
+		},
+		{
+			name: "action_with_final_answer_prefix",
+			content: strings.Join(
+				[]string{
+					ActionTag,
+					finalAnswerPrefix + " 42",
+				},
+				"\n",
+			),
+			done:         true,
+			expectedDone: true,
+			description: "FINAL ANSWER line should allow a final " +
+				"response",
+		},
+		{
 			name:         "intent_with_final_answer",
 			content:      "I will provide the answer now. /*FINAL_ANSWER*/ The result is 42.",
 			done:         true,
