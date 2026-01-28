@@ -250,6 +250,10 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 				),
 			)
 		}
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithSkillLoadMode(options.SkillLoadMode),
+		)
 		skillsProcessor := processor.NewSkillsRequestProcessor(
 			options.skillsRepository,
 			skillsOpts...,
