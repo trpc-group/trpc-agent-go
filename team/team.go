@@ -304,11 +304,6 @@ func (t *Team) FindSubAgent(name string) agent.Agent {
 	return t.memberByName[name]
 }
 
-// Mode returns the team mode.
-func (t *Team) Mode() Mode {
-	return t.mode
-}
-
 func buildMemberIndex(
 	coordinatorName string,
 	members []agent.Agent,
