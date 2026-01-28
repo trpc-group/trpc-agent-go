@@ -306,8 +306,15 @@ func (e *Executor) executeGraph(
 		defer extInterrupt.stop()
 	}
 
-	execState, checkpointConfig, resumed, resumedStep, lastCkpt, restoredPending :=
-		e.prepareCheckpointAndState(ctx, initialState, invocation)
+	execState, checkpointConfig, resumed, resumedStep, lastCkpt,
+		restoredPending, prepErr := e.prepareCheckpointAndState(
+		ctx,
+		initialState,
+		invocation,
+	)
+	if prepErr != nil {
+		return prepErr
+	}
 
 	execState = e.processResumeCommand(execState, initialState)
 
@@ -374,10 +381,10 @@ func (e *Executor) prepareCheckpointAndState(
 	ctx context.Context,
 	initialState State,
 	invocation *agent.Invocation,
-) (State, map[string]any, bool, int, *Checkpoint, []PendingWrite) {
+) (State, map[string]any, bool, int, *Checkpoint, []PendingWrite, error) {
 	if e.checkpointSaver == nil {
 		execState := e.initializeState(initialState)
-		return execState, nil, false, 0, nil, nil
+		return execState, nil, false, 0, nil, nil, nil
 	}
 	return e.resumeOrInitWithSaver(ctx, initialState, invocation)
 }
@@ -387,7 +394,7 @@ func (e *Executor) resumeOrInitWithSaver(
 	ctx context.Context,
 	initialState State,
 	invocation *agent.Invocation,
-) (State, map[string]any, bool, int, *Checkpoint, []PendingWrite) {
+) (State, map[string]any, bool, int, *Checkpoint, []PendingWrite, error) {
 	var lineageID string
 	if id, ok := initialState[CfgKeyLineageID].(string); ok && id != "" {
 		lineageID = id
@@ -405,6 +412,7 @@ func (e *Executor) resumeOrInitWithSaver(
 	if ns, ok := initialState[CfgKeyCheckpointNS].(string); ok {
 		namespace = ns
 	}
+	_, resumeRequested := initialState[CfgKeyCheckpointID]
 	if id, ok := initialState[CfgKeyCheckpointID].(string); ok {
 		checkpointID = id
 		log.DebugfContext(
@@ -423,10 +431,37 @@ func (e *Executor) resumeOrInitWithSaver(
 	)
 
 	tuple, err := e.checkpointSaver.GetTuple(ctx, checkpointConfig)
-	if err != nil || tuple == nil || tuple.Checkpoint == nil {
+	if err != nil {
+		if resumeRequested {
+			return nil, nil, false, 0, nil, nil, fmt.Errorf(
+				"get checkpoint tuple (ln=%s ns=%s ck=%s): %w",
+				lineageID,
+				namespace,
+				checkpointID,
+				err,
+			)
+		}
+		log.DebugfContext(
+			ctx,
+			"Failed to load checkpoint, starting fresh: %v",
+			err,
+		)
+		execState := e.initializeState(initialState)
+		return execState, checkpointConfig, false, 0, nil, nil, nil
+	}
+	if tuple == nil || tuple.Checkpoint == nil {
+		if resumeRequested {
+			return nil, nil, false, 0, nil, nil, fmt.Errorf(
+				"%w: lineage=%s checkpoint_id=%s namespace=%s",
+				ErrCheckpointNotFound,
+				lineageID,
+				checkpointID,
+				namespace,
+			)
+		}
 		log.DebugContext(ctx, "No checkpoint found, starting fresh")
 		execState := e.initializeState(initialState)
-		return execState, checkpointConfig, false, 0, nil, nil
+		return execState, checkpointConfig, false, 0, nil, nil, nil
 	}
 
 	log.DebugfContext(
@@ -461,7 +496,8 @@ func (e *Executor) resumeOrInitWithSaver(
 	)
 	e.applyExecutableNextNodes(restored, tuple)
 	e.applyGraphInterruptInputs(restored, tuple)
-	return restored, checkpointConfig, true, resumedStep, lastCheckpoint, pending
+	return restored, checkpointConfig, true, resumedStep, lastCheckpoint,
+		pending, nil
 }
 
 // restoreStateFromCheckpoint converts checkpoint channel values back into state.
@@ -3637,6 +3673,18 @@ func (e *Executor) processConditionalResult(
 		} else {
 			// Finally, fallback to treating the result as a concrete node id.
 			target = result
+		}
+	}
+
+	if target != End {
+		if _, exists := e.graph.Node(target); !exists {
+			return fmt.Errorf(
+				"conditional edge from %s returned %q; "+
+					"target node %q does not exist",
+				condEdge.From,
+				result,
+				target,
+			)
 		}
 	}
 

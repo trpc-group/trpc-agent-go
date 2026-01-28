@@ -105,6 +105,57 @@ func main() {
 }
 ```
 
+### 在一个端口上暴露多个 A2A Agent（base path）
+
+有时你希望 **一个服务（一个端口）** 同时对外提供多个 A2A Agent。
+在 A2A 的惯用做法里，每个 Agent 都应该有自己的 **base URL**，客户端通过选择 URL
+来选择要调用的 Agent，而不是额外传一个 `agent_name` 参数做路由。
+
+在 tRPC-Agent-Go 中，`a2a.WithHost(...)` 支持带 path 的 URL。
+当 host URL 包含 path（例如 `http://localhost:8888/agents/math`）时，
+A2A server 会自动把这段 path 作为自己的 **base path** 用于路由。
+
+核心思路：
+
+- 每个 Agent 创建一个独立的 A2A server（每个 server 使用不同的 base path）
+- 不要对每个 server 都调用 `Start`（否则会争抢同一个端口）
+- 通过 `server.Handler()` 把多个 A2A server 挂到一个共享的 `http.Server` 上
+
+示例：
+
+```go
+mathServer, err := a2a.New(
+	a2a.WithHost("http://localhost:8888/agents/math"),
+	a2a.WithAgent(mathAgent, false),
+)
+if err != nil {
+	panic(err)
+}
+
+weatherServer, err := a2a.New(
+	a2a.WithHost("http://localhost:8888/agents/weather"),
+	a2a.WithAgent(weatherAgent, false),
+)
+if err != nil {
+	panic(err)
+}
+
+mux := http.NewServeMux()
+mux.Handle("/agents/math/", mathServer.Handler())
+mux.Handle("/agents/weather/", weatherServer.Handler())
+
+if err := http.ListenAndServe(":8888", mux); err != nil {
+	panic(err)
+}
+```
+
+服务启动后，每个 Agent 都有自己独立的 AgentCard：
+
+- `http://localhost:8888/agents/math/.well-known/agent-card.json`
+- `http://localhost:8888/agents/weather/.well-known/agent-card.json`
+
+完整可运行示例：`examples/a2amultipath`。
+
 ## A2AAgent：调用远程 A2A 服务
 
 与 A2A Server 相对应，tRPC-Agent-Go 还提供了 `A2AAgent`，用于调用远程的 A2A 服务，实现 Agent 间的通信。
