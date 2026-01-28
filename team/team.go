@@ -245,9 +245,6 @@ func (t *Team) getActiveAgent(invocation *agent.Invocation) agent.Agent {
 	}
 
 	activeAgentName := string(agentNameBytes)
-	if activeAgentName == "" {
-		return nil
-	}
 
 	// Look up the agent in memberByName.
 	ag := t.memberByName[activeAgentName]

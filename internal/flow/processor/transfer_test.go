@@ -352,3 +352,32 @@ func TestTransferResponseProc_CrossRequestTransfer_SkipsStateDeltaWithoutMarker(
 	}
 	t.Fatal("missing done response event from child")
 }
+
+func TestTransferResponseProc_SaveActiveAgent_EarlyReturns(t *testing.T) {
+	proc := NewTransferResponseProcessor(true)
+	target := &doneResponseAgent{name: "child"}
+	ctx := context.Background()
+
+	require.NotPanics(t, func() {
+		proc.saveActiveAgent(ctx, nil, target, &event.Event{})
+	})
+
+	require.NotPanics(t, func() {
+		proc.saveActiveAgent(ctx, &agent.Invocation{}, target, &event.Event{})
+	})
+
+	sess := session.NewSession("app", "user", "sess")
+	inv := &agent.Invocation{Session: sess}
+
+	require.NotPanics(t, func() {
+		proc.saveActiveAgent(ctx, inv, target, nil)
+	})
+
+	evt := &event.Event{}
+	proc.saveActiveAgent(ctx, inv, target, evt)
+	require.Nil(t, evt.StateDelta)
+}
+
+func TestSwarmActiveAgentKey_EmptyTeamName(t *testing.T) {
+	require.Equal(t, swarmActiveAgentKeyPrefix, swarmActiveAgentKey(""))
+}

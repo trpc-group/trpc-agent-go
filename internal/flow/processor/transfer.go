@@ -258,9 +258,6 @@ func (p *TransferResponseProcessor) saveActiveAgent(
 		return
 	}
 	teamName := string(teamNameBytes)
-	if teamName == "" {
-		return
-	}
 
 	if targetEvent.StateDelta == nil {
 		targetEvent.StateDelta = make(map[string][]byte)

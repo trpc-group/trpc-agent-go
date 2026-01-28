@@ -657,3 +657,36 @@ func TestTeam_RunSwarm_CrossRequestTransfer_MissingActiveAgentFallsBackToEntry(t
 	}
 	require.Equal(t, testEntryName, gotAuthor)
 }
+
+func TestTeam_RunSwarm_EntryMissing(t *testing.T) {
+	tm := &Team{
+		mode:         ModeSwarm,
+		entryName:    "missing",
+		memberByName: map[string]agent.Agent{},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(tm),
+		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
+	)
+	_, err := tm.runSwarm(context.Background(), inv)
+	require.Error(t, err)
+}
+
+func TestTeam_getActiveAgent_NilInvocationOrSession(t *testing.T) {
+	tm := &Team{name: testTeamName}
+	require.Nil(t, tm.getActiveAgent(nil))
+	require.Nil(t, tm.getActiveAgent(&agent.Invocation{}))
+}
+
+func TestTeam_getActiveAgent_NoState(t *testing.T) {
+	tm := &Team{name: testTeamName}
+	sess := session.NewSession(testAppName, testUserID, testSessionID)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+	)
+	require.Nil(t, tm.getActiveAgent(inv))
+}
+
+func TestSwarmActiveAgentKey_EmptyTeamName(t *testing.T) {
+	require.Equal(t, SwarmActiveAgentKeyPrefix, swarmActiveAgentKey(""))
+}
