@@ -141,6 +141,9 @@ GAIA 基准示例（技能 + 文件工具）：
 该示例包含数据集下载脚本，以及 `whisper`（音频）/`ocr`（图片）等
 技能的 Python 依赖准备说明。
 
+SkillLoadMode 演示（无需 API key）：
+[examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
+
 快速开始（下载数据集 JSON 到 `examples/skill/data/`）：
 
 ```bash
@@ -209,16 +212,32 @@ https://github.com/anthropics/skills
 - `include_all_docs`（可选）：为 true 时包含所有文档
 
 行为：
-- 写入会话临时键（同一会话内可跨轮保留）：
+- 写入会话临时键（生命周期由 `SkillLoadMode` 控制）：
   - `temp:skill:loaded:<name>` = "1"
   - `temp:skill:docs:<name>` = "*" 或 JSON 字符串数组
 - 请求处理器读取这些键，把 `SKILL.md` 正文与文档注入到系统消息
 
-说明：建议采用“渐进式披露”：默认只传 `skill` 加载正文；需要文档时
-先 `skill_list_docs` 再 `skill_select_docs`，只选必要文档；除非确
-实需要全部（或用户明确要求），避免 `include_all_docs=true`。可多
-次调用以新增或替换文档；这些键写在会话状态里，同一会话内可跨轮
-生效（键本身只存技能名/文档名，不存正文）。
+说明：
+- 建议采用“渐进式披露”：默认只传 `skill` 加载正文；需要文档时先
+  `skill_list_docs` 再 `skill_select_docs`，只选必要文档；除非确
+  实需要全部（或用户明确要求），避免 `include_all_docs=true`。
+- 可多次调用以新增或替换文档。
+- 工具会写入 session state，但**正文/文档在提示词里驻留多久**取决
+  于 `SkillLoadMode`：
+  - `turn`（默认）：在当前一次 `Runner.Run`（处理一条用户消息）
+    的所有模型请求中驻留；下一次运行开始前自动清空。
+  - `once`：只在**下一次**模型请求中注入一次，随后自动 offload
+    并清空对应 state。
+  - `session`（兼容旧行为）：跨多轮对话保留，直到手动清除或会话过期。
+- 在 agent 上配置：
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeTurn),
+)
+```
 
 ### `skill_select_docs`（选择文档）
 

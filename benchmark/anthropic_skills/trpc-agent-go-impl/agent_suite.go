@@ -89,7 +89,12 @@ func runAgentSuite(
 	debug bool,
 	progress bool,
 ) error {
-	agt := newBenchAgent(repo, exec, modelName)
+	agt := newBenchAgent(
+		repo,
+		exec,
+		modelName,
+		llmagent.SkillLoadModeTurn,
+	)
 	r := runner.NewRunner(defaultAppName, agt)
 	defer r.Close()
 
@@ -176,7 +181,12 @@ func runTokenReportSuite(
 	debug bool,
 	progress bool,
 ) error {
-	agt := newBenchAgent(repo, exec, modelName)
+	agt := newBenchAgent(
+		repo,
+		exec,
+		modelName,
+		llmagent.SkillLoadModeSession,
+	)
 	svc := inmemory.NewSessionService()
 	r := runner.NewRunner(
 		defaultAppName,
@@ -302,6 +312,7 @@ func newBenchAgent(
 	repo skillrepo.Repository,
 	exec codeexecutor.CodeExecutor,
 	modelName string,
+	skillLoadMode string,
 ) agent.Agent {
 	m := openai.New(modelName)
 
@@ -324,6 +335,7 @@ func newBenchAgent(
 		"anthropic-skills-agent",
 		llmagent.WithModel(m),
 		llmagent.WithSkills(repo),
+		llmagent.WithSkillLoadMode(skillLoadMode),
 		llmagent.WithCodeExecutor(exec),
 		llmagent.WithPlanner(react.New()),
 		llmagent.WithMaxToolIterations(20),

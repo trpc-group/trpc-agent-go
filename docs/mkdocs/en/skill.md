@@ -138,6 +138,9 @@ GAIA benchmark demo (skills + file tools):
 It includes a dataset downloader script and notes on Python dependencies
 for skills like `whisper` (audio) and `ocr` (images).
 
+SkillLoadMode demo (no API key required):
+[examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
+
 Quick start (download dataset JSON into `examples/skill/data/`):
 
 ```bash
@@ -212,10 +215,24 @@ Notes:
   select only the docs you need. Avoid `include_all_docs` unless you
   truly need every doc (or the user explicitly asks).
 - Safe to call multiple times to add or replace docs.
-- These keys are stored on the session state and can remain effective
-  across turns in the same session until overwritten/cleared or the
-  session expires.
-- The keys store only selection metadata, not full doc contents.
+- The tools write session state, but **how long the loaded content stays
+  in the prompt** depends on `SkillLoadMode`:
+  - `turn` (default): loaded bodies/docs stay for the current
+    `Runner.Run` call (one user message) and are cleared automatically
+    before the next run starts.
+  - `once`: loaded bodies/docs are injected for the **next** model
+    request only, then offloaded (cleared) from session state.
+  - `session` (legacy): loaded bodies/docs persist across turns until
+    cleared or the session expires.
+- Configure it on the agent:
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeTurn),
+)
+```
 
 ### `skill_select_docs`
 

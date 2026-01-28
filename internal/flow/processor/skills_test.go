@@ -75,7 +75,10 @@ func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 	}
 
 	ch := make(chan *event.Event, 2)
-	p := NewSkillsRequestProcessor(repo)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+	)
 	p.ProcessRequest(context.Background(), inv, req, ch)
 
 	// System message should be merged with overview and loaded content.
@@ -163,7 +166,10 @@ func TestSkillsRequestProcessor_ArrayDocs_NoSystemMessage(t *testing.T) {
 	}}
 	// No system message initially.
 	req := &model.Request{Messages: nil}
-	p := NewSkillsRequestProcessor(repo)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+	)
 	ch := make(chan *event.Event, 2)
 	p.ProcessRequest(context.Background(), inv, req, ch)
 
@@ -193,7 +199,10 @@ func TestSkillsRequestProcessor_MergeIntoEmptySystem(t *testing.T) {
 	req := &model.Request{Messages: []model.Message{
 		model.NewSystemMessage(""),
 	}}
-	p := NewSkillsRequestProcessor(repo)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+	)
 	ch := make(chan *event.Event, 2)
 	p.ProcessRequest(context.Background(), inv, req, ch)
 	// Should fill content into the empty system message.
@@ -221,7 +230,10 @@ func TestSkillsRequestProcessor_InvalidDocsSelectionJSON(t *testing.T) {
 		},
 	}}
 	req := &model.Request{Messages: nil}
-	p := NewSkillsRequestProcessor(repo)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+	)
 	ch := make(chan *event.Event, 2)
 	p.ProcessRequest(context.Background(), inv, req, ch)
 	require.NotEmpty(t, req.Messages)
@@ -266,4 +278,113 @@ func TestSkillsRequestProcessor_MergeIntoSystem_Edge(t *testing.T) {
 	}}
 	p.mergeIntoSystem(req, "")
 	require.Equal(t, "sys", req.Messages[0].Content)
+}
+
+func TestSkillsRequestProcessor_SkillLoadModeOnce_OffloadsLoadedSkills(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+			},
+		},
+	}
+	req := &model.Request{Messages: nil}
+
+	ch := make(chan *event.Event, 3)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeOnce),
+	)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, "[Loaded] calc")
+	require.Contains(t, sys, "B")
+
+	v, ok := inv.Session.GetState(skill.StateKeyLoadedPrefix + "calc")
+	require.True(t, ok)
+	require.Empty(t, v)
+
+	ev1 := <-ch
+	require.NotNil(t, ev1)
+	require.Equal(t, model.ObjectTypeStateUpdate, ev1.Object)
+	require.Contains(t, ev1.StateDelta, skill.StateKeyLoadedPrefix+"calc")
+
+	ev2 := <-ch
+	require.NotNil(t, ev2)
+	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev2.Object)
+}
+
+func TestSkillsRequestProcessor_SkillLoadModeTurn_ClearsOncePerInvocation(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+				skill.StateKeyDocsPrefix + "calc":   []byte("*"),
+			},
+		},
+	}
+
+	req1 := &model.Request{Messages: nil}
+	ch1 := make(chan *event.Event, 3)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeTurn),
+	)
+	p.ProcessRequest(context.Background(), inv, req1, ch1)
+
+	require.NotEmpty(t, req1.Messages)
+	sys1 := req1.Messages[0].Content
+	require.Contains(t, sys1, skillsOverviewHeader)
+	require.NotContains(t, sys1, "[Loaded] calc")
+
+	loadedVal, ok := inv.Session.GetState(skill.StateKeyLoadedPrefix + "calc")
+	require.True(t, ok)
+	require.Empty(t, loadedVal)
+	docsVal, ok := inv.Session.GetState(skill.StateKeyDocsPrefix + "calc")
+	require.True(t, ok)
+	require.Empty(t, docsVal)
+
+	ev1 := <-ch1
+	require.NotNil(t, ev1)
+	require.Equal(t, model.ObjectTypeStateUpdate, ev1.Object)
+
+	ev2 := <-ch1
+	require.NotNil(t, ev2)
+	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev2.Object)
+
+	inv.Session.SetState(skill.StateKeyLoadedPrefix+"calc", []byte("1"))
+	req2 := &model.Request{Messages: nil}
+	ch2 := make(chan *event.Event, 2)
+	p.ProcessRequest(context.Background(), inv, req2, ch2)
+
+	require.NotEmpty(t, req2.Messages)
+	sys2 := req2.Messages[0].Content
+	require.Contains(t, sys2, "[Loaded] calc")
+	require.Contains(t, sys2, "B")
+
+	ev3 := <-ch2
+	require.NotNil(t, ev3)
+	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev3.Object)
 }
