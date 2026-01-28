@@ -231,9 +231,10 @@ func (t *RunTool) Declaration() *tool.Declaration {
 		Description: "Run a command inside a skill workspace. " +
 			"Returns stdout/stderr, a primary_output " +
 			"(best small text file), and collected output_files " +
-			"(inline, with workspace:// refs). Prefer " +
-			"primary_output/output_files content; use " +
-			"output_files[*].ref when passing a file to other tools.",
+			"(inline by default, with workspace:// refs). " +
+			"Prefer primary_output/output_files content; " +
+			"use output_files[*].ref when passing a file to " +
+			"other tools.",
 		InputSchema: &tool.Schema{
 			Type:        "object",
 			Description: "Run command input",
@@ -256,9 +257,12 @@ func (t *RunTool) Declaration() *tool.Declaration {
 				"save_as_artifacts": {Type: "boolean", Description: "" +
 					"Persist collected files via Artifact service"},
 				"omit_inline_content": {Type: "boolean", Description: "" +
-					"With save_as_artifacts, omit output_files content"},
+					"Omit output_files content (metadata only). " +
+					"Use output_files[*].ref to read later."},
 				"artifact_prefix": {Type: "string", Description: "" +
 					"With save_as_artifacts, prefix artifact names"},
+				"inputs":  inputSpecsSchema(),
+				"outputs": outputSpecSchema(),
 			},
 		},
 		OutputSchema: &tool.Schema{Type: "object",
@@ -322,9 +326,8 @@ func (t *RunTool) Call(
 		return nil, err
 	}
 	mergeManifestArtifactRefs(manifest, &out)
-	if !(in.SaveArtifacts && in.OmitInline) {
-		toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
-	}
+	applyOmitInlineContent(ctx, &out, in.OmitInline)
+	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
 	return out, nil
 }
 
@@ -1064,9 +1067,11 @@ func (t *RunTool) prepareOutputs(
 		if in.Outputs.Inline {
 			for _, fr := range m.Files {
 				files = append(files, codeexecutor.File{
-					Name:     fr.Name,
-					Content:  fr.Content,
-					MIMEType: fr.MIMEType,
+					Name:      fr.Name,
+					Content:   fr.Content,
+					MIMEType:  fr.MIMEType,
+					SizeBytes: fr.SizeBytes,
+					Truncated: fr.Truncated,
 				})
 			}
 		}
@@ -1213,7 +1218,7 @@ func (t *RunTool) attachArtifactsIfRequested(
 }
 
 const warnSaveArtifactsSkippedTmpl = "save_as_artifacts requested but " +
-	"%s; returning inline output_files"
+	"%s; outputs are not persisted"
 
 const warnOutputFilesWorkspaceOnly = "output_files are workspace-" +
 	"relative; prefer output_files content; when you need a " +
@@ -1252,6 +1257,82 @@ func appendWarning(out *runOutput, reason string) {
 		out.Warnings,
 		fmt.Sprintf(warnSaveArtifactsSkippedTmpl, reason),
 	)
+}
+
+const warnOmitInlineNoFallback = "omit_inline_content requested but " +
+	"invocation is missing; returning inline output_files"
+
+func applyOmitInlineContent(
+	ctx context.Context,
+	out *runOutput,
+	omit bool,
+) {
+	if out == nil || !omit {
+		return
+	}
+	if !hasOmitInlineFallback(ctx) {
+		out.Warnings = append(out.Warnings, warnOmitInlineNoFallback)
+		return
+	}
+	for i := range out.OutputFiles {
+		out.OutputFiles[i].Content = ""
+	}
+	if out.PrimaryOutput != nil {
+		out.PrimaryOutput.Content = ""
+	}
+}
+
+func hasOmitInlineFallback(ctx context.Context) bool {
+	inv, ok := agent.InvocationFromContext(ctx)
+	return ok && inv != nil
+}
+
+func inputSpecsSchema() *tool.Schema {
+	return &tool.Schema{
+		Type:        "array",
+		Description: "Declarative inputs to stage into workspace",
+		Items: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"from": {Type: "string", Description: "" +
+					"Source ref (artifact://, host://, " +
+					"workspace://, skill://)"},
+				"to": {Type: "string", Description: "" +
+					"Workspace-relative destination"},
+				"mode": {Type: "string", Description: "" +
+					"copy (default) or link"},
+				"pin": {Type: "boolean", Description: "" +
+					"Pin artifact version when supported"},
+			},
+		},
+	}
+}
+
+func outputSpecSchema() *tool.Schema {
+	return &tool.Schema{
+		Type:        "object",
+		Description: "Declarative outputs with limits and persistence",
+		Properties: map[string]*tool.Schema{
+			"globs": {
+				Type:  "array",
+				Items: &tool.Schema{Type: "string"},
+				Description: "Workspace-relative patterns " +
+					"(supports ** and $OUTPUT_DIR/**)",
+			},
+			"inline": {Type: "boolean", Description: "" +
+				"Inline file contents into result"},
+			"save": {Type: "boolean", Description: "" +
+				"Persist outputs via Artifact service"},
+			"name_template": {Type: "string", Description: "" +
+				"Prefix for artifact names (e.g. pref/)"},
+			"max_files": {Type: "integer", Description: "" +
+				"Max number of matched files"},
+			"max_file_bytes": {Type: "integer", Description: "" +
+				"Max bytes per file (default 4 MiB)"},
+			"max_total_bytes": {Type: "integer", Description: "" +
+				"Max total bytes across files (default 64 MiB)"},
+		},
+	}
 }
 
 // mergeManifestArtifactRefs appends artifact refs derived from a

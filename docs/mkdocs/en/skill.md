@@ -277,15 +277,18 @@ Input:
   - `name_template` prefix for artifact names (e.g., `pref/`)
   - Limits: `max_files` (default 100), `max_file_bytes` (default
     4 MiB/file), `max_total_bytes` (default 64 MiB)
+  - Note: `outputs` accepts both snake_case keys (recommended) and
+    legacy Go-style keys like `MaxFiles`
 
 - `timeout` (optional seconds)
 - `save_as_artifacts` (optional, legacy path): persist files collected
   via `output_files` and return `artifact_files` in the result
-- `omit_inline_content` (optional): with `save_as_artifacts`, omit
-  `output_files[*].content` and return metadata only
+- `omit_inline_content` (optional): omit `output_files[*].content` and
+  `primary_output.content` (metadata only). Use `output_files[*].ref`
+  with `read_file` when you need the content later.
 - `artifact_prefix` (optional): prefix for the legacy artifact path
   - If the Artifact service is not configured, `skill_run` keeps
-    returning inline `output_files` and reports a `warnings` entry.
+    returning `output_files` and reports a `warnings` entry.
 
 Optional safety restriction (allowlist):
 - Env var `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`:
@@ -308,12 +311,18 @@ Optional safety restriction (denylist):
 
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
-- `primary_output` (optional) with `name`, `ref`, `content`, `mime_type`
+- `primary_output` (optional) with `name`, `ref`, `content`, `mime_type`,
+  `size_bytes`, `truncated`
   - Convenience pointer to the "best" small text output file (when one
     exists). Prefer this when there is a single main output.
-- `output_files` with `name`, `ref`, `content`, `mime_type`
+- `output_files` with `name`, `ref`, `content`, `mime_type`, `size_bytes`,
+  `truncated`
   - `ref` is a stable `workspace://<name>` reference that can be passed
     to other tools
+  - When `omit_inline_content=true`, `content` is empty. Use `ref` with
+    `read_file` to fetch content on demand.
+  - `size_bytes` is the file size on disk; `truncated=true` means the
+    collected content hit internal caps (for example, 4 MiB/file).
 - `warnings` (optional): non-fatal notes (for example, when artifact
   saving is skipped)
 - `artifact_files` with `name`, `version` appears in two cases:
@@ -326,6 +335,51 @@ Typical flow:
    - Legacy: use `output_files` globs
    - Declarative: use `outputs` to drive collect/inline/save
    - Use `inputs` to stage upstream files when needed
+
+Examples:
+
+Metadata-only outputs (avoid filling context):
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo hi > out/a.txt",
+  "output_files": ["out/*.txt"],
+  "omit_inline_content": true
+}
+```
+
+The tool returns `output_files[*].ref` like `workspace://out/a.txt`
+with `content=""`, plus `size_bytes` and `truncated`.
+
+To read the content later:
+
+```json
+{
+  "file_name": "workspace://out/a.txt",
+  "start_line": 1,
+  "num_lines": 20
+}
+```
+
+Persist large outputs as artifacts (no inline content):
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo report > out/report.txt",
+  "outputs": {
+    "globs": ["$OUTPUT_DIR/report.txt"],
+    "inline": false,
+    "save": true,
+    "max_files": 5
+  }
+}
+```
+
+When saved, `skill_run` returns `artifact_files` with `name` and
+`version`. You can reference an artifact as `artifact://<name>[@<version>]`
+in tools like `read_file`.
 
 Environment and CWD:
 - When `cwd` is omitted, runs at the skill root: `/skills/<name>`
