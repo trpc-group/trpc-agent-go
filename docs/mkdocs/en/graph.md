@@ -676,14 +676,16 @@ func processNodeFunc(ctx context.Context, state graph.State) (any, error) {
 
 ### 2. Using LLM Nodes
 
-LLM nodes implement a fixed three-stage input rule without extra configuration:
+LLM nodes implement a fixed three-stage input rule without extra configuration
+(except an optional input key override):
 
 1. OneShot first:
    - If `one_shot_messages_by_node[<node_id>]` exists, use it as the input for
      this round.
    - Otherwise, if `one_shot_messages` exists, use it as the input for this
      round.
-2. UserInput next: Otherwise, if `user_input` exists, persist once to history.
+2. UserInput next: Otherwise, if the node's user input key exists, persist once
+   to history (default key: `user_input`).
 3. History default: Otherwise, use durable `messages` as input.
 
 ```go
@@ -705,6 +707,9 @@ Important notes:
 - System prompt is only used for this round and is not persisted to state.
 - One-shot keys (`user_input` / `one_shot_messages` / `one_shot_messages_by_node`)
   are automatically cleared after successful execution.
+- You can override the user input key per LLM/Agent node via
+  `graph.WithUserInputKey("my_input")`. This key is treated as one-shot input
+  and is cleared after the node runs.
 - Parallel branches: if multiple branches need different one-shot inputs for
   different LLM nodes in the same step, write `one_shot_messages_by_node`
   instead of `one_shot_messages`. If one upstream node prepares inputs for
@@ -775,6 +780,16 @@ Common approaches:
 
   - When non-empty, the LLM node uses durable `messages` plus this round's user input to call the model. After the call, it writes the user input and assistant reply to `messages` using `MessageOp` (e.g., `AppendMessages`, `ReplaceLastUser`) atomically, and clears `user_input` to avoid repeated appends.
   - Use case: conversational flows where pre-nodes may adjust user input.
+  - By default, the user input key is `StateKeyUserInput`. To read one-shot
+    input from a different key, use `graph.WithUserInputKey(...)` on that node.
+  - `WithUserInputKey` is a build-time node option. For per-run customization,
+    keep the key stable and update the value in state (for example, in a
+    pre-node callback).
+  - Placeholder injection is **not** applied to user messages. If your UI/DSL
+    lets users type placeholders inside UserInput (for example, `{key}`,
+    `{{key}}`, or `input.output_parsed.xxx`), you must resolve them yourself
+    (for example, in your DSL layer or a pre-node callback) before writing the
+    final string into the state key.
 
 - Messages only (just `StateKeyMessages`):
   - Common in tool-call loops. After the first round via `user_input`, routing to tools and back to LLM, since `user_input` is cleared, the LLM uses only `messages` (history). The tail is often a `tool` response, enabling the model to continue reasoning based on tool outputs.
@@ -1354,6 +1369,17 @@ Notes:
 - GraphAgent writes the current `*session.Session` into graph state under `StateKeySession`; the LLM node reads values from there
 - `{invocation:*}` values are read from the current `*agent.Invocation` for this run
 - Unprefixed keys (e.g., `research_topics`) must be present directly in `session.State`
+- Scope: placeholders are expanded only in the LLM node `instruction`
+  (the system message). They are **not** expanded in UserInput or other user
+  messages.
+- Limits: placeholder names are restricted to `key` or `prefix:key` (where
+  `prefix` is one of `user`, `app`, `temp`, `invocation`). Nested paths like
+  `{input.output_parsed.xxx}` are not supported; flatten the value into a key
+  (for example, `temp:output_parsed_xxx`) in your DSL/callback, then reference
+  it as `{temp:output_parsed_xxx}`.
+- Mustache support is a compatibility layer only (`{{key}}` → `{key}`) and it
+  only triggers for valid placeholder names; full Mustache features (sections,
+  loops, helpers) are not supported.
 
 Example:
 
@@ -3061,8 +3087,14 @@ graphAgent, _ := graphagent.New("workflow", g,
         reviewer,
     }))
 
-// I/O: sub‑agents receive graph.StateKeyUserInput as the message AND the full
-// graph state via inv.RunOptions.RuntimeState; on finish they update
+// I/O: by default, sub‑agents receive graph.StateKeyUserInput as the message.
+// To forward a different one-shot input key, set graph.WithUserInputKey("...")
+// on that Agent node. The message content is passed through as-is (no
+// placeholder expansion); do template rendering in your DSL/callbacks if
+// needed.
+//
+// Sub‑agents also receive the full graph state via inv.RunOptions.RuntimeState;
+// on finish they update
 // graph.StateKeyLastResponse and graph.StateKeyNodeResponses[nodeID]
 ```
 
@@ -3070,11 +3102,14 @@ graphAgent, _ := graphagent.New("workflow", g,
 
 > Scenario: A → B → C as black boxes. Downstream should only consume upstream's result text as this turn's input, without pulling full session history.
 
-- Approach 1 (dependency‑free, universally available): add a pre‑node callback to the target Agent node that assigns parent `last_response` to `user_input`. Optionally isolate messages.
+- Approach 1 (dependency‑free, universally available): add a pre‑node callback
+  to the target Agent node that assigns parent `last_response` to the Agent
+  node's configured user input key (default: `user_input`). Optionally isolate
+  messages.
 
 ```go
 sg.AddAgentNode("orchestrator",
-    // Map upstream last_response → this turn's user_input
+    // Map upstream last_response → this turn's user input key
     graph.WithPreNodeCallback(func(ctx context.Context, cb *graph.NodeCallbackContext, s graph.State) (any, error) {
         if v, ok := s[graph.StateKeyLastResponse].(string); ok && v != "" {
             s[graph.StateKeyUserInput] = v
@@ -3099,7 +3134,10 @@ sg.AddAgentNode("orchestrator",
 )
 ```
 
-Notes: Both approaches ensure B only sees A's result, and C only sees B's. The option is more concise when available; the callback is zero‑dependency and works everywhere.
+Notes: Both approaches write to the Agent node's configured user input key
+(default: `StateKeyUserInput`) and ensure B only sees A's result, and C only
+sees B's. The option is more concise when available; the callback is
+zero‑dependency and works everywhere.
 
 ### Hybrid Pattern Example
 
