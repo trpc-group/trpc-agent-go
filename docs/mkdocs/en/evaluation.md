@@ -2094,6 +2094,8 @@ A callback returns `Result` and `error`. `Result` is optional and is used to pas
 - `return result, nil`: update `ctx` to `result.Context`. Subsequent callbacks and later stages use the updated `ctx`.
 - `return nil, err`: abort the current callback point and return the error.
 
+`After*` callback args include `StartTime`, which records when the corresponding EvalSet/EvalCase stage started. `Before*` callbacks can use `time.Now()` if they need timing information.
+
 When parallel inference is enabled with `evaluation.WithEvalCaseParallelInferenceEnabled(true)`, case-level callbacks may run concurrently. Since `args.Request` points to the same `*InferenceRequest`, treat it as read-only. If you need to mutate requests, do it in set-level callbacks.
 
 Per-case inference or evaluation failures usually are not propagated via `error`; they are written into `Result.Status` and `Result.ErrorMessage`. `After*CaseArgs.Error` is not used to carry per-case failure reasons. To determine whether a case failed, check `args.Result.Status` and `args.Result.ErrorMessage`.

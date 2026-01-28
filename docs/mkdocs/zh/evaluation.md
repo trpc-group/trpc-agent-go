@@ -2081,6 +2081,8 @@ agentEvaluator, err := evaluation.New(
 - `return result, nil`：将 `ctx` 更新为 `result.Context`，后续回调与后续阶段使用更新后的 `ctx`。
 - `return nil, err`：中断当前回调点并向上返回错误。
 
+`After*` 回调参数包含 `StartTime` 字段，表示对应 EvalSet/EvalCase 阶段的开始时间，可用于计算耗时；`Before*` 回调如果需要时间信息可以直接使用 `time.Now()`。
+
 通过 `evaluation.WithEvalCaseParallelInferenceEnabled(true)` 开启并行推理后，case 级回调可能并发执行，由于 `args.Request` 指向同一份 `*InferenceRequest`，因此建议只读；如需改写请求，可以在 set 级回调中完成。
 
 单个 EvalCase 的推理或评估失败通常不会通过 `error` 向上传递，而是写入 `Result.Status` 与 `Result.ErrorMessage`，因此 `After*CaseArgs.Error` 不用于承载单个用例失败原因，需要判断失败可以查看 `args.Result.Status` 与 `args.Result.ErrorMessage`。
