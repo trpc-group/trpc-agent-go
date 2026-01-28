@@ -222,6 +222,70 @@ func TestNewAgentEvaluatorWithCustomService(t *testing.T) {
 	assert.Equal(t, customSvc, impl.evalService)
 }
 
+func TestNewAgentEvaluatorWithCallbacksPassesThroughToEvalService(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+
+	err = mgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{
+		EvalID:   "case-1",
+		EvalMode: evalset.EvalModeTrace,
+		SessionInput: &evalset.SessionInput{
+			AppName: appName,
+			UserID:  "user",
+		},
+		Conversation: []*evalset.Invocation{
+			{
+				InvocationID: "invocation-1",
+				UserContent: &model.Message{
+					Role:    model.RoleUser,
+					Content: "hello",
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+
+	var gotReq *service.InferenceRequest
+	var called int32
+	callbacks := service.NewCallbacks()
+	callbacks.RegisterBeforeInferenceSet("probe", func(ctx context.Context, args *service.BeforeInferenceSetArgs) (*service.BeforeInferenceSetResult, error) {
+		atomic.AddInt32(&called, 1)
+		gotReq = args.Request
+		return nil, nil
+	})
+
+	ae, err := New(appName, stubRunner{}, WithEvalSetManager(mgr), WithCallbacks(callbacks))
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+	impl, ok := ae.(*agentEvaluator)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+
+	req := &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID}
+	results, err := impl.evalService.Inference(ctx, req)
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&called))
+	assert.Same(t, req, gotReq)
+}
+
 func TestAgentEvaluatorCloseLifecycle(t *testing.T) {
 	customSvc := &countingService{}
 	ae := &agentEvaluator{

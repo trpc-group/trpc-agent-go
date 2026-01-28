@@ -108,11 +108,12 @@ func (s *local) runBeforeEvaluateSetCallbacks(ctx context.Context, req *service.
 	return ctx, nil
 }
 
-func (s *local) runAfterEvaluateSetCallbacks(ctx context.Context, req *service.EvaluateRequest, result *evalresult.EvalSetResult, err error) error {
+func (s *local) runAfterEvaluateSetCallbacks(ctx context.Context, req *service.EvaluateRequest, result *evalresult.EvalSetResult, err error, startTime time.Time) error {
 	_, err = callback.RunAfterEvaluateSet(ctx, s.callbacks, &service.AfterEvaluateSetArgs{
-		Request: req,
-		Result:  result,
-		Error:   err,
+		Request:   req,
+		Result:    result,
+		Error:     err,
+		StartTime: startTime,
 	})
 	if err != nil {
 		return fmt.Errorf("run after evaluate set callbacks (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
@@ -141,12 +142,14 @@ func (s *local) runAfterEvaluateCaseCallbacks(
 	inferenceResult *service.InferenceResult,
 	result *evalresult.EvalCaseResult,
 	err error,
+	startTime time.Time,
 ) error {
 	_, err = callback.RunAfterEvaluateCase(ctx, s.callbacks, &service.AfterEvaluateCaseArgs{
 		Request:         req,
 		InferenceResult: inferenceResult,
 		Result:          result,
 		Error:           err,
+		StartTime:       startTime,
 	})
 	if err != nil {
 		evalCaseID := ""
@@ -178,8 +181,9 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (eva
 		return nil, fmt.Errorf("run before evaluate set callbacks (app=%s, evalSetID=%s): %w",
 			req.AppName, req.EvalSetID, err)
 	}
+	setStartTime := time.Now()
 	defer func() {
-		afterErr := s.runAfterEvaluateSetCallbacks(ctx, req, evalSetResult, err)
+		afterErr := s.runAfterEvaluateSetCallbacks(ctx, req, evalSetResult, err, setStartTime)
 		if afterErr != nil {
 			evalSetResult = nil
 			err = afterErr
@@ -222,8 +226,9 @@ func (s *local) evaluateCase(ctx context.Context, req *service.EvaluateRequest, 
 		return nil, fmt.Errorf("run before evaluate case callbacks (app=%s, evalSetID=%s, evalCaseID=%s): %w",
 			req.AppName, req.EvalSetID, inferenceResult.EvalCaseID, err)
 	}
+	caseStartTime := time.Now()
 	defer func() {
-		afterErr := s.runAfterEvaluateCaseCallbacks(ctx, req, inferenceResult, result, err)
+		afterErr := s.runAfterEvaluateCaseCallbacks(ctx, req, inferenceResult, result, err, caseStartTime)
 		if afterErr != nil {
 			result = nil
 			err = afterErr

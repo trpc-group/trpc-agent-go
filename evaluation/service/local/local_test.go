@@ -1403,3 +1403,455 @@ func TestLocalEvaluateAfterEvaluateCaseIncludesInferenceResult(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, inference, got)
 }
+
+func TestLocalEvaluateBeforeEvaluateSetContextPropagatesToAfterEvaluateSet(t *testing.T) {
+	type evalSetKey struct{}
+
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	called := false
+	callbacks := &service.Callbacks{}
+	callbacks.Register("observe", &service.Callback{
+		BeforeEvaluateSet: func(ctx context.Context, args *service.BeforeEvaluateSetArgs) (*service.BeforeEvaluateSetResult, error) {
+			next := context.WithValue(ctx, evalSetKey{}, "value")
+			return &service.BeforeEvaluateSetResult{Context: next}, nil
+		},
+		AfterEvaluateSet: func(ctx context.Context, args *service.AfterEvaluateSetArgs) (*service.AfterEvaluateSetResult, error) {
+			called = true
+			assert.Equal(t, "value", ctx.Value(evalSetKey{}))
+			return nil, nil
+		},
+	})
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(evalsetinmemory.New()),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithCallbacks(callbacks),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	if svc == nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	_, err = svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-1", SessionID: "session", Status: status.EvalStatusFailed, ErrorMessage: "failed"}},
+		EvaluateConfig:   &service.EvaluateConfig{},
+	})
+	assert.NoError(t, err)
+	assert.True(t, called)
+}
+
+func TestLocalEvaluateBeforeEvaluateSetErrorReturnsError(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	callbacks := &service.Callbacks{}
+	callbacks.Register("fail", &service.Callback{
+		BeforeEvaluateSet: func(ctx context.Context, args *service.BeforeEvaluateSetArgs) (*service.BeforeEvaluateSetResult, error) {
+			return nil, errors.New("before evaluate set failed")
+		},
+	})
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(evalsetinmemory.New()),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithCallbacks(callbacks),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	if svc == nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	_, err = svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:        appName,
+		EvalSetID:      evalSetID,
+		EvaluateConfig: &service.EvaluateConfig{},
+	})
+	assert.Error(t, err)
+	if err == nil {
+		return
+	}
+	assert.Contains(t, err.Error(), "run before evaluate set callbacks")
+	assert.Contains(t, err.Error(), "before evaluate set failed")
+}
+
+func TestLocalEvaluateBeforeEvaluateCaseContextPropagatesToAfterEvaluateCase(t *testing.T) {
+	type evalCaseKey struct{}
+
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	called := false
+	callbacks := &service.Callbacks{}
+	callbacks.Register("inject", &service.Callback{
+		BeforeEvaluateCase: func(ctx context.Context, args *service.BeforeEvaluateCaseArgs) (*service.BeforeEvaluateCaseResult, error) {
+			next := context.WithValue(ctx, evalCaseKey{}, "value")
+			return &service.BeforeEvaluateCaseResult{Context: next}, nil
+		},
+	})
+	callbacks.Register("observe", &service.Callback{
+		AfterEvaluateCase: func(ctx context.Context, args *service.AfterEvaluateCaseArgs) (*service.AfterEvaluateCaseResult, error) {
+			called = true
+			assert.Equal(t, "value", ctx.Value(evalCaseKey{}))
+			return nil, nil
+		},
+	})
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(evalsetinmemory.New()),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithCallbacks(callbacks),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	if svc == nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	_, err = svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-1", SessionID: "session", Status: status.EvalStatusFailed, ErrorMessage: "failed"}},
+		EvaluateConfig:   &service.EvaluateConfig{},
+	})
+	assert.NoError(t, err)
+	assert.True(t, called)
+}
+
+func TestLocalEvaluateBeforeEvaluateCaseErrorReturnsError(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	callbacks := &service.Callbacks{}
+	callbacks.Register("fail", &service.Callback{
+		BeforeEvaluateCase: func(ctx context.Context, args *service.BeforeEvaluateCaseArgs) (*service.BeforeEvaluateCaseResult, error) {
+			return nil, errors.New("before evaluate case failed")
+		},
+	})
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(evalsetinmemory.New()),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithCallbacks(callbacks),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	if svc == nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	_, err = svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-1", SessionID: "session", Status: status.EvalStatusFailed, ErrorMessage: "failed"}},
+		EvaluateConfig:   &service.EvaluateConfig{},
+	})
+	assert.Error(t, err)
+	if err == nil {
+		return
+	}
+	assert.Contains(t, err.Error(), "evaluate case")
+	assert.Contains(t, err.Error(), "run before evaluate case callbacks")
+	assert.Contains(t, err.Error(), "before evaluate case failed")
+}
+
+func TestLocalEvaluateAfterEvaluateCaseErrorReturnsError(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	callbacks := &service.Callbacks{}
+	callbacks.Register("fail", &service.Callback{
+		AfterEvaluateCase: func(ctx context.Context, args *service.AfterEvaluateCaseArgs) (*service.AfterEvaluateCaseResult, error) {
+			return nil, errors.New("after evaluate case failed")
+		},
+	})
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(evalsetinmemory.New()),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithCallbacks(callbacks),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	if svc == nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	_, err = svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-1", SessionID: "session", Status: status.EvalStatusFailed, ErrorMessage: "failed"}},
+		EvaluateConfig:   &service.EvaluateConfig{},
+	})
+	assert.Error(t, err)
+	if err == nil {
+		return
+	}
+	assert.Contains(t, err.Error(), "run after evaluate case callbacks")
+	assert.Contains(t, err.Error(), "after evaluate case failed")
+}
+
+func TestLocalRunAfterEvaluateCaseCallbacksNilInferenceResultIncludesEmptyEvalCaseID(t *testing.T) {
+	ctx := context.Background()
+
+	callbacks := &service.Callbacks{}
+	callbacks.Register("fail", &service.Callback{
+		AfterEvaluateCase: func(ctx context.Context, args *service.AfterEvaluateCaseArgs) (*service.AfterEvaluateCaseResult, error) {
+			return nil, errors.New("after evaluate case failed")
+		},
+	})
+
+	svc := &local{callbacks: callbacks}
+	err := svc.runAfterEvaluateCaseCallbacks(ctx, &service.EvaluateRequest{AppName: "app", EvalSetID: "set", EvaluateConfig: &service.EvaluateConfig{}}, nil, nil, nil, time.Unix(123, 0))
+	assert.Error(t, err)
+	if err == nil {
+		return
+	}
+	assert.Contains(t, err.Error(), "run after evaluate case callbacks")
+	assert.Contains(t, err.Error(), "evalCaseID=")
+}
+
+func TestLocalEvaluateNilInferenceResultReturnsErrorWithEmptyEvalCaseID(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(evalsetinmemory.New()),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	if svc == nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	_, err = svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{nil},
+		EvaluateConfig:   &service.EvaluateConfig{},
+	})
+	assert.Error(t, err)
+	if err == nil {
+		return
+	}
+	assert.Contains(t, err.Error(), "evaluate case")
+	assert.Contains(t, err.Error(), "evalCaseID=")
+	assert.Contains(t, err.Error(), "inference result is nil")
+}
+
+func TestLocalEvaluateSaveEvalSetResultErrorReturnsError(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(evalsetinmemory.New()),
+		service.WithEvalResultManager(&failingEvalResultManager{err: errors.New("save failed")}),
+		service.WithRegistry(registry.New()),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	if svc == nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	_, err = svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-1", SessionID: "session", Status: status.EvalStatusFailed, ErrorMessage: "failed"}},
+		EvaluateConfig:   &service.EvaluateConfig{},
+	})
+	assert.Error(t, err)
+	if err == nil {
+		return
+	}
+	assert.Contains(t, err.Error(), "save eval set result")
+	assert.Contains(t, err.Error(), "save failed")
+}
+
+func TestLocalEvaluatePerCaseErrorMarksCaseFailed(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	mgr := failingEvalSetManager{
+		Manager: evalsetinmemory.New(),
+		err:     errors.New("get case failed"),
+	}
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(mgr),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	if svc == nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	result, err := svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-1", SessionID: "session", Status: status.EvalStatusPassed}},
+		EvaluateConfig:   &service.EvaluateConfig{},
+	})
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	assert.NotNil(t, result)
+	if result == nil {
+		return
+	}
+	assert.Len(t, result.EvalCaseResults, 1)
+	if len(result.EvalCaseResults) != 1 {
+		return
+	}
+	assert.Equal(t, status.EvalStatusFailed, result.EvalCaseResults[0].FinalEvalStatus)
+	assert.Contains(t, result.EvalCaseResults[0].ErrorMessage, "get eval case")
+	assert.Contains(t, result.EvalCaseResults[0].ErrorMessage, "get case failed")
+}
+
+func TestRunAfterEvaluateSetCallbacksPassesArgs(t *testing.T) {
+	ctx := context.Background()
+	startTime := time.Unix(123, 0)
+	wantErr := errors.New("evaluate error")
+	req := &service.EvaluateRequest{AppName: "app", EvalSetID: "set", EvaluateConfig: &service.EvaluateConfig{}}
+	result := &evalresult.EvalSetResult{EvalSetID: "set"}
+
+	callbacks := service.NewCallbacks()
+	var got *service.AfterEvaluateSetArgs
+	callbacks.RegisterAfterEvaluateSet("probe", func(ctx context.Context, args *service.AfterEvaluateSetArgs) (*service.AfterEvaluateSetResult, error) {
+		got = args
+		return nil, nil
+	})
+
+	svc := &local{callbacks: callbacks}
+	err := svc.runAfterEvaluateSetCallbacks(ctx, req, result, wantErr, startTime)
+	assert.NoError(t, err)
+	assert.NotNil(t, got)
+	assert.Same(t, req, got.Request)
+	assert.Same(t, result, got.Result)
+	assert.Same(t, wantErr, got.Error)
+	assert.Equal(t, startTime, got.StartTime)
+}
+
+func TestRunAfterEvaluateSetCallbacksWrapsErrorWithContext(t *testing.T) {
+	ctx := context.Background()
+	startTime := time.Unix(123, 0)
+	req := &service.EvaluateRequest{AppName: "app", EvalSetID: "set", EvaluateConfig: &service.EvaluateConfig{}}
+	sentinel := errors.New("boom")
+
+	callbacks := service.NewCallbacks()
+	callbacks.RegisterAfterEvaluateSet("bad", func(ctx context.Context, args *service.AfterEvaluateSetArgs) (*service.AfterEvaluateSetResult, error) {
+		return nil, sentinel
+	})
+
+	svc := &local{callbacks: callbacks}
+	err := svc.runAfterEvaluateSetCallbacks(ctx, req, nil, nil, startTime)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, sentinel)
+	assert.Contains(t, err.Error(), "run after evaluate set callbacks")
+	assert.Contains(t, err.Error(), "app=app")
+	assert.Contains(t, err.Error(), "evalSetID=set")
+}
+
+type failingEvalResultManager struct {
+	err error
+}
+
+func (m *failingEvalResultManager) Save(ctx context.Context, appName string, evalSetResult *evalresult.EvalSetResult) (string, error) {
+	return "", m.err
+}
+
+func (m *failingEvalResultManager) Get(ctx context.Context, appName, evalSetResultID string) (*evalresult.EvalSetResult, error) {
+	return nil, nil
+}
+
+func (m *failingEvalResultManager) List(ctx context.Context, appName string) ([]string, error) {
+	return nil, nil
+}
+
+type failingEvalSetManager struct {
+	evalset.Manager
+	err error
+}
+
+func (m failingEvalSetManager) GetCase(ctx context.Context, appName, evalSetID, evalCaseID string) (*evalset.EvalCase, error) {
+	return nil, m.err
+}
