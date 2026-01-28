@@ -378,7 +378,7 @@ go func() {
 }()
 
 for range events {
-    // Keep draining until channel close.
+    // Keep draining until the channel is closed.
 }
 ```
 
