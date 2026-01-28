@@ -139,6 +139,18 @@ func (p *panicGetTupleSaver) GetTuple(
 	panic("gettuple panic")
 }
 
+type failingGetTupleSaver struct {
+	*mockSaver
+	retErr error
+}
+
+func (f *failingGetTupleSaver) GetTuple(
+	_ context.Context,
+	_ map[string]any,
+) (*CheckpointTuple, error) {
+	return nil, f.retErr
+}
+
 func TestExecutor_CheckpointSaveError_DoesNotStopRun(
 	t *testing.T,
 ) {
@@ -192,6 +204,146 @@ func TestExecutor_PanicInSaver_IsRecovered(
 	require.NoError(t, err)
 	for range ch {
 	}
+}
+
+func TestExecutor_NonResume_GetTupleError_DoesNotStopRun(t *testing.T) {
+	const (
+		getErrMsg = "gettuple failed"
+		invID     = "inv-gettuple-nonresume"
+	)
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+
+	baseSaver := newMockSaver()
+	saver := &failingGetTupleSaver{
+		mockSaver: baseSaver,
+		retErr:    errors.New(getErrMsg),
+	}
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(
+		context.Background(),
+		State{},
+		&agent.Invocation{InvocationID: invID},
+	)
+	require.NoError(t, err)
+
+	var gotDone bool
+	for evt := range ch {
+		require.Nil(t, evt.Error)
+		if evt.Done {
+			gotDone = true
+		}
+	}
+	require.True(t, gotDone)
+	require.NotZero(t, len(baseSaver.byID))
+}
+
+func TestExecutor_Resume_GetTupleError_ReturnsError(t *testing.T) {
+	const (
+		lineageID = "ln-gettuple-err"
+		checkID   = "ck-gettuple-err"
+		getErrMsg = "gettuple failed"
+		invID     = "inv-gettuple-resume"
+	)
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+
+	baseSaver := newMockSaver()
+	saver := &failingGetTupleSaver{
+		mockSaver: baseSaver,
+		retErr:    errors.New(getErrMsg),
+	}
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	init := State{
+		CfgKeyLineageID:    lineageID,
+		CfgKeyCheckpointID: checkID,
+	}
+	ch, err := exec.Execute(
+		context.Background(),
+		init,
+		&agent.Invocation{InvocationID: invID},
+	)
+	require.NoError(t, err)
+
+	var gotErr *model.ResponseError
+	var gotDone bool
+	for evt := range ch {
+		if evt.Error != nil {
+			gotErr = evt.Error
+		}
+		if evt.Done {
+			gotDone = true
+		}
+	}
+	require.False(t, gotDone)
+	require.NotNil(t, gotErr)
+	require.Contains(t, gotErr.Message, getErrMsg)
+	require.Zero(t, len(baseSaver.byID))
+}
+
+func TestExecutor_Resume_CheckpointNotFound_ReturnsError(t *testing.T) {
+	const (
+		lineageID = "ln-missing-ckpt"
+		checkID   = "ck-missing"
+		invID     = "inv-missing-ckpt"
+	)
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	init := State{
+		CfgKeyLineageID:    lineageID,
+		CfgKeyCheckpointID: checkID,
+	}
+	ch, err := exec.Execute(
+		context.Background(),
+		init,
+		&agent.Invocation{InvocationID: invID},
+	)
+	require.NoError(t, err)
+
+	var gotErr *model.ResponseError
+	var gotDone bool
+	for evt := range ch {
+		if evt.Error != nil {
+			gotErr = evt.Error
+		}
+		if evt.Done {
+			gotDone = true
+		}
+	}
+	require.False(t, gotDone)
+	require.NotNil(t, gotErr)
+	require.Contains(t, gotErr.Message, ErrCheckpointNotFound.Error())
+	require.Zero(t, len(saver.byID))
 }
 
 func TestExecutor_CreateTask_LogsStepCountAndFinalNode(
