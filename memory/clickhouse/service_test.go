@@ -22,7 +22,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -1210,4 +1212,960 @@ func TestBuildCreateTableSQL(t *testing.T) {
 	assert.Contains(t, sql, "user_id")
 	assert.Contains(t, sql, "memory_data")
 	assert.Contains(t, sql, "ReplacingMergeTree")
+}
+
+// TestService_initDB tests the initDB method.
+func TestService_initDB(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		execCalled := false
+		mockClient := &mockClickHouseClient{
+			execFunc: func(ctx context.Context, query string, args ...any) error {
+				execCalled = true
+				assert.Contains(t, query, "CREATE TABLE IF NOT EXISTS")
+				return nil
+			},
+		}
+
+		svc := &Service{
+			chClient:  mockClient,
+			tableName: "test_memories",
+		}
+
+		err := svc.initDB(ctx)
+		require.NoError(t, err)
+		assert.True(t, execCalled)
+	})
+
+	t.Run("error", func(t *testing.T) {
+		mockClient := &mockClickHouseClient{
+			execFunc: func(ctx context.Context, query string, args ...any) error {
+				return errors.New("create table error")
+			},
+		}
+
+		svc := &Service{
+			chClient:  mockClient,
+			tableName: "test_memories",
+		}
+
+		err := svc.initDB(ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "create table")
+	})
+}
+
+// TestService_EnqueueAutoMemoryJob tests the EnqueueAutoMemoryJob method.
+func TestService_EnqueueAutoMemoryJob(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("nil worker returns nil", func(t *testing.T) {
+		svc := &Service{
+			autoMemoryWorker: nil,
+		}
+
+		err := svc.EnqueueAutoMemoryJob(ctx, nil)
+		require.NoError(t, err)
+	})
+}
+
+// TestService_UpdateMemory_QueryError tests error handling for query in update.
+func TestService_UpdateMemory_QueryError(t *testing.T) {
+	ctx := context.Background()
+	memoryKey := memory.Key{
+		AppName:  "test-app",
+		UserID:   "user-123",
+		MemoryID: "mem-456",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return nil, errors.New("query error")
+		},
+	}
+
+	svc := &Service{
+		opts:        ServiceOpts{tableName: "memories"},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.UpdateMemory(ctx, memoryKey, "updated", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get memory entry failed")
+}
+
+// TestService_UpdateMemory_ScanError tests error handling for scan in update.
+func TestService_UpdateMemory_ScanError(t *testing.T) {
+	ctx := context.Background()
+	memoryKey := memory.Key{
+		AppName:  "test-app",
+		UserID:   "user-123",
+		MemoryID: "mem-456",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{
+				data: [][]any{{"invalid_data", time.Now()}},
+				scanFunc: func(dest ...any) error {
+					return errors.New("scan error")
+				},
+			}, nil
+		},
+	}
+
+	svc := &Service{
+		opts:        ServiceOpts{tableName: "memories"},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.UpdateMemory(ctx, memoryKey, "updated", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scan memory entry failed")
+}
+
+// TestService_UpdateMemory_UnmarshalError tests error handling for JSON unmarshal.
+func TestService_UpdateMemory_UnmarshalError(t *testing.T) {
+	ctx := context.Background()
+	memoryKey := memory.Key{
+		AppName:  "test-app",
+		UserID:   "user-123",
+		MemoryID: "mem-456",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{
+				data: [][]any{{"invalid json", time.Now()}},
+			}, nil
+		},
+	}
+
+	svc := &Service{
+		opts:        ServiceOpts{tableName: "memories"},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.UpdateMemory(ctx, memoryKey, "updated", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal memory entry failed")
+}
+
+// TestService_UpdateMemory_InsertError tests error handling for insert in update.
+func TestService_UpdateMemory_InsertError(t *testing.T) {
+	ctx := context.Background()
+	memoryKey := memory.Key{
+		AppName:  "test-app",
+		UserID:   "user-123",
+		MemoryID: "mem-456",
+	}
+
+	now := time.Now()
+	existingEntry := &memory.Entry{
+		ID:      memoryKey.MemoryID,
+		AppName: memoryKey.AppName,
+		UserID:  memoryKey.UserID,
+		Memory: &memory.Memory{
+			Memory:      "Old content",
+			Topics:      []string{"old"},
+			LastUpdated: &now,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	existingData, _ := json.Marshal(existingEntry)
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{
+				data: [][]any{{string(existingData), now}},
+			}, nil
+		},
+		execFunc: func(ctx context.Context, query string, args ...any) error {
+			return errors.New("insert error")
+		},
+	}
+
+	svc := &Service{
+		opts:        ServiceOpts{tableName: "memories"},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.UpdateMemory(ctx, memoryKey, "updated", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "update memory entry failed")
+}
+
+// TestService_UpdateMemory_WithSoftDelete tests update with soft delete filter.
+func TestService_UpdateMemory_WithSoftDelete(t *testing.T) {
+	ctx := context.Background()
+	memoryKey := memory.Key{
+		AppName:  "test-app",
+		UserID:   "user-123",
+		MemoryID: "mem-456",
+	}
+
+	now := time.Now()
+	existingEntry := &memory.Entry{
+		ID:      memoryKey.MemoryID,
+		AppName: memoryKey.AppName,
+		UserID:  memoryKey.UserID,
+		Memory: &memory.Memory{
+			Memory:      "Old content",
+			Topics:      []string{"old"},
+			LastUpdated: &now,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	existingData, _ := json.Marshal(existingEntry)
+
+	queryCaptured := ""
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			queryCaptured = query
+			return &mockRows{
+				data: [][]any{{string(existingData), now}},
+			}, nil
+		},
+		execFunc: func(ctx context.Context, query string, args ...any) error {
+			return nil
+		},
+	}
+
+	svc := &Service{
+		opts: ServiceOpts{
+			tableName:  "memories",
+			softDelete: true,
+		},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.UpdateMemory(ctx, memoryKey, "updated", []string{"updated"})
+	require.NoError(t, err)
+	assert.Contains(t, queryCaptured, "deleted_at IS NULL")
+}
+
+// TestService_DeleteMemory_SoftDelete_QueryError tests error in soft delete query.
+func TestService_DeleteMemory_SoftDelete_QueryError(t *testing.T) {
+	ctx := context.Background()
+	memoryKey := memory.Key{
+		AppName:  "test-app",
+		UserID:   "user-123",
+		MemoryID: "mem-456",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return nil, errors.New("query error")
+		},
+	}
+
+	svc := &Service{
+		opts: ServiceOpts{
+			tableName:  "memories",
+			softDelete: true,
+		},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.DeleteMemory(ctx, memoryKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get memory entry for delete failed")
+}
+
+// TestService_DeleteMemory_SoftDelete_ScanError tests error in soft delete scan.
+func TestService_DeleteMemory_SoftDelete_ScanError(t *testing.T) {
+	ctx := context.Background()
+	memoryKey := memory.Key{
+		AppName:  "test-app",
+		UserID:   "user-123",
+		MemoryID: "mem-456",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{
+				data: [][]any{{"data", time.Now()}},
+				scanFunc: func(dest ...any) error {
+					return errors.New("scan error")
+				},
+			}, nil
+		},
+	}
+
+	svc := &Service{
+		opts: ServiceOpts{
+			tableName:  "memories",
+			softDelete: true,
+		},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.DeleteMemory(ctx, memoryKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scan memory entry failed")
+}
+
+// TestService_DeleteMemory_SoftDelete_InsertError tests error in soft delete insert.
+func TestService_DeleteMemory_SoftDelete_InsertError(t *testing.T) {
+	ctx := context.Background()
+	memoryKey := memory.Key{
+		AppName:  "test-app",
+		UserID:   "user-123",
+		MemoryID: "mem-456",
+	}
+
+	now := time.Now()
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{
+				data: [][]any{{"memory_data", now}},
+			}, nil
+		},
+		execFunc: func(ctx context.Context, query string, args ...any) error {
+			return errors.New("insert error")
+		},
+	}
+
+	svc := &Service{
+		opts: ServiceOpts{
+			tableName:  "memories",
+			softDelete: true,
+		},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.DeleteMemory(ctx, memoryKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "soft delete memory entry failed")
+}
+
+// TestService_DeleteMemory_SoftDelete_NotFound tests soft delete when not found.
+func TestService_DeleteMemory_SoftDelete_NotFound(t *testing.T) {
+	ctx := context.Background()
+	memoryKey := memory.Key{
+		AppName:  "test-app",
+		UserID:   "user-123",
+		MemoryID: "mem-456",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{data: [][]any{}}, nil
+		},
+	}
+
+	svc := &Service{
+		opts: ServiceOpts{
+			tableName:  "memories",
+			softDelete: true,
+		},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.DeleteMemory(ctx, memoryKey)
+	require.NoError(t, err)
+}
+
+// TestService_DeleteMemory_HardDelete_Error tests error in hard delete.
+func TestService_DeleteMemory_HardDelete_Error(t *testing.T) {
+	ctx := context.Background()
+	memoryKey := memory.Key{
+		AppName:  "test-app",
+		UserID:   "user-123",
+		MemoryID: "mem-456",
+	}
+
+	mockClient := &mockClickHouseClient{
+		execFunc: func(ctx context.Context, query string, args ...any) error {
+			return errors.New("delete error")
+		},
+	}
+
+	svc := &Service{
+		opts: ServiceOpts{
+			tableName:  "memories",
+			softDelete: false,
+		},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.DeleteMemory(ctx, memoryKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delete memory entry failed")
+}
+
+// TestService_ClearMemories_SoftDelete_QueryError tests query error in clear.
+func TestService_ClearMemories_SoftDelete_QueryError(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return nil, errors.New("query error")
+		},
+	}
+
+	svc := &Service{
+		opts: ServiceOpts{
+			tableName:  "memories",
+			softDelete: true,
+		},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.ClearMemories(ctx, userKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get memories for clear failed")
+}
+
+// TestService_ClearMemories_SoftDelete_ScanError tests scan error in clear.
+func TestService_ClearMemories_SoftDelete_ScanError(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{
+				data: [][]any{{"mem-1", "data", time.Now()}},
+				scanFunc: func(dest ...any) error {
+					return errors.New("scan error")
+				},
+			}, nil
+		},
+	}
+
+	svc := &Service{
+		opts: ServiceOpts{
+			tableName:  "memories",
+			softDelete: true,
+		},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.ClearMemories(ctx, userKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scan memory entry failed")
+}
+
+// TestService_ClearMemories_SoftDelete_BatchInsertError tests batch insert error.
+func TestService_ClearMemories_SoftDelete_BatchInsertError(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	now := time.Now()
+	entry := &memory.Entry{
+		ID:        "mem-1",
+		AppName:   userKey.AppName,
+		UserID:    userKey.UserID,
+		Memory:    &memory.Memory{Memory: "test"},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	entryData, _ := json.Marshal(entry)
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{
+				data: [][]any{{"mem-1", string(entryData), now}},
+			}, nil
+		},
+		batchInsertFunc: func(ctx context.Context, query string, fn storage.BatchFn,
+			opts ...driver.PrepareBatchOption) error {
+			return errors.New("batch insert error")
+		},
+	}
+
+	svc := &Service{
+		opts: ServiceOpts{
+			tableName:  "memories",
+			softDelete: true,
+		},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.ClearMemories(ctx, userKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "batch soft delete memories failed")
+}
+
+// TestService_ClearMemories_SoftDelete_Empty tests clear with no records.
+func TestService_ClearMemories_SoftDelete_Empty(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	batchInsertCalled := false
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{data: [][]any{}}, nil
+		},
+		batchInsertFunc: func(ctx context.Context, query string, fn storage.BatchFn,
+			opts ...driver.PrepareBatchOption) error {
+			batchInsertCalled = true
+			return nil
+		},
+	}
+
+	svc := &Service{
+		opts: ServiceOpts{
+			tableName:  "memories",
+			softDelete: true,
+		},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.ClearMemories(ctx, userKey)
+	require.NoError(t, err)
+	assert.False(t, batchInsertCalled)
+}
+
+// TestService_ClearMemories_HardDelete_Error tests error in hard delete clear.
+func TestService_ClearMemories_HardDelete_Error(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	mockClient := &mockClickHouseClient{
+		execFunc: func(ctx context.Context, query string, args ...any) error {
+			return errors.New("delete error")
+		},
+	}
+
+	svc := &Service{
+		opts: ServiceOpts{
+			tableName:  "memories",
+			softDelete: false,
+		},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.ClearMemories(ctx, userKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "clear memories failed")
+}
+
+// TestService_ReadMemories_QueryError tests query error in read.
+func TestService_ReadMemories_QueryError(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return nil, errors.New("query error")
+		},
+	}
+
+	svc := &Service{
+		opts:        ServiceOpts{tableName: "memories"},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	_, err := svc.ReadMemories(ctx, userKey, 10)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list memories failed")
+}
+
+// TestService_ReadMemories_ScanError tests scan error in read.
+func TestService_ReadMemories_ScanError(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{
+				data: [][]any{{"data"}},
+				scanFunc: func(dest ...any) error {
+					return errors.New("scan error")
+				},
+			}, nil
+		},
+	}
+
+	svc := &Service{
+		opts:        ServiceOpts{tableName: "memories"},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	_, err := svc.ReadMemories(ctx, userKey, 10)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scan memory data failed")
+}
+
+// TestService_ReadMemories_UnmarshalError tests unmarshal error in read.
+func TestService_ReadMemories_UnmarshalError(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{
+				data: [][]any{{"invalid json"}},
+			}, nil
+		},
+	}
+
+	svc := &Service{
+		opts:        ServiceOpts{tableName: "memories"},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	_, err := svc.ReadMemories(ctx, userKey, 10)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal memory entry failed")
+}
+
+// TestService_ReadMemories_NoLimit tests read without limit.
+func TestService_ReadMemories_NoLimit(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	queryCaptured := ""
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			queryCaptured = query
+			return &mockRows{data: [][]any{}}, nil
+		},
+	}
+
+	svc := &Service{
+		opts:        ServiceOpts{tableName: "memories"},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	_, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	assert.NotContains(t, queryCaptured, "LIMIT")
+}
+
+// TestService_SearchMemories_QueryError tests query error in search.
+func TestService_SearchMemories_QueryError(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return nil, errors.New("query error")
+		},
+	}
+
+	svc := &Service{
+		opts:        ServiceOpts{tableName: "memories"},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	_, err := svc.SearchMemories(ctx, userKey, "query")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "search memories failed")
+}
+
+// TestService_SearchMemories_ScanError tests scan error in search.
+func TestService_SearchMemories_ScanError(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{
+				data: [][]any{{"data"}},
+				scanFunc: func(dest ...any) error {
+					return errors.New("scan error")
+				},
+			}, nil
+		},
+	}
+
+	svc := &Service{
+		opts:        ServiceOpts{tableName: "memories"},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	_, err := svc.SearchMemories(ctx, userKey, "query")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scan memory data failed")
+}
+
+// TestService_SearchMemories_UnmarshalError tests unmarshal error in search.
+func TestService_SearchMemories_UnmarshalError(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			return &mockRows{
+				data: [][]any{{"invalid json"}},
+			}, nil
+		},
+	}
+
+	svc := &Service{
+		opts:        ServiceOpts{tableName: "memories"},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	_, err := svc.SearchMemories(ctx, userKey, "query")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal memory entry failed")
+}
+
+// TestService_SearchMemories_WithSoftDelete tests search with soft delete filter.
+func TestService_SearchMemories_WithSoftDelete(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	queryCaptured := ""
+	mockClient := &mockClickHouseClient{
+		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			queryCaptured = query
+			return &mockRows{data: [][]any{}}, nil
+		},
+	}
+
+	svc := &Service{
+		opts: ServiceOpts{
+			tableName:  "memories",
+			softDelete: true,
+		},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	_, err := svc.SearchMemories(ctx, userKey, "query")
+	require.NoError(t, err)
+	assert.Contains(t, queryCaptured, "deleted_at IS NULL")
+}
+
+// TestService_AddMemory_WithSoftDelete tests add memory with soft delete filter.
+func TestService_AddMemory_WithSoftDelete(t *testing.T) {
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	queryCaptured := ""
+	mockClient := &mockClickHouseClient{
+		queryRowFunc: func(ctx context.Context, dest []any, query string, args ...any) error {
+			queryCaptured = query
+			if len(dest) > 0 {
+				if countPtr, ok := dest[0].(*uint64); ok {
+					*countPtr = 0
+				}
+			}
+			return nil
+		},
+		execFunc: func(ctx context.Context, query string, args ...any) error {
+			return nil
+		},
+	}
+
+	svc := &Service{
+		opts: ServiceOpts{
+			tableName:   "memories",
+			memoryLimit: 10,
+			softDelete:  true,
+		},
+		chClient:    mockClient,
+		tableName:   "memories",
+		cachedTools: make(map[string]tool.Tool),
+	}
+
+	err := svc.AddMemory(ctx, userKey, "test", nil)
+	require.NoError(t, err)
+	assert.Contains(t, queryCaptured, "deleted_at IS NULL")
+}
+
+// TestService_Close_Error tests close error handling.
+func TestService_Close_Error(t *testing.T) {
+	mockClient := &mockClickHouseClient{
+		closeFunc: func() error {
+			return errors.New("close error")
+		},
+	}
+
+	svc := &Service{
+		chClient: mockClient,
+	}
+
+	err := svc.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "close error")
+}
+
+// TestService_Close_WithAutoMemoryWorker tests close with auto memory worker.
+func TestService_Close_WithWorker(t *testing.T) {
+	closeCalled := false
+	mockClient := &mockClickHouseClient{
+		closeFunc: func() error {
+			closeCalled = true
+			return nil
+		},
+	}
+
+	// Create a mock memory operator for the auto memory worker.
+	config := imemory.AutoMemoryConfig{
+		Extractor:       &mockMemoryExtractor{},
+		AsyncMemoryNum:  1,
+		MemoryQueueSize: 1,
+	}
+	worker := imemory.NewAutoMemoryWorker(config, &mockMemoryOperator{})
+	worker.Start()
+
+	svc := &Service{
+		chClient:         mockClient,
+		autoMemoryWorker: worker,
+	}
+
+	err := svc.Close()
+	require.NoError(t, err)
+	assert.True(t, closeCalled)
+}
+
+// mockMemoryOperator is a mock implementation of MemoryOperator for testing.
+type mockMemoryOperator struct{}
+
+func (m *mockMemoryOperator) ReadMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	limit int,
+) ([]*memory.Entry, error) {
+	return nil, nil
+}
+
+func (m *mockMemoryOperator) AddMemory(
+	ctx context.Context,
+	userKey memory.UserKey,
+	memoryStr string,
+	topics []string,
+) error {
+	return nil
+}
+
+func (m *mockMemoryOperator) UpdateMemory(
+	ctx context.Context,
+	memoryKey memory.Key,
+	memoryStr string,
+	topics []string,
+) error {
+	return nil
+}
+
+func (m *mockMemoryOperator) DeleteMemory(ctx context.Context, memoryKey memory.Key) error {
+	return nil
+}
+
+func (m *mockMemoryOperator) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
+	return nil
+}
+
+// TestService_EnqueueAutoMemoryJob_WithWorker tests enqueue with worker.
+func TestService_EnqueueAutoMemoryJob_WithWorker(t *testing.T) {
+	ctx := context.Background()
+
+	config := imemory.AutoMemoryConfig{
+		Extractor:       &mockMemoryExtractor{},
+		AsyncMemoryNum:  1,
+		MemoryQueueSize: 10,
+	}
+	worker := imemory.NewAutoMemoryWorker(config, &mockMemoryOperator{})
+	worker.Start()
+	defer worker.Stop()
+
+	svc := &Service{
+		autoMemoryWorker: worker,
+	}
+
+	// Create a mock session directly.
+	sess := &session.Session{
+		ID:      "sess-123",
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	err := svc.EnqueueAutoMemoryJob(ctx, sess)
+	require.NoError(t, err)
 }
