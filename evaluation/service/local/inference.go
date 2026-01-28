@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/callback"
@@ -32,8 +33,9 @@ func (s *local) Inference(ctx context.Context, req *service.InferenceRequest) (r
 		return nil, fmt.Errorf("run before inference set callbacks (app=%s, evalSetID=%s): %w",
 			req.AppName, req.EvalSetID, err)
 	}
+	startTime := time.Now()
 	defer func() {
-		afterErr := s.runAfterInferenceSetCallbacks(ctx, req, results, err)
+		afterErr := s.runAfterInferenceSetCallbacks(ctx, req, results, err, startTime)
 		if afterErr != nil {
 			results = nil
 			err = afterErr
@@ -69,11 +71,13 @@ func (s *local) runAfterInferenceSetCallbacks(
 	req *service.InferenceRequest,
 	results []*service.InferenceResult,
 	err error,
+	startTime time.Time,
 ) error {
 	_, err = callback.RunAfterInferenceSet(ctx, s.callbacks, &service.AfterInferenceSetArgs{
-		Request: req,
-		Results: results,
-		Error:   err,
+		Request:   req,
+		Results:   results,
+		Error:     err,
+		StartTime: startTime,
 	})
 	if err != nil {
 		return fmt.Errorf("run after inference set callbacks (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
@@ -108,11 +112,13 @@ func (s *local) runAfterInferenceCaseCallbacks(
 	evalCaseID string,
 	result *service.InferenceResult,
 	err error,
+	startTime time.Time,
 ) error {
 	_, afterErr := callback.RunAfterInferenceCase(ctx, s.callbacks, &service.AfterInferenceCaseArgs{
-		Request: req,
-		Result:  result,
-		Error:   err,
+		Request:   req,
+		Result:    result,
+		Error:     err,
+		StartTime: startTime,
 	})
 	if afterErr != nil {
 		return fmt.Errorf("run after inference case callbacks (app=%s, evalSetID=%s, evalCaseID=%s): %w",
@@ -232,8 +238,9 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 			UserID:     "",
 		}, err)
 	}
+	caseStartTime := time.Now()
 	defer func() {
-		afterErr := s.runAfterInferenceCaseCallbacks(ctx, req, evalCase.EvalID, result, nil)
+		afterErr := s.runAfterInferenceCaseCallbacks(ctx, req, evalCase.EvalID, result, nil, caseStartTime)
 		if afterErr != nil {
 			result = newFailedInferenceResult(result, errors.Join(err, afterErr))
 		}
