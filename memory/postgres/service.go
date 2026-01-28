@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -442,7 +443,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 // In agentic mode, all enabled tools are returned.
 // The tools list is pre-computed at service creation time.
 func (s *Service) Tools() []tool.Tool {
-	return s.precomputedTools
+	return slices.Clone(s.precomputedTools)
 }
 
 // EnqueueAutoMemoryJob enqueues an auto memory extraction job for async

@@ -13,6 +13,7 @@ package inmemory
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -317,7 +318,7 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 // In agentic mode, all enabled tools are returned.
 // The tools list is pre-computed at service creation time.
 func (s *MemoryService) Tools() []tool.Tool {
-	return s.precomputedTools
+	return slices.Clone(s.precomputedTools)
 }
 
 // EnqueueAutoMemoryJob enqueues an auto memory extraction job for async

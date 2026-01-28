@@ -2021,6 +2021,83 @@ An example metric config file:
 
 This evaluator requires the Agent’s tool calls to return retrieval results. See the complete example at [examples/evaluation/llm/knowledgerecall](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/knowledgerecall).
 
+### Callback
+
+Evaluation supports registering callbacks at key points in the evaluation flow. Callbacks can be used for observability and instrumentation, passing `Context`, and adjusting request parameters.
+
+Create a callback registry with `service.NewCallbacks()`, register callback components, then pass it into `evaluation.New` using `evaluation.WithCallbacks`:
+
+```go
+import (
+	"context"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+)
+
+callbacks := service.NewCallbacks()
+callbacks.Register("noop", &service.Callback{
+	BeforeInferenceSet: func(ctx context.Context, args *service.BeforeInferenceSetArgs) (*service.BeforeInferenceSetResult, error) {
+		return nil, nil
+	},
+	AfterInferenceSet: func(ctx context.Context, args *service.AfterInferenceSetArgs) (*service.AfterInferenceSetResult, error) {
+		return nil, nil
+	},
+	BeforeInferenceCase: func(ctx context.Context, args *service.BeforeInferenceCaseArgs) (*service.BeforeInferenceCaseResult, error) {
+		return nil, nil
+	},
+	AfterInferenceCase: func(ctx context.Context, args *service.AfterInferenceCaseArgs) (*service.AfterInferenceCaseResult, error) {
+		return nil, nil
+	},
+	BeforeEvaluateSet: func(ctx context.Context, args *service.BeforeEvaluateSetArgs) (*service.BeforeEvaluateSetResult, error) {
+		return nil, nil
+	},
+	AfterEvaluateSet: func(ctx context.Context, args *service.AfterEvaluateSetArgs) (*service.AfterEvaluateSetResult, error) {
+		return nil, nil
+	},
+	BeforeEvaluateCase: func(ctx context.Context, args *service.BeforeEvaluateCaseArgs) (*service.BeforeEvaluateCaseResult, error) {
+		return nil, nil
+	},
+	AfterEvaluateCase: func(ctx context.Context, args *service.AfterEvaluateCaseArgs) (*service.AfterEvaluateCaseResult, error) {
+		return nil, nil
+	},
+})
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithCallbacks(callbacks),
+)
+```
+
+For registering a single callback point, you can also use point-specific registration methods such as `callbacks.RegisterBeforeInferenceSet(name, fn)`.
+
+For a complete example, see [examples/evaluation/callbacks](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/callbacks).
+
+Callback points are described in the table below.
+
+| Callback | When |
+| --- | --- |
+| `BeforeInferenceSet` | Before the inference phase starts; runs once per EvalSet |
+| `AfterInferenceSet` | After the inference phase ends; runs once per EvalSet |
+| `BeforeInferenceCase` | Before a single EvalCase inference starts; runs once per EvalCase |
+| `AfterInferenceCase` | After a single EvalCase inference ends; runs once per EvalCase |
+| `BeforeEvaluateSet` | Before the evaluation phase starts; runs once per EvalSet |
+| `AfterEvaluateSet` | After the evaluation phase ends; runs once per EvalSet |
+| `BeforeEvaluateCase` | Before a single EvalCase evaluation starts; runs once per EvalCase |
+| `AfterEvaluateCase` | After a single EvalCase evaluation ends; runs once per EvalCase |
+
+Callbacks at the same point run in registration order. If any callback returns an `error`, execution aborts at that point. The error is wrapped with callback point, index, and component name.
+
+A callback returns `Result` and `error`. `Result` is optional and is used to pass an updated `Context` within the same callback point and to later stages; `error` aborts the flow and is returned. Common return forms include:
+
+- `return nil, nil`: continue using the current `ctx` for subsequent callbacks. If a previous callback at the same point has already updated `ctx` via `Result.Context`, this return form does not overwrite it.
+- `return result, nil`: update `ctx` to `result.Context`. Subsequent callbacks and later stages use the updated `ctx`.
+- `return nil, err`: abort the current callback point and return the error.
+
+When parallel inference is enabled with `evaluation.WithEvalCaseParallelInferenceEnabled(true)`, case-level callbacks may run concurrently. Since `args.Request` points to the same `*InferenceRequest`, treat it as read-only. If you need to mutate requests, do it in set-level callbacks.
+
+Per-case inference or evaluation failures usually are not propagated via `error`; they are written into `Result.Status` and `Result.ErrorMessage`. `After*CaseArgs.Error` is not used to carry per-case failure reasons. To determine whether a case failed, check `args.Result.Status` and `args.Result.ErrorMessage`.
+
 ## Best Practices
 
 ### Context Injection
