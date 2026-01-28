@@ -1475,3 +1475,116 @@ func TestSimpleTokenCounter_EmptyToolCall(t *testing.T) {
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, result, 0)
 }
+
+func TestBuildUserAnchoredRounds_UserOnlySplits(t *testing.T) {
+	const preservedHead = 1
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("u1"),
+		NewUserMessage("u2"),
+		NewUserMessage("u3"),
+	}
+
+	rounds := buildUserAnchoredRounds(messages, preservedHead)
+	require.Len(t, rounds, 3)
+	require.Equal(t, 1, rounds[0].start)
+	require.Equal(t, 2, rounds[0].end)
+	require.Equal(t, 2, rounds[1].start)
+	require.Equal(t, 3, rounds[1].end)
+	require.Equal(t, 3, rounds[2].start)
+	require.Equal(t, 4, rounds[2].end)
+}
+
+func TestBuildUserAnchoredRounds_AssistantGroupsUsers(t *testing.T) {
+	const preservedHead = 1
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("u1"),
+		NewUserMessage("u2"),
+		NewAssistantMessage("a1"),
+		NewUserMessage("u3"),
+	}
+
+	rounds := buildUserAnchoredRounds(messages, preservedHead)
+	require.Len(t, rounds, 2)
+	require.Equal(t, 1, rounds[0].start)
+	require.Equal(t, 4, rounds[0].end)
+	require.Equal(t, 4, rounds[1].start)
+	require.Equal(t, 5, rounds[1].end)
+}
+
+func TestCountTokensWithPrefixSumBounds(t *testing.T) {
+	prefixSum := []int{0, 2, 5, 9}
+
+	require.Equal(t, 9, countTokensWithPrefixSum(prefixSum, -1, 4))
+	require.Equal(t, 0, countTokensWithPrefixSum(prefixSum, 3, 3))
+	require.Equal(t, 0, countTokensWithPrefixSum(prefixSum, 4, 4))
+}
+
+func TestCountTokensForRoundsSkips(t *testing.T) {
+	prefixSum := []int{0, 1, 3, 6}
+	rounds := []userAnchoredRound{
+		{start: 0, end: 2},
+		{start: 2, end: 3},
+	}
+	keep := []bool{true, false}
+
+	require.Equal(t, 3, countTokensForRounds(prefixSum, rounds, keep))
+}
+
+func TestBuildMinimalSuffixCandidates_NoNonSystem(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+	}
+
+	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, 1)
+	require.Nil(t, withSystem)
+	require.Nil(t, withoutSystem)
+}
+
+func TestBuildMinimalSuffixCandidates_ToolAtEnd(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("q"),
+		NewToolMessage("tool_1", "search", "result"),
+	}
+
+	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, 1)
+	require.Len(t, withSystem, 3)
+	require.Equal(t, RoleTool, withSystem[len(withSystem)-1].Role)
+	require.Len(t, withoutSystem, 2)
+	require.Equal(t, RoleTool, withoutSystem[len(withoutSystem)-1].Role)
+}
+
+func TestBuildMinimalSuffixCandidates_ToolOnly(t *testing.T) {
+	messages := []Message{
+		NewToolMessage("tool_1", "search", "result"),
+	}
+
+	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, 0)
+	require.Nil(t, withSystem)
+	require.Nil(t, withoutSystem)
+}
+
+func TestEnsureTailoredWithinBudget_CountTokensError(t *testing.T) {
+	counter := &mockErrorTokenCounter{}
+	messages := []Message{
+		NewUserMessage("q"),
+	}
+
+	out, err := ensureTailoredWithinBudget(context.Background(), counter,
+		messages, 1)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Equal(t, "q", out[0].Content)
+}
+
+func TestFitsWithinBudget_CountTokensError(t *testing.T) {
+	counter := &mockErrorTokenCounter{}
+	messages := []Message{
+		NewUserMessage("q"),
+	}
+
+	ok := fitsWithinBudget(context.Background(), counter, messages, 1)
+	require.False(t, ok)
+}

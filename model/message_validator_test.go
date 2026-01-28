@@ -123,3 +123,57 @@ func TestTokenTailor_PreservesToolCallRoundAtomically(t *testing.T) {
 		require.NotContains(t, msg.Content, "R1")
 	}
 }
+
+func TestEnsureNonEmptyContent_RemovesEmptyNoPayload(t *testing.T) {
+	messages := []Message{
+		{
+			Role:    RoleUser,
+			Content: "",
+		},
+	}
+
+	out := ensureNonEmptyContent(messages)
+	require.Empty(t, out)
+}
+
+func TestSplitIntoUserAnchoredRounds_DropsOrphanPrefix(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewAssistantMessage("orphan"),
+		NewToolMessage("tool_1", "search", "result"),
+		NewUserMessage("q"),
+		NewAssistantMessage("a"),
+	}
+
+	prefix, rounds := splitIntoUserAnchoredRounds(messages)
+	require.Len(t, prefix, 1)
+	require.Equal(t, RoleSystem, prefix[0].Role)
+	require.Len(t, rounds, 1)
+	require.Len(t, rounds[0], 2)
+	require.Equal(t, RoleUser, rounds[0][0].Role)
+	require.Equal(t, "q", rounds[0][0].Content)
+	require.Equal(t, RoleAssistant, rounds[0][1].Role)
+	require.Equal(t, "a", rounds[0][1].Content)
+}
+
+func TestFilterValidRounds_DropsNonUserStart(t *testing.T) {
+	rounds := [][]Message{
+		{
+			NewAssistantMessage("bad"),
+		},
+	}
+
+	out := filterValidRounds(rounds)
+	require.Empty(t, out)
+}
+
+func TestIsRoundValid_UserToolAssistantAlternation(t *testing.T) {
+	round := []Message{
+		NewUserMessage("q"),
+		NewToolMessage("tool_1", "search", "result"),
+		NewAssistantMessage("a"),
+		NewToolMessage("tool_2", "search", "result 2"),
+	}
+
+	require.True(t, isRoundValid(round))
+}
