@@ -140,6 +140,109 @@ if err := kb.Load(ctx); err != nil {
 }
 ```
 
+## Chunking Strategy
+
+> **Example Code**: [fixed-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/fixed-chunking) | [recursive-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/recursive-chunking)
+
+Chunking is the process of splitting long documents into smaller fragments, which is crucial for vector retrieval. The framework provides multiple built-in chunking strategies and supports custom strategies.
+
+### Built-in Chunking Strategies
+
+| Strategy | Description | Use Case |
+|----------|-------------|----------|
+| **FixedSizeChunking** | Fixed-size chunking | General text, simple and fast |
+| **RecursiveChunking** | Recursive chunking by separator hierarchy | Preserving semantic integrity |
+| **MarkdownChunking** | Chunk by Markdown structure | Markdown documents (default) |
+| **JSONChunking** | Chunk by JSON structure | JSON files (default) |
+
+### Default Behavior
+
+Each file type has an associated chunking strategy:
+
+- `.md` files → MarkdownChunking (recursively chunk by heading levels H1→H6→paragraph→fixed size)
+- `.json` files → JSONChunking (chunk by JSON structure)
+- `.txt/.csv/.docx` etc. → FixedSizeChunking
+
+**Default Parameters**:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| ChunkSize | 1024 | Maximum characters per chunk |
+| Overlap | 128 | Overlapping characters between adjacent chunks |
+
+> Default chunking strategies are affected by `chunkSize` parameter. The `overlap` parameter only applies to FixedSizeChunking, RecursiveChunking, and MarkdownChunking. JSONChunking does not support overlap.
+
+Adjust default strategy parameters via `WithChunkSize` and `WithChunkOverlap`:
+
+```go
+fileSrc := filesource.New(
+    []string{"./data/document.txt"},
+    filesource.WithChunkSize(512),     // Chunk size (characters)
+    filesource.WithChunkOverlap(64),   // Chunk overlap (characters)
+)
+```
+
+### Custom Chunking Strategy
+
+Use `WithCustomChunkingStrategy` to override the default chunking strategy.
+
+> **Note**: Custom chunking strategy completely overrides `WithChunkSize` and `WithChunkOverlap` configurations. Chunking parameters must be set within the custom strategy.
+
+#### FixedSizeChunking - Fixed Size Chunking
+
+Splits text by fixed character count with overlap support:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+)
+
+// Create fixed-size chunking strategy
+fixedChunking := chunking.NewFixedSizeChunking(
+    chunking.WithChunkSize(512),   // Max 512 characters per chunk
+    chunking.WithOverlap(64),      // 64 characters overlap between chunks
+)
+
+fileSrc := filesource.New(
+    []string{"./data/document.md"},
+    filesource.WithCustomChunkingStrategy(fixedChunking),
+)
+```
+
+#### RecursiveChunking - Recursive Chunking
+
+Recursively splits by separator hierarchy, preferring natural boundaries:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+)
+
+// Create recursive chunking strategy
+recursiveChunking := chunking.NewRecursiveChunking(
+    chunking.WithRecursiveChunkSize(512),   // Max chunk size
+    chunking.WithRecursiveOverlap(64),      // Overlap between chunks
+    // Custom separator priority (optional)
+    chunking.WithRecursiveSeparators([]string{"\n\n", "\n", ". ", " "}),
+)
+
+fileSrc := filesource.New(
+    []string{"./data/article.txt"},
+    filesource.WithCustomChunkingStrategy(recursiveChunking),
+)
+```
+
+**Separator Priority Explanation**:
+
+1. `\n\n` - First try to split by paragraph
+2. `\n` - Then split by line
+3. `. ` - Then split by sentence
+4. ` ` - Split by space
+
+Recursive chunking attempts to use higher priority separators, only using the next level separator when chunks still exceed the maximum size. If all separators fail to split text within chunkSize, it will force split by chunkSize.
+
 ## Configuring Metadata
 
 To enable filter functionality, it's recommended to add rich metadata when creating document sources.
