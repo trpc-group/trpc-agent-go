@@ -82,8 +82,9 @@ const (
 
 var (
 	defaultOptions = Options{
-		ChannelBufferSize:          defaultChannelBufferSize,
-		EndInvocationAfterTransfer: true,
+		ChannelBufferSize:                    defaultChannelBufferSize,
+		EnableCodeExecutionResponseProcessor: true,
+		EndInvocationAfterTransfer:           true,
 		// Default to rewriting same-branch lineage events to user context so
 		// that downstream agents see a consolidated user message stream unless
 		// explicitly opted into preserving assistant/tool roles.
@@ -130,6 +131,11 @@ type Options struct {
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
 	ChannelBufferSize int
 	codeExecutor      codeexecutor.CodeExecutor
+	// EnableCodeExecutionResponseProcessor controls whether the agent
+	// auto-executes fenced code blocks from model responses.
+	//
+	// Default: true (preserves existing behavior).
+	EnableCodeExecutionResponseProcessor bool
 	// Tools is the list of tools available to the agent.
 	Tools []tool.Tool
 	// ToolSets is the list of tool sets available to the agent.
@@ -357,6 +363,14 @@ func WithChannelBufferSize(size int) Option {
 func WithCodeExecutor(ce codeexecutor.CodeExecutor) Option {
 	return func(opts *Options) {
 		opts.codeExecutor = ce
+	}
+}
+
+// WithEnableCodeExecutionResponseProcessor controls whether the agent
+// auto-executes fenced code blocks found in model responses.
+func WithEnableCodeExecutionResponseProcessor(enable bool) Option {
+	return func(opts *Options) {
+		opts.EnableCodeExecutionResponseProcessor = enable
 	}
 }
 
