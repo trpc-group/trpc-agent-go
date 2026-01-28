@@ -511,6 +511,25 @@ func TestTeam_FindSubAgent(t *testing.T) {
 	require.Nil(t, tm.FindSubAgent("missing"))
 }
 
+func TestTeam_Mode(t *testing.T) {
+	coordinator := &testCoordinator{name: testCoordinatorName}
+	members := []agent.Agent{testAgent{name: testMemberNameOne}}
+
+	coordinatorTeam, err := New(coordinator, members)
+	require.NoError(t, err)
+	require.Equal(t, ModeCoordinator, coordinatorTeam.Mode())
+
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+	swarmTeam, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b},
+	)
+	require.NoError(t, err)
+	require.Equal(t, ModeSwarm, swarmTeam.Mode())
+}
+
 func TestStaticToolSet_ToolsAndClose(t *testing.T) {
 	members := []agent.Agent{testAgent{name: testMemberNameOne}}
 	ts := newMemberToolSet(
