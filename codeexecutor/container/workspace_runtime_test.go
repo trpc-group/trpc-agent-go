@@ -524,11 +524,12 @@ func TestWorkspaceRuntime_CopyFileOut_SkipsDirHeader(t *testing.T) {
 		},
 		cfg: runtimeConfig{runContainerBase: testRunBase},
 	}
-	b, _, mime, err := rt.copyFileOut(
+	b, sizeBytes, _, mime, err := rt.copyFileOut(
 		context.Background(), "/work/file.txt",
 	)
 	require.NoError(t, err)
 	require.Equal(t, "abc", string(b))
+	require.Equal(t, int64(3), sizeBytes)
 	require.NotEmpty(t, mime)
 }
 

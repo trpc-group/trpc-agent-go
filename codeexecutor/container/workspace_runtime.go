@@ -508,14 +508,16 @@ func (r *workspaceRuntime) Collect(
 			continue
 		}
 		seen[rel] = true
-		data, _, mime, err := r.copyFileOut(ctx, line)
+		data, sizeBytes, _, mime, err := r.copyFileOut(ctx, line)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, codeexecutor.File{
-			Name:     rel,
-			Content:  string(data),
-			MIMEType: mime,
+			Name:      rel,
+			Content:   string(data),
+			MIMEType:  mime,
+			SizeBytes: sizeBytes,
+			Truncated: sizeBytes > int64(len(data)),
 		})
 	}
 	return out, nil
@@ -683,7 +685,7 @@ func (r *workspaceRuntime) CollectOutputs(
 			mf.LimitsHit = true
 			break
 		}
-		data, _, mime, err := r.copyFileOut(ctx, line)
+		data, sizeBytes, _, mime, err := r.copyFileOut(ctx, line)
 		if err != nil {
 			return codeexecutor.OutputManifest{}, err
 		}
@@ -694,8 +696,10 @@ func (r *workspaceRuntime) CollectOutputs(
 		left -= int64(len(data))
 		rel := strings.TrimPrefix(line, ws.Path+"/")
 		ref := codeexecutor.FileRef{
-			Name:     rel,
-			MIMEType: mime,
+			Name:      rel,
+			MIMEType:  mime,
+			SizeBytes: sizeBytes,
+			Truncated: sizeBytes > int64(len(data)),
 		}
 		if spec.Inline {
 			ref.Content = string(data)
@@ -920,19 +924,19 @@ func tarFromFiles(files []codeexecutor.PutFile) (io.ReadCloser, error) {
 func (r *workspaceRuntime) copyFileOut(
 	ctx context.Context,
 	fullPath string,
-) ([]byte, string, string, error) {
+) ([]byte, int64, string, string, error) {
 	rc, _, err := r.ce.client.CopyFromContainer(
 		ctx, r.ce.container.ID, fullPath,
 	)
 	if err != nil {
-		return nil, "", "", err
+		return nil, 0, "", "", err
 	}
 	defer rc.Close()
 	tr := tar.NewReader(rc)
 	for {
 		hdr, err := tr.Next()
 		if err != nil {
-			return nil, "", "", err
+			return nil, 0, "", "", err
 		}
 		if hdr.FileInfo().IsDir() {
 			continue
@@ -941,10 +945,10 @@ func (r *workspaceRuntime) copyFileOut(
 		_, err = io.CopyN(&buf, tr, maxReadSizeBytes)
 		if err != nil && !errors.Is(err, io.EOF) &&
 			!errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, "", "", err
+			return nil, 0, "", "", err
 		}
 		data := buf.Bytes()
 		mime := http.DetectContentType(data)
-		return data, hdr.Name, mime, nil
+		return data, hdr.Size, hdr.Name, mime, nil
 	}
 }

@@ -1,6 +1,7 @@
 //
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -58,9 +59,11 @@ func (r CodeExecutionResult) String() string {
 
 // File represents a file generated during code execution.
 type File struct {
-	Name     string `json:"name"`
-	Content  string `json:"content,omitempty"`
-	MIMEType string `json:"mime_type,omitempty"`
+	Name      string `json:"name"`
+	Content   string `json:"content"`
+	MIMEType  string `json:"mime_type"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // CodeBlock represents a single block of code to be executed.
@@ -76,11 +79,15 @@ type CodeBlockDelimiter struct {
 }
 
 // ExtractCodeBlock extracts fenced code blocks using the given delimiter.
-func ExtractCodeBlock(input string, delimiter CodeBlockDelimiter) []CodeBlock {
+func ExtractCodeBlock(
+	input string,
+	delimiter CodeBlockDelimiter,
+) []CodeBlock {
 	var blocks []CodeBlock
 	startDelim := regexp.QuoteMeta(delimiter.Start)
 	endDelim := regexp.QuoteMeta(delimiter.End)
-	pattern := regexp.MustCompile(`(?s)` + startDelim + `([^\n]*)\n(.*?)` + endDelim)
+	re := `(?s)` + startDelim + `([^\n]*)\n(.*?)` + endDelim
+	pattern := regexp.MustCompile(re)
 	matches := pattern.FindAllStringSubmatch(input, -1)
 	for _, match := range matches {
 		if len(match) >= 3 {
