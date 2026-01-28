@@ -2294,6 +2294,8 @@ https://github.com/anthropics/skills</p>
 <li><code>name_template</code>：保存为制品时的文件名前缀（如 <code>pref/</code>）。</li>
 <li><code>max_files</code>（默认 100）、<code>max_file_bytes</code>（默认 4 MiB/文件）、
   <code>max_total_bytes</code>（默认 64 MiB）：上限控制。</li>
+<li>说明：<code>outputs</code> 同时兼容 snake_case（推荐）与旧版 Go 风格字段名
+  （例如 <code>MaxFiles</code>）</li>
 </ul>
 </li>
 </ul>
@@ -2302,11 +2304,12 @@ https://github.com/anthropics/skills</p>
 <li><code>save_as_artifacts</code>（可选，传统收集路径）：把通过
   <code>output_files</code> 收集到的文件保存为制品，并在结果中返回
   <code>artifact_files</code>。</li>
-<li><code>omit_inline_content</code>（可选）：与 <code>save_as_artifacts</code> 配合，
-  为 true 时不返回文件内容，仅保留文件名/MIME 信息。</li>
+<li><code>omit_inline_content</code>（可选）：为 true 时不返回
+  <code>output_files[*].content</code> 与 <code>primary_output.content</code>（只返回元信息）。
+  需要内容时，可用 <code>output_files[*].ref</code> 配合 <code>read_file</code> 按需读取。</li>
 <li><code>artifact_prefix</code>（可选）：与 <code>save_as_artifacts</code> 配合的前缀。<ul>
 <li>若未配置制品服务（Artifact service），<code>skill_run</code> 会继续
-  返回内联的 <code>output_files</code>，并在 <code>warnings</code> 中给出提示。</li>
+  返回 <code>output_files</code>，并在 <code>warnings</code> 中给出提示。</li>
 </ul>
 </li>
 </ul>
@@ -2327,11 +2330,17 @@ https://github.com/anthropics/skills</p>
 - 代码侧也可通过 <code>llmagent.WithSkillRunDeniedCommands(...)</code> 配置。</p>
 <p>输出：
 - <code>stdout</code>、<code>stderr</code>、<code>exit_code</code>、<code>timed_out</code>、<code>duration_ms</code>
-- <code>primary_output</code>（可选）：包含 <code>name</code>、<code>ref</code>、<code>content</code>、<code>mime_type</code>
+- <code>primary_output</code>（可选）：包含 <code>name</code>、<code>ref</code>、<code>content</code>、<code>mime_type</code>、
+  <code>size_bytes</code>、<code>truncated</code>
   - 便捷字段：指向“最合适的”小型文本输出文件（若存在）。当只有一个主要输出时
     优先使用它。
-- <code>output_files</code>：文件列表（<code>name</code>、<code>ref</code>、<code>content</code>、<code>mime_type</code>）
+- <code>output_files</code>：文件列表（<code>name</code>、<code>ref</code>、<code>content</code>、<code>mime_type</code>、
+  <code>size_bytes</code>、<code>truncated</code>）
   - <code>ref</code> 是稳定的 <code>workspace://&lt;name&gt;</code> 引用，可传给其它工具使用
+  - 当 <code>omit_inline_content=true</code> 时，<code>content</code> 为空。可用 <code>ref</code> 配合
+    <code>read_file</code> 按需读取内容。
+  - <code>size_bytes</code> 表示磁盘上的文件大小；<code>truncated=true</code> 表示收集内容触发了
+    内部上限（例如 4 MiB/文件）。
 - <code>warnings</code>（可选）：非致命提示（例如制品保存被跳过）
 - <code>artifact_files</code>：制品引用（<code>name</code>、<code>version</code>）。两种途径：
   - 传统路径：设置了 <code>save_as_artifacts</code> 时由工具保存并返回
@@ -2342,6 +2351,56 @@ https://github.com/anthropics/skills</p>
    - 传统：用 <code>output_files</code> 指定通配符
    - 声明式：用 <code>outputs</code> 统一控制收集/内联/保存
    - 如需把上游文件带入，可用 <code>inputs</code> 先行映射</p>
+<p>示例：</p>
+<p>元信息输出（避免把上下文塞满）：</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span>
+<span class="normal"><a href="#__codelineno-7-2">2</a></span>
+<span class="normal"><a href="#__codelineno-7-3">3</a></span>
+<span class="normal"><a href="#__codelineno-7-4">4</a></span>
+<span class="normal"><a href="#__codelineno-7-5">5</a></span>
+<span class="normal"><a href="#__codelineno-7-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="p">{</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo&quot;</span><span class="p">,</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mkdir -p out; echo hi &gt; out/a.txt&quot;</span><span class="p">,</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">  </span><span class="nt">&quot;output_files&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;out/*.txt&quot;</span><span class="p">],</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">  </span><span class="nt">&quot;omit_inline_content&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>该调用会返回 <code>output_files[*].ref</code>（如 <code>workspace://out/a.txt</code>），
+<code>content=""</code>，并包含 <code>size_bytes</code> 与 <code>truncated</code>。</p>
+<p>需要内容时再读取：</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1">1</a></span>
+<span class="normal"><a href="#__codelineno-8-2">2</a></span>
+<span class="normal"><a href="#__codelineno-8-3">3</a></span>
+<span class="normal"><a href="#__codelineno-8-4">4</a></span>
+<span class="normal"><a href="#__codelineno-8-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="p">{</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;file_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;workspace://out/a.txt&quot;</span><span class="p">,</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;start_line&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="w">  </span><span class="nt">&quot;num_lines&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">20</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>大文件建议保存为制品（不内联内容）：</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-9-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-9-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-9-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-9-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-9-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-9-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-9-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="p">{</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo&quot;</span><span class="p">,</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="w">  </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mkdir -p out; echo report &gt; out/report.txt&quot;</span><span class="p">,</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="w">  </span><span class="nt">&quot;outputs&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a><span class="w">    </span><span class="nt">&quot;globs&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;$OUTPUT_DIR/report.txt&quot;</span><span class="p">],</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="w">    </span><span class="nt">&quot;inline&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="w">    </span><span class="nt">&quot;save&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="w">    </span><span class="nt">&quot;max_files&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>保存成功后，<code>skill_run</code> 会返回 <code>artifact_files</code>（<code>name</code>、<code>version</code>），
+并可用 <code>artifact://&lt;name&gt;[@&lt;version&gt;]</code> 作为文件引用传给 <code>read_file</code> 等工具。</p>
 <p>运行环境与工作目录：
 - 未提供 <code>cwd</code> 时，默认在技能根目录运行：<code>/skills/&lt;name&gt;</code>
 - 相对 <code>cwd</code> 会被解析为技能根目录下的子路径
@@ -2441,7 +2500,7 @@ https://github.com/anthropics/skills</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月27日 03:22:11 UTC">2026-01-27 03:22:11</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月28日 13:33:01 UTC">2026-01-28 13:33:01</span>
   </span>
 
     
