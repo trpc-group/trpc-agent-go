@@ -1638,6 +1638,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#a2a-agentbase-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      在一个端口上暴露多个 A2A Agent（base path）
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2000,6 +2009,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#a2a-agentbase-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      在一个端口上暴露多个 A2A Agent（base path）
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2308,6 +2326,72 @@
 </span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18"></a><span class="w">        </span><span class="nx">protocol</span><span class="p">.</span><span class="nx">SendMessageParams</span><span class="p">{</span><span class="nx">Message</span><span class="p">:</span><span class="w"> </span><span class="nx">message</span><span class="p">})</span>
 </span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="a2a-agentbase-path">在一个端口上暴露多个 A2A Agent（base path）</h3>
+<p>有时你希望 <strong>一个服务（一个端口）</strong> 同时对外提供多个 A2A Agent。
+在 A2A 的惯用做法里，每个 Agent 都应该有自己的 <strong>base URL</strong>，客户端通过选择 URL
+来选择要调用的 Agent，而不是额外传一个 <code>agent_name</code> 参数做路由。</p>
+<p>在 tRPC-Agent-Go 中，<code>a2a.WithHost(...)</code> 支持带 path 的 URL。
+当 host URL 包含 path（例如 <code>http://localhost:8888/agents/math</code>）时，
+A2A server 会自动把这段 path 作为自己的 <strong>base path</strong> 用于路由。</p>
+<p>核心思路：</p>
+<ul>
+<li>每个 Agent 创建一个独立的 A2A server（每个 server 使用不同的 base path）</li>
+<li>不要对每个 server 都调用 <code>Start</code>（否则会争抢同一个端口）</li>
+<li>通过 <code>server.Handler()</code> 把多个 A2A server 挂到一个共享的 <code>http.Server</code> 上</li>
+</ul>
+<p>示例：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-3-10">10</a></span>
+<span class="normal"><a href="#__codelineno-3-11">11</a></span>
+<span class="normal"><a href="#__codelineno-3-12">12</a></span>
+<span class="normal"><a href="#__codelineno-3-13">13</a></span>
+<span class="normal"><a href="#__codelineno-3-14">14</a></span>
+<span class="normal"><a href="#__codelineno-3-15">15</a></span>
+<span class="normal"><a href="#__codelineno-3-16">16</a></span>
+<span class="normal"><a href="#__codelineno-3-17">17</a></span>
+<span class="normal"><a href="#__codelineno-3-18">18</a></span>
+<span class="normal"><a href="#__codelineno-3-19">19</a></span>
+<span class="normal"><a href="#__codelineno-3-20">20</a></span>
+<span class="normal"><a href="#__codelineno-3-21">21</a></span>
+<span class="normal"><a href="#__codelineno-3-22">22</a></span>
+<span class="normal"><a href="#__codelineno-3-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nx">mathServer</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">    </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;http://localhost:8888/agents/math&quot;</span><span class="p">),</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="w">    </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">mathAgent</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">),</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="p">)</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="p">}</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="nx">weatherServer</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="w">    </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;http://localhost:8888/agents/weather&quot;</span><span class="p">),</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="w">    </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">weatherAgent</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">),</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a><span class="p">)</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="w">    </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a><span class="p">}</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a><span class="nx">mux</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">NewServeMux</span><span class="p">()</span>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a><span class="nx">mux</span><span class="p">.</span><span class="nx">Handle</span><span class="p">(</span><span class="s">&quot;/agents/math/&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">mathServer</span><span class="p">.</span><span class="nx">Handler</span><span class="p">())</span>
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a><span class="nx">mux</span><span class="p">.</span><span class="nx">Handle</span><span class="p">(</span><span class="s">&quot;/agents/weather/&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">weatherServer</span><span class="p">.</span><span class="nx">Handler</span><span class="p">())</span>
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a>
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ListenAndServe</span><span class="p">(</span><span class="s">&quot;:8888&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">mux</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22"></a><span class="w">    </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>服务启动后，每个 Agent 都有自己独立的 AgentCard：</p>
+<ul>
+<li><code>http://localhost:8888/agents/math/.well-known/agent-card.json</code></li>
+<li><code>http://localhost:8888/agents/weather/.well-known/agent-card.json</code></li>
+</ul>
+<p>完整可运行示例：<code>examples/a2amultipath</code>。</p>
 <h2 id="a2aagent-a2a">A2AAgent：调用远程 A2A 服务</h2>
 <p>与 A2A Server 相对应，tRPC-Agent-Go 还提供了 <code>A2AAgent</code>，用于调用远程的 A2A 服务，实现 Agent 间的通信。</p>
 <h3 id="_6">概念介绍</h3>
@@ -2332,99 +2416,6 @@
 </ol>
 <h3 id="a2aagent">A2AAgent 快速开始</h3>
 <h4 id="_9">基本用法</h4>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-3-10">10</a></span>
-<span class="normal"><a href="#__codelineno-3-11">11</a></span>
-<span class="normal"><a href="#__codelineno-3-12">12</a></span>
-<span class="normal"><a href="#__codelineno-3-13">13</a></span>
-<span class="normal"><a href="#__codelineno-3-14">14</a></span>
-<span class="normal"><a href="#__codelineno-3-15">15</a></span>
-<span class="normal"><a href="#__codelineno-3-16">16</a></span>
-<span class="normal"><a href="#__codelineno-3-17">17</a></span>
-<span class="normal"><a href="#__codelineno-3-18">18</a></span>
-<span class="normal"><a href="#__codelineno-3-19">19</a></span>
-<span class="normal"><a href="#__codelineno-3-20">20</a></span>
-<span class="normal"><a href="#__codelineno-3-21">21</a></span>
-<span class="normal"><a href="#__codelineno-3-22">22</a></span>
-<span class="normal"><a href="#__codelineno-3-23">23</a></span>
-<span class="normal"><a href="#__codelineno-3-24">24</a></span>
-<span class="normal"><a href="#__codelineno-3-25">25</a></span>
-<span class="normal"><a href="#__codelineno-3-26">26</a></span>
-<span class="normal"><a href="#__codelineno-3-27">27</a></span>
-<span class="normal"><a href="#__codelineno-3-28">28</a></span>
-<span class="normal"><a href="#__codelineno-3-29">29</a></span>
-<span class="normal"><a href="#__codelineno-3-30">30</a></span>
-<span class="normal"><a href="#__codelineno-3-31">31</a></span>
-<span class="normal"><a href="#__codelineno-3-32">32</a></span>
-<span class="normal"><a href="#__codelineno-3-33">33</a></span>
-<span class="normal"><a href="#__codelineno-3-34">34</a></span>
-<span class="normal"><a href="#__codelineno-3-35">35</a></span>
-<span class="normal"><a href="#__codelineno-3-36">36</a></span>
-<span class="normal"><a href="#__codelineno-3-37">37</a></span>
-<span class="normal"><a href="#__codelineno-3-38">38</a></span>
-<span class="normal"><a href="#__codelineno-3-39">39</a></span>
-<span class="normal"><a href="#__codelineno-3-40">40</a></span>
-<span class="normal"><a href="#__codelineno-3-41">41</a></span>
-<span class="normal"><a href="#__codelineno-3-42">42</a></span>
-<span class="normal"><a href="#__codelineno-3-43">43</a></span>
-<span class="normal"><a href="#__codelineno-3-44">44</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/a2aagent&quot;</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="p">)</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="w">    </span><span class="c1">// 1. 创建 A2AAgent，指向远程 A2A 服务</span>
-</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a><span class="w">    </span><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a><span class="w">        </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://localhost:8888&quot;</span><span class="p">),</span>
-</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a>
-</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22"></a><span class="w">    </span><span class="c1">// 2. 像使用普通 Agent 一样使用</span>
-</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23"></a><span class="w">    </span><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
-</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24"></a><span class="w">    </span><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;test&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span>
-</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25"></a><span class="w">        </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">))</span>
-</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26"></a>
-</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27"></a><span class="w">    </span><span class="c1">// 3. 发送消息</span>
-</span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28"></a><span class="w">    </span><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
-</span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29"></a><span class="w">        </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span>
-</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30"></a><span class="w">        </span><span class="s">&quot;user1&quot;</span><span class="p">,</span>
-</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31"></a><span class="w">        </span><span class="s">&quot;session1&quot;</span><span class="p">,</span><span class="w"> </span>
-</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32"></a><span class="w">        </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;请帮我讲个笑话&quot;</span><span class="p">),</span>
-</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-3-34"><a id="__codelineno-3-34" name="__codelineno-3-34"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-35"><a id="__codelineno-3-35" name="__codelineno-3-35"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-3-36"><a id="__codelineno-3-36" name="__codelineno-3-36"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-3-37"><a id="__codelineno-3-37" name="__codelineno-3-37"></a>
-</span><span id="__span-3-38"><a id="__codelineno-3-38" name="__codelineno-3-38"></a><span class="w">    </span><span class="c1">// 4. 处理响应</span>
-</span><span id="__span-3-39"><a id="__codelineno-3-39" name="__codelineno-3-39"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">events</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-40"><a id="__codelineno-3-40" name="__codelineno-3-40"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-41"><a id="__codelineno-3-41" name="__codelineno-3-41"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
-</span><span id="__span-3-42"><a id="__codelineno-3-42" name="__codelineno-3-42"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-3-43"><a id="__codelineno-3-43" name="__codelineno-3-43"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-3-44"><a id="__codelineno-3-44" name="__codelineno-3-44"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<p>在多 Agent 系统中，<code>A2AAgent</code> 通常作为本地协调者 Agent
-（例如 <code>LLMAgent</code>）的 SubAgent 使用。你可以将 <code>A2AAgent</code>
-与 <code>LLMAgent.SetSubAgents</code> 结合，从注册中心动态加载并更新
-远程 SubAgent，而无需重建协调者实例。</p>
-<h4 id="_10">高级配置</h4>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
@@ -2438,285 +2429,350 @@
 <span class="normal"><a href="#__codelineno-4-11">11</a></span>
 <span class="normal"><a href="#__codelineno-4-12">12</a></span>
 <span class="normal"><a href="#__codelineno-4-13">13</a></span>
-<span class="normal"><a href="#__codelineno-4-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="c1">// 创建带有高级配置的 A2AAgent</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="c1">// 指定远程服务地址</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://remote-agent:8888&quot;</span><span class="p">),</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="w">    </span><span class="c1">// 设置流式缓冲区大小</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithStreamingChannelBufSize</span><span class="p">(</span><span class="mi">2048</span><span class="p">),</span>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="w">    </span><span class="c1">// 自定义协议转换</span>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithCustomEventConverter</span><span class="p">(</span><span class="nx">curtomEventConverter</span><span class="p">),</span>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithCustomA2AConverter</span><span class="p">(</span><span class="nx">cursomA2AConverter</span><span class="p">)</span>
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a>
-</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-4-14">14</a></span>
+<span class="normal"><a href="#__codelineno-4-15">15</a></span>
+<span class="normal"><a href="#__codelineno-4-16">16</a></span>
+<span class="normal"><a href="#__codelineno-4-17">17</a></span>
+<span class="normal"><a href="#__codelineno-4-18">18</a></span>
+<span class="normal"><a href="#__codelineno-4-19">19</a></span>
+<span class="normal"><a href="#__codelineno-4-20">20</a></span>
+<span class="normal"><a href="#__codelineno-4-21">21</a></span>
+<span class="normal"><a href="#__codelineno-4-22">22</a></span>
+<span class="normal"><a href="#__codelineno-4-23">23</a></span>
+<span class="normal"><a href="#__codelineno-4-24">24</a></span>
+<span class="normal"><a href="#__codelineno-4-25">25</a></span>
+<span class="normal"><a href="#__codelineno-4-26">26</a></span>
+<span class="normal"><a href="#__codelineno-4-27">27</a></span>
+<span class="normal"><a href="#__codelineno-4-28">28</a></span>
+<span class="normal"><a href="#__codelineno-4-29">29</a></span>
+<span class="normal"><a href="#__codelineno-4-30">30</a></span>
+<span class="normal"><a href="#__codelineno-4-31">31</a></span>
+<span class="normal"><a href="#__codelineno-4-32">32</a></span>
+<span class="normal"><a href="#__codelineno-4-33">33</a></span>
+<span class="normal"><a href="#__codelineno-4-34">34</a></span>
+<span class="normal"><a href="#__codelineno-4-35">35</a></span>
+<span class="normal"><a href="#__codelineno-4-36">36</a></span>
+<span class="normal"><a href="#__codelineno-4-37">37</a></span>
+<span class="normal"><a href="#__codelineno-4-38">38</a></span>
+<span class="normal"><a href="#__codelineno-4-39">39</a></span>
+<span class="normal"><a href="#__codelineno-4-40">40</a></span>
+<span class="normal"><a href="#__codelineno-4-41">41</a></span>
+<span class="normal"><a href="#__codelineno-4-42">42</a></span>
+<span class="normal"><a href="#__codelineno-4-43">43</a></span>
+<span class="normal"><a href="#__codelineno-4-44">44</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/a2aagent&quot;</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="p">)</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a><span class="w">    </span><span class="c1">// 1. 创建 A2AAgent，指向远程 A2A 服务</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15"></a><span class="w">    </span><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a><span class="w">        </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://localhost:8888&quot;</span><span class="p">),</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21"></a>
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22"></a><span class="w">    </span><span class="c1">// 2. 像使用普通 Agent 一样使用</span>
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23"></a><span class="w">    </span><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24"></a><span class="w">    </span><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;test&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span>
+</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25"></a><span class="w">        </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">))</span>
+</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26"></a>
+</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27"></a><span class="w">    </span><span class="c1">// 3. 发送消息</span>
+</span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28"></a><span class="w">    </span><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29"></a><span class="w">        </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span>
+</span><span id="__span-4-30"><a id="__codelineno-4-30" name="__codelineno-4-30"></a><span class="w">        </span><span class="s">&quot;user1&quot;</span><span class="p">,</span>
+</span><span id="__span-4-31"><a id="__codelineno-4-31" name="__codelineno-4-31"></a><span class="w">        </span><span class="s">&quot;session1&quot;</span><span class="p">,</span><span class="w"> </span>
+</span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32"></a><span class="w">        </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;请帮我讲个笑话&quot;</span><span class="p">),</span>
+</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-35"><a id="__codelineno-4-35" name="__codelineno-4-35"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-4-36"><a id="__codelineno-4-36" name="__codelineno-4-36"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-4-37"><a id="__codelineno-4-37" name="__codelineno-4-37"></a>
+</span><span id="__span-4-38"><a id="__codelineno-4-38" name="__codelineno-4-38"></a><span class="w">    </span><span class="c1">// 4. 处理响应</span>
+</span><span id="__span-4-39"><a id="__codelineno-4-39" name="__codelineno-4-39"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">events</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-40"><a id="__codelineno-4-40" name="__codelineno-4-40"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-41"><a id="__codelineno-4-41" name="__codelineno-4-41"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
+</span><span id="__span-4-42"><a id="__codelineno-4-42" name="__codelineno-4-42"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-4-43"><a id="__codelineno-4-43" name="__codelineno-4-43"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-4-44"><a id="__codelineno-4-44" name="__codelineno-4-44"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>在多 Agent 系统中，<code>A2AAgent</code> 通常作为本地协调者 Agent
+（例如 <code>LLMAgent</code>）的 SubAgent 使用。你可以将 <code>A2AAgent</code>
+与 <code>LLMAgent.SetSubAgents</code> 结合，从注册中心动态加载并更新
+远程 SubAgent，而无需重建协调者实例。</p>
+<h4 id="_10">高级配置</h4>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-5-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-5-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-5-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-5-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-5-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-5-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-5-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-5-10">10</a></span>
+<span class="normal"><a href="#__codelineno-5-11">11</a></span>
+<span class="normal"><a href="#__codelineno-5-12">12</a></span>
+<span class="normal"><a href="#__codelineno-5-13">13</a></span>
+<span class="normal"><a href="#__codelineno-5-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="c1">// 创建带有高级配置的 A2AAgent</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">    </span><span class="c1">// 指定远程服务地址</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://remote-agent:8888&quot;</span><span class="p">),</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="w">    </span><span class="c1">// 设置流式缓冲区大小</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithStreamingChannelBufSize</span><span class="p">(</span><span class="mi">2048</span><span class="p">),</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="w">    </span><span class="c1">// 自定义协议转换</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithCustomEventConverter</span><span class="p">(</span><span class="nx">curtomEventConverter</span><span class="p">),</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithCustomA2AConverter</span><span class="p">(</span><span class="nx">cursomA2AConverter</span><span class="p">)</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13"></a>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="a2a-server-a2aagent">完整示例：A2A Server + A2AAgent 综合使用</h3>
 <p>以下是一个完整的示例，展示了如何在同一个程序中同时运行 A2A Server（暴露本地 Agent）和 A2AAgent（调用远程服务）：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">  1</a></span>
-<span class="normal"><a href="#__codelineno-5-2">  2</a></span>
-<span class="normal"><a href="#__codelineno-5-3">  3</a></span>
-<span class="normal"><a href="#__codelineno-5-4">  4</a></span>
-<span class="normal"><a href="#__codelineno-5-5">  5</a></span>
-<span class="normal"><a href="#__codelineno-5-6">  6</a></span>
-<span class="normal"><a href="#__codelineno-5-7">  7</a></span>
-<span class="normal"><a href="#__codelineno-5-8">  8</a></span>
-<span class="normal"><a href="#__codelineno-5-9">  9</a></span>
-<span class="normal"><a href="#__codelineno-5-10"> 10</a></span>
-<span class="normal"><a href="#__codelineno-5-11"> 11</a></span>
-<span class="normal"><a href="#__codelineno-5-12"> 12</a></span>
-<span class="normal"><a href="#__codelineno-5-13"> 13</a></span>
-<span class="normal"><a href="#__codelineno-5-14"> 14</a></span>
-<span class="normal"><a href="#__codelineno-5-15"> 15</a></span>
-<span class="normal"><a href="#__codelineno-5-16"> 16</a></span>
-<span class="normal"><a href="#__codelineno-5-17"> 17</a></span>
-<span class="normal"><a href="#__codelineno-5-18"> 18</a></span>
-<span class="normal"><a href="#__codelineno-5-19"> 19</a></span>
-<span class="normal"><a href="#__codelineno-5-20"> 20</a></span>
-<span class="normal"><a href="#__codelineno-5-21"> 21</a></span>
-<span class="normal"><a href="#__codelineno-5-22"> 22</a></span>
-<span class="normal"><a href="#__codelineno-5-23"> 23</a></span>
-<span class="normal"><a href="#__codelineno-5-24"> 24</a></span>
-<span class="normal"><a href="#__codelineno-5-25"> 25</a></span>
-<span class="normal"><a href="#__codelineno-5-26"> 26</a></span>
-<span class="normal"><a href="#__codelineno-5-27"> 27</a></span>
-<span class="normal"><a href="#__codelineno-5-28"> 28</a></span>
-<span class="normal"><a href="#__codelineno-5-29"> 29</a></span>
-<span class="normal"><a href="#__codelineno-5-30"> 30</a></span>
-<span class="normal"><a href="#__codelineno-5-31"> 31</a></span>
-<span class="normal"><a href="#__codelineno-5-32"> 32</a></span>
-<span class="normal"><a href="#__codelineno-5-33"> 33</a></span>
-<span class="normal"><a href="#__codelineno-5-34"> 34</a></span>
-<span class="normal"><a href="#__codelineno-5-35"> 35</a></span>
-<span class="normal"><a href="#__codelineno-5-36"> 36</a></span>
-<span class="normal"><a href="#__codelineno-5-37"> 37</a></span>
-<span class="normal"><a href="#__codelineno-5-38"> 38</a></span>
-<span class="normal"><a href="#__codelineno-5-39"> 39</a></span>
-<span class="normal"><a href="#__codelineno-5-40"> 40</a></span>
-<span class="normal"><a href="#__codelineno-5-41"> 41</a></span>
-<span class="normal"><a href="#__codelineno-5-42"> 42</a></span>
-<span class="normal"><a href="#__codelineno-5-43"> 43</a></span>
-<span class="normal"><a href="#__codelineno-5-44"> 44</a></span>
-<span class="normal"><a href="#__codelineno-5-45"> 45</a></span>
-<span class="normal"><a href="#__codelineno-5-46"> 46</a></span>
-<span class="normal"><a href="#__codelineno-5-47"> 47</a></span>
-<span class="normal"><a href="#__codelineno-5-48"> 48</a></span>
-<span class="normal"><a href="#__codelineno-5-49"> 49</a></span>
-<span class="normal"><a href="#__codelineno-5-50"> 50</a></span>
-<span class="normal"><a href="#__codelineno-5-51"> 51</a></span>
-<span class="normal"><a href="#__codelineno-5-52"> 52</a></span>
-<span class="normal"><a href="#__codelineno-5-53"> 53</a></span>
-<span class="normal"><a href="#__codelineno-5-54"> 54</a></span>
-<span class="normal"><a href="#__codelineno-5-55"> 55</a></span>
-<span class="normal"><a href="#__codelineno-5-56"> 56</a></span>
-<span class="normal"><a href="#__codelineno-5-57"> 57</a></span>
-<span class="normal"><a href="#__codelineno-5-58"> 58</a></span>
-<span class="normal"><a href="#__codelineno-5-59"> 59</a></span>
-<span class="normal"><a href="#__codelineno-5-60"> 60</a></span>
-<span class="normal"><a href="#__codelineno-5-61"> 61</a></span>
-<span class="normal"><a href="#__codelineno-5-62"> 62</a></span>
-<span class="normal"><a href="#__codelineno-5-63"> 63</a></span>
-<span class="normal"><a href="#__codelineno-5-64"> 64</a></span>
-<span class="normal"><a href="#__codelineno-5-65"> 65</a></span>
-<span class="normal"><a href="#__codelineno-5-66"> 66</a></span>
-<span class="normal"><a href="#__codelineno-5-67"> 67</a></span>
-<span class="normal"><a href="#__codelineno-5-68"> 68</a></span>
-<span class="normal"><a href="#__codelineno-5-69"> 69</a></span>
-<span class="normal"><a href="#__codelineno-5-70"> 70</a></span>
-<span class="normal"><a href="#__codelineno-5-71"> 71</a></span>
-<span class="normal"><a href="#__codelineno-5-72"> 72</a></span>
-<span class="normal"><a href="#__codelineno-5-73"> 73</a></span>
-<span class="normal"><a href="#__codelineno-5-74"> 74</a></span>
-<span class="normal"><a href="#__codelineno-5-75"> 75</a></span>
-<span class="normal"><a href="#__codelineno-5-76"> 76</a></span>
-<span class="normal"><a href="#__codelineno-5-77"> 77</a></span>
-<span class="normal"><a href="#__codelineno-5-78"> 78</a></span>
-<span class="normal"><a href="#__codelineno-5-79"> 79</a></span>
-<span class="normal"><a href="#__codelineno-5-80"> 80</a></span>
-<span class="normal"><a href="#__codelineno-5-81"> 81</a></span>
-<span class="normal"><a href="#__codelineno-5-82"> 82</a></span>
-<span class="normal"><a href="#__codelineno-5-83"> 83</a></span>
-<span class="normal"><a href="#__codelineno-5-84"> 84</a></span>
-<span class="normal"><a href="#__codelineno-5-85"> 85</a></span>
-<span class="normal"><a href="#__codelineno-5-86"> 86</a></span>
-<span class="normal"><a href="#__codelineno-5-87"> 87</a></span>
-<span class="normal"><a href="#__codelineno-5-88"> 88</a></span>
-<span class="normal"><a href="#__codelineno-5-89"> 89</a></span>
-<span class="normal"><a href="#__codelineno-5-90"> 90</a></span>
-<span class="normal"><a href="#__codelineno-5-91"> 91</a></span>
-<span class="normal"><a href="#__codelineno-5-92"> 92</a></span>
-<span class="normal"><a href="#__codelineno-5-93"> 93</a></span>
-<span class="normal"><a href="#__codelineno-5-94"> 94</a></span>
-<span class="normal"><a href="#__codelineno-5-95"> 95</a></span>
-<span class="normal"><a href="#__codelineno-5-96"> 96</a></span>
-<span class="normal"><a href="#__codelineno-5-97"> 97</a></span>
-<span class="normal"><a href="#__codelineno-5-98"> 98</a></span>
-<span class="normal"><a href="#__codelineno-5-99"> 99</a></span>
-<span class="normal"><a href="#__codelineno-5-100">100</a></span>
-<span class="normal"><a href="#__codelineno-5-101">101</a></span>
-<span class="normal"><a href="#__codelineno-5-102">102</a></span>
-<span class="normal"><a href="#__codelineno-5-103">103</a></span>
-<span class="normal"><a href="#__codelineno-5-104">104</a></span>
-<span class="normal"><a href="#__codelineno-5-105">105</a></span>
-<span class="normal"><a href="#__codelineno-5-106">106</a></span>
-<span class="normal"><a href="#__codelineno-5-107">107</a></span>
-<span class="normal"><a href="#__codelineno-5-108">108</a></span>
-<span class="normal"><a href="#__codelineno-5-109">109</a></span>
-<span class="normal"><a href="#__codelineno-5-110">110</a></span>
-<span class="normal"><a href="#__codelineno-5-111">111</a></span>
-<span class="normal"><a href="#__codelineno-5-112">112</a></span>
-<span class="normal"><a href="#__codelineno-5-113">113</a></span>
-<span class="normal"><a href="#__codelineno-5-114">114</a></span>
-<span class="normal"><a href="#__codelineno-5-115">115</a></span>
-<span class="normal"><a href="#__codelineno-5-116">116</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="w">    </span><span class="s">&quot;time&quot;</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/a2aagent&quot;</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
-</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/a2a&quot;</span>
-</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
-</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14"></a><span class="p">)</span>
-</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15"></a>
-</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17"></a><span class="w">    </span><span class="c1">// 1. 创建并启动远程 Agent 服务</span>
-</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18"></a><span class="w">    </span><span class="nx">remoteAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">createRemoteAgent</span><span class="p">()</span>
-</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19"></a><span class="w">    </span><span class="nx">startA2AServer</span><span class="p">(</span><span class="nx">remoteAgent</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;localhost:8888&quot;</span><span class="p">)</span>
-</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20"></a>
-</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21"></a><span class="w">    </span><span class="nx">time</span><span class="p">.</span><span class="nx">Sleep</span><span class="p">(</span><span class="mi">1</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">)</span><span class="w"> </span><span class="c1">// 等待服务启动</span>
-</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22"></a>
-</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23"></a><span class="w">    </span><span class="c1">// 2. 创建 A2AAgent 连接到远程服务</span>
-</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24"></a><span class="w">    </span><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25"></a><span class="w">        </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://localhost:8888&quot;</span><span class="p">),</span>
-</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26"></a><span class="w">        </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithTransferStateKey</span><span class="p">(</span><span class="s">&quot;user_context&quot;</span><span class="p">),</span>
-</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-5-28"><a id="__codelineno-5-28" name="__codelineno-5-28"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-29"><a id="__codelineno-5-29" name="__codelineno-5-29"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-5-30"><a id="__codelineno-5-30" name="__codelineno-5-30"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-5-31"><a id="__codelineno-5-31" name="__codelineno-5-31"></a>
-</span><span id="__span-5-32"><a id="__codelineno-5-32" name="__codelineno-5-32"></a><span class="w">    </span><span class="c1">// 3. 创建本地 Agent</span>
-</span><span id="__span-5-33"><a id="__codelineno-5-33" name="__codelineno-5-33"></a><span class="w">    </span><span class="nx">localAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">createLocalAgent</span><span class="p">()</span>
-</span><span id="__span-5-34"><a id="__codelineno-5-34" name="__codelineno-5-34"></a>
-</span><span id="__span-5-35"><a id="__codelineno-5-35" name="__codelineno-5-35"></a><span class="w">    </span><span class="c1">// 4. 对比本地和远程 Agent 的响应</span>
-</span><span id="__span-5-36"><a id="__codelineno-5-36" name="__codelineno-5-36"></a><span class="w">    </span><span class="nx">compareAgents</span><span class="p">(</span><span class="nx">localAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">a2aAgent</span><span class="p">)</span>
-</span><span id="__span-5-37"><a id="__codelineno-5-37" name="__codelineno-5-37"></a><span class="p">}</span>
-</span><span id="__span-5-38"><a id="__codelineno-5-38" name="__codelineno-5-38"></a>
-</span><span id="__span-5-39"><a id="__codelineno-5-39" name="__codelineno-5-39"></a><span class="kd">func</span><span class="w"> </span><span class="nx">createRemoteAgent</span><span class="p">()</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-40"><a id="__codelineno-5-40" name="__codelineno-5-40"></a><span class="w">    </span><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">)</span>
-</span><span id="__span-5-41"><a id="__codelineno-5-41" name="__codelineno-5-41"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;JokeAgent&quot;</span><span class="p">,</span>
-</span><span id="__span-5-42"><a id="__codelineno-5-42" name="__codelineno-5-42"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
-</span><span id="__span-5-43"><a id="__codelineno-5-43" name="__codelineno-5-43"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;I am a joke-telling agent&quot;</span><span class="p">),</span>
-</span><span id="__span-5-44"><a id="__codelineno-5-44" name="__codelineno-5-44"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;Always respond with a funny joke&quot;</span><span class="p">),</span>
-</span><span id="__span-5-45"><a id="__codelineno-5-45" name="__codelineno-5-45"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-5-46"><a id="__codelineno-5-46" name="__codelineno-5-46"></a><span class="p">}</span>
-</span><span id="__span-5-47"><a id="__codelineno-5-47" name="__codelineno-5-47"></a>
-</span><span id="__span-5-48"><a id="__codelineno-5-48" name="__codelineno-5-48"></a><span class="kd">func</span><span class="w"> </span><span class="nx">createLocalAgent</span><span class="p">()</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-49"><a id="__codelineno-5-49" name="__codelineno-5-49"></a><span class="w">    </span><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">)</span><span class="w"> </span>
-</span><span id="__span-5-50"><a id="__codelineno-5-50" name="__codelineno-5-50"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;LocalAgent&quot;</span><span class="p">,</span>
-</span><span id="__span-5-51"><a id="__codelineno-5-51" name="__codelineno-5-51"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
-</span><span id="__span-5-52"><a id="__codelineno-5-52" name="__codelineno-5-52"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;I am a local assistant&quot;</span><span class="p">),</span>
-</span><span id="__span-5-53"><a id="__codelineno-5-53" name="__codelineno-5-53"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-5-54"><a id="__codelineno-5-54" name="__codelineno-5-54"></a><span class="p">}</span>
-</span><span id="__span-5-55"><a id="__codelineno-5-55" name="__codelineno-5-55"></a>
-</span><span id="__span-5-56"><a id="__codelineno-5-56" name="__codelineno-5-56"></a><span class="kd">func</span><span class="w"> </span><span class="nx">startA2AServer</span><span class="p">(</span><span class="nx">agent</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">,</span><span class="w"> </span><span class="nx">host</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-57"><a id="__codelineno-5-57" name="__codelineno-5-57"></a><span class="w">    </span><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-5-58"><a id="__codelineno-5-58" name="__codelineno-5-58"></a><span class="w">        </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="nx">host</span><span class="p">),</span>
-</span><span id="__span-5-59"><a id="__codelineno-5-59" name="__codelineno-5-59"></a><span class="w">        </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">agent</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="c1">// 启用流式</span>
-</span><span id="__span-5-60"><a id="__codelineno-5-60" name="__codelineno-5-60"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-5-61"><a id="__codelineno-5-61" name="__codelineno-5-61"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-62"><a id="__codelineno-5-62" name="__codelineno-5-62"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-5-63"><a id="__codelineno-5-63" name="__codelineno-5-63"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-5-64"><a id="__codelineno-5-64" name="__codelineno-5-64"></a>
-</span><span id="__span-5-65"><a id="__codelineno-5-65" name="__codelineno-5-65"></a><span class="w">    </span><span class="k">go</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-66"><a id="__codelineno-5-66" name="__codelineno-5-66"></a><span class="w">        </span><span class="nx">server</span><span class="p">.</span><span class="nx">Start</span><span class="p">(</span><span class="nx">host</span><span class="p">)</span>
-</span><span id="__span-5-67"><a id="__codelineno-5-67" name="__codelineno-5-67"></a><span class="w">    </span><span class="p">}()</span>
-</span><span id="__span-5-68"><a id="__codelineno-5-68" name="__codelineno-5-68"></a><span class="p">}</span>
-</span><span id="__span-5-69"><a id="__codelineno-5-69" name="__codelineno-5-69"></a>
-</span><span id="__span-5-70"><a id="__codelineno-5-70" name="__codelineno-5-70"></a><span class="kd">func</span><span class="w"> </span><span class="nx">compareAgents</span><span class="p">(</span><span class="nx">localAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">remoteAgent</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-71"><a id="__codelineno-5-71" name="__codelineno-5-71"></a><span class="w">    </span><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
-</span><span id="__span-5-72"><a id="__codelineno-5-72" name="__codelineno-5-72"></a>
-</span><span id="__span-5-73"><a id="__codelineno-5-73" name="__codelineno-5-73"></a><span class="w">    </span><span class="nx">localRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;local&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">localAgent</span><span class="p">,</span>
-</span><span id="__span-5-74"><a id="__codelineno-5-74" name="__codelineno-5-74"></a><span class="w">        </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">))</span>
-</span><span id="__span-5-75"><a id="__codelineno-5-75" name="__codelineno-5-75"></a><span class="w">    </span><span class="nx">remoteRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;remote&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">remoteAgent</span><span class="p">,</span>
-</span><span id="__span-5-76"><a id="__codelineno-5-76" name="__codelineno-5-76"></a><span class="w">        </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">))</span>
-</span><span id="__span-5-77"><a id="__codelineno-5-77" name="__codelineno-5-77"></a>
-</span><span id="__span-5-78"><a id="__codelineno-5-78" name="__codelineno-5-78"></a><span class="w">    </span><span class="nx">userMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;请帮我讲个笑话&quot;</span>
-</span><span id="__span-5-79"><a id="__codelineno-5-79" name="__codelineno-5-79"></a>
-</span><span id="__span-5-80"><a id="__codelineno-5-80" name="__codelineno-5-80"></a><span class="w">    </span><span class="c1">// 调用本地 Agent</span>
-</span><span id="__span-5-81"><a id="__codelineno-5-81" name="__codelineno-5-81"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="s">&quot;=== Local Agent Response ===&quot;</span><span class="p">)</span>
-</span><span id="__span-5-82"><a id="__codelineno-5-82" name="__codelineno-5-82"></a><span class="w">    </span><span class="nx">processAgent</span><span class="p">(</span><span class="nx">localRunner</span><span class="p">,</span><span class="w"> </span><span class="nx">userMessage</span><span class="p">)</span>
-</span><span id="__span-5-83"><a id="__codelineno-5-83" name="__codelineno-5-83"></a>
-</span><span id="__span-5-84"><a id="__codelineno-5-84" name="__codelineno-5-84"></a><span class="w">    </span><span class="c1">// 调用远程 Agent (通过 A2AAgent)</span>
-</span><span id="__span-5-85"><a id="__codelineno-5-85" name="__codelineno-5-85"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="s">&quot;\n=== Remote Agent Response (via A2AAgent) ===&quot;</span><span class="p">)</span>
-</span><span id="__span-5-86"><a id="__codelineno-5-86" name="__codelineno-5-86"></a><span class="w">    </span><span class="nx">processAgent</span><span class="p">(</span><span class="nx">remoteRunner</span><span class="p">,</span><span class="w"> </span><span class="nx">userMessage</span><span class="p">)</span>
-</span><span id="__span-5-87"><a id="__codelineno-5-87" name="__codelineno-5-87"></a><span class="p">}</span>
-</span><span id="__span-5-88"><a id="__codelineno-5-88" name="__codelineno-5-88"></a>
-</span><span id="__span-5-89"><a id="__codelineno-5-89" name="__codelineno-5-89"></a><span class="kd">func</span><span class="w"> </span><span class="nx">processAgent</span><span class="p">(</span><span class="nx">runner</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Runner</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-90"><a id="__codelineno-5-90" name="__codelineno-5-90"></a><span class="w">    </span><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
-</span><span id="__span-5-91"><a id="__codelineno-5-91" name="__codelineno-5-91"></a><span class="w">        </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span>
-</span><span id="__span-5-92"><a id="__codelineno-5-92" name="__codelineno-5-92"></a><span class="w">        </span><span class="s">&quot;user1&quot;</span><span class="p">,</span>
-</span><span id="__span-5-93"><a id="__codelineno-5-93" name="__codelineno-5-93"></a><span class="w">        </span><span class="s">&quot;session1&quot;</span><span class="p">,</span>
-</span><span id="__span-5-94"><a id="__codelineno-5-94" name="__codelineno-5-94"></a><span class="w">        </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="nx">message</span><span class="p">),</span>
-</span><span id="__span-5-95"><a id="__codelineno-5-95" name="__codelineno-5-95"></a><span class="w">        </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithRuntimeState</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span>
-</span><span id="__span-5-96"><a id="__codelineno-5-96" name="__codelineno-5-96"></a><span class="w">            </span><span class="s">&quot;user_context&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;test_context&quot;</span><span class="p">,</span>
-</span><span id="__span-5-97"><a id="__codelineno-5-97" name="__codelineno-5-97"></a><span class="w">        </span><span class="p">}),</span>
-</span><span id="__span-5-98"><a id="__codelineno-5-98" name="__codelineno-5-98"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-5-99"><a id="__codelineno-5-99" name="__codelineno-5-99"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-100"><a id="__codelineno-5-100" name="__codelineno-5-100"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Error: %v\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-5-101"><a id="__codelineno-5-101" name="__codelineno-5-101"></a><span class="w">        </span><span class="k">return</span>
-</span><span id="__span-5-102"><a id="__codelineno-5-102" name="__codelineno-5-102"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-5-103"><a id="__codelineno-5-103" name="__codelineno-5-103"></a>
-</span><span id="__span-5-104"><a id="__codelineno-5-104" name="__codelineno-5-104"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">events</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-105"><a id="__codelineno-5-105" name="__codelineno-5-105"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-106"><a id="__codelineno-5-106" name="__codelineno-5-106"></a><span class="w">            </span><span class="nx">content</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Content</span>
-</span><span id="__span-5-107"><a id="__codelineno-5-107" name="__codelineno-5-107"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">content</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-108"><a id="__codelineno-5-108" name="__codelineno-5-108"></a><span class="w">                </span><span class="nx">content</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span>
-</span><span id="__span-5-109"><a id="__codelineno-5-109" name="__codelineno-5-109"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-5-110"><a id="__codelineno-5-110" name="__codelineno-5-110"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">content</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-111"><a id="__codelineno-5-111" name="__codelineno-5-111"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">content</span><span class="p">)</span>
-</span><span id="__span-5-112"><a id="__codelineno-5-112" name="__codelineno-5-112"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-5-113"><a id="__codelineno-5-113" name="__codelineno-5-113"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-5-114"><a id="__codelineno-5-114" name="__codelineno-5-114"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-5-115"><a id="__codelineno-5-115" name="__codelineno-5-115"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">()</span>
-</span><span id="__span-5-116"><a id="__codelineno-5-116" name="__codelineno-5-116"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">  1</a></span>
+<span class="normal"><a href="#__codelineno-6-2">  2</a></span>
+<span class="normal"><a href="#__codelineno-6-3">  3</a></span>
+<span class="normal"><a href="#__codelineno-6-4">  4</a></span>
+<span class="normal"><a href="#__codelineno-6-5">  5</a></span>
+<span class="normal"><a href="#__codelineno-6-6">  6</a></span>
+<span class="normal"><a href="#__codelineno-6-7">  7</a></span>
+<span class="normal"><a href="#__codelineno-6-8">  8</a></span>
+<span class="normal"><a href="#__codelineno-6-9">  9</a></span>
+<span class="normal"><a href="#__codelineno-6-10"> 10</a></span>
+<span class="normal"><a href="#__codelineno-6-11"> 11</a></span>
+<span class="normal"><a href="#__codelineno-6-12"> 12</a></span>
+<span class="normal"><a href="#__codelineno-6-13"> 13</a></span>
+<span class="normal"><a href="#__codelineno-6-14"> 14</a></span>
+<span class="normal"><a href="#__codelineno-6-15"> 15</a></span>
+<span class="normal"><a href="#__codelineno-6-16"> 16</a></span>
+<span class="normal"><a href="#__codelineno-6-17"> 17</a></span>
+<span class="normal"><a href="#__codelineno-6-18"> 18</a></span>
+<span class="normal"><a href="#__codelineno-6-19"> 19</a></span>
+<span class="normal"><a href="#__codelineno-6-20"> 20</a></span>
+<span class="normal"><a href="#__codelineno-6-21"> 21</a></span>
+<span class="normal"><a href="#__codelineno-6-22"> 22</a></span>
+<span class="normal"><a href="#__codelineno-6-23"> 23</a></span>
+<span class="normal"><a href="#__codelineno-6-24"> 24</a></span>
+<span class="normal"><a href="#__codelineno-6-25"> 25</a></span>
+<span class="normal"><a href="#__codelineno-6-26"> 26</a></span>
+<span class="normal"><a href="#__codelineno-6-27"> 27</a></span>
+<span class="normal"><a href="#__codelineno-6-28"> 28</a></span>
+<span class="normal"><a href="#__codelineno-6-29"> 29</a></span>
+<span class="normal"><a href="#__codelineno-6-30"> 30</a></span>
+<span class="normal"><a href="#__codelineno-6-31"> 31</a></span>
+<span class="normal"><a href="#__codelineno-6-32"> 32</a></span>
+<span class="normal"><a href="#__codelineno-6-33"> 33</a></span>
+<span class="normal"><a href="#__codelineno-6-34"> 34</a></span>
+<span class="normal"><a href="#__codelineno-6-35"> 35</a></span>
+<span class="normal"><a href="#__codelineno-6-36"> 36</a></span>
+<span class="normal"><a href="#__codelineno-6-37"> 37</a></span>
+<span class="normal"><a href="#__codelineno-6-38"> 38</a></span>
+<span class="normal"><a href="#__codelineno-6-39"> 39</a></span>
+<span class="normal"><a href="#__codelineno-6-40"> 40</a></span>
+<span class="normal"><a href="#__codelineno-6-41"> 41</a></span>
+<span class="normal"><a href="#__codelineno-6-42"> 42</a></span>
+<span class="normal"><a href="#__codelineno-6-43"> 43</a></span>
+<span class="normal"><a href="#__codelineno-6-44"> 44</a></span>
+<span class="normal"><a href="#__codelineno-6-45"> 45</a></span>
+<span class="normal"><a href="#__codelineno-6-46"> 46</a></span>
+<span class="normal"><a href="#__codelineno-6-47"> 47</a></span>
+<span class="normal"><a href="#__codelineno-6-48"> 48</a></span>
+<span class="normal"><a href="#__codelineno-6-49"> 49</a></span>
+<span class="normal"><a href="#__codelineno-6-50"> 50</a></span>
+<span class="normal"><a href="#__codelineno-6-51"> 51</a></span>
+<span class="normal"><a href="#__codelineno-6-52"> 52</a></span>
+<span class="normal"><a href="#__codelineno-6-53"> 53</a></span>
+<span class="normal"><a href="#__codelineno-6-54"> 54</a></span>
+<span class="normal"><a href="#__codelineno-6-55"> 55</a></span>
+<span class="normal"><a href="#__codelineno-6-56"> 56</a></span>
+<span class="normal"><a href="#__codelineno-6-57"> 57</a></span>
+<span class="normal"><a href="#__codelineno-6-58"> 58</a></span>
+<span class="normal"><a href="#__codelineno-6-59"> 59</a></span>
+<span class="normal"><a href="#__codelineno-6-60"> 60</a></span>
+<span class="normal"><a href="#__codelineno-6-61"> 61</a></span>
+<span class="normal"><a href="#__codelineno-6-62"> 62</a></span>
+<span class="normal"><a href="#__codelineno-6-63"> 63</a></span>
+<span class="normal"><a href="#__codelineno-6-64"> 64</a></span>
+<span class="normal"><a href="#__codelineno-6-65"> 65</a></span>
+<span class="normal"><a href="#__codelineno-6-66"> 66</a></span>
+<span class="normal"><a href="#__codelineno-6-67"> 67</a></span>
+<span class="normal"><a href="#__codelineno-6-68"> 68</a></span>
+<span class="normal"><a href="#__codelineno-6-69"> 69</a></span>
+<span class="normal"><a href="#__codelineno-6-70"> 70</a></span>
+<span class="normal"><a href="#__codelineno-6-71"> 71</a></span>
+<span class="normal"><a href="#__codelineno-6-72"> 72</a></span>
+<span class="normal"><a href="#__codelineno-6-73"> 73</a></span>
+<span class="normal"><a href="#__codelineno-6-74"> 74</a></span>
+<span class="normal"><a href="#__codelineno-6-75"> 75</a></span>
+<span class="normal"><a href="#__codelineno-6-76"> 76</a></span>
+<span class="normal"><a href="#__codelineno-6-77"> 77</a></span>
+<span class="normal"><a href="#__codelineno-6-78"> 78</a></span>
+<span class="normal"><a href="#__codelineno-6-79"> 79</a></span>
+<span class="normal"><a href="#__codelineno-6-80"> 80</a></span>
+<span class="normal"><a href="#__codelineno-6-81"> 81</a></span>
+<span class="normal"><a href="#__codelineno-6-82"> 82</a></span>
+<span class="normal"><a href="#__codelineno-6-83"> 83</a></span>
+<span class="normal"><a href="#__codelineno-6-84"> 84</a></span>
+<span class="normal"><a href="#__codelineno-6-85"> 85</a></span>
+<span class="normal"><a href="#__codelineno-6-86"> 86</a></span>
+<span class="normal"><a href="#__codelineno-6-87"> 87</a></span>
+<span class="normal"><a href="#__codelineno-6-88"> 88</a></span>
+<span class="normal"><a href="#__codelineno-6-89"> 89</a></span>
+<span class="normal"><a href="#__codelineno-6-90"> 90</a></span>
+<span class="normal"><a href="#__codelineno-6-91"> 91</a></span>
+<span class="normal"><a href="#__codelineno-6-92"> 92</a></span>
+<span class="normal"><a href="#__codelineno-6-93"> 93</a></span>
+<span class="normal"><a href="#__codelineno-6-94"> 94</a></span>
+<span class="normal"><a href="#__codelineno-6-95"> 95</a></span>
+<span class="normal"><a href="#__codelineno-6-96"> 96</a></span>
+<span class="normal"><a href="#__codelineno-6-97"> 97</a></span>
+<span class="normal"><a href="#__codelineno-6-98"> 98</a></span>
+<span class="normal"><a href="#__codelineno-6-99"> 99</a></span>
+<span class="normal"><a href="#__codelineno-6-100">100</a></span>
+<span class="normal"><a href="#__codelineno-6-101">101</a></span>
+<span class="normal"><a href="#__codelineno-6-102">102</a></span>
+<span class="normal"><a href="#__codelineno-6-103">103</a></span>
+<span class="normal"><a href="#__codelineno-6-104">104</a></span>
+<span class="normal"><a href="#__codelineno-6-105">105</a></span>
+<span class="normal"><a href="#__codelineno-6-106">106</a></span>
+<span class="normal"><a href="#__codelineno-6-107">107</a></span>
+<span class="normal"><a href="#__codelineno-6-108">108</a></span>
+<span class="normal"><a href="#__codelineno-6-109">109</a></span>
+<span class="normal"><a href="#__codelineno-6-110">110</a></span>
+<span class="normal"><a href="#__codelineno-6-111">111</a></span>
+<span class="normal"><a href="#__codelineno-6-112">112</a></span>
+<span class="normal"><a href="#__codelineno-6-113">113</a></span>
+<span class="normal"><a href="#__codelineno-6-114">114</a></span>
+<span class="normal"><a href="#__codelineno-6-115">115</a></span>
+<span class="normal"><a href="#__codelineno-6-116">116</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">    </span><span class="s">&quot;time&quot;</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/a2aagent&quot;</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/a2a&quot;</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14"></a><span class="p">)</span>
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15"></a>
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17"></a><span class="w">    </span><span class="c1">// 1. 创建并启动远程 Agent 服务</span>
+</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18"></a><span class="w">    </span><span class="nx">remoteAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">createRemoteAgent</span><span class="p">()</span>
+</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19"></a><span class="w">    </span><span class="nx">startA2AServer</span><span class="p">(</span><span class="nx">remoteAgent</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;localhost:8888&quot;</span><span class="p">)</span>
+</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20"></a>
+</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21"></a><span class="w">    </span><span class="nx">time</span><span class="p">.</span><span class="nx">Sleep</span><span class="p">(</span><span class="mi">1</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">)</span><span class="w"> </span><span class="c1">// 等待服务启动</span>
+</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22"></a>
+</span><span id="__span-6-23"><a id="__codelineno-6-23" name="__codelineno-6-23"></a><span class="w">    </span><span class="c1">// 2. 创建 A2AAgent 连接到远程服务</span>
+</span><span id="__span-6-24"><a id="__codelineno-6-24" name="__codelineno-6-24"></a><span class="w">    </span><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-6-25"><a id="__codelineno-6-25" name="__codelineno-6-25"></a><span class="w">        </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://localhost:8888&quot;</span><span class="p">),</span>
+</span><span id="__span-6-26"><a id="__codelineno-6-26" name="__codelineno-6-26"></a><span class="w">        </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithTransferStateKey</span><span class="p">(</span><span class="s">&quot;user_context&quot;</span><span class="p">),</span>
+</span><span id="__span-6-27"><a id="__codelineno-6-27" name="__codelineno-6-27"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-6-28"><a id="__codelineno-6-28" name="__codelineno-6-28"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-29"><a id="__codelineno-6-29" name="__codelineno-6-29"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-6-30"><a id="__codelineno-6-30" name="__codelineno-6-30"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-31"><a id="__codelineno-6-31" name="__codelineno-6-31"></a>
+</span><span id="__span-6-32"><a id="__codelineno-6-32" name="__codelineno-6-32"></a><span class="w">    </span><span class="c1">// 3. 创建本地 Agent</span>
+</span><span id="__span-6-33"><a id="__codelineno-6-33" name="__codelineno-6-33"></a><span class="w">    </span><span class="nx">localAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">createLocalAgent</span><span class="p">()</span>
+</span><span id="__span-6-34"><a id="__codelineno-6-34" name="__codelineno-6-34"></a>
+</span><span id="__span-6-35"><a id="__codelineno-6-35" name="__codelineno-6-35"></a><span class="w">    </span><span class="c1">// 4. 对比本地和远程 Agent 的响应</span>
+</span><span id="__span-6-36"><a id="__codelineno-6-36" name="__codelineno-6-36"></a><span class="w">    </span><span class="nx">compareAgents</span><span class="p">(</span><span class="nx">localAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">a2aAgent</span><span class="p">)</span>
+</span><span id="__span-6-37"><a id="__codelineno-6-37" name="__codelineno-6-37"></a><span class="p">}</span>
+</span><span id="__span-6-38"><a id="__codelineno-6-38" name="__codelineno-6-38"></a>
+</span><span id="__span-6-39"><a id="__codelineno-6-39" name="__codelineno-6-39"></a><span class="kd">func</span><span class="w"> </span><span class="nx">createRemoteAgent</span><span class="p">()</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-40"><a id="__codelineno-6-40" name="__codelineno-6-40"></a><span class="w">    </span><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">)</span>
+</span><span id="__span-6-41"><a id="__codelineno-6-41" name="__codelineno-6-41"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;JokeAgent&quot;</span><span class="p">,</span>
+</span><span id="__span-6-42"><a id="__codelineno-6-42" name="__codelineno-6-42"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
+</span><span id="__span-6-43"><a id="__codelineno-6-43" name="__codelineno-6-43"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;I am a joke-telling agent&quot;</span><span class="p">),</span>
+</span><span id="__span-6-44"><a id="__codelineno-6-44" name="__codelineno-6-44"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;Always respond with a funny joke&quot;</span><span class="p">),</span>
+</span><span id="__span-6-45"><a id="__codelineno-6-45" name="__codelineno-6-45"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-6-46"><a id="__codelineno-6-46" name="__codelineno-6-46"></a><span class="p">}</span>
+</span><span id="__span-6-47"><a id="__codelineno-6-47" name="__codelineno-6-47"></a>
+</span><span id="__span-6-48"><a id="__codelineno-6-48" name="__codelineno-6-48"></a><span class="kd">func</span><span class="w"> </span><span class="nx">createLocalAgent</span><span class="p">()</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-49"><a id="__codelineno-6-49" name="__codelineno-6-49"></a><span class="w">    </span><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">)</span><span class="w"> </span>
+</span><span id="__span-6-50"><a id="__codelineno-6-50" name="__codelineno-6-50"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;LocalAgent&quot;</span><span class="p">,</span>
+</span><span id="__span-6-51"><a id="__codelineno-6-51" name="__codelineno-6-51"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
+</span><span id="__span-6-52"><a id="__codelineno-6-52" name="__codelineno-6-52"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;I am a local assistant&quot;</span><span class="p">),</span>
+</span><span id="__span-6-53"><a id="__codelineno-6-53" name="__codelineno-6-53"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-6-54"><a id="__codelineno-6-54" name="__codelineno-6-54"></a><span class="p">}</span>
+</span><span id="__span-6-55"><a id="__codelineno-6-55" name="__codelineno-6-55"></a>
+</span><span id="__span-6-56"><a id="__codelineno-6-56" name="__codelineno-6-56"></a><span class="kd">func</span><span class="w"> </span><span class="nx">startA2AServer</span><span class="p">(</span><span class="nx">agent</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">,</span><span class="w"> </span><span class="nx">host</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-57"><a id="__codelineno-6-57" name="__codelineno-6-57"></a><span class="w">    </span><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-6-58"><a id="__codelineno-6-58" name="__codelineno-6-58"></a><span class="w">        </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="nx">host</span><span class="p">),</span>
+</span><span id="__span-6-59"><a id="__codelineno-6-59" name="__codelineno-6-59"></a><span class="w">        </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">agent</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="c1">// 启用流式</span>
+</span><span id="__span-6-60"><a id="__codelineno-6-60" name="__codelineno-6-60"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-6-61"><a id="__codelineno-6-61" name="__codelineno-6-61"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-62"><a id="__codelineno-6-62" name="__codelineno-6-62"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-6-63"><a id="__codelineno-6-63" name="__codelineno-6-63"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-64"><a id="__codelineno-6-64" name="__codelineno-6-64"></a>
+</span><span id="__span-6-65"><a id="__codelineno-6-65" name="__codelineno-6-65"></a><span class="w">    </span><span class="k">go</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-66"><a id="__codelineno-6-66" name="__codelineno-6-66"></a><span class="w">        </span><span class="nx">server</span><span class="p">.</span><span class="nx">Start</span><span class="p">(</span><span class="nx">host</span><span class="p">)</span>
+</span><span id="__span-6-67"><a id="__codelineno-6-67" name="__codelineno-6-67"></a><span class="w">    </span><span class="p">}()</span>
+</span><span id="__span-6-68"><a id="__codelineno-6-68" name="__codelineno-6-68"></a><span class="p">}</span>
+</span><span id="__span-6-69"><a id="__codelineno-6-69" name="__codelineno-6-69"></a>
+</span><span id="__span-6-70"><a id="__codelineno-6-70" name="__codelineno-6-70"></a><span class="kd">func</span><span class="w"> </span><span class="nx">compareAgents</span><span class="p">(</span><span class="nx">localAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">remoteAgent</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-71"><a id="__codelineno-6-71" name="__codelineno-6-71"></a><span class="w">    </span><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
+</span><span id="__span-6-72"><a id="__codelineno-6-72" name="__codelineno-6-72"></a>
+</span><span id="__span-6-73"><a id="__codelineno-6-73" name="__codelineno-6-73"></a><span class="w">    </span><span class="nx">localRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;local&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">localAgent</span><span class="p">,</span>
+</span><span id="__span-6-74"><a id="__codelineno-6-74" name="__codelineno-6-74"></a><span class="w">        </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">))</span>
+</span><span id="__span-6-75"><a id="__codelineno-6-75" name="__codelineno-6-75"></a><span class="w">    </span><span class="nx">remoteRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;remote&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">remoteAgent</span><span class="p">,</span>
+</span><span id="__span-6-76"><a id="__codelineno-6-76" name="__codelineno-6-76"></a><span class="w">        </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">))</span>
+</span><span id="__span-6-77"><a id="__codelineno-6-77" name="__codelineno-6-77"></a>
+</span><span id="__span-6-78"><a id="__codelineno-6-78" name="__codelineno-6-78"></a><span class="w">    </span><span class="nx">userMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;请帮我讲个笑话&quot;</span>
+</span><span id="__span-6-79"><a id="__codelineno-6-79" name="__codelineno-6-79"></a>
+</span><span id="__span-6-80"><a id="__codelineno-6-80" name="__codelineno-6-80"></a><span class="w">    </span><span class="c1">// 调用本地 Agent</span>
+</span><span id="__span-6-81"><a id="__codelineno-6-81" name="__codelineno-6-81"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="s">&quot;=== Local Agent Response ===&quot;</span><span class="p">)</span>
+</span><span id="__span-6-82"><a id="__codelineno-6-82" name="__codelineno-6-82"></a><span class="w">    </span><span class="nx">processAgent</span><span class="p">(</span><span class="nx">localRunner</span><span class="p">,</span><span class="w"> </span><span class="nx">userMessage</span><span class="p">)</span>
+</span><span id="__span-6-83"><a id="__codelineno-6-83" name="__codelineno-6-83"></a>
+</span><span id="__span-6-84"><a id="__codelineno-6-84" name="__codelineno-6-84"></a><span class="w">    </span><span class="c1">// 调用远程 Agent (通过 A2AAgent)</span>
+</span><span id="__span-6-85"><a id="__codelineno-6-85" name="__codelineno-6-85"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="s">&quot;\n=== Remote Agent Response (via A2AAgent) ===&quot;</span><span class="p">)</span>
+</span><span id="__span-6-86"><a id="__codelineno-6-86" name="__codelineno-6-86"></a><span class="w">    </span><span class="nx">processAgent</span><span class="p">(</span><span class="nx">remoteRunner</span><span class="p">,</span><span class="w"> </span><span class="nx">userMessage</span><span class="p">)</span>
+</span><span id="__span-6-87"><a id="__codelineno-6-87" name="__codelineno-6-87"></a><span class="p">}</span>
+</span><span id="__span-6-88"><a id="__codelineno-6-88" name="__codelineno-6-88"></a>
+</span><span id="__span-6-89"><a id="__codelineno-6-89" name="__codelineno-6-89"></a><span class="kd">func</span><span class="w"> </span><span class="nx">processAgent</span><span class="p">(</span><span class="nx">runner</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Runner</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-90"><a id="__codelineno-6-90" name="__codelineno-6-90"></a><span class="w">    </span><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-6-91"><a id="__codelineno-6-91" name="__codelineno-6-91"></a><span class="w">        </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span>
+</span><span id="__span-6-92"><a id="__codelineno-6-92" name="__codelineno-6-92"></a><span class="w">        </span><span class="s">&quot;user1&quot;</span><span class="p">,</span>
+</span><span id="__span-6-93"><a id="__codelineno-6-93" name="__codelineno-6-93"></a><span class="w">        </span><span class="s">&quot;session1&quot;</span><span class="p">,</span>
+</span><span id="__span-6-94"><a id="__codelineno-6-94" name="__codelineno-6-94"></a><span class="w">        </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="nx">message</span><span class="p">),</span>
+</span><span id="__span-6-95"><a id="__codelineno-6-95" name="__codelineno-6-95"></a><span class="w">        </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithRuntimeState</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span>
+</span><span id="__span-6-96"><a id="__codelineno-6-96" name="__codelineno-6-96"></a><span class="w">            </span><span class="s">&quot;user_context&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;test_context&quot;</span><span class="p">,</span>
+</span><span id="__span-6-97"><a id="__codelineno-6-97" name="__codelineno-6-97"></a><span class="w">        </span><span class="p">}),</span>
+</span><span id="__span-6-98"><a id="__codelineno-6-98" name="__codelineno-6-98"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-6-99"><a id="__codelineno-6-99" name="__codelineno-6-99"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-100"><a id="__codelineno-6-100" name="__codelineno-6-100"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Error: %v\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-6-101"><a id="__codelineno-6-101" name="__codelineno-6-101"></a><span class="w">        </span><span class="k">return</span>
+</span><span id="__span-6-102"><a id="__codelineno-6-102" name="__codelineno-6-102"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-103"><a id="__codelineno-6-103" name="__codelineno-6-103"></a>
+</span><span id="__span-6-104"><a id="__codelineno-6-104" name="__codelineno-6-104"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">events</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-105"><a id="__codelineno-6-105" name="__codelineno-6-105"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-106"><a id="__codelineno-6-106" name="__codelineno-6-106"></a><span class="w">            </span><span class="nx">content</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Content</span>
+</span><span id="__span-6-107"><a id="__codelineno-6-107" name="__codelineno-6-107"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">content</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-108"><a id="__codelineno-6-108" name="__codelineno-6-108"></a><span class="w">                </span><span class="nx">content</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span>
+</span><span id="__span-6-109"><a id="__codelineno-6-109" name="__codelineno-6-109"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-6-110"><a id="__codelineno-6-110" name="__codelineno-6-110"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">content</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-111"><a id="__codelineno-6-111" name="__codelineno-6-111"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">content</span><span class="p">)</span>
+</span><span id="__span-6-112"><a id="__codelineno-6-112" name="__codelineno-6-112"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-6-113"><a id="__codelineno-6-113" name="__codelineno-6-113"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-6-114"><a id="__codelineno-6-114" name="__codelineno-6-114"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-115"><a id="__codelineno-6-115" name="__codelineno-6-115"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">()</span>
+</span><span id="__span-6-116"><a id="__codelineno-6-116" name="__codelineno-6-116"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="agentcard_1">AgentCard 自动发现</h3>
 <p><code>A2AAgent</code> 支持通过标准的 AgentCard 发现机制自动获取远程 Agent 的信息：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-6-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-6-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-6-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-6-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-6-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-6-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-6-10">10</a></span>
-<span class="normal"><a href="#__codelineno-6-11">11</a></span>
-<span class="normal"><a href="#__codelineno-6-12">12</a></span>
-<span class="normal"><a href="#__codelineno-6-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="c1">// A2AAgent 会自动从以下路径获取 AgentCard</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="c1">// http://remote-agent:8888/.well-known/agent.json</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="kd">type</span><span class="w"> </span><span class="nx">AgentCard</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="w">    </span><span class="nx">Name</span><span class="w">         </span><span class="kt">string</span><span class="w">                 </span><span class="s">`json:&quot;name&quot;`</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">    </span><span class="nx">Description</span><span class="w">  </span><span class="kt">string</span><span class="w">                 </span><span class="s">`json:&quot;description&quot;`</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="w">    </span><span class="nx">URL</span><span class="w">          </span><span class="kt">string</span><span class="w">                 </span><span class="s">`json:&quot;url&quot;`</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="w">    </span><span class="nx">Capabilities</span><span class="w"> </span><span class="nx">AgentCardCapabilities</span><span class="w">  </span><span class="s">`json:&quot;capabilities&quot;`</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="p">}</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="kd">type</span><span class="w"> </span><span class="nx">AgentCardCapabilities</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a><span class="w">    </span><span class="nx">Streaming</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;streaming,omitempty&quot;`</span>
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<h3 id="_11">状态传递</h3>
-<p><code>A2AAgent</code> 支持将本地运行时状态传递给远程 Agent：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-7-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-7-3"> 3</a></span>
@@ -2729,24 +2785,22 @@
 <span class="normal"><a href="#__codelineno-7-10">10</a></span>
 <span class="normal"><a href="#__codelineno-7-11">11</a></span>
 <span class="normal"><a href="#__codelineno-7-12">12</a></span>
-<span class="normal"><a href="#__codelineno-7-13">13</a></span>
-<span class="normal"><a href="#__codelineno-7-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://remote-agent:8888&quot;</span><span class="p">),</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="c1">// 指定要传递的状态键</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithTransferStateKey</span><span class="p">(</span><span class="s">&quot;user_id&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session_context&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;preferences&quot;</span><span class="p">),</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="p">)</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="c1">// 运行时状态会通过 A2A 协议的 metadata 字段传递给远程 Agent</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">,</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithRuntimeState</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="w">        </span><span class="s">&quot;user_id&quot;</span><span class="p">:</span><span class="w">         </span><span class="s">&quot;12345&quot;</span><span class="p">,</span>
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">        </span><span class="s">&quot;session_context&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;shopping_cart&quot;</span><span class="p">,</span>
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">        </span><span class="s">&quot;preferences&quot;</span><span class="p">:</span><span class="w">     </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;language&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;zh&quot;</span><span class="p">},</span>
-</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-7-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="c1">// A2AAgent 会自动从以下路径获取 AgentCard</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="c1">// http://remote-agent:8888/.well-known/agent.json</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="kd">type</span><span class="w"> </span><span class="nx">AgentCard</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">    </span><span class="nx">Name</span><span class="w">         </span><span class="kt">string</span><span class="w">                 </span><span class="s">`json:&quot;name&quot;`</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="w">    </span><span class="nx">Description</span><span class="w">  </span><span class="kt">string</span><span class="w">                 </span><span class="s">`json:&quot;description&quot;`</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="w">    </span><span class="nx">URL</span><span class="w">          </span><span class="kt">string</span><span class="w">                 </span><span class="s">`json:&quot;url&quot;`</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="w">    </span><span class="nx">Capabilities</span><span class="w"> </span><span class="nx">AgentCardCapabilities</span><span class="w">  </span><span class="s">`json:&quot;capabilities&quot;`</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="p">}</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="kd">type</span><span class="w"> </span><span class="nx">AgentCardCapabilities</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">    </span><span class="nx">Streaming</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;streaming,omitempty&quot;`</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="http-headers">自定义 HTTP Headers</h3>
-<p>你可以使用 <code>WithA2ARequestOptions</code> 为每次请求传递自定义的 HTTP headers：</p>
+<h3 id="_11">状态传递</h3>
+<p><code>A2AAgent</code> 支持将本地运行时状态传递给远程 Agent：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-8-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-8-3"> 3</a></span>
@@ -2760,77 +2814,76 @@
 <span class="normal"><a href="#__codelineno-8-11">11</a></span>
 <span class="normal"><a href="#__codelineno-8-12">12</a></span>
 <span class="normal"><a href="#__codelineno-8-13">13</a></span>
-<span class="normal"><a href="#__codelineno-8-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-a2a-go/client&quot;</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="w">    </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="w">    </span><span class="nx">userID</span><span class="p">,</span>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a><span class="w">    </span><span class="nx">sessionID</span><span class="p">,</span>
-</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;你的问题&quot;</span><span class="p">),</span>
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="w">    </span><span class="c1">// 为本次请求传递自定义 HTTP headers</span>
-</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithA2ARequestOptions</span><span class="p">(</span>
-</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="w">        </span><span class="nx">client</span><span class="p">.</span><span class="nx">WithRequestHeader</span><span class="p">(</span><span class="s">&quot;X-Custom-Header&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-value&quot;</span><span class="p">),</span>
-</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11"></a><span class="w">        </span><span class="nx">client</span><span class="p">.</span><span class="nx">WithRequestHeader</span><span class="p">(</span><span class="s">&quot;X-Request-ID&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;req-%d&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">().</span><span class="nx">UnixNano</span><span class="p">())),</span>
-</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12"></a><span class="w">        </span><span class="nx">client</span><span class="p">.</span><span class="nx">WithRequestHeader</span><span class="p">(</span><span class="s">&quot;Authorization&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;Bearer your-token&quot;</span><span class="p">),</span>
-</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13"></a><span class="w">    </span><span class="p">),</span>
+<span class="normal"><a href="#__codelineno-8-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://remote-agent:8888&quot;</span><span class="p">),</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="w">    </span><span class="c1">// 指定要传递的状态键</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithTransferStateKey</span><span class="p">(</span><span class="s">&quot;user_id&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session_context&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;preferences&quot;</span><span class="p">),</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="p">)</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7"></a><span class="c1">// 运行时状态会通过 A2A 协议的 metadata 字段传递给远程 Agent</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">,</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithRuntimeState</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="w">        </span><span class="s">&quot;user_id&quot;</span><span class="p">:</span><span class="w">         </span><span class="s">&quot;12345&quot;</span><span class="p">,</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11"></a><span class="w">        </span><span class="s">&quot;session_context&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;shopping_cart&quot;</span><span class="p">,</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12"></a><span class="w">        </span><span class="s">&quot;preferences&quot;</span><span class="p">:</span><span class="w">     </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;language&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;zh&quot;</span><span class="p">},</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13"></a><span class="w">    </span><span class="p">}),</span>
 </span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="http-headers">自定义 HTTP Headers</h3>
+<p>你可以使用 <code>WithA2ARequestOptions</code> 为每次请求传递自定义的 HTTP headers：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-9-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-9-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-9-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-9-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-9-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-9-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-9-10">10</a></span>
+<span class="normal"><a href="#__codelineno-9-11">11</a></span>
+<span class="normal"><a href="#__codelineno-9-12">12</a></span>
+<span class="normal"><a href="#__codelineno-9-13">13</a></span>
+<span class="normal"><a href="#__codelineno-9-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-a2a-go/client&quot;</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="w">    </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a><span class="w">    </span><span class="nx">userID</span><span class="p">,</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="w">    </span><span class="nx">sessionID</span><span class="p">,</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;你的问题&quot;</span><span class="p">),</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="w">    </span><span class="c1">// 为本次请求传递自定义 HTTP headers</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithA2ARequestOptions</span><span class="p">(</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="w">        </span><span class="nx">client</span><span class="p">.</span><span class="nx">WithRequestHeader</span><span class="p">(</span><span class="s">&quot;X-Custom-Header&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-value&quot;</span><span class="p">),</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="w">        </span><span class="nx">client</span><span class="p">.</span><span class="nx">WithRequestHeader</span><span class="p">(</span><span class="s">&quot;X-Request-ID&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;req-%d&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">().</span><span class="nx">UnixNano</span><span class="p">())),</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="w">        </span><span class="nx">client</span><span class="p">.</span><span class="nx">WithRequestHeader</span><span class="p">(</span><span class="s">&quot;Authorization&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;Bearer your-token&quot;</span><span class="p">),</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>常见使用场景：</strong></p>
 <ol>
 <li>
 <p><strong>身份认证</strong>：传递认证 token
-   <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1">1</a></span>
-<span class="normal"><a href="#__codelineno-9-2">2</a></span>
-<span class="normal"><a href="#__codelineno-9-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="nx">agent</span><span class="p">.</span><span class="nx">WithA2ARequestOptions</span><span class="p">(</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">    </span><span class="nx">client</span><span class="p">.</span><span class="nx">WithRequestHeader</span><span class="p">(</span><span class="s">&quot;Authorization&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;Bearer &quot;</span><span class="o">+</span><span class="nx">token</span><span class="p">),</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="p">)</span>
+   <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1">1</a></span>
+<span class="normal"><a href="#__codelineno-10-2">2</a></span>
+<span class="normal"><a href="#__codelineno-10-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="nx">agent</span><span class="p">.</span><span class="nx">WithA2ARequestOptions</span><span class="p">(</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="w">    </span><span class="nx">client</span><span class="p">.</span><span class="nx">WithRequestHeader</span><span class="p">(</span><span class="s">&quot;Authorization&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;Bearer &quot;</span><span class="o">+</span><span class="nx">token</span><span class="p">),</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div></p>
 </li>
 <li>
 <p><strong>分布式追踪</strong>：添加请求/追踪 ID
-   <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1">1</a></span>
-<span class="normal"><a href="#__codelineno-10-2">2</a></span>
-<span class="normal"><a href="#__codelineno-10-3">3</a></span>
-<span class="normal"><a href="#__codelineno-10-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="nx">agent</span><span class="p">.</span><span class="nx">WithA2ARequestOptions</span><span class="p">(</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="w">    </span><span class="nx">client</span><span class="p">.</span><span class="nx">WithRequestHeader</span><span class="p">(</span><span class="s">&quot;X-Request-ID&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">requestID</span><span class="p">),</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="nx">client</span><span class="p">.</span><span class="nx">WithRequestHeader</span><span class="p">(</span><span class="s">&quot;X-Trace-ID&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">traceID</span><span class="p">),</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="p">)</span>
+   <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1">1</a></span>
+<span class="normal"><a href="#__codelineno-11-2">2</a></span>
+<span class="normal"><a href="#__codelineno-11-3">3</a></span>
+<span class="normal"><a href="#__codelineno-11-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="nx">agent</span><span class="p">.</span><span class="nx">WithA2ARequestOptions</span><span class="p">(</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">    </span><span class="nx">client</span><span class="p">.</span><span class="nx">WithRequestHeader</span><span class="p">(</span><span class="s">&quot;X-Request-ID&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">requestID</span><span class="p">),</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="nx">client</span><span class="p">.</span><span class="nx">WithRequestHeader</span><span class="p">(</span><span class="s">&quot;X-Trace-ID&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">traceID</span><span class="p">),</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div></p>
 </li>
 </ol>
 <p><strong>配置 UserID Header：</strong></p>
 <p>客户端和服务端都支持配置使用哪个 HTTP header 来传递 UserID，默认使用 X-User-ID：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-11-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-11-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-11-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-11-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-11-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-11-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-11-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-11-10">10</a></span>
-<span class="normal"><a href="#__codelineno-11-11">11</a></span>
-<span class="normal"><a href="#__codelineno-11-12">12</a></span>
-<span class="normal"><a href="#__codelineno-11-13">13</a></span>
-<span class="normal"><a href="#__codelineno-11-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="c1">// 客户端：配置通过哪个 header 发送 UserID</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://remote-agent:8888&quot;</span><span class="p">),</span>
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="w">    </span><span class="c1">// 默认是 &quot;X-User-ID&quot;，可以自定义</span>
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithUserIDHeader</span><span class="p">(</span><span class="s">&quot;X-Custom-User-ID&quot;</span><span class="p">),</span>
-</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a><span class="p">)</span>
-</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a>
-</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="c1">// 服务端：配置从哪个 header 读取 UserID</span>
-</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10"></a><span class="w">    </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;localhost:8888&quot;</span><span class="p">),</span>
-</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11"></a><span class="w">    </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">agent</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12"></a><span class="w">    </span><span class="c1">// 默认是 &quot;X-User-ID&quot;，可以自定义</span>
-</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13"></a><span class="w">    </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">WithUserIDHeader</span><span class="p">(</span><span class="s">&quot;X-Custom-User-ID&quot;</span><span class="p">),</span>
-</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14"></a><span class="p">)</span>
-</span></code></pre></div></td></tr></table></div>
-<p>来自 <code>invocation.Session.UserID</code> 的 UserID 会自动通过配置的 header 发送给 A2A server。</p>
-<h3 id="_12">自定义转换器</h3>
-<p>对于特殊需求，可以自定义消息和事件转换器：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-12-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-12-3"> 3</a></span>
@@ -2844,60 +2897,91 @@
 <span class="normal"><a href="#__codelineno-12-11">11</a></span>
 <span class="normal"><a href="#__codelineno-12-12">12</a></span>
 <span class="normal"><a href="#__codelineno-12-13">13</a></span>
-<span class="normal"><a href="#__codelineno-12-14">14</a></span>
-<span class="normal"><a href="#__codelineno-12-15">15</a></span>
-<span class="normal"><a href="#__codelineno-12-16">16</a></span>
-<span class="normal"><a href="#__codelineno-12-17">17</a></span>
-<span class="normal"><a href="#__codelineno-12-18">18</a></span>
-<span class="normal"><a href="#__codelineno-12-19">19</a></span>
-<span class="normal"><a href="#__codelineno-12-20">20</a></span>
-<span class="normal"><a href="#__codelineno-12-21">21</a></span>
-<span class="normal"><a href="#__codelineno-12-22">22</a></span>
-<span class="normal"><a href="#__codelineno-12-23">23</a></span>
-<span class="normal"><a href="#__codelineno-12-24">24</a></span>
-<span class="normal"><a href="#__codelineno-12-25">25</a></span>
-<span class="normal"><a href="#__codelineno-12-26">26</a></span>
-<span class="normal"><a href="#__codelineno-12-27">27</a></span>
-<span class="normal"><a href="#__codelineno-12-28">28</a></span>
-<span class="normal"><a href="#__codelineno-12-29">29</a></span>
-<span class="normal"><a href="#__codelineno-12-30">30</a></span>
-<span class="normal"><a href="#__codelineno-12-31">31</a></span>
-<span class="normal"><a href="#__codelineno-12-32">32</a></span>
-<span class="normal"><a href="#__codelineno-12-33">33</a></span>
-<span class="normal"><a href="#__codelineno-12-34">34</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="c1">// 自定义 A2A 消息转换器</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">CustomA2AConverter</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">CustomA2AConverter</span><span class="p">)</span><span class="w"> </span><span class="nx">ConvertToA2AMessage</span><span class="p">(</span>
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5"></a><span class="w">    </span><span class="nx">isStream</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span>
-</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a><span class="w">    </span><span class="nx">agentName</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span>
-</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7"></a><span class="w">    </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
-</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8"></a><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">protocol</span><span class="p">.</span><span class="nx">Message</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9"></a><span class="w">    </span><span class="c1">// 自定义消息转换逻辑</span>
-</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">protocol</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span>
-</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11"></a><span class="w">        </span><span class="nx">MessageID</span><span class="p">:</span><span class="w"> </span><span class="nx">invocation</span><span class="p">.</span><span class="nx">InvocationID</span><span class="p">,</span>
-</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12"></a><span class="w">        </span><span class="nx">Role</span><span class="p">:</span><span class="w">      </span><span class="nx">protocol</span><span class="p">.</span><span class="nx">MessageRoleUser</span><span class="p">,</span>
-</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13"></a><span class="w">        </span><span class="nx">Parts</span><span class="p">:</span><span class="w">     </span><span class="p">[]</span><span class="nx">protocol</span><span class="p">.</span><span class="nx">Part</span><span class="p">{</span><span class="cm">/* 自定义内容 */</span><span class="p">},</span>
-</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14"></a><span class="w">    </span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15"></a><span class="p">}</span>
-</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16"></a>
-</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17"></a><span class="c1">// 自定义事件转换器  </span>
-</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18"></a><span class="kd">type</span><span class="w"> </span><span class="nx">CustomEventConverter</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
-</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19"></a>
-</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">CustomEventConverter</span><span class="p">)</span><span class="w"> </span><span class="nx">ConvertToEvent</span><span class="p">(</span>
-</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21"></a><span class="w">    </span><span class="nx">result</span><span class="w"> </span><span class="nx">protocol</span><span class="p">.</span><span class="nx">MessageResult</span><span class="p">,</span>
-</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22"></a><span class="w">    </span><span class="nx">agentName</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span>
-</span><span id="__span-12-23"><a id="__codelineno-12-23" name="__codelineno-12-23"></a><span class="w">    </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
-</span><span id="__span-12-24"><a id="__codelineno-12-24" name="__codelineno-12-24"></a><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-12-25"><a id="__codelineno-12-25" name="__codelineno-12-25"></a><span class="w">    </span><span class="c1">// 自定义事件转换逻辑</span>
-</span><span id="__span-12-26"><a id="__codelineno-12-26" name="__codelineno-12-26"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">invocation</span><span class="p">.</span><span class="nx">InvocationID</span><span class="p">,</span><span class="w"> </span><span class="nx">agentName</span><span class="p">),</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-12-27"><a id="__codelineno-12-27" name="__codelineno-12-27"></a><span class="p">}</span>
-</span><span id="__span-12-28"><a id="__codelineno-12-28" name="__codelineno-12-28"></a>
-</span><span id="__span-12-29"><a id="__codelineno-12-29" name="__codelineno-12-29"></a><span class="c1">// 使用自定义转换器</span>
-</span><span id="__span-12-30"><a id="__codelineno-12-30" name="__codelineno-12-30"></a><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-12-31"><a id="__codelineno-12-31" name="__codelineno-12-31"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://remote-agent:8888&quot;</span><span class="p">),</span>
-</span><span id="__span-12-32"><a id="__codelineno-12-32" name="__codelineno-12-32"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithA2AMessageConverter</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">CustomA2AConverter</span><span class="p">{}),</span>
-</span><span id="__span-12-33"><a id="__codelineno-12-33" name="__codelineno-12-33"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithEventConverter</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">CustomEventConverter</span><span class="p">{}),</span>
-</span><span id="__span-12-34"><a id="__codelineno-12-34" name="__codelineno-12-34"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-12-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="c1">// 客户端：配置通过哪个 header 发送 UserID</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://remote-agent:8888&quot;</span><span class="p">),</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="w">    </span><span class="c1">// 默认是 &quot;X-User-ID&quot;，可以自定义</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithUserIDHeader</span><span class="p">(</span><span class="s">&quot;X-Custom-User-ID&quot;</span><span class="p">),</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a><span class="p">)</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7"></a>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8"></a><span class="c1">// 服务端：配置从哪个 header 读取 UserID</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10"></a><span class="w">    </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;localhost:8888&quot;</span><span class="p">),</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11"></a><span class="w">    </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">agent</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12"></a><span class="w">    </span><span class="c1">// 默认是 &quot;X-User-ID&quot;，可以自定义</span>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13"></a><span class="w">    </span><span class="nx">a2a</span><span class="p">.</span><span class="nx">WithUserIDHeader</span><span class="p">(</span><span class="s">&quot;X-Custom-User-ID&quot;</span><span class="p">),</span>
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>来自 <code>invocation.Session.UserID</code> 的 UserID 会自动通过配置的 header 发送给 A2A server。</p>
+<h3 id="_12">自定义转换器</h3>
+<p>对于特殊需求，可以自定义消息和事件转换器：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-13-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-13-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-13-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-13-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-13-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-13-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-13-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-13-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-13-10">10</a></span>
+<span class="normal"><a href="#__codelineno-13-11">11</a></span>
+<span class="normal"><a href="#__codelineno-13-12">12</a></span>
+<span class="normal"><a href="#__codelineno-13-13">13</a></span>
+<span class="normal"><a href="#__codelineno-13-14">14</a></span>
+<span class="normal"><a href="#__codelineno-13-15">15</a></span>
+<span class="normal"><a href="#__codelineno-13-16">16</a></span>
+<span class="normal"><a href="#__codelineno-13-17">17</a></span>
+<span class="normal"><a href="#__codelineno-13-18">18</a></span>
+<span class="normal"><a href="#__codelineno-13-19">19</a></span>
+<span class="normal"><a href="#__codelineno-13-20">20</a></span>
+<span class="normal"><a href="#__codelineno-13-21">21</a></span>
+<span class="normal"><a href="#__codelineno-13-22">22</a></span>
+<span class="normal"><a href="#__codelineno-13-23">23</a></span>
+<span class="normal"><a href="#__codelineno-13-24">24</a></span>
+<span class="normal"><a href="#__codelineno-13-25">25</a></span>
+<span class="normal"><a href="#__codelineno-13-26">26</a></span>
+<span class="normal"><a href="#__codelineno-13-27">27</a></span>
+<span class="normal"><a href="#__codelineno-13-28">28</a></span>
+<span class="normal"><a href="#__codelineno-13-29">29</a></span>
+<span class="normal"><a href="#__codelineno-13-30">30</a></span>
+<span class="normal"><a href="#__codelineno-13-31">31</a></span>
+<span class="normal"><a href="#__codelineno-13-32">32</a></span>
+<span class="normal"><a href="#__codelineno-13-33">33</a></span>
+<span class="normal"><a href="#__codelineno-13-34">34</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="c1">// 自定义 A2A 消息转换器</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">CustomA2AConverter</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">CustomA2AConverter</span><span class="p">)</span><span class="w"> </span><span class="nx">ConvertToA2AMessage</span><span class="p">(</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5"></a><span class="w">    </span><span class="nx">isStream</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6"></a><span class="w">    </span><span class="nx">agentName</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7"></a><span class="w">    </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8"></a><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">protocol</span><span class="p">.</span><span class="nx">Message</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9"></a><span class="w">    </span><span class="c1">// 自定义消息转换逻辑</span>
+</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">protocol</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span>
+</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11"></a><span class="w">        </span><span class="nx">MessageID</span><span class="p">:</span><span class="w"> </span><span class="nx">invocation</span><span class="p">.</span><span class="nx">InvocationID</span><span class="p">,</span>
+</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12"></a><span class="w">        </span><span class="nx">Role</span><span class="p">:</span><span class="w">      </span><span class="nx">protocol</span><span class="p">.</span><span class="nx">MessageRoleUser</span><span class="p">,</span>
+</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13"></a><span class="w">        </span><span class="nx">Parts</span><span class="p">:</span><span class="w">     </span><span class="p">[]</span><span class="nx">protocol</span><span class="p">.</span><span class="nx">Part</span><span class="p">{</span><span class="cm">/* 自定义内容 */</span><span class="p">},</span>
+</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14"></a><span class="w">    </span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-13-15"><a id="__codelineno-13-15" name="__codelineno-13-15"></a><span class="p">}</span>
+</span><span id="__span-13-16"><a id="__codelineno-13-16" name="__codelineno-13-16"></a>
+</span><span id="__span-13-17"><a id="__codelineno-13-17" name="__codelineno-13-17"></a><span class="c1">// 自定义事件转换器  </span>
+</span><span id="__span-13-18"><a id="__codelineno-13-18" name="__codelineno-13-18"></a><span class="kd">type</span><span class="w"> </span><span class="nx">CustomEventConverter</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
+</span><span id="__span-13-19"><a id="__codelineno-13-19" name="__codelineno-13-19"></a>
+</span><span id="__span-13-20"><a id="__codelineno-13-20" name="__codelineno-13-20"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">CustomEventConverter</span><span class="p">)</span><span class="w"> </span><span class="nx">ConvertToEvent</span><span class="p">(</span>
+</span><span id="__span-13-21"><a id="__codelineno-13-21" name="__codelineno-13-21"></a><span class="w">    </span><span class="nx">result</span><span class="w"> </span><span class="nx">protocol</span><span class="p">.</span><span class="nx">MessageResult</span><span class="p">,</span>
+</span><span id="__span-13-22"><a id="__codelineno-13-22" name="__codelineno-13-22"></a><span class="w">    </span><span class="nx">agentName</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span>
+</span><span id="__span-13-23"><a id="__codelineno-13-23" name="__codelineno-13-23"></a><span class="w">    </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
+</span><span id="__span-13-24"><a id="__codelineno-13-24" name="__codelineno-13-24"></a><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-13-25"><a id="__codelineno-13-25" name="__codelineno-13-25"></a><span class="w">    </span><span class="c1">// 自定义事件转换逻辑</span>
+</span><span id="__span-13-26"><a id="__codelineno-13-26" name="__codelineno-13-26"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">invocation</span><span class="p">.</span><span class="nx">InvocationID</span><span class="p">,</span><span class="w"> </span><span class="nx">agentName</span><span class="p">),</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-13-27"><a id="__codelineno-13-27" name="__codelineno-13-27"></a><span class="p">}</span>
+</span><span id="__span-13-28"><a id="__codelineno-13-28" name="__codelineno-13-28"></a>
+</span><span id="__span-13-29"><a id="__codelineno-13-29" name="__codelineno-13-29"></a><span class="c1">// 使用自定义转换器</span>
+</span><span id="__span-13-30"><a id="__codelineno-13-30" name="__codelineno-13-30"></a><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-13-31"><a id="__codelineno-13-31" name="__codelineno-13-31"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://remote-agent:8888&quot;</span><span class="p">),</span>
+</span><span id="__span-13-32"><a id="__codelineno-13-32" name="__codelineno-13-32"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithA2AMessageConverter</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">CustomA2AConverter</span><span class="p">{}),</span>
+</span><span id="__span-13-33"><a id="__codelineno-13-33" name="__codelineno-13-33"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithEventConverter</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">CustomEventConverter</span><span class="p">{}),</span>
+</span><span id="__span-13-34"><a id="__codelineno-13-34" name="__codelineno-13-34"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="a2a-server-vs-a2aagent">总结：A2A Server vs A2AAgent</h2>
 <table>
@@ -2925,21 +3009,21 @@
 </tbody>
 </table>
 <h3 id="_13">典型架构模式</h3>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1">1</a></span>
-<span class="normal"><a href="#__codelineno-13-2">2</a></span>
-<span class="normal"><a href="#__codelineno-13-3">3</a></span>
-<span class="normal"><a href="#__codelineno-13-4">4</a></span>
-<span class="normal"><a href="#__codelineno-13-5">5</a></span>
-<span class="normal"><a href="#__codelineno-13-6">6</a></span>
-<span class="normal"><a href="#__codelineno-13-7">7</a></span>
-<span class="normal"><a href="#__codelineno-13-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a>┌─────────────┐ A2A protocol  ┌───────────────┐
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a>│   Client    │──────────────→│ A2A Server    |
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a>│ (A2AAgent)  │               │ (local Agent) │
-</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a>└─────────────┘               └───────────────┘
-</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5"></a>      ↑                              ↑
-</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6"></a>      │                              │
-</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7"></a>   调用远程                       暴露本地
-</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8"></a>   Agent服务                     Agent服务
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1">1</a></span>
+<span class="normal"><a href="#__codelineno-14-2">2</a></span>
+<span class="normal"><a href="#__codelineno-14-3">3</a></span>
+<span class="normal"><a href="#__codelineno-14-4">4</a></span>
+<span class="normal"><a href="#__codelineno-14-5">5</a></span>
+<span class="normal"><a href="#__codelineno-14-6">6</a></span>
+<span class="normal"><a href="#__codelineno-14-7">7</a></span>
+<span class="normal"><a href="#__codelineno-14-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a>┌─────────────┐ A2A protocol  ┌───────────────┐
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2"></a>│   Client    │──────────────→│ A2A Server    |
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3"></a>│ (A2AAgent)  │               │ (local Agent) │
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4"></a>└─────────────┘               └───────────────┘
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5"></a>      ↑                              ↑
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6"></a>      │                              │
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7"></a>   调用远程                       暴露本地
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8"></a>   Agent服务                     Agent服务
 </span></code></pre></div></td></tr></table></div>
 <p>通过 A2A Server 和 A2AAgent 的配合使用，可以比较方便的构建的远程的 Agent 系统。</p>
 
@@ -2964,7 +3048,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月5日 04:12:09 UTC">2025-12-05 04:12:09</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月28日 03:33:05 UTC">2026-01-28 03:33:05</span>
   </span>
 
     
