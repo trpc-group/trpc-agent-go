@@ -338,6 +338,28 @@ Notes:
 - Members must support `SetSubAgents` (LLMAgent does). This is required so
   members can discover and transfer to each other.
 
+### Cross-request transfer (optional)
+
+By default, each new user message starts from the Swarm entry member
+(`entryName`), even if the previous message ended after one or more handoffs.
+
+If you want the "current owner" of the conversation to persist across user
+messages, enable cross-request transfer:
+
+```go
+tm, err := team.NewSwarm(
+    "team",
+    "researcher",
+    members,
+    team.WithCrossRequestTransfer(true),
+)
+```
+
+With this enabled, after a handoff, the next user message will start from the
+Agent that produced the last reply (until another `transfer_to_agent` happens).
+This feature is implemented via session state, so you must reuse the same
+session across requests.
+
 ## Swarm Guardrails
 
 Swarm-style handoffs can loop if Agents keep transferring back and forth.

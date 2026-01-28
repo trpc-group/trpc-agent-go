@@ -320,6 +320,26 @@ if err != nil {
 - 成员需要支持 `SetSubAgents`（LLMAgent 支持）。Swarm 需要成员之间能“发现彼此”，
   才能正确 transfer。
 
+### 跨请求 transfer（可选）
+
+默认情况下，每次新的用户输入都会从 Swarm 的 entry（入口）成员（`entryName`）开始，
+即使上一轮已经发生过一次或多次 handoff（交接）。
+
+如果你希望“当前接管会话的成员”在多次用户输入间保持不变，可以开启跨请求 transfer：
+
+```go
+tm, err := team.NewSwarm(
+    "team",
+    "researcher",
+    members,
+    team.WithCrossRequestTransfer(true),
+)
+```
+
+开启后：当某个成员通过 `transfer_to_agent` 交接并产出最后一次回复时，
+下一条用户输入将从该成员开始（直到再次发生 `transfer_to_agent`）。该能力通过
+Session State 实现，因此需要复用同一个 session。
+
 ## Swarm 的安全限制
 
 Swarm 的 handoff（交接）如果不加限制，可能会出现来回 transfer 的循环。
