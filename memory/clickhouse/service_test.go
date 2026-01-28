@@ -29,12 +29,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-func TestBasic(t *testing.T) {
-	// Basic test to ensure package compiles.
-	var _ memory.Service = (*Service)(nil)
-	t.Log("ClickHouse memory service interface implemented")
-}
-
 // mockMemoryExtractor is a mock implementation of extractor.MemoryExtractor.
 type mockMemoryExtractor struct{}
 
