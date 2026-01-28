@@ -720,10 +720,47 @@ for event := range eventChan {
 
 ### 安全中断执行
 
-- **取消上下文**：用 `context.WithCancel` 包裹 `runner.Run` 的 ctx，
-  当轮次或 token 超限时调用 `cancel()`。`llmflow` 将
-  `context.Canceled` 视为正常退出，会关闭 agent 事件通道，
-  runner 的消费循环也会正常结束，避免阻塞。
+当你调用 `Runner.Run` 时，框架会启动 goroutines 来持续产出事件，直到本次 run
+结束。
+
+这里有两种“停止”，非常容易混淆：
+
+1. **停止读取事件**（你的代码不读 eventChan 了）
+2. **停止本次 run**（agent 停止模型/工具调用并退出）
+
+如果你只是停止读取，但 run 还在继续，agent goroutine 可能会在写事件通道时阻塞，
+从而引发 goroutine 泄漏或“卡住的 run”。
+
+安全姿势永远是：
+
+1. **触发取消**（ctx cancel / requestID cancel / StopError）
+2. **把事件通道读到关闭为止**
+
+#### 方式 A：Ctrl+C（命令行程序）
+
+在命令行程序里，常见做法是把 Ctrl+C 转换为 ctx cancel：
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+defer stop()
+
+eventCh, err := r.Run(ctx, userID, sessionID, message)
+if err != nil {
+    return err
+}
+
+for range eventCh {
+    // 一直读到通道关闭：要么 ctx 被取消，要么 run 正常结束。
+}
+```
+
+#### 方式 B：取消上下文（推荐默认做法）
+
+用 `context.WithCancel` 包裹 `runner.Run` 的 ctx，在你希望中断时调用
+`cancel()`（例如：轮次上限、token 预算超限、用户点击“停止”等）。
+
+`llmflow` 将 `context.Canceled` 视为正常退出，会关闭 agent 事件通道，
+runner 的消费循环也会正常结束，避免写端阻塞。
 
 ```go
 ctx, cancel := context.WithCancel(context.Background())
@@ -751,11 +788,72 @@ for evt := range eventCh {
 }
 ```
 
-- **发送停止事件**：在自定义处理器或工具内部返回 `agent.NewStopError("原因")`。`llmflow` 会把它转换为 `stop_agent_error` 事件并停止流程。
-  仍建议配合 ctx cancel 进行硬截止。详见 [回调中的停止用法](https://trpc-group.github.io/trpc-agent-go/zh/callbacks/#stop-agent-via-callbacks)。
+如果你需要“尽快返回”（例如 HTTP handler 超时），但仍想避免写端阻塞，可以用单独
+的 goroutine 去 drain：
 
-- **避免直接 break 事件循环**：直接在 runner 的事件消费循环里 break 会让 agent goroutine 继续运行并可能在写通道时阻塞。
-  优先使用上下文取消或 `StopError`。
+```go
+// eventCh 是 Runner.Run 返回的事件通道。
+// cancel 是 context.WithCancel 返回的取消函数。
+go func() {
+    for range eventCh {
+    }
+}()
+cancel()
+return nil
+```
+
+#### 方式 C：按 `requestID` 取消（ManagedRunner）
+
+在服务端场景里，你经常需要在“另一个 goroutine / 另一个请求”里取消某次 run。
+这时可以用 request identifier（requestID）来定位并取消。
+
+1. 生成 requestID，并通过 `agent.WithRequestID` 传入 `Run`。
+2. 将 runner 转换为 `runner.ManagedRunner`。
+3. 调用 `Cancel(requestID)`。
+
+```go
+requestID := "req-123"
+
+eventCh, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithRequestID(requestID),
+)
+if err != nil {
+    return err
+}
+
+mr := r.(runner.ManagedRunner)
+_ = mr.Cancel(requestID)
+
+for range eventCh {
+}
+```
+
+#### 方式 D：在 run 内部触发停止（StopError）
+
+有时最适合决定“现在就停止”的位置是在工具、回调或处理器内部（例如：策略校验、
+预算限制、业务规则）。
+
+你可以返回 `agent.NewStopError("原因")`（也可以与其他错误 join / wrap）。
+`llmflow` 会把它转换为 `stop_agent_error` 事件并停止流程。
+
+但“硬截止”（强制时间上限）仍建议用 **ctx deadline**（`context.WithTimeout` /
+`agent.WithMaxRunDuration`）来实现。
+
+#### 常见误区
+
+- **只 break 事件循环**：run 可能还在后台继续，并在写通道时阻塞。
+- 全部使用 `context.Background()`：你没有办法取消，就无法中断 run。
+- 工具实现忽略 `ctx`：取消是协作式的；长耗时工具应检查 `ctx.Done()`，
+  或把 `ctx` 传入网络/DB 请求。
+
+可运行示例：
+
+- `examples/cancelrun`（Enter/Ctrl+C 取消、drain 事件通道）
+- `examples/managedrunner`（requestID cancel、detached cancel、最长运行时长）
 
 ### 资源管理
 
