@@ -349,8 +349,8 @@ func TestMiddleOutStrategy_MiddleOutLogic(t *testing.T) {
 	assert.Equal(t, RoleSystem, tailored[0].Role)
 	assert.Equal(t, "You are a helpful assistant.", tailored[0].Content)
 
-	// Should preserve last turn (last 2 messages).
-	assert.Equal(t, "Question 5", tailored[len(tailored)-2].Content)
+	// Should preserve the last user message.
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
 	assert.Equal(t, "Question 6", tailored[len(tailored)-1].Content)
 
 	// Should have removed some middle messages.
@@ -1416,9 +1416,9 @@ func TestHeadOutStrategy_BinarySearchAccuracy(t *testing.T) {
 	require.Greater(t, len(tailored), 0)
 	assert.Equal(t, RoleSystem, tailored[0].Role)
 
-	// Should preserve last turn (last 2 messages).
-	assert.Equal(t, "Last user message", tailored[len(tailored)-2].Content)
-	assert.Equal(t, "Last assistant response", tailored[len(tailored)-1].Content)
+	// The sequence must end with user/tool for request legality.
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+	assert.Equal(t, "Last user message", tailored[len(tailored)-1].Content)
 
 	// Verify token count is within limit.
 	totalTokens := 0
@@ -1456,9 +1456,9 @@ func TestTailOutStrategy_BinarySearchAccuracy(t *testing.T) {
 	require.Greater(t, len(tailored), 0)
 	assert.Equal(t, RoleSystem, tailored[0].Role)
 
-	// Should preserve last turn (last 2 messages).
-	assert.Equal(t, "Last user message", tailored[len(tailored)-2].Content)
-	assert.Equal(t, "Last assistant response", tailored[len(tailored)-1].Content)
+	// The sequence must end with user/tool for request legality.
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+	assert.Equal(t, "Last user message", tailored[len(tailored)-1].Content)
 
 	// Verify token count is within limit.
 	totalTokens := 0
@@ -1492,8 +1492,8 @@ func TestHeadOutStrategy_VeryTightBudget(t *testing.T) {
 		assert.Equal(t, RoleSystem, tailored[0].Role)
 	}
 	if len(tailored) >= 2 {
-		assert.Equal(t, "Query", tailored[len(tailored)-2].Content)
-		assert.Equal(t, "Response", tailored[len(tailored)-1].Content)
+		assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+		assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 	}
 
 	// Verify token count is within limit.
@@ -1528,8 +1528,8 @@ func TestTailOutStrategy_VeryTightBudget(t *testing.T) {
 		assert.Equal(t, RoleSystem, tailored[0].Role)
 	}
 	if len(tailored) >= 2 {
-		assert.Equal(t, "Query", tailored[len(tailored)-2].Content)
-		assert.Equal(t, "Response", tailored[len(tailored)-1].Content)
+		assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+		assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 	}
 
 	// Verify token count is within limit.
@@ -1561,8 +1561,8 @@ func TestHeadOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 
 	// Should return only preserved segments (system + last turn).
 	require.Greater(t, len(tailored), 0)
-	assert.Equal(t, RoleSystem, tailored[0].Role)
-	assert.Equal(t, RoleAssistant, tailored[len(tailored)-1].Role)
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 }
 
 // TestTailOutStrategy_PreservedSegmentsExceedBudget tests when preserved segments exceed budget.
@@ -1584,8 +1584,8 @@ func TestTailOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 
 	// Should return only preserved segments (system + last turn).
 	require.Greater(t, len(tailored), 0)
-	assert.Equal(t, RoleSystem, tailored[0].Role)
-	assert.Equal(t, RoleAssistant, tailored[len(tailored)-1].Role)
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 }
 
 // TestHeadOutStrategy_BalancedMessages tests HeadOut with balanced message distribution.
@@ -1611,8 +1611,8 @@ func TestHeadOutStrategy_BalancedMessages(t *testing.T) {
 
 	// Should preserve system and last turn.
 	assert.Equal(t, RoleSystem, tailored[0].Role)
-	assert.Equal(t, "Query", tailored[len(tailored)-2].Content)
-	assert.Equal(t, "Response", tailored[len(tailored)-1].Content)
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 
 	// Should keep tail messages (HeadOut removes from head).
 	hasTailMessages := false
@@ -1657,8 +1657,8 @@ func TestTailOutStrategy_BalancedMessages(t *testing.T) {
 
 	// Should preserve system and last turn.
 	assert.Equal(t, RoleSystem, tailored[0].Role)
-	assert.Equal(t, "Query", tailored[len(tailored)-2].Content)
-	assert.Equal(t, "Response", tailored[len(tailored)-1].Content)
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 
 	// Should keep head messages (TailOut removes from tail).
 	hasHeadMessages := false
