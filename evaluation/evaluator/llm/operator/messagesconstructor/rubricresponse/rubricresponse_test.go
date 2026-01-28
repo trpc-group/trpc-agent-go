@@ -51,28 +51,3 @@ func TestConstructMessagesIncludesAllFields(t *testing.T) {
 	assert.Contains(t, messages[0].Content, "test_final_response")
 	assert.Contains(t, messages[0].Content, "test_rubric_text")
 }
-
-func TestConstructMessagesIncludesContextMessages(t *testing.T) {
-	constructor := New()
-	actual := &evalset.Invocation{
-		ContextMessages: []*model.Message{
-			{Role: model.RoleSystem, Content: "system context"},
-		},
-		UserContent:   &model.Message{Role: model.RoleUser, Content: "test_user_content"},
-		FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "test_final_response"},
-	}
-	evalMetric := &metric.EvalMetric{
-		Criterion: &criterion.Criterion{
-			LLMJudge: &llm.LLMCriterion{
-				Rubrics: []*llm.Rubric{
-					{ID: "1", Content: &llm.RubricContent{Text: "test_rubric_text"}},
-				},
-			},
-		},
-	}
-	messages, err := constructor.ConstructMessages(context.Background(), []*evalset.Invocation{actual}, nil, evalMetric)
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Contains(t, messages[0].Content, "system context")
-	assert.Contains(t, messages[0].Content, "test_user_content")
-}

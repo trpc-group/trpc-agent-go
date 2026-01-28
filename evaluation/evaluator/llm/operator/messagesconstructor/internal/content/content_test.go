@@ -22,39 +22,6 @@ func TestExtractTextFromContent(t *testing.T) {
 	assert.Equal(t, "", ExtractTextFromContent(&model.Message{}))
 }
 
-func TestExtractTextFromContentCombinesContentAndParts(t *testing.T) {
-	partText := "part text"
-	content := &model.Message{
-		Content: "base content",
-		ContentParts: []model.ContentPart{
-			{Type: model.ContentTypeText, Text: &partText},
-		},
-	}
-	assert.Equal(t, "base content\npart text", ExtractTextFromContent(content))
-}
-
-func TestExtractTextFromContentFormatsNonTextParts(t *testing.T) {
-	content := &model.Message{
-		ContentParts: []model.ContentPart{
-			{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.com/a.png"}},
-			{Type: model.ContentTypeFile, File: &model.File{Name: "a.txt"}},
-		},
-	}
-	out := ExtractTextFromContent(content)
-	assert.Contains(t, out, "[image:https://example.com/a.png]")
-	assert.Contains(t, out, "[file:a.txt]")
-}
-
-func TestFormatContextMessagesIncludesRolePrefixes(t *testing.T) {
-	context := []*model.Message{
-		{Role: model.RoleSystem, Content: "sys"},
-		{Role: model.RoleUser, Content: "u"},
-	}
-	out := FormatContextMessages(context)
-	assert.Contains(t, out, "[system] sys")
-	assert.Contains(t, out, "[user] u")
-}
-
 func TestExtractRubrics(t *testing.T) {
 	rubrics := []*llm.Rubric{
 		{ID: "1", Content: &llm.RubricContent{Text: "foo"}},

@@ -110,15 +110,8 @@ func (e *finalResponseMessagesConstructor) ConstructMessages(ctx context.Context
 	}
 	actual := actuals[len(actuals)-1]
 	expected := expecteds[len(expecteds)-1]
-	userPrompt := content.ExtractTextFromContent(actual.UserContent)
-	contextBlock := content.FormatContextMessages(actual.ContextMessages)
-	if contextBlock != "" && userPrompt != "" {
-		userPrompt = "Context messages:\n" + contextBlock + "\n\nUser prompt:\n" + userPrompt
-	} else if contextBlock != "" {
-		userPrompt = "Context messages:\n" + contextBlock
-	}
 	data := finalResponsePromptData{
-		UserPrompt:       userPrompt,
+		UserPrompt:       content.ExtractTextFromContent(actual.UserContent),
 		ActualResponse:   content.ExtractTextFromContent(actual.FinalResponse),
 		ExpectedResponse: content.ExtractTextFromContent(expected.FinalResponse),
 	}

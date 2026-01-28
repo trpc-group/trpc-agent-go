@@ -41,27 +41,6 @@ func TestConstructMessagesBuildsPrompt(t *testing.T) {
 	assert.Contains(t, messages[0].Content, "expected answer")
 }
 
-func TestConstructMessagesIncludesContextMessages(t *testing.T) {
-	constructor := New()
-	actual := &evalset.Invocation{
-		ContextMessages: []*model.Message{
-			{Role: model.RoleSystem, Content: "system context"},
-			{Role: model.RoleUser, Content: "previous user message"},
-		},
-		UserContent:   &model.Message{Role: model.RoleUser, Content: "current user prompt"},
-		FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "actual answer"},
-	}
-	expected := &evalset.Invocation{
-		FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "expected answer"},
-	}
-	messages, err := constructor.ConstructMessages(context.Background(), []*evalset.Invocation{actual}, []*evalset.Invocation{expected}, &metric.EvalMetric{})
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Contains(t, messages[0].Content, "system context")
-	assert.Contains(t, messages[0].Content, "previous user message")
-	assert.Contains(t, messages[0].Content, "current user prompt")
-}
-
 func TestConstructMessagesTemplateError(t *testing.T) {
 	original := finalResponsePromptTemplate
 	t.Cleanup(func() { finalResponsePromptTemplate = original })
