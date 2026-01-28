@@ -19,7 +19,6 @@ import (
 	"mime"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -654,11 +653,7 @@ func (t *RunTool) removeWorkspacePath(
 		return nil
 	}
 	if eng == nil || eng.Runner() == nil {
-		if ws.Path == "" {
-			return nil
-		}
-		p := filepath.Join(ws.Path, filepath.FromSlash(target))
-		return os.RemoveAll(p)
+		return fmt.Errorf("workspace runner is not configured")
 	}
 	var sb strings.Builder
 	sb.WriteString("set -e; if [ -e ")
