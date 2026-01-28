@@ -734,10 +734,49 @@ for event := range eventChan {
 
 ### Stopping a Run Safely
 
-- **Cancel the context**: Wrap `runner.Run` with `context.WithCancel`.
-  Call `cancel()` when turn count or token budget is hit. `llmflow`
-  treats `context.Canceled` as graceful exit and closes the agent event
-  channel, so the runner loop finishes cleanly without blocking writers.
+When you call `Runner.Run`, the framework starts goroutines that keep producing
+events until the run ends.
+
+There are two different “stops” people often confuse:
+
+1. **Stopping your reader loop** (your code stops reading events)
+2. **Stopping the run** (the agent stops calling models/tools and exits)
+
+If you only stop reading but the run is still active, the agent goroutine may
+block trying to write to the event channel. This can lead to goroutine leaks
+and “stuck” runs.
+
+The safe pattern is always:
+
+1. **Trigger cancellation** (ctx cancel / requestID cancel / StopError)
+2. **Keep draining** the event channel until it is closed
+
+#### Option A: Ctrl+C (terminal programs)
+
+In a CLI or local demo, a common approach is to translate Ctrl+C into context
+cancellation:
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+defer stop()
+
+eventCh, err := r.Run(ctx, userID, sessionID, message)
+if err != nil {
+    return err
+}
+
+for range eventCh {
+    // Drain until the run stops (ctx canceled or run completed).
+}
+```
+
+#### Option B: Cancel the context (recommended default)
+
+Wrap `Runner.Run` with `context.WithCancel` and call `cancel()` when you decide
+to stop (for example, max turns, token budget, user clicked “Stop”, etc.).
+
+`llmflow` treats `context.Canceled` as a graceful exit and closes the agent
+event channel, so the runner loop can finish cleanly without blocking writers.
 
 ```go
 ctx, cancel := context.WithCancel(context.Background())
@@ -765,11 +804,72 @@ for evt := range eventCh {
 }
 ```
 
-- **Emit a stop event**: Inside custom processors or tools, return `agent.NewStopError("reason")`. `llmflow` converts it into a
-  `stop_agent_error` event and stops the flow. Still pair with context cancel for hard cutoffs.
+If you need to return early (for example, your HTTP handler timed out) but
+still want to avoid blocking writers, you can drain in a separate goroutine:
 
-- **Avoid breaking the runner loop directly**: Breaking the event-loop reader leaves the agent goroutine running and can block on channel
-  writes. Prefer context cancellation or `StopError`.
+```go
+go func() {
+    for range eventCh {
+    }
+}()
+cancel()
+return nil
+```
+
+#### Option C: Cancel by `requestID` (ManagedRunner)
+
+In server scenarios, you often want to cancel a run from a different goroutine
+or even a different request. For that, use a request identifier (requestID).
+
+1. Generate a requestID and pass it into `Run` via `agent.WithRequestID`.
+2. Type-assert the runner to `runner.ManagedRunner`.
+3. Call `Cancel(requestID)`.
+
+```go
+requestID := "req-123"
+
+eventCh, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithRequestID(requestID),
+)
+if err != nil {
+    return err
+}
+
+mr := r.(runner.ManagedRunner)
+_ = mr.Cancel(requestID)
+
+for range eventCh {
+}
+```
+
+#### Option D: Stop from inside the run (StopError)
+
+Sometimes the best place to decide “stop now” is inside a tool, callback, or
+processor (for example, policy checks, budget limits, or user-defined rules).
+
+Return `agent.NewStopError("reason")` (or wrap it with other errors). `llmflow`
+converts it into a `stop_agent_error` event and stops the flow.
+
+Still prefer **context deadlines** (`WithTimeout`, `WithMaxRunDuration`) for
+hard cutoffs.
+
+#### Common mistakes
+
+- **Breaking the event-loop reader** without cancellation: the run may keep
+  going and block on channel writes.
+- Using `context.Background()` everywhere: you cannot stop a run if you have no
+  way to cancel.
+- Writing tools that ignore `ctx`: cancellation is cooperative; long-running
+  tools should check `ctx.Done()` or pass `ctx` into network/DB requests.
+
+See runnable demos:
+
+- `examples/cancelrun` (cancel via Enter/Ctrl+C, drain events)
+- `examples/managedrunner` (requestID cancel, detached cancel, max duration)
 
 ### Resource Management
 
