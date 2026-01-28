@@ -1103,6 +1103,57 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Stopping a Run Safely">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-a-ctrlc-terminal-programs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option A: Ctrl+C (terminal programs)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-b-cancel-the-context-recommended-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option B: Cancel the context (recommended default)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-c-cancel-by-requestid-managedrunner" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option C: Cancel by requestID (ManagedRunner)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-d-stop-from-inside-the-run-stoperror" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option D: Stop from inside the run (StopError)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#common-mistakes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Common mistakes
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -2417,6 +2468,57 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Stopping a Run Safely">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-a-ctrlc-terminal-programs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option A: Ctrl+C (terminal programs)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-b-cancel-the-context-recommended-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option B: Cancel the context (recommended default)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-c-cancel-by-requestid-managedrunner" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option C: Cancel by requestID (ManagedRunner)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-d-stop-from-inside-the-run-stoperror" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option D: Stop from inside the run (StopError)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#common-mistakes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Common mistakes
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -3463,12 +3565,24 @@ are forwarded to your <code>eventChan</code>.</p>
 </span><span id="__span-27-15"><a id="__codelineno-27-15" name="__codelineno-27-15"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="stopping-a-run-safely">Stopping a Run Safely</h3>
-<ul>
-<li><strong>Cancel the context</strong>: Wrap <code>runner.Run</code> with <code>context.WithCancel</code>.
-  Call <code>cancel()</code> when turn count or token budget is hit. <code>llmflow</code>
-  treats <code>context.Canceled</code> as graceful exit and closes the agent event
-  channel, so the runner loop finishes cleanly without blocking writers.</li>
-</ul>
+<p>When you call <code>Runner.Run</code>, the framework starts goroutines that keep producing
+events until the run ends.</p>
+<p>There are two different “stops” people often confuse:</p>
+<ol>
+<li><strong>Stopping your reader loop</strong> (your code stops reading events)</li>
+<li><strong>Stopping the run</strong> (the agent stops calling models/tools and exits)</li>
+</ol>
+<p>If you only stop reading but the run is still active, the agent goroutine may
+block trying to write to the event channel. This can lead to goroutine leaks
+and “stuck” runs.</p>
+<p>The safe pattern is always:</p>
+<ol>
+<li><strong>Trigger cancellation</strong> (ctx cancel / requestID cancel / StopError)</li>
+<li><strong>Keep draining</strong> the event channel until it is closed</li>
+</ol>
+<h4 id="option-a-ctrlc-terminal-programs">Option A: Ctrl+C (terminal programs)</h4>
+<p>In a CLI or local demo, a common approach is to translate Ctrl+C into context
+cancellation:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-28-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-28-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-28-3"> 3</a></span>
@@ -3479,57 +3593,23 @@ are forwarded to your <code>eventChan</code>.</p>
 <span class="normal"><a href="#__codelineno-28-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-28-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-28-10">10</a></span>
-<span class="normal"><a href="#__codelineno-28-11">11</a></span>
-<span class="normal"><a href="#__codelineno-28-12">12</a></span>
-<span class="normal"><a href="#__codelineno-28-13">13</a></span>
-<span class="normal"><a href="#__codelineno-28-14">14</a></span>
-<span class="normal"><a href="#__codelineno-28-15">15</a></span>
-<span class="normal"><a href="#__codelineno-28-16">16</a></span>
-<span class="normal"><a href="#__codelineno-28-17">17</a></span>
-<span class="normal"><a href="#__codelineno-28-18">18</a></span>
-<span class="normal"><a href="#__codelineno-28-19">19</a></span>
-<span class="normal"><a href="#__codelineno-28-20">20</a></span>
-<span class="normal"><a href="#__codelineno-28-21">21</a></span>
-<span class="normal"><a href="#__codelineno-28-22">22</a></span>
-<span class="normal"><a href="#__codelineno-28-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1"></a><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithCancel</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">())</span>
-</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2"></a><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
+<span class="normal"><a href="#__codelineno-28-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1"></a><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">stop</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">signal</span><span class="p">.</span><span class="nx">NotifyContext</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="nx">os</span><span class="p">.</span><span class="nx">Interrupt</span><span class="p">)</span>
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2"></a><span class="k">defer</span><span class="w"> </span><span class="nx">stop</span><span class="p">()</span>
 </span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3"></a>
 </span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4"></a><span class="nx">eventCh</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
 </span><span id="__span-28-5"><a id="__codelineno-28-5" name="__codelineno-28-5"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
 </span><span id="__span-28-7"><a id="__codelineno-28-7" name="__codelineno-28-7"></a><span class="p">}</span>
 </span><span id="__span-28-8"><a id="__codelineno-28-8" name="__codelineno-28-8"></a>
-</span><span id="__span-28-9"><a id="__codelineno-28-9" name="__codelineno-28-9"></a><span class="nx">turns</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span>
-</span><span id="__span-28-10"><a id="__codelineno-28-10" name="__codelineno-28-10"></a><span class="k">for</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventCh</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-28-11"><a id="__codelineno-28-11" name="__codelineno-28-11"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-28-12"><a id="__codelineno-28-12" name="__codelineno-28-12"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;event error: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
-</span><span id="__span-28-13"><a id="__codelineno-28-13" name="__codelineno-28-13"></a><span class="w">        </span><span class="k">continue</span>
-</span><span id="__span-28-14"><a id="__codelineno-28-14" name="__codelineno-28-14"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-28-15"><a id="__codelineno-28-15" name="__codelineno-28-15"></a><span class="w">    </span><span class="c1">// ... handle evt ...</span>
-</span><span id="__span-28-16"><a id="__codelineno-28-16" name="__codelineno-28-16"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">IsFinalResponse</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-28-17"><a id="__codelineno-28-17" name="__codelineno-28-17"></a><span class="w">        </span><span class="k">break</span>
-</span><span id="__span-28-18"><a id="__codelineno-28-18" name="__codelineno-28-18"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-28-19"><a id="__codelineno-28-19" name="__codelineno-28-19"></a><span class="w">    </span><span class="nx">turns</span><span class="o">++</span>
-</span><span id="__span-28-20"><a id="__codelineno-28-20" name="__codelineno-28-20"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">turns</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">maxTurns</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-28-21"><a id="__codelineno-28-21" name="__codelineno-28-21"></a><span class="w">        </span><span class="nx">cancel</span><span class="p">()</span><span class="w"> </span><span class="c1">// stop further model/tool calls.</span>
-</span><span id="__span-28-22"><a id="__codelineno-28-22" name="__codelineno-28-22"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-28-23"><a id="__codelineno-28-23" name="__codelineno-28-23"></a><span class="p">}</span>
+</span><span id="__span-28-9"><a id="__codelineno-28-9" name="__codelineno-28-9"></a><span class="k">for</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventCh</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-28-10"><a id="__codelineno-28-10" name="__codelineno-28-10"></a><span class="w">    </span><span class="c1">// Drain until the run stops (ctx canceled or run completed).</span>
+</span><span id="__span-28-11"><a id="__codelineno-28-11" name="__codelineno-28-11"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<ul>
-<li><strong>Emit a stop event</strong>: Inside custom processors or tools, return <code>agent.NewStopError("reason")</code>. <code>llmflow</code> converts it into a
-  <code>stop_agent_error</code> event and stops the flow. Still pair with context cancel for hard cutoffs.</li>
-</ul>
-<ul>
-<li><strong>Avoid breaking the runner loop directly</strong>: Breaking the event-loop reader leaves the agent goroutine running and can block on channel
-  writes. Prefer context cancellation or <code>StopError</code>.</li>
-</ul>
-<h3 id="resource-management">Resource Management</h3>
-<h4 id="closing-runner-important">🔒 Closing Runner (Important)</h4>
-<p><strong>You MUST call <code>Close()</code> when the Runner is no longer needed to prevent goroutine leaks(<code>trpc-agent-go &gt;= v0.5.0</code>).</strong></p>
-<p><strong>Runner Only Closes Resources It Created</strong></p>
-<p>When a Runner is created without providing a Session Service, it automatically creates a default inmemory Session Service. This service starts background goroutines internally (for asynchronous summary processing, TTL-based session cleanup, etc.). <strong>Runner only manages the lifecycle of this self-created inmemory Session Service.</strong> If you provide your own Session Service via <code>WithSessionService()</code>, you are responsible for managing its lifecycle—Runner won't close it.</p>
-<p>If you don't call <code>Close()</code> on a Runner that owns an inmemory Session Service, the background goroutines will run forever, causing resource leaks.</p>
-<p><strong>Recommended Practice</strong>:</p>
+<h4 id="option-b-cancel-the-context-recommended-default">Option B: Cancel the context (recommended default)</h4>
+<p>Wrap <code>Runner.Run</code> with <code>context.WithCancel</code> and call <code>cancel()</code> when you decide
+to stop (for example, max turns, token budget, user clicked “Stop”, etc.).</p>
+<p><code>llmflow</code> treats <code>context.Canceled</code> as a graceful exit and closes the agent
+event channel, so the runner loop can finish cleanly without blocking writers.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-29-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-29-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-29-3"> 3</a></span>
@@ -3545,45 +3625,59 @@ are forwarded to your <code>eventChan</code>.</p>
 <span class="normal"><a href="#__codelineno-29-13">13</a></span>
 <span class="normal"><a href="#__codelineno-29-14">14</a></span>
 <span class="normal"><a href="#__codelineno-29-15">15</a></span>
-<span class="normal"><a href="#__codelineno-29-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1"></a><span class="c1">// ✅ Recommended: Use defer to ensure cleanup</span>
-</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
-</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span><span class="w">  </span><span class="c1">// Ensure cleanup on function exit (trpc-agent-go &gt;= v0.5.0)</span>
-</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4"></a>
-</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5"></a><span class="c1">// Use the runner</span>
-</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
-</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-8"><a id="__codelineno-29-8" name="__codelineno-29-8"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-29-9"><a id="__codelineno-29-9" name="__codelineno-29-9"></a><span class="p">}</span>
-</span><span id="__span-29-10"><a id="__codelineno-29-10" name="__codelineno-29-10"></a>
-</span><span id="__span-29-11"><a id="__codelineno-29-11" name="__codelineno-29-11"></a><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-12"><a id="__codelineno-29-12" name="__codelineno-29-12"></a><span class="w">    </span><span class="c1">// Process events</span>
-</span><span id="__span-29-13"><a id="__codelineno-29-13" name="__codelineno-29-13"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">IsRunnerCompletion</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-14"><a id="__codelineno-29-14" name="__codelineno-29-14"></a><span class="w">        </span><span class="k">break</span>
-</span><span id="__span-29-15"><a id="__codelineno-29-15" name="__codelineno-29-15"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-29-16"><a id="__codelineno-29-16" name="__codelineno-29-16"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-29-16">16</a></span>
+<span class="normal"><a href="#__codelineno-29-17">17</a></span>
+<span class="normal"><a href="#__codelineno-29-18">18</a></span>
+<span class="normal"><a href="#__codelineno-29-19">19</a></span>
+<span class="normal"><a href="#__codelineno-29-20">20</a></span>
+<span class="normal"><a href="#__codelineno-29-21">21</a></span>
+<span class="normal"><a href="#__codelineno-29-22">22</a></span>
+<span class="normal"><a href="#__codelineno-29-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1"></a><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithCancel</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">())</span>
+</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2"></a><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
+</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3"></a>
+</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4"></a><span class="nx">eventCh</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
+</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7"></a><span class="p">}</span>
+</span><span id="__span-29-8"><a id="__codelineno-29-8" name="__codelineno-29-8"></a>
+</span><span id="__span-29-9"><a id="__codelineno-29-9" name="__codelineno-29-9"></a><span class="nx">turns</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span>
+</span><span id="__span-29-10"><a id="__codelineno-29-10" name="__codelineno-29-10"></a><span class="k">for</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventCh</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-11"><a id="__codelineno-29-11" name="__codelineno-29-11"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-12"><a id="__codelineno-29-12" name="__codelineno-29-12"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;event error: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
+</span><span id="__span-29-13"><a id="__codelineno-29-13" name="__codelineno-29-13"></a><span class="w">        </span><span class="k">continue</span>
+</span><span id="__span-29-14"><a id="__codelineno-29-14" name="__codelineno-29-14"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-29-15"><a id="__codelineno-29-15" name="__codelineno-29-15"></a><span class="w">    </span><span class="c1">// ... handle evt ...</span>
+</span><span id="__span-29-16"><a id="__codelineno-29-16" name="__codelineno-29-16"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">IsFinalResponse</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-17"><a id="__codelineno-29-17" name="__codelineno-29-17"></a><span class="w">        </span><span class="k">break</span>
+</span><span id="__span-29-18"><a id="__codelineno-29-18" name="__codelineno-29-18"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-29-19"><a id="__codelineno-29-19" name="__codelineno-29-19"></a><span class="w">    </span><span class="nx">turns</span><span class="o">++</span>
+</span><span id="__span-29-20"><a id="__codelineno-29-20" name="__codelineno-29-20"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">turns</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">maxTurns</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-21"><a id="__codelineno-29-21" name="__codelineno-29-21"></a><span class="w">        </span><span class="nx">cancel</span><span class="p">()</span><span class="w"> </span><span class="c1">// stop further model/tool calls.</span>
+</span><span id="__span-29-22"><a id="__codelineno-29-22" name="__codelineno-29-22"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-29-23"><a id="__codelineno-29-23" name="__codelineno-29-23"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>When You Provide Your Own Session Service</strong>:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-30-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-30-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-30-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-30-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-30-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-30-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-30-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-30-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-30-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-30-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1"></a><span class="c1">// You create and manage the session service lifecycle</span>
-</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">redis</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span><span class="nx">redis</span><span class="p">.</span><span class="nx">WithRedisClientURL</span><span class="p">(</span><span class="s">&quot;redis://localhost:6379&quot;</span><span class="p">))</span>
-</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3"></a><span class="k">defer</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span><span class="w">  </span><span class="c1">// YOU are responsible for closing it</span>
-</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4"></a>
-</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5"></a><span class="c1">// Runner uses but doesn&#39;t own this session service</span>
-</span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">,</span>
-</span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">))</span>
-</span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span><span class="w">  </span><span class="c1">// This will NOT close sessionService (you provided it) (trpc-agent-go &gt;= v0.5.0)</span>
-</span><span id="__span-30-9"><a id="__codelineno-30-9" name="__codelineno-30-9"></a>
-</span><span id="__span-30-10"><a id="__codelineno-30-10" name="__codelineno-30-10"></a><span class="c1">// ... use the runner</span>
+<p>If you need to return early (for example, your HTTP handler timed out) but
+still want to avoid blocking writers, you can drain in a separate goroutine:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-30-1">1</a></span>
+<span class="normal"><a href="#__codelineno-30-2">2</a></span>
+<span class="normal"><a href="#__codelineno-30-3">3</a></span>
+<span class="normal"><a href="#__codelineno-30-4">4</a></span>
+<span class="normal"><a href="#__codelineno-30-5">5</a></span>
+<span class="normal"><a href="#__codelineno-30-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1"></a><span class="k">go</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventCh</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4"></a><span class="p">}()</span>
+</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5"></a><span class="nx">cancel</span><span class="p">()</span>
+</span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6"></a><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>Long-Running Services</strong>:</p>
+<h4 id="option-c-cancel-by-requestid-managedrunner">Option C: Cancel by <code>requestID</code> (ManagedRunner)</h4>
+<p>In server scenarios, you often want to cancel a run from a different goroutine
+or even a different request. For that, use a request identifier (requestID).</p>
+<ol>
+<li>Generate a requestID and pass it into <code>Run</code> via <code>agent.WithRequestID</code>.</li>
+<li>Type-assert the runner to <code>runner.ManagedRunner</code>.</li>
+<li>Call <code>Cancel(requestID)</code>.</li>
+</ol>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-31-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-31-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-31-3"> 3</a></span>
@@ -3601,57 +3695,53 @@ are forwarded to your <code>eventChan</code>.</p>
 <span class="normal"><a href="#__codelineno-31-15">15</a></span>
 <span class="normal"><a href="#__codelineno-31-16">16</a></span>
 <span class="normal"><a href="#__codelineno-31-17">17</a></span>
-<span class="normal"><a href="#__codelineno-31-18">18</a></span>
-<span class="normal"><a href="#__codelineno-31-19">19</a></span>
-<span class="normal"><a href="#__codelineno-31-20">20</a></span>
-<span class="normal"><a href="#__codelineno-31-21">21</a></span>
-<span class="normal"><a href="#__codelineno-31-22">22</a></span>
-<span class="normal"><a href="#__codelineno-31-23">23</a></span>
-<span class="normal"><a href="#__codelineno-31-24">24</a></span>
-<span class="normal"><a href="#__codelineno-31-25">25</a></span>
-<span class="normal"><a href="#__codelineno-31-26">26</a></span>
-<span class="normal"><a href="#__codelineno-31-27">27</a></span>
-<span class="normal"><a href="#__codelineno-31-28">28</a></span>
-<span class="normal"><a href="#__codelineno-31-29">29</a></span>
-<span class="normal"><a href="#__codelineno-31-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Service</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2"></a><span class="w">    </span><span class="nx">runner</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Runner</span>
-</span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3"></a><span class="w">    </span><span class="nx">sessionService</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">Service</span><span class="w">  </span><span class="c1">// If you manage it yourself</span>
-</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4"></a><span class="p">}</span>
-</span><span id="__span-31-5"><a id="__codelineno-31-5" name="__codelineno-31-5"></a>
-</span><span id="__span-31-6"><a id="__codelineno-31-6" name="__codelineno-31-6"></a><span class="kd">func</span><span class="w"> </span><span class="nx">NewService</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-31-7"><a id="__codelineno-31-7" name="__codelineno-31-7"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
-</span><span id="__span-31-8"><a id="__codelineno-31-8" name="__codelineno-31-8"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Service</span><span class="p">{</span><span class="nx">runner</span><span class="p">:</span><span class="w"> </span><span class="nx">r</span><span class="p">}</span>
-</span><span id="__span-31-9"><a id="__codelineno-31-9" name="__codelineno-31-9"></a><span class="p">}</span>
-</span><span id="__span-31-10"><a id="__codelineno-31-10" name="__codelineno-31-10"></a>
-</span><span id="__span-31-11"><a id="__codelineno-31-11" name="__codelineno-31-11"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="p">)</span><span class="w"> </span><span class="nx">Start</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-31-12"><a id="__codelineno-31-12" name="__codelineno-31-12"></a><span class="w">    </span><span class="c1">// Service startup logic</span>
-</span><span id="__span-31-13"><a id="__codelineno-31-13" name="__codelineno-31-13"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-31-14"><a id="__codelineno-31-14" name="__codelineno-31-14"></a><span class="p">}</span>
-</span><span id="__span-31-15"><a id="__codelineno-31-15" name="__codelineno-31-15"></a>
-</span><span id="__span-31-16"><a id="__codelineno-31-16" name="__codelineno-31-16"></a><span class="c1">// Call Close when shutting down the service</span>
-</span><span id="__span-31-17"><a id="__codelineno-31-17" name="__codelineno-31-17"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="p">)</span><span class="w"> </span><span class="nx">Stop</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-31-18"><a id="__codelineno-31-18" name="__codelineno-31-18"></a><span class="w">    </span><span class="c1">// Close runner (which closes its owned inmemory session service)</span>
-</span><span id="__span-31-19"><a id="__codelineno-31-19" name="__codelineno-31-19"></a><span class="w">    </span><span class="c1">// trpc-agent-go &gt;= v0.5.0</span>
-</span><span id="__span-31-20"><a id="__codelineno-31-20" name="__codelineno-31-20"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">runner</span><span class="p">.</span><span class="nx">Close</span><span class="p">();</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-31-21"><a id="__codelineno-31-21" name="__codelineno-31-21"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-31-22"><a id="__codelineno-31-22" name="__codelineno-31-22"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-31-23"><a id="__codelineno-31-23" name="__codelineno-31-23"></a>
-</span><span id="__span-31-24"><a id="__codelineno-31-24" name="__codelineno-31-24"></a><span class="w">    </span><span class="c1">// If you provided your own session service, close it here</span>
-</span><span id="__span-31-25"><a id="__codelineno-31-25" name="__codelineno-31-25"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">sessionService</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-31-26"><a id="__codelineno-31-26" name="__codelineno-31-26"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
-</span><span id="__span-31-27"><a id="__codelineno-31-27" name="__codelineno-31-27"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-31-28"><a id="__codelineno-31-28" name="__codelineno-31-28"></a>
-</span><span id="__span-31-29"><a id="__codelineno-31-29" name="__codelineno-31-29"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-31-30"><a id="__codelineno-31-30" name="__codelineno-31-30"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-31-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1"></a><span class="nx">requestID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;req-123&quot;</span>
+</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2"></a>
+</span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3"></a><span class="nx">eventCh</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-31-5"><a id="__codelineno-31-5" name="__codelineno-31-5"></a><span class="w">    </span><span class="nx">userID</span><span class="p">,</span>
+</span><span id="__span-31-6"><a id="__codelineno-31-6" name="__codelineno-31-6"></a><span class="w">    </span><span class="nx">sessionID</span><span class="p">,</span>
+</span><span id="__span-31-7"><a id="__codelineno-31-7" name="__codelineno-31-7"></a><span class="w">    </span><span class="nx">message</span><span class="p">,</span>
+</span><span id="__span-31-8"><a id="__codelineno-31-8" name="__codelineno-31-8"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithRequestID</span><span class="p">(</span><span class="nx">requestID</span><span class="p">),</span>
+</span><span id="__span-31-9"><a id="__codelineno-31-9" name="__codelineno-31-9"></a><span class="p">)</span>
+</span><span id="__span-31-10"><a id="__codelineno-31-10" name="__codelineno-31-10"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-31-11"><a id="__codelineno-31-11" name="__codelineno-31-11"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-31-12"><a id="__codelineno-31-12" name="__codelineno-31-12"></a><span class="p">}</span>
+</span><span id="__span-31-13"><a id="__codelineno-31-13" name="__codelineno-31-13"></a>
+</span><span id="__span-31-14"><a id="__codelineno-31-14" name="__codelineno-31-14"></a><span class="nx">mr</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.(</span><span class="nx">runner</span><span class="p">.</span><span class="nx">ManagedRunner</span><span class="p">)</span>
+</span><span id="__span-31-15"><a id="__codelineno-31-15" name="__codelineno-31-15"></a><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">mr</span><span class="p">.</span><span class="nx">Cancel</span><span class="p">(</span><span class="nx">requestID</span><span class="p">)</span>
+</span><span id="__span-31-16"><a id="__codelineno-31-16" name="__codelineno-31-16"></a>
+</span><span id="__span-31-17"><a id="__codelineno-31-17" name="__codelineno-31-17"></a><span class="k">for</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventCh</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-31-18"><a id="__codelineno-31-18" name="__codelineno-31-18"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>Important Notes</strong>:</p>
+<h4 id="option-d-stop-from-inside-the-run-stoperror">Option D: Stop from inside the run (StopError)</h4>
+<p>Sometimes the best place to decide “stop now” is inside a tool, callback, or
+processor (for example, policy checks, budget limits, or user-defined rules).</p>
+<p>Return <code>agent.NewStopError("reason")</code> (or wrap it with other errors). <code>llmflow</code>
+converts it into a <code>stop_agent_error</code> event and stops the flow.</p>
+<p>Still prefer <strong>context deadlines</strong> (<code>WithTimeout</code>, <code>WithMaxRunDuration</code>) for
+hard cutoffs.</p>
+<h4 id="common-mistakes">Common mistakes</h4>
 <ul>
-<li>✅ <code>Close()</code> is idempotent; calling it multiple times is safe</li>
-<li>✅ <strong>Runner only closes the inmemory Session Service it creates by default</strong></li>
-<li>✅ If you provide your own Session Service via <code>WithSessionService()</code>, Runner won't close it (you manage it yourself)</li>
-<li>❌ Not calling <code>Close()</code> when Runner owns an inmemory Session Service will cause goroutine leaks</li>
+<li><strong>Breaking the event-loop reader</strong> without cancellation: the run may keep
+  going and block on channel writes.</li>
+<li>Using <code>context.Background()</code> everywhere: you cannot stop a run if you have no
+  way to cancel.</li>
+<li>Writing tools that ignore <code>ctx</code>: cancellation is cooperative; long-running
+  tools should check <code>ctx.Done()</code> or pass <code>ctx</code> into network/DB requests.</li>
 </ul>
-<h4 id="context-lifecycle-control">Context Lifecycle Control</h4>
+<p>See runnable demos:</p>
+<ul>
+<li><code>examples/cancelrun</code> (cancel via Enter/Ctrl+C, drain events)</li>
+<li><code>examples/managedrunner</code> (requestID cancel, detached cancel, max duration)</li>
+</ul>
+<h3 id="resource-management">Resource Management</h3>
+<h4 id="closing-runner-important">🔒 Closing Runner (Important)</h4>
+<p><strong>You MUST call <code>Close()</code> when the Runner is no longer needed to prevent goroutine leaks(<code>trpc-agent-go &gt;= v0.5.0</code>).</strong></p>
+<p><strong>Runner Only Closes Resources It Created</strong></p>
+<p>When a Runner is created without providing a Session Service, it automatically creates a default inmemory Session Service. This service starts background goroutines internally (for asynchronous summary processing, TTL-based session cleanup, etc.). <strong>Runner only manages the lifecycle of this self-created inmemory Session Service.</strong> If you provide your own Session Service via <code>WithSessionService()</code>, you are responsible for managing its lifecycle—Runner won't close it.</p>
+<p>If you don't call <code>Close()</code> on a Runner that owns an inmemory Session Service, the background goroutines will run forever, causing resource leaks.</p>
+<p><strong>Recommended Practice</strong>:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-32-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-32-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-32-3"> 3</a></span>
@@ -3667,11 +3757,11 @@ are forwarded to your <code>eventChan</code>.</p>
 <span class="normal"><a href="#__codelineno-32-13">13</a></span>
 <span class="normal"><a href="#__codelineno-32-14">14</a></span>
 <span class="normal"><a href="#__codelineno-32-15">15</a></span>
-<span class="normal"><a href="#__codelineno-32-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1"></a><span class="c1">// Use context to control the lifecycle of a single run</span>
-</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2"></a><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithCancel</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">())</span>
-</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3"></a><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
+<span class="normal"><a href="#__codelineno-32-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1"></a><span class="c1">// ✅ Recommended: Use defer to ensure cleanup</span>
+</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span><span class="w">  </span><span class="c1">// Ensure cleanup on function exit (trpc-agent-go &gt;= v0.5.0)</span>
 </span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4"></a>
-</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5"></a><span class="c1">// Ensure all events are consumed</span>
+</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5"></a><span class="c1">// Use the runner</span>
 </span><span id="__span-32-6"><a id="__codelineno-32-6" name="__codelineno-32-6"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
 </span><span id="__span-32-7"><a id="__codelineno-32-7" name="__codelineno-32-7"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-32-8"><a id="__codelineno-32-8" name="__codelineno-32-8"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -3679,12 +3769,12 @@ are forwarded to your <code>eventChan</code>.</p>
 </span><span id="__span-32-10"><a id="__codelineno-32-10" name="__codelineno-32-10"></a>
 </span><span id="__span-32-11"><a id="__codelineno-32-11" name="__codelineno-32-11"></a><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-32-12"><a id="__codelineno-32-12" name="__codelineno-32-12"></a><span class="w">    </span><span class="c1">// Process events</span>
-</span><span id="__span-32-13"><a id="__codelineno-32-13" name="__codelineno-32-13"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-32-13"><a id="__codelineno-32-13" name="__codelineno-32-13"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">IsRunnerCompletion</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-32-14"><a id="__codelineno-32-14" name="__codelineno-32-14"></a><span class="w">        </span><span class="k">break</span>
 </span><span id="__span-32-15"><a id="__codelineno-32-15" name="__codelineno-32-15"></a><span class="w">    </span><span class="p">}</span>
 </span><span id="__span-32-16"><a id="__codelineno-32-16" name="__codelineno-32-16"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="health-check">Health Check</h3>
+<p><strong>When You Provide Your Own Session Service</strong>:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-33-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-33-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-33-3"> 3</a></span>
@@ -3694,52 +3784,174 @@ are forwarded to your <code>eventChan</code>.</p>
 <span class="normal"><a href="#__codelineno-33-7"> 7</a></span>
 <span class="normal"><a href="#__codelineno-33-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-33-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-33-10">10</a></span>
-<span class="normal"><a href="#__codelineno-33-11">11</a></span>
-<span class="normal"><a href="#__codelineno-33-12">12</a></span>
-<span class="normal"><a href="#__codelineno-33-13">13</a></span>
-<span class="normal"><a href="#__codelineno-33-14">14</a></span>
-<span class="normal"><a href="#__codelineno-33-15">15</a></span>
-<span class="normal"><a href="#__codelineno-33-16">16</a></span>
-<span class="normal"><a href="#__codelineno-33-17">17</a></span>
-<span class="normal"><a href="#__codelineno-33-18">18</a></span>
-<span class="normal"><a href="#__codelineno-33-19">19</a></span>
-<span class="normal"><a href="#__codelineno-33-20">20</a></span>
-<span class="normal"><a href="#__codelineno-33-21">21</a></span>
-<span class="normal"><a href="#__codelineno-33-22">22</a></span>
-<span class="normal"><a href="#__codelineno-33-23">23</a></span>
-<span class="normal"><a href="#__codelineno-33-24">24</a></span>
-<span class="normal"><a href="#__codelineno-33-25">25</a></span>
-<span class="normal"><a href="#__codelineno-33-26">26</a></span>
-<span class="normal"><a href="#__codelineno-33-27">27</a></span>
-<span class="normal"><a href="#__codelineno-33-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
+<span class="normal"><a href="#__codelineno-33-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1"></a><span class="c1">// You create and manage the session service lifecycle</span>
+</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">redis</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span><span class="nx">redis</span><span class="p">.</span><span class="nx">WithRedisClientURL</span><span class="p">(</span><span class="s">&quot;redis://localhost:6379&quot;</span><span class="p">))</span>
+</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3"></a><span class="k">defer</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span><span class="w">  </span><span class="c1">// YOU are responsible for closing it</span>
 </span><span id="__span-33-4"><a id="__codelineno-33-4" name="__codelineno-33-4"></a>
-</span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-33-6"><a id="__codelineno-33-6" name="__codelineno-33-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-33-7"><a id="__codelineno-33-7" name="__codelineno-33-7"></a><span class="p">)</span>
-</span><span id="__span-33-8"><a id="__codelineno-33-8" name="__codelineno-33-8"></a>
-</span><span id="__span-33-9"><a id="__codelineno-33-9" name="__codelineno-33-9"></a><span class="c1">// Check whether Runner works properly.</span>
-</span><span id="__span-33-10"><a id="__codelineno-33-10" name="__codelineno-33-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">checkRunner</span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Runner</span><span class="p">,</span><span class="w"> </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-33-11"><a id="__codelineno-33-11" name="__codelineno-33-11"></a><span class="w">    </span><span class="nx">testMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;test&quot;</span><span class="p">)</span>
-</span><span id="__span-33-12"><a id="__codelineno-33-12" name="__codelineno-33-12"></a><span class="w">    </span><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;test-user&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;test-session&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">testMessage</span><span class="p">)</span>
-</span><span id="__span-33-13"><a id="__codelineno-33-13" name="__codelineno-33-13"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-33-14"><a id="__codelineno-33-14" name="__codelineno-33-14"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;Runner.Run failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-33-15"><a id="__codelineno-33-15" name="__codelineno-33-15"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-33-16"><a id="__codelineno-33-16" name="__codelineno-33-16"></a>
-</span><span id="__span-33-17"><a id="__codelineno-33-17" name="__codelineno-33-17"></a><span class="w">    </span><span class="c1">// Check the event stream.</span>
-</span><span id="__span-33-18"><a id="__codelineno-33-18" name="__codelineno-33-18"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-33-19"><a id="__codelineno-33-19" name="__codelineno-33-19"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-33-20"><a id="__codelineno-33-20" name="__codelineno-33-20"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;Received error event: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
-</span><span id="__span-33-21"><a id="__codelineno-33-21" name="__codelineno-33-21"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-33-22"><a id="__codelineno-33-22" name="__codelineno-33-22"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-33-23"><a id="__codelineno-33-23" name="__codelineno-33-23"></a><span class="w">            </span><span class="k">break</span>
-</span><span id="__span-33-24"><a id="__codelineno-33-24" name="__codelineno-33-24"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-33-25"><a id="__codelineno-33-25" name="__codelineno-33-25"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-33-26"><a id="__codelineno-33-26" name="__codelineno-33-26"></a>
-</span><span id="__span-33-27"><a id="__codelineno-33-27" name="__codelineno-33-27"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-33-28"><a id="__codelineno-33-28" name="__codelineno-33-28"></a><span class="p">}</span>
+</span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5"></a><span class="c1">// Runner uses but doesn&#39;t own this session service</span>
+</span><span id="__span-33-6"><a id="__codelineno-33-6" name="__codelineno-33-6"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">,</span>
+</span><span id="__span-33-7"><a id="__codelineno-33-7" name="__codelineno-33-7"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">))</span>
+</span><span id="__span-33-8"><a id="__codelineno-33-8" name="__codelineno-33-8"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span><span class="w">  </span><span class="c1">// This will NOT close sessionService (you provided it) (trpc-agent-go &gt;= v0.5.0)</span>
+</span><span id="__span-33-9"><a id="__codelineno-33-9" name="__codelineno-33-9"></a>
+</span><span id="__span-33-10"><a id="__codelineno-33-10" name="__codelineno-33-10"></a><span class="c1">// ... use the runner</span>
+</span></code></pre></div></td></tr></table></div>
+<p><strong>Long-Running Services</strong>:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-34-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-34-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-34-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-34-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-34-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-34-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-34-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-34-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-34-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-34-10">10</a></span>
+<span class="normal"><a href="#__codelineno-34-11">11</a></span>
+<span class="normal"><a href="#__codelineno-34-12">12</a></span>
+<span class="normal"><a href="#__codelineno-34-13">13</a></span>
+<span class="normal"><a href="#__codelineno-34-14">14</a></span>
+<span class="normal"><a href="#__codelineno-34-15">15</a></span>
+<span class="normal"><a href="#__codelineno-34-16">16</a></span>
+<span class="normal"><a href="#__codelineno-34-17">17</a></span>
+<span class="normal"><a href="#__codelineno-34-18">18</a></span>
+<span class="normal"><a href="#__codelineno-34-19">19</a></span>
+<span class="normal"><a href="#__codelineno-34-20">20</a></span>
+<span class="normal"><a href="#__codelineno-34-21">21</a></span>
+<span class="normal"><a href="#__codelineno-34-22">22</a></span>
+<span class="normal"><a href="#__codelineno-34-23">23</a></span>
+<span class="normal"><a href="#__codelineno-34-24">24</a></span>
+<span class="normal"><a href="#__codelineno-34-25">25</a></span>
+<span class="normal"><a href="#__codelineno-34-26">26</a></span>
+<span class="normal"><a href="#__codelineno-34-27">27</a></span>
+<span class="normal"><a href="#__codelineno-34-28">28</a></span>
+<span class="normal"><a href="#__codelineno-34-29">29</a></span>
+<span class="normal"><a href="#__codelineno-34-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Service</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2"></a><span class="w">    </span><span class="nx">runner</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Runner</span>
+</span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3"></a><span class="w">    </span><span class="nx">sessionService</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">Service</span><span class="w">  </span><span class="c1">// If you manage it yourself</span>
+</span><span id="__span-34-4"><a id="__codelineno-34-4" name="__codelineno-34-4"></a><span class="p">}</span>
+</span><span id="__span-34-5"><a id="__codelineno-34-5" name="__codelineno-34-5"></a>
+</span><span id="__span-34-6"><a id="__codelineno-34-6" name="__codelineno-34-6"></a><span class="kd">func</span><span class="w"> </span><span class="nx">NewService</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-34-7"><a id="__codelineno-34-7" name="__codelineno-34-7"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-34-8"><a id="__codelineno-34-8" name="__codelineno-34-8"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Service</span><span class="p">{</span><span class="nx">runner</span><span class="p">:</span><span class="w"> </span><span class="nx">r</span><span class="p">}</span>
+</span><span id="__span-34-9"><a id="__codelineno-34-9" name="__codelineno-34-9"></a><span class="p">}</span>
+</span><span id="__span-34-10"><a id="__codelineno-34-10" name="__codelineno-34-10"></a>
+</span><span id="__span-34-11"><a id="__codelineno-34-11" name="__codelineno-34-11"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="p">)</span><span class="w"> </span><span class="nx">Start</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-34-12"><a id="__codelineno-34-12" name="__codelineno-34-12"></a><span class="w">    </span><span class="c1">// Service startup logic</span>
+</span><span id="__span-34-13"><a id="__codelineno-34-13" name="__codelineno-34-13"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-34-14"><a id="__codelineno-34-14" name="__codelineno-34-14"></a><span class="p">}</span>
+</span><span id="__span-34-15"><a id="__codelineno-34-15" name="__codelineno-34-15"></a>
+</span><span id="__span-34-16"><a id="__codelineno-34-16" name="__codelineno-34-16"></a><span class="c1">// Call Close when shutting down the service</span>
+</span><span id="__span-34-17"><a id="__codelineno-34-17" name="__codelineno-34-17"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="p">)</span><span class="w"> </span><span class="nx">Stop</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-34-18"><a id="__codelineno-34-18" name="__codelineno-34-18"></a><span class="w">    </span><span class="c1">// Close runner (which closes its owned inmemory session service)</span>
+</span><span id="__span-34-19"><a id="__codelineno-34-19" name="__codelineno-34-19"></a><span class="w">    </span><span class="c1">// trpc-agent-go &gt;= v0.5.0</span>
+</span><span id="__span-34-20"><a id="__codelineno-34-20" name="__codelineno-34-20"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">runner</span><span class="p">.</span><span class="nx">Close</span><span class="p">();</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-34-21"><a id="__codelineno-34-21" name="__codelineno-34-21"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-34-22"><a id="__codelineno-34-22" name="__codelineno-34-22"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-34-23"><a id="__codelineno-34-23" name="__codelineno-34-23"></a>
+</span><span id="__span-34-24"><a id="__codelineno-34-24" name="__codelineno-34-24"></a><span class="w">    </span><span class="c1">// If you provided your own session service, close it here</span>
+</span><span id="__span-34-25"><a id="__codelineno-34-25" name="__codelineno-34-25"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">sessionService</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-34-26"><a id="__codelineno-34-26" name="__codelineno-34-26"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-34-27"><a id="__codelineno-34-27" name="__codelineno-34-27"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-34-28"><a id="__codelineno-34-28" name="__codelineno-34-28"></a>
+</span><span id="__span-34-29"><a id="__codelineno-34-29" name="__codelineno-34-29"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-34-30"><a id="__codelineno-34-30" name="__codelineno-34-30"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p><strong>Important Notes</strong>:</p>
+<ul>
+<li>✅ <code>Close()</code> is idempotent; calling it multiple times is safe</li>
+<li>✅ <strong>Runner only closes the inmemory Session Service it creates by default</strong></li>
+<li>✅ If you provide your own Session Service via <code>WithSessionService()</code>, Runner won't close it (you manage it yourself)</li>
+<li>❌ Not calling <code>Close()</code> when Runner owns an inmemory Session Service will cause goroutine leaks</li>
+</ul>
+<h4 id="context-lifecycle-control">Context Lifecycle Control</h4>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-35-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-35-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-35-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-35-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-35-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-35-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-35-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-35-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-35-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-35-10">10</a></span>
+<span class="normal"><a href="#__codelineno-35-11">11</a></span>
+<span class="normal"><a href="#__codelineno-35-12">12</a></span>
+<span class="normal"><a href="#__codelineno-35-13">13</a></span>
+<span class="normal"><a href="#__codelineno-35-14">14</a></span>
+<span class="normal"><a href="#__codelineno-35-15">15</a></span>
+<span class="normal"><a href="#__codelineno-35-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1"></a><span class="c1">// Use context to control the lifecycle of a single run</span>
+</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2"></a><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithCancel</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">())</span>
+</span><span id="__span-35-3"><a id="__codelineno-35-3" name="__codelineno-35-3"></a><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
+</span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4"></a>
+</span><span id="__span-35-5"><a id="__codelineno-35-5" name="__codelineno-35-5"></a><span class="c1">// Ensure all events are consumed</span>
+</span><span id="__span-35-6"><a id="__codelineno-35-6" name="__codelineno-35-6"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
+</span><span id="__span-35-7"><a id="__codelineno-35-7" name="__codelineno-35-7"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-8"><a id="__codelineno-35-8" name="__codelineno-35-8"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-35-9"><a id="__codelineno-35-9" name="__codelineno-35-9"></a><span class="p">}</span>
+</span><span id="__span-35-10"><a id="__codelineno-35-10" name="__codelineno-35-10"></a>
+</span><span id="__span-35-11"><a id="__codelineno-35-11" name="__codelineno-35-11"></a><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-12"><a id="__codelineno-35-12" name="__codelineno-35-12"></a><span class="w">    </span><span class="c1">// Process events</span>
+</span><span id="__span-35-13"><a id="__codelineno-35-13" name="__codelineno-35-13"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-14"><a id="__codelineno-35-14" name="__codelineno-35-14"></a><span class="w">        </span><span class="k">break</span>
+</span><span id="__span-35-15"><a id="__codelineno-35-15" name="__codelineno-35-15"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-35-16"><a id="__codelineno-35-16" name="__codelineno-35-16"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="health-check">Health Check</h3>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-36-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-36-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-36-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-36-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-36-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-36-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-36-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-36-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-36-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-36-10">10</a></span>
+<span class="normal"><a href="#__codelineno-36-11">11</a></span>
+<span class="normal"><a href="#__codelineno-36-12">12</a></span>
+<span class="normal"><a href="#__codelineno-36-13">13</a></span>
+<span class="normal"><a href="#__codelineno-36-14">14</a></span>
+<span class="normal"><a href="#__codelineno-36-15">15</a></span>
+<span class="normal"><a href="#__codelineno-36-16">16</a></span>
+<span class="normal"><a href="#__codelineno-36-17">17</a></span>
+<span class="normal"><a href="#__codelineno-36-18">18</a></span>
+<span class="normal"><a href="#__codelineno-36-19">19</a></span>
+<span class="normal"><a href="#__codelineno-36-20">20</a></span>
+<span class="normal"><a href="#__codelineno-36-21">21</a></span>
+<span class="normal"><a href="#__codelineno-36-22">22</a></span>
+<span class="normal"><a href="#__codelineno-36-23">23</a></span>
+<span class="normal"><a href="#__codelineno-36-24">24</a></span>
+<span class="normal"><a href="#__codelineno-36-25">25</a></span>
+<span class="normal"><a href="#__codelineno-36-26">26</a></span>
+<span class="normal"><a href="#__codelineno-36-27">27</a></span>
+<span class="normal"><a href="#__codelineno-36-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
+</span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4"></a>
+</span><span id="__span-36-5"><a id="__codelineno-36-5" name="__codelineno-36-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-36-6"><a id="__codelineno-36-6" name="__codelineno-36-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-36-7"><a id="__codelineno-36-7" name="__codelineno-36-7"></a><span class="p">)</span>
+</span><span id="__span-36-8"><a id="__codelineno-36-8" name="__codelineno-36-8"></a>
+</span><span id="__span-36-9"><a id="__codelineno-36-9" name="__codelineno-36-9"></a><span class="c1">// Check whether Runner works properly.</span>
+</span><span id="__span-36-10"><a id="__codelineno-36-10" name="__codelineno-36-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">checkRunner</span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Runner</span><span class="p">,</span><span class="w"> </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-36-11"><a id="__codelineno-36-11" name="__codelineno-36-11"></a><span class="w">    </span><span class="nx">testMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;test&quot;</span><span class="p">)</span>
+</span><span id="__span-36-12"><a id="__codelineno-36-12" name="__codelineno-36-12"></a><span class="w">    </span><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;test-user&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;test-session&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">testMessage</span><span class="p">)</span>
+</span><span id="__span-36-13"><a id="__codelineno-36-13" name="__codelineno-36-13"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-36-14"><a id="__codelineno-36-14" name="__codelineno-36-14"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;Runner.Run failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-36-15"><a id="__codelineno-36-15" name="__codelineno-36-15"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-36-16"><a id="__codelineno-36-16" name="__codelineno-36-16"></a>
+</span><span id="__span-36-17"><a id="__codelineno-36-17" name="__codelineno-36-17"></a><span class="w">    </span><span class="c1">// Check the event stream.</span>
+</span><span id="__span-36-18"><a id="__codelineno-36-18" name="__codelineno-36-18"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-36-19"><a id="__codelineno-36-19" name="__codelineno-36-19"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-36-20"><a id="__codelineno-36-20" name="__codelineno-36-20"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;Received error event: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
+</span><span id="__span-36-21"><a id="__codelineno-36-21" name="__codelineno-36-21"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-36-22"><a id="__codelineno-36-22" name="__codelineno-36-22"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-36-23"><a id="__codelineno-36-23" name="__codelineno-36-23"></a><span class="w">            </span><span class="k">break</span>
+</span><span id="__span-36-24"><a id="__codelineno-36-24" name="__codelineno-36-24"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-36-25"><a id="__codelineno-36-25" name="__codelineno-36-25"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-36-26"><a id="__codelineno-36-26" name="__codelineno-36-26"></a>
+</span><span id="__span-36-27"><a id="__codelineno-36-27" name="__codelineno-36-27"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-36-28"><a id="__codelineno-36-28" name="__codelineno-36-28"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="summary">📝 Summary</h2>
 <p>The Runner component is a core part of the tRPC-Agent-Go framework, providing complete conversation management and Agent orchestration capabilities. By properly using session management, tool integration, and event handling, you can build powerful intelligent conversational applications.</p>
@@ -3765,7 +3977,7 @@ are forwarded to your <code>eventChan</code>.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 21, 2026 07:29:59 UTC">2026-01-21 07:29:59</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 28, 2026 09:51:53 UTC">2026-01-28 09:51:53</span>
   </span>
 
     

@@ -1103,10 +1103,61 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="安全中断执行">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#actrlc" class="md-nav__link">
+    <span class="md-ellipsis">
+      方式 A：Ctrl+C（命令行程序）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b" class="md-nav__link">
+    <span class="md-ellipsis">
+      方式 B：取消上下文（推荐默认做法）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#c-requestid-managedrunner" class="md-nav__link">
+    <span class="md-ellipsis">
+      方式 C：按 requestID 取消（ManagedRunner）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#d-run-stoperror" class="md-nav__link">
+    <span class="md-ellipsis">
+      方式 D：在 run 内部触发停止（StopError）
+    </span>
+  </a>
+  
 </li>
         
           <li class="md-nav__item">
   <a href="#_25" class="md-nav__link">
+    <span class="md-ellipsis">
+      常见误区
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_26" class="md-nav__link">
     <span class="md-ellipsis">
       资源管理
     </span>
@@ -1139,7 +1190,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_26" class="md-nav__link">
+  <a href="#_27" class="md-nav__link">
     <span class="md-ellipsis">
       状态检查
     </span>
@@ -1153,7 +1204,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_27" class="md-nav__link">
+  <a href="#_28" class="md-nav__link">
     <span class="md-ellipsis">
       📝 总结
     </span>
@@ -2417,10 +2468,61 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="安全中断执行">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#actrlc" class="md-nav__link">
+    <span class="md-ellipsis">
+      方式 A：Ctrl+C（命令行程序）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b" class="md-nav__link">
+    <span class="md-ellipsis">
+      方式 B：取消上下文（推荐默认做法）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#c-requestid-managedrunner" class="md-nav__link">
+    <span class="md-ellipsis">
+      方式 C：按 requestID 取消（ManagedRunner）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#d-run-stoperror" class="md-nav__link">
+    <span class="md-ellipsis">
+      方式 D：在 run 内部触发停止（StopError）
+    </span>
+  </a>
+  
 </li>
         
           <li class="md-nav__item">
   <a href="#_25" class="md-nav__link">
+    <span class="md-ellipsis">
+      常见误区
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_26" class="md-nav__link">
     <span class="md-ellipsis">
       资源管理
     </span>
@@ -2453,7 +2555,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_26" class="md-nav__link">
+  <a href="#_27" class="md-nav__link">
     <span class="md-ellipsis">
       状态检查
     </span>
@@ -2467,7 +2569,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_27" class="md-nav__link">
+  <a href="#_28" class="md-nav__link">
     <span class="md-ellipsis">
       📝 总结
     </span>
@@ -3454,12 +3556,22 @@ RunOption：</p>
 </span><span id="__span-27-15"><a id="__codelineno-27-15" name="__codelineno-27-15"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="_24">安全中断执行</h3>
-<ul>
-<li><strong>取消上下文</strong>：用 <code>context.WithCancel</code> 包裹 <code>runner.Run</code> 的 ctx，
-  当轮次或 token 超限时调用 <code>cancel()</code>。<code>llmflow</code> 将
-  <code>context.Canceled</code> 视为正常退出，会关闭 agent 事件通道，
-  runner 的消费循环也会正常结束，避免阻塞。</li>
-</ul>
+<p>当你调用 <code>Runner.Run</code> 时，框架会启动 goroutines 来持续产出事件，直到本次 run
+结束。</p>
+<p>这里有两种“停止”，非常容易混淆：</p>
+<ol>
+<li><strong>停止读取事件</strong>（你的代码不读 eventChan 了）</li>
+<li><strong>停止本次 run</strong>（agent 停止模型/工具调用并退出）</li>
+</ol>
+<p>如果你只是停止读取，但 run 还在继续，agent goroutine 可能会在写事件通道时阻塞，
+从而引发 goroutine 泄漏或“卡住的 run”。</p>
+<p>安全姿势永远是：</p>
+<ol>
+<li><strong>触发取消</strong>（ctx cancel / requestID cancel / StopError）</li>
+<li><strong>把事件通道读到关闭为止</strong></li>
+</ol>
+<h4 id="actrlc">方式 A：Ctrl+C（命令行程序）</h4>
+<p>在命令行程序里，常见做法是把 Ctrl+C 转换为 ctx cancel：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-28-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-28-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-28-3"> 3</a></span>
@@ -3470,57 +3582,23 @@ RunOption：</p>
 <span class="normal"><a href="#__codelineno-28-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-28-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-28-10">10</a></span>
-<span class="normal"><a href="#__codelineno-28-11">11</a></span>
-<span class="normal"><a href="#__codelineno-28-12">12</a></span>
-<span class="normal"><a href="#__codelineno-28-13">13</a></span>
-<span class="normal"><a href="#__codelineno-28-14">14</a></span>
-<span class="normal"><a href="#__codelineno-28-15">15</a></span>
-<span class="normal"><a href="#__codelineno-28-16">16</a></span>
-<span class="normal"><a href="#__codelineno-28-17">17</a></span>
-<span class="normal"><a href="#__codelineno-28-18">18</a></span>
-<span class="normal"><a href="#__codelineno-28-19">19</a></span>
-<span class="normal"><a href="#__codelineno-28-20">20</a></span>
-<span class="normal"><a href="#__codelineno-28-21">21</a></span>
-<span class="normal"><a href="#__codelineno-28-22">22</a></span>
-<span class="normal"><a href="#__codelineno-28-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1"></a><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithCancel</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">())</span>
-</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2"></a><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
+<span class="normal"><a href="#__codelineno-28-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1"></a><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">stop</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">signal</span><span class="p">.</span><span class="nx">NotifyContext</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="nx">os</span><span class="p">.</span><span class="nx">Interrupt</span><span class="p">)</span>
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2"></a><span class="k">defer</span><span class="w"> </span><span class="nx">stop</span><span class="p">()</span>
 </span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3"></a>
 </span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4"></a><span class="nx">eventCh</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
 </span><span id="__span-28-5"><a id="__codelineno-28-5" name="__codelineno-28-5"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
 </span><span id="__span-28-7"><a id="__codelineno-28-7" name="__codelineno-28-7"></a><span class="p">}</span>
 </span><span id="__span-28-8"><a id="__codelineno-28-8" name="__codelineno-28-8"></a>
-</span><span id="__span-28-9"><a id="__codelineno-28-9" name="__codelineno-28-9"></a><span class="nx">turns</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span>
-</span><span id="__span-28-10"><a id="__codelineno-28-10" name="__codelineno-28-10"></a><span class="k">for</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventCh</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-28-11"><a id="__codelineno-28-11" name="__codelineno-28-11"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-28-12"><a id="__codelineno-28-12" name="__codelineno-28-12"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;事件错误: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
-</span><span id="__span-28-13"><a id="__codelineno-28-13" name="__codelineno-28-13"></a><span class="w">        </span><span class="k">continue</span>
-</span><span id="__span-28-14"><a id="__codelineno-28-14" name="__codelineno-28-14"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-28-15"><a id="__codelineno-28-15" name="__codelineno-28-15"></a><span class="w">    </span><span class="c1">// ... 处理事件 ...</span>
-</span><span id="__span-28-16"><a id="__codelineno-28-16" name="__codelineno-28-16"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">IsFinalResponse</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-28-17"><a id="__codelineno-28-17" name="__codelineno-28-17"></a><span class="w">        </span><span class="k">break</span>
-</span><span id="__span-28-18"><a id="__codelineno-28-18" name="__codelineno-28-18"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-28-19"><a id="__codelineno-28-19" name="__codelineno-28-19"></a><span class="w">    </span><span class="nx">turns</span><span class="o">++</span>
-</span><span id="__span-28-20"><a id="__codelineno-28-20" name="__codelineno-28-20"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">turns</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">maxTurns</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-28-21"><a id="__codelineno-28-21" name="__codelineno-28-21"></a><span class="w">        </span><span class="nx">cancel</span><span class="p">()</span><span class="w"> </span><span class="c1">// 停止后续模型或工具调用</span>
-</span><span id="__span-28-22"><a id="__codelineno-28-22" name="__codelineno-28-22"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-28-23"><a id="__codelineno-28-23" name="__codelineno-28-23"></a><span class="p">}</span>
+</span><span id="__span-28-9"><a id="__codelineno-28-9" name="__codelineno-28-9"></a><span class="k">for</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventCh</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-28-10"><a id="__codelineno-28-10" name="__codelineno-28-10"></a><span class="w">    </span><span class="c1">// 一直读到通道关闭：要么 ctx 被取消，要么 run 正常结束。</span>
+</span><span id="__span-28-11"><a id="__codelineno-28-11" name="__codelineno-28-11"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<ul>
-<li><strong>发送停止事件</strong>：在自定义处理器或工具内部返回 <code>agent.NewStopError("原因")</code>。<code>llmflow</code> 会把它转换为 <code>stop_agent_error</code> 事件并停止流程。
-  仍建议配合 ctx cancel 进行硬截止。详见 <a href="https://trpc-group.github.io/trpc-agent-go/zh/callbacks/#stop-agent-via-callbacks">回调中的停止用法</a>。</li>
-</ul>
-<ul>
-<li><strong>避免直接 break 事件循环</strong>：直接在 runner 的事件消费循环里 break 会让 agent goroutine 继续运行并可能在写通道时阻塞。
-  优先使用上下文取消或 <code>StopError</code>。</li>
-</ul>
-<h3 id="_25">资源管理</h3>
-<h4 id="runner_2">🔒 关闭 Runner（重要）</h4>
-<p><strong>Runner 在不使用时必须调用 <code>Close()</code> 方法，否则会导致 goroutine 泄漏（要求 <code>trpc-agent-go &gt;= v0.5.0</code>）。</strong></p>
-<p><strong>Runner 只关闭它自己创建的资源</strong></p>
-<p>当 Runner 创建时如果未提供 Session Service，会自动创建默认的 inmemory Session Service。该 Service 内部会启动后台 goroutines（用于异步处理 summary、基于 TTL 的会话清理等任务）。<strong>Runner 只管理这个自己创建的 inmemory Session Service 的生命周期。</strong> 如果你通过 <code>WithSessionService()</code> 提供了自己的 Session Service，你需要自己管理它的生命周期——Runner 不会关闭它。</p>
-<p>如果不调用拥有 inmemory Session Service 的 Runner 的 <code>Close()</code>，这些后台 goroutines 将永远运行，造成资源泄漏。</p>
-<p><strong>推荐做法</strong>：</p>
+<h4 id="b">方式 B：取消上下文（推荐默认做法）</h4>
+<p>用 <code>context.WithCancel</code> 包裹 <code>runner.Run</code> 的 ctx，在你希望中断时调用
+<code>cancel()</code>（例如：轮次上限、token 预算超限、用户点击“停止”等）。</p>
+<p><code>llmflow</code> 将 <code>context.Canceled</code> 视为正常退出，会关闭 agent 事件通道，
+runner 的消费循环也会正常结束，避免写端阻塞。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-29-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-29-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-29-3"> 3</a></span>
@@ -3536,45 +3614,63 @@ RunOption：</p>
 <span class="normal"><a href="#__codelineno-29-13">13</a></span>
 <span class="normal"><a href="#__codelineno-29-14">14</a></span>
 <span class="normal"><a href="#__codelineno-29-15">15</a></span>
-<span class="normal"><a href="#__codelineno-29-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1"></a><span class="c1">// ✅ 推荐：使用 defer 确保资源被清理</span>
-</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
-</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span><span class="w">  </span><span class="c1">// 确保在函数退出时关闭 (trpc-agent-go &gt;= v0.5.0)</span>
-</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4"></a>
-</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5"></a><span class="c1">// 使用 runner</span>
-</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
-</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-8"><a id="__codelineno-29-8" name="__codelineno-29-8"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-29-9"><a id="__codelineno-29-9" name="__codelineno-29-9"></a><span class="p">}</span>
-</span><span id="__span-29-10"><a id="__codelineno-29-10" name="__codelineno-29-10"></a>
-</span><span id="__span-29-11"><a id="__codelineno-29-11" name="__codelineno-29-11"></a><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-12"><a id="__codelineno-29-12" name="__codelineno-29-12"></a><span class="w">    </span><span class="c1">// 处理事件</span>
-</span><span id="__span-29-13"><a id="__codelineno-29-13" name="__codelineno-29-13"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">IsRunnerCompletion</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-14"><a id="__codelineno-29-14" name="__codelineno-29-14"></a><span class="w">        </span><span class="k">break</span>
-</span><span id="__span-29-15"><a id="__codelineno-29-15" name="__codelineno-29-15"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-29-16"><a id="__codelineno-29-16" name="__codelineno-29-16"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-29-16">16</a></span>
+<span class="normal"><a href="#__codelineno-29-17">17</a></span>
+<span class="normal"><a href="#__codelineno-29-18">18</a></span>
+<span class="normal"><a href="#__codelineno-29-19">19</a></span>
+<span class="normal"><a href="#__codelineno-29-20">20</a></span>
+<span class="normal"><a href="#__codelineno-29-21">21</a></span>
+<span class="normal"><a href="#__codelineno-29-22">22</a></span>
+<span class="normal"><a href="#__codelineno-29-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1"></a><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithCancel</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">())</span>
+</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2"></a><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
+</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3"></a>
+</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4"></a><span class="nx">eventCh</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
+</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7"></a><span class="p">}</span>
+</span><span id="__span-29-8"><a id="__codelineno-29-8" name="__codelineno-29-8"></a>
+</span><span id="__span-29-9"><a id="__codelineno-29-9" name="__codelineno-29-9"></a><span class="nx">turns</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span>
+</span><span id="__span-29-10"><a id="__codelineno-29-10" name="__codelineno-29-10"></a><span class="k">for</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventCh</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-11"><a id="__codelineno-29-11" name="__codelineno-29-11"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-12"><a id="__codelineno-29-12" name="__codelineno-29-12"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;事件错误: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
+</span><span id="__span-29-13"><a id="__codelineno-29-13" name="__codelineno-29-13"></a><span class="w">        </span><span class="k">continue</span>
+</span><span id="__span-29-14"><a id="__codelineno-29-14" name="__codelineno-29-14"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-29-15"><a id="__codelineno-29-15" name="__codelineno-29-15"></a><span class="w">    </span><span class="c1">// ... 处理事件 ...</span>
+</span><span id="__span-29-16"><a id="__codelineno-29-16" name="__codelineno-29-16"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">IsFinalResponse</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-17"><a id="__codelineno-29-17" name="__codelineno-29-17"></a><span class="w">        </span><span class="k">break</span>
+</span><span id="__span-29-18"><a id="__codelineno-29-18" name="__codelineno-29-18"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-29-19"><a id="__codelineno-29-19" name="__codelineno-29-19"></a><span class="w">    </span><span class="nx">turns</span><span class="o">++</span>
+</span><span id="__span-29-20"><a id="__codelineno-29-20" name="__codelineno-29-20"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">turns</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">maxTurns</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-21"><a id="__codelineno-29-21" name="__codelineno-29-21"></a><span class="w">        </span><span class="nx">cancel</span><span class="p">()</span><span class="w"> </span><span class="c1">// 停止后续模型或工具调用</span>
+</span><span id="__span-29-22"><a id="__codelineno-29-22" name="__codelineno-29-22"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-29-23"><a id="__codelineno-29-23" name="__codelineno-29-23"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>当你提供自己的 Session Service 时</strong>：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-30-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-30-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-30-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-30-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-30-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-30-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-30-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-30-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-30-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-30-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1"></a><span class="c1">// 你创建并管理 session service 的生命周期</span>
-</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">redis</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span><span class="nx">redis</span><span class="p">.</span><span class="nx">WithRedisClientURL</span><span class="p">(</span><span class="s">&quot;redis://localhost:6379&quot;</span><span class="p">))</span>
-</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3"></a><span class="k">defer</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span><span class="w">  </span><span class="c1">// 你负责关闭它</span>
-</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4"></a>
-</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5"></a><span class="c1">// Runner 使用但不拥有这个 session service</span>
-</span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">,</span>
-</span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">))</span>
-</span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span><span class="w">  </span><span class="c1">// 这不会关闭 sessionService（因为是你提供的） (trpc-agent-go &gt;= v0.5.0)</span>
-</span><span id="__span-30-9"><a id="__codelineno-30-9" name="__codelineno-30-9"></a>
-</span><span id="__span-30-10"><a id="__codelineno-30-10" name="__codelineno-30-10"></a><span class="c1">// ... 使用 runner</span>
+<p>如果你需要“尽快返回”（例如 HTTP handler 超时），但仍想避免写端阻塞，可以用单独
+的 goroutine 去 drain：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-30-1">1</a></span>
+<span class="normal"><a href="#__codelineno-30-2">2</a></span>
+<span class="normal"><a href="#__codelineno-30-3">3</a></span>
+<span class="normal"><a href="#__codelineno-30-4">4</a></span>
+<span class="normal"><a href="#__codelineno-30-5">5</a></span>
+<span class="normal"><a href="#__codelineno-30-6">6</a></span>
+<span class="normal"><a href="#__codelineno-30-7">7</a></span>
+<span class="normal"><a href="#__codelineno-30-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1"></a><span class="c1">// eventCh 是 Runner.Run 返回的事件通道。</span>
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2"></a><span class="c1">// cancel 是 context.WithCancel 返回的取消函数。</span>
+</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3"></a><span class="k">go</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventCh</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6"></a><span class="p">}()</span>
+</span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7"></a><span class="nx">cancel</span><span class="p">()</span>
+</span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8"></a><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>长期运行的服务</strong>：</p>
+<h4 id="c-requestid-managedrunner">方式 C：按 <code>requestID</code> 取消（ManagedRunner）</h4>
+<p>在服务端场景里，你经常需要在“另一个 goroutine / 另一个请求”里取消某次 run。
+这时可以用 request identifier（requestID）来定位并取消。</p>
+<ol>
+<li>生成 requestID，并通过 <code>agent.WithRequestID</code> 传入 <code>Run</code>。</li>
+<li>将 runner 转换为 <code>runner.ManagedRunner</code>。</li>
+<li>调用 <code>Cancel(requestID)</code>。</li>
+</ol>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-31-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-31-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-31-3"> 3</a></span>
@@ -3592,57 +3688,51 @@ RunOption：</p>
 <span class="normal"><a href="#__codelineno-31-15">15</a></span>
 <span class="normal"><a href="#__codelineno-31-16">16</a></span>
 <span class="normal"><a href="#__codelineno-31-17">17</a></span>
-<span class="normal"><a href="#__codelineno-31-18">18</a></span>
-<span class="normal"><a href="#__codelineno-31-19">19</a></span>
-<span class="normal"><a href="#__codelineno-31-20">20</a></span>
-<span class="normal"><a href="#__codelineno-31-21">21</a></span>
-<span class="normal"><a href="#__codelineno-31-22">22</a></span>
-<span class="normal"><a href="#__codelineno-31-23">23</a></span>
-<span class="normal"><a href="#__codelineno-31-24">24</a></span>
-<span class="normal"><a href="#__codelineno-31-25">25</a></span>
-<span class="normal"><a href="#__codelineno-31-26">26</a></span>
-<span class="normal"><a href="#__codelineno-31-27">27</a></span>
-<span class="normal"><a href="#__codelineno-31-28">28</a></span>
-<span class="normal"><a href="#__codelineno-31-29">29</a></span>
-<span class="normal"><a href="#__codelineno-31-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Service</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2"></a><span class="w">    </span><span class="nx">runner</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Runner</span>
-</span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3"></a><span class="w">    </span><span class="nx">sessionService</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">Service</span><span class="w">  </span><span class="c1">// 如果你自己管理它</span>
-</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4"></a><span class="p">}</span>
-</span><span id="__span-31-5"><a id="__codelineno-31-5" name="__codelineno-31-5"></a>
-</span><span id="__span-31-6"><a id="__codelineno-31-6" name="__codelineno-31-6"></a><span class="kd">func</span><span class="w"> </span><span class="nx">NewService</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-31-7"><a id="__codelineno-31-7" name="__codelineno-31-7"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
-</span><span id="__span-31-8"><a id="__codelineno-31-8" name="__codelineno-31-8"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Service</span><span class="p">{</span><span class="nx">runner</span><span class="p">:</span><span class="w"> </span><span class="nx">r</span><span class="p">}</span>
-</span><span id="__span-31-9"><a id="__codelineno-31-9" name="__codelineno-31-9"></a><span class="p">}</span>
-</span><span id="__span-31-10"><a id="__codelineno-31-10" name="__codelineno-31-10"></a>
-</span><span id="__span-31-11"><a id="__codelineno-31-11" name="__codelineno-31-11"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="p">)</span><span class="w"> </span><span class="nx">Start</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-31-12"><a id="__codelineno-31-12" name="__codelineno-31-12"></a><span class="w">    </span><span class="c1">// 启动服务逻辑</span>
-</span><span id="__span-31-13"><a id="__codelineno-31-13" name="__codelineno-31-13"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-31-14"><a id="__codelineno-31-14" name="__codelineno-31-14"></a><span class="p">}</span>
-</span><span id="__span-31-15"><a id="__codelineno-31-15" name="__codelineno-31-15"></a>
-</span><span id="__span-31-16"><a id="__codelineno-31-16" name="__codelineno-31-16"></a><span class="c1">// 在服务关闭时调用 Close</span>
-</span><span id="__span-31-17"><a id="__codelineno-31-17" name="__codelineno-31-17"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="p">)</span><span class="w"> </span><span class="nx">Stop</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-31-18"><a id="__codelineno-31-18" name="__codelineno-31-18"></a><span class="w">    </span><span class="c1">// 关闭 runner（它会关闭自己拥有的 inmemory session service）</span>
-</span><span id="__span-31-19"><a id="__codelineno-31-19" name="__codelineno-31-19"></a><span class="w">    </span><span class="c1">// 要求 trpc-agent-go &gt;= v0.5.0</span>
-</span><span id="__span-31-20"><a id="__codelineno-31-20" name="__codelineno-31-20"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">runner</span><span class="p">.</span><span class="nx">Close</span><span class="p">();</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-31-21"><a id="__codelineno-31-21" name="__codelineno-31-21"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-31-22"><a id="__codelineno-31-22" name="__codelineno-31-22"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-31-23"><a id="__codelineno-31-23" name="__codelineno-31-23"></a>
-</span><span id="__span-31-24"><a id="__codelineno-31-24" name="__codelineno-31-24"></a><span class="w">    </span><span class="c1">// 如果你提供了自己的 session service，在这里关闭它</span>
-</span><span id="__span-31-25"><a id="__codelineno-31-25" name="__codelineno-31-25"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">sessionService</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-31-26"><a id="__codelineno-31-26" name="__codelineno-31-26"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
-</span><span id="__span-31-27"><a id="__codelineno-31-27" name="__codelineno-31-27"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-31-28"><a id="__codelineno-31-28" name="__codelineno-31-28"></a>
-</span><span id="__span-31-29"><a id="__codelineno-31-29" name="__codelineno-31-29"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-31-30"><a id="__codelineno-31-30" name="__codelineno-31-30"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-31-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1"></a><span class="nx">requestID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;req-123&quot;</span>
+</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2"></a>
+</span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3"></a><span class="nx">eventCh</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-31-5"><a id="__codelineno-31-5" name="__codelineno-31-5"></a><span class="w">    </span><span class="nx">userID</span><span class="p">,</span>
+</span><span id="__span-31-6"><a id="__codelineno-31-6" name="__codelineno-31-6"></a><span class="w">    </span><span class="nx">sessionID</span><span class="p">,</span>
+</span><span id="__span-31-7"><a id="__codelineno-31-7" name="__codelineno-31-7"></a><span class="w">    </span><span class="nx">message</span><span class="p">,</span>
+</span><span id="__span-31-8"><a id="__codelineno-31-8" name="__codelineno-31-8"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithRequestID</span><span class="p">(</span><span class="nx">requestID</span><span class="p">),</span>
+</span><span id="__span-31-9"><a id="__codelineno-31-9" name="__codelineno-31-9"></a><span class="p">)</span>
+</span><span id="__span-31-10"><a id="__codelineno-31-10" name="__codelineno-31-10"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-31-11"><a id="__codelineno-31-11" name="__codelineno-31-11"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-31-12"><a id="__codelineno-31-12" name="__codelineno-31-12"></a><span class="p">}</span>
+</span><span id="__span-31-13"><a id="__codelineno-31-13" name="__codelineno-31-13"></a>
+</span><span id="__span-31-14"><a id="__codelineno-31-14" name="__codelineno-31-14"></a><span class="nx">mr</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.(</span><span class="nx">runner</span><span class="p">.</span><span class="nx">ManagedRunner</span><span class="p">)</span>
+</span><span id="__span-31-15"><a id="__codelineno-31-15" name="__codelineno-31-15"></a><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">mr</span><span class="p">.</span><span class="nx">Cancel</span><span class="p">(</span><span class="nx">requestID</span><span class="p">)</span>
+</span><span id="__span-31-16"><a id="__codelineno-31-16" name="__codelineno-31-16"></a>
+</span><span id="__span-31-17"><a id="__codelineno-31-17" name="__codelineno-31-17"></a><span class="k">for</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventCh</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-31-18"><a id="__codelineno-31-18" name="__codelineno-31-18"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>注意事项</strong>：</p>
+<h4 id="d-run-stoperror">方式 D：在 run 内部触发停止（StopError）</h4>
+<p>有时最适合决定“现在就停止”的位置是在工具、回调或处理器内部（例如：策略校验、
+预算限制、业务规则）。</p>
+<p>你可以返回 <code>agent.NewStopError("原因")</code>（也可以与其他错误 join / wrap）。
+<code>llmflow</code> 会把它转换为 <code>stop_agent_error</code> 事件并停止流程。</p>
+<p>但“硬截止”（强制时间上限）仍建议用 <strong>ctx deadline</strong>（<code>context.WithTimeout</code> /
+<code>agent.WithMaxRunDuration</code>）来实现。</p>
+<h4 id="_25">常见误区</h4>
 <ul>
-<li>✅ <code>Close()</code> 是幂等的，多次调用是安全的</li>
-<li>✅ <strong>Runner 只关闭它默认创建的 inmemory Session Service</strong></li>
-<li>✅ 如果你通过 <code>WithSessionService()</code> 提供了自己的 Session Service，Runner 不会关闭它（你需要自己管理）</li>
-<li>❌ 如果 Runner 拥有 inmemory Session Service 但不调用 <code>Close()</code>，会导致 goroutine 泄漏</li>
+<li><strong>只 break 事件循环</strong>：run 可能还在后台继续，并在写通道时阻塞。</li>
+<li>全部使用 <code>context.Background()</code>：你没有办法取消，就无法中断 run。</li>
+<li>工具实现忽略 <code>ctx</code>：取消是协作式的；长耗时工具应检查 <code>ctx.Done()</code>，
+  或把 <code>ctx</code> 传入网络/DB 请求。</li>
 </ul>
-<h4 id="context">Context 生命周期控制</h4>
+<p>可运行示例：</p>
+<ul>
+<li><code>examples/cancelrun</code>（Enter/Ctrl+C 取消、drain 事件通道）</li>
+<li><code>examples/managedrunner</code>（requestID cancel、detached cancel、最长运行时长）</li>
+</ul>
+<h3 id="_26">资源管理</h3>
+<h4 id="runner_2">🔒 关闭 Runner（重要）</h4>
+<p><strong>Runner 在不使用时必须调用 <code>Close()</code> 方法，否则会导致 goroutine 泄漏（要求 <code>trpc-agent-go &gt;= v0.5.0</code>）。</strong></p>
+<p><strong>Runner 只关闭它自己创建的资源</strong></p>
+<p>当 Runner 创建时如果未提供 Session Service，会自动创建默认的 inmemory Session Service。该 Service 内部会启动后台 goroutines（用于异步处理 summary、基于 TTL 的会话清理等任务）。<strong>Runner 只管理这个自己创建的 inmemory Session Service 的生命周期。</strong> 如果你通过 <code>WithSessionService()</code> 提供了自己的 Session Service，你需要自己管理它的生命周期——Runner 不会关闭它。</p>
+<p>如果不调用拥有 inmemory Session Service 的 Runner 的 <code>Close()</code>，这些后台 goroutines 将永远运行，造成资源泄漏。</p>
+<p><strong>推荐做法</strong>：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-32-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-32-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-32-3"> 3</a></span>
@@ -3658,11 +3748,11 @@ RunOption：</p>
 <span class="normal"><a href="#__codelineno-32-13">13</a></span>
 <span class="normal"><a href="#__codelineno-32-14">14</a></span>
 <span class="normal"><a href="#__codelineno-32-15">15</a></span>
-<span class="normal"><a href="#__codelineno-32-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1"></a><span class="c1">// 使用 context 控制单次运行的生命周期</span>
-</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2"></a><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithCancel</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">())</span>
-</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3"></a><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
+<span class="normal"><a href="#__codelineno-32-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1"></a><span class="c1">// ✅ 推荐：使用 defer 确保资源被清理</span>
+</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span><span class="w">  </span><span class="c1">// 确保在函数退出时关闭 (trpc-agent-go &gt;= v0.5.0)</span>
 </span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4"></a>
-</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5"></a><span class="c1">// 确保消费完所有事件</span>
+</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5"></a><span class="c1">// 使用 runner</span>
 </span><span id="__span-32-6"><a id="__codelineno-32-6" name="__codelineno-32-6"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
 </span><span id="__span-32-7"><a id="__codelineno-32-7" name="__codelineno-32-7"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-32-8"><a id="__codelineno-32-8" name="__codelineno-32-8"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -3670,12 +3760,12 @@ RunOption：</p>
 </span><span id="__span-32-10"><a id="__codelineno-32-10" name="__codelineno-32-10"></a>
 </span><span id="__span-32-11"><a id="__codelineno-32-11" name="__codelineno-32-11"></a><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-32-12"><a id="__codelineno-32-12" name="__codelineno-32-12"></a><span class="w">    </span><span class="c1">// 处理事件</span>
-</span><span id="__span-32-13"><a id="__codelineno-32-13" name="__codelineno-32-13"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-32-13"><a id="__codelineno-32-13" name="__codelineno-32-13"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">IsRunnerCompletion</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-32-14"><a id="__codelineno-32-14" name="__codelineno-32-14"></a><span class="w">        </span><span class="k">break</span>
 </span><span id="__span-32-15"><a id="__codelineno-32-15" name="__codelineno-32-15"></a><span class="w">    </span><span class="p">}</span>
 </span><span id="__span-32-16"><a id="__codelineno-32-16" name="__codelineno-32-16"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="_26">状态检查</h3>
+<p><strong>当你提供自己的 Session Service 时</strong>：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-33-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-33-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-33-3"> 3</a></span>
@@ -3685,54 +3775,176 @@ RunOption：</p>
 <span class="normal"><a href="#__codelineno-33-7"> 7</a></span>
 <span class="normal"><a href="#__codelineno-33-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-33-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-33-10">10</a></span>
-<span class="normal"><a href="#__codelineno-33-11">11</a></span>
-<span class="normal"><a href="#__codelineno-33-12">12</a></span>
-<span class="normal"><a href="#__codelineno-33-13">13</a></span>
-<span class="normal"><a href="#__codelineno-33-14">14</a></span>
-<span class="normal"><a href="#__codelineno-33-15">15</a></span>
-<span class="normal"><a href="#__codelineno-33-16">16</a></span>
-<span class="normal"><a href="#__codelineno-33-17">17</a></span>
-<span class="normal"><a href="#__codelineno-33-18">18</a></span>
-<span class="normal"><a href="#__codelineno-33-19">19</a></span>
-<span class="normal"><a href="#__codelineno-33-20">20</a></span>
-<span class="normal"><a href="#__codelineno-33-21">21</a></span>
-<span class="normal"><a href="#__codelineno-33-22">22</a></span>
-<span class="normal"><a href="#__codelineno-33-23">23</a></span>
-<span class="normal"><a href="#__codelineno-33-24">24</a></span>
-<span class="normal"><a href="#__codelineno-33-25">25</a></span>
-<span class="normal"><a href="#__codelineno-33-26">26</a></span>
-<span class="normal"><a href="#__codelineno-33-27">27</a></span>
-<span class="normal"><a href="#__codelineno-33-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
+<span class="normal"><a href="#__codelineno-33-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1"></a><span class="c1">// 你创建并管理 session service 的生命周期</span>
+</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">redis</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span><span class="nx">redis</span><span class="p">.</span><span class="nx">WithRedisClientURL</span><span class="p">(</span><span class="s">&quot;redis://localhost:6379&quot;</span><span class="p">))</span>
+</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3"></a><span class="k">defer</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span><span class="w">  </span><span class="c1">// 你负责关闭它</span>
 </span><span id="__span-33-4"><a id="__codelineno-33-4" name="__codelineno-33-4"></a>
-</span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-33-6"><a id="__codelineno-33-6" name="__codelineno-33-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-33-7"><a id="__codelineno-33-7" name="__codelineno-33-7"></a><span class="p">)</span>
-</span><span id="__span-33-8"><a id="__codelineno-33-8" name="__codelineno-33-8"></a>
-</span><span id="__span-33-9"><a id="__codelineno-33-9" name="__codelineno-33-9"></a><span class="c1">// 检查 Runner 是否能正常工作</span>
-</span><span id="__span-33-10"><a id="__codelineno-33-10" name="__codelineno-33-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">checkRunner</span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Runner</span><span class="p">,</span><span class="w"> </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-33-11"><a id="__codelineno-33-11" name="__codelineno-33-11"></a><span class="w">    </span><span class="nx">testMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;测试&quot;</span><span class="p">)</span>
-</span><span id="__span-33-12"><a id="__codelineno-33-12" name="__codelineno-33-12"></a><span class="w">    </span><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;test-user&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;test-session&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">testMessage</span><span class="p">)</span>
-</span><span id="__span-33-13"><a id="__codelineno-33-13" name="__codelineno-33-13"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-33-14"><a id="__codelineno-33-14" name="__codelineno-33-14"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;Runner.Run 失败: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-33-15"><a id="__codelineno-33-15" name="__codelineno-33-15"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-33-16"><a id="__codelineno-33-16" name="__codelineno-33-16"></a>
-</span><span id="__span-33-17"><a id="__codelineno-33-17" name="__codelineno-33-17"></a><span class="w">    </span><span class="c1">// 检查事件流</span>
-</span><span id="__span-33-18"><a id="__codelineno-33-18" name="__codelineno-33-18"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-33-19"><a id="__codelineno-33-19" name="__codelineno-33-19"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-33-20"><a id="__codelineno-33-20" name="__codelineno-33-20"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;收到错误事件: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
-</span><span id="__span-33-21"><a id="__codelineno-33-21" name="__codelineno-33-21"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-33-22"><a id="__codelineno-33-22" name="__codelineno-33-22"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-33-23"><a id="__codelineno-33-23" name="__codelineno-33-23"></a><span class="w">            </span><span class="k">break</span>
-</span><span id="__span-33-24"><a id="__codelineno-33-24" name="__codelineno-33-24"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-33-25"><a id="__codelineno-33-25" name="__codelineno-33-25"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-33-26"><a id="__codelineno-33-26" name="__codelineno-33-26"></a>
-</span><span id="__span-33-27"><a id="__codelineno-33-27" name="__codelineno-33-27"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-33-28"><a id="__codelineno-33-28" name="__codelineno-33-28"></a><span class="p">}</span>
+</span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5"></a><span class="c1">// Runner 使用但不拥有这个 session service</span>
+</span><span id="__span-33-6"><a id="__codelineno-33-6" name="__codelineno-33-6"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">,</span>
+</span><span id="__span-33-7"><a id="__codelineno-33-7" name="__codelineno-33-7"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">))</span>
+</span><span id="__span-33-8"><a id="__codelineno-33-8" name="__codelineno-33-8"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span><span class="w">  </span><span class="c1">// 这不会关闭 sessionService（因为是你提供的） (trpc-agent-go &gt;= v0.5.0)</span>
+</span><span id="__span-33-9"><a id="__codelineno-33-9" name="__codelineno-33-9"></a>
+</span><span id="__span-33-10"><a id="__codelineno-33-10" name="__codelineno-33-10"></a><span class="c1">// ... 使用 runner</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_27">📝 总结</h2>
+<p><strong>长期运行的服务</strong>：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-34-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-34-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-34-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-34-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-34-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-34-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-34-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-34-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-34-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-34-10">10</a></span>
+<span class="normal"><a href="#__codelineno-34-11">11</a></span>
+<span class="normal"><a href="#__codelineno-34-12">12</a></span>
+<span class="normal"><a href="#__codelineno-34-13">13</a></span>
+<span class="normal"><a href="#__codelineno-34-14">14</a></span>
+<span class="normal"><a href="#__codelineno-34-15">15</a></span>
+<span class="normal"><a href="#__codelineno-34-16">16</a></span>
+<span class="normal"><a href="#__codelineno-34-17">17</a></span>
+<span class="normal"><a href="#__codelineno-34-18">18</a></span>
+<span class="normal"><a href="#__codelineno-34-19">19</a></span>
+<span class="normal"><a href="#__codelineno-34-20">20</a></span>
+<span class="normal"><a href="#__codelineno-34-21">21</a></span>
+<span class="normal"><a href="#__codelineno-34-22">22</a></span>
+<span class="normal"><a href="#__codelineno-34-23">23</a></span>
+<span class="normal"><a href="#__codelineno-34-24">24</a></span>
+<span class="normal"><a href="#__codelineno-34-25">25</a></span>
+<span class="normal"><a href="#__codelineno-34-26">26</a></span>
+<span class="normal"><a href="#__codelineno-34-27">27</a></span>
+<span class="normal"><a href="#__codelineno-34-28">28</a></span>
+<span class="normal"><a href="#__codelineno-34-29">29</a></span>
+<span class="normal"><a href="#__codelineno-34-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Service</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2"></a><span class="w">    </span><span class="nx">runner</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Runner</span>
+</span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3"></a><span class="w">    </span><span class="nx">sessionService</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">Service</span><span class="w">  </span><span class="c1">// 如果你自己管理它</span>
+</span><span id="__span-34-4"><a id="__codelineno-34-4" name="__codelineno-34-4"></a><span class="p">}</span>
+</span><span id="__span-34-5"><a id="__codelineno-34-5" name="__codelineno-34-5"></a>
+</span><span id="__span-34-6"><a id="__codelineno-34-6" name="__codelineno-34-6"></a><span class="kd">func</span><span class="w"> </span><span class="nx">NewService</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-34-7"><a id="__codelineno-34-7" name="__codelineno-34-7"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-34-8"><a id="__codelineno-34-8" name="__codelineno-34-8"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Service</span><span class="p">{</span><span class="nx">runner</span><span class="p">:</span><span class="w"> </span><span class="nx">r</span><span class="p">}</span>
+</span><span id="__span-34-9"><a id="__codelineno-34-9" name="__codelineno-34-9"></a><span class="p">}</span>
+</span><span id="__span-34-10"><a id="__codelineno-34-10" name="__codelineno-34-10"></a>
+</span><span id="__span-34-11"><a id="__codelineno-34-11" name="__codelineno-34-11"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="p">)</span><span class="w"> </span><span class="nx">Start</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-34-12"><a id="__codelineno-34-12" name="__codelineno-34-12"></a><span class="w">    </span><span class="c1">// 启动服务逻辑</span>
+</span><span id="__span-34-13"><a id="__codelineno-34-13" name="__codelineno-34-13"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-34-14"><a id="__codelineno-34-14" name="__codelineno-34-14"></a><span class="p">}</span>
+</span><span id="__span-34-15"><a id="__codelineno-34-15" name="__codelineno-34-15"></a>
+</span><span id="__span-34-16"><a id="__codelineno-34-16" name="__codelineno-34-16"></a><span class="c1">// 在服务关闭时调用 Close</span>
+</span><span id="__span-34-17"><a id="__codelineno-34-17" name="__codelineno-34-17"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="p">)</span><span class="w"> </span><span class="nx">Stop</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-34-18"><a id="__codelineno-34-18" name="__codelineno-34-18"></a><span class="w">    </span><span class="c1">// 关闭 runner（它会关闭自己拥有的 inmemory session service）</span>
+</span><span id="__span-34-19"><a id="__codelineno-34-19" name="__codelineno-34-19"></a><span class="w">    </span><span class="c1">// 要求 trpc-agent-go &gt;= v0.5.0</span>
+</span><span id="__span-34-20"><a id="__codelineno-34-20" name="__codelineno-34-20"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">runner</span><span class="p">.</span><span class="nx">Close</span><span class="p">();</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-34-21"><a id="__codelineno-34-21" name="__codelineno-34-21"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-34-22"><a id="__codelineno-34-22" name="__codelineno-34-22"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-34-23"><a id="__codelineno-34-23" name="__codelineno-34-23"></a>
+</span><span id="__span-34-24"><a id="__codelineno-34-24" name="__codelineno-34-24"></a><span class="w">    </span><span class="c1">// 如果你提供了自己的 session service，在这里关闭它</span>
+</span><span id="__span-34-25"><a id="__codelineno-34-25" name="__codelineno-34-25"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">sessionService</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-34-26"><a id="__codelineno-34-26" name="__codelineno-34-26"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-34-27"><a id="__codelineno-34-27" name="__codelineno-34-27"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-34-28"><a id="__codelineno-34-28" name="__codelineno-34-28"></a>
+</span><span id="__span-34-29"><a id="__codelineno-34-29" name="__codelineno-34-29"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-34-30"><a id="__codelineno-34-30" name="__codelineno-34-30"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p><strong>注意事项</strong>：</p>
+<ul>
+<li>✅ <code>Close()</code> 是幂等的，多次调用是安全的</li>
+<li>✅ <strong>Runner 只关闭它默认创建的 inmemory Session Service</strong></li>
+<li>✅ 如果你通过 <code>WithSessionService()</code> 提供了自己的 Session Service，Runner 不会关闭它（你需要自己管理）</li>
+<li>❌ 如果 Runner 拥有 inmemory Session Service 但不调用 <code>Close()</code>，会导致 goroutine 泄漏</li>
+</ul>
+<h4 id="context">Context 生命周期控制</h4>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-35-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-35-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-35-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-35-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-35-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-35-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-35-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-35-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-35-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-35-10">10</a></span>
+<span class="normal"><a href="#__codelineno-35-11">11</a></span>
+<span class="normal"><a href="#__codelineno-35-12">12</a></span>
+<span class="normal"><a href="#__codelineno-35-13">13</a></span>
+<span class="normal"><a href="#__codelineno-35-14">14</a></span>
+<span class="normal"><a href="#__codelineno-35-15">15</a></span>
+<span class="normal"><a href="#__codelineno-35-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1"></a><span class="c1">// 使用 context 控制单次运行的生命周期</span>
+</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2"></a><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithCancel</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">())</span>
+</span><span id="__span-35-3"><a id="__codelineno-35-3" name="__codelineno-35-3"></a><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
+</span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4"></a>
+</span><span id="__span-35-5"><a id="__codelineno-35-5" name="__codelineno-35-5"></a><span class="c1">// 确保消费完所有事件</span>
+</span><span id="__span-35-6"><a id="__codelineno-35-6" name="__codelineno-35-6"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
+</span><span id="__span-35-7"><a id="__codelineno-35-7" name="__codelineno-35-7"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-8"><a id="__codelineno-35-8" name="__codelineno-35-8"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-35-9"><a id="__codelineno-35-9" name="__codelineno-35-9"></a><span class="p">}</span>
+</span><span id="__span-35-10"><a id="__codelineno-35-10" name="__codelineno-35-10"></a>
+</span><span id="__span-35-11"><a id="__codelineno-35-11" name="__codelineno-35-11"></a><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-12"><a id="__codelineno-35-12" name="__codelineno-35-12"></a><span class="w">    </span><span class="c1">// 处理事件</span>
+</span><span id="__span-35-13"><a id="__codelineno-35-13" name="__codelineno-35-13"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-14"><a id="__codelineno-35-14" name="__codelineno-35-14"></a><span class="w">        </span><span class="k">break</span>
+</span><span id="__span-35-15"><a id="__codelineno-35-15" name="__codelineno-35-15"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-35-16"><a id="__codelineno-35-16" name="__codelineno-35-16"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="_27">状态检查</h3>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-36-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-36-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-36-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-36-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-36-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-36-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-36-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-36-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-36-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-36-10">10</a></span>
+<span class="normal"><a href="#__codelineno-36-11">11</a></span>
+<span class="normal"><a href="#__codelineno-36-12">12</a></span>
+<span class="normal"><a href="#__codelineno-36-13">13</a></span>
+<span class="normal"><a href="#__codelineno-36-14">14</a></span>
+<span class="normal"><a href="#__codelineno-36-15">15</a></span>
+<span class="normal"><a href="#__codelineno-36-16">16</a></span>
+<span class="normal"><a href="#__codelineno-36-17">17</a></span>
+<span class="normal"><a href="#__codelineno-36-18">18</a></span>
+<span class="normal"><a href="#__codelineno-36-19">19</a></span>
+<span class="normal"><a href="#__codelineno-36-20">20</a></span>
+<span class="normal"><a href="#__codelineno-36-21">21</a></span>
+<span class="normal"><a href="#__codelineno-36-22">22</a></span>
+<span class="normal"><a href="#__codelineno-36-23">23</a></span>
+<span class="normal"><a href="#__codelineno-36-24">24</a></span>
+<span class="normal"><a href="#__codelineno-36-25">25</a></span>
+<span class="normal"><a href="#__codelineno-36-26">26</a></span>
+<span class="normal"><a href="#__codelineno-36-27">27</a></span>
+<span class="normal"><a href="#__codelineno-36-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
+</span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4"></a>
+</span><span id="__span-36-5"><a id="__codelineno-36-5" name="__codelineno-36-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-36-6"><a id="__codelineno-36-6" name="__codelineno-36-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-36-7"><a id="__codelineno-36-7" name="__codelineno-36-7"></a><span class="p">)</span>
+</span><span id="__span-36-8"><a id="__codelineno-36-8" name="__codelineno-36-8"></a>
+</span><span id="__span-36-9"><a id="__codelineno-36-9" name="__codelineno-36-9"></a><span class="c1">// 检查 Runner 是否能正常工作</span>
+</span><span id="__span-36-10"><a id="__codelineno-36-10" name="__codelineno-36-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">checkRunner</span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Runner</span><span class="p">,</span><span class="w"> </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-36-11"><a id="__codelineno-36-11" name="__codelineno-36-11"></a><span class="w">    </span><span class="nx">testMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;测试&quot;</span><span class="p">)</span>
+</span><span id="__span-36-12"><a id="__codelineno-36-12" name="__codelineno-36-12"></a><span class="w">    </span><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;test-user&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;test-session&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">testMessage</span><span class="p">)</span>
+</span><span id="__span-36-13"><a id="__codelineno-36-13" name="__codelineno-36-13"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-36-14"><a id="__codelineno-36-14" name="__codelineno-36-14"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;Runner.Run 失败: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-36-15"><a id="__codelineno-36-15" name="__codelineno-36-15"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-36-16"><a id="__codelineno-36-16" name="__codelineno-36-16"></a>
+</span><span id="__span-36-17"><a id="__codelineno-36-17" name="__codelineno-36-17"></a><span class="w">    </span><span class="c1">// 检查事件流</span>
+</span><span id="__span-36-18"><a id="__codelineno-36-18" name="__codelineno-36-18"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-36-19"><a id="__codelineno-36-19" name="__codelineno-36-19"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-36-20"><a id="__codelineno-36-20" name="__codelineno-36-20"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;收到错误事件: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
+</span><span id="__span-36-21"><a id="__codelineno-36-21" name="__codelineno-36-21"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-36-22"><a id="__codelineno-36-22" name="__codelineno-36-22"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-36-23"><a id="__codelineno-36-23" name="__codelineno-36-23"></a><span class="w">            </span><span class="k">break</span>
+</span><span id="__span-36-24"><a id="__codelineno-36-24" name="__codelineno-36-24"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-36-25"><a id="__codelineno-36-25" name="__codelineno-36-25"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-36-26"><a id="__codelineno-36-26" name="__codelineno-36-26"></a>
+</span><span id="__span-36-27"><a id="__codelineno-36-27" name="__codelineno-36-27"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-36-28"><a id="__codelineno-36-28" name="__codelineno-36-28"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<h2 id="_28">📝 总结</h2>
 <p>Runner 组件是 tRPC-Agent-Go 框架的核心，提供了完整的对话管理和 Agent 编排能力。通过合理使用会话管理、工具集成和事件处理，可以构建强大的智能对话应用。</p>
 
 
@@ -3756,7 +3968,7 @@ RunOption：</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月21日 07:29:59 UTC">2026-01-21 07:29:59</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月28日 09:51:53 UTC">2026-01-28 09:51:53</span>
   </span>
 
     
