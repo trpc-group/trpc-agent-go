@@ -4719,14 +4719,15 @@
 </span><span id="__span-12-132"><a id="__codelineno-12-132" name="__codelineno-12-132"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="2-llm">2. 使用 LLM 节点</h3>
-<p>LLM 节点实现了固定的三段式输入规则，无需配置：</p>
+<p>LLM 节点实现了固定的三段式输入规则，无需配置（可选：覆盖输入 key）：</p>
 <ol>
 <li><strong>OneShot 优先</strong>：<ul>
 <li>若存在 <code>one_shot_messages_by_node[&lt;node_id&gt;]</code>，以它为本轮输入。</li>
 <li>否则若存在 <code>one_shot_messages</code>，以它为本轮输入。</li>
 </ul>
 </li>
-<li><strong>UserInput 其次</strong>：否则若存在 <code>user_input</code>，自动持久化一次。</li>
+<li><strong>UserInput 其次</strong>：否则若存在节点的用户输入 key，自动持久化一次
+   （默认 key：<code>user_input</code>）。</li>
 <li><strong>历史默认</strong>：否则以持久化历史作为输入。</li>
 </ol>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1"> 1</a></span>
@@ -4756,6 +4757,9 @@
 <li>SystemPrompt 仅用于本次输入，不落持久化状态。</li>
 <li>一次性键（<code>user_input</code>/<code>one_shot_messages</code>/<code>one_shot_messages_by_node</code>）
   在成功执行后自动清空。</li>
+<li>你可以为单个 LLM/Agent 节点覆盖用户输入 key：
+  <code>graph.WithUserInputKey("my_input")</code>。该 key 会被视为一次性输入，并在
+  节点运行后清空。</li>
 <li>并行分支：如果需要为不同的 LLM 节点准备不同的一次性输入，优先写
   <code>one_shot_messages_by_node</code>，避免多个分支同时写 <code>one_shot_messages</code>
   互相覆盖/清空。若由单个上游节点同时为多个 LLM 节点准备输入，推荐使用
@@ -4827,6 +4831,15 @@ Model，LLM）消息（例如用于用户界面（User Interface，UI）的流�
   <code>MessageOp</code>（例如 <code>AppendMessages</code>、<code>ReplaceLastUser</code>）原子性写入
   到 <code>messages</code>，并自动清空 <code>user_input</code> 以避免重复追加。</li>
 <li>适用场景：普通对话式工作流，允许在前置节点动态调整用户输入。</li>
+<li>默认用户输入 key 为 <code>StateKeyUserInput</code>。如果需要从其他一次性 key
+  读取输入，可在该节点上配置 <code>graph.WithUserInputKey(...)</code>。</li>
+<li><code>WithUserInputKey</code> 是建图时的节点 option。若你希望每次 run 动态改输入，
+  建议保持 key 固定，在前置节点/回调里写入该 key 的 value。</li>
+<li>注意：占位符不会在 user message 中自动展开。<code>StateKeyUserInput</code>
+  （以及 <code>messages</code> 里 <code>role=user</code> 的内容）会原样传给模型。如果你的
+  界面/DSL 允许在用户输入里写 <code>{key}</code> / <code>{{key}}</code> 或
+  <code>input.output_parsed.xxx</code> 这类变量，请在 DSL 层或前置回调先解析并写入
+  最终字符串。</li>
 </ul>
 </li>
 </ul>
@@ -4851,6 +4864,15 @@ Model，LLM）消息（例如用于用户界面（User Interface，UI）的流�
 <li>GraphAgent 会把当前 <code>*session.Session</code> 写入图状态的 <code>StateKeySession</code>，LLM 节点据此读取注入值</li>
 <li><code>{invocation:*}</code> 从本次运行的 <code>*agent.Invocation</code> 读取</li>
 <li>无前缀键（如 <code>research_topics</code>）需要直接存在于 <code>session.State</code></li>
+<li>作用范围：占位符只会在 LLM 节点的 <code>instruction</code>（system message）中展开，
+  不会在 <code>user_input</code> 或其他 user message 中展开</li>
+<li>限制：占位符名仅支持 <code>key</code> 或 <code>prefix:key</code>（<code>prefix</code> 为
+  <code>user</code> / <code>app</code> / <code>temp</code> / <code>invocation</code>）。不支持
+  <code>{input.output_parsed.xxx}</code> 这类点号路径；建议在 DSL/callback 中把值拍平
+  到一个 key（例如 <code>temp:output_parsed_xxx</code>），再用
+  <code>{temp:output_parsed_xxx}</code> 引用</li>
+<li>Mustache 兼容仅做语法规整（<code>{{key}}</code> → <code>{key}</code>），且只会对“合法的占位符名”
+  生效；不支持 Mustache 的 section/loop/helper 等高级语法</li>
 </ul>
 <p>示例：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1">1</a></span>
@@ -5249,9 +5271,15 @@ Model，LLM）消息（例如用于用户界面（User Interface，UI）的流�
 <p>Agent 节点不会自动把“上游输出”作为“下游输入”。边只负责控制执行顺序；数据必须通过 State
 在节点之间显式传递。</p>
 <p>默认情况下，Agent 节点会从 <code>state[graph.StateKeyUserInput]</code> 构造子代理的输入消息。
-但 <code>user_input</code> 是<strong>一次性</strong>输入：LLM/Agent 节点成功执行后会清空它以避免重复消费。
+如果希望该节点读取其他一次性输入 key，可在该节点上配置
+<code>graph.WithUserInputKey("...")</code>。</p>
+<p>注意：该输入消息不会做占位符展开，会原样传给子 Agent。若你需要把
+<code>{key}</code> / <code>{{key}}</code> 或 <code>input.output_parsed.xxx</code> 之类的变量渲染成最终文本，
+请在 DSL 层或前置回调先完成渲染，再写入对应的输入 key。</p>
+<p>但 <code>user_input</code>（或你配置的输入 key）是<strong>一次性</strong>输入：LLM/Agent 节点成功执行后会清空它以避免重复消费。
 因此当你写出 <code>A (agent) → B (agent)</code> 这种链路时，很容易出现“ A 有输出，但 B 看起来没拿到输入”的现象。</p>
-<p>要让下游 Agent 消费上游结果，需要在下游 Agent 节点执行前，把目标字段写回 <code>user_input</code>：</p>
+<p>要让下游 Agent 消费上游结果，需要在下游 Agent 节点执行前，把目标字段写回该节点的
+输入 key（默认 <code>user_input</code>）：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-23-1">1</a></span>
 <span class="normal"><a href="#__codelineno-23-2">2</a></span>
 <span class="normal"><a href="#__codelineno-23-3">3</a></span>
@@ -5270,8 +5298,9 @@ Model，LLM）消息（例如用于用户界面（User Interface，UI）的流�
 </span></code></pre></div></td></tr></table></div>
 <p>说明：</p>
 <ul>
-<li><code>WithSubgraphInputFromLastResponse()</code> 会把当前的 <code>last_response</code> 映射到该 Agent 节点的
-  <code>user_input</code>，因此 <code>nodeB</code> 会把 <code>nodeA</code> 的输出当作输入。</li>
+<li><code>WithSubgraphInputFromLastResponse()</code> 会把当前的 <code>last_response</code> 映射到该
+  Agent 节点配置的“用户输入 key”（默认 <code>user_input</code>），因此 <code>nodeB</code> 会把
+  <code>nodeA</code> 的输出当作输入。</li>
 <li>如果你需要消费“指定节点”的输出（而不是最近一次），可以通过前置回调从
   <code>node_responses[targetNodeID]</code> 取值并写入 <code>user_input</code>。</li>
 </ul>
@@ -9621,7 +9650,7 @@ API、服务优雅下线钩子），并且不想在节点代码里显式写
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月27日 06:19:22 UTC">2026-01-27 06:19:22</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月28日 13:48:56 UTC">2026-01-28 13:48:56</span>
   </span>
 
     

@@ -4738,7 +4738,8 @@ to update other keys in the same node):</p>
 </span><span id="__span-12-132"><a id="__codelineno-12-132" name="__codelineno-12-132"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="2-using-llm-nodes">2. Using LLM Nodes</h3>
-<p>LLM nodes implement a fixed three-stage input rule without extra configuration:</p>
+<p>LLM nodes implement a fixed three-stage input rule without extra configuration
+(except an optional input key override):</p>
 <ol>
 <li>OneShot first:<ul>
 <li>If <code>one_shot_messages_by_node[&lt;node_id&gt;]</code> exists, use it as the input for
@@ -4747,7 +4748,8 @@ to update other keys in the same node):</p>
    round.</li>
 </ul>
 </li>
-<li>UserInput next: Otherwise, if <code>user_input</code> exists, persist once to history.</li>
+<li>UserInput next: Otherwise, if the node's user input key exists, persist once
+   to history (default key: <code>user_input</code>).</li>
 <li>History default: Otherwise, use durable <code>messages</code> as input.</li>
 </ol>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1"> 1</a></span>
@@ -4777,6 +4779,9 @@ to update other keys in the same node):</p>
 <li>System prompt is only used for this round and is not persisted to state.</li>
 <li>One-shot keys (<code>user_input</code> / <code>one_shot_messages</code> / <code>one_shot_messages_by_node</code>)
   are automatically cleared after successful execution.</li>
+<li>You can override the user input key per LLM/Agent node via
+  <code>graph.WithUserInputKey("my_input")</code>. This key is treated as one-shot input
+  and is cleared after the node runs.</li>
 <li>Parallel branches: if multiple branches need different one-shot inputs for
   different LLM nodes in the same step, write <code>one_shot_messages_by_node</code>
   instead of <code>one_shot_messages</code>. If one upstream node prepares inputs for
@@ -4848,6 +4853,16 @@ nodes enable final model responses automatically for that run.</p>
 <ul>
 <li>When non-empty, the LLM node uses durable <code>messages</code> plus this round's user input to call the model. After the call, it writes the user input and assistant reply to <code>messages</code> using <code>MessageOp</code> (e.g., <code>AppendMessages</code>, <code>ReplaceLastUser</code>) atomically, and clears <code>user_input</code> to avoid repeated appends.</li>
 <li>Use case: conversational flows where pre-nodes may adjust user input.</li>
+<li>By default, the user input key is <code>StateKeyUserInput</code>. To read one-shot
+  input from a different key, use <code>graph.WithUserInputKey(...)</code> on that node.</li>
+<li><code>WithUserInputKey</code> is a build-time node option. For per-run customization,
+  keep the key stable and update the value in state (for example, in a
+  pre-node callback).</li>
+<li>Placeholder injection is <strong>not</strong> applied to user messages. If your UI/DSL
+  lets users type placeholders inside UserInput (for example, <code>{key}</code>,
+  <code>{{key}}</code>, or <code>input.output_parsed.xxx</code>), you must resolve them yourself
+  (for example, in your DSL layer or a pre-node callback) before writing the
+  final string into the state key.</li>
 </ul>
 </li>
 </ul>
@@ -5566,6 +5581,17 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 <li>GraphAgent writes the current <code>*session.Session</code> into graph state under <code>StateKeySession</code>; the LLM node reads values from there</li>
 <li><code>{invocation:*}</code> values are read from the current <code>*agent.Invocation</code> for this run</li>
 <li>Unprefixed keys (e.g., <code>research_topics</code>) must be present directly in <code>session.State</code></li>
+<li>Scope: placeholders are expanded only in the LLM node <code>instruction</code>
+  (the system message). They are <strong>not</strong> expanded in UserInput or other user
+  messages.</li>
+<li>Limits: placeholder names are restricted to <code>key</code> or <code>prefix:key</code> (where
+  <code>prefix</code> is one of <code>user</code>, <code>app</code>, <code>temp</code>, <code>invocation</code>). Nested paths like
+  <code>{input.output_parsed.xxx}</code> are not supported; flatten the value into a key
+  (for example, <code>temp:output_parsed_xxx</code>) in your DSL/callback, then reference
+  it as <code>{temp:output_parsed_xxx}</code>.</li>
+<li>Mustache support is a compatibility layer only (<code>{{key}}</code> → <code>{key}</code>) and it
+  only triggers for valid placeholder names; full Mustache features (sections,
+  loops, helpers) are not supported.</li>
 </ul>
 <p>Example:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-29-1">1</a></span>
@@ -8002,7 +8028,13 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <span class="normal"><a href="#__codelineno-68-24">24</a></span>
 <span class="normal"><a href="#__codelineno-68-25">25</a></span>
 <span class="normal"><a href="#__codelineno-68-26">26</a></span>
-<span class="normal"><a href="#__codelineno-68-27">27</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-68-1"><a id="__codelineno-68-1" name="__codelineno-68-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-68-27">27</a></span>
+<span class="normal"><a href="#__codelineno-68-28">28</a></span>
+<span class="normal"><a href="#__codelineno-68-29">29</a></span>
+<span class="normal"><a href="#__codelineno-68-30">30</a></span>
+<span class="normal"><a href="#__codelineno-68-31">31</a></span>
+<span class="normal"><a href="#__codelineno-68-32">32</a></span>
+<span class="normal"><a href="#__codelineno-68-33">33</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-68-1"><a id="__codelineno-68-1" name="__codelineno-68-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-68-2"><a id="__codelineno-68-2" name="__codelineno-68-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
 </span><span id="__span-68-3"><a id="__codelineno-68-3" name="__codelineno-68-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/graphagent&quot;</span>
 </span><span id="__span-68-4"><a id="__codelineno-68-4" name="__codelineno-68-4"></a><span class="p">)</span>
@@ -8026,16 +8058,25 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </span><span id="__span-68-22"><a id="__codelineno-68-22" name="__codelineno-68-22"></a><span class="w">        </span><span class="nx">reviewer</span><span class="p">,</span>
 </span><span id="__span-68-23"><a id="__codelineno-68-23" name="__codelineno-68-23"></a><span class="w">    </span><span class="p">}))</span>
 </span><span id="__span-68-24"><a id="__codelineno-68-24" name="__codelineno-68-24"></a>
-</span><span id="__span-68-25"><a id="__codelineno-68-25" name="__codelineno-68-25"></a><span class="c1">// I/O: sub‑agents receive graph.StateKeyUserInput as the message AND the full</span>
-</span><span id="__span-68-26"><a id="__codelineno-68-26" name="__codelineno-68-26"></a><span class="c1">// graph state via inv.RunOptions.RuntimeState; on finish they update</span>
-</span><span id="__span-68-27"><a id="__codelineno-68-27" name="__codelineno-68-27"></a><span class="c1">// graph.StateKeyLastResponse and graph.StateKeyNodeResponses[nodeID]</span>
+</span><span id="__span-68-25"><a id="__codelineno-68-25" name="__codelineno-68-25"></a><span class="c1">// I/O: by default, sub‑agents receive graph.StateKeyUserInput as the message.</span>
+</span><span id="__span-68-26"><a id="__codelineno-68-26" name="__codelineno-68-26"></a><span class="c1">// To forward a different one-shot input key, set graph.WithUserInputKey(&quot;...&quot;)</span>
+</span><span id="__span-68-27"><a id="__codelineno-68-27" name="__codelineno-68-27"></a><span class="c1">// on that Agent node. The message content is passed through as-is (no</span>
+</span><span id="__span-68-28"><a id="__codelineno-68-28" name="__codelineno-68-28"></a><span class="c1">// placeholder expansion); do template rendering in your DSL/callbacks if</span>
+</span><span id="__span-68-29"><a id="__codelineno-68-29" name="__codelineno-68-29"></a><span class="c1">// needed.</span>
+</span><span id="__span-68-30"><a id="__codelineno-68-30" name="__codelineno-68-30"></a><span class="c1">//</span>
+</span><span id="__span-68-31"><a id="__codelineno-68-31" name="__codelineno-68-31"></a><span class="c1">// Sub‑agents also receive the full graph state via inv.RunOptions.RuntimeState;</span>
+</span><span id="__span-68-32"><a id="__codelineno-68-32" name="__codelineno-68-32"></a><span class="c1">// on finish they update</span>
+</span><span id="__span-68-33"><a id="__codelineno-68-33" name="__codelineno-68-33"></a><span class="c1">// graph.StateKeyLastResponse and graph.StateKeyNodeResponses[nodeID]</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="passing-only-results-map-last_response-to-downstream-user_input">Passing only results: map last_response to downstream user_input</h4>
 <blockquote>
 <p>Scenario: A → B → C as black boxes. Downstream should only consume upstream's result text as this turn's input, without pulling full session history.</p>
 </blockquote>
 <ul>
-<li>Approach 1 (dependency‑free, universally available): add a pre‑node callback to the target Agent node that assigns parent <code>last_response</code> to <code>user_input</code>. Optionally isolate messages.</li>
+<li>Approach 1 (dependency‑free, universally available): add a pre‑node callback
+  to the target Agent node that assigns parent <code>last_response</code> to the Agent
+  node's configured user input key (default: <code>user_input</code>). Optionally isolate
+  messages.</li>
 </ul>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-69-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-69-2"> 2</a></span>
@@ -8049,7 +8090,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <span class="normal"><a href="#__codelineno-69-10">10</a></span>
 <span class="normal"><a href="#__codelineno-69-11">11</a></span>
 <span class="normal"><a href="#__codelineno-69-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddAgentNode</span><span class="p">(</span><span class="s">&quot;orchestrator&quot;</span><span class="p">,</span>
-</span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2"></a><span class="w">    </span><span class="c1">// Map upstream last_response → this turn&#39;s user_input</span>
+</span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2"></a><span class="w">    </span><span class="c1">// Map upstream last_response → this turn&#39;s user input key</span>
 </span><span id="__span-69-3"><a id="__codelineno-69-3" name="__codelineno-69-3"></a><span class="w">    </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithPreNodeCallback</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">cb</span><span class="w"> </span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">NodeCallbackContext</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-69-4"><a id="__codelineno-69-4" name="__codelineno-69-4"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">v</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyLastResponse</span><span class="p">].(</span><span class="kt">string</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-69-5"><a id="__codelineno-69-5" name="__codelineno-69-5"></a><span class="w">            </span><span class="nx">s</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyUserInput</span><span class="p">]</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">v</span>
@@ -8078,7 +8119,10 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </span><span id="__span-70-6"><a id="__codelineno-70-6" name="__codelineno-70-6"></a><span class="w">    </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithSubgraphIsolatedMessages</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
 </span><span id="__span-70-7"><a id="__codelineno-70-7" name="__codelineno-70-7"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Notes: Both approaches ensure B only sees A's result, and C only sees B's. The option is more concise when available; the callback is zero‑dependency and works everywhere.</p>
+<p>Notes: Both approaches write to the Agent node's configured user input key
+(default: <code>StateKeyUserInput</code>) and ensure B only sees A's result, and C only
+sees B's. The option is more concise when available; the callback is
+zero‑dependency and works everywhere.</p>
 <h3 id="hybrid-pattern-example">Hybrid Pattern Example</h3>
 <p>Embed dynamic decision‑making within a structured flow:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-71-1"> 1</a></span>
@@ -9666,7 +9710,7 @@ tokens for user interface streaming).</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 27, 2026 06:19:22 UTC">2026-01-27 06:19:22</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 28, 2026 13:48:56 UTC">2026-01-28 13:48:56</span>
   </span>
 
     
