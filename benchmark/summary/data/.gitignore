@@ -1,0 +1,2 @@
+# Ignore all dataset files (should be downloaded via download_datasets.sh).
+mt-bench-101/
