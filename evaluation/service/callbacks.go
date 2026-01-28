@@ -11,6 +11,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 )
@@ -191,6 +192,8 @@ type AfterInferenceSetArgs struct {
 	Results []*InferenceResult
 	// Error is the error occurred during inference and may be nil.
 	Error error
+	// StartTime records when the inference set stage started.
+	StartTime time.Time
 }
 
 // AfterInferenceSetResult contains the return value for after inference set callbacks.
@@ -220,6 +223,8 @@ type AfterInferenceCaseArgs struct {
 	Result *InferenceResult
 	// Error is the error occurred during inference and may be nil.
 	Error error
+	// StartTime records when the inference case stage started.
+	StartTime time.Time
 }
 
 // AfterInferenceCaseResult contains the return value for after inference case callbacks.
@@ -248,6 +253,8 @@ type AfterEvaluateSetArgs struct {
 	Result *evalresult.EvalSetResult
 	// Error is the error occurred during evaluation and may be nil.
 	Error error
+	// StartTime records when the evaluate set stage started.
+	StartTime time.Time
 }
 
 // AfterEvaluateSetResult contains the return value for after evaluation set callbacks.
@@ -278,6 +285,8 @@ type AfterEvaluateCaseArgs struct {
 	Result *evalresult.EvalCaseResult
 	// Error is the error occurred during evaluation and may be nil.
 	Error error
+	// StartTime records when the evaluate case stage started.
+	StartTime time.Time
 }
 
 // AfterEvaluateCaseResult contains the return value for after evaluation case callbacks.
