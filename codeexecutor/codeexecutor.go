@@ -31,14 +31,14 @@ type CodeExecutor interface {
 
 // CodeExecutionInput is the input for code execution.
 type CodeExecutionInput struct {
-	CodeBlocks  []CodeBlock
-	ExecutionID string
+	CodeBlocks  []CodeBlock `json:"code_blocks"`
+	ExecutionID string      `json:"execution_id,omitempty"`
 }
 
 // CodeExecutionResult is the result of code execution including files.
 type CodeExecutionResult struct {
-	Output      string
-	OutputFiles []File
+	Output      string `json:"output"`
+	OutputFiles []File `json:"output_files,omitempty"`
 }
 
 // String formats a human-readable result.
@@ -68,8 +68,8 @@ type File struct {
 
 // CodeBlock represents a single block of code to be executed.
 type CodeBlock struct {
-	Code     string
-	Language string
+	Code     string `json:"code"`
+	Language string `json:"language"`
 }
 
 // CodeBlockDelimiter defines the start and end delimiters for code blocks.
