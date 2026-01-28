@@ -59,9 +59,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		imemory.ApplyAutoModeDefaults(opts.enabledTools, opts.userExplicitlySet)
 	}
 
-	builderOpts := []storage.ClientBuilderOpt{
-		storage.WithExtraOptions(opts.extraOptions...),
-	}
+	var builderOpts []storage.ClientBuilderOpt
 	// Priority: DSN > instance name.
 	if opts.dsn != "" {
 		builderOpts = append(builderOpts, storage.WithClientBuilderDSN(opts.dsn))
@@ -72,6 +70,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		}
 	} else {
 		return nil, fmt.Errorf("either DSN or instance name must be provided")
+	}
+	if len(opts.extraOptions) > 0 {
+		builderOpts = append(builderOpts, storage.WithExtraOptions(opts.extraOptions...))
 	}
 
 	chClient, err := storage.GetClientBuilder()(builderOpts...)
@@ -158,7 +159,8 @@ func (s *Service) AddMemory(
 		if err != nil {
 			return fmt.Errorf("check memory count failed: %w", err)
 		}
-		if int(count) >= s.opts.memoryLimit {
+		limit := uint64(s.opts.memoryLimit)
+		if count >= limit {
 			return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
 				userKey.UserID, s.opts.memoryLimit, count)
 		}
@@ -458,17 +460,19 @@ func (s *Service) SearchMemories(
 		return []*memory.Entry{}, nil
 	}
 
-	// Get all memories for the user.
+	// Use ClickHouse text search to filter memories by query.
 	selectQuery := fmt.Sprintf(
-		"SELECT memory_data FROM %s FINAL WHERE app_name = ? AND user_id = ?",
+		"SELECT memory_data FROM %s FINAL WHERE app_name = ? AND user_id = ? "+
+			"AND positionCaseInsensitiveUTF8(memory_data, ?) > 0",
 		s.tableName,
 	)
 	if s.opts.softDelete {
 		selectQuery += " AND deleted_at IS NULL"
 	}
+	selectQuery += " ORDER BY updated_at DESC, created_at DESC"
 
 	rows, err := s.chClient.Query(ctx, selectQuery,
-		userKey.AppName, userKey.UserID)
+		userKey.AppName, userKey.UserID, query)
 	if err != nil {
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
@@ -486,9 +490,7 @@ func (s *Service) SearchMemories(
 			return nil, fmt.Errorf("unmarshal memory entry failed: %w", err)
 		}
 
-		if imemory.MatchMemoryEntry(e, query) {
-			results = append(results, e)
-		}
+		results = append(results, e)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("search memories failed: %w", err)
@@ -502,7 +504,9 @@ func (s *Service) SearchMemories(
 // In agentic mode, all enabled tools are returned.
 // The tools list is pre-computed at service creation time.
 func (s *Service) Tools() []tool.Tool {
-	return s.precomputedTools
+	tools := make([]tool.Tool, len(s.precomputedTools))
+	copy(tools, s.precomputedTools)
+	return tools
 }
 
 // EnqueueAutoMemoryJob enqueues an auto memory extraction job for async

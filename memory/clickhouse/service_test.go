@@ -60,10 +60,10 @@ var _ storage.Client = (*mockClickHouseClient)(nil)
 
 // mockClickHouseClient is a mock implementation of storage.Client for testing.
 type mockClickHouseClient struct {
-	execFunc           func(ctx context.Context, query string, args ...any) error
-	queryFunc          func(ctx context.Context, query string, args ...any) (driver.Rows, error)
-	queryRowFunc       func(ctx context.Context, dest []any, query string, args ...any) error
-	batchInsertFunc    func(ctx context.Context, query string, fn storage.BatchFn,
+	execFunc        func(ctx context.Context, query string, args ...any) error
+	queryFunc       func(ctx context.Context, query string, args ...any) (driver.Rows, error)
+	queryRowFunc    func(ctx context.Context, dest []any, query string, args ...any) error
+	batchInsertFunc func(ctx context.Context, query string, fn storage.BatchFn,
 		opts ...driver.PrepareBatchOption) error
 	asyncInsertFunc    func(ctx context.Context, query string, wait bool, args ...any) error
 	closeFunc          func() error
@@ -442,6 +442,8 @@ func TestService_Tools(t *testing.T) {
 	tools := svc.Tools()
 	assert.Len(t, tools, 1)
 	assert.Equal(t, memory.SearchToolName, tools[0].Declaration().Name)
+	tools = append(tools, &mockTool{name: memory.AddToolName})
+	assert.Len(t, svc.precomputedTools, 1)
 }
 
 func TestService_Close(t *testing.T) {
@@ -1042,28 +1044,9 @@ func TestService_SearchMemories_NoMatch(t *testing.T) {
 		UserID:  "user-123",
 	}
 
-	now := time.Now()
-	entry := &memory.Entry{
-		ID:      "mem-456",
-		AppName: userKey.AppName,
-		UserID:  userKey.UserID,
-		Memory: &memory.Memory{
-			Memory:      "User likes cats",
-			Topics:      []string{"pets"},
-			LastUpdated: &now,
-		},
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	entryData, _ := json.Marshal(entry)
-
 	mockClient := &mockClickHouseClient{
 		queryFunc: func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
-			return &mockRows{
-				data: [][]any{
-					{string(entryData)},
-				},
-			}, nil
+			return &mockRows{}, nil
 		},
 	}
 
