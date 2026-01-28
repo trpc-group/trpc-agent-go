@@ -22,7 +22,58 @@ func ExtractTextFromContent(content *model.Message) string {
 	if content == nil {
 		return ""
 	}
-	return content.Content
+	var parts []string
+	if strings.TrimSpace(content.Content) != "" {
+		parts = append(parts, content.Content)
+	}
+	for _, part := range content.ContentParts {
+		switch part.Type {
+		case model.ContentTypeText:
+			if part.Text != nil && strings.TrimSpace(*part.Text) != "" {
+				parts = append(parts, *part.Text)
+			}
+		case model.ContentTypeImage:
+			if part.Image != nil && strings.TrimSpace(part.Image.URL) != "" {
+				parts = append(parts, "[image:"+part.Image.URL+"]")
+			} else {
+				parts = append(parts, "[image]")
+			}
+		case model.ContentTypeAudio:
+			parts = append(parts, "[audio]")
+		case model.ContentTypeFile:
+			if part.File != nil && strings.TrimSpace(part.File.Name) != "" {
+				parts = append(parts, "[file:"+part.File.Name+"]")
+			} else {
+				parts = append(parts, "[file]")
+			}
+		default:
+			parts = append(parts, "[content]")
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+// FormatContextMessages formats context messages into a judge-friendly text block.
+func FormatContextMessages(messages []*model.Message) string {
+	if len(messages) == 0 {
+		return ""
+	}
+	var text strings.Builder
+	for _, message := range messages {
+		if message == nil {
+			continue
+		}
+		msgContent := ExtractTextFromContent(message)
+		if strings.TrimSpace(msgContent) == "" {
+			continue
+		}
+		text.WriteString("[")
+		text.WriteString(message.Role.String())
+		text.WriteString("] ")
+		text.WriteString(msgContent)
+		text.WriteString("\n")
+	}
+	return strings.TrimSpace(text.String())
 }
 
 // ExtractRubrics extracts rubrics from llm.Rubric.

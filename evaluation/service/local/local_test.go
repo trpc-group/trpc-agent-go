@@ -1855,3 +1855,41 @@ type failingEvalSetManager struct {
 func (m failingEvalSetManager) GetCase(ctx context.Context, appName, evalSetID, evalCaseID string) (*evalset.EvalCase, error) {
 	return nil, m.err
 }
+
+func TestPrepareCaseEvaluationInputs_AttachesContextMessagesToEachInvocation(t *testing.T) {
+	contextMessages := []*model.Message{
+		{Role: model.RoleSystem, Content: "system context"},
+		{Role: model.RoleUser, Content: "previous user message"},
+	}
+
+	inferenceResult := &service.InferenceResult{
+		AppName:    "app",
+		EvalSetID:  "set",
+		EvalCaseID: "case",
+		Inferences: []*evalset.Invocation{
+			{InvocationID: "1", UserContent: &model.Message{Role: model.RoleUser, Content: "u1"}, FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "a1"}},
+			{InvocationID: "2", UserContent: &model.Message{Role: model.RoleUser, Content: "u2"}, FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "a2"}},
+		},
+	}
+
+	evalCase := &evalset.EvalCase{
+		EvalID:          "case",
+		ContextMessages: contextMessages,
+		Conversation: []*evalset.Invocation{
+			{InvocationID: "1", UserContent: &model.Message{Role: model.RoleUser, Content: "u1"}, FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "e1"}},
+			{InvocationID: "2", UserContent: &model.Message{Role: model.RoleUser, Content: "u2"}, FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "e2"}},
+		},
+		SessionInput: &evalset.SessionInput{UserID: "u"},
+	}
+
+	inputs, err := prepareCaseEvaluationInputs(inferenceResult, evalCase)
+	assert.NoError(t, err)
+	assert.Len(t, inputs.actuals, 2)
+	assert.Len(t, inputs.expecteds, 2)
+	for _, invocation := range inputs.actuals {
+		assert.Equal(t, contextMessages, invocation.ContextMessages)
+	}
+	for _, invocation := range inputs.expecteds {
+		assert.Equal(t, contextMessages, invocation.ContextMessages)
+	}
+}

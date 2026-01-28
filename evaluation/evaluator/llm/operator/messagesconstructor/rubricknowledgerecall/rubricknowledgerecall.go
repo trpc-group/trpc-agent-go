@@ -129,8 +129,15 @@ func (e *rubricKnowledgeRecallMessagesConstructor) ConstructMessages(ctx context
 	if retrieved == "" {
 		retrieved = "No knowledge search results were found."
 	}
+	userInput := content.ExtractTextFromContent(actual.UserContent)
+	contextBlock := content.FormatContextMessages(actual.ContextMessages)
+	if contextBlock != "" && userInput != "" {
+		userInput = "Context messages:\n" + contextBlock + "\n\nUser prompt:\n" + userInput
+	} else if contextBlock != "" {
+		userInput = "Context messages:\n" + contextBlock
+	}
 	data := rubricKnowledgeRecallPromptData{
-		UserInput:          content.ExtractTextFromContent(actual.UserContent),
+		UserInput:          userInput,
 		RetrievedKnowledge: retrieved,
 		Rubrics:            content.ExtractRubrics(evalMetric.Criterion.LLMJudge.Rubrics),
 	}

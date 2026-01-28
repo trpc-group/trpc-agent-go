@@ -101,3 +101,24 @@ func TestConstructMessagesKnowledgeError(t *testing.T) {
 	_, err := constructor.ConstructMessages(context.Background(), []*evalset.Invocation{actual}, nil, evalMetric)
 	require.Error(t, err)
 }
+
+func TestConstructMessagesIncludesContextMessages(t *testing.T) {
+	constructor := New()
+	actual := &evalset.Invocation{
+		ContextMessages: []*model.Message{
+			{Role: model.RoleSystem, Content: "system context"},
+		},
+		UserContent: &model.Message{Role: model.RoleUser, Content: "question"},
+	}
+	evalMetric := &metric.EvalMetric{
+		Criterion: &criterion.Criterion{
+			LLMJudge: &llm.LLMCriterion{},
+		},
+	}
+
+	messages, err := constructor.ConstructMessages(context.Background(), []*evalset.Invocation{actual}, nil, evalMetric)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0].Content, "system context")
+	assert.Contains(t, messages[0].Content, "question")
+}
