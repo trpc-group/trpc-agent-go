@@ -279,16 +279,19 @@ https://github.com/anthropics/skills
   - `name_template`：保存为制品时的文件名前缀（如 `pref/`）。
   - `max_files`（默认 100）、`max_file_bytes`（默认 4 MiB/文件）、
     `max_total_bytes`（默认 64 MiB）：上限控制。
+  - 说明：`outputs` 同时兼容 snake_case（推荐）与旧版 Go 风格字段名
+    （例如 `MaxFiles`）
 
 - `timeout`（可选）：超时秒数（执行器有默认值）
 - `save_as_artifacts`（可选，传统收集路径）：把通过
   `output_files` 收集到的文件保存为制品，并在结果中返回
   `artifact_files`。
-- `omit_inline_content`（可选）：与 `save_as_artifacts` 配合，
-  为 true 时不返回文件内容，仅保留文件名/MIME 信息。
+- `omit_inline_content`（可选）：为 true 时不返回
+  `output_files[*].content` 与 `primary_output.content`（只返回元信息）。
+  需要内容时，可用 `output_files[*].ref` 配合 `read_file` 按需读取。
 - `artifact_prefix`（可选）：与 `save_as_artifacts` 配合的前缀。
   - 若未配置制品服务（Artifact service），`skill_run` 会继续
-    返回内联的 `output_files`，并在 `warnings` 中给出提示。
+    返回 `output_files`，并在 `warnings` 中给出提示。
 
 可选的安全限制（白名单）：
 - 环境变量 `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`：
@@ -309,11 +312,17 @@ https://github.com/anthropics/skills
 
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`
-- `primary_output`（可选）：包含 `name`、`ref`、`content`、`mime_type`
+- `primary_output`（可选）：包含 `name`、`ref`、`content`、`mime_type`、
+  `size_bytes`、`truncated`
   - 便捷字段：指向“最合适的”小型文本输出文件（若存在）。当只有一个主要输出时
     优先使用它。
-- `output_files`：文件列表（`name`、`ref`、`content`、`mime_type`）
+- `output_files`：文件列表（`name`、`ref`、`content`、`mime_type`、
+  `size_bytes`、`truncated`）
   - `ref` 是稳定的 `workspace://<name>` 引用，可传给其它工具使用
+  - 当 `omit_inline_content=true` 时，`content` 为空。可用 `ref` 配合
+    `read_file` 按需读取内容。
+  - `size_bytes` 表示磁盘上的文件大小；`truncated=true` 表示收集内容触发了
+    内部上限（例如 4 MiB/文件）。
 - `warnings`（可选）：非致命提示（例如制品保存被跳过）
 - `artifact_files`：制品引用（`name`、`version`）。两种途径：
   - 传统路径：设置了 `save_as_artifacts` 时由工具保存并返回
@@ -325,6 +334,50 @@ https://github.com/anthropics/skills
    - 传统：用 `output_files` 指定通配符
    - 声明式：用 `outputs` 统一控制收集/内联/保存
    - 如需把上游文件带入，可用 `inputs` 先行映射
+
+示例：
+
+元信息输出（避免把上下文塞满）：
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo hi > out/a.txt",
+  "output_files": ["out/*.txt"],
+  "omit_inline_content": true
+}
+```
+
+该调用会返回 `output_files[*].ref`（如 `workspace://out/a.txt`），
+`content=""`，并包含 `size_bytes` 与 `truncated`。
+
+需要内容时再读取：
+
+```json
+{
+  "file_name": "workspace://out/a.txt",
+  "start_line": 1,
+  "num_lines": 20
+}
+```
+
+大文件建议保存为制品（不内联内容）：
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo report > out/report.txt",
+  "outputs": {
+    "globs": ["$OUTPUT_DIR/report.txt"],
+    "inline": false,
+    "save": true,
+    "max_files": 5
+  }
+}
+```
+
+保存成功后，`skill_run` 会返回 `artifact_files`（`name`、`version`），
+并可用 `artifact://<name>[@<version>]` 作为文件引用传给 `read_file` 等工具。
 
 运行环境与工作目录：
 - 未提供 `cwd` 时，默认在技能根目录运行：`/skills/<name>`
