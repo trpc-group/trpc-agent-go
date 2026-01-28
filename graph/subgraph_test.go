@@ -309,6 +309,99 @@ func TestSubgraph_InputFromLastResponse_MapsUserInput(t *testing.T) {
 	require.Equal(t, "original-user-input", msg2)
 }
 
+func TestSubgraph_CustomUserInputKey_UsesAndClears(t *testing.T) {
+	const (
+		testCustomInputKey = "custom_input"
+		testCustomInput    = "override-input"
+	)
+
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-custom", EventChan: ch}
+	child := &messageEchoAgent{name: "child-custom"}
+	parent := &parentWithSubAgent{a: child}
+	state := State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: "agentNode",
+		StateKeyParentAgent:   parent,
+		StateKeyUserInput:     "original-user-input",
+		testCustomInputKey:    testCustomInput,
+	}
+
+	fn := NewAgentNodeFunc(
+		"child-custom",
+		WithUserInputKey(testCustomInputKey),
+	)
+	out, err := fn(context.Background(), state)
+	require.NoError(t, err)
+
+	var msg string
+	for i := 0; i < 8; i++ {
+		select {
+		case ev := <-ch:
+			if ev != nil && ev.Object == "test.msg" && ev.StateDelta != nil {
+				if raw, ok := ev.StateDelta["msg"]; ok {
+					msg = string(raw)
+				}
+			}
+		default:
+		}
+	}
+	require.Equal(t, testCustomInput, msg)
+
+	updated, ok := out.(State)
+	require.True(t, ok)
+	require.Equal(t, "", updated[testCustomInputKey])
+	_, clearsDefaultKey := updated[StateKeyUserInput]
+	require.False(t, clearsDefaultKey)
+}
+
+func TestSubgraph_CustomUserInputKey_InputFromLastResponse(t *testing.T) {
+	const (
+		testCustomInputKey = "custom_input"
+	)
+
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-custom-last", EventChan: ch}
+	child := &messageEchoAgent{name: "child-custom-last"}
+	parent := &parentWithSubAgent{a: child}
+	state := State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: "agentNode",
+		StateKeyParentAgent:   parent,
+		StateKeyUserInput:     "original-user-input",
+		testCustomInputKey:    "custom-input",
+		StateKeyLastResponse:  "from-last-response",
+	}
+
+	fn := NewAgentNodeFunc(
+		"child-custom-last",
+		WithUserInputKey(testCustomInputKey),
+		WithSubgraphInputFromLastResponse(),
+	)
+	out, err := fn(context.Background(), state)
+	require.NoError(t, err)
+
+	var msg string
+	for i := 0; i < 8; i++ {
+		select {
+		case ev := <-ch:
+			if ev != nil && ev.Object == "test.msg" && ev.StateDelta != nil {
+				if raw, ok := ev.StateDelta["msg"]; ok {
+					msg = string(raw)
+				}
+			}
+		default:
+		}
+	}
+	require.Equal(t, "from-last-response", msg)
+
+	updated, ok := out.(State)
+	require.True(t, ok)
+	require.Equal(t, "", updated[testCustomInputKey])
+	_, clearsDefaultKey := updated[StateKeyUserInput]
+	require.False(t, clearsDefaultKey)
+}
+
 // Verify the default child runtime state copy filters internal keys.
 func TestSubgraph_DefaultRuntimeStateFiltersInternalKeys(t *testing.T) {
 	ch := make(chan *event.Event, 8)

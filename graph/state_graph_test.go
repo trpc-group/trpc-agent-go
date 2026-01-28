@@ -1881,7 +1881,13 @@ func TestLLMRunnerSetsLastResponseID(t *testing.T) {
 		{
 			name: "user-input",
 			run: func(r *llmRunner) (State, error) {
-				res, err := r.executeUserInputStage(ctx, State{StateKeyUserInput: "hi"}, "hi", span)
+				res, err := r.executeUserInputStage(
+					ctx,
+					State{StateKeyUserInput: "hi"},
+					StateKeyUserInput,
+					"hi",
+					span,
+				)
 				require.NoError(t, err)
 				return res.(State), nil
 			},
@@ -1906,6 +1912,41 @@ func TestLLMRunnerSetsLastResponseID(t *testing.T) {
 			require.Equal(t, tt.expect, state[StateKeyLastResponseID])
 		})
 	}
+}
+
+func TestLLMRunner_CustomUserInputKey(t *testing.T) {
+	const (
+		testCustomInputKey = "custom_input"
+		testCustomInput    = "from-custom"
+	)
+
+	ctx, span := trace.Tracer.Start(context.Background(), "test")
+	defer span.End()
+
+	runner := newRunner("resp-custom")
+	runner.userInputKey = testCustomInputKey
+
+	res, err := runner.execute(ctx, State{
+		StateKeyMessages:   []model.Message{},
+		StateKeyUserInput:  "from-user",
+		testCustomInputKey: testCustomInput,
+	}, span)
+	require.NoError(t, err)
+
+	state, ok := res.(State)
+	require.True(t, ok)
+	require.Equal(t, "", state[testCustomInputKey])
+	_, hasDefaultKey := state[StateKeyUserInput]
+	require.False(t, hasDefaultKey)
+
+	merged := MessageReducer([]model.Message{}, state[StateKeyMessages])
+	msgs, ok := merged.([]model.Message)
+	require.True(t, ok)
+	require.Len(t, msgs, 2)
+	require.Equal(t, model.RoleUser, msgs[0].Role)
+	require.Equal(t, testCustomInput, msgs[0].Content)
+	require.Equal(t, model.RoleAssistant, msgs[1].Role)
+	require.Equal(t, "ok", msgs[1].Content)
 }
 
 func TestLLMRunner_OverridesStreamFromRunOptions(t *testing.T) {

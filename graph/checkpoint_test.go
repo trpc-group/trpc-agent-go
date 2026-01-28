@@ -1163,7 +1163,16 @@ func TestLLMRunner_ExecuteUserInputAndHistoryStages(t *testing.T) {
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
 	_, span := tracer.Start(context.Background(), "s")
 	// user input stage
-	st1, err := r.executeUserInputStage(context.Background(), State{StateKeyMessages: []model.Message{}, StateKeyUserInput: "hello"}, "hello", span)
+	st1, err := r.executeUserInputStage(
+		context.Background(),
+		State{
+			StateKeyMessages:  []model.Message{},
+			StateKeyUserInput: "hello",
+		},
+		StateKeyUserInput,
+		"hello",
+		span,
+	)
 	require.NoError(t, err)
 	s1, _ := st1.(State)
 	require.NotNil(t, s1[StateKeyLastResponse])
@@ -1526,16 +1535,30 @@ func TestExecuteModelWithEvents_ToolCallsMerged(t *testing.T) {
 }
 
 func TestExtractModelInput_Combinations(t *testing.T) {
+	const testCustomInputKey = "custom_input"
+
 	// both instruction and user input
-	s := extractModelInput(State{StateKeyUserInput: "hi"}, "inst")
+	s := extractModelInput(State{StateKeyUserInput: "hi"}, "inst", "")
 	require.Contains(t, s, "inst")
 	require.Contains(t, s, "hi")
 	// only instruction
-	s2 := extractModelInput(State{}, "inst")
+	s2 := extractModelInput(State{}, "inst", "")
 	require.Equal(t, "inst", s2)
 	// only user input
-	s3 := extractModelInput(State{StateKeyUserInput: "hi"}, "")
+	s3 := extractModelInput(State{StateKeyUserInput: "hi"}, "", "")
 	require.Equal(t, "hi", s3)
+
+	// custom user input key
+	s4 := extractModelInput(
+		State{
+			StateKeyUserInput:  "ignored",
+			testCustomInputKey: "from-custom",
+		},
+		"inst",
+		testCustomInputKey,
+	)
+	require.Contains(t, s4, "inst")
+	require.Contains(t, s4, "from-custom")
 }
 
 func TestFindSubAgentByName_NoProvider(t *testing.T) {

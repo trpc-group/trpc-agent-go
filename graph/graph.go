@@ -112,6 +112,10 @@ type Node struct {
 	Function    NodeFunc
 	Type        NodeType // Type of the node (function, llm, tool, etc.)
 
+	// userInputKey is the state key used as one-shot input for LLM and
+	// Agent nodes. When empty, StateKeyUserInput is used.
+	userInputKey string
+
 	toolSets             []tool.ToolSet
 	refreshToolSetsOnRun bool
 	// Per-node callbacks for fine-grained control
