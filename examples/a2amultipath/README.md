@@ -11,7 +11,7 @@ selects the target agent by choosing the agent's URL:
 
 ## How It Works
 
-1. Create one `server/a2a` server per agent.
+1. Create one A2A server per agent (for example, using `a2a.New`).
 2. Set a different `a2a.WithHost(...)` URL per agent (the URL includes a path).
 3. Mount all A2A servers onto one shared `http.Server` via `server.Handler()`.
 
@@ -38,4 +38,3 @@ You can also fetch each agent's AgentCard:
 curl http://localhost:8888/agents/math/.well-known/agent-card.json
 curl http://localhost:8888/agents/weather/.well-known/agent-card.json
 ```
-

@@ -123,10 +123,25 @@ func main() {
 func normalizePublicHost(host string) string {
 	trimmed := strings.TrimSpace(host)
 	trimmed = strings.TrimSuffix(trimmed, "/")
-	if strings.HasPrefix(trimmed, httpScheme) {
-		return trimmed
+	if trimmed == "" {
+		log.Printf(
+			"invalid public-host %q, using %q",
+			host,
+			defaultPublicHost,
+		)
+		return defaultPublicHost
 	}
-	if strings.HasPrefix(trimmed, httpsScheme) {
+
+	if strings.HasPrefix(trimmed, httpScheme) ||
+		strings.HasPrefix(trimmed, httpsScheme) {
+		if trimmed == httpScheme || trimmed == httpsScheme {
+			log.Printf(
+				"invalid public-host %q, using %q",
+				host,
+				defaultPublicHost,
+			)
+			return defaultPublicHost
+		}
 		return trimmed
 	}
 	return httpScheme + trimmed
