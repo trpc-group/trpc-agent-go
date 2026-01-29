@@ -8,6 +8,8 @@
 2. LLM Search vs Knowledge Search: 哪种策略更优？在什么场景？
 3. 随着对话轮数增加 Token 消耗量如何变化？
 4. 影响 Tool Search 的因素有哪些？
+5. Tool Search 会带来多少端到端耗时增量？
+6. Search Tool 的调用次数如何分布？它和耗时/Token 的关系是什么？
 
 ## 实验设定
 

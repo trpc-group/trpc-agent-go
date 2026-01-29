@@ -497,14 +497,7 @@ func (c *baselineChat) showFinalStats() {
 func (c *baselineChat) startNewSession() {
 	oldSessionID := c.sessionID
 	c.sessionID = fmt.Sprintf("baseline-session-%d", time.Now().Unix())
-	c.sessionUsage = &SessionTokenUsage{
-		UsageHistory: []UsageHistory{
-			{
-				ChatModelUsageHistory:  make([]TurnUsage, 0),
-				ToolSearchUsageHistory: make([]TurnUsage, 0),
-			},
-		},
-	}
+	c.sessionUsage = &SessionTokenUsage{}
 	c.turnCount = 0
 	c.sessionStart = time.Now()
 
