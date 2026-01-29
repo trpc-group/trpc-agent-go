@@ -74,6 +74,7 @@ func Reduce(appName, userID string, events []session.TrackEvent) ([]aguievents.M
 			break
 		}
 	}
+	r.finalizePartial()
 	messages := make([]aguievents.Message, 0, len(r.messages))
 	for _, message := range r.messages {
 		messages = append(messages, *message)
@@ -125,6 +126,33 @@ func (r *reducer) reduceEvent(evt aguievents.Event) error {
 		return r.handleToolResult(e)
 	default:
 		return r.handleActivity(e)
+	}
+}
+
+func (r *reducer) finalizePartial() {
+	for _, state := range r.texts {
+		if state.phase != textReceiving || state.content.Len() == 0 {
+			continue
+		}
+		text := strings.Clone(state.content.String())
+		r.messages[state.index].Content = &text
+	}
+	for _, state := range r.toolCalls {
+		if state.phase != toolAwaitingArgs || state.content.Len() == 0 {
+			continue
+		}
+		parentState, ok := r.texts[state.messageID]
+		if !ok {
+			continue
+		}
+		if parentState.index < 0 || parentState.index >= len(r.messages) {
+			continue
+		}
+		parent := r.messages[parentState.index]
+		if state.index < 0 || state.index >= len(parent.ToolCalls) {
+			continue
+		}
+		parent.ToolCalls[state.index].Function.Arguments = strings.Clone(state.content.String())
 	}
 }
 
