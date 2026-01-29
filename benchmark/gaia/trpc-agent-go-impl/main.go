@@ -38,6 +38,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/planner"
+	"trpc.group/trpc-go/trpc-agent-go/planner/ralphloop"
 	"trpc.group/trpc-go/trpc-agent-go/planner/react"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -49,12 +51,22 @@ import (
 )
 
 var (
-	datasetPath  = flag.String("dataset", "../data/gaia_2023_level1_validation.json", "Path to GAIA dataset")
-	dataDir      = flag.String("data-dir", "../data", "Directory containing data files")
-	outputPath   = flag.String("output", "../results/trpc-agent-go.json", "Path to output results")
-	maxTasks     = flag.Int("tasks", 0, "Maximum number of tasks to run (0 means all)")
-	modelName    = flag.String("model", "deepseek-v3-local-II", "Model name to use")
-	specificTask = flag.String("task-id", "", "Run specific task by task ID or index (e.g., '28' or 'e1fc63a2-da7a-432f-be78-7c4a95598703')")
+	datasetPath     = flag.String("dataset", "../data/gaia_2023_level1_validation.json", "Path to GAIA dataset")
+	dataDir         = flag.String("data-dir", "../data", "Directory containing data files")
+	outputPath      = flag.String("output", "../results/trpc-agent-go.json", "Path to output results")
+	maxTasks        = flag.Int("tasks", 0, "Maximum number of tasks to run (0 means all)")
+	modelName       = flag.String("model", "deepseek-v3-local-II", "Model name to use")
+	specificTask    = flag.String("task-id", "", "Run specific task by task ID or index (e.g., '28' or 'e1fc63a2-da7a-432f-be78-7c4a95598703')")
+	enableRalphLoop = flag.Bool(
+		"ralph-loop",
+		false,
+		"Enable Ralph Loop outer loop verification",
+	)
+	ralphMaxIterations = flag.Int(
+		"ralph-max-iterations",
+		3,
+		"Max Ralph Loop iterations",
+	)
 )
 
 // Store original working directory for relative path resolution
@@ -218,6 +230,15 @@ func main() {
 	log.Printf("Dataset: %s", *datasetPath)
 	log.Printf("Data directory: %s", *dataDir)
 	log.Printf("Max tasks: %d", *maxTasks)
+	log.Printf("Model: %s", *modelName)
+	if *enableRalphLoop {
+		log.Printf(
+			"Planner: react+ralphloop (max iterations: %d)",
+			*ralphMaxIterations,
+		)
+	} else {
+		log.Printf("Planner: react")
+	}
 
 	// Load dataset
 	tasks, err := loadDataset(*datasetPath)
@@ -1328,6 +1349,129 @@ func extractTextFromHTML(html string) string {
 	return strings.TrimSpace(text)
 }
 
+const gaiaFinalAnswerPrefix = "FINAL ANSWER:"
+
+var gaiaFinalAnswerLineRE = regexp.MustCompile(
+	`(?i)FINAL\s*ANSWER\s*:\s*\S`,
+)
+
+type gaiaFinalAnswerVerifier struct{}
+
+func (gaiaFinalAnswerVerifier) Verify(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	response *model.Response,
+) (ralphloop.VerifyResult, error) {
+	content := assistantContent(response)
+	if gaiaFinalAnswerLineRE.MatchString(content) {
+		return ralphloop.VerifyResult{Passed: true}, nil
+	}
+
+	feedback := fmt.Sprintf(
+		"Please end with %q followed by the answer.",
+		gaiaFinalAnswerPrefix,
+	)
+	return ralphloop.VerifyResult{
+		Passed:   false,
+		Feedback: feedback,
+	}, nil
+}
+
+func assistantContent(response *model.Response) string {
+	if response == nil || len(response.Choices) == 0 {
+		return ""
+	}
+	return response.Choices[0].Message.Content
+}
+
+type ralphLoopWrapperPlanner struct {
+	base  planner.Planner
+	ralph *ralphloop.Planner
+}
+
+func newGAIAPlanner(
+	enable bool,
+	maxIterations int,
+) (planner.Planner, error) {
+	base := react.New()
+	if !enable {
+		return base, nil
+	}
+
+	rl, err := ralphloop.New(ralphloop.Config{
+		MaxIterations: maxIterations,
+		Verifiers: []ralphloop.Verifier{
+			gaiaFinalAnswerVerifier{},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &ralphLoopWrapperPlanner{
+		base:  base,
+		ralph: rl,
+	}, nil
+}
+
+func (p *ralphLoopWrapperPlanner) BuildPlanningInstruction(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) string {
+	if p == nil || p.base == nil {
+		return ""
+	}
+
+	baseInstruction := p.base.BuildPlanningInstruction(ctx, invocation, req)
+	if p.ralph == nil {
+		return baseInstruction
+	}
+
+	ralphInstruction := p.ralph.BuildPlanningInstruction(
+		ctx,
+		invocation,
+		req,
+	)
+	if baseInstruction == "" {
+		return ralphInstruction
+	}
+	if ralphInstruction == "" {
+		return baseInstruction
+	}
+	return baseInstruction + "\n\n" + ralphInstruction
+}
+
+func (p *ralphLoopWrapperPlanner) ProcessPlanningResponse(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	response *model.Response,
+) *model.Response {
+	if p == nil || p.base == nil {
+		return nil
+	}
+
+	processed := p.base.ProcessPlanningResponse(ctx, invocation, response)
+	if p.ralph == nil {
+		return processed
+	}
+
+	responseToVerify := response
+	if processed != nil {
+		responseToVerify = processed
+	}
+
+	verified := p.ralph.ProcessPlanningResponse(
+		ctx,
+		invocation,
+		responseToVerify,
+	)
+	if verified != nil {
+		return verified
+	}
+	return processed
+}
+
 func createGAIAAgent() agent.Agent {
 	// Create model
 	modelInstance := openai.New(*modelName)
@@ -1429,6 +1573,20 @@ IMPORTANT:
 		generationConfig.Temperature = floatPtr(0.0)
 	}
 
+	plannerInstance, err := newGAIAPlanner(
+		*enableRalphLoop,
+		*ralphMaxIterations,
+	)
+	if err != nil {
+		log.Fatalf("Failed to create planner: %v", err)
+	}
+	if *enableRalphLoop {
+		log.Printf(
+			"RalphLoop enabled (max iterations: %d)",
+			*ralphMaxIterations,
+		)
+	}
+
 	// Create Skills Repository
 	skillsRoot := filepath.Join(filepath.Dir(absDataDir), "skills")
 	var skillRepo *skill.FSRepository
@@ -1451,7 +1609,7 @@ IMPORTANT:
 		llmagent.WithToolSets([]tool.ToolSet{fileToolSet, arxivToolSet, wikipediaToolSet}),
 		llmagent.WithGenerationConfig(generationConfig),
 		llmagent.WithInstruction(SystemPrompt),
-		llmagent.WithPlanner(react.New()),
+		llmagent.WithPlanner(plannerInstance),
 	}
 
 	// Add Skills to Agent if available
