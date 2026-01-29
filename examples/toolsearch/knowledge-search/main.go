@@ -182,7 +182,7 @@ func (c *baselineChat) setup(_ context.Context) error {
 	c.sessionStart = time.Now()
 	c.sessionUsage = &SessionTokenUsage{}
 
-	fmt.Printf("✅ LLM Search chat ready! Session: %s\n", c.sessionID)
+	fmt.Printf("✅ Knowledge Search chat ready! Session: %s\n", c.sessionID)
 	fmt.Printf("⚠️  Note: only %d of 10 tools are provided to LLM without any search\n\n", *maxTools)
 
 	return nil

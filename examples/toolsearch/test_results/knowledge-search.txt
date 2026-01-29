@@ -17,7 +17,7 @@ Streaming: true
 Tools: 10 (all tools provided to LLM)
 Type 'exit' to end the conversation
 ============================================================
-✅ LLM Search chat ready! Session: baseline-session-1769653098
+✅ Knowledge Search chat ready! Session: baseline-session-1769653098
 ⚠️  Note: only 3 of 10 tools are provided to LLM without any search
 
 💡 Special commands:
