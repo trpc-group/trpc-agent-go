@@ -70,6 +70,52 @@ func getValidSession(sessionWithTTL *sessionWithTTL) *session.Session {
 	return sessionWithTTL.session
 }
 
+func filterTrackEvents(events []session.TrackEvent, after time.Time, limit int) []session.TrackEvent {
+	filtered := events
+	if !after.IsZero() {
+		count := 0
+		for _, evt := range filtered {
+			if !evt.Timestamp.Before(after) {
+				count++
+			}
+		}
+		if count == 0 {
+			return nil
+		}
+		if count != len(filtered) {
+			out := make([]session.TrackEvent, 0, count)
+			for _, evt := range filtered {
+				if !evt.Timestamp.Before(after) {
+					out = append(out, evt)
+				}
+			}
+			filtered = out
+		}
+	}
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[len(filtered)-limit:]
+		out := make([]session.TrackEvent, len(filtered))
+		copy(out, filtered)
+		filtered = out
+	}
+	return filtered
+}
+
+func applyTrackFiltering(sess *session.Session, opt *session.Options) {
+	if sess == nil || sess.Tracks == nil || opt == nil {
+		return
+	}
+	if opt.EventNum <= 0 && opt.EventTime.IsZero() {
+		return
+	}
+	for _, history := range sess.Tracks {
+		if history == nil {
+			continue
+		}
+		history.Events = filterTrackEvents(history.Events, opt.EventTime, opt.EventNum)
+	}
+}
+
 // appSessions is a map of userID to sessions, it store sessions of one app.
 type appSessions struct {
 	mu        sync.RWMutex
@@ -284,6 +330,7 @@ func (s *SessionService) getSession(ctx context.Context, key session.Key, opt *s
 		session.WithEventNum(opt.EventNum),
 		session.WithEventTime(opt.EventTime),
 	)
+	applyTrackFiltering(copiedSess, opt)
 
 	appState := getValidState(app.appState)
 	userState := getValidState(app.userState[key.UserID])
@@ -317,6 +364,10 @@ func (s *SessionService) ListSessions(
 		return []*session.Session{}, nil
 	}
 
+	opt := &session.Options{}
+	for _, o := range opts {
+		o(opt)
+	}
 	sessList := make([]*session.Session, 0, len(app.sessions[userKey.UserID]))
 	for _, sWithTTL := range app.sessions[userKey.UserID] {
 		// Check if session is expired
@@ -326,6 +377,7 @@ func (s *SessionService) ListSessions(
 		}
 		copiedSess := s.Clone()
 		copiedSess.ApplyEventFiltering(opts...)
+		applyTrackFiltering(copiedSess, opt)
 
 		appState := getValidState(app.appState)
 		userState := getValidState(app.userState[userKey.UserID])
