@@ -380,8 +380,10 @@ func defaultToolingAndWorkspaceGuidance() string {
 	b.WriteString("skill_select_docs to load only what you need.\n")
 	b.WriteString("- Avoid include_all_docs unless you need every doc ")
 	b.WriteString("or the user asks.\n")
-	b.WriteString("- When body and needed docs are present, call ")
-	b.WriteString("skill_run to execute commands.\n")
+	b.WriteString("- Use skill_run only for commands required by the ")
+	b.WriteString("skill docs. \n")
+	b.WriteString("- When the body and needed docs are present, call ")
+	b.WriteString("skill_run to execute those commands.\n")
 	return b.String()
 }
 
