@@ -481,6 +481,7 @@ type EvalCase struct {
 // Invocation 表示一次用户与 Agent 的交互
 type Invocation struct {
 	InvocationID          string
+	ContextMessages       []*model.Message     // 推理时注入的上下文消息。
 	UserContent           *model.Message       // 用户输入
 	FinalResponse         *model.Message       // Agent 最终响应
 	Tools                 []*Tool              // 工具调用与工具执行结果
