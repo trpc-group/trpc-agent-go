@@ -1608,7 +1608,7 @@ func (f *flushRecorder) AppendEvent(ctx context.Context, key session.Key, event 
 	return nil
 }
 
-func (f *flushRecorder) GetEvents(ctx context.Context, key session.Key) (*session.TrackEvents, error) {
+func (f *flushRecorder) GetEvents(ctx context.Context, key session.Key, opts ...session.Option) (*session.TrackEvents, error) {
 	return nil, nil
 }
 
@@ -1630,7 +1630,7 @@ func (r *recordingTracker) AppendEvent(ctx context.Context, key session.Key, eve
 	return nil
 }
 
-func (r *recordingTracker) GetEvents(ctx context.Context, key session.Key) (*session.TrackEvents, error) {
+func (r *recordingTracker) GetEvents(ctx context.Context, key session.Key, opts ...session.Option) (*session.TrackEvents, error) {
 	return nil, nil
 }
 
@@ -1652,7 +1652,7 @@ func (e *errorTracker) AppendEvent(ctx context.Context,
 }
 
 func (e *errorTracker) GetEvents(ctx context.Context,
-	_ session.Key) (*session.TrackEvents, error) {
+	_ session.Key, _ ...session.Option) (*session.TrackEvents, error) {
 	return nil, nil
 }
 

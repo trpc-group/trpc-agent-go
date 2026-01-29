@@ -102,7 +102,24 @@ func TestReduceAllowsUnclosedTextMessage(t *testing.T) {
 	msgs, err := Reduce(testAppName, testUserID, events)
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
-	assert.Nil(t, msgs[0].Content)
+	require.NotNil(t, msgs[0].Content)
+	assert.Equal(t, "hello", *msgs[0].Content)
+}
+
+func TestReduceAllowsUnclosedToolCallArgs(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant")),
+		aguievents.NewToolCallStartEvent("tool-call-1", "calc", aguievents.WithParentMessageID("assistant-1")),
+		aguievents.NewToolCallArgsEvent("tool-call-1", "{\"a\":"),
+		aguievents.NewToolCallArgsEvent("tool-call-1", "1}"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].ToolCalls, 1)
+	assert.Equal(t, "tool-call-1", msgs[0].ToolCalls[0].ID)
+	assert.Equal(t, "calc", msgs[0].ToolCalls[0].Function.Name)
+	assert.Equal(t, "{\"a\":1}", msgs[0].ToolCalls[0].Function.Arguments)
 }
 
 func TestHandleTextChunkSuccess(t *testing.T) {
