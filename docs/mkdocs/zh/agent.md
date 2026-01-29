@@ -138,6 +138,64 @@ if err != nil {
 }
 ```
 
+### 中断 Agent 运行（取消）
+
+在 Go 里，`context.Context`（常命名为 `ctx`）不仅用于“传参”，还可以携带：
+
+- **取消信号**（调用 `cancel()`）
+- **截止时间**（deadline / timeout）
+
+框架会用 `ctx` 来安全地停止正在运行的 agent。
+
+#### 如何停止一个正在运行的 agent
+
+取消你传给 `Runner.Run` 的同一个 `ctx`。不要只停止读取事件通道。
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+// 假设 r 是通过 runner.NewRunner(...) 创建的 runner.Runner。
+eventCh, err := r.Run(ctx, "user-001", "session-001", message)
+if err != nil {
+    return err
+}
+
+go func() {
+    time.Sleep(2 * time.Second)
+    cancel()
+}()
+
+for range eventCh {
+    // 一直读到通道关闭：要么 ctx 被取消，要么 run 正常结束。
+}
+```
+
+#### Ctrl+C（命令行程序）
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+defer stop()
+
+// 假设 r 是通过 runner.NewRunner(...) 创建的 runner.Runner。
+eventCh, err := r.Run(ctx, "user-001", "session-001", message)
+if err != nil {
+    return err
+}
+for range eventCh {
+}
+```
+
+#### 如果你实现自定义 Agent 或 Tool
+
+取消是“协作式”的：你的代码需要检查 `ctx.Done()` 并尽快返回。
+
+- 自定义 Agent 在长循环里要 `select` 监听 `ctx.Done()`。
+- Tool 做网络/DB 调用时建议传入 `ctx`（这样这些调用也能被取消）。
+
+更完整的 run 控制说明（requestID cancel、StopError、超时等）见
+`docs/mkdocs/zh/runner.md`。
+
 ### 消息可见性选项
 当前 Agent 可在需要时根据不同场景控制其对其他 Agent 生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
 在与 model 交互时仅将可见的内容输入给模型。 

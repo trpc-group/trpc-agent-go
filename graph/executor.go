@@ -2995,13 +2995,22 @@ func (e *Executor) emitNodeStartEvent(
 		return
 	}
 
+	inputKey := StateKeyUserInput
+	if nodeType == NodeTypeLLM {
+		if node, ok := e.graph.Node(nodeID); ok && node != nil {
+			if node.userInputKey != "" {
+				inputKey = node.userInputKey
+			}
+		}
+	}
+
 	execCtx.stateMutex.RLock()
 	inputKeys := extractStateKeys(execCtx.State)
 
 	// Extract model input for LLM nodes.
 	var modelInput string
 	if nodeType == NodeTypeLLM {
-		if userInput, exists := execCtx.State[StateKeyUserInput]; exists {
+		if userInput, exists := execCtx.State[inputKey]; exists {
 			if input, ok := userInput.(string); ok {
 				modelInput = input
 			}

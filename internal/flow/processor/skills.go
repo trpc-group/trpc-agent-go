@@ -28,14 +28,41 @@ const (
 	skillsOverviewHeader = "Available skills:"
 
 	skillsToolingGuidanceHeader = "Tooling and workspace guidance:"
+
+	// SkillLoadModeOnce injects loaded skill content for the next model
+	// request, then offloads it from session state.
+	SkillLoadModeOnce = "once"
+	// SkillLoadModeTurn keeps loaded skill content available for all model
+	// requests within the current invocation, and offloads it when the next
+	// invocation begins.
+	SkillLoadModeTurn = "turn"
+	// SkillLoadModeSession keeps loaded skill content available across
+	// invocations until cleared or the session expires.
+	SkillLoadModeSession = "session"
+
+	defaultSkillLoadMode = SkillLoadModeTurn
 )
 
 type skillsRequestProcessorOptions struct {
 	toolingGuidance *string
+	loadMode        string
 }
 
 // SkillsRequestProcessorOption configures SkillsRequestProcessor.
 type SkillsRequestProcessorOption func(*skillsRequestProcessorOptions)
+
+// WithSkillLoadMode sets how long loaded skill bodies/docs remain
+// available in the system prompt.
+//
+// Supported modes:
+//   - SkillLoadModeTurn (default)
+//   - SkillLoadModeOnce
+//   - SkillLoadModeSession (legacy)
+func WithSkillLoadMode(mode string) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.loadMode = mode
+	}
+}
 
 // WithSkillsToolingGuidance overrides the tooling/workspace guidance
 // block appended to the skills overview.
@@ -67,7 +94,12 @@ func WithSkillsToolingGuidance(
 type SkillsRequestProcessor struct {
 	repo            skill.Repository
 	toolingGuidance *string
+	loadMode        string
 }
+
+const (
+	skillsTurnInitStateKey = "processor:skills:turn_init"
+)
 
 // NewSkillsRequestProcessor creates a processor instance.
 func NewSkillsRequestProcessor(
@@ -84,6 +116,21 @@ func NewSkillsRequestProcessor(
 	return &SkillsRequestProcessor{
 		repo:            repo,
 		toolingGuidance: options.toolingGuidance,
+		loadMode:        normalizeSkillLoadMode(options.loadMode),
+	}
+}
+
+func normalizeSkillLoadMode(mode string) string {
+	m := strings.ToLower(strings.TrimSpace(mode))
+	switch m {
+	case SkillLoadModeOnce:
+		return SkillLoadModeOnce
+	case SkillLoadModeTurn:
+		return SkillLoadModeTurn
+	case SkillLoadModeSession:
+		return SkillLoadModeSession
+	default:
+		return defaultSkillLoadMode
 	}
 }
 
@@ -95,6 +142,8 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 	if req == nil || inv == nil || inv.Session == nil || p.repo == nil {
 		return
 	}
+
+	p.maybeClearSkillStateForTurn(ctx, inv, ch)
 
 	// 1) Always inject overview (names + descriptions) into system
 	//    message. Merge into existing system message if present.
@@ -143,11 +192,91 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 		p.mergeIntoSystem(req, s)
 	}
 
+	p.maybeOffloadLoadedSkills(ctx, inv, loaded, ch)
+
 	// Send a preprocessing trace event even when only overview is
 	// injected, for consistent trace semantics.
 	agent.EmitEvent(ctx, inv, ch, event.New(
 		inv.InvocationID, inv.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingInstruction),
+	))
+}
+
+func (p *SkillsRequestProcessor) maybeClearSkillStateForTurn(
+	ctx context.Context,
+	inv *agent.Invocation,
+	ch chan<- *event.Event,
+) {
+	if p.loadMode != SkillLoadModeTurn || inv == nil || inv.Session == nil {
+		return
+	}
+	if _, ok := inv.GetState(skillsTurnInitStateKey); ok {
+		return
+	}
+	inv.SetState(skillsTurnInitStateKey, true)
+
+	delta := clearSkillState(inv)
+	if len(delta) == 0 {
+		return
+	}
+	agent.EmitEvent(ctx, inv, ch, event.New(
+		inv.InvocationID,
+		inv.AgentName,
+		event.WithObject(model.ObjectTypeStateUpdate),
+		event.WithStateDelta(delta),
+	))
+}
+
+func clearSkillState(inv *agent.Invocation) map[string][]byte {
+	if inv == nil || inv.Session == nil {
+		return nil
+	}
+	state := inv.Session.SnapshotState()
+	if len(state) == 0 {
+		return nil
+	}
+	delta := make(map[string][]byte)
+	for k, v := range state {
+		if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) &&
+			!strings.HasPrefix(k, skill.StateKeyDocsPrefix) {
+			continue
+		}
+		if len(v) == 0 {
+			continue
+		}
+		inv.Session.SetState(k, nil)
+		delta[k] = nil
+	}
+	return delta
+}
+
+func (p *SkillsRequestProcessor) maybeOffloadLoadedSkills(
+	ctx context.Context,
+	inv *agent.Invocation,
+	loaded []string,
+	ch chan<- *event.Event,
+) {
+	if p.loadMode != SkillLoadModeOnce ||
+		inv == nil ||
+		inv.Session == nil ||
+		len(loaded) == 0 {
+		return
+	}
+	delta := make(map[string][]byte, len(loaded)*2)
+	for _, name := range loaded {
+		loadedKey := skill.StateKeyLoadedPrefix + name
+		inv.Session.SetState(loadedKey, nil)
+		delta[loadedKey] = nil
+
+		docsKey := skill.StateKeyDocsPrefix + name
+		inv.Session.SetState(docsKey, nil)
+		delta[docsKey] = nil
+	}
+	agent.EmitEvent(ctx, inv, ch, event.New(
+		inv.InvocationID,
+		inv.AgentName,
+		event.WithObject(model.ObjectTypeStateUpdate),
+		event.WithStateDelta(delta),
 	))
 }
 
@@ -230,6 +359,12 @@ func defaultToolingAndWorkspaceGuidance() string {
 	b.WriteString("directly. ")
 	b.WriteString("If you need a stable reference for other tools, ")
 	b.WriteString("use output_files[*].ref (workspace://...).\n")
+	b.WriteString("- For large or binary outputs, set ")
+	b.WriteString("omit_inline_content=true so output_files return ")
+	b.WriteString("metadata only, then use output_files[*].ref ")
+	b.WriteString("(workspace://...) with read_file when needed. ")
+	b.WriteString("For persistence, prefer outputs.save=true with ")
+	b.WriteString("outputs.inline=false.\n")
 	b.WriteString("- Do not rerun the same skill_run command when you ")
 	b.WriteString("already have the needed content.\n")
 	b.WriteString("- If you already have the needed file content, ")

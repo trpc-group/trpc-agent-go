@@ -45,12 +45,13 @@ This example uses three discussion roles plus one summary role:
 
 ## Command Line Arguments
 
-| Argument      | Description                   | Default Value   |
-| ------------- | ----------------------------- | --------------- |
-| `-model`      | Name of the model to use      | `deepseek-chat` |
-| `-variant`    | Variant passed to the OpenAI provider | `openai` |
-| `-streaming`  | Enable streaming output       | `true`          |
-| `-timeout`    | Request timeout               | `5m`            |
+| Argument | Description | Default Value |
+| --- | --- | --- |
+| `-model` | Name of the model to use | `deepseek-chat` |
+| `-variant` | Variant passed to the OpenAI provider | `openai` |
+| `-streaming` | Enable streaming output | `true` |
+| `-timeout` | Request timeout | `5m` |
+| `-cross-request-transfer` | Enable cross-request transfer (see below) | `false` |
 
 ## Usage
 
@@ -59,6 +60,24 @@ cd examples/team/swarm
 export OPENAI_API_KEY="your-api-key"
 go run .
 ```
+
+## Cross-request transfer (optional)
+
+By default, each new user message starts from the entry Agent (`optimist` in
+this example), even if the previous message ended after a handoff.
+
+If you want the "current owner" of the conversation to persist across user
+messages, enable cross-request transfer:
+
+- In code: pass `team.WithCrossRequestTransfer(true)` to `team.NewSwarm(...)`.
+- In this example:
+
+```bash
+go run . -cross-request-transfer=true
+```
+
+With this enabled, after a handoff, the next user message will start from the
+Agent that produced the last reply (until another `transfer_to_agent` happens).
 
 Try a prompt like:
 
