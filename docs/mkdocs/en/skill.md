@@ -112,6 +112,10 @@ Key points:
 - Tools are auto‑registered with `WithSkills`: `skill_load`,
   `skill_select_docs`, `skill_list_docs`, and `skill_run` show up
   automatically; no manual wiring required.
+- Note: when `WithCodeExecutor` is set, LLMAgent will (by default) try to
+  execute Markdown fenced code blocks in model responses. If you only need
+  the executor for `skill_run`, disable this behavior with
+  `llmagent.WithEnableCodeExecutionResponseProcessor(false)`.
 - By default, the framework appends a small `Tooling and workspace guidance:`
   block after the `Available skills:` list in the system message.
   - Disable it (to save prompt tokens): `llmagent.WithSkillsToolingGuidance("")`.
