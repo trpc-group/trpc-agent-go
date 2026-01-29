@@ -130,24 +130,6 @@ Total Token =  Tool Search (Chat Model) + Tool Search (Embedding Model) + Other 
 | 9 | 4550 | 72 | 4622 | 2690 | 86 | 2776 | 2797 | 78 | 2875 |
 | 10 | 4774 | 45 | 4819 | 3054 | 49 | 3103 | 3154 | 33 | 3187 |
 
-##### 耗时汇总（端到端）
-
-| Case Name | Total Session Duration | Average Duration per Turn |
-| --- | ---:| ---:|
-| without tool search | 55.593s | 5.559s |
-| llm search | 1m30.277s | 9.028s |
-| knowledge search | 1m43.028s | 10.303s |
-
-##### Search Tool 调用次数汇总
-
-说明：这里的“调用次数”指测试结果中 `Tool Search Turn-by-Turn Usage History` 里的 call 数量（即每轮为主模型选择/准备工具的内部调用次数），不包含业务 tool 本身的执行次数。
-
-| Case Name | Tool Search 调用次数 | 平均每轮调用次数 |
-| --- | ---:| ---:|
-| without tool search | 0 | 0 |
-| llm search | 21 | 2.1 |
-| knowledge search | 21 | 2.1 |
-
 ## 结论（基于本次 Token/耗时/调用次数测试数据）
 
 ### 1) 使用 Tool Search 能节约多少 token？
@@ -239,6 +221,12 @@ Total Token =  Tool Search (Chat Model) + Tool Search (Embedding Model) + Other 
 
 从 `耗时汇总（端到端）` 表可以看到（同为 10 轮对话）：
 
+| Case Name | Total Session Duration | Average Duration per Turn | vs baseline（Total） | vs baseline（Avg/Turn） |
+| --- | ---:| ---:| ---:| ---:|
+| without tool search | 55.593s | 5.559s | +0s (0%) | +0s (0%) |
+| llm search | 1m30.277s | 9.028s | +34.684s (+62.4%) | +3.469s (+62.4%) |
+| knowledge search | 1m43.028s | 10.303s | +47.435s (+85.3%) | +4.744s (+85.3%) |
+
 - **without tool search 最快**：55.593s（5.559s/turn）。
 - **llm search 明显变慢**：1m30.277s，相对 baseline 增加 34.684s（约 +62.4%）。
 - **knowledge search 最慢**：1m43.028s，相对 baseline 增加 47.435s（约 +85.3%），相对 llm search 增加 12.751s（约 +14.1%）。
@@ -248,6 +236,16 @@ Total Token =  Tool Search (Chat Model) + Tool Search (Embedding Model) + Other 
 ### 6) Search Tool 调用次数分析
 
 从 `Search Tool 调用次数汇总` 表可以看到：
+
+##### Search Tool 调用次数汇总
+
+说明：这里的“调用次数”指测试结果中 `Tool Search Turn-by-Turn Usage History` 里的 call 数量（即每轮为主模型选择/准备工具的内部调用次数），不包含业务 tool 本身的执行次数。
+
+| Case Name | Tool Search 调用次数 | 平均每轮调用次数 |
+| --- | ---:| ---:|
+| without tool search | 0 | 0 |
+| llm search | 21 | 2.1 |
+| knowledge search | 21 | 2.1 |
 
 - **两种 Tool Search 都是 21 次调用 / 10 轮**：平均约 2.1 次/轮（baseline 为 0）。
 - **分布上大多是每轮 2 次，少数轮次 3 次**：通常与当轮是否发生 tool 执行失败/重试、或一轮内多次 tool 调用有关；每多一次重试，往往就会多一次“选工具”内部调用。
