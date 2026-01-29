@@ -149,11 +149,21 @@ func TestIsTextMIME(t *testing.T) {
 	}{
 		{name: "text/plain", in: "text/plain", want: true},
 		{
+			name: "text/plain with whitespace",
+			in:   "  text/plain  ",
+			want: true,
+		},
+		{
 			name: "text/plain with charset",
 			in:   "text/plain; charset=utf-8",
 			want: true,
 		},
 		{name: "application/json", in: "application/json", want: true},
+		{
+			name: "application/json with charset",
+			in:   "application/json; charset=utf-8",
+			want: true,
+		},
 		{name: "plus json", in: "application/ld+json", want: true},
 		{name: "image", in: "image/png", want: false},
 		{name: "octet stream", in: "application/octet-stream", want: false},
