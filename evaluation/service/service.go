@@ -25,8 +25,8 @@ import (
 type Service interface {
 	// Inference runs the agent for the requested eval cases and returns the inference results for each case.
 	Inference(ctx context.Context, request *InferenceRequest) ([]*InferenceResult, error)
-	// Evaluate runs the evaluation on the inference results and returns the persisted eval set result.
-	Evaluate(ctx context.Context, request *EvaluateRequest) (*evalresult.EvalSetResult, error)
+	// Evaluate runs the evaluation on the inference results and returns the eval set run result.
+	Evaluate(ctx context.Context, request *EvaluateRequest) (*EvalSetRunResult, error)
 	// Close releases resources owned by the service.
 	Close() error
 }
@@ -80,4 +80,14 @@ type EvaluateRequest struct {
 type EvaluateConfig struct {
 	// EvalMetrics contains the metrics to be evaluated.
 	EvalMetrics []*metric.EvalMetric `json:"evalMetrics,omitempty"`
+}
+
+// EvalSetRunResult represents the evaluation output of a single eval set run.
+type EvalSetRunResult struct {
+	// AppName is the name of the app.
+	AppName string `json:"appName,omitempty"`
+	// EvalSetID is the ID of the eval set.
+	EvalSetID string `json:"evalSetId,omitempty"`
+	// EvalCaseResults are the evaluation results produced in this run.
+	EvalCaseResults []*evalresult.EvalCaseResult `json:"evalCaseResults,omitempty"`
 }

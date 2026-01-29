@@ -248,7 +248,7 @@ func TestRunCallbackPoints_ContextPropagationAndEmptyLastResult(t *testing.T) {
 
 	t.Run("AfterEvaluateSet", func(t *testing.T) {
 		req := &service.EvaluateRequest{AppName: "app", EvalSetID: "set"}
-		args := &service.AfterEvaluateSetArgs{Request: req, Result: &evalresult.EvalSetResult{EvalSetID: "set"}, Error: nil}
+		args := &service.AfterEvaluateSetArgs{Request: req, Result: &service.EvalSetRunResult{AppName: "app", EvalSetID: "set"}, Error: nil}
 
 		result, err := RunAfterEvaluateSet(base, nil, args)
 		assert.NoError(t, err)
@@ -490,7 +490,7 @@ func TestRunCallbackPoints_ErrorPaths(t *testing.T) {
 		})
 
 		req := &service.EvaluateRequest{AppName: "app", EvalSetID: "set"}
-		args := &service.AfterEvaluateSetArgs{Request: req, Result: &evalresult.EvalSetResult{EvalSetID: "set"}, Error: nil}
+		args := &service.AfterEvaluateSetArgs{Request: req, Result: &service.EvalSetRunResult{AppName: "app", EvalSetID: "set"}, Error: nil}
 		_, err := RunAfterEvaluateSet(base, callbacks, args)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, sentinel)
@@ -626,7 +626,7 @@ func TestRunCallbackPoints_ReturnsNonEmptyResult(t *testing.T) {
 		})
 
 		req := &service.EvaluateRequest{AppName: "app", EvalSetID: "set"}
-		args := &service.AfterEvaluateSetArgs{Request: req, Result: &evalresult.EvalSetResult{EvalSetID: "set"}, Error: nil}
+		args := &service.AfterEvaluateSetArgs{Request: req, Result: &service.EvalSetRunResult{AppName: "app", EvalSetID: "set"}, Error: nil}
 		result, err := RunAfterEvaluateSet(base, callbacks, args)
 		require.NoError(t, err)
 		require.NotNil(t, result)
