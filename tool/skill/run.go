@@ -229,6 +229,8 @@ func (t *RunTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "skill_run",
 		Description: "Run a command inside a skill workspace. " +
+			"Use it only for commands required by the skill " +
+			"docs (not for generic shell tasks). " +
 			"Returns stdout/stderr, a primary_output " +
 			"(best small text file), and collected output_files " +
 			"(text inline by default, with workspace:// refs). " +
