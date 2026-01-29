@@ -2326,7 +2326,8 @@ https://github.com/anthropics/skills</p>
   <code>artifact_files</code>。</li>
 <li><code>omit_inline_content</code>（可选）：为 true 时不返回
   <code>output_files[*].content</code> 与 <code>primary_output.content</code>（只返回元信息）。
-  需要内容时，可用 <code>output_files[*].ref</code> 配合 <code>read_file</code> 按需读取。</li>
+  非文本输出的 <code>content</code> 也会始终为空。需要文本内容时，可用
+  <code>output_files[*].ref</code> 配合 <code>read_file</code> 按需读取。</li>
 <li><code>artifact_prefix</code>（可选）：与 <code>save_as_artifacts</code> 配合的前缀。<ul>
 <li>若未配置制品服务（Artifact service），<code>skill_run</code> 会继续
   返回 <code>output_files</code>，并在 <code>warnings</code> 中给出提示。</li>
@@ -2357,8 +2358,9 @@ https://github.com/anthropics/skills</p>
 - <code>output_files</code>：文件列表（<code>name</code>、<code>ref</code>、<code>content</code>、<code>mime_type</code>、
   <code>size_bytes</code>、<code>truncated</code>）
   - <code>ref</code> 是稳定的 <code>workspace://&lt;name&gt;</code> 引用，可传给其它工具使用
-  - 当 <code>omit_inline_content=true</code> 时，<code>content</code> 为空。可用 <code>ref</code> 配合
-    <code>read_file</code> 按需读取内容。
+  - 非文本文件的 <code>content</code> 始终为空。
+  - 当 <code>omit_inline_content=true</code> 时，所有文件的 <code>content</code> 为空。可用
+    <code>ref</code> 配合 <code>read_file</code> 按需读取文本内容。
   - <code>size_bytes</code> 表示磁盘上的文件大小；<code>truncated=true</code> 表示收集内容触发了
     内部上限（例如 4 MiB/文件）。
 - <code>warnings</code>（可选）：非致命提示（例如制品保存被跳过）
@@ -2520,7 +2522,7 @@ https://github.com/anthropics/skills</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月28日 13:44:49 UTC">2026-01-28 13:44:49</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月29日 09:29:54 UTC">2026-01-29 09:29:54</span>
   </span>
 
     
