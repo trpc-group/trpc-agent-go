@@ -139,7 +139,7 @@ func (r *Registry) BeforeTool(cb tool.BeforeToolCallbackStructured) {
 		) {
 			res, err := cb(ctx, args)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", r.name, err)
+				return res, fmt.Errorf("%s: %w", r.name, err)
 			}
 			return res, nil
 		},
@@ -157,7 +157,7 @@ func (r *Registry) AfterTool(cb tool.AfterToolCallbackStructured) {
 		) {
 			res, err := cb(ctx, args)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", r.name, err)
+				return res, fmt.Errorf("%s: %w", r.name, err)
 			}
 			return res, nil
 		},
