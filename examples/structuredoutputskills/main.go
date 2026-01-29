@@ -1,3 +1,13 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 // Package main demonstrates using structured output together with Agent
 // Skills. The agent is free to call tools first, and only the final answer
 // must be a single JSON object matching the schema.
