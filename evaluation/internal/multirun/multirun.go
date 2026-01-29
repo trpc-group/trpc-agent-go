@@ -56,9 +56,8 @@ func groupCaseResultsByRunID(caseResults []*evalresult.EvalCaseResult, expectedN
 		return nil, 0, fmt.Errorf("expected num runs is negative: %d", expectedNumRuns)
 	}
 	runCaseResults := make(map[int][]*evalresult.EvalCaseResult)
-	hasRunID := false
-	hasMissingRunID := false
 	nonNilCount := 0
+	maxRunID := 0
 	for idx, caseResult := range caseResults {
 		if caseResult == nil {
 			continue
@@ -66,42 +65,6 @@ func groupCaseResultsByRunID(caseResults []*evalresult.EvalCaseResult, expectedN
 		nonNilCount++
 		if caseResult.EvalID == "" {
 			return nil, 0, fmt.Errorf("eval id at index %d is empty", idx)
-		}
-		if caseResult.RunID > 0 {
-			hasRunID = true
-		} else {
-			hasMissingRunID = true
-		}
-	}
-	if nonNilCount == 0 {
-		numRuns := expectedNumRuns
-		if numRuns <= 0 {
-			numRuns = 1
-		}
-		return runCaseResults, numRuns, nil
-	}
-	if hasRunID && hasMissingRunID {
-		return nil, 0, errors.New("mixed run id population in eval case results")
-	}
-	if !hasRunID {
-		inferred, inferredRuns, err := inferRunCaseResultsFromSequence(caseResults)
-		if err != nil {
-			return nil, 0, err
-		}
-		numRuns := inferredRuns
-		if expectedNumRuns > 0 {
-			numRuns = expectedNumRuns
-		}
-		if numRuns <= 0 {
-			numRuns = 1
-		}
-		return inferred, numRuns, nil
-	}
-
-	maxRunID := 0
-	for idx, caseResult := range caseResults {
-		if caseResult == nil {
-			continue
 		}
 		runID := caseResult.RunID
 		if runID <= 0 {
@@ -115,7 +78,9 @@ func groupCaseResultsByRunID(caseResults []*evalresult.EvalCaseResult, expectedN
 		}
 		runCaseResults[runID] = append(runCaseResults[runID], caseResult)
 	}
-
+	if nonNilCount == 0 {
+		maxRunID = expectedNumRuns
+	}
 	numRuns := maxRunID
 	if expectedNumRuns > 0 {
 		numRuns = expectedNumRuns
@@ -124,33 +89,6 @@ func groupCaseResultsByRunID(caseResults []*evalresult.EvalCaseResult, expectedN
 		numRuns = 1
 	}
 	return runCaseResults, numRuns, nil
-}
-
-func inferRunCaseResultsFromSequence(caseResults []*evalresult.EvalCaseResult) (map[int][]*evalresult.EvalCaseResult, int, error) {
-	runCaseResults := make(map[int][]*evalresult.EvalCaseResult)
-	seen := make(map[string]struct{}, len(caseResults))
-	runID := 1
-	nonNilCount := 0
-	for idx, caseResult := range caseResults {
-		if caseResult == nil {
-			continue
-		}
-		nonNilCount++
-		caseID := caseResult.EvalID
-		if caseID == "" {
-			return nil, 0, fmt.Errorf("eval id at index %d is empty", idx)
-		}
-		if _, ok := seen[caseID]; ok {
-			runID++
-			seen = make(map[string]struct{}, len(caseResults)-idx)
-		}
-		seen[caseID] = struct{}{}
-		runCaseResults[runID] = append(runCaseResults[runID], caseResult)
-	}
-	if nonNilCount == 0 {
-		return runCaseResults, 1, nil
-	}
-	return runCaseResults, runID, nil
 }
 
 func buildEvalSetRunSummaries(runCaseResults map[int][]*evalresult.EvalCaseResult, runIDs []int) ([]*evalresult.EvalSetRunSummary, evalresult.EvalStatusCounts, error) {
