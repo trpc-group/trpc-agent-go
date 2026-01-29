@@ -398,6 +398,38 @@ func TestFileTool_ReadFile_FromRef_EmptyFile(t *testing.T) {
 	assert.Contains(t, rsp.Message, "file is empty")
 }
 
+func TestFileTool_ReadFile_FromRef_NonTextFile(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	const (
+		outAPng     = "out/a.png"
+		refAPng     = "workspace://out/a.png"
+		pngContent  = "\x89PNG\r\n\x1a\n"
+		pngMIMEType = "image/png"
+	)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     outAPng,
+			Content:  pngContent,
+			MIMEType: pngMIMEType,
+		},
+	})
+
+	rsp, err := fileToolSet.readFile(ctx, &readFileRequest{
+		FileName: refAPng,
+	})
+	assert.Error(t, err)
+	assert.NotNil(t, rsp)
+	assert.Empty(t, rsp.Contents)
+	assert.Contains(t, rsp.Message, pngMIMEType)
+}
+
 func TestFileTool_ReadFile_FromCache_EmptyFile(t *testing.T) {
 	tempDir := t.TempDir()
 	toolSet, err := NewToolSet(WithBaseDir(tempDir))

@@ -16,11 +16,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"mime"
 	"os"
 	"path"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
@@ -231,7 +231,8 @@ func (t *RunTool) Declaration() *tool.Declaration {
 		Description: "Run a command inside a skill workspace. " +
 			"Returns stdout/stderr, a primary_output " +
 			"(best small text file), and collected output_files " +
-			"(inline by default, with workspace:// refs). " +
+			"(text inline by default, with workspace:// refs). " +
+			"Non-text outputs omit inline content. " +
 			"Prefer primary_output/output_files content; " +
 			"use output_files[*].ref when passing a file to " +
 			"other tools.",
@@ -248,7 +249,8 @@ func (t *RunTool) Declaration() *tool.Declaration {
 				"output_files": {Type: "array",
 					Items: &tool.Schema{Type: "string"},
 					Description: "Workspace-relative paths/globs to " +
-						"collect and inline (e.g. out/*.txt). " +
+						"collect and inline text (e.g. out/*.txt). " +
+						"Non-text outputs omit inline content. " +
 						"Prefer output_files content; for other " +
 						"tools use output_files[*].ref " +
 						"(workspace://...). Do not use " +
@@ -258,6 +260,7 @@ func (t *RunTool) Declaration() *tool.Declaration {
 					"Persist collected files via Artifact service"},
 				"omit_inline_content": {Type: "boolean", Description: "" +
 					"Omit output_files content (metadata only). " +
+					"Non-text outputs are always metadata only. " +
 					"Use output_files[*].ref to read later."},
 				"artifact_prefix": {Type: "string", Description: "" +
 					"With save_as_artifacts, prefix artifact names"},
@@ -1134,12 +1137,29 @@ func truncateOutput(s string) (string, bool) {
 func toRunFiles(files []codeexecutor.File) []runFile {
 	out := make([]runFile, 0, len(files))
 	for _, f := range files {
+		rf := f
+		if !shouldInlineFileContent(rf) {
+			rf.Content = ""
+		}
 		out = append(out, runFile{
-			File: f,
+			File: rf,
 			Ref:  fileref.WorkspaceRef(f.Name),
 		})
 	}
 	return out
+}
+
+func shouldInlineFileContent(f codeexecutor.File) bool {
+	if f.Content == "" {
+		return true
+	}
+	if !codeexecutor.IsTextMIME(f.MIMEType) {
+		return false
+	}
+	if strings.IndexByte(f.Content, 0) >= 0 {
+		return false
+	}
+	return utf8.ValidString(f.Content)
 }
 
 func selectPrimaryOutput(files []runFile) *runFile {
@@ -1148,7 +1168,7 @@ func selectPrimaryOutput(files []runFile) *runFile {
 		if strings.TrimSpace(f.Content) == "" {
 			continue
 		}
-		if !isTextMIME(f.MIMEType) {
+		if !codeexecutor.IsTextMIME(f.MIMEType) {
 			continue
 		}
 		if len(f.Content) > maxPrimaryOutputChars {
@@ -1169,16 +1189,6 @@ func mergeAutoPrimaryOutput(files []codeexecutor.File, out *runOutput) {
 	}
 	runFiles := toRunFiles(files)
 	out.PrimaryOutput = selectPrimaryOutput(runFiles)
-}
-
-func isTextMIME(mimeType string) bool {
-	mt := strings.TrimSpace(mimeType)
-	if parsed, _, err := mime.ParseMediaType(mt); err == nil {
-		mt = parsed
-	}
-	return strings.HasPrefix(mt, "text/") ||
-		mt == "application/json" ||
-		strings.HasSuffix(mt, "+json")
 }
 
 // attachArtifactsIfRequested saves files as artifacts when requested

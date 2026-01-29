@@ -37,20 +37,23 @@ import (
 )
 
 const (
-	testSkillName   = "demo"
-	skillFileName   = "SKILL.md"
-	timeoutSecSmall = 5
-	outGlobTxt      = "out/*.txt"
-	outATxt         = "out/a.txt"
-	outBTxt         = "out/b.txt"
-	scriptsDir      = "scripts"
-	contentHi       = "hi"
-	contentHello    = "hello"
-	contentMsg      = "msg"
-	echoOK          = "echo ok"
-	cmdEcho         = "echo"
-	cmdLS           = "ls"
-	cmdEchoThenLS   = "echo ok; ls"
+	testSkillName    = "demo"
+	skillFileName    = "SKILL.md"
+	timeoutSecSmall  = 5
+	outGlobTxt       = "out/*.txt"
+	outGlobAll       = "out/*"
+	outATxt          = "out/a.txt"
+	outAPng          = "out/a.png"
+	outBTxt          = "out/b.txt"
+	scriptsDir       = "scripts"
+	contentHi        = "hi"
+	contentHello     = "hello"
+	contentMsg       = "msg"
+	pngHeaderEscaped = "\\x89PNG\\r\\n\\x1a\\n"
+	echoOK           = "echo ok"
+	cmdEcho          = "echo"
+	cmdLS            = "ls"
+	cmdEchoThenLS    = "echo ok; ls"
 
 	errCollectFail     = "collect-fail"
 	errPutFail         = "put-fail"
@@ -111,6 +114,60 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.Len(t, out.OutputFiles, 1)
 	require.Equal(t, outATxt, out.OutputFiles[0].Name)
 	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+
+	require.NotNil(t, out.PrimaryOutput)
+	require.Equal(t, outATxt, out.PrimaryOutput.Name)
+	require.Contains(t, out.PrimaryOutput.Content, contentHi)
+}
+
+func TestRunTool_DoesNotInlineNonTextOutputs(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	cmd := strings.Join([]string{
+		"mkdir -p out",
+		"printf '" + pngHeaderEscaped + "' > " + outAPng,
+		"echo " + contentHi + " > " + outATxt,
+	}, "; ")
+
+	args := runInput{
+		Skill:       testSkillName,
+		Command:     cmd,
+		OutputFiles: []string{outGlobAll},
+		Timeout:     timeoutSecSmall,
+	}
+
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 2)
+
+	got := make(map[string]runFile, len(out.OutputFiles))
+	for _, f := range out.OutputFiles {
+		got[f.Name] = f
+	}
+
+	png, ok := got[outAPng]
+	require.True(t, ok)
+	require.Equal(t, "", png.Content)
+	require.Equal(t, "image/png", png.MIMEType)
+	require.False(t, png.Truncated)
+	require.NotZero(t, png.SizeBytes)
+
+	txt, ok := got[outATxt]
+	require.True(t, ok)
+	require.Contains(t, txt.Content, contentHi)
 
 	require.NotNil(t, out.PrimaryOutput)
 	require.Equal(t, outATxt, out.PrimaryOutput.Name)
