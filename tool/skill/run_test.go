@@ -174,6 +174,64 @@ func TestRunTool_DoesNotInlineNonTextOutputs(t *testing.T) {
 	require.Contains(t, out.PrimaryOutput.Content, contentHi)
 }
 
+func TestShouldInlineFileContent(t *testing.T) {
+	const (
+		mimeTextPlain = "text/plain"
+		mimeImagePNG  = "image/png"
+		invalidByte   = 0xff
+	)
+
+	tests := []struct {
+		name string
+		file codeexecutor.File
+		want bool
+	}{
+		{
+			name: "empty content",
+			file: codeexecutor.File{},
+			want: true,
+		},
+		{
+			name: "valid text",
+			file: codeexecutor.File{
+				Content:  contentHi,
+				MIMEType: mimeTextPlain,
+			},
+			want: true,
+		},
+		{
+			name: "non-text mime",
+			file: codeexecutor.File{
+				Content:  contentHi,
+				MIMEType: mimeImagePNG,
+			},
+			want: false,
+		},
+		{
+			name: "contains nul",
+			file: codeexecutor.File{
+				Content:  contentHi + "\x00",
+				MIMEType: mimeTextPlain,
+			},
+			want: false,
+		},
+		{
+			name: "invalid utf8",
+			file: codeexecutor.File{
+				Content:  string([]byte{invalidByte}),
+				MIMEType: mimeTextPlain,
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, shouldInlineFileContent(tt.file))
+		})
+	}
+}
+
 func TestRunTool_AutoExportsOutToWorkspaceCache(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
