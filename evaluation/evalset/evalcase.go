@@ -44,6 +44,8 @@ type EvalCase struct {
 type Invocation struct {
 	// InvocationID uniquely identifies this invocation.
 	InvocationID string `json:"invocationId,omitempty"`
+	// ContextMessages contains per-case context messages for this invocation.
+	ContextMessages []*model.Message `json:"contextMessages,omitempty"`
 	// UserContent represents the user's input.
 	UserContent *model.Message `json:"userContent,omitempty"`
 	// FinalResponse represents the agent's final response.

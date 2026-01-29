@@ -481,6 +481,7 @@ type EvalCase struct {
 // Invocation represents a user-agent interaction.
 type Invocation struct {
 	InvocationID          string
+	ContextMessages       []*model.Message     // Context messages injected into this invocation run.
 	UserContent           *model.Message       // User input.
 	FinalResponse         *model.Message       // Agent final response.
 	Tools                 []*Tool              // Tool calls and results.
