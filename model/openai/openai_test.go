@@ -2990,6 +2990,42 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 		chatReq, _ := m.buildChatRequest(req)
 		assert.NotEmpty(t, chatReq.Tools, "expected tools to be present")
 	})
+
+	t.Run("structured output disables parallel tool calls", func(t *testing.T) {
+		schema := map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}
+		tools := map[string]tool.Tool{
+			"test_tool": stubTool{
+				decl: &tool.Declaration{
+					Name:        "test_tool",
+					Description: "A test tool",
+					InputSchema: &tool.Schema{Type: "object"},
+				},
+			},
+		}
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("test"),
+			},
+			Tools: tools,
+			StructuredOutput: &model.StructuredOutput{
+				Type: model.StructuredOutputJSONSchema,
+				JSONSchema: &model.JSONSchemaConfig{
+					Name:   "output",
+					Schema: schema,
+					Strict: true,
+				},
+			},
+		}
+
+		chatReq, _ := m.buildChatRequest(req)
+		if !chatReq.ParallelToolCalls.Valid() {
+			t.Fatalf("expected parallel_tool_calls to be set")
+		}
+		assert.False(t, chatReq.ParallelToolCalls.Value)
+	})
 }
 
 // TestConvertUserMessageContent_WithImage tests image content conversion.
