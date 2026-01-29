@@ -1772,6 +1772,73 @@ func TestRunAfterEvaluateSetCallbacksPassesArgs(t *testing.T) {
 	assert.Equal(t, startTime, got.StartTime)
 }
 
+func TestLocalEvaluateAfterEvaluateSetReceivesNilResultWhenEvaluateFails(t *testing.T) {
+	ctx := context.Background()
+	req := &service.EvaluateRequest{
+		AppName:          "app",
+		EvalSetID:        "set",
+		InferenceResults: []*service.InferenceResult{nil},
+		EvaluateConfig:   &service.EvaluateConfig{},
+	}
+
+	callbacks := service.NewCallbacks()
+	var got *service.AfterEvaluateSetArgs
+	callbacks.RegisterAfterEvaluateSet("probe", func(ctx context.Context, args *service.AfterEvaluateSetArgs) (*service.AfterEvaluateSetResult, error) {
+		got = args
+		return nil, nil
+	})
+
+	svc := &local{callbacks: callbacks}
+	_, err := svc.Evaluate(ctx, req)
+	assert.Error(t, err)
+	assert.NotNil(t, got)
+	if got == nil {
+		return
+	}
+	assert.Same(t, req, got.Request)
+	assert.Nil(t, got.Result)
+	assert.Error(t, got.Error)
+}
+
+func TestLocalEvaluateAfterEvaluateSetReceivesRunResultOnSuccess(t *testing.T) {
+	ctx := context.Background()
+	req := &service.EvaluateRequest{
+		AppName:   "app",
+		EvalSetID: "set",
+		InferenceResults: []*service.InferenceResult{
+			{
+				AppName:      "app",
+				EvalSetID:    "set",
+				EvalCaseID:   "case-1",
+				SessionID:    "session",
+				UserID:       "user",
+				Status:       status.EvalStatusFailed,
+				ErrorMessage: "inference failed",
+			},
+		},
+		EvaluateConfig: &service.EvaluateConfig{},
+	}
+
+	callbacks := service.NewCallbacks()
+	var got *service.AfterEvaluateSetArgs
+	callbacks.RegisterAfterEvaluateSet("probe", func(ctx context.Context, args *service.AfterEvaluateSetArgs) (*service.AfterEvaluateSetResult, error) {
+		got = args
+		return nil, nil
+	})
+
+	svc := &local{callbacks: callbacks}
+	res, err := svc.Evaluate(ctx, req)
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+	assert.NotNil(t, got)
+	if got == nil {
+		return
+	}
+	assert.Same(t, req, got.Request)
+	assert.Same(t, res, got.Result)
+	assert.NoError(t, got.Error)
+}
+
 func TestRunAfterEvaluateSetCallbacksWrapsErrorWithContext(t *testing.T) {
 	ctx := context.Background()
 	startTime := time.Unix(123, 0)

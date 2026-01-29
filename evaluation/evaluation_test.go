@@ -852,6 +852,113 @@ func TestAgentEvaluatorRunEvaluationPersistsSingleResultWithSummary(t *testing.T
 	}
 }
 
+func TestAgentEvaluatorRunEvaluationPersistsSummaryWhenNumRunsIsOne(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{
+			{
+				{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "A", SessionID: "s-a1", Status: status.EvalStatusPassed},
+			},
+		},
+		evaluateResults: []*service.EvalSetRunResult{
+			{
+				AppName:   appName,
+				EvalSetID: evalSetID,
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					makeEvalCaseResult(evalSetID, "A", "m", 0, 1, status.EvalStatusFailed),
+				},
+			},
+		},
+	}
+
+	resultMgr := &countingEvalResultManager{}
+	ae := &agentEvaluator{
+		appName:           appName,
+		evalService:       svc,
+		metricManager:     &fakeMetricManager{metrics: map[string]*metric.EvalMetric{}},
+		evalResultManager: resultMgr,
+		numRuns:           1,
+	}
+
+	res, err := ae.runEvaluation(ctx, evalSetID)
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+	if res == nil {
+		return
+	}
+	assert.Len(t, res.EvalCaseResults, 1)
+	if len(res.EvalCaseResults) == 1 && res.EvalCaseResults[0] != nil {
+		assert.Equal(t, 1, res.EvalCaseResults[0].RunID)
+	}
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&resultMgr.saves))
+	assert.NotNil(t, resultMgr.last)
+	if resultMgr.last == nil {
+		return
+	}
+	assert.NotNil(t, resultMgr.last.Summary)
+	if resultMgr.last.Summary == nil {
+		return
+	}
+	assert.Equal(t, 1, resultMgr.last.Summary.NumRuns)
+	assert.Len(t, resultMgr.last.Summary.RunSummaries, 1)
+	assert.Len(t, resultMgr.last.Summary.EvalCaseSummaries, 1)
+}
+
+func TestAgentEvaluatorRunEvaluationSkipsNilCaseResults(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{{}},
+		evaluateResults: []*service.EvalSetRunResult{
+			{
+				AppName:   appName,
+				EvalSetID: evalSetID,
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					nil,
+					makeEvalCaseResult(evalSetID, "A", "m", 2, 1, status.EvalStatusPassed),
+				},
+			},
+		},
+	}
+
+	resultMgr := &countingEvalResultManager{}
+	ae := &agentEvaluator{
+		appName:           appName,
+		evalService:       svc,
+		metricManager:     &fakeMetricManager{metrics: map[string]*metric.EvalMetric{}},
+		evalResultManager: resultMgr,
+		numRuns:           1,
+	}
+
+	res, err := ae.runEvaluation(ctx, evalSetID)
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+	if res == nil {
+		return
+	}
+	assert.Len(t, res.EvalCaseResults, 1)
+	if len(res.EvalCaseResults) == 1 && res.EvalCaseResults[0] != nil {
+		assert.Equal(t, "A", res.EvalCaseResults[0].EvalID)
+		assert.Equal(t, 1, res.EvalCaseResults[0].RunID)
+	}
+
+	assert.NotNil(t, resultMgr.last)
+	if resultMgr.last == nil {
+		return
+	}
+	assert.Len(t, resultMgr.last.EvalCaseResults, 1)
+	if len(resultMgr.last.EvalCaseResults) == 1 && resultMgr.last.EvalCaseResults[0] != nil {
+		assert.Equal(t, "A", resultMgr.last.EvalCaseResults[0].EvalID)
+		assert.Equal(t, 1, resultMgr.last.EvalCaseResults[0].RunID)
+	}
+}
+
 func TestAggregateCaseRunsSuccess(t *testing.T) {
 	caseID := "case"
 	runs := []*evalresult.EvalCaseResult{

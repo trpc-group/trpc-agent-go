@@ -237,8 +237,8 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string) (*
 				continue
 			}
 			caseResult.RunID = runID
+			allCaseResults = append(allCaseResults, caseResult)
 		}
-		allCaseResults = append(allCaseResults, runResult.EvalCaseResults...)
 	}
 	evalSetResult := &evalresult.EvalSetResult{
 		EvalSetID:       evalSetID,
