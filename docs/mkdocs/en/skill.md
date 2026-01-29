@@ -307,9 +307,16 @@ Input:
   - If the Artifact service is not configured, `skill_run` keeps
     returning `output_files` and reports a `warnings` entry.
 
+Guidance:
+- Prefer using `skill_run` only for the workflow described in the skill
+  docs (for example, commands explicitly required by `SKILL.md`).
+- Avoid using `skill_run` for generic shell exploration (for example,
+  `ls`, `cat`, `grep`). Prefer `skill_list_docs` / `skill_select_docs`
+  and file tools instead.
+
 Optional safety restriction (allowlist):
 - Env var `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`:
-  - Comma/space-separated command names (for example, `ls,cat,ifconfig`)
+  - Comma/space-separated command names (for example, `python3,ffmpeg`)
   - When set, `skill_run` rejects shell syntax (pipes/redirections/
     separators) and only allows a single allowlisted command
   - Because the command is no longer parsed by a shell, patterns like

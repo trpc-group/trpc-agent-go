@@ -312,9 +312,15 @@ agent := llmagent.New(
   - 若未配置制品服务（Artifact service），`skill_run` 会继续
     返回 `output_files`，并在 `warnings` 中给出提示。
 
+建议：
+- 建议 `skill_run` 尽量只用于执行 Skill 文档里描述的流程
+  （例如 `SKILL.md` 明确要求的命令）。
+- 不建议用 `skill_run` 做通用的 Shell 探查（如 `ls`、`cat`、`grep`）；
+  优先使用 `skill_list_docs` / `skill_select_docs` 与文件工具。
+
 可选的安全限制（白名单）：
 - 环境变量 `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`：
-  - 逗号/空格分隔的命令名列表（如 `ls,cat,ifconfig`）
+  - 逗号/空格分隔的命令名列表（如 `python3,ffmpeg`）
   - 启用后 `skill_run` 会拒绝管道/重定向/分号等 Shell 语法，
     并仅允许执行白名单中的“单条命令”
   - 因为不再经过 Shell 解析，诸如 `> out/x.txt`、heredoc、
