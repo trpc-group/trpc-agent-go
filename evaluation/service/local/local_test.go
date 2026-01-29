@@ -1893,3 +1893,27 @@ func TestPrepareCaseEvaluationInputs_AttachesContextMessagesToEachInvocation(t *
 		assert.Equal(t, contextMessages, invocation.ContextMessages)
 	}
 }
+
+func TestAttachContextMessages_SkipsNilAndPrePopulatedInvocations(t *testing.T) {
+	contextMessages := []*model.Message{
+		{Role: model.RoleSystem, Content: "system context"},
+	}
+	existing := []*model.Message{
+		{Role: model.RoleSystem, Content: "existing context"},
+	}
+	invWithExisting := &evalset.Invocation{
+		InvocationID:    "1",
+		ContextMessages: existing,
+		UserContent:     &model.Message{Role: model.RoleUser, Content: "u1"},
+	}
+	invEmpty := &evalset.Invocation{
+		InvocationID: "2",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "u2"},
+	}
+	invocations := []*evalset.Invocation{nil, invWithExisting, invEmpty}
+
+	attachContextMessages(invocations, contextMessages)
+
+	assert.Equal(t, existing, invWithExisting.ContextMessages)
+	assert.Equal(t, contextMessages, invEmpty.ContextMessages)
+}
