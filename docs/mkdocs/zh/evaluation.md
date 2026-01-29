@@ -790,7 +790,7 @@ Service 是评估服务，用于整合以下模块：
 - 评估指标 Metric
 - 评估器注册中心 Registry
 - 评估器 Evaluator
-- 评估结果 EvalSetResult
+- 评估结果 EvalSetRunResult
 
 Service 接口定义了完整的评测流程，包括推理（Inference）和评估（Evaluate）两个阶段，接口定义如下：
 
@@ -801,8 +801,8 @@ import "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 type Service interface {
 	// Inference 执行推理，调用 Agent 处理指定的评测用例，并返回推理结果。
 	Inference(ctx context.Context, request *InferenceRequest) ([]*InferenceResult, error)
-	// Evaluate 对推理结果进行评估，生成并持久化评测结果。
-	Evaluate(ctx context.Context, request *EvaluateRequest) (*evalresult.EvalSetResult, error)
+	// Evaluate 对推理结果进行评估，生成评测结果
+	Evaluate(ctx context.Context, request *EvaluateRequest) (*EvalSetRunResult, error)
 }
 ```
 
