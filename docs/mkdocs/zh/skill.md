@@ -112,6 +112,10 @@ agent := llmagent.New(
 - 工具自动注册：开启 `WithSkills` 后，`skill_load`、
   `skill_select_docs`、`skill_list_docs` 与 `skill_run`
   会自动出现在工具列表中，无需手动添加。
+- 注意：当你同时设置了 `WithCodeExecutor` 时，LLMAgent 默认会尝试执行
+  模型回复里的 Markdown 围栏代码块。如果你只是为了给 `skill_run` 提供运行时，
+  不希望自动执行代码块，可以加上
+  `llmagent.WithEnableCodeExecutionResponseProcessor(false)`。
 - 默认提示指引：框架会在系统消息里，在 `Available skills:` 列表后追加一段
   `Tooling and workspace guidance:` 指引文本。
   - 关闭该指引（减少提示词占用）：`llmagent.WithSkillsToolingGuidance("")`。
