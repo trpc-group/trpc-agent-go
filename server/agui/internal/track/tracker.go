@@ -33,7 +33,7 @@ type Tracker interface {
 	// AppendEvent appends an AG-UI event to the session track.
 	AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error
 	// GetEvents retrieves the AG-UI track events from the session.
-	GetEvents(ctx context.Context, key session.Key) (*session.TrackEvents, error)
+	GetEvents(ctx context.Context, key session.Key, opts ...session.Option) (*session.TrackEvents, error)
 	// Flush flushes any pending aggregated events for the given session key.
 	Flush(ctx context.Context, key session.Key) error
 }
@@ -93,11 +93,11 @@ func (t *tracker) AppendEvent(ctx context.Context, key session.Key, event aguiev
 }
 
 // GetEvents retrieves the AG-UI track events from the session.
-func (t *tracker) GetEvents(ctx context.Context, key session.Key) (*session.TrackEvents, error) {
+func (t *tracker) GetEvents(ctx context.Context, key session.Key, opts ...session.Option) (*session.TrackEvents, error) {
 	if err := key.CheckSessionKey(); err != nil {
 		return nil, fmt.Errorf("session key: %w", err)
 	}
-	sess, err := t.sessionService.GetSession(ctx, key)
+	sess, err := t.sessionService.GetSession(ctx, key, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}

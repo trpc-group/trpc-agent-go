@@ -77,7 +77,10 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		tracker:                                tracker,
 		running:                                make(map[session.Key]*sessionContext),
 		startSpan:                              opts.StartSpan,
+		flushInterval:                          opts.FlushInterval,
 		timeout:                                opts.Timeout,
+		messagesSnapshotFollowEnabled:          opts.MessagesSnapshotFollowEnabled,
+		messagesSnapshotFollowMaxDuration:      opts.MessagesSnapshotFollowMaxDuration,
 	}
 	return run
 }
@@ -99,7 +102,10 @@ type runner struct {
 	runningMu                              sync.Mutex
 	running                                map[session.Key]*sessionContext
 	startSpan                              StartSpan
+	flushInterval                          time.Duration
 	timeout                                time.Duration
+	messagesSnapshotFollowEnabled          bool
+	messagesSnapshotFollowMaxDuration      time.Duration
 }
 
 type sessionContext struct {
