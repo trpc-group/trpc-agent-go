@@ -142,7 +142,7 @@ func (m *Model) handleNonStreamingResponse(
 	if m.chatResponseCallback != nil {
 		m.chatResponseCallback(ctx, chatRequest, generateConfig, chatCompletion)
 	}
-	response := m.buildResponse(chatCompletion)
+	response := m.buildFinalResponse(chatCompletion)
 	select {
 	case responseChan <- response:
 	case <-ctx.Done():
@@ -160,10 +160,8 @@ func (m *Model) handleStreamingResponse(
 		ctx, m.name, chatRequest, generateConfig)
 	acc := &Accumulator{}
 	for chunk := range chatCompletion {
-		response := m.buildResponse(chunk)
+		response := m.buildChunkResponse(chunk)
 		acc.Accumulate(response)
-		response.Object = model.ObjectTypeChatCompletionChunk
-		response.IsPartial = true
 		if m.chatChunkCallback != nil {
 			m.chatChunkCallback(ctx, chatRequest, generateConfig, chunk)
 		}
@@ -229,19 +227,47 @@ func (m *Model) convertContentBlock(candidates []*genai.Candidate) (model.Messag
 	}, finishReason
 }
 
-// buildResponse builds a partial streaming response for a chunk.
-// Returns nil if the chunk should be skipped.
-func (m *Model) buildResponse(chatCompletion *genai.GenerateContentResponse) *model.Response {
-	if chatCompletion == nil {
-		return &model.Response{}
+func (m *Model) buildChunkResponse(rsp *genai.GenerateContentResponse) *model.Response {
+	return m.buildChatCompletionResponse(
+		rsp,
+		model.ObjectTypeChatCompletionChunk,
+		false,
+		true,
+	)
+}
+
+func (m *Model) buildFinalResponse(rsp *genai.GenerateContentResponse) *model.Response {
+	return m.buildChatCompletionResponse(
+		rsp,
+		model.ObjectTypeChatCompletion,
+		true,
+		false,
+	)
+}
+
+func (m *Model) buildChatCompletionResponse(
+	rsp *genai.GenerateContentResponse,
+	object string,
+	done bool,
+	isPartial bool,
+) *model.Response {
+	if rsp == nil {
+		return &model.Response{
+			Object:    object,
+			IsPartial: isPartial,
+			Done:      done,
+		}
 	}
 	response := &model.Response{
-		ID:        chatCompletion.ResponseID,
-		Created:   chatCompletion.CreateTime.Unix(),
-		Model:     chatCompletion.ModelVersion,
-		Timestamp: chatCompletion.CreateTime,
+		ID:        rsp.ResponseID,
+		Object:    object,
+		Created:   rsp.CreateTime.Unix(),
+		Model:     rsp.ModelVersion,
+		Timestamp: rsp.CreateTime,
+		Done:      done,
+		IsPartial: isPartial,
 	}
-	message, finishReason := m.convertContentBlock(chatCompletion.Candidates)
+	message, finishReason := m.convertContentBlock(rsp.Candidates)
 	response.Choices = []model.Choice{
 		{
 			Index:   0,
@@ -254,7 +280,7 @@ func (m *Model) buildResponse(chatCompletion *genai.GenerateContentResponse) *mo
 		response.Choices[0].FinishReason = &finishReason
 	}
 	// Convert usage information.
-	response.Usage = m.completionUsageToModelUsage(chatCompletion.UsageMetadata)
+	response.Usage = m.completionUsageToModelUsage(rsp.UsageMetadata)
 	return response
 }
 

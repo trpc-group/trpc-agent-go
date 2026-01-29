@@ -291,11 +291,12 @@ func TestModel_Info(t *testing.T) {
 	}
 }
 
-func TestModel_buildResponse(t *testing.T) {
+func TestModel_buildFinalResponse(t *testing.T) {
 	finishReason := "FinishReason"
 	now := time.Now()
 	functionArgs := map[string]any{"args": "1"}
 	functionArgsBytes, _ := json.Marshal(functionArgs)
+
 	type fields struct {
 		m *Model
 	}
@@ -309,29 +310,38 @@ func TestModel_buildResponse(t *testing.T) {
 		want   *model.Response
 	}{
 		{
-			name: "nil-req",
-			fields: fields{
-				m: &Model{},
-			},
-			args: args{
-				chatCompletion: nil,
-			},
-			want: &model.Response{},
-		},
-		{
-			name: "empty-usage",
-			fields: fields{
-				m: &Model{},
-			},
-			args: args{
-				chatCompletion: &genai.GenerateContentResponse{},
+			name:   "nil-req",
+			fields: fields{m: &Model{}},
+			args:   args{chatCompletion: nil},
+			want: &model.Response{
+				Object: model.ObjectTypeChatCompletion,
+				Done:   true,
 			},
 		},
 		{
-			name: "buildResponse",
-			fields: fields{
-				m: &Model{},
+			name:   "empty-usage",
+			fields: fields{m: &Model{}},
+			args:   args{chatCompletion: &genai.GenerateContentResponse{}},
+			want: &model.Response{
+				Object:  model.ObjectTypeChatCompletion,
+				Created: (time.Time{}).Unix(),
+				Done:    true,
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role: model.RoleAssistant,
+						},
+						Delta: model.Message{
+							Role: model.RoleAssistant,
+						},
+					},
+				},
 			},
+		},
+		{
+			name:   "buildFinalResponse",
+			fields: fields{m: &Model{}},
 			args: args{
 				chatCompletion: &genai.GenerateContentResponse{
 					ResponseID:   "1",
@@ -341,9 +351,7 @@ func TestModel_buildResponse(t *testing.T) {
 						{
 							Content: &genai.Content{
 								Parts: []*genai.Part{
-									{
-										Text: "",
-									},
+									{Text: ""},
 									{
 										Thought: true,
 										Text:    "Thought",
@@ -353,9 +361,7 @@ func TestModel_buildResponse(t *testing.T) {
 											Args: functionArgs,
 										},
 									},
-									{
-										Text: "Answer",
-									},
+									{Text: "Answer"},
 								},
 							},
 							FinishReason: genai.FinishReason(finishReason),
@@ -371,11 +377,14 @@ func TestModel_buildResponse(t *testing.T) {
 			},
 			want: &model.Response{
 				ID:        "1",
+				Object:    model.ObjectTypeChatCompletion,
 				Created:   now.Unix(),
 				Timestamp: now,
 				Model:     "pro-v1",
+				Done:      true,
 				Choices: []model.Choice{
 					{
+						Index:        0,
 						FinishReason: &finishReason,
 						Delta: model.Message{
 							Role:             model.RoleAssistant,
@@ -418,10 +427,8 @@ func TestModel_buildResponse(t *testing.T) {
 			},
 		},
 		{
-			name: "buildResponse-functionCall-empty-text",
-			fields: fields{
-				m: &Model{},
-			},
+			name:   "buildFinalResponse-functionCall-empty-text",
+			fields: fields{m: &Model{}},
 			args: args{
 				chatCompletion: &genai.GenerateContentResponse{
 					ResponseID:   "2",
@@ -438,9 +445,7 @@ func TestModel_buildResponse(t *testing.T) {
 											Args: functionArgs,
 										},
 									},
-									{
-										Text: "Answer",
-									},
+									{Text: "Answer"},
 								},
 							},
 							FinishReason: genai.FinishReason(finishReason),
@@ -450,11 +455,14 @@ func TestModel_buildResponse(t *testing.T) {
 			},
 			want: &model.Response{
 				ID:        "2",
+				Object:    model.ObjectTypeChatCompletion,
 				Created:   now.Unix(),
 				Timestamp: now,
 				Model:     "pro-v1",
+				Done:      true,
 				Choices: []model.Choice{
 					{
+						Index:        0,
 						FinishReason: &finishReason,
 						Delta: model.Message{
 							Role:    model.RoleAssistant,
@@ -487,22 +495,135 @@ func TestModel_buildResponse(t *testing.T) {
 			},
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			response := tt.fields.m.buildResponse(tt.args.chatCompletion)
-			if tt.name == "nil-req" || tt.name == "empty-usage" {
-				return
-			}
-			assert.Equal(t, tt.want.ID, response.ID)
-			assert.Equal(t, tt.want.Model, response.Model)
-			assert.Equal(t, tt.want.Created, response.Created)
-			assert.Equal(t, tt.want.Usage, response.Usage)
-			assert.Equal(t, tt.want.Choices[0].FinishReason, response.Choices[0].FinishReason)
-			assert.Equal(t, tt.want.Choices[0].Delta.ReasoningContent, response.Choices[0].Delta.ReasoningContent)
-			assert.Equal(t, tt.want.Choices[0].Delta.Content, response.Choices[0].Delta.Content)
-			assert.Equal(t, tt.want.Choices[0].Delta.Role, response.Choices[0].Delta.Role)
-			assert.Equal(t, tt.want.Choices[0].Delta.ToolCalls, response.Choices[0].Delta.ToolCalls)
-			assert.Equal(t, tt.want.Choices[0].Message.ToolCalls, response.Choices[0].Message.ToolCalls)
+			response := tt.fields.m.buildFinalResponse(tt.args.chatCompletion)
+			assert.Equal(t, tt.want, response)
+		})
+	}
+}
+
+func TestModel_buildChunkResponse(t *testing.T) {
+	finishReason := "FinishReason"
+	now := time.Now()
+	functionArgs := map[string]any{"args": "1"}
+	functionArgsBytes, _ := json.Marshal(functionArgs)
+
+	type fields struct {
+		m *Model
+	}
+	type args struct {
+		chatCompletion *genai.GenerateContentResponse
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   *model.Response
+	}{
+		{
+			name:   "nil-req",
+			fields: fields{m: &Model{}},
+			args:   args{chatCompletion: nil},
+			want: &model.Response{
+				Object:    model.ObjectTypeChatCompletionChunk,
+				IsPartial: true,
+			},
+		},
+		{
+			name:   "buildChunkResponse",
+			fields: fields{m: &Model{}},
+			args: args{
+				chatCompletion: &genai.GenerateContentResponse{
+					ResponseID:   "1",
+					CreateTime:   now,
+					ModelVersion: "pro-v1",
+					Candidates: []*genai.Candidate{
+						{
+							Content: &genai.Content{
+								Parts: []*genai.Part{
+									{Text: ""},
+									{
+										Thought: true,
+										Text:    "Thought",
+										FunctionCall: &genai.FunctionCall{
+											ID:   "id",
+											Name: "function_call",
+											Args: functionArgs,
+										},
+									},
+									{Text: "Answer"},
+								},
+							},
+							FinishReason: genai.FinishReason(finishReason),
+						},
+					},
+					UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+						PromptTokenCount:        1,
+						CandidatesTokenCount:    1,
+						TotalTokenCount:         2,
+						CachedContentTokenCount: 1,
+					},
+				},
+			},
+			want: &model.Response{
+				ID:        "1",
+				Object:    model.ObjectTypeChatCompletionChunk,
+				Created:   now.Unix(),
+				Timestamp: now,
+				Model:     "pro-v1",
+				IsPartial: true,
+				Choices: []model.Choice{
+					{
+						Index:        0,
+						FinishReason: &finishReason,
+						Delta: model.Message{
+							Role:             model.RoleAssistant,
+							ReasoningContent: "Thought",
+							Content:          "Answer",
+							ToolCalls: []model.ToolCall{
+								{
+									ID: "id",
+									Function: model.FunctionDefinitionParam{
+										Name:      "function_call",
+										Arguments: functionArgsBytes,
+									},
+								},
+							},
+						},
+						Message: model.Message{
+							Role:             model.RoleAssistant,
+							ReasoningContent: "Thought",
+							Content:          "Answer",
+							ToolCalls: []model.ToolCall{
+								{
+									ID: "id",
+									Function: model.FunctionDefinitionParam{
+										Name:      "function_call",
+										Arguments: functionArgsBytes,
+									},
+								},
+							},
+						},
+					},
+				},
+				Usage: &model.Usage{
+					PromptTokens:     1,
+					TotalTokens:      2,
+					CompletionTokens: 1,
+					PromptTokensDetails: model.PromptTokensDetails{
+						CachedTokens: 1,
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := tt.fields.m.buildChunkResponse(tt.args.chatCompletion)
+			assert.Equal(t, tt.want, response)
 		})
 	}
 }
