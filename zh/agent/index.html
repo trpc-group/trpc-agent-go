@@ -3298,6 +3298,11 @@
 </table>
 <h3 id="withstructuredoutputjsonschema">WithStructuredOutputJSONSchema</h3>
 <p>提供用户自定义的 JSON schema 用于结构化输出，同时<strong>允许使用工具</strong>。这是需要结构化输出和工具能力的 Agent 的最灵活选项。</p>
+<p><strong>注意：</strong>
+- “允许使用工具”表示 Agent 仍可发起工具调用（包括 Skills 的
+  <code>skill_load</code> / <code>skill_run</code>）。
+- 当模型需要调用工具时，可能会先返回工具调用事件而不是最终 JSON；
+  只有最终答复才需要满足 schema，并且必须是单个 JSON 对象。</p>
 <p><strong>示例：</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-24-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-24-2"> 2</a></span>
@@ -3386,6 +3391,9 @@
 - 渐进式类型场景</p>
 <h3 id="withstructuredoutputjson">WithStructuredOutputJSON</h3>
 <p>从 Go 结构体自动生成 JSON schema 并返回类型化输出。提供编译时类型安全。</p>
+<p><strong>注意：</strong>
+- 当模型需要调用工具时，可能会先返回工具调用事件而不是最终 JSON；
+  只有最终答复才需要满足 schema，并且必须是单个 JSON 对象。</p>
 <p><strong>示例：</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-25-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-25-2"> 2</a></span>
@@ -3843,7 +3851,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月28日 09:51:53 UTC">2026-01-28 09:51:53</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月29日 12:46:00 UTC">2026-01-29 12:46:00</span>
   </span>
 
     
