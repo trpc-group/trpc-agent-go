@@ -503,6 +503,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 
 - Skill 是一个包含 `SKILL.md` 规范的文件夹，可附带 docs/scripts。
 - 内置工具：`skill_load`、`skill_list_docs`、`skill_select_docs`、`skill_run`（在隔离工作空间里执行命令）。
+- 建议 `skill_run` 尽量只用于执行所选 Skill 文档里要求的命令，而不是用于通用的 Shell 探查。
 
 ### 12. Artifacts
 

@@ -515,6 +515,8 @@ Example: [examples/skillrun](examples/skillrun)
 - Skills are folders with a `SKILL.md` spec + optional docs/scripts.
 - Built-in tools: `skill_load`, `skill_list_docs`, `skill_select_docs`,
   `skill_run` (runs commands in an isolated workspace).
+- Prefer using `skill_run` only for commands required by the selected skill
+  docs, not for generic shell exploration.
 
 ### 12. Artifacts
 
