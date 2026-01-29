@@ -66,6 +66,7 @@ func TestAccumulator_BuildResponse(t *testing.T) {
 				Usage:            model.Usage{},
 			},
 			want: &model.Response{
+				Object: model.ObjectTypeChatCompletion,
 				Usage: &model.Usage{
 					PromptTokens:     1,
 					CompletionTokens: 1,

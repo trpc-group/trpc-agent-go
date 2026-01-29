@@ -59,6 +59,7 @@ func (a *Accumulator) Accumulate(resp *model.Response) {
 func (a *Accumulator) BuildResponse() *model.Response {
 	now := time.Now()
 	return &model.Response{
+		Object:    model.ObjectTypeChatCompletion,
 		Model:     a.Model,
 		Created:   now.Unix(),
 		Timestamp: now,
