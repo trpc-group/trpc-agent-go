@@ -301,8 +301,9 @@ Input:
 - `save_as_artifacts` (optional, legacy path): persist files collected
   via `output_files` and return `artifact_files` in the result
 - `omit_inline_content` (optional): omit `output_files[*].content` and
-  `primary_output.content` (metadata only). Use `output_files[*].ref`
-  with `read_file` when you need the content later.
+  `primary_output.content` (metadata only). Non-text outputs never
+  inline content. Use `output_files[*].ref` with `read_file` when you
+  need text content later.
 - `artifact_prefix` (optional): prefix for the legacy artifact path
   - If the Artifact service is not configured, `skill_run` keeps
     returning `output_files` and reports a `warnings` entry.
@@ -336,8 +337,9 @@ Output:
   `truncated`
   - `ref` is a stable `workspace://<name>` reference that can be passed
     to other tools
-  - When `omit_inline_content=true`, `content` is empty. Use `ref` with
-    `read_file` to fetch content on demand.
+  - For non-text files, `content` is always empty.
+  - When `omit_inline_content=true`, `content` is empty for all files.
+    Use `ref` with `read_file` to fetch text content on demand.
   - `size_bytes` is the file size on disk; `truncated=true` means the
     collected content hit internal caps (for example, 4 MiB/file).
 - `warnings` (optional): non-fatal notes (for example, when artifact

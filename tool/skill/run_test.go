@@ -37,20 +37,23 @@ import (
 )
 
 const (
-	testSkillName   = "demo"
-	skillFileName   = "SKILL.md"
-	timeoutSecSmall = 5
-	outGlobTxt      = "out/*.txt"
-	outATxt         = "out/a.txt"
-	outBTxt         = "out/b.txt"
-	scriptsDir      = "scripts"
-	contentHi       = "hi"
-	contentHello    = "hello"
-	contentMsg      = "msg"
-	echoOK          = "echo ok"
-	cmdEcho         = "echo"
-	cmdLS           = "ls"
-	cmdEchoThenLS   = "echo ok; ls"
+	testSkillName    = "demo"
+	skillFileName    = "SKILL.md"
+	timeoutSecSmall  = 5
+	outGlobTxt       = "out/*.txt"
+	outGlobAll       = "out/*"
+	outATxt          = "out/a.txt"
+	outAPng          = "out/a.png"
+	outBTxt          = "out/b.txt"
+	scriptsDir       = "scripts"
+	contentHi        = "hi"
+	contentHello     = "hello"
+	contentMsg       = "msg"
+	pngHeaderEscaped = "\\x89PNG\\r\\n\\x1a\\n"
+	echoOK           = "echo ok"
+	cmdEcho          = "echo"
+	cmdLS            = "ls"
+	cmdEchoThenLS    = "echo ok; ls"
 
 	errCollectFail     = "collect-fail"
 	errPutFail         = "put-fail"
@@ -115,6 +118,170 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.NotNil(t, out.PrimaryOutput)
 	require.Equal(t, outATxt, out.PrimaryOutput.Name)
 	require.Contains(t, out.PrimaryOutput.Content, contentHi)
+}
+
+func TestRunTool_DoesNotInlineNonTextOutputs(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	cmd := strings.Join([]string{
+		"mkdir -p out",
+		"printf '" + pngHeaderEscaped + "' > " + outAPng,
+		"echo " + contentHi + " > " + outATxt,
+	}, "; ")
+
+	args := runInput{
+		Skill:       testSkillName,
+		Command:     cmd,
+		OutputFiles: []string{outGlobAll},
+		Timeout:     timeoutSecSmall,
+	}
+
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 2)
+
+	got := make(map[string]runFile, len(out.OutputFiles))
+	for _, f := range out.OutputFiles {
+		got[f.Name] = f
+	}
+
+	png, ok := got[outAPng]
+	require.True(t, ok)
+	require.Equal(t, "", png.Content)
+	require.Equal(t, "image/png", png.MIMEType)
+	require.False(t, png.Truncated)
+	require.NotZero(t, png.SizeBytes)
+
+	txt, ok := got[outATxt]
+	require.True(t, ok)
+	require.Contains(t, txt.Content, contentHi)
+
+	require.NotNil(t, out.PrimaryOutput)
+	require.Equal(t, outATxt, out.PrimaryOutput.Name)
+	require.Contains(t, out.PrimaryOutput.Content, contentHi)
+}
+
+func TestRunTool_TrimsTruncatedUTF8TextOutputs(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	const bytes4MiB = 4 * 1024 * 1024
+	cmd := strings.Join([]string{
+		"set -e",
+		"mkdir -p out",
+		"head -c " + strconv.Itoa(bytes4MiB-1) +
+			" /dev/zero | tr '\\000' 'a' > " + outATxt,
+		"printf '\\xE2\\x82\\xAC\\n' >> " + outATxt,
+	}, "; ")
+
+	args := runInput{
+		Skill:       testSkillName,
+		Command:     cmd,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 1)
+
+	f := out.OutputFiles[0]
+	require.Equal(t, outATxt, f.Name)
+	require.True(t, strings.HasPrefix(f.MIMEType, "text/plain"))
+	require.True(t, f.Truncated)
+	require.Equal(t, bytes4MiB-1, len(f.Content))
+	require.True(t, strings.HasSuffix(f.Content, "a"))
+
+	got, _, handled, err := fileref.TryRead(ctx, f.Ref)
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.Equal(t, bytes4MiB-1, len(got))
+	require.True(t, strings.HasSuffix(got, "a"))
+}
+
+func TestShouldInlineFileContent(t *testing.T) {
+	const (
+		mimeTextPlain = "text/plain"
+		mimeImagePNG  = "image/png"
+		invalidByte   = 0xff
+	)
+
+	tests := []struct {
+		name string
+		file codeexecutor.File
+		want bool
+	}{
+		{
+			name: "empty content",
+			file: codeexecutor.File{},
+			want: true,
+		},
+		{
+			name: "valid text",
+			file: codeexecutor.File{
+				Content:  contentHi,
+				MIMEType: mimeTextPlain,
+			},
+			want: true,
+		},
+		{
+			name: "non-text mime",
+			file: codeexecutor.File{
+				Content:  contentHi,
+				MIMEType: mimeImagePNG,
+			},
+			want: false,
+		},
+		{
+			name: "contains nul",
+			file: codeexecutor.File{
+				Content:  contentHi + "\x00",
+				MIMEType: mimeTextPlain,
+			},
+			want: false,
+		},
+		{
+			name: "invalid utf8",
+			file: codeexecutor.File{
+				Content:  string([]byte{invalidByte}),
+				MIMEType: mimeTextPlain,
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, shouldInlineFileContent(tt.file))
+		})
+	}
 }
 
 func TestRunTool_AutoExportsOutToWorkspaceCache(t *testing.T) {
