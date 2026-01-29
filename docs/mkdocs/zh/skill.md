@@ -315,8 +315,9 @@ agent := llmagent.New(
 建议：
 - 建议 `skill_run` 尽量只用于执行 Skill 文档里描述的流程
   （例如 `SKILL.md` 明确要求的命令）。
-- 不建议用 `skill_run` 做通用的 Shell 探查（如 `ls`、`cat`、`grep`）；
-  优先使用 `skill_list_docs` / `skill_select_docs` 与文件工具。
+- 不建议用 `skill_run` 做通用的 Shell 探索。
+- 优先使用 `skill_list_docs` / `skill_select_docs` 读取 Skill 文档，
+  再用文件工具按需查看选中的内容。
 
 可选的安全限制（白名单）：
 - 环境变量 `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`：
