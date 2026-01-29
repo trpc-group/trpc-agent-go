@@ -1286,6 +1286,20 @@ func TestSessionServiceGetSessionFiltersTrackEvents(t *testing.T) {
 		assert.Equal(t, json.RawMessage(`"b2"`), beta.Events[1].Payload)
 	})
 
+	t.Run("filters out all events when event time is after last event", func(t *testing.T) {
+		got, err := service.GetSession(ctx, key, session.WithEventTime(base.Add(3*time.Second)))
+		require.NoError(t, err)
+		require.NotNil(t, got)
+
+		alpha, err := got.GetTrackEvents("alpha")
+		require.NoError(t, err)
+		require.Empty(t, alpha.Events)
+
+		beta, err := got.GetTrackEvents("beta")
+		require.NoError(t, err)
+		require.Empty(t, beta.Events)
+	})
+
 	t.Run("filters by event num", func(t *testing.T) {
 		got, err := service.GetSession(ctx, key, session.WithEventNum(1))
 		require.NoError(t, err)
@@ -1300,6 +1314,20 @@ func TestSessionServiceGetSessionFiltersTrackEvents(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, beta.Events, 1)
 		assert.Equal(t, json.RawMessage(`"b2"`), beta.Events[0].Payload)
+	})
+
+	t.Run("does not truncate when event num exceeds history length", func(t *testing.T) {
+		got, err := service.GetSession(ctx, key, session.WithEventNum(10))
+		require.NoError(t, err)
+		require.NotNil(t, got)
+
+		alpha, err := got.GetTrackEvents("alpha")
+		require.NoError(t, err)
+		require.Len(t, alpha.Events, 3)
+
+		beta, err := got.GetTrackEvents("beta")
+		require.NoError(t, err)
+		require.Len(t, beta.Events, 2)
 	})
 }
 
