@@ -132,6 +132,14 @@ Total Token =  Tool Search (Chat Model) + Tool Search (Embedding Model) + Other 
 
 ## 结论（基于本次 Token/耗时/调用次数测试数据）
 
+### 总览
+
+| Case Name | Total Tokens | vs baseline（Total） | Prompt Tokens | vs baseline（Prompt） | Completion Tokens | vs baseline（Completion） | Total Session Duration | vs baseline（Duration） | Avg Duration/Turn | Tool Search Calls | Calls/Turn |
+| --- | ---:| ---:| ---:| ---:| ---:| ---:| ---:| ---:| ---:| ---:| ---:|
+| without tool search | 38187 | +0 (0%) | 37626 | +0 (0%) | 561 | +0 (0%) | 55.593s | +0s (0%) | 5.559s | 0 | 0 |
+| llm search | 32079 | -6108 (-16.0%) | 31059 | -6567 (-17.5%) | 1020 | +459 (+81.8%) | 1m30.277s | +34.684s (+62.4%) | 9.028s | 21 | 2.1 |
+| knowledge search | 24814 | -13373 (-35.0%) | 23510 | -14116 (-37.5%) | 1304 | +743 (+132.5%) | 1m43.028s | +47.435s (+85.3%) | 10.303s | 21 | 2.1 |
+
 ### 1) 使用 Tool Search 能节约多少 token？
 
 结合上面 4 张表（`不同模块的 Total Tokens 消耗量`、`不同 case 的 Prompt/Completion/Total`、`Other Chat Model 明细汇总`、`Tool Search 明细汇总`），可以按 **3 个维度**来分析（Total / Prompt / Completion）：
