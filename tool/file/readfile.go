@@ -11,11 +11,15 @@
 package file
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"unicode/utf8"
 
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -85,16 +89,63 @@ func validateReadFileRequest(req *readFileRequest) error {
 	return nil
 }
 
+const (
+	errNotTextFile     = "file is not a UTF-8 text file"
+	errNotTextFileTmpl = "file is not a UTF-8 text file (mime: %s)"
+)
+
+func validateTextString(content string, mimeType string) error {
+	if content == "" {
+		return nil
+	}
+	if strings.TrimSpace(mimeType) != "" &&
+		!codeexecutor.IsTextMIME(mimeType) {
+		return notTextFileErr(mimeType)
+	}
+	if strings.IndexByte(content, 0) >= 0 ||
+		!utf8.ValidString(content) {
+		return notTextFileErr(mimeType)
+	}
+	return nil
+}
+
+func validateTextBytes(data []byte, mimeType string) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(mimeType) != "" &&
+		!codeexecutor.IsTextMIME(mimeType) {
+		return notTextFileErr(mimeType)
+	}
+	if bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data) {
+		return notTextFileErr(mimeType)
+	}
+	return nil
+}
+
+func notTextFileErr(mimeType string) error {
+	mt := strings.TrimSpace(mimeType)
+	if mt == "" {
+		return fmt.Errorf(errNotTextFile)
+	}
+	return fmt.Errorf(errNotTextFileTmpl, mt)
+}
+
 func (f *fileToolSet) readFileFromRef(
 	ctx context.Context,
 	req *readFileRequest,
 	rsp *readFileResponse,
 ) (bool, error) {
-	content, _, handled, err := fileref.TryRead(ctx, req.FileName)
+	content, mimeType, handled, err := fileref.TryRead(ctx, req.FileName)
 	if !handled {
 		return false, nil
 	}
 	if err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return true, err
+	}
+
+	if err := validateTextString(content, mimeType); err != nil {
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return true, err
 	}
@@ -186,6 +237,11 @@ func (f *fileToolSet) readFileFromDiskOrCache(
 		rsp.Message = fmt.Sprintf("Error: cannot read file: %v", err)
 		return fmt.Errorf("reading file: %w", err)
 	}
+	mimeType := http.DetectContentType(contents)
+	if err := validateTextBytes(contents, mimeType); err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return err
+	}
 	chunk, startLine, endLine, total, empty, err := f.sliceReadFile(
 		req,
 		string(contents),
@@ -224,6 +280,11 @@ func (f *fileToolSet) readFileFromCache(
 	)
 	if !ok {
 		return false, nil
+	}
+
+	if err := validateTextString(content, mime); err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return true, err
 	}
 
 	chunk, start, end, total, empty, err := f.sliceReadFile(req, content)
