@@ -323,6 +323,92 @@ func TestAgentEvaluatorCloseWrapsEvalServiceError(t *testing.T) {
 	assert.ErrorIs(t, err, wantErr)
 }
 
+func TestAgentEvaluatorCollectCaseResultsGetEvalSetError(t *testing.T) {
+	ctx := context.Background()
+	ae := &agentEvaluator{
+		appName:        "app",
+		evalSetManager: evalsetinmemory.New(),
+		numRuns:        1,
+	}
+	_, err := ae.collectCaseResults(ctx, "set")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "get eval set")
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestAgentEvaluatorCollectCaseResultsSortByEvalSetOrder(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, evalSetMgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{EvalID: "B"}))
+	assert.NoError(t, evalSetMgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{EvalID: "A"}))
+
+	svc := &fakeService{
+		evaluateResults: []*service.EvalSetRunResult{{
+			AppName:   appName,
+			EvalSetID: evalSetID,
+			EvalCaseResults: []*evalresult.EvalCaseResult{
+				makeEvalCaseResult(evalSetID, "A", "m", 1, 0, status.EvalStatusPassed),
+				makeEvalCaseResult(evalSetID, "B", "m", 1, 0, status.EvalStatusPassed),
+			},
+		}},
+	}
+
+	ae := &agentEvaluator{
+		appName:           appName,
+		evalSetManager:    evalSetMgr,
+		evalService:       svc,
+		metricManager:     &fakeMetricManager{metrics: map[string]*metric.EvalMetric{}},
+		evalResultManager: evalresultinmemory.New(),
+		numRuns:           1,
+	}
+	results, err := ae.collectCaseResults(ctx, evalSetID)
+	assert.NoError(t, err)
+	assert.Len(t, results, 2)
+	assert.Equal(t, "B", results[0].EvalCaseID)
+	assert.Equal(t, "A", results[1].EvalCaseID)
+}
+
+func TestAgentEvaluatorCollectCaseResultsSortKnownCaseFirst(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, evalSetMgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{EvalID: "A"}))
+
+	svc := &fakeService{
+		evaluateResults: []*service.EvalSetRunResult{{
+			AppName:   appName,
+			EvalSetID: evalSetID,
+			EvalCaseResults: []*evalresult.EvalCaseResult{
+				makeEvalCaseResult(evalSetID, "B", "m", 1, 0, status.EvalStatusPassed),
+				makeEvalCaseResult(evalSetID, "A", "m", 1, 0, status.EvalStatusPassed),
+			},
+		}},
+	}
+
+	ae := &agentEvaluator{
+		appName:           appName,
+		evalSetManager:    evalSetMgr,
+		evalService:       svc,
+		metricManager:     &fakeMetricManager{metrics: map[string]*metric.EvalMetric{}},
+		evalResultManager: evalresultinmemory.New(),
+		numRuns:           1,
+	}
+	results, err := ae.collectCaseResults(ctx, evalSetID)
+	assert.NoError(t, err)
+	assert.Len(t, results, 2)
+	assert.Equal(t, "A", results[0].EvalCaseID)
+	assert.Equal(t, "B", results[1].EvalCaseID)
+}
+
 func TestAgentEvaluatorCollectCaseResultsSortLexicographically(t *testing.T) {
 	ctx := context.Background()
 	appName := "app"
@@ -529,6 +615,119 @@ func TestAgentEvaluatorRunEvaluationErrors(t *testing.T) {
 			assert.Error(t, err)
 		})
 	}
+}
+
+func TestAgentEvaluatorRunEvaluationNilRunResult(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{{}},
+		evaluateResults:  []*service.EvalSetRunResult{nil},
+	}
+
+	resultMgr := &countingEvalResultManager{}
+	ae := &agentEvaluator{
+		appName:           appName,
+		evalService:       svc,
+		metricManager:     &fakeMetricManager{metrics: map[string]*metric.EvalMetric{}},
+		evalResultManager: resultMgr,
+		numRuns:           1,
+	}
+	_, err := ae.runEvaluation(ctx, evalSetID)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "eval set run result is nil")
+	assert.Equal(t, int32(0), atomic.LoadInt32(&resultMgr.saves))
+}
+
+type failingEvalResultManager struct {
+	last *evalresult.EvalSetResult
+	err  error
+}
+
+func (m *failingEvalResultManager) Save(_ context.Context, _ string, evalSetResult *evalresult.EvalSetResult) (string, error) {
+	m.last = evalSetResult
+	return "", m.err
+}
+
+func (m *failingEvalResultManager) Get(_ context.Context, _, _ string) (*evalresult.EvalSetResult, error) {
+	return nil, os.ErrNotExist
+}
+
+func (m *failingEvalResultManager) List(_ context.Context, _ string) ([]string, error) {
+	return []string{}, nil
+}
+
+func TestAgentEvaluatorRunEvaluationSaveFailureLeavesResultIDUnset(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{{}},
+		evaluateResults: []*service.EvalSetRunResult{{
+			AppName:   appName,
+			EvalSetID: evalSetID,
+			EvalCaseResults: []*evalresult.EvalCaseResult{
+				makeEvalCaseResult(evalSetID, "case-1", "m", 0, 1, status.EvalStatusFailed),
+			},
+		}},
+	}
+
+	resultMgr := &failingEvalResultManager{err: errors.New("save failed")}
+	ae := &agentEvaluator{
+		appName:           appName,
+		evalService:       svc,
+		metricManager:     &fakeMetricManager{metrics: map[string]*metric.EvalMetric{}},
+		evalResultManager: resultMgr,
+		numRuns:           1,
+	}
+	_, err := ae.runEvaluation(ctx, evalSetID)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "save eval set result")
+	assert.Contains(t, err.Error(), "save failed")
+	assert.NotNil(t, resultMgr.last)
+	if assert.NotNil(t, resultMgr.last) {
+		assert.Empty(t, resultMgr.last.EvalSetResultID)
+	}
+}
+
+func TestAgentEvaluatorRunEvaluationSummarizeError(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{{}, {}},
+		evaluateResults: []*service.EvalSetRunResult{
+			{
+				AppName:   appName,
+				EvalSetID: evalSetID,
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					{EvalSetID: evalSetID, EvalID: "", FinalEvalStatus: status.EvalStatusFailed},
+				},
+			},
+			{
+				AppName:         appName,
+				EvalSetID:       evalSetID,
+				EvalCaseResults: []*evalresult.EvalCaseResult{},
+			},
+		},
+	}
+
+	resultMgr := &countingEvalResultManager{}
+	ae := &agentEvaluator{
+		appName:           appName,
+		evalService:       svc,
+		metricManager:     &fakeMetricManager{metrics: map[string]*metric.EvalMetric{}},
+		evalResultManager: resultMgr,
+		numRuns:           2,
+	}
+	_, err := ae.runEvaluation(ctx, evalSetID)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "summarize eval set result")
+	assert.Equal(t, int32(0), atomic.LoadInt32(&resultMgr.saves))
 }
 
 func TestAgentEvaluatorRunEvaluationConcatsInferenceResultsAcrossRuns(t *testing.T) {

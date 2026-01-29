@@ -145,6 +145,17 @@ func (a *agentEvaluator) Close() error {
 
 // collectCaseResults runs evaluation on the specified eval set across multiple runs and groups results by case ID.
 func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID string) ([]*EvaluationCaseResult, error) {
+	// Determine eval case ordering from the eval set definition when possible.
+	evalSetIndex := make(map[string]int)
+	if a.evalSetManager != nil {
+		evalSet, err := a.evalSetManager.Get(ctx, a.appName, evalSetID)
+		if err != nil {
+			return nil, fmt.Errorf("get eval set: %w", err)
+		}
+		for i, evalCase := range evalSet.EvalCases {
+			evalSetIndex[evalCase.EvalID] = i
+		}
+	}
 	// Due to multiple runs, an evaluation case may be evaluated multiple times and generate multiple evaluation
 	// case results. So EvalCaseResults need to be grouped by case ID.
 	// caseResultsByID is a map from case ID to a list of eval case results.
@@ -168,6 +179,14 @@ func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID strin
 		evalCaseResults = append(evalCaseResults, evalCaseResult)
 	}
 	sort.SliceStable(evalCaseResults, func(i, j int) bool {
+		leftIndex, leftOK := evalSetIndex[evalCaseResults[i].EvalCaseID]
+		rightIndex, rightOK := evalSetIndex[evalCaseResults[j].EvalCaseID]
+		if leftOK && rightOK {
+			return leftIndex < rightIndex
+		}
+		if leftOK != rightOK {
+			return leftOK
+		}
 		return evalCaseResults[i].EvalCaseID < evalCaseResults[j].EvalCaseID
 	})
 	return evalCaseResults, nil
@@ -189,8 +208,7 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string) (*
 		evalMetrics = append(evalMetrics, metric)
 	}
 	allCaseResults := make([]*evalresult.EvalCaseResult, 0)
-	for runIdx := range a.numRuns {
-		runID := runIdx + 1
+	for runID := 1; runID <= a.numRuns; runID++ {
 		inferenceRequest := &service.InferenceRequest{
 			AppName:   a.appName,
 			EvalSetID: evalSetID,

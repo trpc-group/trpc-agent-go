@@ -30,8 +30,8 @@ func SummarizeMultiRun(evalSetResult *evalresult.EvalSetResult, expectedNumRuns 
 		return err
 	}
 	runIDs := make([]int, 0, numRuns)
-	for runIdx := range numRuns {
-		runIDs = append(runIDs, runIdx+1)
+	for runID := 1; runID <= numRuns; runID++ {
+		runIDs = append(runIDs, runID)
 	}
 	runSummaries, runStatusCounts, err := buildEvalSetRunSummaries(runCaseResults, runIDs)
 	if err != nil {
