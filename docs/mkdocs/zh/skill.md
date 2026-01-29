@@ -307,7 +307,8 @@ agent := llmagent.New(
   `artifact_files`。
 - `omit_inline_content`（可选）：为 true 时不返回
   `output_files[*].content` 与 `primary_output.content`（只返回元信息）。
-  需要内容时，可用 `output_files[*].ref` 配合 `read_file` 按需读取。
+  非文本输出的 `content` 也会始终为空。需要文本内容时，可用
+  `output_files[*].ref` 配合 `read_file` 按需读取。
 - `artifact_prefix`（可选）：与 `save_as_artifacts` 配合的前缀。
   - 若未配置制品服务（Artifact service），`skill_run` 会继续
     返回 `output_files`，并在 `warnings` 中给出提示。
@@ -338,8 +339,9 @@ agent := llmagent.New(
 - `output_files`：文件列表（`name`、`ref`、`content`、`mime_type`、
   `size_bytes`、`truncated`）
   - `ref` 是稳定的 `workspace://<name>` 引用，可传给其它工具使用
-  - 当 `omit_inline_content=true` 时，`content` 为空。可用 `ref` 配合
-    `read_file` 按需读取内容。
+  - 非文本文件的 `content` 始终为空。
+  - 当 `omit_inline_content=true` 时，所有文件的 `content` 为空。可用
+    `ref` 配合 `read_file` 按需读取文本内容。
   - `size_bytes` 表示磁盘上的文件大小；`truncated=true` 表示收集内容触发了
     内部上限（例如 4 MiB/文件）。
 - `warnings`（可选）：非致命提示（例如制品保存被跳过）
