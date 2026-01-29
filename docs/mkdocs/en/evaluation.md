@@ -802,7 +802,7 @@ Service is an evaluation service that integrates the following modules:
 - Metric
 - Registry
 - Evaluator
-- EvalSetResult
+- EvalSetRunResult
 
 The Service interface defines the complete evaluation process, including the inference and evaluation phases. The interface definition is as follows:
 
@@ -814,8 +814,8 @@ type Service interface {
 	// Inference performs inference, calls the Agent to process the specified evaluation case, 
 	// and returns the inference result.
 	Inference(ctx context.Context, request *InferenceRequest) ([]*InferenceResult, error)
-	// Evaluate evaluates the inference result, generates and persists the evaluation result.
-	Evaluate(ctx context.Context, request *EvaluateRequest) (*evalresult.EvalSetResult, error)
+	// Evaluate evaluates the inference result and generates the evaluation result (without persistence).
+	Evaluate(ctx context.Context, request *EvaluateRequest) (*EvalSetRunResult, error)
 }
 ```
 
@@ -953,6 +953,8 @@ Because the Agent's execution process may be uncertain, `evaluation.WithNumRuns`
 - The default number of runs is 1;
 - By specifying `evaluation.WithNumRuns(n)`, each evaluation case can be run multiple times;
 - The final result is based on the combined statistical results of multiple runs. The default statistical method is the average of the evaluation scores of multiple runs.
+- Each evaluation execution persists a single eval result file. When `NumRuns > 1`, the persisted `EvalSetResult.EvalCaseResults` contains one entry per run (each entry includes `runId` to indicate which run produced it), so the same `EvalID` can appear multiple times.
+- When `NumRuns > 1`, the persisted `EvalSetResult` also includes `Summary`, which provides an aggregated view by run and by eval case for easier inspection.
 
 To accelerate the inference phase for large evaluation sets, parallel inference across evaluation cases can be enabled.
 

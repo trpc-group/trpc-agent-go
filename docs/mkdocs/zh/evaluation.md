@@ -790,7 +790,7 @@ Service 是评估服务，用于整合以下模块：
 - 评估指标 Metric
 - 评估器注册中心 Registry
 - 评估器 Evaluator
-- 评估结果 EvalSetResult
+- 评估结果 EvalSetRunResult
 
 Service 接口定义了完整的评测流程，包括推理（Inference）和评估（Evaluate）两个阶段，接口定义如下：
 
@@ -801,8 +801,8 @@ import "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 type Service interface {
 	// Inference 执行推理，调用 Agent 处理指定的评测用例，并返回推理结果。
 	Inference(ctx context.Context, request *InferenceRequest) ([]*InferenceResult, error)
-	// Evaluate 对推理结果进行评估，生成并持久化评测结果。
-	Evaluate(ctx context.Context, request *EvaluateRequest) (*evalresult.EvalSetResult, error)
+	// Evaluate 对推理结果进行评估，生成评测结果（不负责持久化）。
+	Evaluate(ctx context.Context, request *EvaluateRequest) (*EvalSetRunResult, error)
 }
 ```
 
@@ -937,6 +937,8 @@ defer agentEvaluator.Close()
 - 默认运行次数为 1 次；
 - 通过指定 `evaluation.WithNumRuns(n)`，可对每个评估用例运行多次；
 - 最终结果将基于多次运行的综合统计结果得出，默认统计方法是多次运行评估得分的平均值。
+- 每次评估执行只会落盘一份 evalresult 文件；当 `NumRuns > 1` 时，落盘的 `EvalSetResult.EvalCaseResults` 会包含每次运行的条目（每条带有 `runId` 标识来自第几次 run），因此同一 `EvalID` 可能出现多次。
+- 当 `NumRuns > 1` 时，落盘的 `EvalSetResult` 会包含 `Summary` 字段，提供按 run / 按 evalcase 聚合的统计视图。
 
 对于较大的评估集，为了加速 inference 阶段，可以开启 EvalCase 级别的并发推理：
 

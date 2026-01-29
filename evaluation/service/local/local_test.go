@@ -22,8 +22,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
-	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
@@ -188,12 +186,11 @@ func makeInferenceResult(appName, evalSetID, caseID, sessionID string, inference
 	}
 }
 
-func newLocalService(t *testing.T, r runner.Runner, evalSetMgr evalset.Manager, resultMgr evalresult.Manager, reg registry.Registry, sessionID string) *local {
+func newLocalService(t *testing.T, r runner.Runner, evalSetMgr evalset.Manager, reg registry.Registry, sessionID string) *local {
 	t.Helper()
 	svc, err := New(
 		r,
 		service.WithEvalSetManager(evalSetMgr),
-		service.WithEvalResultManager(resultMgr),
 		service.WithRegistry(reg),
 		service.WithSessionIDSupplier(func(ctx context.Context) string {
 			return sessionID
@@ -233,14 +230,6 @@ func TestLocalNewValidationErrors(t *testing.T) {
 				service.WithEvalSetManager(nil),
 			},
 			wantErr: "eval set manager is nil",
-		},
-		{
-			name: "nil_eval_result_manager",
-			r:    &fakeRunner{},
-			options: []service.Option{
-				service.WithEvalResultManager(nil),
-			},
-			wantErr: "eval result manager is nil",
 		},
 		{
 			name: "nil_registry",
@@ -305,8 +294,7 @@ func TestLocalInferenceRequestValidation(t *testing.T) {
 	ctx := context.Background()
 	mgr := evalsetinmemory.New()
 	reg := registry.New()
-	resMgr := evalresultinmemory.New()
-	svc := newLocalService(t, &fakeRunner{}, mgr, resMgr, reg, "session")
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session")
 
 	results, err := svc.Inference(ctx, nil)
 	assert.Error(t, err)
@@ -333,8 +321,7 @@ func TestLocalInferenceFiltersCases(t *testing.T) {
 
 	runnerStub := &fakeRunner{events: []*event.Event{makeFinalEvent("calc result: 3")}}
 	reg := registry.New()
-	resMgr := evalresultinmemory.New()
-	svc := newLocalService(t, runnerStub, mgr, resMgr, reg, "session-123")
+	svc := newLocalService(t, runnerStub, mgr, reg, "session-123")
 
 	req := &service.InferenceRequest{
 		AppName:     appName,
@@ -398,12 +385,11 @@ func TestLocalInferenceSkipsNilEvalCases(t *testing.T) {
       }
     }
   ]
-}`), 0o644))
+	}`), 0o644))
 
 	mgr := evalsetlocal.New(evalset.WithBaseDir(baseDir))
 	reg := registry.New()
-	resMgr := evalresultinmemory.New()
-	svc := newLocalService(t, &fakeRunner{err: errors.New("runner should not be called")}, mgr, resMgr, reg, "session-trace")
+	svc := newLocalService(t, &fakeRunner{err: errors.New("runner should not be called")}, mgr, reg, "session-trace")
 
 	results, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
 	assert.NoError(t, err)
@@ -420,8 +406,7 @@ func TestLocalInferenceEvalSetError(t *testing.T) {
 	ctx := context.Background()
 	mgr := evalsetinmemory.New()
 	reg := registry.New()
-	resMgr := evalresultinmemory.New()
-	svc := newLocalService(t, &fakeRunner{}, mgr, resMgr, reg, "session")
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session")
 
 	req := &service.InferenceRequest{AppName: "app", EvalSetID: "missing"}
 	results, err := svc.Inference(ctx, req)
@@ -440,8 +425,7 @@ func TestLocalInferenceNoMatchingCases(t *testing.T) {
 
 	runnerStub := &fakeRunner{events: []*event.Event{makeFinalEvent("ignored")}}
 	reg := registry.New()
-	resMgr := evalresultinmemory.New()
-	svc := newLocalService(t, runnerStub, mgr, resMgr, reg, "session")
+	svc := newLocalService(t, runnerStub, mgr, reg, "session")
 
 	req := &service.InferenceRequest{
 		AppName:     appName,
@@ -469,8 +453,7 @@ func TestLocalInferenceRunnerError(t *testing.T) {
 
 	runnerStub := &fakeRunner{err: errors.New("run failed")}
 	reg := registry.New()
-	resMgr := evalresultinmemory.New()
-	svc := newLocalService(t, runnerStub, mgr, resMgr, reg, "session")
+	svc := newLocalService(t, runnerStub, mgr, reg, "session")
 
 	req := &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID}
 	results, err := svc.Inference(ctx, req)
@@ -498,11 +481,9 @@ func TestLocalInferenceInvalidSessionInput(t *testing.T) {
 	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, invalid))
 
 	reg := registry.New()
-	resMgr := evalresultinmemory.New()
 	svc, err := New(
 		&fakeRunner{events: []*event.Event{makeFinalEvent("resp")}},
 		service.WithEvalSetManager(mgr),
-		service.WithEvalResultManager(resMgr),
 		service.WithRegistry(reg),
 		service.WithEvalCaseParallelInferenceEnabled(true),
 		service.WithEvalCaseParallelism(2),
@@ -531,11 +512,9 @@ func TestLocalInferenceParallelInvokeFailureAddsContext(t *testing.T) {
 	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, "case", "prompt")))
 
 	reg := registry.New()
-	resMgr := evalresultinmemory.New()
 	svc, err := New(
 		&fakeRunner{events: []*event.Event{makeFinalEvent("resp")}},
 		service.WithEvalSetManager(mgr),
-		service.WithEvalResultManager(resMgr),
 		service.WithRegistry(reg),
 		service.WithSessionIDSupplier(func(ctx context.Context) string {
 			return "session-123"
@@ -586,11 +565,9 @@ func TestLocalInferenceParallelOrder(t *testing.T) {
 	}()
 
 	reg := registry.New()
-	resMgr := evalresultinmemory.New()
 	svc, err := New(
 		runnerStub,
 		service.WithEvalSetManager(mgr),
-		service.WithEvalResultManager(resMgr),
 		service.WithRegistry(reg),
 		service.WithEvalCaseParallelInferenceEnabled(true),
 		service.WithEvalCaseParallelism(2),
@@ -691,11 +668,9 @@ func TestLocalInferenceParallelismOneRunsSerial(t *testing.T) {
 	}()
 
 	reg := registry.New()
-	resMgr := evalresultinmemory.New()
 	svc, err := New(
 		runnerStub,
 		service.WithEvalSetManager(mgr),
-		service.WithEvalResultManager(resMgr),
 		service.WithRegistry(reg),
 		service.WithEvalCaseParallelInferenceEnabled(true),
 		service.WithEvalCaseParallelism(1),
@@ -767,8 +742,7 @@ func TestLocalEvaluateRequestValidation(t *testing.T) {
 	ctx := context.Background()
 	mgr := evalsetinmemory.New()
 	reg := registry.New()
-	resMgr := evalresultinmemory.New()
-	svc := newLocalService(t, &fakeRunner{}, mgr, resMgr, reg, "session")
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session")
 
 	result, err := svc.Evaluate(ctx, nil)
 	assert.Error(t, err)
@@ -807,8 +781,7 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	}
 	assert.NoError(t, reg.Register(metricName, fakeEval))
 
-	resMgr := evalresultinmemory.New()
-	svc := newLocalService(t, &fakeRunner{}, mgr, resMgr, reg, "session-xyz")
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session-xyz")
 	actual := makeActualInvocation("generated", "calc add 1 2", "calc result: 3")
 	inference := makeInferenceResult(appName, evalSetID, caseID, "session-xyz", []*evalset.Invocation{actual})
 	req := &service.EvaluateRequest{
@@ -823,8 +796,8 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	result, err := svc.Evaluate(ctx, req)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
+	assert.Equal(t, appName, result.AppName)
 	assert.Equal(t, evalSetID, result.EvalSetID)
-	assert.NotEmpty(t, result.EvalSetResultID)
 	assert.Len(t, result.EvalCaseResults, 1)
 
 	caseResult := result.EvalCaseResults[0]
@@ -836,16 +809,9 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	assert.Len(t, caseResult.EvalMetricResultPerInvocation, 1)
 	assert.Len(t, caseResult.EvalMetricResultPerInvocation[0].EvalMetricResults, 1)
 	assert.Equal(t, "demo-user", caseResult.UserID)
-
-	storedIDs, err := resMgr.List(ctx, appName)
-	assert.NoError(t, err)
-	assert.Len(t, storedIDs, 1)
-	stored, err := resMgr.Get(ctx, appName, result.EvalSetResultID)
-	assert.NoError(t, err)
-	assert.Equal(t, result.EvalSetResultID, stored.EvalSetResultID)
 }
 
-func TestLocalEvaluateInferenceFailurePersistsErrorMessage(t *testing.T) {
+func TestLocalEvaluateInferenceFailureReturnsErrorMessage(t *testing.T) {
 	ctx := context.Background()
 	appName := "app"
 	evalSetID := "set"
@@ -856,8 +822,7 @@ func TestLocalEvaluateInferenceFailurePersistsErrorMessage(t *testing.T) {
 	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, caseID, "prompt")))
 
 	reg := registry.New()
-	resMgr := evalresultinmemory.New()
-	svc := newLocalService(t, &fakeRunner{}, mgr, resMgr, reg, "session-xyz")
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session-xyz")
 
 	inference := &service.InferenceResult{
 		AppName:      appName,
@@ -881,11 +846,6 @@ func TestLocalEvaluateInferenceFailurePersistsErrorMessage(t *testing.T) {
 	assert.Len(t, result.EvalCaseResults, 1)
 	assert.Equal(t, status.EvalStatusFailed, result.EvalCaseResults[0].FinalEvalStatus)
 	assert.Equal(t, "run failed", result.EvalCaseResults[0].ErrorMessage)
-
-	stored, err := resMgr.Get(ctx, appName, result.EvalSetResultID)
-	assert.NoError(t, err)
-	assert.Len(t, stored.EvalCaseResults, 1)
-	assert.Equal(t, "run failed", stored.EvalCaseResults[0].ErrorMessage)
 }
 
 func TestLocalEvaluatePerCaseErrors(t *testing.T) {
@@ -896,8 +856,7 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 	prepare := func(t *testing.T) (*local, evalset.Manager, registry.Registry) {
 		mgr := evalsetinmemory.New()
 		reg := registry.New()
-		resMgr := evalresultinmemory.New()
-		svc := newLocalService(t, &fakeRunner{}, mgr, resMgr, reg, "session")
+		svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session")
 		return svc, mgr, reg
 	}
 
@@ -1100,8 +1059,7 @@ func TestLocalInferenceTraceModeSkipsRunner(t *testing.T) {
 
 	runnerStub := &fakeRunner{err: errors.New("runner should not be called in trace mode")}
 	reg := registry.New()
-	resMgr := evalresultinmemory.New()
-	svc := newLocalService(t, runnerStub, mgr, resMgr, reg, "session-trace")
+	svc := newLocalService(t, runnerStub, mgr, reg, "session-trace")
 
 	req := &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID}
 	results, err := svc.Inference(ctx, req)
@@ -1151,9 +1109,8 @@ func TestLocalEvaluateTraceModeUsesUserContentAsExpected(t *testing.T) {
 	}
 	assert.NoError(t, reg.Register(metricName, fakeEval))
 
-	resMgr := evalresultinmemory.New()
 	runnerStub := &fakeRunner{err: errors.New("runner should not be called in trace mode")}
-	svc := newLocalService(t, runnerStub, mgr, resMgr, reg, "session-trace")
+	svc := newLocalService(t, runnerStub, mgr, reg, "session-trace")
 
 	inferenceResults, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
 	assert.NoError(t, err)

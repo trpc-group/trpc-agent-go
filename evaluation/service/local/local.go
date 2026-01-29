@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/panjf2000/ants/v2"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
@@ -163,8 +162,8 @@ func (s *local) runAfterEvaluateCaseCallbacks(
 	return nil
 }
 
-// Evaluate runs the evaluation on the inference results and returns the persisted eval set result.
-func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (evalSetResult *evalresult.EvalSetResult, err error) {
+// Evaluate runs the evaluation on the inference results and returns the eval set run result.
+func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (runResult *service.EvalSetRunResult, err error) {
 	if req == nil {
 		return nil, errors.New("evaluate request is nil")
 	}
@@ -183,10 +182,11 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (eva
 			req.AppName, req.EvalSetID, err)
 	}
 	setStartTime := time.Now()
+	var callbackResult *evalresult.EvalSetResult
 	defer func() {
-		afterErr := s.runAfterEvaluateSetCallbacks(ctx, req, evalSetResult, err, setStartTime)
+		afterErr := s.runAfterEvaluateSetCallbacks(ctx, req, callbackResult, err, setStartTime)
 		if afterErr != nil {
-			evalSetResult = nil
+			runResult = nil
 			err = afterErr
 		}
 	}()
@@ -203,19 +203,16 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (eva
 		}
 		evalCaseResults = append(evalCaseResults, caseResult)
 	}
-	evalSetResult = &evalresult.EvalSetResult{
-		EvalSetID:         req.EvalSetID,
-		EvalCaseResults:   evalCaseResults,
-		CreationTimestamp: &epochtime.EpochTime{Time: time.Now()},
+	callbackResult = &evalresult.EvalSetResult{
+		EvalSetID:       req.EvalSetID,
+		EvalCaseResults: evalCaseResults,
 	}
-	evalSetResultID, err := s.evalResultManager.Save(ctx, req.AppName, evalSetResult)
-	if err != nil {
-		return nil, fmt.Errorf("save eval set result (app=%s, evalSetID=%s): %w",
-			req.AppName, req.EvalSetID, err)
+	runResult = &service.EvalSetRunResult{
+		AppName:         req.AppName,
+		EvalSetID:       req.EvalSetID,
+		EvalCaseResults: evalCaseResults,
 	}
-	evalSetResult.EvalSetResultID = evalSetResultID
-	evalSetResult.EvalSetResultName = evalSetResultID
-	return evalSetResult, nil
+	return runResult, nil
 }
 
 func (s *local) evaluateCase(ctx context.Context, req *service.EvaluateRequest, inferenceResult *service.InferenceResult) (result *evalresult.EvalCaseResult, err error) {
