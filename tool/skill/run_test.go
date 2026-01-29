@@ -174,6 +174,58 @@ func TestRunTool_DoesNotInlineNonTextOutputs(t *testing.T) {
 	require.Contains(t, out.PrimaryOutput.Content, contentHi)
 }
 
+func TestRunTool_TrimsTruncatedUTF8TextOutputs(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	const bytes4MiB = 4 * 1024 * 1024
+	cmd := strings.Join([]string{
+		"set -e",
+		"mkdir -p out",
+		"head -c " + strconv.Itoa(bytes4MiB-1) +
+			" /dev/zero | tr '\\000' 'a' > " + outATxt,
+		"printf '\\xE2\\x82\\xAC\\n' >> " + outATxt,
+	}, "; ")
+
+	args := runInput{
+		Skill:       testSkillName,
+		Command:     cmd,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 1)
+
+	f := out.OutputFiles[0]
+	require.Equal(t, outATxt, f.Name)
+	require.True(t, strings.HasPrefix(f.MIMEType, "text/plain"))
+	require.True(t, f.Truncated)
+	require.Equal(t, bytes4MiB-1, len(f.Content))
+	require.True(t, strings.HasSuffix(f.Content, "a"))
+
+	got, _, handled, err := fileref.TryRead(ctx, f.Ref)
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.Equal(t, bytes4MiB-1, len(got))
+	require.True(t, strings.HasSuffix(got, "a"))
+}
+
 func TestShouldInlineFileContent(t *testing.T) {
 	const (
 		mimeTextPlain = "text/plain"

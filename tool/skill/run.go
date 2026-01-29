@@ -316,6 +316,7 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	trimTruncatedUTF8TextFiles(files)
 	out := buildRunOutput(rr, files)
 	mergeAutoPrimaryOutput(autoFiles, &out)
 	if len(files) > 0 && !in.SaveArtifacts {
@@ -354,6 +355,7 @@ func (t *RunTool) autoExportWorkspaceOut(
 	if len(files) > defaultAutoExportMax {
 		files = files[:defaultAutoExportMax]
 	}
+	trimTruncatedUTF8TextFiles(files)
 	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
 	return files
 }
@@ -1160,6 +1162,45 @@ func shouldInlineFileContent(f codeexecutor.File) bool {
 		return false
 	}
 	return utf8.ValidString(f.Content)
+}
+
+const maxTrimUTF8SuffixBytes = utf8.UTFMax - 1
+
+func trimTruncatedUTF8TextFiles(files []codeexecutor.File) {
+	for i := range files {
+		f := &files[i]
+		if !f.Truncated || f.Content == "" {
+			continue
+		}
+		if !codeexecutor.IsTextMIME(f.MIMEType) {
+			continue
+		}
+		if strings.IndexByte(f.Content, 0) >= 0 {
+			continue
+		}
+		if utf8.ValidString(f.Content) {
+			continue
+		}
+		n := validUTF8PrefixLen(f.Content)
+		if len(f.Content)-n > maxTrimUTF8SuffixBytes {
+			continue
+		}
+		if n > 0 {
+			f.Content = f.Content[:n]
+		}
+	}
+}
+
+func validUTF8PrefixLen(s string) int {
+	n := 0
+	for n < len(s) {
+		r, size := utf8.DecodeRuneInString(s[n:])
+		if r == utf8.RuneError && size == 1 {
+			break
+		}
+		n += size
+	}
+	return n
 }
 
 func selectPrimaryOutput(files []runFile) *runFile {
