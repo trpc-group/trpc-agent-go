@@ -247,7 +247,7 @@ Based on experimental results, we classify tasks into three categories:
 | Suitability | Characteristics | Example Tasks | Recommendation |
 |-------------|-----------------|---------------|----------------|
 | **Highly Recommended** | Avg turns ≥4, Prompt >2000 | SI, PI, CM | Enable summarization |
-| **Conditionally Recommended** | Avg turns 3~4, Prompt 1000~2000 | CC, IC, GR | Dynamic decision based on actual turns |
+| **Conditionally Recommended** | Avg turns 3-4, Prompt 1000-2000 | CC, IC, GR | Dynamic decision based on actual turns |
 | **Not Recommended** | Avg turns ≤2, Prompt <1000 | SA, SC, TS | Disable summarization |
 
 ### 5.2 Future Research Directions
