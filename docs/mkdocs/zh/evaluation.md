@@ -142,6 +142,7 @@ if err != nil {
     {
       "evalSetId": "math-basic",
       "evalId": "calc_add",
+      "runId": 1,
       "finalEvalStatus": "passed",
       "overallEvalMetricResults": [
         {
@@ -259,6 +260,67 @@ if err != nil {
       "userId": "user"
     }
   ],
+  "summary": {
+    "overallStatus": "passed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "passed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "passed",
+        "caseStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ]
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "calc_add",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "tool_trajectory_avg_score",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
   "creationTimestamp": 1766455261.342534
 }
 ```
@@ -937,8 +999,8 @@ defer agentEvaluator.Close()
 - 默认运行次数为 1 次；
 - 通过指定 `evaluation.WithNumRuns(n)`，可对每个评估用例运行多次；
 - 最终结果将基于多次运行的综合统计结果得出，默认统计方法是多次运行评估得分的平均值。
-- 每次评估执行只会落盘一份 evalresult 文件；当 `NumRuns > 1` 时，落盘的 `EvalSetResult.EvalCaseResults` 会包含每次运行的条目（每条带有 `runId` 标识来自第几次 run），因此同一 `EvalID` 可能出现多次。
-- 当 `NumRuns > 1` 时，落盘的 `EvalSetResult` 会包含 `Summary` 字段，提供按 run / 按 evalcase 聚合的统计视图。
+- 每次评估执行只会落盘一份 evalresult 文件；落盘的 `EvalSetResult.EvalCaseResults` 会包含每次运行的条目（每条带有 `runId` 标识来自第几次 run），因此同一 `EvalID` 可能出现多次。
+- 落盘的 `EvalSetResult` 会包含 `Summary` 字段，提供按 run / 按 evalcase 聚合的统计视图。
 
 对于较大的评估集，为了加速 inference 阶段，可以开启 EvalCase 级别的并发推理：
 

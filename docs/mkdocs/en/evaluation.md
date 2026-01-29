@@ -142,6 +142,7 @@ if err != nil {
     {
       "evalSetId": "math-basic",
       "evalId": "calc_add",
+      "runId": 1,
       "finalEvalStatus": "passed",
       "overallEvalMetricResults": [
         {
@@ -259,6 +260,67 @@ if err != nil {
       "userId": "user"
     }
   ],
+  "summary": {
+    "overallStatus": "passed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "passed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "passed",
+        "caseStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ]
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "calc_add",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "tool_trajectory_avg_score",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
   "creationTimestamp": 1766455261.342534
 }
 ```
@@ -953,8 +1015,8 @@ Because the Agent's execution process may be uncertain, `evaluation.WithNumRuns`
 - The default number of runs is 1;
 - By specifying `evaluation.WithNumRuns(n)`, each evaluation case can be run multiple times;
 - The final result is based on the combined statistical results of multiple runs. The default statistical method is the average of the evaluation scores of multiple runs.
-- Each evaluation execution persists a single eval result file. When `NumRuns > 1`, the persisted `EvalSetResult.EvalCaseResults` contains one entry per run (each entry includes `runId` to indicate which run produced it), so the same `EvalID` can appear multiple times.
-- When `NumRuns > 1`, the persisted `EvalSetResult` also includes `Summary`, which provides an aggregated view by run and by eval case for easier inspection.
+- Each evaluation execution persists a single eval result file. The persisted `EvalSetResult.EvalCaseResults` contains one entry per run (each entry includes `runId` to indicate which run produced it), so the same `EvalID` can appear multiple times.
+- The persisted `EvalSetResult` includes `Summary`, which provides an aggregated view by run and by eval case for easier inspection.
 
 To accelerate the inference phase for large evaluation sets, parallel inference across evaluation cases can be enabled.
 
