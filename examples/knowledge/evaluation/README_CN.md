@@ -1,14 +1,15 @@
-# RAG 评测：tRPC-Agent-Go vs LangChain vs Agno
+# RAG 评测：tRPC-Agent-Go vs LangChain vs Agno vs CrewAI
 
 本目录包含一个全面的评测框架，使用 [RAGAS](https://docs.ragas.io/) 指标对不同的 RAG（检索增强生成）系统进行对比分析。
 
 ## 概述
 
-为了确保公平对比，我们使用**完全相同的配置**对三个 RAG 实现进行了评测：
+为了确保公平对比，我们使用**完全相同的配置**对四个 RAG 实现进行了评测：
 
 - **tRPC-Agent-Go**: 我们基于 Go 的 RAG 实现
 - **LangChain**: 基于 Python 的参考实现
 - **Agno**: 具有内置知识库支持的 Python AI Agent 框架
+- **CrewAI**: 基于 Python 的多智能体框架，使用 ChromaDB 向量存储
 
 ## 快速开始
 
@@ -51,23 +52,31 @@ python3 main.py --kb=trpc-agent-go --max-qa=1 --full-log
 
 ## 配置对齐
 
-三个系统均使用**相同参数**以确保对比的公正性：
+四个系统均使用**相同参数**以确保对比的公正性：
 
-| 参数 | LangChain | tRPC-Agent-Go | Agno |
-|-----------|-----------|---------------|------|
-| **Temperature** | 0 | 0 | 0 |
-| **Chunk Size** | 500 | 500 | 500 |
-| **Chunk Overlap** | 50 | 50 | 50 |
-| **Embedding Dimensions** | 1024 | 1024 | 1024 |
-| **Vector Store** | PGVector | PGVector | PgVector |
-| **Agent 类型** | Tool-calling Agent | LLM Agent with Tools | Agno Agent |
-| **单次检索数量 (k)** | 4 | 4 | 4 |
+
+| 参数                     | LangChain               | tRPC-Agent-Go           | Agno                    | CrewAI                  |
+| -------------------------- | ------------------------- | ------------------------- | ------------------------- | ------------------------- |
+| **Temperature**          | 0                       | 0                       | 0                       | 0                       |
+| **Chunk Size**           | 500                     | 500                     | 500                     | 500                     |
+| **Chunk Overlap**        | 50                      | 50                      | 50                      | 50                      |
+| **Embedding Dimensions** | 1024                    | 1024                    | 1024                    | 1024                    |
+| **Vector Store**         | PGVector                | PGVector                | PgVector                | ChromaDB                |
+| **Knowledge Base 构建**  | 框架原生方式            | 框架原生方式            | 框架原生方式            | 框架原生方式            |
+| **Agent 类型**           | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) |
+| **单次检索数量 (k)**     | 4                       | 4                       | 4                       | 4                       |
+
+> 📝 **CrewAI 说明**：
+>
+> - **Vector Store**：由于 CrewAI 目前不支持 PGVector 构建知识库，这里使用 ChromaDB 作为向量存储。
+> - **Bug 修复**：CrewAI (v1.9.0) 存在一个 Bug，当 LLM（如 DeepSeek-V3.2）同时返回 `content` 和 `tool_calls` 时，框架会优先返回 `content` 而忽略 `tool_calls`，导致 Agent 无法正常调用工具。我们通过 Monkey Patch 修复了 `LLM._handle_non_streaming_response` 方法，使其优先处理 `tool_calls`，确保评测的公平性。详见 `knowledge_system/crewai/knowledge_base.py`。
 
 ## 系统提示词 (System Prompt)
 
-为了确保评测的公平性，我们为所有三个系统配置了**完全相同**的核心提示词。
+为了确保评测的公平性，我们为所有四个系统配置了**完全相同**的核心提示词。
 
-**LangChain, Agno & tRPC-Agent-Go 使用的提示词：**
+**LangChain, Agno, tRPC-Agent-Go & CrewAI 使用的提示词：**
+
 ```text
 You are a helpful assistant that answers questions using a knowledge base search tool.
 
@@ -94,20 +103,22 @@ If the search results don't contain the answer, say "I cannot find this informat
 
 ### 回答质量 (Answer Quality)
 
-| 指标 | 含义 | 越高说明 |
-|------|------|---------|
-| **Faithfulness (忠实度)** | 回答是否**仅基于检索到的上下文**，无幻觉 | 答案更可信，没有编造内容 |
-| **Answer Relevancy (相关性)** | 回答与问题的**相关程度** | 答案更切题、更完整 |
-| **Answer Correctness (正确性)** | 回答与标准答案的**语义一致性** | 答案越接近正确答案 |
-| **Answer Similarity (相似度)** | 回答与标准答案的**语义相似程度** | 答案文本表达越相似 |
+
+| 指标                            | 含义                                     | 越高说明                 |
+| --------------------------------- | ------------------------------------------ | -------------------------- |
+| **Faithfulness (忠实度)**       | 回答是否**仅基于检索到的上下文**，无幻觉 | 答案更可信，没有编造内容 |
+| **Answer Relevancy (相关性)**   | 回答与问题的**相关程度**                 | 答案更切题、更完整       |
+| **Answer Correctness (正确性)** | 回答与标准答案的**语义一致性**           | 答案越接近正确答案       |
+| **Answer Similarity (相似度)**  | 回答与标准答案的**语义相似程度**         | 答案文本表达越相似       |
 
 ### 上下文质量 (Context Quality)
 
-| 指标 | 含义 | 越高说明 |
-|------|------|---------|
-| **Context Precision (精确率)** | 检索到的文档中**相关内容的密集程度** | 检索更精准，噪音更少 |
-| **Context Recall (召回率)** | 检索出的内容是否**包含了得出答案所需的全部信息** | 检索更全面，没有遗漏关键信息 |
-| **Context Entity Recall (实体召回)** | 检索到的内容对标准答案中**关键实体的覆盖程度** | 关键信息检索更完整 |
+
+| 指标                                 | 含义                                             | 越高说明                     |
+| -------------------------------------- | -------------------------------------------------- | ------------------------------ |
+| **Context Precision (精确率)**       | 检索到的文档中**相关内容的密集程度**             | 检索更精准，噪音更少         |
+| **Context Recall (召回率)**          | 检索出的内容是否**包含了得出答案所需的全部信息** | 检索更全面，没有遗漏关键信息 |
+| **Context Entity Recall (实体召回)** | 检索到的内容对标准答案中**关键实体的覆盖程度**   | 关键信息检索更完整           |
 
 ### 指标的简单理解
 
@@ -124,6 +135,7 @@ If the search results don't contain the answer, say "I cannot find this informat
 ### 全量数据评测 (54 个问答对)
 
 **测试环境参数：**
+
 - **数据集**: 全量 HuggingFace Markdown 文档集 (54 QA)
 - **Embedding 模型**: `server:274214` (1024 维)
 - **Agent 模型**: `DeepSeek-V3.2`
@@ -131,31 +143,36 @@ If the search results don't contain the answer, say "I cannot find this informat
 
 #### 回答质量指标 (Answer Quality)
 
-| 指标 | LangChain | tRPC-Agent-Go | Agno | 胜者 |
-|--------|-----------|---------------|------|------|
-| **Faithfulness (忠实度)** | 0.8978 | 0.8639 | 0.8491 | ✅ LangChain |
-| **Answer Relevancy (相关性)** | 0.8921 | 0.9034 | 0.9625 | ✅ Agno |
-| **Answer Correctness (正确性)** | 0.6193 | 0.6167 | 0.6120 | ✅ LangChain |
-| **Answer Similarity (相似度)** | 0.6535 | 0.6468 | 0.6312 | ✅ LangChain |
+
+| 指标                            | LangChain | tRPC-Agent-Go | Agno   | CrewAI | 胜者      |
+| --------------------------------- | ----------- | --------------- | -------- | -------- | ----------- |
+| **Faithfulness (忠实度)**       | 0.8978    | 0.8639        | 0.8491 | 0.9027 | ✅ CrewAI |
+| **Answer Relevancy (相关性)**   | 0.8921    | 0.9034        | 0.9625 | 0.7680 | ✅ Agno   |
+| **Answer Correctness (正确性)** | 0.6193    | 0.6167        | 0.6120 | 0.6941 | ✅ CrewAI |
+| **Answer Similarity (相似度)**  | 0.6535    | 0.6468        | 0.6312 | 0.6714 | ✅ CrewAI |
 
 #### 上下文质量指标 (Context Quality)
 
-| 指标 | LangChain | tRPC-Agent-Go | Agno | 胜者 |
-|--------|-----------|---------------|------|------|
-| **Context Precision (精确率)** | 0.6267 | 0.6983 | 0.6860 | ✅ tRPC-Agent-Go |
-| **Context Recall (召回率)** | 0.8889 | 0.9259 | 0.9630 | ✅ Agno |
-| **Context Entity Recall (实体召回)** | 0.4466 | 0.4846 | 0.4654 | ✅ tRPC-Agent-Go |
+
+| 指标                                 | LangChain | tRPC-Agent-Go | Agno   | CrewAI | 胜者             |
+| -------------------------------------- | ----------- | --------------- | -------- | -------- | ------------------ |
+| **Context Precision (精确率)**       | 0.6267    | 0.6983        | 0.6860 | 0.6942 | ✅ tRPC-Agent-Go |
+| **Context Recall (召回率)**          | 0.8889    | 0.9259        | 0.9630 | 0.9259 | ✅ Agno          |
+| **Context Entity Recall (实体召回)** | 0.4466    | 0.4846        | 0.4654 | 0.4883 | ✅ CrewAI        |
 
 #### 执行效率 (耗时)
 
-| 指标 | LangChain | tRPC-Agent-Go | Agno |
-|--------|-----------|---------------|------|
-| **问答总耗时** | 753.79s | 795.35s | 1556.45s |
-| **单题平均耗时** | 13.96s | 14.73s | 28.82s |
+> ⚠️ **重要说明**：各框架的评测是在**不同时间段**分别运行的，模型推理速度会受 API 服务器负载和网络状况影响而有较大波动。**时间指标仅供参考，不宜用于严格的性能对比。**
+
+
+| 指标             | LangChain | tRPC-Agent-Go | Agno     | CrewAI  |
+| ------------------ | ----------- | --------------- | ---------- | --------- |
+| **问答总耗时**   | 753.79s   | 795.35s       | 1556.45s | 385.23s |
+| **单题平均耗时** | 13.96s    | 14.73s        | 28.82s   | 7.13s   |
 
 ### 核心结论
 
-1.  **tRPC-Agent-Go 表现亮眼**：在 **Context Precision (0.6983)** 和 **Context Entity Recall (0.4846)** 上位居第一。这表明我们的 Go 实现检索到的文档更加精准，且对关键信息的覆盖面更广。
-2.  **响应速度极快**：tRPC-Agent-Go 的单题响应耗时（14.7s）与 LangChain 几乎持平，但远快于 Agno（28.8s，快了近 2 倍）。
-3.  **Agno 检索召回最高**：Agno 在相关性和召回率上表现最好，但代价是极高的执行延迟。
-4.  **LangChain 回答质量稳定**：在忠实度和相似度上表现更佳。
+1. **CrewAI 回答质量最高**：在 **Faithfulness (0.9027)**、**Answer Correctness (0.6941)**、**Answer Similarity (0.6714)** 和 **Context Entity Recall (0.4883)** 上均位居第一，但 **Answer Relevancy (0.7680)** 最低。
+2. **tRPC-Agent-Go 检索精度最高**：在 **Context Precision (0.6983)** 上位居第一，表明检索到的文档更加精准，各项指标表现均衡。
+3. **Agno 检索召回最高**：在 **Answer Relevancy (0.9625)** 和 **Context Recall (0.9630)** 上表现最好，检索能力最强。
+4. **LangChain 表现均衡**：各项指标均处于中上水平，是成熟稳定的参考实现。

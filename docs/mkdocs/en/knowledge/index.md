@@ -322,7 +322,7 @@ err := kb.Load(ctx,
 
 ## Evaluation and Comparison
 
-We have conducted comprehensive RAG quality evaluation of tRPC-Agent-Go, LangChain, and Agno using the [RAGAS](https://docs.ragas.io/) framework.
+We have conducted comprehensive RAG quality evaluation of tRPC-Agent-Go, LangChain, Agno, and CrewAI using the [RAGAS](https://docs.ragas.io/) framework.
 
 > **Detailed Documentation**: For complete evaluation plan, parameter configuration, and result analysis, please refer to [examples/knowledge/evaluation/README.md](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/evaluation/README.md)
 
@@ -331,11 +331,11 @@ We have conducted comprehensive RAG quality evaluation of tRPC-Agent-Go, LangCha
 
 - **Dataset**: HuggingFace Documentation Dataset ([m-ric/huggingface_doc](https://huggingface.co/datasets/m-ric/huggingface_doc))
 - **Metrics**: 7 standard RAGAS metrics (Faithfulness, Answer Relevancy, Context Precision, etc.)
-- **Comparison**: tRPC-Agent-Go vs LangChain vs Agno with identical configuration parameters
+- **Comparison**: tRPC-Agent-Go vs LangChain vs Agno vs CrewAI with identical configuration parameters
 
 ### Configuration Alignment
 
-To ensure fair comparison, all three systems use identical configurations:
+To ensure fair comparison, all four systems use identical configurations:
 
 | Parameter | Configuration |
 |-----------|----------------|
@@ -344,7 +344,7 @@ To ensure fair comparison, all three systems use identical configurations:
 | **Chunk Size** | 500 |
 | **Chunk Overlap** | 50 |
 | **Embedding Model** | server:274214 (1024 dims) |
-| **Vector Store** | PGVector |
+| **Vector Store** | PGVector (CrewAI uses ChromaDB) |
 | **Agent Model** | DeepSeek-V3.2 |
 
 

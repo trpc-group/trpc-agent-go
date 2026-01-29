@@ -198,7 +198,7 @@ def main():
     )
     parser.add_argument(
         "--kb",
-        choices=["langchain", "trpc-agent-go", "agno"],
+        choices=["langchain", "trpc-agent-go", "agno", "crewai", "autogen"],
         default="langchain",
         help="Knowledge base implementation to use (default: langchain)",
     )
@@ -274,6 +274,10 @@ def main():
         from knowledge_system.agno.knowledge_base import AgnoKnowledgeBase
         kb = AgnoKnowledgeBase(max_results=args.k)
         print("Using Agno knowledge base")
+    elif args.kb == "crewai":
+        from knowledge_system.crewai.knowledge_base import CrewAIKnowledgeBase
+        kb = CrewAIKnowledgeBase(max_results=args.k)
+        print("Using CrewAI knowledge base")
     else:
         from knowledge_system.langchain.knowledge_base import LangChainKnowledgeBase
         kb = LangChainKnowledgeBase()

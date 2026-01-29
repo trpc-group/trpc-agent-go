@@ -18,6 +18,9 @@ DEFAULT_PGVECTOR_USER = "root"
 DEFAULT_PGVECTOR_PASSWORD = "123"
 DEFAULT_PGVECTOR_DATABASE = "vector"
 
+# ChromaDB defaults
+DEFAULT_CHROMADB_PATH = "./chromadb_storage"
+
 
 def get_pg_connection() -> str:
     """
@@ -49,6 +52,21 @@ def get_pg_connection() -> str:
     return f"postgresql+psycopg://{encoded_user}:{encoded_password}@{host}:{port}/{database}"
 
 
+def get_chromadb_config() -> dict:
+    """
+    Get ChromaDB configuration from environment variables.
+
+    Environment variables:
+        CHROMADB_PATH: Path to ChromaDB storage directory (default: ./chromadb_storage)
+
+    Returns:
+        Dict with ChromaDB configuration.
+    """
+    return {
+        "path": os.environ.get("CHROMADB_PATH", DEFAULT_CHROMADB_PATH),
+    }
+
+
 def get_config():
     """
     Get configuration from environment variables with defaults.
@@ -62,12 +80,15 @@ def get_config():
         EVAL_API_KEY: Evaluation model API key (default: same as OPENAI_API_KEY)
         EVAL_BASE_URL: Evaluation model base URL (default: same as OPENAI_BASE_URL)
         PGVECTOR_*: PostgreSQL connection parameters
+        CHROMADB_*: ChromaDB configuration
 
     Returns:
         Dict with configuration values.
     """
     api_key = os.environ.get("OPENAI_API_KEY", "")
     base_url = os.environ.get("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL)
+    chroma_api_key = os.environ.get("CHROMA_OPENAI_API_KEY")
+    chroma_api_base = os.environ.get("CHROMA_OPENAI_API_BASE")
     
     return {
         # Knowledge/RAG model config
@@ -81,4 +102,10 @@ def get_config():
         "eval_base_url": os.environ.get("EVAL_BASE_URL", base_url),
         # Database config
         "pg_connection": get_pg_connection(),
+        # ChromaDB config
+        "chromadb": {
+            **get_chromadb_config(),
+            "api_key": chroma_api_key or api_key,
+            "api_base": chroma_api_base or base_url,
+        },
     }

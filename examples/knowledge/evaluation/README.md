@@ -1,14 +1,15 @@
-# RAG Evaluation: tRPC-Agent-Go vs LangChain vs Agno
+# RAG Evaluation: tRPC-Agent-Go vs LangChain vs Agno vs CrewAI
 
 This directory contains a comprehensive evaluation framework for comparing RAG (Retrieval-Augmented Generation) systems using [RAGAS](https://docs.ragas.io/) metrics.
 
 ## Overview
 
-We evaluate three RAG implementations with **identical configurations** to ensure a fair comparison:
+We evaluate four RAG implementations with **identical configurations** to ensure a fair comparison:
 
 - **tRPC-Agent-Go**: Our Go-based RAG implementation
 - **LangChain**: Python-based reference implementation
 - **Agno**: Python-based AI agent framework with built-in knowledge base support
+- **CrewAI**: Python-based multi-agent framework with ChromaDB vector store
 
 ## Quick Start
 
@@ -63,7 +64,7 @@ python3 main.py --evaluator=ragas --kb=langchain --output=results.json
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--kb` | langchain | Knowledge base: `langchain`, `trpc-agent-go`, or `agno` |
+| `--kb` | langchain | Knowledge base: `langchain`, `trpc-agent-go`, `agno`, or `crewai` |
 | `--evaluator` | ragas | Evaluator to use (currently only `ragas`) |
 | `--k` | 4 | Number of documents to retrieve per query |
 | `--max-qa` | all | Maximum QA items for evaluation |
@@ -77,23 +78,28 @@ python3 main.py --evaluator=ragas --kb=langchain --output=results.json
 
 ## Configuration Alignment
 
-All three systems use **identical parameters** to ensure fair comparison:
+All four systems use **identical parameters** to ensure fair comparison:
 
-| Parameter | LangChain | tRPC-Agent-Go | Agno |
-|-----------|-----------|---------------|------|
-| **Temperature** | 0 | 0 | 0 |
-| **Chunk Size** | 500 | 500 | 500 |
-| **Chunk Overlap** | 50 | 50 | 50 |
-| **Embedding Dimensions** | 1024 | 1024 | 1024 |
-| **Vector Store** | PGVector | PGVector | PgVector |
-| **Agent Type** | Tool-calling Agent | LLM Agent with Tools | Agno Agent |
-| **Max Retrieval Results (k)** | 4 | 4 | 4 |
+| Parameter | LangChain | tRPC-Agent-Go | Agno | CrewAI |
+|-----------|-----------|---------------|------|--------|
+| **Temperature** | 0 | 0 | 0 | 0 |
+| **Chunk Size** | 500 | 500 | 500 | 500 |
+| **Chunk Overlap** | 50 | 50 | 50 | 50 |
+| **Embedding Dimensions** | 1024 | 1024 | 1024 | 1024 |
+| **Vector Store** | PGVector | PGVector | PgVector | ChromaDB |
+| **Knowledge Base Build** | Native framework method | Native framework method | Native framework method | Native framework method |
+| **Agent Type** | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) |
+| **Max Retrieval Results (k)** | 4 | 4 | 4 | 4 |
+
+> 📝 **CrewAI Notes**:
+> - **Vector Store**: CrewAI does not currently support PGVector for knowledge base construction, so ChromaDB is used as the vector store.
+> - **Bug Fix**: CrewAI (v1.9.0) has a bug where it prioritizes `content` over `tool_calls` when the LLM (e.g., DeepSeek-V3.2) returns both simultaneously, causing the Agent to skip tool invocations. We applied a Monkey Patch to `LLM._handle_non_streaming_response` to prioritize `tool_calls`, ensuring fair evaluation. See `knowledge_system/crewai/knowledge_base.py` for details.
 
 ## System Prompt
 
-To ensure fair comparison, all three systems are configured with **identical** instructions.
+To ensure fair comparison, all four systems are configured with **identical** instructions.
 
-**Prompt for LangChain, Agno & tRPC-Agent-Go:**
+**Prompt for LangChain, Agno, tRPC-Agent-Go & CrewAI:**
 ```text
 You are a helpful assistant that answers questions using a knowledge base search tool.
 
@@ -162,52 +168,53 @@ We evaluate 7 metrics across 3 categories:
 
 #### Answer Quality Metrics
 
-| Metric | LangChain | tRPC-Agent-Go | Agno | Best |
-|--------|-----------|---------------|------|------|
-| **Faithfulness** | 0.8978 | 0.8639 | 0.8491 | ✅ LangChain |
-| **Answer Relevancy** | 0.8921 | 0.9034 | 0.9625 | ✅ Agno |
-| **Answer Correctness** | 0.6193 | 0.6167 | 0.6120 | ✅ LangChain |
-| **Answer Similarity** | 0.6535 | 0.6468 | 0.6312 | ✅ LangChain |
+| Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | Best |
+|--------|-----------|---------------|------|--------|------|
+| **Faithfulness** | 0.8978 | 0.8639 | 0.8491 | 0.9027 | ✅ CrewAI |
+| **Answer Relevancy** | 0.8921 | 0.9034 | 0.9625 | 0.7680 | ✅ Agno |
+| **Answer Correctness** | 0.6193 | 0.6167 | 0.6120 | 0.6941 | ✅ CrewAI |
+| **Answer Similarity** | 0.6535 | 0.6468 | 0.6312 | 0.6714 | ✅ CrewAI |
 
 #### Context Quality Metrics
 
-| Metric | LangChain | tRPC-Agent-Go | Agno | Best |
-|--------|-----------|---------------|------|------|
-| **Context Precision** | 0.6267 | 0.6983 | 0.6860 | ✅ tRPC-Agent-Go |
-| **Context Recall** | 0.8889 | 0.9259 | 0.9630 | ✅ Agno |
-| **Context Entity Recall** | 0.4466 | 0.4846 | 0.4654 | ✅ tRPC-Agent-Go |
+| Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | Best |
+|--------|-----------|---------------|------|--------|------|
+| **Context Precision** | 0.6267 | 0.6983 | 0.6860 | 0.6942 | ✅ tRPC-Agent-Go |
+| **Context Recall** | 0.8889 | 0.9259 | 0.9630 | 0.9259 | ✅ Agno |
+| **Context Entity Recall** | 0.4466 | 0.4846 | 0.4654 | 0.4883 | ✅ CrewAI |
 
 #### Execution Time
 
-| Metric | LangChain | tRPC-Agent-Go | Agno |
-|--------|-----------|---------------|------|
-| **Q&A Total Time** | 753.79s | 795.35s | 1556.45s |
-| **Avg Time per Question** | 13.96s | 14.73s | 28.82s |
-| **Evaluation Time** | 2049.52s | 1962.01s | 2031.81s |
-| **Total Time** | 2803.31s | 2757.36s | 3588.26s |
+> ⚠️ **Important Note**: The evaluations were run at **different time periods**, and model inference speed can vary significantly depending on API server load and network conditions. **Time metrics are for reference only and should not be used for strict performance comparison.**
+
+| Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI |
+|--------|-----------|---------------|------|--------|
+| **Q&A Total Time** | 753.79s | 795.35s | 1556.45s | 385.23s |
+| **Avg Time per Question** | 13.96s | 14.73s | 28.82s | 7.13s |
+| **Evaluation Time** | 2049.52s | 1962.01s | 2031.81s | 2285.87s |
+| **Total Time** | 2803.31s | 2757.36s | 3588.26s | 2671.09s |
 
 ### Summary
 
-| Category | LangChain | tRPC-Agent-Go | Agno |
-|----------|-----------|---------------|------|
-| **Faithfulness** | ✅ Best (0.8978) | 2nd | 3rd |
-| **Answer Relevancy** | 3rd | 2nd | ✅ Best (0.9625) |
-| **Answer Correctness** | ✅ Best (0.6193) | 2nd | 3rd |
-| **Answer Similarity** | ✅ Best (0.6535) | 2nd | 3rd |
-| **Context Precision** | 3rd | ✅ Best (0.6983) | 2nd |
-| **Context Recall** | 3rd | 2nd | ✅ Best (0.9630) |
-| **Context Entity Recall** | 3rd | ✅ Best (0.4846) | 2nd |
-| **Speed (Q&A)** | ✅ Fastest | 2nd | 3rd |
+| Category | LangChain | tRPC-Agent-Go | Agno | CrewAI |
+|----------|-----------|---------------|------|--------|
+| **Faithfulness** | 2nd | 3rd | 4th | ✅ Best (0.9027) |
+| **Answer Relevancy** | 3rd | 2nd | ✅ Best (0.9625) | 4th |
+| **Answer Correctness** | 2nd | 3rd | 4th | ✅ Best (0.6941) |
+| **Answer Similarity** | 2nd | 3rd | 4th | ✅ Best (0.6714) |
+| **Context Precision** | 4th | ✅ Best (0.6983) | 3rd | 2nd |
+| **Context Recall** | 4th | 2nd (tie) | ✅ Best (0.9630) | 2nd (tie) |
+| **Context Entity Recall** | 4th | 2nd | 3rd | ✅ Best (0.4883) |
 
 **Key Observations**:
 
-1. **LangChain** excels in answer quality metrics (Faithfulness, Correctness, Similarity) and execution speed.
+1. **CrewAI** excels in answer quality metrics (Faithfulness 0.9027, Correctness 0.6941, Similarity 0.6714), but has the **lowest Answer Relevancy** (0.7680).
 
-2. **tRPC-Agent-Go** achieves the best Context Precision and Context Entity Recall, with competitive speed.
+2. **tRPC-Agent-Go** achieves the best Context Precision (0.6983), with competitive performance across all metrics.
 
-3. **Agno** leads in Answer Relevancy and Context Recall, but is significantly slower (2x slower than LangChain/tRPC-Agent-Go).
+3. **Agno** leads in Answer Relevancy (0.9625) and Context Recall (0.9630), demonstrating strong retrieval capabilities.
 
-4. **Speed**: LangChain and tRPC-Agent-Go have similar performance (~14s/question), while Agno takes ~29s/question.
+4. **LangChain** provides balanced performance across all metrics.
 
 
 
@@ -234,7 +241,9 @@ evaluation/
 │   │   └── trpc_knowledge/   # Go server
 │   │       ├── knowledge.go
 │   │       └── main.go
-│   └── agno/                 # Agno implementation
+│   ├── agno/                 # Agno implementation
+│   │   └── knowledge_base.py
+│   └── crewai/               # CrewAI implementation
 │       └── knowledge_base.py
 ├── util.py                   # Configuration utilities
 └── requirements.txt          # Python dependencies
