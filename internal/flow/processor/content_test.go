@@ -12,6 +12,7 @@ package processor
 import (
 	"context"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -157,6 +158,303 @@ func TestContentRequestProcessor_ToolCalls(t *testing.T) {
 			actualContent := convertedEvent.Response.Choices[0].Message.Content
 			assert.Equalf(t, tt.expectedPrefix, actualContent, "Expected content '%s', got '%s'", tt.expectedPrefix, actualContent)
 		})
+	}
+}
+
+func TestContentRequestProcessor_ProcessRequest_SanitizesOrphanToolCalls(t *testing.T) {
+	processor := NewContentRequestProcessor(
+		WithBranchFilterMode(BranchFilterModeAll),
+	)
+
+	sess := session.NewSession("app", "user", "sess", session.WithSessionEvents([]event.Event{
+		{
+			Author:  "agent",
+			Version: event.CurrentVersion,
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleUser,
+						Content: "hi",
+					},
+				}},
+				Done: true,
+			},
+		},
+		{
+			Author:  "agent",
+			Version: event.CurrentVersion,
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Index: 0,
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							ID: "call-1",
+							Function: model.FunctionDefinitionParam{
+								Name:      "echo",
+								Arguments: []byte(`{"a":1}`),
+							},
+						}},
+					},
+				}},
+				Done: true,
+			},
+		},
+		{
+			Author:  "agent",
+			Version: event.CurrentVersion,
+			Response: &model.Response{
+				Object: model.ObjectTypeError,
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeFlowError,
+					Message: "boom",
+				},
+				Choices: []model.Choice{{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "tool failed",
+					},
+				}},
+				Done: true,
+			},
+		},
+	}))
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage("current")),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req"}),
+	)
+	inv.AgentName = "agent"
+
+	req := &model.Request{}
+	processor.ProcessRequest(context.Background(), inv, req, nil)
+
+	var hasToolCall bool
+	var hasErrorMsg bool
+	for _, msg := range req.Messages {
+		if msg.Role == model.RoleAssistant && len(msg.ToolCalls) > 0 {
+			hasToolCall = true
+		}
+		if msg.Role == model.RoleAssistant && msg.Content == "tool failed" {
+			hasErrorMsg = true
+		}
+	}
+	assert.False(t, hasToolCall, "should drop assistant tool calls without tool responses")
+	assert.True(t, hasErrorMsg, "should keep downstream assistant error message")
+}
+
+func TestSanitizeToolCallMessages_TrimsExtraToolCalls(t *testing.T) {
+	messages := []model.Message{
+		{Role: model.RoleUser, Content: "hi"},
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{
+					ID: "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "tool-a",
+						Arguments: []byte(`{}`),
+					},
+				},
+				{
+					ID: "call-2",
+					Function: model.FunctionDefinitionParam{
+						Name:      "tool-b",
+						Arguments: []byte(`{}`),
+					},
+				},
+			},
+		},
+		{Role: model.RoleTool, ToolID: "call-1", ToolName: "tool-a", Content: "ok"},
+	}
+
+	out := sanitizeToolCallMessages(messages, true)
+	assert.Len(t, out, 3)
+	assert.Equal(t, model.RoleUser, out[0].Role)
+	assert.Equal(t, model.RoleAssistant, out[1].Role)
+	assert.Len(t, out[1].ToolCalls, 1)
+	assert.Equal(t, "call-1", out[1].ToolCalls[0].ID)
+	assert.Equal(t, model.RoleTool, out[2].Role)
+	assert.Equal(t, "call-1", out[2].ToolID)
+}
+
+func TestSanitizeToolCallMessages_DropsOrphanToolCallsButKeepsAssistantContent(t *testing.T) {
+	messages := []model.Message{
+		{Role: model.RoleUser, Content: "hi"},
+		{
+			Role:    model.RoleAssistant,
+			Content: "I will call a tool.",
+			ToolCalls: []model.ToolCall{{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "tool-a",
+					Arguments: []byte(`{}`),
+				},
+			}},
+		},
+	}
+
+	out := sanitizeToolCallMessages(messages, true)
+	assert.Len(t, out, 2)
+	assert.Equal(t, model.RoleAssistant, out[1].Role)
+	assert.Equal(t, "I will call a tool.", out[1].Content)
+	assert.Len(t, out[1].ToolCalls, 0)
+}
+
+func TestSanitizeToolCallMessages_DropsToolMessagesWithoutToolID(t *testing.T) {
+	messages := []model.Message{
+		{Role: model.RoleUser, Content: "hi"},
+		{
+			Role:    model.RoleAssistant,
+			Content: "I will call a tool.",
+			ToolCalls: []model.ToolCall{{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "tool-a",
+					Arguments: []byte(`{}`),
+				},
+			}},
+		},
+		{Role: model.RoleTool, ToolName: "tool-a", Content: "ok"},
+	}
+
+	out := sanitizeToolCallMessages(messages, true)
+	assert.Len(t, out, 2)
+	assert.Equal(t, model.RoleAssistant, out[1].Role)
+	assert.Equal(t, "I will call a tool.", out[1].Content)
+	assert.Len(t, out[1].ToolCalls, 0)
+}
+
+func TestSanitizeToolCallMessages_DropsExtraToolMessages(t *testing.T) {
+	messages := []model.Message{
+		{Role: model.RoleUser, Content: "hi"},
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "tool-a",
+					Arguments: []byte(`{}`),
+				},
+			}},
+		},
+		{Role: model.RoleTool, ToolID: "call-1", ToolName: "tool-a", Content: "ok"},
+		{Role: model.RoleTool, ToolID: "call-2", ToolName: "tool-b", Content: "extra"},
+	}
+
+	out := sanitizeToolCallMessages(messages, true)
+	assert.Len(t, out, 3)
+	assert.Equal(t, model.RoleAssistant, out[1].Role)
+	assert.Len(t, out[1].ToolCalls, 1)
+	assert.Equal(t, "call-1", out[1].ToolCalls[0].ID)
+	assert.Equal(t, "call-1", out[2].ToolID)
+}
+
+func TestSanitizeToolCallMessages_IgnoresToolCallsWithoutID(t *testing.T) {
+	messages := []model.Message{
+		{Role: model.RoleUser, Content: "hi"},
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{
+					ID: "",
+					Function: model.FunctionDefinitionParam{
+						Name:      "tool-a",
+						Arguments: []byte(`{}`),
+					},
+				},
+				{
+					ID: "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "tool-b",
+						Arguments: []byte(`{}`),
+					},
+				},
+			},
+		},
+		{Role: model.RoleTool, ToolID: "call-1", ToolName: "tool-b", Content: "ok"},
+	}
+
+	out := sanitizeToolCallMessages(messages, true)
+	assert.Len(t, out, 3)
+	assert.Equal(t, model.RoleAssistant, out[1].Role)
+	assert.Len(t, out[1].ToolCalls, 1)
+	assert.Equal(t, "call-1", out[1].ToolCalls[0].ID)
+	assert.Equal(t, "call-1", out[2].ToolID)
+}
+
+func TestSanitizeToolCallMessages_RewritesInvalidToolCallArgumentsAsUserContext(t *testing.T) {
+	messages := []model.Message{
+		{Role: model.RoleUser, Content: "hi"},
+		{
+			Role:    model.RoleAssistant,
+			Content: "I will call a tool.",
+			ToolCalls: []model.ToolCall{{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "tool-a",
+					Arguments: []byte(`{"a":1,}`),
+				},
+			}},
+		},
+		{Role: model.RoleTool, ToolID: "call-1", ToolName: "tool-a", Content: "invalid json"},
+		{Role: model.RoleAssistant, Content: "after"},
+	}
+
+	out := sanitizeToolCallMessages(messages, true)
+	assert.Len(t, out, 3)
+	assert.Equal(t, model.RoleUser, out[0].Role)
+	assert.Equal(t, model.RoleUser, out[1].Role)
+	assert.True(t, strings.HasPrefix(out[1].Content, contextPrefix), "should prefix context message")
+	assert.Contains(t, out[1].Content, "tool-a")
+	assert.Contains(t, out[1].Content, `{"a":1,}`)
+	assert.Contains(t, out[1].Content, "invalid json")
+	assert.Equal(t, model.RoleAssistant, out[2].Role)
+}
+
+func TestSanitizeToolCallMessages_PreservesValidToolCallsAndRewritesInvalidOnes(t *testing.T) {
+	messages := []model.Message{
+		{Role: model.RoleUser, Content: "hi"},
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{
+					ID: "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "tool-a",
+						Arguments: []byte(`{"a":1,}`),
+					},
+				},
+				{
+					ID: "call-2",
+					Function: model.FunctionDefinitionParam{
+						Name:      "tool-b",
+						Arguments: []byte(`{}`),
+					},
+				},
+			},
+		},
+		{Role: model.RoleTool, ToolID: "call-1", ToolName: "tool-a", Content: "invalid json"},
+		{Role: model.RoleTool, ToolID: "call-2", ToolName: "tool-b", Content: "ok"},
+	}
+
+	out := sanitizeToolCallMessages(messages, true)
+	assert.Len(t, out, 4)
+	assert.Equal(t, model.RoleAssistant, out[1].Role)
+	assert.Len(t, out[1].ToolCalls, 1)
+	assert.Equal(t, "call-2", out[1].ToolCalls[0].ID)
+	assert.Equal(t, model.RoleTool, out[2].Role)
+	assert.Equal(t, "call-2", out[2].ToolID)
+	assert.Equal(t, model.RoleUser, out[3].Role)
+	assert.Contains(t, out[3].Content, "call-1")
+	assert.Contains(t, out[3].Content, `{"a":1,}`)
+	for _, msg := range out {
+		if msg.Role == model.RoleTool {
+			assert.NotEqual(t, "call-1", msg.ToolID)
+		}
 	}
 }
 
