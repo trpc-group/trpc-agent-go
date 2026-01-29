@@ -802,7 +802,7 @@ Service is an evaluation service that integrates the following modules:
 - Metric
 - Registry
 - Evaluator
-- EvalSetResult
+- EvalSetRunResult
 
 The Service interface defines the complete evaluation process, including the inference and evaluation phases. The interface definition is as follows:
 
@@ -814,8 +814,8 @@ type Service interface {
 	// Inference performs inference, calls the Agent to process the specified evaluation case, 
 	// and returns the inference result.
 	Inference(ctx context.Context, request *InferenceRequest) ([]*InferenceResult, error)
-	// Evaluate evaluates the inference result, generates and persists the evaluation result.
-	Evaluate(ctx context.Context, request *EvaluateRequest) (*evalresult.EvalSetResult, error)
+	// Evaluate evaluates the inference result and generates the evaluation result.
+	Evaluate(ctx context.Context, request *EvaluateRequest) (*EvalSetRunResult, error)
 }
 ```
 
