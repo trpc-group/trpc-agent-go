@@ -169,6 +169,7 @@ automatically visible to normal file tools unless they are exported.
 Recommended patterns:
 
 - When calling `skill_run`, write outputs under `out/` and set
-  `output_files` so the tool returns file contents inline.
+  `output_files` so the tool returns text file contents inline.
+  Non-text files (like images) are returned as metadata only.
 - When passing an output file to other tools, use `output_files[*].ref`
   (a `workspace://...` reference), not a host filesystem path.

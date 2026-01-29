@@ -398,6 +398,132 @@ func TestFileTool_ReadFile_FromRef_EmptyFile(t *testing.T) {
 	assert.Contains(t, rsp.Message, "file is empty")
 }
 
+func TestFileTool_ReadFile_FromRef_NonTextFile(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	const (
+		outAPng     = "out/a.png"
+		refAPng     = "workspace://out/a.png"
+		pngContent  = "\x89PNG\r\n\x1a\n"
+		pngMIMEType = "image/png"
+	)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     outAPng,
+			Content:  pngContent,
+			MIMEType: pngMIMEType,
+		},
+	})
+
+	rsp, err := fileToolSet.readFile(ctx, &readFileRequest{
+		FileName: refAPng,
+	})
+	assert.Error(t, err)
+	assert.NotNil(t, rsp)
+	assert.Empty(t, rsp.Contents)
+	assert.Contains(t, rsp.Message, pngMIMEType)
+}
+
+func TestFileTool_ReadFile_NonTextFileFromDisk(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	const (
+		fileName    = "binary.png"
+		pngContent  = "\x89PNG\r\n\x1a\n"
+		pngMIMEType = "image/png"
+	)
+	err = os.WriteFile(
+		filepath.Join(tempDir, fileName),
+		[]byte(pngContent),
+		0644,
+	)
+	assert.NoError(t, err)
+
+	rsp, err := fileToolSet.readFile(context.Background(), &readFileRequest{
+		FileName: fileName,
+	})
+	assert.Error(t, err)
+	assert.NotNil(t, rsp)
+	assert.Empty(t, rsp.Contents)
+	assert.Contains(t, rsp.Message, pngMIMEType)
+}
+
+func TestFileTool_ReadFile_FromRef_InvalidUTF8(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	const (
+		outATxt       = "out/a.txt"
+		refATxt       = "workspace://out/a.txt"
+		mimeTextPlain = "text/plain"
+		invalidByte   = 0xff
+	)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     outATxt,
+			Content:  string([]byte{invalidByte}),
+			MIMEType: mimeTextPlain,
+		},
+	})
+
+	rsp, err := fileToolSet.readFile(ctx, &readFileRequest{
+		FileName: refATxt,
+	})
+	assert.Error(t, err)
+	assert.NotNil(t, rsp)
+	assert.Empty(t, rsp.Contents)
+	assert.Contains(t, rsp.Message, mimeTextPlain)
+}
+
+func TestFileTool_ReadFile_InvalidUTF8FromDisk(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	const (
+		fileName    = "invalid.txt"
+		sniffLen    = 512
+		invalidByte = byte(0xff)
+		mimeText    = "text/plain"
+	)
+
+	prefix := make([]byte, sniffLen)
+	for i := range prefix {
+		prefix[i] = 'a'
+	}
+	content := append(prefix, invalidByte)
+	err = os.WriteFile(
+		filepath.Join(tempDir, fileName),
+		content,
+		0644,
+	)
+	assert.NoError(t, err)
+
+	rsp, err := fileToolSet.readFile(
+		context.Background(),
+		&readFileRequest{FileName: fileName},
+	)
+	assert.Error(t, err)
+	assert.NotNil(t, rsp)
+	assert.Empty(t, rsp.Contents)
+	assert.Contains(t, rsp.Message, mimeText)
+}
+
 func TestFileTool_ReadFile_FromCache_EmptyFile(t *testing.T) {
 	tempDir := t.TempDir()
 	toolSet, err := NewToolSet(WithBaseDir(tempDir))
@@ -420,6 +546,37 @@ func TestFileTool_ReadFile_FromCache_EmptyFile(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, rsp.Contents)
 	assert.Contains(t, rsp.Message, "file is empty")
+}
+
+func TestFileTool_ReadFile_FromCache_InvalidUTF8(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	const (
+		outATxt       = "out/a.txt"
+		mimeTextPlain = "text/plain"
+		invalidByte   = 0xff
+	)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     outATxt,
+			Content:  string([]byte{invalidByte}),
+			MIMEType: mimeTextPlain,
+		},
+	})
+
+	rsp, err := fileToolSet.readFile(ctx, &readFileRequest{
+		FileName: outATxt,
+	})
+	assert.Error(t, err)
+	assert.NotNil(t, rsp)
+	assert.Empty(t, rsp.Contents)
+	assert.Contains(t, rsp.Message, mimeTextPlain)
 }
 
 func TestFileTool_ReadFile_FromRef_ParseError(t *testing.T) {

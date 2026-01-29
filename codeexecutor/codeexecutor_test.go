@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -37,8 +38,9 @@ func TestExtractCodeBlock(t *testing.T) {
 			},
 		},
 		{
-			name:      "multiple blocks with different languages",
-			input:     "```go\nfmt.Println(\"hi\")\n```\nSome text\n```js\nconsole.log('hi')\n```",
+			name: "multiple blocks with different languages",
+			input: "```go\nfmt.Println(\"hi\")\n```\nSome text\n" +
+				"```js\nconsole.log('hi')\n```",
 			delimiter: delimiter,
 			expected: []codeexecutor.CodeBlock{
 				{Code: "fmt.Println(\"hi\")\n", Language: "go"},
@@ -68,9 +70,12 @@ func TestExtractCodeBlock(t *testing.T) {
 			expected:  nil,
 		},
 		{
-			name:      "custom delimiter",
-			input:     "<code>ruby\nputs 'hi'\n</code>",
-			delimiter: codeexecutor.CodeBlockDelimiter{Start: "<code>", End: "</code>"},
+			name:  "custom delimiter",
+			input: "<code>ruby\nputs 'hi'\n</code>",
+			delimiter: codeexecutor.CodeBlockDelimiter{
+				Start: "<code>",
+				End:   "</code>",
+			},
 			expected: []codeexecutor.CodeBlock{
 				{Code: "puts 'hi'\n", Language: "ruby"},
 			},
@@ -132,6 +137,42 @@ func TestCodeExecutionResultString(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.expected, tt.result.String())
+		})
+	}
+}
+
+func TestIsTextMIME(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{name: "text/plain", in: "text/plain", want: true},
+		{
+			name: "text/plain with whitespace",
+			in:   "  text/plain  ",
+			want: true,
+		},
+		{
+			name: "text/plain with charset",
+			in:   "text/plain; charset=utf-8",
+			want: true,
+		},
+		{name: "application/json", in: "application/json", want: true},
+		{
+			name: "application/json with charset",
+			in:   "application/json; charset=utf-8",
+			want: true,
+		},
+		{name: "plus json", in: "application/ld+json", want: true},
+		{name: "image", in: "image/png", want: false},
+		{name: "octet stream", in: "application/octet-stream", want: false},
+		{name: "empty", in: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, codeexecutor.IsTextMIME(tt.in))
 		})
 	}
 }
