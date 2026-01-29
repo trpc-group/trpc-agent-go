@@ -22,6 +22,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
@@ -1656,7 +1658,7 @@ func TestLocalEvaluateNilInferenceResultReturnsErrorWithEmptyEvalCaseID(t *testi
 	assert.Contains(t, err.Error(), "inference result is nil")
 }
 
-func TestLocalEvaluateSaveEvalSetResultErrorReturnsError(t *testing.T) {
+func TestLocalEvaluateDoesNotPersistEvalSetResult(t *testing.T) {
 	ctx := context.Background()
 	appName := "app"
 	evalSetID := "set"
@@ -1677,21 +1679,23 @@ func TestLocalEvaluateSaveEvalSetResultErrorReturnsError(t *testing.T) {
 	}
 	defer func() {
 		assert.NoError(t, svc.Close())
-	}()
+		}()
 
-	_, err = svc.Evaluate(ctx, &service.EvaluateRequest{
-		AppName:          appName,
-		EvalSetID:        evalSetID,
-		InferenceResults: []*service.InferenceResult{{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-1", SessionID: "session", Status: status.EvalStatusFailed, ErrorMessage: "failed"}},
-		EvaluateConfig:   &service.EvaluateConfig{},
-	})
-	assert.Error(t, err)
-	if err == nil {
-		return
+		res, err := svc.Evaluate(ctx, &service.EvaluateRequest{
+			AppName:          appName,
+			EvalSetID:        evalSetID,
+			InferenceResults: []*service.InferenceResult{{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-1", SessionID: "session", Status: status.EvalStatusFailed, ErrorMessage: "failed"}},
+			EvaluateConfig:   &service.EvaluateConfig{},
+		})
+		assert.NoError(t, err)
+		assert.NotNil(t, res)
+		if assert.NotNil(t, res) {
+			assert.Len(t, res.EvalCaseResults, 1)
+			assert.Equal(t, "case-1", res.EvalCaseResults[0].EvalID)
+			assert.Equal(t, status.EvalStatusFailed, res.EvalCaseResults[0].FinalEvalStatus)
+			assert.Equal(t, "failed", res.EvalCaseResults[0].ErrorMessage)
+		}
 	}
-	assert.Contains(t, err.Error(), "save eval set result")
-	assert.Contains(t, err.Error(), "save failed")
-}
 
 func TestLocalEvaluatePerCaseErrorMarksCaseFailed(t *testing.T) {
 	ctx := context.Background()
